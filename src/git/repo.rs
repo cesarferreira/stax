@@ -172,6 +172,45 @@ impl GitRepo {
     pub fn inner(&self) -> &Repository {
         &self.repo
     }
+
+    /// Check if a branch is merged into trunk
+    pub fn is_branch_merged(&self, branch: &str) -> Result<bool> {
+        let trunk = self.trunk_branch()?;
+        let trunk_commit = self
+            .repo
+            .find_branch(&trunk, BranchType::Local)?
+            .get()
+            .peel_to_commit()?;
+        let branch_commit = self
+            .repo
+            .find_branch(branch, BranchType::Local)?
+            .get()
+            .peel_to_commit()?;
+
+        // Branch is merged if its commit is an ancestor of trunk
+        Ok(self
+            .repo
+            .merge_base(trunk_commit.id(), branch_commit.id())?
+            == branch_commit.id())
+    }
+
+    /// Get all branches that are merged into trunk (excluding trunk itself)
+    pub fn merged_branches(&self) -> Result<Vec<String>> {
+        let trunk = self.trunk_branch()?;
+        let current = self.current_branch()?;
+        let all_branches = self.list_branches()?;
+
+        let mut merged = Vec::new();
+        for branch in all_branches {
+            if branch == trunk || branch == current {
+                continue;
+            }
+            if self.is_branch_merged(&branch).unwrap_or(false) {
+                merged.push(branch);
+            }
+        }
+        Ok(merged)
+    }
 }
 
 #[derive(Debug, PartialEq)]
