@@ -20,7 +20,7 @@ pub fn run() -> Result<()> {
     println!();
 
     // Render tree starting from trunk (bottom-up: trunk at bottom)
-    render_branch_tree(&repo, &stack, &stack.trunk, &current, &mut Vec::new());
+    render_branch_tree(&repo, &stack, &stack.trunk, &current, 0);
 
     println!();
 
@@ -32,7 +32,7 @@ fn render_branch_tree(
     stack: &Stack,
     branch: &str,
     current: &str,
-    pipes: &mut Vec<bool>, // true = draw pipe at this level, false = space
+    depth: usize,
 ) {
     let branch_info = stack.branches.get(branch);
     let is_current = branch == current;
@@ -44,17 +44,12 @@ fn render_branch_tree(
         .unwrap_or_default();
 
     // Render children first (so leaves are at top)
-    // Process in reverse so first child ends up at bottom (closest to parent)
-    for (i, child) in children.iter().rev().enumerate() {
-        let is_last_child = i == children.len() - 1;
-        // Add pipe for this level - true if there are more siblings after this one
-        pipes.push(!is_last_child);
-        render_branch_tree(repo, stack, child, current, pipes);
-        pipes.pop();
+    for child in children.iter().rev() {
+        render_branch_tree(repo, stack, child, current, depth + 1);
     }
 
-    // Build prefix from pipes
-    let prefix: String = pipes.iter().map(|&has_pipe| if has_pipe { "|   " } else { "    " }).collect();
+    // Simple depth-based indentation (4 spaces per level)
+    let indent = "    ".repeat(depth);
 
     // Branch indicator
     let indicator = if is_current { "*" } else { "o" };
@@ -91,21 +86,14 @@ fn render_branch_tree(
         }
     }
 
-    println!(
-        "{}{} {}{}",
-        prefix.bright_black(),
-        indicator_colored,
-        name_colored,
-        badges
-    );
+    println!("{}{} {}{}", indent, indicator_colored, name_colored, badges);
 
-    // Details prefix (continues the tree line)
-    let details_prefix: String = pipes.iter().map(|&has_pipe| if has_pipe { "|   " } else { "    " }).collect();
-    let details_prefix = format!("{}|   ", details_prefix);
+    // Details with same indent + extra spacing
+    let details_indent = format!("{}    ", indent);
 
     // Age
     if let Ok(age) = repo.branch_age(branch) {
-        println!("{}{}", details_prefix.bright_black(), age.dimmed());
+        println!("{}{}", details_indent, age.dimmed());
     }
 
     // Commits unique to this branch
@@ -115,7 +103,7 @@ fn render_branch_tree(
             for commit in commits {
                 println!(
                     "{}{} {}",
-                    details_prefix.bright_black(),
+                    details_indent,
                     commit.short_hash.bright_yellow(),
                     commit.message.white()
                 );
@@ -123,9 +111,8 @@ fn render_branch_tree(
         }
     }
 
-    // Spacing line (only if not trunk)
-    if !pipes.is_empty() {
-        let spacer: String = pipes.iter().map(|&has_pipe| if has_pipe { "|   " } else { "    " }).collect();
-        println!("{}{}", spacer.bright_black(), "|".bright_black());
+    // Empty line for spacing (except for trunk)
+    if depth > 0 {
+        println!();
     }
 }

@@ -20,7 +20,7 @@ pub fn run() -> Result<()> {
     println!();
 
     // Render tree starting from trunk
-    render_branch_tree(&stack, &stack.trunk, &current, &mut Vec::new());
+    render_branch_tree(&stack, &stack.trunk, &current, 0);
 
     println!();
 
@@ -38,7 +38,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn render_branch_tree(stack: &Stack, branch: &str, current: &str, pipes: &mut Vec<bool>) {
+fn render_branch_tree(stack: &Stack, branch: &str, current: &str, depth: usize) {
     let branch_info = stack.branches.get(branch);
     let is_current = branch == current;
     let is_trunk = branch == &stack.trunk;
@@ -49,15 +49,12 @@ fn render_branch_tree(stack: &Stack, branch: &str, current: &str, pipes: &mut Ve
         .unwrap_or_default();
 
     // Render children first (so leaves are at top)
-    for (i, child) in children.iter().rev().enumerate() {
-        let is_last_child = i == children.len() - 1;
-        pipes.push(!is_last_child);
-        render_branch_tree(stack, child, current, pipes);
-        pipes.pop();
+    for child in children.iter().rev() {
+        render_branch_tree(stack, child, current, depth + 1);
     }
 
-    // Build prefix from pipes
-    let prefix: String = pipes.iter().map(|&has_pipe| if has_pipe { "|   " } else { "    " }).collect();
+    // Simple depth-based indentation (4 spaces per level)
+    let indent = "    ".repeat(depth);
 
     // Branch indicator
     let indicator = if is_current { "*" } else { "o" };
@@ -95,11 +92,5 @@ fn render_branch_tree(stack: &Stack, branch: &str, current: &str, pipes: &mut Ve
     }
 
     // Render this branch
-    println!(
-        "{}{} {}{}",
-        prefix.bright_black(),
-        indicator_colored,
-        name_colored,
-        badges
-    );
+    println!("{}{} {}{}", indent, indicator_colored, name_colored, badges);
 }
