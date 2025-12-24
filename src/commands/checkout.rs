@@ -59,12 +59,14 @@ fn collect_branch_items(
     let branch_info = stack.branches.get(branch);
     let is_current = branch == current;
 
-    // Get children and process them first (so leaves are at top)
-    let children: Vec<String> = branch_info
+    // Get children sorted alphabetically for consistent ordering
+    let mut children: Vec<String> = branch_info
         .map(|b| b.children.clone())
         .unwrap_or_default();
+    children.sort();
 
-    for child in children.iter().rev() {
+    // Process children first (so leaves are at top)
+    for child in &children {
         collect_branch_items(stack, child, current, depth + 1, items, branch_names);
     }
 

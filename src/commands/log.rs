@@ -38,13 +38,14 @@ fn render_branch_tree(
     let is_current = branch == current;
     let is_trunk = branch == &stack.trunk;
 
-    // Get children
-    let children: Vec<String> = branch_info
+    // Get children sorted alphabetically for consistent ordering
+    let mut children: Vec<String> = branch_info
         .map(|b| b.children.clone())
         .unwrap_or_default();
+    children.sort();
 
     // Render children first (so leaves are at top)
-    for child in children.iter().rev() {
+    for child in &children {
         render_branch_tree(repo, stack, child, current, depth + 1);
     }
 
