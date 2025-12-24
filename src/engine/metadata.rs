@@ -64,3 +64,67 @@ impl BranchMetadata {
         Ok(current_parent_rev != self.parent_branch_revision)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_new() {
+        let meta = BranchMetadata::new("main", "abc123");
+        assert_eq!(meta.parent_branch_name, "main");
+        assert_eq!(meta.parent_branch_revision, "abc123");
+        assert!(meta.pr_info.is_none());
+    }
+
+    #[test]
+    fn test_metadata_serialization() {
+        let meta = BranchMetadata::new("main", "abc123");
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("parentBranchName"));
+        assert!(json.contains("main"));
+    }
+
+    #[test]
+    fn test_metadata_deserialization() {
+        let json = r#"{"parentBranchName":"main","parentBranchRevision":"abc123"}"#;
+        let meta: BranchMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.parent_branch_name, "main");
+        assert_eq!(meta.parent_branch_revision, "abc123");
+    }
+
+    #[test]
+    fn test_metadata_with_pr_info() {
+        let json = r#"{
+            "parentBranchName": "main",
+            "parentBranchRevision": "abc123",
+            "prInfo": {
+                "number": 42,
+                "state": "OPEN",
+                "isDraft": false
+            }
+        }"#;
+        let meta: BranchMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.pr_info.is_some());
+        let pr = meta.pr_info.unwrap();
+        assert_eq!(pr.number, 42);
+        assert_eq!(pr.state, "OPEN");
+    }
+
+    #[test]
+    fn test_freephite_compatibility() {
+        // This JSON format matches freephite's metadata format
+        let freephite_json = r#"{
+            "parentBranchName": "main",
+            "parentBranchRevision": "deadbeef1234567890",
+            "prInfo": {
+                "number": 123,
+                "state": "OPEN",
+                "isDraft": true
+            }
+        }"#;
+        let meta: BranchMetadata = serde_json::from_str(freephite_json).unwrap();
+        assert_eq!(meta.parent_branch_name, "main");
+        assert_eq!(meta.parent_branch_revision, "deadbeef1234567890");
+    }
+}
