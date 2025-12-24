@@ -41,11 +41,12 @@ fn test_submit_alias_ss() {
 }
 
 #[test]
-fn test_restack_alias_rs() {
+fn test_sync_alias_rs() {
     let output = stax(&["rs", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("all"));
+    assert!(stdout.contains("restack")); // --restack option
+    assert!(stdout.contains("delete"));  // --no-delete option
 }
 
 #[test]
