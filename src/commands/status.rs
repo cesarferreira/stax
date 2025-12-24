@@ -53,8 +53,8 @@ fn render_branch_tree(stack: &Stack, branch: &str, current: &str, depth: usize) 
         render_branch_tree(stack, child, current, depth + 1);
     }
 
-    // Simple depth-based indentation (4 spaces per level)
-    let indent = "    ".repeat(depth);
+    // Indentation: 2 spaces per level
+    let indent = "  ".repeat(depth);
 
     // Branch indicator
     let indicator = if is_current { "*" } else { "o" };
@@ -93,4 +93,9 @@ fn render_branch_tree(stack: &Stack, branch: &str, current: &str, depth: usize) 
 
     // Render this branch
     println!("{}{} {}{}", indent, indicator_colored, name_colored, badges);
+
+    // Draw connecting line to parent (except for trunk)
+    if depth > 0 {
+        println!("{}|", indent.bright_black());
+    }
 }
