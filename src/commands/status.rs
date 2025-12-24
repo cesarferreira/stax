@@ -35,10 +35,18 @@ pub fn run() -> Result<()> {
         // Build the prefix based on position
         let prefix = if is_last {
             // Trunk (bottom) - corner piece
-            "○─┘ ".to_string()
+            if is_current {
+                "◉─┘ ".to_string()
+            } else {
+                "○─┘ ".to_string()
+            }
         } else if i == 0 {
-            // Top (leaf) - just circle
-            "○   ".to_string()
+            // Top (leaf)
+            if is_current {
+                "◉   ".to_string()
+            } else {
+                "○   ".to_string()
+            }
         } else {
             // Middle - vertical connector with circle
             if is_current {
@@ -46,15 +54,6 @@ pub fn run() -> Result<()> {
             } else {
                 "│ ○ ".to_string()
             }
-        };
-
-        // Override prefix for current if it's the top
-        let prefix = if i == 0 && is_current {
-            "◉   ".to_string()
-        } else if i == 0 {
-            "○   ".to_string()
-        } else {
-            prefix
         };
 
         // Branch name with color
