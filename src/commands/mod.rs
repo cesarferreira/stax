@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod branch;
 pub mod checkout;
+pub mod config;
 pub mod continue_cmd;
 pub mod init;
 pub mod log;
