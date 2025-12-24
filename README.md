@@ -50,19 +50,23 @@ stax rs
 | `stax rs` | **R**e**s**tack - rebase current branch onto its parent |
 | `stax bco` | **B**ranch **c**heck**o**ut - interactive branch picker |
 | `stax bc <name>` | **B**ranch **c**reate - create a new stacked branch |
-| `stax bd` | **B**ranch **d**elete - delete a branch and its metadata |
+| `stax bu` | **B**ranch **u**p - move to child branch |
+| `stax bd` | **B**ranch **d**own - move to parent branch |
 
 ### Full Commands
 
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `stax status` | `s`, `l`, `log` | Show the current stack |
-| `stax restack` | | Rebase current branch onto parent |
+| `stax status` | `s`, `ls` | Show the current stack (simple view) |
+| `stax log` | `l` | Show stack with commits and PR info |
+| `stax restack` | `rs` | Rebase current branch onto parent |
 | `stax restack --all` | | Restack all branches that need it |
-| `stax submit` | | Push and create/update PRs |
+| `stax submit` | `ss` | Push and create/update PRs |
 | `stax submit --draft` | | Create PRs as drafts |
 | `stax submit --no-pr` | | Just push, skip PR creation |
-| `stax checkout [branch]` | `co` | Checkout a branch (interactive if no arg) |
+| `stax checkout [branch]` | `co`, `bco` | Checkout a branch (interactive if no arg) |
+| `stax up` | `bu` | Move up the stack (to child branch) |
+| `stax down` | `bd` | Move down the stack (to parent branch) |
 | `stax continue` | `cont` | Continue after resolving conflicts |
 | `stax auth` | | Set GitHub personal access token |
 
@@ -102,11 +106,13 @@ git add . && git commit -m "Add auth UI"
 
 # View your stack
 stax s
-#   ○ main
-# │
-# │ ○ feat/auth-api
-# │
-# │ ◉ feat/auth-ui ← you are here
+# │ ◉  feat/auth-ui   ← you are here
+# │ ○  feat/auth-api
+# ○─┘  main
+
+# Navigate the stack
+stax bd  # move down to feat/auth-api
+stax bu  # move back up to feat/auth-ui
 
 # Submit all PRs
 stax ss
