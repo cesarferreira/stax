@@ -17,67 +17,33 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    // ===== Top-level shortcuts (freephite style) =====
-
-    /// Submit stack - push and create/update PRs [alias: stack submit]
-    #[command(name = "ss")]
-    Ss {
-        #[arg(short, long)]
-        draft: bool,
-        #[arg(long)]
-        no_pr: bool,
-    },
-
-    /// Restack current branch onto parent [alias: stack restack]
-    #[command(name = "rs")]
-    Rs {
-        #[arg(short, long)]
-        all: bool,
-    },
-
-    /// Branch checkout - switch branches [alias: branch checkout]
-    #[command(name = "bco")]
-    Bco {
-        branch: Option<String>,
-    },
-
-    /// Branch create - create stacked branch [alias: branch create]
-    #[command(name = "bc")]
-    Bc {
-        name: String,
-    },
-
-    /// Branch delete [alias: branch delete]
-    #[command(name = "bd")]
-    Bd {
-        branch: Option<String>,
-        #[arg(short, long)]
-        force: bool,
-    },
-
-    // ===== Full commands =====
-
     /// Show the current stack
-    #[command(visible_aliases = ["s", "log", "l"])]
+    #[command(visible_aliases = ["s", "l", "log"])]
     Status,
 
-    /// Restack (rebase) the current branch onto its parent
-    Restack {
-        #[arg(short, long)]
-        all: bool,
-    },
-
     /// Submit stack - push branches and create/update PRs
+    #[command(visible_alias = "ss")]
     Submit {
+        /// Create PRs as drafts
         #[arg(short, long)]
         draft: bool,
+        /// Only push, don't create/update PRs
         #[arg(long)]
         no_pr: bool,
+    },
+
+    /// Restack (rebase) the current branch onto its parent
+    #[command(visible_alias = "rs")]
+    Restack {
+        /// Restack all branches in the stack
+        #[arg(short, long)]
+        all: bool,
     },
 
     /// Checkout a branch in the stack
-    #[command(visible_alias = "co")]
+    #[command(visible_aliases = ["co", "bco"])]
     Checkout {
+        /// Branch name (interactive if not provided)
         branch: Option<String>,
     },
 
@@ -87,6 +53,7 @@ enum Commands {
 
     /// Authenticate with GitHub
     Auth {
+        /// GitHub personal access token
         #[arg(short, long)]
         token: Option<String>,
     },
@@ -102,6 +69,17 @@ enum Commands {
     /// Downstack commands (operate on ancestors)
     #[command(subcommand, visible_alias = "ds")]
     Downstack(DownstackCommands),
+
+    // Hidden top-level shortcuts for convenience
+    #[command(hide = true)]
+    Bc { name: String },
+
+    #[command(hide = true)]
+    Bd {
+        branch: Option<String>,
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -109,17 +87,20 @@ enum BranchCommands {
     /// Create a new branch stacked on current
     #[command(visible_alias = "c")]
     Create {
+        /// Name for the new branch
         name: String,
     },
 
     /// Checkout a branch in the stack
     #[command(visible_alias = "co")]
     Checkout {
+        /// Branch name (interactive if not provided)
         branch: Option<String>,
     },
 
     /// Track an existing branch (set its parent)
     Track {
+        /// Parent branch name
         #[arg(short, long)]
         parent: Option<String>,
     },
@@ -127,7 +108,9 @@ enum BranchCommands {
     /// Delete a branch and its metadata
     #[command(visible_alias = "d")]
     Delete {
+        /// Branch to delete
         branch: Option<String>,
+        /// Force delete even if not merged
         #[arg(short, long)]
         force: bool,
     },
@@ -149,17 +132,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        // Top-level shortcuts
-        Commands::Ss { draft, no_pr } => commands::submit::run(draft, no_pr),
-        Commands::Rs { all } => commands::restack::run(all),
-        Commands::Bco { branch } => commands::checkout::run(branch),
-        Commands::Bc { name } => commands::branch::create::run(&name),
-        Commands::Bd { branch, force } => commands::branch::delete::run(branch, force),
-
-        // Full commands
         Commands::Status => commands::status::run(),
-        Commands::Restack { all } => commands::restack::run(all),
         Commands::Submit { draft, no_pr } => commands::submit::run(draft, no_pr),
+        Commands::Restack { all } => commands::restack::run(all),
         Commands::Checkout { branch } => commands::checkout::run(branch),
         Commands::Continue => commands::continue_cmd::run(),
         Commands::Auth { token } => commands::auth::run(token),
@@ -175,7 +150,10 @@ fn main() -> Result<()> {
             UpstackCommands::Restack => commands::upstack::restack::run(),
         },
         Commands::Downstack(cmd) => match cmd {
-            DownstackCommands::Get => commands::status::run(), // For now, just show status
+            DownstackCommands::Get => commands::status::run(),
         },
+        // Hidden shortcuts
+        Commands::Bc { name } => commands::branch::create::run(&name),
+        Commands::Bd { branch, force } => commands::branch::delete::run(branch, force),
     }
 }
