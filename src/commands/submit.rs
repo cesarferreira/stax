@@ -101,8 +101,27 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
     let remote_url = get_remote_url(repo.workdir()?)?;
     let (owner, repo_name) = GitHubClient::from_remote(&remote_url)?;
 
+    // Fetch to ensure we have latest remote refs
+    print!("Fetching from origin... ");
+    fetch_origin(repo.workdir()?)?;
+    println!("{}", "✓".green());
+
     // Check which branches exist on remote
     let remote_branches = get_remote_branches(repo.workdir()?)?;
+
+    // Verify trunk exists on remote
+    if !remote_branches.contains(&stack.trunk) {
+        anyhow::bail!(
+            "Base branch '{}' does not exist on the remote.\n\n\
+             This can happen if:\n  \
+             - This is a new repository that hasn't been pushed yet\n  \
+             - The default branch has a different name on GitHub\n\n\
+             To fix this, push your base branch first:\n  \
+             git push -u origin {}",
+            stack.trunk,
+            stack.trunk
+        );
+    }
 
     // Build plan - determine which PRs need create vs update
     println!(
@@ -239,8 +258,10 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
                     .create_pr(&plan.branch, &plan.parent, &title, &body, draft)
                     .await
                     .context(format!(
-                        "Failed to create PR for {} (base: {})",
-                        plan.branch, plan.parent
+                        "Failed to create PR for {} (base: {})\n\
+                         Hint: Make sure the base branch '{}' exists on GitHub.\n\
+                         If the base branch is correct, try running 'git push origin {}' first.",
+                        plan.branch, plan.parent, plan.parent, plan.parent
                     ))?;
 
                 println!("{} {}", "✓".green(), format!("#{}", pr.number).dimmed());
@@ -367,6 +388,21 @@ fn get_remote_branches(workdir: &std::path::Path) -> Result<Vec<String>> {
         .collect();
 
     Ok(branches)
+}
+
+fn fetch_origin(workdir: &std::path::Path) -> Result<()> {
+    let status = Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(workdir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("Failed to fetch from origin")?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to fetch from origin");
+    }
+    Ok(())
 }
 
 fn push_branch(workdir: &std::path::Path, branch: &str) -> Result<()> {
