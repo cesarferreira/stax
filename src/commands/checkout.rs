@@ -9,66 +9,23 @@ pub fn run(branch: Option<String>) -> Result<()> {
     let target = match branch {
         Some(b) => b,
         None => {
-            // Interactive selection with fuzzy finder
             let stack = Stack::load(&repo)?;
             let current = repo.current_branch()?;
 
-            // Get ALL branches in display order (leaves first, trunk last)
-            let stack_branches = stack.all_branches_display_order();
-
-            if stack_branches.is_empty() {
+            if stack.branches.is_empty() {
                 println!("No branches found.");
                 return Ok(());
             }
 
-            // Build display items with tree structure (like fp bco)
-            let total = stack_branches.len();
-            let items: Vec<String> = stack_branches
-                .iter()
-                .enumerate()
-                .map(|(i, b)| {
-                    let is_current = b == &current;
-                    let is_last = i == total - 1;
+            // Build items with tree structure
+            let mut items = Vec::new();
+            let mut branch_names = Vec::new();
+            collect_branch_items(&stack, &stack.trunk, &current, 0, &mut items, &mut branch_names);
 
-                    // Build the prefix based on position (matching fp style)
-                    let prefix = if is_last {
-                        // Trunk (bottom) - corner piece
-                        if is_current {
-                            "◉─┘ "
-                        } else {
-                            "○─┘ "
-                        }
-                    } else if i == 0 {
-                        // Top (leaf)
-                        if is_current {
-                            "◉   "
-                        } else {
-                            "○   "
-                        }
-                    } else {
-                        // Middle - vertical connector with circle
-                        if is_current {
-                            "│ ◉ "
-                        } else {
-                            "│ ○ "
-                        }
-                    };
-
-                    let mut display = format!("{}{}", prefix, b);
-
-                    // Add tracked branch info
-                    if let Some(info) = stack.branches.get(b) {
-                        if info.needs_restack {
-                            display.push_str(" (needs restack)");
-                        }
-                        if let Some(pr) = info.pr_number {
-                            display.push_str(&format!(" #{}", pr));
-                        }
-                    }
-
-                    display
-                })
-                .collect();
+            if items.is_empty() {
+                println!("No branches found.");
+                return Ok(());
+            }
 
             let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
                 .with_prompt("Checkout a branch (autocomplete or arrow keys)")
@@ -77,7 +34,7 @@ pub fn run(branch: Option<String>) -> Result<()> {
                 .highlight_matches(true)
                 .interact()?;
 
-            stack_branches[selection].clone()
+            branch_names[selection].clone()
         }
     };
 
@@ -89,4 +46,47 @@ pub fn run(branch: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn collect_branch_items(
+    stack: &Stack,
+    branch: &str,
+    current: &str,
+    depth: usize,
+    items: &mut Vec<String>,
+    branch_names: &mut Vec<String>,
+) {
+    let branch_info = stack.branches.get(branch);
+    let is_current = branch == current;
+
+    // Get children and process them first (so leaves are at top)
+    let children: Vec<String> = branch_info
+        .map(|b| b.children.clone())
+        .unwrap_or_default();
+
+    for child in children.iter().rev() {
+        collect_branch_items(stack, child, current, depth + 1, items, branch_names);
+    }
+
+    // Build display string
+    let indent: String = (0..depth).map(|_| "│ ").collect();
+    let indicator = if is_current { "◉" } else { "○" };
+
+    let mut display = format!("{}{} {}", indent, indicator, branch);
+
+    if let Some(info) = branch_info {
+        if info.needs_restack {
+            display.push_str(" (needs restack)");
+        }
+        if let Some(pr) = info.pr_number {
+            display.push_str(&format!(" #{}", pr));
+        }
+    }
+
+    if is_current {
+        display.push_str(" (current)");
+    }
+
+    items.push(display);
+    branch_names.push(branch.to_string());
 }

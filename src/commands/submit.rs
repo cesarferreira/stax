@@ -1,6 +1,6 @@
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
-use crate::github::pr::generate_stack_comment;
+use crate::github::pr::{generate_stack_comment, StackPrInfo};
 use crate::github::GitHubClient;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -77,7 +77,7 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
     rt.block_on(async {
         let client = GitHubClient::new(&owner, &repo_name)?;
 
-        let mut pr_info: Vec<(String, Option<u64>)> = Vec::new();
+        let mut pr_infos: Vec<StackPrInfo> = Vec::new();
 
         for branch in &stack_branches {
             let meta = BranchMetadata::read(repo.inner(), branch)?
@@ -120,19 +120,23 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
             };
             updated_meta.write(repo.inner(), branch)?;
 
-            pr_info.push((branch.clone(), Some(pr.number)));
+            pr_infos.push(StackPrInfo {
+                branch: branch.clone(),
+                pr_number: Some(pr.number),
+                state: Some(pr.state.clone()),
+                is_draft: pr.is_draft,
+            });
         }
 
         // Update stack comments on all PRs
         println!();
         println!("Updating stack comments...");
 
-        let stack_comment = generate_stack_comment(&pr_info, &current);
-
-        for (branch, pr_num) in &pr_info {
-            if let Some(num) = pr_num {
+        for pr_info in &pr_infos {
+            if let Some(num) = pr_info.pr_number {
                 print!("  PR #{}... ", num);
-                client.update_stack_comment(*num, &stack_comment).await?;
+                let stack_comment = generate_stack_comment(&pr_infos, num, &owner, &repo_name);
+                client.update_stack_comment(num, &stack_comment).await?;
                 println!("{}", "✓".green());
             }
         }
@@ -142,11 +146,11 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
 
         // Print PR URLs
         println!();
-        for (branch, pr_num) in &pr_info {
-            if let Some(num) = pr_num {
+        for pr_info in &pr_infos {
+            if let Some(num) = pr_info.pr_number {
                 println!(
                     "  {} → https://github.com/{}/{}/pull/{}",
-                    branch.white(),
+                    pr_info.branch.white(),
                     owner,
                     repo_name,
                     num
