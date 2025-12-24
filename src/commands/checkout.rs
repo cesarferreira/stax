@@ -28,15 +28,18 @@ pub fn run(branch: Option<String>) -> Result<()> {
                 .unwrap_or_default();
             trunk_children.sort();
 
+            // Find which stack contains the current branch
+            let current_stack_root = find_stack_containing(&stack, &trunk_children, &current);
+
             // Collect branches from each stack
-            for (stack_idx, stack_root) in trunk_children.iter().enumerate() {
-                let is_last_stack = stack_idx == trunk_children.len() - 1;
-                collect_stack_items(&stack, stack_root, &current, is_last_stack, &mut items, &mut branch_names);
+            for stack_root in trunk_children.iter() {
+                let is_current_stack = current_stack_root.as_ref() == Some(stack_root);
+                collect_stack_items(&stack, stack_root, &current, is_current_stack, &mut items, &mut branch_names);
             }
 
             // Add trunk
             let is_current = stack.trunk == current;
-            let indicator = if is_current { "◉" } else { "◉" };
+            let indicator = "○";
             let mut display = format!("{}┘  {}", indicator, stack.trunk);
             if is_current {
                 display.push_str(" <");
@@ -74,7 +77,7 @@ fn collect_stack_items(
     stack: &Stack,
     branch: &str,
     current: &str,
-    is_last_stack: bool,
+    is_current_stack: bool,
     items: &mut Vec<String>,
     branch_names: &mut Vec<String>,
 ) {
@@ -86,7 +89,7 @@ fn collect_stack_items(
     for b in branches.iter() {
         let is_current = *b == current;
 
-        let left_margin = if is_last_stack { "  " } else { "│ " };
+        let left_margin = if is_current_stack { "│ " } else { "  " };
         let indicator = if is_current { "◉" } else { "○" };
 
         let mut display = format!("{}{} {}", left_margin, indicator, b);
@@ -116,4 +119,27 @@ fn collect_stack_branches<'a>(stack: &'a Stack, branch: &'a str, result: &mut Ve
         }
     }
     result.push(branch);
+}
+
+fn find_stack_containing(stack: &Stack, stack_roots: &[String], current: &str) -> Option<String> {
+    for root in stack_roots {
+        if branch_is_in_stack(stack, root, current) {
+            return Some(root.clone());
+        }
+    }
+    None
+}
+
+fn branch_is_in_stack(stack: &Stack, root: &str, target: &str) -> bool {
+    if root == target {
+        return true;
+    }
+    if let Some(info) = stack.branches.get(root) {
+        for child in &info.children {
+            if branch_is_in_stack(stack, child, target) {
+                return true;
+            }
+        }
+    }
+    false
 }

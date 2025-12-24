@@ -24,15 +24,18 @@ pub fn run() -> Result<()> {
         .unwrap_or_default();
     trunk_children.sort();
 
+    // Find which stack contains the current branch
+    let current_stack_root = find_stack_containing(&stack, &trunk_children, &current);
+
     // Render each stack
-    for (stack_idx, stack_root) in trunk_children.iter().enumerate() {
-        let is_last_stack = stack_idx == trunk_children.len() - 1;
-        render_stack(&repo, &stack, stack_root, &current, is_last_stack);
+    for stack_root in trunk_children.iter() {
+        let is_current_stack = current_stack_root.as_ref() == Some(stack_root);
+        render_stack(&repo, &stack, stack_root, &current, is_current_stack);
     }
 
     // Render trunk
     let is_current = stack.trunk == current;
-    let indicator = "◉";
+    let indicator = "○";
     let connector = "┘";
 
     print!("{}", indicator.bright_blue());
@@ -73,7 +76,7 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn render_stack(repo: &GitRepo, stack: &Stack, branch: &str, current: &str, is_last_stack: bool) {
+fn render_stack(repo: &GitRepo, stack: &Stack, branch: &str, current: &str, is_current_stack: bool) {
     // Collect all branches in this stack (linear chain)
     let mut branches = Vec::new();
     collect_stack_branches(stack, branch, &mut branches);
@@ -82,8 +85,8 @@ fn render_stack(repo: &GitRepo, stack: &Stack, branch: &str, current: &str, is_l
     for b in branches.iter() {
         let is_current = *b == current;
 
-        // Left margin: │ for non-last stacks, empty for last stack
-        let left_margin = if is_last_stack { "  " } else { "│ " };
+        // Left margin: │ for current stack, empty for others
+        let left_margin = if is_current_stack { "│ " } else { "  " };
 
         // Indicator
         let indicator = if is_current { "◉" } else { "○" };
@@ -114,7 +117,7 @@ fn render_stack(repo: &GitRepo, stack: &Stack, branch: &str, current: &str, is_l
         println!("{}{} {}{}", left_margin.bright_black(), indicator_colored, name_colored, badges);
 
         // Details: age and commits
-        let detail_margin = if is_last_stack { "  " } else { "│ " };
+        let detail_margin = if is_current_stack { "│ " } else { "  " };
 
         if let Ok(age) = repo.branch_age(b) {
             println!("{}{}  {}", detail_margin.bright_black(), "|".bright_black(), age.dimmed());
@@ -144,4 +147,27 @@ fn collect_stack_branches<'a>(stack: &'a Stack, branch: &'a str, result: &mut Ve
     }
     // Then add this branch
     result.push(branch);
+}
+
+fn find_stack_containing(stack: &Stack, stack_roots: &[String], current: &str) -> Option<String> {
+    for root in stack_roots {
+        if branch_is_in_stack(stack, root, current) {
+            return Some(root.clone());
+        }
+    }
+    None
+}
+
+fn branch_is_in_stack(stack: &Stack, root: &str, target: &str) -> bool {
+    if root == target {
+        return true;
+    }
+    if let Some(info) = stack.branches.get(root) {
+        for child in &info.children {
+            if branch_is_in_stack(stack, child, target) {
+                return true;
+            }
+        }
+    }
+    false
 }
