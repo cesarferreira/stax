@@ -171,7 +171,27 @@ fn get_remote_url(workdir: &std::path::Path) -> Result<String> {
         .output()
         .context("Failed to get remote URL")?;
 
-    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    if !output.status.success() {
+        anyhow::bail!(
+            "No git remote 'origin' found.\n\n\
+             To fix this, add a GitHub remote:\n\n  \
+             git remote add origin git@github.com:owner/repo.git\n\n\
+             Or:\n\n  \
+             git remote add origin https://github.com/owner/repo.git"
+        );
+    }
+
+    let url = String::from_utf8(output.stdout)?.trim().to_string();
+
+    if url.is_empty() {
+        anyhow::bail!(
+            "Git remote 'origin' has no URL configured.\n\n\
+             To fix this, set the remote URL:\n\n  \
+             git remote set-url origin git@github.com:owner/repo.git"
+        );
+    }
+
+    Ok(url)
 }
 
 fn push_branch(workdir: &std::path::Path, branch: &str) -> Result<()> {
