@@ -9,60 +9,78 @@ pub fn run(branch: Option<String>) -> Result<()> {
     let target = match branch {
         Some(b) => b,
         None => {
-            // Interactive selection
+            // Interactive selection with fuzzy finder
             let stack = Stack::load(&repo)?;
             let current = repo.current_branch()?;
+            let trunk = repo.trunk_branch()?;
 
-            // Get all tracked branches (excluding trunk)
-            let mut branches: Vec<String> = stack
-                .branches
-                .keys()
-                .filter(|b| *b != &stack.trunk)
-                .cloned()
-                .collect();
-            branches.sort();
+            // Get ALL local branches
+            let mut all_branches = repo.list_branches()?;
+            all_branches.sort();
+
+            // Move trunk to the end, current to top
+            all_branches.retain(|b| b != &trunk && b != &current);
+
+            // Put current first if it exists
+            let mut branches = vec![];
+            if all_branches.iter().any(|b| b == &current) || current != trunk {
+                branches.push(current.clone());
+            }
+            branches.extend(all_branches);
+            branches.push(trunk.clone());
 
             if branches.is_empty() {
-                println!("No tracked branches. Use `gt branch track` to track a branch.");
+                println!("No branches found.");
                 return Ok(());
             }
-
-            // Find current index
-            let default_idx = branches.iter().position(|b| b == &current).unwrap_or(0);
 
             // Build display items with indicators
             let items: Vec<String> = branches
                 .iter()
                 .map(|b| {
-                    let branch_info = stack.branches.get(b);
                     let mut display = b.clone();
-                    if let Some(info) = branch_info {
+
+                    // Add tracked branch info
+                    if let Some(info) = stack.branches.get(b) {
                         if info.needs_restack {
-                            display.push_str(" (needs restack)");
+                            display.push_str(" ⚠ restack");
                         }
                         if let Some(pr) = info.pr_number {
-                            display.push_str(&format!(" #{}", pr));
+                            display.push_str(&format!(" PR#{}", pr));
                         }
                     }
+
+                    // Mark current branch
                     if b == &current {
-                        display.push_str(" ◀");
+                        display.push_str(" ◀ current");
                     }
+
+                    // Mark trunk
+                    if b == &trunk {
+                        display.push_str(" (trunk)");
+                    }
+
                     display
                 })
                 .collect();
 
             let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-                .with_prompt("Select branch")
+                .with_prompt("Switch to branch (type to filter)")
                 .items(&items)
-                .default(default_idx)
+                .default(0)
+                .highlight_matches(true)
                 .interact()?;
 
             branches[selection].clone()
         }
     };
 
-    repo.checkout(&target)?;
-    println!("Switched to branch '{}'", target);
+    if target == repo.current_branch()? {
+        println!("Already on '{}'", target);
+    } else {
+        repo.checkout(&target)?;
+        println!("Switched to branch '{}'", target);
+    }
 
     Ok(())
 }
