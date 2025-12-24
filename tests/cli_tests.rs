@@ -1,8 +1,12 @@
 use std::process::Command;
 
+/// Get path to compiled binary (built by cargo test)
+fn stax_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_stax")
+}
+
 fn stax(args: &[&str]) -> std::process::Output {
-    Command::new("cargo")
-        .args(["run", "--quiet", "--"])
+    Command::new(stax_bin())
         .args(args)
         .output()
         .expect("Failed to execute stax")
