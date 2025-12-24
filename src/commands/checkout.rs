@@ -1,7 +1,6 @@
 use crate::engine::Stack;
 use crate::git::GitRepo;
 use anyhow::Result;
-use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 
 pub fn run(branch: Option<String>) -> Result<()> {
@@ -39,15 +38,7 @@ pub fn run(branch: Option<String>) -> Result<()> {
             }
 
             // Add trunk
-            let is_current = stack.trunk == current;
-            let indicator = "○".bright_blue();
-            let connector = "─┘".bright_black();
-            let name = if is_current {
-                stack.trunk.bright_green().bold()
-            } else {
-                stack.trunk.bright_blue().bold()
-            };
-            let display = format!("{}{}  {}", indicator, connector, name);
+            let display = format!("○─┘  {}", stack.trunk);
             items.push(display);
             branch_names.push(stack.trunk.clone());
 
@@ -92,34 +83,21 @@ fn collect_stack_items(
     // Render from leaf to root
     for b in branches.iter() {
         let is_current = *b == current;
-
-        // Colored indicator
-        let indicator = if is_current {
-            "◉".bright_green().bold().to_string()
-        } else {
-            "○".bright_cyan().to_string()
-        };
-
-        // Colored branch name
-        let name = if is_current {
-            b.bright_green().bold().to_string()
-        } else {
-            b.bright_cyan().to_string()
-        };
+        let indicator = if is_current { "◉" } else { "○" };
 
         // fp style: "○    name" for non-current, "│ ○  name" for current
         let mut display = if is_current_stack {
-            format!("{} {}  {}", "│".bright_blue(), indicator, name)
+            format!("│ {}  {}", indicator, b)
         } else {
-            format!("{}    {}", indicator, name)
+            format!("{}    {}", indicator, b)
         };
 
         if let Some(info) = stack.branches.get(*b) {
             if info.needs_restack {
-                display.push_str(&" [needs restack]".bright_yellow().to_string());
+                display.push_str(" [needs restack]");
             }
             if let Some(pr) = info.pr_number {
-                display.push_str(&format!(" PR #{}", pr).bright_magenta().to_string());
+                display.push_str(&format!(" PR #{}", pr));
             }
         }
 
