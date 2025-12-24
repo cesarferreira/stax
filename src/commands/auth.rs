@@ -21,14 +21,17 @@ pub fn run(token: Option<String>) -> Result<()> {
         }
     };
 
-    let mut config = Config::load()?;
-    config.set_github_token(&token);
-    config.save()?;
+    Config::set_github_token(&token)?;
 
     println!("{}", "✓ GitHub token saved!".green());
     println!(
-        "Config stored at: {}",
-        Config::path()?.display().to_string().dimmed()
+        "Credentials stored at: {}",
+        Config::dir()?.join(".credentials").display().to_string().dimmed()
+    );
+    println!();
+    println!(
+        "{}",
+        "Note: Token is stored separately from config (safe to commit config to dotfiles)".dimmed()
     );
 
     Ok(())

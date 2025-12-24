@@ -12,10 +12,8 @@ pub struct GitHubClient {
 impl GitHubClient {
     /// Create a new GitHub client from config
     pub fn new(owner: &str, repo: &str) -> Result<Self> {
-        let config = Config::load()?;
-        let token = config
-            .github_token()
-            .context("GitHub token not set. Run `gt auth` first.")?;
+        let token = Config::github_token()
+            .context("GitHub token not set. Run `stax auth` or set GITHUB_TOKEN env var.")?;
 
         let octocrab = Octocrab::builder()
             .personal_token(token.to_string())
