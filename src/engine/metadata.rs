@@ -16,12 +16,14 @@ pub struct BranchMetadata {
     pub pr_info: Option<PrInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrInfo {
+    #[serde(default)]
     pub number: u64,
+    #[serde(default)]
     pub state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_draft: Option<bool>,
 }
 
