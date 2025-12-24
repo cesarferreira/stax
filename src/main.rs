@@ -18,9 +18,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show the current stack
-    #[command(visible_aliases = ["s", "l", "log"])]
+    /// Show the current stack (simple tree view)
+    #[command(visible_aliases = ["s", "ls"])]
     Status,
+
+    /// Show detailed stack with commits and PR info
+    #[command(visible_alias = "l")]
+    Log,
 
     /// Submit stack - push branches and create/update PRs
     #[command(visible_alias = "ss")]
@@ -145,6 +149,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Status => commands::status::run(),
+        Commands::Log => commands::log::run(),
         Commands::Submit { draft, no_pr } => commands::submit::run(draft, no_pr),
         Commands::Restack { all } => commands::restack::run(all),
         Commands::Checkout { branch } => commands::checkout::run(branch),

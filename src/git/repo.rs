@@ -193,6 +193,53 @@ impl GitRepo {
         &self.repo
     }
 
+    /// Get commits unique to a branch (not in parent)
+    pub fn branch_commits(&self, branch: &str, parent: Option<&str>) -> Result<Vec<CommitInfo>> {
+        let branch_ref = self.repo.find_branch(branch, BranchType::Local)?;
+        let branch_commit = branch_ref.get().peel_to_commit()?;
+
+        let mut commits = Vec::new();
+        let mut revwalk = self.repo.revwalk()?;
+        revwalk.push(branch_commit.id())?;
+
+        // If parent specified, exclude its commits
+        if let Some(parent_name) = parent {
+            if let Ok(parent_ref) = self.repo.find_branch(parent_name, BranchType::Local) {
+                if let Ok(parent_commit) = parent_ref.get().peel_to_commit() {
+                    revwalk.hide(parent_commit.id())?;
+                }
+            }
+        }
+
+        for oid in revwalk.take(5) {
+            // Max 5 commits
+            let oid = oid?;
+            let commit = self.repo.find_commit(oid)?;
+            let message = commit.summary().unwrap_or("").to_string();
+            let short_id = &oid.to_string()[..10];
+            commits.push(CommitInfo {
+                short_hash: short_id.to_string(),
+                message,
+            });
+        }
+
+        Ok(commits)
+    }
+
+    /// Get time since last commit on a branch
+    pub fn branch_age(&self, branch: &str) -> Result<String> {
+        let branch_ref = self.repo.find_branch(branch, BranchType::Local)?;
+        let commit = branch_ref.get().peel_to_commit()?;
+        let time = commit.time();
+        let commit_ts = time.seconds();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let diff = now - commit_ts;
+
+        Ok(format_duration(diff))
+    }
     /// Check if a branch is merged into trunk
     pub fn is_branch_merged(&self, branch: &str) -> Result<bool> {
         let trunk = self.trunk_branch()?;
@@ -237,4 +284,25 @@ impl GitRepo {
 pub enum RebaseResult {
     Success,
     Conflict,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitInfo {
+    pub short_hash: String,
+    pub message: String,
+}
+
+fn format_duration(seconds: i64) -> String {
+    if seconds < 60 {
+        "just now".to_string()
+    } else if seconds < 3600 {
+        let mins = seconds / 60;
+        format!("{} minute{} ago", mins, if mins == 1 { "" } else { "s" })
+    } else if seconds < 86400 {
+        let hours = seconds / 3600;
+        format!("{} hour{} ago", hours, if hours == 1 { "" } else { "s" })
+    } else {
+        let days = seconds / 86400;
+        format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
+    }
 }
