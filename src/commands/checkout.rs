@@ -36,7 +36,11 @@ pub fn run(branch: Option<String>) -> Result<()> {
                     // Build the prefix based on position (matching fp style)
                     let prefix = if is_last {
                         // Trunk (bottom) - corner piece
-                        "○─┘ "
+                        if is_current {
+                            "◉─┘ "
+                        } else {
+                            "○─┘ "
+                        }
                     } else if i == 0 {
                         // Top (leaf)
                         if is_current {
