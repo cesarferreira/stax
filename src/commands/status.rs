@@ -53,12 +53,11 @@ fn render_branch_tree(stack: &Stack, branch: &str, current: &str, depth: usize) 
         render_branch_tree(stack, child, current, depth + 1);
     }
 
-    // Build colored prefix based on depth
-    let indent: String = (0..depth).map(|_| "│  ").collect();
-    let indent_colored = indent.bright_black();
+    // Build indent using ASCII pipe for consistent alignment
+    let indent: String = (0..depth).map(|_| "|   ").collect();
 
-    // Branch indicator with colors
-    let indicator = if is_current { "●" } else { "○" };
+    // Branch indicator
+    let indicator = if is_current { "*" } else { "o" };
     let indicator_colored = if is_current {
         indicator.bright_green().bold()
     } else if is_trunk {
@@ -80,12 +79,12 @@ fn render_branch_tree(stack: &Stack, branch: &str, current: &str, depth: usize) 
     let mut badges = String::new();
 
     if is_current {
-        badges.push_str(&" ◀".bright_green().to_string());
+        badges.push_str(&" <".bright_green().to_string());
     }
 
     if let Some(b) = branch_info {
         if b.needs_restack {
-            badges.push_str(&" ⚠ needs restack".bright_yellow().to_string());
+            badges.push_str(&" [needs restack]".bright_yellow().to_string());
         }
         if let Some(pr) = b.pr_number {
             badges.push_str(&format!(" PR #{}", pr).bright_magenta().to_string());
@@ -93,5 +92,11 @@ fn render_branch_tree(stack: &Stack, branch: &str, current: &str, depth: usize) 
     }
 
     // Render this branch
-    println!("{}{} {}{}", indent_colored, indicator_colored, name_colored, badges);
+    println!(
+        "{}{} {}{}",
+        indent.bright_black(),
+        indicator_colored,
+        name_colored,
+        badges
+    );
 }

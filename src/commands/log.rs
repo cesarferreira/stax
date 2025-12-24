@@ -42,12 +42,11 @@ fn render_branch_tree(repo: &GitRepo, stack: &Stack, branch: &str, current: &str
         render_branch_tree(repo, stack, child, current, depth + 1);
     }
 
-    // Build colored indent
-    let indent: String = (0..depth).map(|_| "│  ").collect();
-    let indent_colored = indent.bright_black();
+    // Build indent using ASCII pipe for consistent alignment
+    let indent: String = (0..depth).map(|_| "|   ").collect();
 
-    // Branch indicator with bright colors
-    let indicator = if is_current { "●" } else { "○" };
+    // Branch indicator
+    let indicator = if is_current { "*" } else { "o" };
     let indicator_colored = if is_current {
         indicator.bright_green().bold()
     } else if is_trunk {
@@ -69,26 +68,32 @@ fn render_branch_tree(repo: &GitRepo, stack: &Stack, branch: &str, current: &str
     let mut badges = String::new();
 
     if is_current {
-        badges.push_str(&" ◀".bright_green().to_string());
+        badges.push_str(&" <".bright_green().to_string());
     }
 
     if let Some(info) = branch_info {
         if info.needs_restack {
-            badges.push_str(&" ⚠ needs restack".bright_yellow().to_string());
+            badges.push_str(&" [needs restack]".bright_yellow().to_string());
         }
         if let Some(pr_num) = info.pr_number {
             badges.push_str(&format!(" PR #{}", pr_num).bright_magenta().to_string());
         }
     }
 
-    println!("{}{} {}{}", indent_colored, indicator_colored, name_colored, badges);
+    println!(
+        "{}{} {}{}",
+        indent.bright_black(),
+        indicator_colored,
+        name_colored,
+        badges
+    );
 
     // Details line (age and commit info)
-    let details_indent = format!("{}│  ", indent).bright_black();
+    let details_prefix = format!("{}|   ", indent);
 
     // Age
     if let Ok(age) = repo.branch_age(branch) {
-        println!("{}{}", details_indent, age.dimmed());
+        println!("{}{}", details_prefix.bright_black(), age.dimmed());
     }
 
     // Commits unique to this branch
@@ -98,7 +103,7 @@ fn render_branch_tree(repo: &GitRepo, stack: &Stack, branch: &str, current: &str
             for commit in commits {
                 println!(
                     "{}{} {}",
-                    details_indent,
+                    details_prefix.bright_black(),
                     commit.short_hash.bright_yellow(),
                     commit.message.white()
                 );
@@ -108,6 +113,6 @@ fn render_branch_tree(repo: &GitRepo, stack: &Stack, branch: &str, current: &str
 
     // Spacing line
     if depth > 0 || !children.is_empty() {
-        println!("{}{}", indent_colored, "│".bright_black());
+        println!("{}{}", indent.bright_black(), "|".bright_black());
     }
 }

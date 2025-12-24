@@ -68,23 +68,23 @@ fn collect_branch_items(
         collect_branch_items(stack, child, current, depth + 1, items, branch_names);
     }
 
-    // Build display string
-    let indent: String = (0..depth).map(|_| "│ ").collect();
-    let indicator = if is_current { "◉" } else { "○" };
+    // Build display string with ASCII pipe for consistent alignment
+    let indent: String = (0..depth).map(|_| "|   ").collect();
+    let indicator = if is_current { "*" } else { "o" };
 
     let mut display = format!("{}{} {}", indent, indicator, branch);
 
     if let Some(info) = branch_info {
         if info.needs_restack {
-            display.push_str(" (needs restack)");
+            display.push_str(" [needs restack]");
         }
         if let Some(pr) = info.pr_number {
-            display.push_str(&format!(" #{}", pr));
+            display.push_str(&format!(" PR #{}", pr));
         }
     }
 
     if is_current {
-        display.push_str(" (current)");
+        display.push_str(" <");
     }
 
     items.push(display);
