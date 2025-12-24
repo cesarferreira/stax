@@ -36,11 +36,17 @@ pub fn run() -> Result<()> {
     // Render trunk
     let is_current = stack.trunk == current;
     let indicator = "○";
-    let connector = "┘";
 
-    print!("{}", indicator.bright_blue());
-    print!("{}", connector.bright_black());
-    print!("  ");
+    // Show connector line if there's a current stack
+    if current_stack_root.is_some() {
+        print!("{}", indicator.bright_blue());
+        print!("{}", "─┘".bright_black());
+    } else {
+        print!("{}", indicator.bright_blue());
+        print!("{}", "┘".bright_black());
+        print!(" ");
+    }
+    print!(" ");
     if is_current {
         println!("{}", stack.trunk.bright_green().bold());
     } else {
@@ -85,9 +91,6 @@ fn render_stack(repo: &GitRepo, stack: &Stack, branch: &str, current: &str, is_c
     for b in branches.iter() {
         let is_current = *b == current;
 
-        // Left margin: │ for current stack, empty for others
-        let left_margin = if is_current_stack { "│ " } else { "  " };
-
         // Indicator
         let indicator = if is_current { "◉" } else { "○" };
         let indicator_colored = if is_current {
@@ -114,21 +117,34 @@ fn render_stack(repo: &GitRepo, stack: &Stack, branch: &str, current: &str, is_c
             }
         }
 
-        println!("{}{} {}{}", left_margin.bright_black(), indicator_colored, name_colored, badges);
+        // Print with left margin: │ for current stack, space for others
+        if is_current_stack {
+            print!("{}", "│".bright_blue());
+        } else {
+            print!(" ");
+        }
+        println!(" {} {}{}", indicator_colored, name_colored, badges);
 
         // Details: age and commits
-        let detail_margin = if is_current_stack { "│ " } else { "  " };
-
         if let Ok(age) = repo.branch_age(b) {
-            println!("{}{}  {}", detail_margin.bright_black(), "|".bright_black(), age.dimmed());
+            if is_current_stack {
+                print!("{}", "│".bright_blue());
+            } else {
+                print!(" ");
+            }
+            println!(" {}  {}", "|".bright_black(), age.dimmed());
         }
 
         let parent = stack.branches.get(*b).and_then(|info| info.parent.as_deref());
         if let Ok(commits) = repo.branch_commits(b, parent) {
             for commit in commits.iter().take(3) {
+                if is_current_stack {
+                    print!("{}", "│".bright_blue());
+                } else {
+                    print!(" ");
+                }
                 println!(
-                    "{}{}  {} {}",
-                    detail_margin.bright_black(),
+                    " {}  {} {}",
                     "|".bright_black(),
                     commit.short_hash.bright_yellow(),
                     commit.message.white()

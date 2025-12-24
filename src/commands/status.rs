@@ -36,11 +36,17 @@ pub fn run() -> Result<()> {
     // Render trunk
     let is_current = stack.trunk == current;
     let indicator = "○";
-    let connector = "┘";
 
-    print!("{}", indicator.bright_blue());
-    print!("{}", connector.bright_black());
-    print!("  ");
+    // Show connector line if there's a current stack
+    if current_stack_root.is_some() {
+        print!("{}", indicator.bright_blue());
+        print!("{}", "─┘".bright_black());
+    } else {
+        print!("{}", indicator.bright_blue());
+        print!("{}", "┘".bright_black());
+        print!(" ");
+    }
+    print!(" ");
     if is_current {
         println!("{}", stack.trunk.bright_green().bold());
     } else {
@@ -70,9 +76,6 @@ fn render_stack(stack: &Stack, branch: &str, current: &str, is_current_stack: bo
     for b in branches.iter() {
         let is_current = *b == current;
 
-        // Left margin: │ for current stack, empty for others
-        let left_margin = if is_current_stack { "│ " } else { "  " };
-
         // Indicator
         let indicator = if is_current { "◉" } else { "○" };
         let indicator_colored = if is_current {
@@ -99,7 +102,13 @@ fn render_stack(stack: &Stack, branch: &str, current: &str, is_current_stack: bo
             }
         }
 
-        println!("{}{} {}{}", left_margin.bright_black(), indicator_colored, name_colored, badges);
+        // Print with left margin: │ for current stack, space for others
+        if is_current_stack {
+            print!("{}", "│".bright_blue());
+        } else {
+            print!(" ");
+        }
+        println!(" {} {}{}", indicator_colored, name_colored, badges);
     }
 }
 

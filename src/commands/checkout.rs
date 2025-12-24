@@ -40,7 +40,8 @@ pub fn run(branch: Option<String>) -> Result<()> {
             // Add trunk
             let is_current = stack.trunk == current;
             let indicator = "○";
-            let mut display = format!("{}┘  {}", indicator, stack.trunk);
+            let connector = if current_stack_root.is_some() { "─┘" } else { "┘ " };
+            let mut display = format!("{}{} {}", indicator, connector, stack.trunk);
             if is_current {
                 display.push_str(" <");
             }
@@ -89,10 +90,10 @@ fn collect_stack_items(
     for b in branches.iter() {
         let is_current = *b == current;
 
-        let left_margin = if is_current_stack { "│ " } else { "  " };
+        let left_margin = if is_current_stack { "│" } else { " " };
         let indicator = if is_current { "◉" } else { "○" };
 
-        let mut display = format!("{}{} {}", left_margin, indicator, b);
+        let mut display = format!("{} {} {}", left_margin, indicator, b);
 
         if let Some(info) = stack.branches.get(*b) {
             if info.needs_restack {
