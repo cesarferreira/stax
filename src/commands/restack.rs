@@ -2,6 +2,7 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
 use anyhow::Result;
 use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Confirm};
 
 pub fn run(all: bool) -> Result<()> {
     let repo = GitRepo::open()?;
@@ -75,6 +76,45 @@ pub fn run(all: bool) -> Result<()> {
 
     println!();
     println!("{}", "✓ Stack restacked successfully!".green());
+
+    // Check for merged branches and offer to delete them
+    cleanup_merged_branches(&repo)?;
+
+    Ok(())
+}
+
+/// Check for merged branches and prompt to delete each one
+fn cleanup_merged_branches(repo: &GitRepo) -> Result<()> {
+    let merged = repo.merged_branches()?;
+
+    if merged.is_empty() {
+        return Ok(());
+    }
+
+    println!();
+    println!(
+        "{}",
+        format!("Found {} merged branch(es):", merged.len()).dimmed()
+    );
+
+    for branch in &merged {
+        let confirm = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt(format!("Delete '{}'?", branch.yellow()))
+            .default(true)
+            .interact()?;
+
+        if confirm {
+            // Delete the branch
+            repo.delete_branch(branch, true)?;
+
+            // Delete metadata if it exists
+            let _ = BranchMetadata::delete(repo.inner(), branch);
+
+            println!("  {} {}", "✓".green(), format!("Deleted {}", branch).dimmed());
+        } else {
+            println!("  {} {}", "○".dimmed(), format!("Skipped {}", branch).dimmed());
+        }
+    }
 
     Ok(())
 }
