@@ -47,9 +47,11 @@ stax rs
 | Command | Description |
 |---------|-------------|
 | `stax ss` | **S**ubmit **s**tack - push branches and create/update PRs |
-| `stax rs` | **R**e**s**tack - rebase current branch onto its parent |
+| `stax rs` | **R**epo **s**ync - pull trunk, delete merged branches |
+| `stax rs --restack` | Repo sync + restack branches |
 | `stax bco` | **B**ranch **c**heck**o**ut - interactive branch picker |
 | `stax bc <name>` | **B**ranch **c**reate - create a new stacked branch |
+| `stax bc -m "msg"` | Create branch from message (spaces replaced) |
 | `stax bu` | **B**ranch **u**p - move to child branch |
 | `stax bd` | **B**ranch **d**own - move to parent branch |
 
@@ -59,7 +61,9 @@ stax rs
 |---------|-------|-------------|
 | `stax status` | `s`, `ls` | Show the current stack (simple view) |
 | `stax log` | `l` | Show stack with commits and PR info |
-| `stax restack` | `rs` | Rebase current branch onto parent |
+| `stax sync` | `rs` | Pull trunk, delete merged branches |
+| `stax sync --restack` | | Also restack after syncing |
+| `stax restack` | | Rebase current branch onto parent |
 | `stax restack --all` | | Restack all branches that need it |
 | `stax submit` | `ss` | Push and create/update PRs |
 | `stax submit --draft` | | Create PRs as drafts |

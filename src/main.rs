@@ -37,8 +37,21 @@ enum Commands {
         no_pr: bool,
     },
 
-    /// Restack (rebase) the current branch onto its parent
+    /// Sync repo - pull trunk, delete merged branches
     #[command(visible_alias = "rs")]
+    Sync {
+        /// Also restack branches after syncing
+        #[arg(short, long)]
+        restack: bool,
+        /// Don't delete merged branches
+        #[arg(long)]
+        no_delete: bool,
+        /// Force sync without prompts
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Restack (rebase) the current branch onto its parent
     Restack {
         /// Restack all branches in the stack
         #[arg(short, long)]
@@ -85,7 +98,11 @@ enum Commands {
 
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
-    Bc { name: String },
+    Bc {
+        name: Option<String>,
+        #[arg(short, long)]
+        message: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -94,7 +111,10 @@ enum BranchCommands {
     #[command(visible_alias = "c")]
     Create {
         /// Name for the new branch
-        name: String,
+        name: Option<String>,
+        /// Message/description to use as branch name (spaces replaced)
+        #[arg(short, long)]
+        message: Option<String>,
     },
 
     /// Checkout a branch in the stack
@@ -152,12 +172,13 @@ fn main() -> Result<()> {
         Commands::Status => commands::status::run(),
         Commands::Log => commands::log::run(),
         Commands::Submit { draft, no_pr } => commands::submit::run(draft, no_pr),
+        Commands::Sync { restack, no_delete, force } => commands::sync::run(restack, !no_delete, force),
         Commands::Restack { all } => commands::restack::run(all),
         Commands::Checkout { branch } => commands::checkout::run(branch),
         Commands::Continue => commands::continue_cmd::run(),
         Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Branch(cmd) => match cmd {
-            BranchCommands::Create { name } => commands::branch::create::run(&name),
+            BranchCommands::Create { name, message } => commands::branch::create::run(name, message),
             BranchCommands::Checkout { branch } => commands::checkout::run(branch),
             BranchCommands::Track { parent } => commands::branch::track::run(parent),
             BranchCommands::Delete { branch, force } => {
@@ -173,6 +194,6 @@ fn main() -> Result<()> {
         Commands::Up => commands::navigate::up(),
         Commands::Down => commands::navigate::down(),
         // Hidden shortcuts
-        Commands::Bc { name } => commands::branch::create::run(&name),
+        Commands::Bc { name, message } => commands::branch::create::run(name, message),
     }
 }
