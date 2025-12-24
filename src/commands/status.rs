@@ -3,15 +3,6 @@ use crate::git::GitRepo;
 use anyhow::Result;
 use colored::{Color, Colorize};
 
-struct BranchDisplay {
-    name: String,
-    depth: usize,
-    color: Color,
-    is_current: bool,
-    pr_number: Option<u64>,
-    needs_restack: bool,
-}
-
 // Colors for different stacks (cycle through these)
 const STACK_COLORS: &[Color] = &[
     Color::Yellow,
@@ -19,11 +10,9 @@ const STACK_COLORS: &[Color] = &[
     Color::Magenta,
     Color::Cyan,
     Color::Blue,
-    Color::Red,
+    Color::BrightRed,
     Color::BrightYellow,
     Color::BrightGreen,
-    Color::BrightMagenta,
-    Color::BrightCyan,
 ];
 
 pub fn run() -> Result<()> {
@@ -47,80 +36,70 @@ pub fn run() -> Result<()> {
         .unwrap_or_default();
     trunk_children.sort();
 
-    // Build a list of all branches with their depth and color
-    let mut all_branches: Vec<BranchDisplay> = Vec::new();
-
-    // Process each stack with its own color
-    for (stack_idx, root) in trunk_children.iter().enumerate() {
-        let color = STACK_COLORS[stack_idx % STACK_COLORS.len()];
-        collect_branches_with_depth(&stack, root, 0, color, &current, &mut all_branches);
+    // Assign colors to stacks
+    let mut stack_colors: std::collections::HashMap<String, Color> = std::collections::HashMap::new();
+    for (idx, root) in trunk_children.iter().enumerate() {
+        let color = STACK_COLORS[idx % STACK_COLORS.len()];
+        assign_stack_color(&stack, root, color, &mut stack_colors);
     }
 
-    // Find max depth to calculate column widths
-    let max_depth = all_branches.iter().map(|b| b.depth).max().unwrap_or(0);
+    // Collect all branches in display order (leaves first, then parents)
+    let mut display_order: Vec<(String, usize)> = Vec::new(); // (branch, depth)
+    for root in &trunk_children {
+        collect_display_order(&stack, root, 0, &mut display_order);
+    }
 
-    // Render each branch
-    for branch in &all_branches {
-        // Build the tree lines
-        let mut line = String::new();
+    // Render
+    for (branch, depth) in &display_order {
+        let is_current = branch == &current;
+        let color = stack_colors.get(branch).copied().unwrap_or(Color::White);
 
-        // Add connector lines for depth
-        for d in 0..=max_depth {
-            if d < branch.depth {
-                // Add colored vertical line
-                line.push_str(&format!("{}", "│".color(branch.color)));
-            } else if d == branch.depth {
-                // Add the node indicator
-                let indicator = if branch.is_current { "◉" } else { "○" };
-                if branch.is_current {
-                    line.push_str(&format!("{}", indicator.color(branch.color).bold()));
-                } else {
-                    line.push_str(&format!("{}", indicator.color(branch.color)));
-                }
-            } else {
-                line.push(' ');
-            }
-        }
+        // Build the line
+        let indent = "  ".repeat(*depth);
+        let indicator = if is_current { "◉" } else { "○" };
 
-        // Add spacing and branch name
-        line.push_str("  ");
+        // Get branch info
+        let info = stack.branches.get(branch);
+        let pr_badge = info
+            .and_then(|i| i.pr_number)
+            .map(|pr| format!(" PR #{}", pr))
+            .unwrap_or_default();
 
-        // Branch name with highlighting
-        let name = if branch.is_current {
-            format!("{}", branch.name.bold())
+        let restack_badge = if info.map(|i| i.needs_restack).unwrap_or(false) {
+            " !"
         } else {
-            branch.name.clone()
+            ""
         };
-        line.push_str(&name);
 
-        // Add PR badge if present
-        if let Some(pr) = branch.pr_number {
-            line.push_str(&format!(" {}", format!("PR #{}", pr).bright_magenta()));
+        // Print line
+        if is_current {
+            println!(
+                "{}{}  {}{}{}",
+                indent,
+                indicator.color(color).bold(),
+                branch.bold(),
+                pr_badge.bright_magenta(),
+                restack_badge.bright_yellow()
+            );
+        } else {
+            println!(
+                "{}{}  {}{}{}",
+                indent,
+                indicator.color(color),
+                branch,
+                pr_badge.bright_magenta(),
+                restack_badge.bright_yellow()
+            );
         }
-
-        // Add restack warning
-        if branch.needs_restack {
-            line.push_str(&format!(" {}", "!".bright_yellow()));
-        }
-
-        println!("{}", line);
     }
 
-    // Render trunk at the bottom
+    // Render trunk
     let is_trunk_current = stack.trunk == current;
-    let trunk_display = if is_trunk_current {
-        format!("{}", stack.trunk.bright_green().bold())
+    if is_trunk_current {
+        println!("{}  {}", "○".white(), stack.trunk.bold());
     } else {
-        format!("{}", stack.trunk.white())
-    };
-
-    // Build trunk line with connectors
-    let mut trunk_line = String::new();
-    for _ in 0..max_depth {
-        trunk_line.push(' ');
+        println!("{}  {}", "○".white(), stack.trunk);
     }
-    trunk_line.push_str(&format!("{}  {}", "○".white(), trunk_display));
-    println!("{}", trunk_line);
 
     // Show hint if restack needed
     let needs_restack = stack.needs_restack();
@@ -136,33 +115,32 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn collect_branches_with_depth(
+fn assign_stack_color(
+    stack: &Stack,
+    branch: &str,
+    color: Color,
+    colors: &mut std::collections::HashMap<String, Color>,
+) {
+    colors.insert(branch.to_string(), color);
+    if let Some(info) = stack.branches.get(branch) {
+        for child in &info.children {
+            assign_stack_color(stack, child, color, colors);
+        }
+    }
+}
+
+fn collect_display_order(
     stack: &Stack,
     branch: &str,
     depth: usize,
-    color: Color,
-    current: &str,
-    result: &mut Vec<BranchDisplay>,
+    result: &mut Vec<(String, usize)>,
 ) {
-    let info = stack.branches.get(branch);
-    let is_current = branch == current;
-    let pr_number = info.and_then(|i| i.pr_number);
-    let needs_restack = info.map(|i| i.needs_restack).unwrap_or(false);
-
-    // First, recurse into children (leaves first)
-    if let Some(info) = info {
+    // First collect children (leaves first)
+    if let Some(info) = stack.branches.get(branch) {
         for child in &info.children {
-            collect_branches_with_depth(stack, child, depth + 1, color, current, result);
+            collect_display_order(stack, child, depth + 1, result);
         }
     }
-
     // Then add this branch
-    result.push(BranchDisplay {
-        name: branch.to_string(),
-        depth,
-        color,
-        is_current,
-        pr_number,
-        needs_restack,
-    });
+    result.push((branch.to_string(), depth));
 }
