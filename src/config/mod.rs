@@ -122,14 +122,16 @@ impl Config {
     }
 
     /// Get GitHub token (from env var or credentials file)
+    /// Priority: 1. STAX_GITHUB_TOKEN, 2. GITHUB_TOKEN, 3. credentials file
     pub fn github_token() -> Option<String> {
-        // First try environment variables
-        if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        // First try stax-specific env var
+        if let Ok(token) = std::env::var("STAX_GITHUB_TOKEN") {
             if !token.is_empty() {
                 return Some(token);
             }
         }
-        if let Ok(token) = std::env::var("STAX_GITHUB_TOKEN") {
+        // Then try generic GitHub token
+        if let Ok(token) = std::env::var("GITHUB_TOKEN") {
             if !token.is_empty() {
                 return Some(token);
             }
@@ -203,5 +205,140 @@ impl Config {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn test_default_config() {
+        let config = Config::default();
+        assert!(config.branch.prefix.is_none());
+        assert!(!config.branch.date);
+        assert_eq!(config.branch.replacement, "-");
+        assert!(config.ui.tips);
+    }
+
+    #[test]
+    fn test_format_branch_name_no_prefix() {
+        let config = Config::default();
+        assert_eq!(config.format_branch_name("my-feature"), "my-feature");
+    }
+
+    #[test]
+    fn test_format_branch_name_with_prefix() {
+        let mut config = Config::default();
+        config.branch.prefix = Some("cesar/".to_string());
+        assert_eq!(config.format_branch_name("my-feature"), "cesar/my-feature");
+    }
+
+    #[test]
+    fn test_format_branch_name_prefix_not_duplicated() {
+        let mut config = Config::default();
+        config.branch.prefix = Some("cesar/".to_string());
+        // If name already has prefix, don't add it again
+        assert_eq!(config.format_branch_name("cesar/my-feature"), "cesar/my-feature");
+    }
+
+    #[test]
+    fn test_format_branch_name_spaces_replaced() {
+        let config = Config::default();
+        assert_eq!(config.format_branch_name("my cool feature"), "my-cool-feature");
+    }
+
+    #[test]
+    fn test_format_branch_name_special_chars_replaced() {
+        let config = Config::default();
+        assert_eq!(config.format_branch_name("feat: add stuff!"), "feat-add-stuff-");
+    }
+
+    #[test]
+    fn test_format_branch_name_custom_replacement() {
+        let mut config = Config::default();
+        config.branch.replacement = "_".to_string();
+        assert_eq!(config.format_branch_name("my cool feature"), "my_cool_feature");
+    }
+
+    #[test]
+    fn test_format_branch_name_consecutive_replacements_collapsed() {
+        let config = Config::default();
+        // Multiple spaces should become single dash
+        assert_eq!(config.format_branch_name("my   feature"), "my-feature");
+    }
+
+    #[test]
+    fn test_token_priority_stax_env_first() {
+        // Save original values
+        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
+        let orig_github = env::var("GITHUB_TOKEN").ok();
+
+        // Set both env vars
+        env::set_var("STAX_GITHUB_TOKEN", "stax-token");
+        env::set_var("GITHUB_TOKEN", "github-token");
+
+        // STAX_GITHUB_TOKEN should take priority
+        let token = Config::github_token();
+        assert_eq!(token, Some("stax-token".to_string()));
+
+        // Restore original values
+        match orig_stax {
+            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
+            None => env::remove_var("STAX_GITHUB_TOKEN"),
+        }
+        match orig_github {
+            Some(v) => env::set_var("GITHUB_TOKEN", v),
+            None => env::remove_var("GITHUB_TOKEN"),
+        }
+    }
+
+    #[test]
+    fn test_token_fallback_to_github_token() {
+        // Save original values
+        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
+        let orig_github = env::var("GITHUB_TOKEN").ok();
+
+        // Only set GITHUB_TOKEN
+        env::remove_var("STAX_GITHUB_TOKEN");
+        env::set_var("GITHUB_TOKEN", "github-token");
+
+        let token = Config::github_token();
+        assert_eq!(token, Some("github-token".to_string()));
+
+        // Restore original values
+        match orig_stax {
+            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
+            None => env::remove_var("STAX_GITHUB_TOKEN"),
+        }
+        match orig_github {
+            Some(v) => env::set_var("GITHUB_TOKEN", v),
+            None => env::remove_var("GITHUB_TOKEN"),
+        }
+    }
+
+    #[test]
+    fn test_token_empty_string_ignored() {
+        // Save original values
+        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
+        let orig_github = env::var("GITHUB_TOKEN").ok();
+
+        // Set empty STAX token, valid GITHUB token
+        env::set_var("STAX_GITHUB_TOKEN", "");
+        env::set_var("GITHUB_TOKEN", "github-token");
+
+        let token = Config::github_token();
+        assert_eq!(token, Some("github-token".to_string()));
+
+        // Restore original values
+        match orig_stax {
+            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
+            None => env::remove_var("STAX_GITHUB_TOKEN"),
+        }
+        match orig_github {
+            Some(v) => env::set_var("GITHUB_TOKEN", v),
+            None => env::remove_var("GITHUB_TOKEN"),
+        }
     }
 }

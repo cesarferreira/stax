@@ -165,20 +165,25 @@ tips = true
 
 ### GitHub Authentication
 
-GitHub token is stored **separately** from config (not in dotfiles):
+GitHub token is stored **separately** from config (not in dotfiles).
+
+**Priority order:**
+1. `STAX_GITHUB_TOKEN` env var (highest)
+2. `GITHUB_TOKEN` env var
+3. `~/.config/stax/.credentials` file (lowest)
 
 ```bash
-# Option 1: Use stax auth command
-stax auth
+# Option 1: stax-specific env var (recommended)
+export STAX_GITHUB_TOKEN="ghp_xxxx"
 
-# Option 2: Environment variable
+# Option 2: Generic GitHub token
 export GITHUB_TOKEN="ghp_xxxx"
 
-# Option 3: stax-specific env var
-export STAX_GITHUB_TOKEN="ghp_xxxx"
+# Option 3: Use stax auth command (saves to credentials file)
+stax auth
 ```
 
-Token is stored at `~/.config/stax/.credentials` with `600` permissions.
+Credentials file has `600` permissions on Unix.
 
 ## Migrating from freephite
 
