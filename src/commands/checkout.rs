@@ -68,8 +68,8 @@ fn collect_branch_items(
         collect_branch_items(stack, child, current, depth + 1, items, branch_names);
     }
 
-    // Simple depth-based indentation
-    let indent = "    ".repeat(depth);
+    // Indentation: 2 spaces per level
+    let indent = "  ".repeat(depth);
     let indicator = if is_current { "*" } else { "o" };
 
     let mut display = format!("{}{} {}", indent, indicator, branch);

@@ -48,8 +48,8 @@ fn render_branch_tree(
         render_branch_tree(repo, stack, child, current, depth + 1);
     }
 
-    // Simple depth-based indentation (4 spaces per level)
-    let indent = "    ".repeat(depth);
+    // Indentation: 2 spaces per level
+    let indent = "  ".repeat(depth);
 
     // Branch indicator
     let indicator = if is_current { "*" } else { "o" };
@@ -88,12 +88,12 @@ fn render_branch_tree(
 
     println!("{}{} {}{}", indent, indicator_colored, name_colored, badges);
 
-    // Details with same indent + extra spacing
-    let details_indent = format!("{}    ", indent);
+    // Details line
+    let pipe_indent = format!("{}|", indent);
 
     // Age
     if let Ok(age) = repo.branch_age(branch) {
-        println!("{}{}", details_indent, age.dimmed());
+        println!("{}  {}", pipe_indent.bright_black(), age.dimmed());
     }
 
     // Commits unique to this branch
@@ -102,17 +102,12 @@ fn render_branch_tree(
         if !commits.is_empty() {
             for commit in commits {
                 println!(
-                    "{}{} {}",
-                    details_indent,
+                    "{}  {} {}",
+                    pipe_indent.bright_black(),
                     commit.short_hash.bright_yellow(),
                     commit.message.white()
                 );
             }
         }
-    }
-
-    // Empty line for spacing (except for trunk)
-    if depth > 0 {
-        println!();
     }
 }
