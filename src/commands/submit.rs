@@ -7,6 +7,15 @@ use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::process::Command;
 
+struct PrPlan {
+    branch: String,
+    parent: String,
+    existing_pr: Option<u64>,
+    // For new PRs, we'll collect these upfront
+    title: Option<String>,
+    body: Option<String>,
+}
+
 pub fn run(draft: bool, no_pr: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
@@ -61,7 +70,6 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
         .iter()
         .filter(|b| {
             if let Some(branch_info) = stack.branches.get(*b) {
-                // Check if branch has same commit as parent
                 if let Some(parent) = &branch_info.parent {
                     if let Ok(branch_commit) = repo.branch_commit(b) {
                         if let Ok(parent_commit) = repo.branch_commit(parent) {
@@ -75,19 +83,22 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
         .collect();
 
     if !empty_branches.is_empty() {
-        println!("{}", "WARNING: The following branch has no changes:".yellow());
+        println!(
+            "{}",
+            "WARNING: The following branches have no changes:".yellow()
+        );
         for b in &empty_branches {
             println!("  {} {}", "▸".yellow(), b);
         }
+        println!();
         println!(
             "{}",
-            "WARNING: Are you sure you want to submit it?".yellow()
+            "GitHub will reject PRs for branches with no commits.".yellow()
         );
-        println!();
 
         let proceed = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Continue with empty branch?")
-            .default(false)
+            .with_prompt("Skip empty branches and continue?")
+            .default(true)
             .interact()?;
 
         if !proceed {
@@ -95,6 +106,19 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
             return Ok(());
         }
         println!();
+    }
+
+    // Filter out empty branches
+    let empty_set: std::collections::HashSet<_> = empty_branches.iter().cloned().collect();
+    let branches_to_submit: Vec<_> = stack_branches
+        .iter()
+        .filter(|b| !empty_set.contains(b))
+        .cloned()
+        .collect();
+
+    if branches_to_submit.is_empty() {
+        println!("{}", "No branches with changes to submit.".yellow());
+        return Ok(());
     }
 
     // Get remote URL for GitHub
@@ -132,61 +156,98 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let client = rt.block_on(async { GitHubClient::new(&owner, &repo_name) })?;
 
-    struct BranchPlan {
-        branch: String,
-        parent: String,
-        existing_pr: Option<u64>,
-        needs_create: bool,
-    }
+    let mut plans: Vec<PrPlan> = Vec::new();
 
-    let mut plans: Vec<BranchPlan> = Vec::new();
-
-    for branch in &stack_branches {
+    for branch in &branches_to_submit {
         let meta = BranchMetadata::read(repo.inner(), branch)?
             .context(format!("No metadata for branch {}", branch))?;
 
         // Check if PR exists
         let existing_pr = rt.block_on(async { client.find_pr(branch).await })?;
-
-        let needs_create = existing_pr.is_none();
         let pr_number = existing_pr.as_ref().map(|p| p.number);
 
         // Determine the base branch for PR
-        // If parent doesn't exist on remote, use trunk
         let base = if remote_branches.contains(&meta.parent_branch_name) {
             meta.parent_branch_name.clone()
-        } else if meta.parent_branch_name == stack.trunk {
-            stack.trunk.clone()
         } else {
-            // Parent branch not on remote yet - we'll push it first
+            // Parent not on remote - will be pushed, use it anyway
             meta.parent_branch_name.clone()
         };
 
-        plans.push(BranchPlan {
-            branch: branch.clone(),
-            parent: base,
-            existing_pr: pr_number,
-            needs_create,
-        });
-
-        let action = if needs_create {
+        let action = if existing_pr.is_none() {
             "(Create)".green()
         } else {
             format!("(Update #{})", pr_number.unwrap()).blue()
         };
         println!("  {} {} {}", "▸".white(), branch, action);
+
+        plans.push(PrPlan {
+            branch: branch.clone(),
+            parent: base,
+            existing_pr: pr_number,
+            title: None,
+            body: None,
+        });
     }
     println!();
 
-    // Push all branches first
+    // Collect PR details for new PRs BEFORE pushing
+    if !no_pr {
+        let new_prs: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_none()).collect();
+        if !new_prs.is_empty() {
+            println!("{}", "Enter details for new PRs:".yellow());
+            println!();
+
+            for plan in &mut plans {
+                if plan.existing_pr.is_none() {
+                    let default_title = plan
+                        .branch
+                        .split('/')
+                        .last()
+                        .unwrap_or(&plan.branch)
+                        .replace('-', " ")
+                        .replace('_', " ");
+
+                    println!("  {} {}", "▸".cyan(), plan.branch.cyan());
+
+                    let title: String = Input::with_theme(&ColorfulTheme::default())
+                        .with_prompt("  Title")
+                        .default(default_title)
+                        .interact_text()?;
+
+                    let body_options = vec!["Skip (leave empty)", "Enter description"];
+                    let body_choice = Select::with_theme(&ColorfulTheme::default())
+                        .with_prompt("  Body")
+                        .items(&body_options)
+                        .default(0)
+                        .interact()?;
+
+                    let body = if body_choice == 1 {
+                        Input::with_theme(&ColorfulTheme::default())
+                            .with_prompt("  Description")
+                            .allow_empty(true)
+                            .interact_text()?
+                    } else {
+                        String::new()
+                    };
+
+                    plan.title = Some(title);
+                    plan.body = Some(body);
+                    println!();
+                }
+            }
+        }
+    }
+
+    // Now push all branches
     println!(
         "Pushing {} branch(es) to {}/{}...",
-        stack_branches.len().to_string().cyan(),
+        branches_to_submit.len().to_string().cyan(),
         owner,
         repo_name
     );
 
-    for branch in &stack_branches {
+    for branch in &branches_to_submit {
         print!("  Pushing {}... ", branch.white());
         push_branch(repo.workdir()?, branch)?;
         println!("{}", "✓".green());
@@ -212,56 +273,23 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
             let meta = BranchMetadata::read(repo.inner(), &plan.branch)?
                 .context(format!("No metadata for branch {}", plan.branch))?;
 
-            if plan.needs_create {
-                // Prompt for title
-                let default_title = plan
-                    .branch
-                    .split('/')
-                    .last()
-                    .unwrap_or(&plan.branch)
-                    .replace('-', " ")
-                    .replace('_', " ");
+            if plan.existing_pr.is_none() {
+                // Create new PR
+                let title = plan.title.as_ref().unwrap();
+                let body = plan.body.as_ref().unwrap();
 
-                println!();
-                println!(
-                    "  {} {} {}",
-                    "▸".white(),
-                    plan.branch.cyan(),
-                    "(Create)".green()
-                );
-
-                let title: String = Input::with_theme(&ColorfulTheme::default())
-                    .with_prompt("Title")
-                    .default(default_title)
-                    .interact_text()?;
-
-                // Prompt for body
-                let body_options = vec!["Skip (leave empty)", "Enter description"];
-                let body_choice = Select::with_theme(&ColorfulTheme::default())
-                    .with_prompt("Body")
-                    .items(&body_options)
-                    .default(0)
-                    .interact()?;
-
-                let body = if body_choice == 1 {
-                    Input::with_theme(&ColorfulTheme::default())
-                        .with_prompt("Description")
-                        .allow_empty(true)
-                        .interact_text()?
-                } else {
-                    String::new()
-                };
-
-                print!("  Creating PR... ");
+                print!("  Creating PR for {}... ", plan.branch.white());
 
                 let pr = client
-                    .create_pr(&plan.branch, &plan.parent, &title, &body, draft)
+                    .create_pr(&plan.branch, &plan.parent, title, body, draft)
                     .await
                     .context(format!(
-                        "Failed to create PR for {} (base: {})\n\
-                         Hint: Make sure the base branch '{}' exists on GitHub.\n\
-                         If the base branch is correct, try running 'git push origin {}' first.",
-                        plan.branch, plan.parent, plan.parent, plan.parent
+                        "Failed to create PR for '{}' with base '{}'\n\
+                         This may happen if:\n  \
+                         - The base branch '{}' doesn't exist on GitHub\n  \
+                         - The branch has no commits different from base\n  \
+                         Try: git log {}..{} to see the commits",
+                        plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
                     ))?;
 
                 println!("{} {}", "✓".green(), format!("#{}", pr.number).dimmed());
@@ -310,15 +338,17 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
         }
 
         // Update stack comments on all PRs
-        println!();
-        println!("Updating stack comments...");
+        if !pr_infos.is_empty() {
+            println!();
+            println!("Updating stack comments...");
 
-        for pr_info in &pr_infos {
-            if let Some(num) = pr_info.pr_number {
-                print!("  PR #{}... ", num);
-                let stack_comment = generate_stack_comment(&pr_infos, num, &owner, &repo_name);
-                client.update_stack_comment(num, &stack_comment).await?;
-                println!("{}", "✓".green());
+            for pr_info in &pr_infos {
+                if let Some(num) = pr_info.pr_number {
+                    print!("  PR #{}... ", num);
+                    let stack_comment = generate_stack_comment(&pr_infos, num, &owner, &repo_name);
+                    client.update_stack_comment(num, &stack_comment).await?;
+                    println!("{}", "✓".green());
+                }
             }
         }
 
@@ -326,16 +356,18 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
         println!("{}", "✓ Stack submitted successfully!".green());
 
         // Print PR URLs
-        println!();
-        for pr_info in &pr_infos {
-            if let Some(num) = pr_info.pr_number {
-                println!(
-                    "  {} → https://github.com/{}/{}/pull/{}",
-                    pr_info.branch.white(),
-                    owner,
-                    repo_name,
-                    num
-                );
+        if !pr_infos.is_empty() {
+            println!();
+            for pr_info in &pr_infos {
+                if let Some(num) = pr_info.pr_number {
+                    println!(
+                        "  {} → https://github.com/{}/{}/pull/{}",
+                        pr_info.branch.white(),
+                        owner,
+                        repo_name,
+                        num
+                    );
+                }
             }
         }
 
