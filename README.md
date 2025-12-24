@@ -73,6 +73,7 @@ stax rs
 | `stax down` | `bd` | Move down the stack (to parent branch) |
 | `stax continue` | `cont` | Continue after resolving conflicts |
 | `stax auth` | | Set GitHub personal access token |
+| `stax config` | | Show config file path and contents |
 
 ### Branch Commands
 

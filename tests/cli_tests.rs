@@ -95,3 +95,12 @@ fn test_us_alias() {
     let output = stax(&["us", "--help"]);
     assert!(output.status.success());
 }
+
+#[test]
+fn test_config_command() {
+    let output = stax(&["config"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Config path:"));
+    assert!(stdout.contains(".config/stax/config.toml"));
+}

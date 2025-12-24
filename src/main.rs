@@ -76,6 +76,9 @@ enum Commands {
         token: Option<String>,
     },
 
+    /// Show config file path and contents
+    Config,
+
     /// Branch management commands
     #[command(subcommand, visible_alias = "b")]
     Branch(BranchCommands),
@@ -161,8 +164,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Commands that don't need repo initialization
-    if let Commands::Auth { token } = cli.command {
-        return commands::auth::run(token);
+    match &cli.command {
+        Commands::Auth { token } => return commands::auth::run(token.clone()),
+        Commands::Config => return commands::config::run(),
+        _ => {}
     }
 
     // Ensure repo is initialized for all other commands
@@ -177,6 +182,7 @@ fn main() -> Result<()> {
         Commands::Checkout { branch } => commands::checkout::run(branch),
         Commands::Continue => commands::continue_cmd::run(),
         Commands::Auth { .. } => unreachable!(), // Handled above
+        Commands::Config => unreachable!(),      // Handled above
         Commands::Branch(cmd) => match cmd {
             BranchCommands::Create { name, message } => commands::branch::create::run(name, message),
             BranchCommands::Checkout { branch } => commands::checkout::run(branch),
