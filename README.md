@@ -138,12 +138,47 @@ Each branch tracks:
 
 ## Configuration
 
-Config is stored at `~/.config/stax/config.toml`:
+Config is stored at `~/.config/stax/config.toml` (safe to commit to dotfiles):
 
 ```toml
-[github]
-token = "ghp_xxxx"
+[branch]
+prefix = "cesar/"      # Auto-prefix new branches (e.g., "my-feature" → "cesar/my-feature")
+date = false           # Add date to branch names (e.g., "2024-01-15-my-feature")
+replacement = "-"      # Character to replace spaces and special chars
+
+[ui]
+tips = true            # Show helpful tips
 ```
+
+### Default Config
+
+On first run, stax creates a default config:
+
+```toml
+[branch]
+date = false
+replacement = "-"
+
+[ui]
+tips = true
+```
+
+### GitHub Authentication
+
+GitHub token is stored **separately** from config (not in dotfiles):
+
+```bash
+# Option 1: Use stax auth command
+stax auth
+
+# Option 2: Environment variable
+export GITHUB_TOKEN="ghp_xxxx"
+
+# Option 3: stax-specific env var
+export STAX_GITHUB_TOKEN="ghp_xxxx"
+```
+
+Token is stored at `~/.config/stax/.credentials` with `600` permissions.
 
 ## Migrating from freephite
 

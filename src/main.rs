@@ -6,6 +6,7 @@ mod github;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use config::Config;
 
 #[derive(Parser)]
 #[command(name = "stax")]
@@ -129,6 +130,9 @@ enum DownstackCommands {
 }
 
 fn main() -> Result<()> {
+    // Ensure config exists (creates default on first run)
+    let _ = Config::ensure_exists();
+
     let cli = Cli::parse();
 
     match cli.command {
