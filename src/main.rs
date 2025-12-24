@@ -75,6 +75,14 @@ enum Commands {
     #[command(subcommand, visible_alias = "ds")]
     Downstack(DownstackCommands),
 
+    /// Move up the stack (to child branch)
+    #[command(visible_alias = "bu")]
+    Up,
+
+    /// Move down the stack (to parent branch)
+    #[command(visible_alias = "bdown")]
+    Down,
+
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
     Bc { name: String },
@@ -169,6 +177,8 @@ fn main() -> Result<()> {
         Commands::Downstack(cmd) => match cmd {
             DownstackCommands::Get => commands::status::run(),
         },
+        Commands::Up => commands::navigate::up(),
+        Commands::Down => commands::navigate::down(),
         // Hidden shortcuts
         Commands::Bc { name } => commands::branch::create::run(&name),
         Commands::Bd { branch, force } => commands::branch::delete::run(branch, force),
