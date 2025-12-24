@@ -2,6 +2,8 @@ use crate::engine::Stack;
 use crate::git::GitRepo;
 use anyhow::Result;
 use colored::{Color, Colorize};
+use std::collections::{HashMap, HashSet};
+use std::process::Command;
 
 // Colors for different stacks (cycle through these)
 const STACK_COLORS: &[Color] = &[
@@ -29,6 +31,9 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
+    // Get remote branches
+    let remote_branches = get_remote_branches(repo.workdir()?);
+
     // Collect all stacks (each direct child of trunk starts a stack)
     let trunk_info = stack.branches.get(&stack.trunk);
     let mut trunk_children: Vec<String> = trunk_info
@@ -37,7 +42,7 @@ pub fn run() -> Result<()> {
     trunk_children.sort();
 
     // Assign colors to stacks
-    let mut stack_colors: std::collections::HashMap<String, Color> = std::collections::HashMap::new();
+    let mut stack_colors: HashMap<String, Color> = HashMap::new();
     for (idx, root) in trunk_children.iter().enumerate() {
         let color = STACK_COLORS[idx % STACK_COLORS.len()];
         assign_stack_color(&stack, root, color, &mut stack_colors);
@@ -60,13 +65,34 @@ pub fn run() -> Result<()> {
 
         // Get branch info
         let info = stack.branches.get(branch);
+
+        // Check if on remote
+        let remote_icon = if remote_branches.contains(branch) {
+            "☁ "
+        } else {
+            ""
+        };
+
+        // Get commits ahead of parent
+        let commits_info = if let Some(parent) = info.and_then(|i| i.parent.as_ref()) {
+            match get_commits_ahead(repo.workdir()?, parent, branch) {
+                Some(0) => "".to_string(),
+                Some(n) => format!(" +{}", n),
+                None => "".to_string(),
+            }
+        } else {
+            "".to_string()
+        };
+
+        // PR badge
         let pr_badge = info
             .and_then(|i| i.pr_number)
             .map(|pr| format!(" PR #{}", pr))
             .unwrap_or_default();
 
+        // Restack badge
         let restack_badge = if info.map(|i| i.needs_restack).unwrap_or(false) {
-            " !"
+            " ↻"
         } else {
             ""
         };
@@ -74,19 +100,23 @@ pub fn run() -> Result<()> {
         // Print line
         if is_current {
             println!(
-                "{}{}  {}{}{}",
+                "{}{}  {}{}{}{}{}",
                 indent,
                 indicator.color(color).bold(),
+                remote_icon.bright_blue(),
                 branch.bold(),
+                commits_info.bright_green(),
                 pr_badge.bright_magenta(),
                 restack_badge.bright_yellow()
             );
         } else {
             println!(
-                "{}{}  {}{}{}",
+                "{}{}  {}{}{}{}{}",
                 indent,
                 indicator.color(color),
+                remote_icon.bright_blue(),
                 branch,
+                commits_info.dimmed(),
                 pr_badge.bright_magenta(),
                 restack_badge.bright_yellow()
             );
@@ -95,10 +125,26 @@ pub fn run() -> Result<()> {
 
     // Render trunk
     let is_trunk_current = stack.trunk == current;
-    if is_trunk_current {
-        println!("{}  {}", "○".white(), stack.trunk.bold());
+    let trunk_remote = if remote_branches.contains(&stack.trunk) {
+        "☁ "
     } else {
-        println!("{}  {}", "○".white(), stack.trunk);
+        ""
+    };
+
+    if is_trunk_current {
+        println!(
+            "{}  {}{}",
+            "○".white(),
+            trunk_remote.bright_blue(),
+            stack.trunk.bold()
+        );
+    } else {
+        println!(
+            "{}  {}{}",
+            "○".white(),
+            trunk_remote.bright_blue(),
+            stack.trunk
+        );
     }
 
     // Show hint if restack needed
@@ -107,7 +153,7 @@ pub fn run() -> Result<()> {
         println!();
         println!(
             "{}",
-            format!("! {} branch(es) need restacking", needs_restack.len()).bright_yellow()
+            format!("↻ {} branch(es) need restacking", needs_restack.len()).bright_yellow()
         );
         println!("Run {} to rebase.", "stax rs --restack".bright_cyan());
     }
@@ -115,11 +161,44 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+fn get_remote_branches(workdir: &std::path::Path) -> HashSet<String> {
+    let output = Command::new("git")
+        .args(["branch", "-r", "--format=%(refname:short)"])
+        .current_dir(workdir)
+        .output();
+
+    match output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|s| s.trim().strip_prefix("origin/"))
+            .map(|s| s.to_string())
+            .collect(),
+        Err(_) => HashSet::new(),
+    }
+}
+
+fn get_commits_ahead(workdir: &std::path::Path, parent: &str, branch: &str) -> Option<usize> {
+    let output = Command::new("git")
+        .args(["rev-list", "--count", &format!("{}..{}", parent, branch)])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .ok()
+    } else {
+        None
+    }
+}
+
 fn assign_stack_color(
     stack: &Stack,
     branch: &str,
     color: Color,
-    colors: &mut std::collections::HashMap<String, Color>,
+    colors: &mut HashMap<String, Color>,
 ) {
     colors.insert(branch.to_string(), color);
     if let Some(info) = stack.branches.get(branch) {
