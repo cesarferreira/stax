@@ -40,7 +40,7 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
             "{}",
             "⚠ Some branches need restacking before submit.".yellow()
         );
-        println!("Run {} first.", "gt restack".cyan());
+        println!("Run {} first.", "stax rs".cyan());
         return Ok(());
     }
 

@@ -28,12 +28,12 @@ pub fn run() -> Result<()> {
 
             println!("{}", "✓ Rebase completed successfully!".green());
             println!();
-            println!("You may want to run {} to continue restacking.", "gt restack".cyan());
+            println!("You may want to run {} to continue restacking.", "stax rs".cyan());
         }
         RebaseResult::Conflict => {
             println!("{}", "More conflicts to resolve.".yellow());
             println!();
-            println!("Resolve the conflicts and run {} again.", "gt continue".cyan());
+            println!("Resolve the conflicts and run {} again.", "stax continue".cyan());
         }
     }
 

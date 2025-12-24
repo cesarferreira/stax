@@ -64,7 +64,7 @@ pub fn run(all: bool) -> Result<()> {
                 println!("    {}", "✗ conflict".red());
                 println!();
                 println!("{}", "Resolve conflicts and run:".yellow());
-                println!("  {}", "gt continue".cyan());
+                println!("  {}", "stax continue".cyan());
                 return Ok(());
             }
         }

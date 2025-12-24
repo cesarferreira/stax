@@ -16,7 +16,7 @@ pub fn run() -> Result<()> {
         println!("{}", "No tracked branches in stack.".dimmed());
         println!(
             "Use {} to start tracking branches.",
-            "gt branch track".cyan()
+            "stax branch track".cyan()
         );
         return Ok(());
     }
@@ -89,7 +89,7 @@ pub fn run() -> Result<()> {
             "{}",
             format!("⚠ {} branch(es) need restacking", needs_restack.len()).yellow()
         );
-        println!("Run {} to rebase the stack.", "gt restack".cyan());
+        println!("Run {} to rebase the stack.", "stax rs".cyan());
         println!();
     }
 
