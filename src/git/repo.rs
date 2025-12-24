@@ -54,14 +54,34 @@ impl GitRepo {
         Ok(commit.id().to_string())
     }
 
-    /// Get the trunk branch name (main or master)
+    /// Get the trunk branch name (from stored setting or auto-detect main/master)
     pub fn trunk_branch(&self) -> Result<String> {
+        // First check if trunk is stored
+        if let Some(trunk) = super::refs::read_trunk(&self.repo)? {
+            return Ok(trunk);
+        }
+        // Fall back to auto-detection
+        self.detect_trunk()
+    }
+
+    /// Auto-detect trunk branch (main or master)
+    pub fn detect_trunk(&self) -> Result<String> {
         for name in ["main", "master"] {
             if self.repo.find_branch(name, BranchType::Local).is_ok() {
                 return Ok(name.to_string());
             }
         }
         anyhow::bail!("No trunk branch (main/master) found")
+    }
+
+    /// Check if stax has been initialized in this repo
+    pub fn is_initialized(&self) -> bool {
+        super::refs::is_initialized(&self.repo)
+    }
+
+    /// Set the trunk branch
+    pub fn set_trunk(&self, trunk: &str) -> Result<()> {
+        super::refs::write_trunk(&self.repo, trunk)
     }
 
     /// Checkout a branch

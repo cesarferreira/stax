@@ -135,13 +135,21 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // Commands that don't need repo initialization
+    if let Commands::Auth { token } = cli.command {
+        return commands::auth::run(token);
+    }
+
+    // Ensure repo is initialized for all other commands
+    commands::init::ensure_initialized()?;
+
     match cli.command {
         Commands::Status => commands::status::run(),
         Commands::Submit { draft, no_pr } => commands::submit::run(draft, no_pr),
         Commands::Restack { all } => commands::restack::run(all),
         Commands::Checkout { branch } => commands::checkout::run(branch),
         Commands::Continue => commands::continue_cmd::run(),
-        Commands::Auth { token } => commands::auth::run(token),
+        Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Branch(cmd) => match cmd {
             BranchCommands::Create { name } => commands::branch::create::run(&name),
             BranchCommands::Checkout { branch } => commands::checkout::run(branch),

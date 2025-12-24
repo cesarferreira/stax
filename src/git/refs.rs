@@ -3,6 +3,7 @@ use git2::Repository;
 use std::process::Command;
 
 const METADATA_REF_PREFIX: &str = "refs/branch-metadata/";
+const STAX_TRUNK_REF: &str = "refs/stax/trunk";
 
 /// Read metadata JSON for a branch from git refs
 pub fn read_metadata(repo: &Repository, branch: &str) -> Result<Option<String>> {
@@ -82,4 +83,55 @@ pub fn list_metadata_branches(repo: &Repository) -> Result<Vec<String>> {
     }
 
     Ok(branches)
+}
+
+/// Check if stax has been initialized in this repo
+pub fn is_initialized(repo: &Repository) -> bool {
+    repo.find_reference(STAX_TRUNK_REF).is_ok()
+}
+
+/// Read the configured trunk branch
+pub fn read_trunk(repo: &Repository) -> Result<Option<String>> {
+    match repo.find_reference(STAX_TRUNK_REF) {
+        Ok(reference) => {
+            let oid = reference.target().context("Reference has no target")?;
+            let blob = repo.find_blob(oid)?;
+            let content = std::str::from_utf8(blob.content())?;
+            Ok(Some(content.trim().to_string()))
+        }
+        Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Write the trunk branch setting
+pub fn write_trunk(repo: &Repository, trunk: &str) -> Result<()> {
+    let workdir = repo
+        .workdir()
+        .context("Repository has no working directory")?;
+
+    // Create blob with trunk name
+    let mut child = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(workdir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin.write_all(trunk.as_bytes())?;
+    }
+
+    let output = child.wait_with_output()?;
+    let hash = String::from_utf8(output.stdout)?.trim().to_string();
+
+    // Update the ref
+    Command::new("git")
+        .args(["update-ref", STAX_TRUNK_REF, &hash])
+        .current_dir(workdir)
+        .status()
+        .context("Failed to update trunk ref")?;
+
+    Ok(())
 }
