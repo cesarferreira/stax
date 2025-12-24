@@ -20,7 +20,7 @@ pub fn run() -> Result<()> {
     println!();
 
     // Render tree starting from trunk
-    render_branch_tree(&stack, &stack.trunk, &current, 0);
+    render_branch_tree(&stack, &stack.trunk, &current, &mut Vec::new());
 
     println!();
 
@@ -29,7 +29,7 @@ pub fn run() -> Result<()> {
     if !needs_restack.is_empty() {
         println!(
             "{}",
-            format!("⚠  {} branch(es) need restacking", needs_restack.len()).bright_yellow()
+            format!("!  {} branch(es) need restacking", needs_restack.len()).bright_yellow()
         );
         println!("Run {} to rebase the stack.", "stax rs".bright_cyan());
         println!();
@@ -38,23 +38,26 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn render_branch_tree(stack: &Stack, branch: &str, current: &str, depth: usize) {
+fn render_branch_tree(stack: &Stack, branch: &str, current: &str, pipes: &mut Vec<bool>) {
     let branch_info = stack.branches.get(branch);
     let is_current = branch == current;
     let is_trunk = branch == &stack.trunk;
 
-    // Get children and render them first (so leaves are at top)
+    // Get children
     let children: Vec<String> = branch_info
         .map(|b| b.children.clone())
         .unwrap_or_default();
 
-    // Render children first (reverse order so first child is at bottom, closest to parent)
-    for child in children.iter().rev() {
-        render_branch_tree(stack, child, current, depth + 1);
+    // Render children first (so leaves are at top)
+    for (i, child) in children.iter().rev().enumerate() {
+        let is_last_child = i == children.len() - 1;
+        pipes.push(!is_last_child);
+        render_branch_tree(stack, child, current, pipes);
+        pipes.pop();
     }
 
-    // Build indent using ASCII pipe for consistent alignment
-    let indent: String = (0..depth).map(|_| "|   ").collect();
+    // Build prefix from pipes
+    let prefix: String = pipes.iter().map(|&has_pipe| if has_pipe { "|   " } else { "    " }).collect();
 
     // Branch indicator
     let indicator = if is_current { "*" } else { "o" };
@@ -94,7 +97,7 @@ fn render_branch_tree(stack: &Stack, branch: &str, current: &str, depth: usize) 
     // Render this branch
     println!(
         "{}{} {}{}",
-        indent.bright_black(),
+        prefix.bright_black(),
         indicator_colored,
         name_colored,
         badges

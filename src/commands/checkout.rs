@@ -20,7 +20,7 @@ pub fn run(branch: Option<String>) -> Result<()> {
             // Build items with tree structure
             let mut items = Vec::new();
             let mut branch_names = Vec::new();
-            collect_branch_items(&stack, &stack.trunk, &current, 0, &mut items, &mut branch_names);
+            collect_branch_items(&stack, &stack.trunk, &current, &mut Vec::new(), &mut items, &mut branch_names);
 
             if items.is_empty() {
                 println!("No branches found.");
@@ -52,7 +52,7 @@ fn collect_branch_items(
     stack: &Stack,
     branch: &str,
     current: &str,
-    depth: usize,
+    pipes: &mut Vec<bool>,
     items: &mut Vec<String>,
     branch_names: &mut Vec<String>,
 ) {
@@ -64,15 +64,18 @@ fn collect_branch_items(
         .map(|b| b.children.clone())
         .unwrap_or_default();
 
-    for child in children.iter().rev() {
-        collect_branch_items(stack, child, current, depth + 1, items, branch_names);
+    for (i, child) in children.iter().rev().enumerate() {
+        let is_last_child = i == children.len() - 1;
+        pipes.push(!is_last_child);
+        collect_branch_items(stack, child, current, pipes, items, branch_names);
+        pipes.pop();
     }
 
-    // Build display string with ASCII pipe for consistent alignment
-    let indent: String = (0..depth).map(|_| "|   ").collect();
+    // Build prefix from pipes
+    let prefix: String = pipes.iter().map(|&has_pipe| if has_pipe { "|   " } else { "    " }).collect();
     let indicator = if is_current { "*" } else { "o" };
 
-    let mut display = format!("{}{} {}", indent, indicator, branch);
+    let mut display = format!("{}{} {}", prefix, indicator, branch);
 
     if let Some(info) = branch_info {
         if info.needs_restack {
