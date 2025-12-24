@@ -1,13 +1,14 @@
 [package]
-name = "gt"
+name = "stax"
 version = "0.1.0"
 edition = "2021"
 description = "Fast stacked Git branches and PRs"
 license = "MIT"
 authors = ["Cesar Ferreira"]
+repository = "https://github.com/cesarferreira/stax"
 
 [[bin]]
-name = "gt"
+name = "stax"
 path = "src/main.rs"
 
 [dependencies]
