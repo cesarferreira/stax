@@ -3,7 +3,6 @@ mod config;
 mod engine;
 mod git;
 mod github;
-mod tree;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

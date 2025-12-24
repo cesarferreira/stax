@@ -17,98 +17,131 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!();
+    // Collect all stacks (each direct child of trunk starts a stack)
+    let trunk_info = stack.branches.get(&stack.trunk);
+    let mut trunk_children: Vec<String> = trunk_info
+        .map(|b| b.children.clone())
+        .unwrap_or_default();
+    trunk_children.sort();
 
-    // Render tree starting from trunk (bottom-up: trunk at bottom)
-    render_branch_tree(&repo, &stack, &stack.trunk, &current, 0);
+    // Render each stack
+    for (stack_idx, stack_root) in trunk_children.iter().enumerate() {
+        let is_last_stack = stack_idx == trunk_children.len() - 1;
+        render_stack(&repo, &stack, stack_root, &current, is_last_stack);
+    }
 
-    println!();
+    // Render trunk
+    let is_current = stack.trunk == current;
+    let indicator = "◉";
+    let connector = "┘";
+
+    print!("{}", indicator.bright_blue());
+    print!("{}", connector.bright_black());
+    print!("  ");
+    if is_current {
+        println!("{}", stack.trunk.bright_green().bold());
+    } else {
+        println!("{}", stack.trunk.bright_blue().bold());
+    }
+
+    // Trunk details
+    if let Ok(age) = repo.branch_age(&stack.trunk) {
+        println!("{}  {}", "|".bright_black(), age.dimmed());
+    }
+    if let Ok(commits) = repo.branch_commits(&stack.trunk, None) {
+        for commit in commits.iter().take(3) {
+            println!(
+                "{}  {} {}",
+                "|".bright_black(),
+                commit.short_hash.bright_yellow(),
+                commit.message.white()
+            );
+        }
+    }
+
+    // Show hint if restack needed
+    let needs_restack = stack.needs_restack();
+    if !needs_restack.is_empty() {
+        println!();
+        println!(
+            "{}",
+            format!("!  {} branch(es) need restacking", needs_restack.len()).bright_yellow()
+        );
+        println!("Run {} to rebase the stack.", "stax rs".bright_cyan());
+    }
 
     Ok(())
 }
 
-fn render_branch_tree(
-    repo: &GitRepo,
-    stack: &Stack,
-    branch: &str,
-    current: &str,
-    depth: usize,
-) {
-    let branch_info = stack.branches.get(branch);
-    let is_current = branch == current;
-    let is_trunk = branch == &stack.trunk;
+fn render_stack(repo: &GitRepo, stack: &Stack, branch: &str, current: &str, is_last_stack: bool) {
+    // Collect all branches in this stack (linear chain)
+    let mut branches = Vec::new();
+    collect_stack_branches(stack, branch, &mut branches);
 
-    // Get children sorted alphabetically for consistent ordering
-    let mut children: Vec<String> = branch_info
-        .map(|b| b.children.clone())
-        .unwrap_or_default();
-    children.sort();
+    // Render from leaf to root (top to bottom)
+    for b in branches.iter() {
+        let is_current = *b == current;
 
-    // Render children first (so leaves are at top)
-    for child in &children {
-        render_branch_tree(repo, stack, child, current, depth + 1);
-    }
+        // Left margin: │ for non-last stacks, empty for last stack
+        let left_margin = if is_last_stack { "  " } else { "│ " };
 
-    // Indentation: 2 spaces per level
-    let indent = "  ".repeat(depth);
+        // Indicator
+        let indicator = if is_current { "◉" } else { "○" };
+        let indicator_colored = if is_current {
+            indicator.bright_green().bold()
+        } else {
+            indicator.bright_cyan()
+        };
 
-    // Branch indicator
-    let indicator = if is_current { "*" } else { "o" };
-    let indicator_colored = if is_current {
-        indicator.bright_green().bold()
-    } else if is_trunk {
-        indicator.bright_blue()
-    } else {
-        indicator.bright_cyan()
-    };
+        // Branch name
+        let name_colored = if is_current {
+            b.bright_green().bold()
+        } else {
+            b.bright_cyan()
+        };
 
-    // Branch name with bright colors
-    let name_colored = if is_current {
-        branch.bright_green().bold()
-    } else if is_trunk {
-        branch.bright_blue().bold()
-    } else {
-        branch.bright_cyan()
-    };
-
-    // Build status badges
-    let mut badges = String::new();
-
-    if is_current {
-        badges.push_str(&" <".bright_green().to_string());
-    }
-
-    if let Some(info) = branch_info {
-        if info.needs_restack {
-            badges.push_str(&" [needs restack]".bright_yellow().to_string());
+        // Status badges
+        let mut badges = String::new();
+        if let Some(info) = stack.branches.get(*b) {
+            if info.needs_restack {
+                badges.push_str(&" [needs restack]".bright_yellow().to_string());
+            }
+            if let Some(pr) = info.pr_number {
+                badges.push_str(&format!(" PR #{}", pr).bright_magenta().to_string());
+            }
         }
-        if let Some(pr_num) = info.pr_number {
-            badges.push_str(&format!(" PR #{}", pr_num).bright_magenta().to_string());
+
+        println!("{}{} {}{}", left_margin.bright_black(), indicator_colored, name_colored, badges);
+
+        // Details: age and commits
+        let detail_margin = if is_last_stack { "  " } else { "│ " };
+
+        if let Ok(age) = repo.branch_age(b) {
+            println!("{}{}  {}", detail_margin.bright_black(), "|".bright_black(), age.dimmed());
         }
-    }
 
-    println!("{}{} {}{}", indent, indicator_colored, name_colored, badges);
-
-    // Details line
-    let pipe_indent = format!("{}|", indent);
-
-    // Age
-    if let Ok(age) = repo.branch_age(branch) {
-        println!("{}  {}", pipe_indent.bright_black(), age.dimmed());
-    }
-
-    // Commits unique to this branch
-    let parent = branch_info.and_then(|b| b.parent.as_deref());
-    if let Ok(commits) = repo.branch_commits(branch, parent) {
-        if !commits.is_empty() {
-            for commit in commits {
+        let parent = stack.branches.get(*b).and_then(|info| info.parent.as_deref());
+        if let Ok(commits) = repo.branch_commits(b, parent) {
+            for commit in commits.iter().take(3) {
                 println!(
-                    "{}  {} {}",
-                    pipe_indent.bright_black(),
+                    "{}{}  {} {}",
+                    detail_margin.bright_black(),
+                    "|".bright_black(),
                     commit.short_hash.bright_yellow(),
                     commit.message.white()
                 );
             }
         }
     }
+}
+
+fn collect_stack_branches<'a>(stack: &'a Stack, branch: &'a str, result: &mut Vec<&'a str>) {
+    // First collect children (to get leaves first)
+    if let Some(info) = stack.branches.get(branch) {
+        for child in &info.children {
+            collect_stack_branches(stack, child, result);
+        }
+    }
+    // Then add this branch
+    result.push(branch);
 }

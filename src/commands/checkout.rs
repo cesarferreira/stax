@@ -17,10 +17,32 @@ pub fn run(branch: Option<String>) -> Result<()> {
                 return Ok(());
             }
 
-            // Build items with tree structure
+            // Build items with fp-style tree structure
             let mut items = Vec::new();
             let mut branch_names = Vec::new();
-            collect_branch_items(&stack, &stack.trunk, &current, 0, &mut items, &mut branch_names);
+
+            // Get trunk children (each starts a stack)
+            let trunk_info = stack.branches.get(&stack.trunk);
+            let mut trunk_children: Vec<String> = trunk_info
+                .map(|b| b.children.clone())
+                .unwrap_or_default();
+            trunk_children.sort();
+
+            // Collect branches from each stack
+            for (stack_idx, stack_root) in trunk_children.iter().enumerate() {
+                let is_last_stack = stack_idx == trunk_children.len() - 1;
+                collect_stack_items(&stack, stack_root, &current, is_last_stack, &mut items, &mut branch_names);
+            }
+
+            // Add trunk
+            let is_current = stack.trunk == current;
+            let indicator = if is_current { "◉" } else { "◉" };
+            let mut display = format!("{}┘  {}", indicator, stack.trunk);
+            if is_current {
+                display.push_str(" <");
+            }
+            items.push(display);
+            branch_names.push(stack.trunk.clone());
 
             if items.is_empty() {
                 println!("No branches found.");
@@ -48,47 +70,50 @@ pub fn run(branch: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn collect_branch_items(
+fn collect_stack_items(
     stack: &Stack,
     branch: &str,
     current: &str,
-    depth: usize,
+    is_last_stack: bool,
     items: &mut Vec<String>,
     branch_names: &mut Vec<String>,
 ) {
-    let branch_info = stack.branches.get(branch);
-    let is_current = branch == current;
+    // Collect all branches in this stack
+    let mut branches = Vec::new();
+    collect_stack_branches(stack, branch, &mut branches);
 
-    // Get children sorted alphabetically for consistent ordering
-    let mut children: Vec<String> = branch_info
-        .map(|b| b.children.clone())
-        .unwrap_or_default();
-    children.sort();
+    // Render from leaf to root
+    for b in branches.iter() {
+        let is_current = *b == current;
 
-    // Process children first (so leaves are at top)
-    for child in &children {
-        collect_branch_items(stack, child, current, depth + 1, items, branch_names);
-    }
+        let left_margin = if is_last_stack { "  " } else { "│ " };
+        let indicator = if is_current { "◉" } else { "○" };
 
-    // Indentation: 2 spaces per level
-    let indent = "  ".repeat(depth);
-    let indicator = if is_current { "*" } else { "o" };
+        let mut display = format!("{}{} {}", left_margin, indicator, b);
 
-    let mut display = format!("{}{} {}", indent, indicator, branch);
-
-    if let Some(info) = branch_info {
-        if info.needs_restack {
-            display.push_str(" [needs restack]");
+        if let Some(info) = stack.branches.get(*b) {
+            if info.needs_restack {
+                display.push_str(" [needs restack]");
+            }
+            if let Some(pr) = info.pr_number {
+                display.push_str(&format!(" PR #{}", pr));
+            }
         }
-        if let Some(pr) = info.pr_number {
-            display.push_str(&format!(" PR #{}", pr));
+
+        if is_current {
+            display.push_str(" <");
+        }
+
+        items.push(display);
+        branch_names.push(b.to_string());
+    }
+}
+
+fn collect_stack_branches<'a>(stack: &'a Stack, branch: &'a str, result: &mut Vec<&'a str>) {
+    if let Some(info) = stack.branches.get(branch) {
+        for child in &info.children {
+            collect_stack_branches(stack, child, result);
         }
     }
-
-    if is_current {
-        display.push_str(" <");
-    }
-
-    items.push(display);
-    branch_names.push(branch.to_string());
+    result.push(branch);
 }
