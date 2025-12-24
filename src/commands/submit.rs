@@ -4,6 +4,7 @@ use crate::github::pr::{generate_stack_comment, StackPrInfo};
 use crate::github::GitHubClient;
 use anyhow::{Context, Result};
 use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::process::Command;
 
 pub fn run(draft: bool, no_pr: bool) -> Result<()> {
@@ -23,6 +24,13 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Validation phase
+    println!(
+        "{}",
+        "Validating that this stack is ready to submit...".yellow()
+    );
+    println!();
+
     // Check for needs restack
     let needs_restack: Vec<_> = stack_branches
         .iter()
@@ -38,25 +46,127 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
     if !needs_restack.is_empty() {
         println!(
             "{}",
-            "⚠ Some branches need restacking before submit.".yellow()
+            "WARNING: Some branches need restacking before submit:".red()
         );
-        println!("Run {} first.", "stax rs".cyan());
+        for b in &needs_restack {
+            println!("  {} {}", "▸".red(), b);
+        }
+        println!();
+        println!("Run {} first.", "stax rs --restack".cyan());
         return Ok(());
+    }
+
+    // Check for branches with no changes (empty branches)
+    let empty_branches: Vec<_> = stack_branches
+        .iter()
+        .filter(|b| {
+            if let Some(branch_info) = stack.branches.get(*b) {
+                // Check if branch has same commit as parent
+                if let Some(parent) = &branch_info.parent {
+                    if let Ok(branch_commit) = repo.branch_commit(b) {
+                        if let Ok(parent_commit) = repo.branch_commit(parent) {
+                            return branch_commit == parent_commit;
+                        }
+                    }
+                }
+            }
+            false
+        })
+        .collect();
+
+    if !empty_branches.is_empty() {
+        println!("{}", "WARNING: The following branch has no changes:".yellow());
+        for b in &empty_branches {
+            println!("  {} {}", "▸".yellow(), b);
+        }
+        println!(
+            "{}",
+            "WARNING: Are you sure you want to submit it?".yellow()
+        );
+        println!();
+
+        let proceed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Continue with empty branch?")
+            .default(false)
+            .interact()?;
+
+        if !proceed {
+            println!("{}", "Aborted.".red());
+            return Ok(());
+        }
+        println!();
     }
 
     // Get remote URL for GitHub
     let remote_url = get_remote_url(repo.workdir()?)?;
     let (owner, repo_name) = GitHubClient::from_remote(&remote_url)?;
 
+    // Check which branches exist on remote
+    let remote_branches = get_remote_branches(repo.workdir()?)?;
+
+    // Build plan - determine which PRs need create vs update
     println!(
-        "Submitting {} branch(es) to {}/{}...",
+        "{}",
+        "Preparing to submit PRs for the following branches...".yellow()
+    );
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let client = rt.block_on(async { GitHubClient::new(&owner, &repo_name) })?;
+
+    struct BranchPlan {
+        branch: String,
+        parent: String,
+        existing_pr: Option<u64>,
+        needs_create: bool,
+    }
+
+    let mut plans: Vec<BranchPlan> = Vec::new();
+
+    for branch in &stack_branches {
+        let meta = BranchMetadata::read(repo.inner(), branch)?
+            .context(format!("No metadata for branch {}", branch))?;
+
+        // Check if PR exists
+        let existing_pr = rt.block_on(async { client.find_pr(branch).await })?;
+
+        let needs_create = existing_pr.is_none();
+        let pr_number = existing_pr.as_ref().map(|p| p.number);
+
+        // Determine the base branch for PR
+        // If parent doesn't exist on remote, use trunk
+        let base = if remote_branches.contains(&meta.parent_branch_name) {
+            meta.parent_branch_name.clone()
+        } else if meta.parent_branch_name == stack.trunk {
+            stack.trunk.clone()
+        } else {
+            // Parent branch not on remote yet - we'll push it first
+            meta.parent_branch_name.clone()
+        };
+
+        plans.push(BranchPlan {
+            branch: branch.clone(),
+            parent: base,
+            existing_pr: pr_number,
+            needs_create,
+        });
+
+        let action = if needs_create {
+            "(Create)".green()
+        } else {
+            format!("(Update #{})", pr_number.unwrap()).blue()
+        };
+        println!("  {} {} {}", "▸".white(), branch, action);
+    }
+    println!();
+
+    // Push all branches first
+    println!(
+        "Pushing {} branch(es) to {}/{}...",
         stack_branches.len().to_string().cyan(),
         owner,
         repo_name
     );
-    println!();
 
-    // Push all branches
     for branch in &stack_branches {
         print!("  Pushing {}... ", branch.white());
         push_branch(repo.workdir()?, branch)?;
@@ -65,7 +175,10 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
 
     if no_pr {
         println!();
-        println!("{}", "✓ Branches pushed (--no-pr, skipping PR creation)".green());
+        println!(
+            "{}",
+            "✓ Branches pushed (--no-pr, skipping PR creation)".green()
+        );
         return Ok(());
     }
 
@@ -73,59 +186,106 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
     println!();
     println!("Creating/updating PRs...");
 
-    let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let client = GitHubClient::new(&owner, &repo_name)?;
-
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();
 
-        for branch in &stack_branches {
-            let meta = BranchMetadata::read(repo.inner(), branch)?
-                .context(format!("No metadata for branch {}", branch))?;
+        for plan in &plans {
+            let meta = BranchMetadata::read(repo.inner(), &plan.branch)?
+                .context(format!("No metadata for branch {}", plan.branch))?;
 
-            // Check if PR exists
-            let existing_pr = client.find_pr(branch).await?;
+            if plan.needs_create {
+                // Prompt for title
+                let default_title = plan
+                    .branch
+                    .split('/')
+                    .last()
+                    .unwrap_or(&plan.branch)
+                    .replace('-', " ")
+                    .replace('_', " ");
 
-            let pr = if let Some(pr) = existing_pr {
-                print!("  Updating PR #{} for {}... ", pr.number, branch.white());
+                println!();
+                println!(
+                    "  {} {} {}",
+                    "▸".white(),
+                    plan.branch.cyan(),
+                    "(Create)".green()
+                );
 
-                // Update base if needed
-                client.update_pr_base(pr.number, &meta.parent_branch_name).await?;
+                let title: String = Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Title")
+                    .default(default_title)
+                    .interact_text()?;
 
-                println!("{}", "✓".green());
-                pr
-            } else {
-                print!("  Creating PR for {}... ", branch.white());
+                // Prompt for body
+                let body_options = vec!["Skip (leave empty)", "Enter description"];
+                let body_choice = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Body")
+                    .items(&body_options)
+                    .default(0)
+                    .interact()?;
 
-                // Create new PR
-                let title = branch.replace('-', " ").replace('_', " ");
-                let body = format!("Stack branch: `{}`\n\nParent: `{}`", branch, meta.parent_branch_name);
+                let body = if body_choice == 1 {
+                    Input::with_theme(&ColorfulTheme::default())
+                        .with_prompt("Description")
+                        .allow_empty(true)
+                        .interact_text()?
+                } else {
+                    String::new()
+                };
+
+                print!("  Creating PR... ");
 
                 let pr = client
-                    .create_pr(branch, &meta.parent_branch_name, &title, &body, draft)
-                    .await?;
+                    .create_pr(&plan.branch, &plan.parent, &title, &body, draft)
+                    .await
+                    .context(format!(
+                        "Failed to create PR for {} (base: {})",
+                        plan.branch, plan.parent
+                    ))?;
 
                 println!("{} {}", "✓".green(), format!("#{}", pr.number).dimmed());
-                pr
-            };
 
-            // Update metadata with PR info
-            let updated_meta = BranchMetadata {
-                pr_info: Some(crate::engine::metadata::PrInfo {
-                    number: pr.number,
-                    state: pr.state.clone(),
-                    is_draft: Some(pr.is_draft),
-                }),
-                ..meta
-            };
-            updated_meta.write(repo.inner(), branch)?;
+                // Update metadata with PR info
+                let updated_meta = BranchMetadata {
+                    pr_info: Some(crate::engine::metadata::PrInfo {
+                        number: pr.number,
+                        state: pr.state.clone(),
+                        is_draft: Some(pr.is_draft),
+                    }),
+                    ..meta
+                };
+                updated_meta.write(repo.inner(), &plan.branch)?;
 
-            pr_infos.push(StackPrInfo {
-                branch: branch.clone(),
-                pr_number: Some(pr.number),
-                state: Some(pr.state.clone()),
-                is_draft: pr.is_draft,
-            });
+                pr_infos.push(StackPrInfo {
+                    branch: plan.branch.clone(),
+                    pr_number: Some(pr.number),
+                    state: Some(pr.state.clone()),
+                    is_draft: pr.is_draft,
+                });
+            } else {
+                // Update existing PR
+                let pr_number = plan.existing_pr.unwrap();
+                print!(
+                    "  Updating PR #{} for {}... ",
+                    pr_number,
+                    plan.branch.white()
+                );
+
+                // Update base if needed
+                client.update_pr_base(pr_number, &plan.parent).await?;
+
+                println!("{}", "✓".green());
+
+                // Get current PR state
+                let pr = client.get_pr(pr_number).await?;
+
+                pr_infos.push(StackPrInfo {
+                    branch: plan.branch.clone(),
+                    pr_number: Some(pr.number),
+                    state: Some(pr.state.clone()),
+                    is_draft: pr.is_draft,
+                });
+            }
         }
 
         // Update stack comments on all PRs
@@ -192,6 +352,21 @@ fn get_remote_url(workdir: &std::path::Path) -> Result<String> {
     }
 
     Ok(url)
+}
+
+fn get_remote_branches(workdir: &std::path::Path) -> Result<Vec<String>> {
+    let output = Command::new("git")
+        .args(["branch", "-r", "--format=%(refname:short)"])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to list remote branches")?;
+
+    let branches: Vec<String> = String::from_utf8(output.stdout)?
+        .lines()
+        .map(|s| s.trim().strip_prefix("origin/").unwrap_or(s).to_string())
+        .collect();
+
+    Ok(branches)
 }
 
 fn push_branch(workdir: &std::path::Path, branch: &str) -> Result<()> {
