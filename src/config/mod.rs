@@ -13,7 +13,6 @@ pub struct Config {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct BranchConfig {
     /// Prefix for new branches (e.g., "cesar/")
     #[serde(default)]
@@ -69,12 +68,10 @@ fn default_tips() -> bool {
 }
 
 impl Config {
-    /// Get the config directory
+    /// Get the config directory (~/.config/stax on all platforms)
     pub fn dir() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .context("Could not find config directory")?
-            .join("stax");
-        Ok(config_dir)
+        let home = dirs::home_dir().context("Could not find home directory")?;
+        Ok(home.join(".config").join("stax"))
     }
 
     /// Get the config file path
