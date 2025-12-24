@@ -80,19 +80,12 @@ enum Commands {
     Up,
 
     /// Move down the stack (to parent branch)
-    #[command(visible_alias = "bdown")]
+    #[command(visible_alias = "bd")]
     Down,
 
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
     Bc { name: String },
-
-    #[command(hide = true)]
-    Bd {
-        branch: Option<String>,
-        #[arg(short, long)]
-        force: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -181,6 +174,5 @@ fn main() -> Result<()> {
         Commands::Down => commands::navigate::down(),
         // Hidden shortcuts
         Commands::Bc { name } => commands::branch::create::run(&name),
-        Commands::Bd { branch, force } => commands::branch::delete::run(branch, force),
     }
 }
