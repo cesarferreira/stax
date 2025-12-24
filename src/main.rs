@@ -8,7 +8,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "gt")]
+#[command(name = "stax")]
 #[command(about = "Fast stacked Git branches and PRs", long_about = None)]
 struct Cli {
     #[command(subcommand)]

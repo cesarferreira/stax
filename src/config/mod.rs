@@ -19,7 +19,7 @@ impl Config {
     pub fn path() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
             .context("Could not find config directory")?
-            .join("gt");
+            .join("stax");
         Ok(config_dir.join("config.toml"))
     }
 
