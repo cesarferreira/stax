@@ -38,15 +38,9 @@ pub fn run() -> Result<()> {
     let indicator = "○";
 
     // Show connector line if there's a current stack
-    if current_stack_root.is_some() {
-        print!("{}", indicator.bright_blue());
-        print!("{}", "─┘".bright_black());
-    } else {
-        print!("{}", indicator.bright_blue());
-        print!("{}", "┘".bright_black());
-        print!(" ");
-    }
-    print!(" ");
+    print!("{}", indicator.bright_blue());
+    print!("{}", "─┘".bright_black());
+    print!("  ");
     if is_current {
         println!("{}", stack.trunk.bright_green().bold());
     } else {
@@ -102,13 +96,13 @@ fn render_stack(stack: &Stack, branch: &str, current: &str, is_current_stack: bo
             }
         }
 
-        // Print with left margin: │ for current stack, space for others
+        // Print: indicator first, then spacing, then name
+        // fp style: "○    name" for non-current, "│ ○  name" for current
         if is_current_stack {
-            print!("{}", "│".bright_blue());
+            println!("{} {}  {}{}", "│".bright_blue(), indicator_colored, name_colored, badges);
         } else {
-            print!(" ");
+            println!("{}    {}{}", indicator_colored, name_colored, badges);
         }
-        println!(" {} {}{}", indicator_colored, name_colored, badges);
     }
 }
 
