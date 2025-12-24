@@ -8,10 +8,7 @@ pub fn run() -> Result<()> {
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
 
-    // Get ALL branches in display order (leaves first, trunk last)
-    let stack_branches = stack.all_branches_display_order();
-
-    if stack_branches.len() <= 1 {
+    if stack.branches.len() <= 1 {
         println!("{}", "No tracked branches in stack.".dimmed());
         println!(
             "Use {} to start tracking branches.",
@@ -20,90 +17,97 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    let total = stack_branches.len();
-    for (i, branch_name) in stack_branches.iter().enumerate() {
-        let branch_info = stack.branches.get(branch_name);
-        let is_current = branch_name == &current;
-        let is_trunk = branch_name == &stack.trunk;
-        let is_last = i == total - 1;
+    println!();
 
-        // Branch indicator
-        let indicator = if is_current { "◉" } else { "○" };
-        let indicator_colored = if is_current {
-            indicator.green()
-        } else {
-            indicator.cyan()
-        };
-
-        // Branch name with status
-        let name_colored = if is_current {
-            branch_name.green().bold()
-        } else if is_trunk {
-            branch_name.blue()
-        } else {
-            branch_name.cyan()
-        };
-
-        // Build first line: indicator + branch name + status
-        let mut first_line = format!("{} {}", indicator_colored, name_colored);
-
-        if is_current {
-            first_line.push_str(&" (current)".dimmed().to_string());
-        }
-
-        if let Some(info) = branch_info {
-            if info.needs_restack {
-                first_line.push_str(&" (needs restack)".yellow().to_string());
-            }
-        }
-
-        println!("{}", first_line);
-
-        // Second line: age
-        if let Ok(age) = repo.branch_age(branch_name) {
-            let prefix = if is_last { " " } else { "│" };
-            println!("{} {}", prefix.dimmed(), age.dimmed());
-        }
-
-        // PR info (if available)
-        if let Some(info) = branch_info {
-            if let Some(pr_num) = info.pr_number {
-                let prefix = if is_last { " " } else { "│" };
-                // TODO: fetch actual PR title from GitHub
-                let pr_line = format!(
-                    "PR #{} {}",
-                    pr_num.to_string().magenta(),
-                    format!("https://github.com/.../pull/{}", pr_num).dimmed()
-                );
-                println!("{}", prefix.dimmed());
-                println!("{} {}", prefix.dimmed(), pr_line);
-            }
-        }
-
-        // Commits unique to this branch
-        let parent = branch_info.and_then(|b| b.parent.as_deref());
-        if let Ok(commits) = repo.branch_commits(branch_name, parent) {
-            if !commits.is_empty() {
-                let prefix = if is_last { " " } else { "│" };
-                println!("{}", prefix.dimmed());
-                for commit in commits {
-                    println!(
-                        "{} {} - {}",
-                        prefix.dimmed(),
-                        commit.short_hash.yellow(),
-                        commit.message.dimmed()
-                    );
-                }
-            }
-        }
-
-        // Spacing between branches
-        if !is_last {
-            println!("{}", "│".dimmed());
-        }
-    }
+    // Render tree starting from trunk
+    render_branch_tree(&repo, &stack, &stack.trunk, &current, 0);
 
     println!();
 
     Ok(())
+}
+
+fn render_branch_tree(repo: &GitRepo, stack: &Stack, branch: &str, current: &str, depth: usize) {
+    let branch_info = stack.branches.get(branch);
+    let is_current = branch == current;
+    let is_trunk = branch == &stack.trunk;
+
+    // Get children and render them first (so leaves are at top)
+    let children: Vec<String> = branch_info
+        .map(|b| b.children.clone())
+        .unwrap_or_default();
+
+    // Render children first (reverse order so first child is at bottom)
+    for child in children.iter().rev() {
+        render_branch_tree(repo, stack, child, current, depth + 1);
+    }
+
+    // Build colored indent
+    let indent: String = (0..depth).map(|_| "│  ").collect();
+    let indent_colored = indent.bright_black();
+
+    // Branch indicator with bright colors
+    let indicator = if is_current { "●" } else { "○" };
+    let indicator_colored = if is_current {
+        indicator.bright_green().bold()
+    } else if is_trunk {
+        indicator.bright_blue()
+    } else {
+        indicator.bright_cyan()
+    };
+
+    // Branch name with bright colors
+    let name_colored = if is_current {
+        branch.bright_green().bold()
+    } else if is_trunk {
+        branch.bright_blue().bold()
+    } else {
+        branch.bright_cyan()
+    };
+
+    // Build first line with status badges
+    let mut badges = String::new();
+
+    if is_current {
+        badges.push_str(&" ◀".bright_green().to_string());
+    }
+
+    if let Some(info) = branch_info {
+        if info.needs_restack {
+            badges.push_str(&" ⚠ needs restack".bright_yellow().to_string());
+        }
+        if let Some(pr_num) = info.pr_number {
+            badges.push_str(&format!(" PR #{}", pr_num).bright_magenta().to_string());
+        }
+    }
+
+    println!("{}{} {}{}", indent_colored, indicator_colored, name_colored, badges);
+
+    // Details line (age and commit info)
+    let details_indent = format!("{}│  ", indent).bright_black();
+
+    // Age
+    if let Ok(age) = repo.branch_age(branch) {
+        println!("{}{}", details_indent, age.dimmed());
+    }
+
+    // Commits unique to this branch
+    let parent = branch_info.and_then(|b| b.parent.as_deref());
+    if let Ok(commits) = repo.branch_commits(branch, parent) {
+        if !commits.is_empty() {
+            for commit in commits {
+                println!(
+                    "{}{} {}",
+                    details_indent,
+                    commit.short_hash.bright_yellow(),
+                    commit.message.white()
+                );
+            }
+        }
+    }
+
+    // Spacing line
+    if depth > 0 || !children.is_empty() {
+        println!("{}{}", indent_colored, "│".bright_black());
+    }
 }
