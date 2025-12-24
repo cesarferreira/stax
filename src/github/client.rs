@@ -54,6 +54,11 @@ impl GitHubClient {
             }
         }
 
-        anyhow::bail!("Could not parse GitHub remote URL: {}", remote_url)
+        anyhow::bail!(
+            "Could not parse GitHub remote URL: {}\n\n\
+             stax only supports GitHub repositories.\n\
+             Expected format: git@github.com:owner/repo.git or https://github.com/owner/repo.git",
+            remote_url
+        )
     }
 }
