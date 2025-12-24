@@ -12,52 +12,57 @@ pub fn run(branch: Option<String>) -> Result<()> {
             // Interactive selection with fuzzy finder
             let stack = Stack::load(&repo)?;
             let current = repo.current_branch()?;
-            let trunk = repo.trunk_branch()?;
 
-            // Get ALL local branches
-            let mut all_branches = repo.list_branches()?;
-            all_branches.sort();
+            // Get the current stack (ordered from trunk to leaves)
+            let mut stack_branches = stack.current_stack(&current);
 
-            // Move trunk to the end, current to top
-            all_branches.retain(|b| b != &trunk && b != &current);
-
-            // Put current first if it exists
-            let mut branches = vec![];
-            if all_branches.iter().any(|b| b == &current) || current != trunk {
-                branches.push(current.clone());
-            }
-            branches.extend(all_branches);
-            branches.push(trunk.clone());
-
-            if branches.is_empty() {
+            if stack_branches.is_empty() {
                 println!("No branches found.");
                 return Ok(());
             }
 
-            // Build display items with indicators
-            let items: Vec<String> = branches
+            // Reverse so leaves are at top, trunk at bottom (like fp)
+            stack_branches.reverse();
+
+            // Build display items with tree structure (like fp bco)
+            let total = stack_branches.len();
+            let items: Vec<String> = stack_branches
                 .iter()
-                .map(|b| {
-                    let mut display = b.clone();
+                .enumerate()
+                .map(|(i, b)| {
+                    let is_current = b == &current;
+                    let is_last = i == total - 1;
+
+                    // Build the prefix based on position (matching fp style)
+                    let prefix = if is_last {
+                        // Trunk (bottom) - corner piece
+                        "○─┘ "
+                    } else if i == 0 {
+                        // Top (leaf)
+                        if is_current {
+                            "◉   "
+                        } else {
+                            "○   "
+                        }
+                    } else {
+                        // Middle - vertical connector with circle
+                        if is_current {
+                            "│ ◉ "
+                        } else {
+                            "│ ○ "
+                        }
+                    };
+
+                    let mut display = format!("{}{}", prefix, b);
 
                     // Add tracked branch info
                     if let Some(info) = stack.branches.get(b) {
                         if info.needs_restack {
-                            display.push_str(" ⚠ restack");
+                            display.push_str(" (needs restack)");
                         }
                         if let Some(pr) = info.pr_number {
-                            display.push_str(&format!(" PR#{}", pr));
+                            display.push_str(&format!(" #{}", pr));
                         }
-                    }
-
-                    // Mark current branch
-                    if b == &current {
-                        display.push_str(" ◀ current");
-                    }
-
-                    // Mark trunk
-                    if b == &trunk {
-                        display.push_str(" (trunk)");
                     }
 
                     display
@@ -65,13 +70,13 @@ pub fn run(branch: Option<String>) -> Result<()> {
                 .collect();
 
             let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-                .with_prompt("Switch to branch (type to filter)")
+                .with_prompt("Checkout a branch (autocomplete or arrow keys)")
                 .items(&items)
                 .default(0)
                 .highlight_matches(true)
                 .interact()?;
 
-            branches[selection].clone()
+            stack_branches[selection].clone()
         }
     };
 
