@@ -7,11 +7,44 @@ use std::path::PathBuf;
 pub struct Config {
     #[serde(default)]
     pub github: GitHubConfig,
+    #[serde(default)]
+    pub branch: BranchConfig,
+    #[serde(default)]
+    pub ui: UiConfig,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GitHubConfig {
     pub token: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchConfig {
+    /// Prefix for new branches (e.g., "cesar/")
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// Whether to add date to branch names
+    #[serde(default)]
+    pub date: bool,
+    /// Character to replace spaces and special chars (default: "-")
+    #[serde(default = "default_replacement")]
+    pub replacement: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct UiConfig {
+    /// Whether to show tips
+    #[serde(default = "default_tips")]
+    pub tips: bool,
+}
+
+fn default_replacement() -> String {
+    "-".to_string()
+}
+
+fn default_tips() -> bool {
+    true
 }
 
 impl Config {
@@ -54,5 +87,43 @@ impl Config {
     /// Set GitHub token
     pub fn set_github_token(&mut self, token: &str) {
         self.github.token = Some(token.to_string());
+    }
+
+    /// Format a branch name according to config settings
+    pub fn format_branch_name(&self, name: &str) -> String {
+        let mut result = name.to_string();
+
+        // Replace spaces and special characters
+        let replacement = &self.branch.replacement;
+        result = result
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' || c == '/' {
+                    c
+                } else {
+                    replacement.chars().next().unwrap_or('-')
+                }
+            })
+            .collect();
+
+        // Replace multiple consecutive replacements with single one
+        while result.contains(&format!("{}{}", replacement, replacement)) {
+            result = result.replace(&format!("{}{}", replacement, replacement), replacement);
+        }
+
+        // Add date if enabled
+        if self.branch.date {
+            let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+            result = format!("{}{}{}", date, replacement, result);
+        }
+
+        // Add prefix if set
+        if let Some(prefix) = &self.branch.prefix {
+            if !result.starts_with(prefix) {
+                result = format!("{}{}", prefix, result);
+            }
+        }
+
+        result
     }
 }
