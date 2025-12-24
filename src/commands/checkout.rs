@@ -40,8 +40,7 @@ pub fn run(branch: Option<String>) -> Result<()> {
             // Add trunk
             let is_current = stack.trunk == current;
             let indicator = "○";
-            let connector = if current_stack_root.is_some() { "─┘" } else { "┘ " };
-            let mut display = format!("{}{} {}", indicator, connector, stack.trunk);
+            let mut display = format!("{}─┘  {}", indicator, stack.trunk);
             if is_current {
                 display.push_str(" <");
             }
@@ -89,11 +88,14 @@ fn collect_stack_items(
     // Render from leaf to root
     for b in branches.iter() {
         let is_current = *b == current;
-
-        let left_margin = if is_current_stack { "│" } else { " " };
         let indicator = if is_current { "◉" } else { "○" };
 
-        let mut display = format!("{} {} {}", left_margin, indicator, b);
+        // fp style: "○    name" for non-current, "│ ○  name" for current
+        let mut display = if is_current_stack {
+            format!("│ {}  {}", indicator, b)
+        } else {
+            format!("{}    {}", indicator, b)
+        };
 
         if let Some(info) = stack.branches.get(*b) {
             if info.needs_restack {

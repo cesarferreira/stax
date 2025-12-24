@@ -37,16 +37,9 @@ pub fn run() -> Result<()> {
     let is_current = stack.trunk == current;
     let indicator = "○";
 
-    // Show connector line if there's a current stack
-    if current_stack_root.is_some() {
-        print!("{}", indicator.bright_blue());
-        print!("{}", "─┘".bright_black());
-    } else {
-        print!("{}", indicator.bright_blue());
-        print!("{}", "┘".bright_black());
-        print!(" ");
-    }
-    print!(" ");
+    print!("{}", indicator.bright_blue());
+    print!("{}", "─┘".bright_black());
+    print!("  ");
     if is_current {
         println!("{}", stack.trunk.bright_green().bold());
     } else {
@@ -117,38 +110,42 @@ fn render_stack(repo: &GitRepo, stack: &Stack, branch: &str, current: &str, is_c
             }
         }
 
-        // Print with left margin: │ for current stack, space for others
+        // Print: indicator first, then spacing, then name
+        // fp style: "○    name" for non-current, "│ ○  name" for current
         if is_current_stack {
-            print!("{}", "│".bright_blue());
+            println!("{} {}  {}{}", "│".bright_blue(), indicator_colored, name_colored, badges);
         } else {
-            print!(" ");
+            println!("{}    {}{}", indicator_colored, name_colored, badges);
         }
-        println!(" {} {}{}", indicator_colored, name_colored, badges);
 
         // Details: age and commits
         if let Ok(age) = repo.branch_age(b) {
             if is_current_stack {
-                print!("{}", "│".bright_blue());
+                println!("{} {}  {}", "│".bright_blue(), "|".bright_black(), age.dimmed());
             } else {
-                print!(" ");
+                println!("{}    {}", "|".bright_black(), age.dimmed());
             }
-            println!(" {}  {}", "|".bright_black(), age.dimmed());
         }
 
         let parent = stack.branches.get(*b).and_then(|info| info.parent.as_deref());
         if let Ok(commits) = repo.branch_commits(b, parent) {
             for commit in commits.iter().take(3) {
                 if is_current_stack {
-                    print!("{}", "│".bright_blue());
+                    println!(
+                        "{} {}  {} {}",
+                        "│".bright_blue(),
+                        "|".bright_black(),
+                        commit.short_hash.bright_yellow(),
+                        commit.message.white()
+                    );
                 } else {
-                    print!(" ");
+                    println!(
+                        "{}    {} {}",
+                        "|".bright_black(),
+                        commit.short_hash.bright_yellow(),
+                        commit.message.white()
+                    );
                 }
-                println!(
-                    " {}  {} {}",
-                    "|".bright_black(),
-                    commit.short_hash.bright_yellow(),
-                    commit.message.white()
-                );
             }
         }
     }
