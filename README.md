@@ -1,10 +1,18 @@
-# stax
+<div align="center">
+  <h1>stax</h1>
+  <p>
+    Fast stacked Git branches and PRs. A Rust rewrite of <a href="https://github.com/bradymadden97/freephite">freephite</a>.
+  </p>
 
-> Fast stacked Git branches and PRs. A Rust rewrite of [freephite](https://github.com/bradymadden97/freephite).
+  <p>
+    <img alt="Startup" src="https://img.shields.io/badge/startup-~18ms-brightgreen">
+    <img alt="Git" src="https://img.shields.io/badge/git-git2-f34f29">
+    <img alt="Async" src="https://img.shields.io/badge/async-tokio-2f74c0">
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+  </p>
+</div>
 
-**~18ms startup** vs ~300ms for the Node.js original.
-
-## Installation
+## Install
 
 ```bash
 cargo install --git https://github.com/cesarferreira/stax
@@ -36,8 +44,8 @@ stax s
 # Submit all branches as PRs
 stax ss
 
-# When parent branch changes, restack
-stax rs
+# When parent branch changes, sync and restack
+stax rs --restack
 ```
 
 ## Commands
@@ -128,10 +136,8 @@ stax ss
 #   Creating PR for feat/auth-api... ✓ #123
 #   Creating PR for feat/auth-ui... ✓ #124
 
-# If main gets updated, restack
-git checkout feat/auth-api
-stax rs
-stax us restack  # restack branches above
+# If main gets updated, sync and restack
+stax rs --restack
 ```
 
 ## How It Works
@@ -149,7 +155,7 @@ Each branch tracks:
 
 ## Configuration
 
-Config is stored at `~/.config/stax/config.toml` (safe to commit to dotfiles):
+Config is stored at `~/.config/stax/config.toml`:
 
 ```toml
 [branch]
@@ -161,18 +167,7 @@ replacement = "-"      # Character to replace spaces and special chars
 tips = true            # Show helpful tips
 ```
 
-### Default Config
-
-On first run, stax creates a default config:
-
-```toml
-[branch]
-date = false
-replacement = "-"
-
-[ui]
-tips = true
-```
+View your config with `stax config`.
 
 ### GitHub Authentication
 
@@ -194,8 +189,6 @@ export GITHUB_TOKEN="ghp_xxxx"
 stax auth
 ```
 
-Credentials file has `600` permissions on Unix.
-
 ## Migrating from freephite
 
 stax uses the same metadata format as freephite. Just install stax and your existing stacks will work:
@@ -203,8 +196,8 @@ stax uses the same metadata format as freephite. Just install stax and your exis
 ```bash
 # Your existing fp stacks just work
 stax s  # shows your stack
-stax rs # restacks
-stax ss # submits
+stax rs # syncs repo
+stax ss # submits PRs
 ```
 
 ## Why Rust?
