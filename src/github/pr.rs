@@ -66,6 +66,24 @@ impl GitHubClient {
         })
     }
 
+    /// Get a PR by number
+    pub async fn get_pr(&self, pr_number: u64) -> Result<PrInfo> {
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .context("Failed to get PR")?;
+
+        Ok(PrInfo {
+            number: pr.number,
+            state: pr.state.as_ref().map(|s| format!("{:?}", s)).unwrap_or_default(),
+            title: pr.title.clone().unwrap_or_default(),
+            url: pr.html_url.as_ref().map(|u| u.to_string()).unwrap_or_default(),
+            is_draft: pr.draft.unwrap_or(false),
+        })
+    }
+
     /// Update PR base branch
     pub async fn update_pr_base(&self, pr_number: u64, new_base: &str) -> Result<()> {
         self.octocrab
