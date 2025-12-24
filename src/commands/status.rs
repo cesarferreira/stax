@@ -17,6 +17,18 @@ const STACK_COLORS: &[Color] = &[
     Color::BrightGreen,
 ];
 
+struct BranchInfo {
+    name: String,
+    column: usize,      // Which column this branch is in
+    color: Color,
+    is_current: bool,
+    has_remote: bool,
+    commits_ahead: Option<usize>,
+    pr_number: Option<u64>,
+    needs_restack: bool,
+    has_children: bool, // Does this branch have children below it?
+}
+
 pub fn run() -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
@@ -41,111 +53,133 @@ pub fn run() -> Result<()> {
         .unwrap_or_default();
     trunk_children.sort();
 
-    // Assign colors to stacks
-    let mut stack_colors: HashMap<String, Color> = HashMap::new();
+    // Assign colors and columns to stacks
+    let mut branch_colors: HashMap<String, Color> = HashMap::new();
+    let mut branch_columns: HashMap<String, usize> = HashMap::new();
+
     for (idx, root) in trunk_children.iter().enumerate() {
         let color = STACK_COLORS[idx % STACK_COLORS.len()];
-        assign_stack_color(&stack, root, color, &mut stack_colors);
+        assign_stack_info(&stack, root, idx, color, &mut branch_columns, &mut branch_colors);
     }
+
+    let total_columns = trunk_children.len();
 
     // Collect all branches in display order (leaves first, then parents)
-    let mut display_order: Vec<(String, usize)> = Vec::new(); // (branch, depth)
+    let mut display_order: Vec<BranchInfo> = Vec::new();
     for root in &trunk_children {
-        collect_display_order(&stack, root, 0, &mut display_order);
+        collect_branch_info(
+            &stack,
+            root,
+            &current,
+            &remote_branches,
+            &branch_columns,
+            &branch_colors,
+            repo.workdir()?,
+            &mut display_order,
+        );
     }
 
-    // Render
-    for (branch, depth) in &display_order {
-        let is_current = branch == &current;
-        let color = stack_colors.get(branch).copied().unwrap_or(Color::White);
+    // Track which columns have active lines (branches still to be rendered)
+    let mut active_columns: HashSet<usize> = HashSet::new();
+    for bi in &display_order {
+        if bi.has_children {
+            active_columns.insert(bi.column);
+        }
+    }
 
-        // Build the line
-        let indent = "  ".repeat(*depth);
-        let indicator = if is_current { "◉" } else { "○" };
+    // Render each branch
+    for bi in &display_order {
+        // Build the column indicators
+        let mut line = String::new();
 
-        // Get branch info
-        let info = stack.branches.get(branch);
-
-        // Check if on remote
-        let remote_icon = if remote_branches.contains(branch) {
-            "☁ "
-        } else {
-            ""
-        };
-
-        // Get commits ahead of parent
-        let commits_info = if let Some(parent) = info.and_then(|i| i.parent.as_ref()) {
-            match get_commits_ahead(repo.workdir()?, parent, branch) {
-                Some(0) => "".to_string(),
-                Some(n) => format!(" +{}", n),
-                None => "".to_string(),
+        for col in 0..total_columns {
+            if col == bi.column {
+                // This is our branch's column - show the node
+                let indicator = if bi.is_current { "◉" } else { "○" };
+                if bi.is_current {
+                    line.push_str(&format!("{}", indicator.color(bi.color).bold()));
+                } else {
+                    line.push_str(&format!("{}", indicator.color(bi.color)));
+                }
+            } else if active_columns.contains(&col) {
+                // Another stack has active branches - show line
+                let col_color = STACK_COLORS[col % STACK_COLORS.len()];
+                line.push_str(&format!("{}", "│".color(col_color)));
+            } else {
+                line.push(' ');
             }
-        } else {
-            "".to_string()
-        };
+        }
 
-        // PR badge
-        let pr_badge = info
-            .and_then(|i| i.pr_number)
-            .map(|pr| format!(" PR #{}", pr))
-            .unwrap_or_default();
+        // Add spacing and branch name
+        line.push_str("  ");
 
-        // Restack badge
-        let restack_badge = if info.map(|i| i.needs_restack).unwrap_or(false) {
-            " ↻"
-        } else {
-            ""
-        };
+        // Remote icon
+        if bi.has_remote {
+            line.push_str(&format!("{}", "☁ ".bright_blue()));
+        }
 
-        // Print line
-        if is_current {
-            println!(
-                "{}{}  {}{}{}{}{}",
-                indent,
-                indicator.color(color).bold(),
-                remote_icon.bright_blue(),
-                branch.bold(),
-                commits_info.bright_green(),
-                pr_badge.bright_magenta(),
-                restack_badge.bright_yellow()
-            );
+        // Branch name
+        if bi.is_current {
+            line.push_str(&format!("{}", bi.name.bold()));
         } else {
-            println!(
-                "{}{}  {}{}{}{}{}",
-                indent,
-                indicator.color(color),
-                remote_icon.bright_blue(),
-                branch,
-                commits_info.dimmed(),
-                pr_badge.bright_magenta(),
-                restack_badge.bright_yellow()
-            );
+            line.push_str(&bi.name);
+        }
+
+        // Commits ahead
+        if let Some(n) = bi.commits_ahead {
+            if n > 0 {
+                if bi.is_current {
+                    line.push_str(&format!("{}", format!(" +{}", n).bright_green()));
+                } else {
+                    line.push_str(&format!("{}", format!(" +{}", n).dimmed()));
+                }
+            }
+        }
+
+        // PR number
+        if let Some(pr) = bi.pr_number {
+            line.push_str(&format!("{}", format!(" PR #{}", pr).bright_magenta()));
+        }
+
+        // Restack warning
+        if bi.needs_restack {
+            line.push_str(&format!("{}", " ↻".bright_yellow()));
+        }
+
+        println!("{}", line);
+
+        // If this branch has no children, its column is no longer active
+        if !bi.has_children {
+            active_columns.remove(&bi.column);
         }
     }
 
     // Render trunk
     let is_trunk_current = stack.trunk == current;
-    let trunk_remote = if remote_branches.contains(&stack.trunk) {
-        "☁ "
-    } else {
-        ""
-    };
+    let mut trunk_line = String::new();
+
+    // Show remaining active columns converging to trunk
+    for col in 0..total_columns {
+        if active_columns.contains(&col) || col == 0 {
+            let col_color = STACK_COLORS[col % STACK_COLORS.len()];
+            trunk_line.push_str(&format!("{}", "○".color(col_color)));
+        } else {
+            trunk_line.push(' ');
+        }
+    }
+
+    trunk_line.push_str("  ");
+    if remote_branches.contains(&stack.trunk) {
+        trunk_line.push_str(&format!("{}", "☁ ".bright_blue()));
+    }
 
     if is_trunk_current {
-        println!(
-            "{}  {}{}",
-            "○".white(),
-            trunk_remote.bright_blue(),
-            stack.trunk.bold()
-        );
+        trunk_line.push_str(&format!("{}", stack.trunk.bold()));
     } else {
-        println!(
-            "{}  {}{}",
-            "○".white(),
-            trunk_remote.bright_blue(),
-            stack.trunk
-        );
+        trunk_line.push_str(&stack.trunk);
     }
+
+    println!("{}", trunk_line);
 
     // Show hint if restack needed
     let needs_restack = stack.needs_restack();
@@ -159,6 +193,63 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn assign_stack_info(
+    stack: &Stack,
+    branch: &str,
+    column: usize,
+    color: Color,
+    columns: &mut HashMap<String, usize>,
+    colors: &mut HashMap<String, Color>,
+) {
+    columns.insert(branch.to_string(), column);
+    colors.insert(branch.to_string(), color);
+
+    if let Some(info) = stack.branches.get(branch) {
+        for child in &info.children {
+            assign_stack_info(stack, child, column, color, columns, colors);
+        }
+    }
+}
+
+fn collect_branch_info(
+    stack: &Stack,
+    branch: &str,
+    current: &str,
+    remote_branches: &HashSet<String>,
+    columns: &HashMap<String, usize>,
+    colors: &HashMap<String, Color>,
+    workdir: &std::path::Path,
+    result: &mut Vec<BranchInfo>,
+) {
+    let info = stack.branches.get(branch);
+    let has_children = info.map(|i| !i.children.is_empty()).unwrap_or(false);
+
+    // First collect children (leaves first)
+    if let Some(info) = info {
+        for child in &info.children {
+            collect_branch_info(stack, child, current, remote_branches, columns, colors, workdir, result);
+        }
+    }
+
+    // Get commits ahead
+    let commits_ahead = info
+        .and_then(|i| i.parent.as_ref())
+        .and_then(|parent| get_commits_ahead(workdir, parent, branch));
+
+    // Then add this branch
+    result.push(BranchInfo {
+        name: branch.to_string(),
+        column: *columns.get(branch).unwrap_or(&0),
+        color: *colors.get(branch).unwrap_or(&Color::White),
+        is_current: branch == current,
+        has_remote: remote_branches.contains(branch),
+        commits_ahead,
+        pr_number: info.and_then(|i| i.pr_number),
+        needs_restack: info.map(|i| i.needs_restack).unwrap_or(false),
+        has_children,
+    });
 }
 
 fn get_remote_branches(workdir: &std::path::Path) -> HashSet<String> {
@@ -192,34 +283,4 @@ fn get_commits_ahead(workdir: &std::path::Path, parent: &str, branch: &str) -> O
     } else {
         None
     }
-}
-
-fn assign_stack_color(
-    stack: &Stack,
-    branch: &str,
-    color: Color,
-    colors: &mut HashMap<String, Color>,
-) {
-    colors.insert(branch.to_string(), color);
-    if let Some(info) = stack.branches.get(branch) {
-        for child in &info.children {
-            assign_stack_color(stack, child, color, colors);
-        }
-    }
-}
-
-fn collect_display_order(
-    stack: &Stack,
-    branch: &str,
-    depth: usize,
-    result: &mut Vec<(String, usize)>,
-) {
-    // First collect children (leaves first)
-    if let Some(info) = stack.branches.get(branch) {
-        for child in &info.children {
-            collect_display_order(stack, child, depth + 1, result);
-        }
-    }
-    // Then add this branch
-    result.push((branch.to_string(), depth));
 }
