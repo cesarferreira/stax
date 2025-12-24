@@ -4,6 +4,7 @@ pub mod checkout;
 pub mod continue_cmd;
 pub mod init;
 pub mod log;
+pub mod navigate;
 pub mod restack;
 pub mod status;
 pub mod submit;
