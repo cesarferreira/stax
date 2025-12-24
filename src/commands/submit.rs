@@ -308,6 +308,7 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
                 pr_infos.push(StackPrInfo {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
+                    pr_title: Some(title.clone()),
                     state: Some(pr.state.clone()),
                     is_draft: pr.is_draft,
                 });
@@ -331,6 +332,7 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
                 pr_infos.push(StackPrInfo {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
+                    pr_title: Some(pr.title.clone()),
                     state: Some(pr.state.clone()),
                     is_draft: pr.is_draft,
                 });
@@ -345,7 +347,7 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
             for pr_info in &pr_infos {
                 if let Some(num) = pr_info.pr_number {
                     print!("  PR #{}... ", num);
-                    let stack_comment = generate_stack_comment(&pr_infos, num, &owner, &repo_name);
+                    let stack_comment = generate_stack_comment(&pr_infos, num, &owner, &repo_name, &stack.trunk);
                     client.update_stack_comment(num, &stack_comment).await?;
                     println!("{}", "✓".green());
                 }
