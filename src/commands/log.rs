@@ -8,8 +8,8 @@ pub fn run() -> Result<()> {
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
 
-    // Get the stack for current branch (ordered from trunk to leaves)
-    let mut stack_branches = stack.current_stack(&current);
+    // Get ALL branches in display order (leaves first, trunk last)
+    let stack_branches = stack.all_branches_display_order();
 
     if stack_branches.len() <= 1 {
         println!("{}", "No tracked branches in stack.".dimmed());
@@ -19,9 +19,6 @@ pub fn run() -> Result<()> {
         );
         return Ok(());
     }
-
-    // Reverse so leaves are at top, trunk at bottom (like fp)
-    stack_branches.reverse();
 
     let total = stack_branches.len();
     for (i, branch_name) in stack_branches.iter().enumerate() {

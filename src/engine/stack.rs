@@ -124,4 +124,40 @@ impl Stack {
             .map(|b| b.name.clone())
             .collect()
     }
+
+    /// Get ALL branches in display order (all stacks, leaves first, trunk last)
+    pub fn all_branches_display_order(&self) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+
+        // Start from trunk and do DFS, collecting in reverse order
+        self.collect_branch_tree(&self.trunk, &mut result, &mut visited);
+
+        // Reverse so leaves are first, trunk is last
+        result.reverse();
+        result
+    }
+
+    /// Helper: recursively collect branches (trunk first, then children)
+    fn collect_branch_tree(
+        &self,
+        branch: &str,
+        result: &mut Vec<String>,
+        visited: &mut std::collections::HashSet<String>,
+    ) {
+        if visited.contains(branch) {
+            return;
+        }
+        visited.insert(branch.to_string());
+
+        // Add this branch
+        result.push(branch.to_string());
+
+        // Recursively add children
+        if let Some(b) = self.branches.get(branch) {
+            for child in &b.children {
+                self.collect_branch_tree(child, result, visited);
+            }
+        }
+    }
 }

@@ -13,16 +13,13 @@ pub fn run(branch: Option<String>) -> Result<()> {
             let stack = Stack::load(&repo)?;
             let current = repo.current_branch()?;
 
-            // Get the current stack (ordered from trunk to leaves)
-            let mut stack_branches = stack.current_stack(&current);
+            // Get ALL branches in display order (leaves first, trunk last)
+            let stack_branches = stack.all_branches_display_order();
 
             if stack_branches.is_empty() {
                 println!("No branches found.");
                 return Ok(());
             }
-
-            // Reverse so leaves are at top, trunk at bottom (like fp)
-            stack_branches.reverse();
 
             // Build display items with tree structure (like fp bco)
             let total = stack_branches.len();
