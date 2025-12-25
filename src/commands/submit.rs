@@ -1,10 +1,14 @@
+use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::github::pr::{generate_stack_comment, StackPrInfo};
 use crate::github::GitHubClient;
+use crate::remote::{self, Provider, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, Editor, Input, Select};
+use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 struct PrPlan {
@@ -16,10 +20,22 @@ struct PrPlan {
     body: Option<String>,
 }
 
-pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
+pub fn run(
+    draft: bool,
+    no_pr: bool,
+    force: bool,
+    yes: bool,
+    no_prompt: bool,
+    reviewers: Vec<String>,
+    labels: Vec<String>,
+    assignees: Vec<String>,
+    quiet: bool,
+) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
+    let config = Config::load()?;
+    let auto_confirm = yes || no_prompt;
 
     // Get branches in current stack (excluding trunk)
     let stack_branches: Vec<String> = stack
@@ -29,16 +45,20 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
         .collect();
 
     if stack_branches.is_empty() {
-        println!("{}", "No tracked branches to submit.".yellow());
+        if !quiet {
+            println!("{}", "No tracked branches to submit.".yellow());
+        }
         return Ok(());
     }
 
     // Validation phase
-    println!(
-        "{}",
-        "Validating that this stack is ready to submit...".yellow()
-    );
-    println!();
+    if !quiet {
+        println!(
+            "{}",
+            "Validating that this stack is ready to submit...".yellow()
+        );
+        println!();
+    }
 
     // Check for needs restack
     let needs_restack: Vec<_> = stack_branches
@@ -53,28 +73,32 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
         .collect();
 
     if !needs_restack.is_empty() && !force {
-        println!(
-            "{}",
-            "⚠ Some branches need restacking:".yellow().bold()
-        );
-        println!();
-        for b in &needs_restack {
-            println!("  {} {}", "▸".yellow(), b);
+        if !quiet {
+            println!(
+                "{}",
+                "⚠ Some branches need restacking:".yellow().bold()
+            );
+            println!();
+            for b in &needs_restack {
+                println!("  {} {}", "▸".yellow(), b);
+            }
+            println!();
+            println!("{}", "This happens when a parent branch has new commits since".dimmed());
+            println!("{}", "these branches were created or last rebased.".dimmed());
+            println!();
+            println!("Options:");
+            println!("  {} - Rebase branches onto their updated parents", "stax rs --restack".cyan());
+            println!("  {} - Submit anyway (PRs may show extra commits)", "stax ss --force".yellow());
         }
-        println!();
-        println!("{}", "This happens when a parent branch has new commits since".dimmed());
-        println!("{}", "these branches were created or last rebased.".dimmed());
-        println!();
-        println!("Options:");
-        println!("  {} - Rebase branches onto their updated parents", "stax rs --restack".cyan());
-        println!("  {} - Submit anyway (PRs may show extra commits)", "stax ss --force".yellow());
         return Ok(());
     } else if !needs_restack.is_empty() && force {
-        println!(
-            "{}",
-            "⚠ Skipping restack check (--force)".yellow()
-        );
-        println!();
+        if !quiet {
+            println!(
+                "{}",
+                "⚠ Skipping restack check (--force)".yellow()
+            );
+            println!();
+        }
     }
 
     // Check for branches with no changes (empty branches)
@@ -95,29 +119,37 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
         .collect();
 
     if !empty_branches.is_empty() {
-        println!(
-            "{}",
-            "WARNING: The following branches have no changes:".yellow()
-        );
-        for b in &empty_branches {
-            println!("  {} {}", "▸".yellow(), b);
+        if !quiet {
+            println!(
+                "{}",
+                "WARNING: The following branches have no changes:".yellow()
+            );
+            for b in &empty_branches {
+                println!("  {} {}", "▸".yellow(), b);
+            }
+            println!();
+            println!(
+                "{}",
+                "GitHub will reject PRs for branches with no commits.".yellow()
+            );
         }
-        println!();
-        println!(
-            "{}",
-            "GitHub will reject PRs for branches with no commits.".yellow()
-        );
 
-        let proceed = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Skip empty branches and continue?")
-            .default(true)
-            .interact()?;
+        let proceed = if auto_confirm {
+            true
+        } else {
+            Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Skip empty branches and continue?")
+                .default(true)
+                .interact()?
+        };
 
         if !proceed {
             println!("{}", "Aborted.".red());
             return Ok(());
         }
-        println!();
+        if !quiet {
+            println!();
+        }
     }
 
     // Filter out empty branches
@@ -129,21 +161,37 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
         .collect();
 
     if branches_to_submit.is_empty() {
-        println!("{}", "No branches with changes to submit.".yellow());
+        if !quiet {
+            println!("{}", "No branches with changes to submit.".yellow());
+        }
         return Ok(());
     }
 
-    // Get remote URL for GitHub
-    let remote_url = get_remote_url(repo.workdir()?)?;
-    let (owner, repo_name) = GitHubClient::from_remote(&remote_url)?;
+    let remote_info = RemoteInfo::from_repo(&repo, &config)?;
+    if remote_info.provider != Provider::GitHub && !no_pr {
+        anyhow::bail!(
+            "PR creation is only supported for GitHub remotes.\n\n\
+             Current provider: {}\n\
+             You can still push branches with:\n  \
+             stax submit --no-pr",
+            config.remote_provider()
+        );
+    }
+
+    let owner = remote_info.owner().to_string();
+    let repo_name = remote_info.repo.clone();
 
     // Fetch to ensure we have latest remote refs
-    print!("Fetching from origin... ");
-    fetch_origin(repo.workdir()?)?;
-    println!("{}", "✓".green());
+    if !quiet {
+        print!("Fetching from {}... ", remote_info.name);
+    }
+    remote::fetch_remote(repo.workdir()?, &remote_info.name)?;
+    if !quiet {
+        println!("{}", "✓".green());
+    }
 
     // Check which branches exist on remote
-    let remote_branches = get_remote_branches(repo.workdir()?)?;
+    let remote_branches = remote::get_remote_branches(repo.workdir()?, &remote_info.name)?;
 
     // Verify trunk exists on remote
     if !remote_branches.contains(&stack.trunk) {
@@ -153,20 +201,25 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
              - This is a new repository that hasn't been pushed yet\n  \
              - The default branch has a different name on GitHub\n\n\
              To fix this, push your base branch first:\n  \
-             git push -u origin {}",
+             git push -u {} {}",
             stack.trunk,
+            remote_info.name,
             stack.trunk
         );
     }
 
     // Build plan - determine which PRs need create vs update
-    println!(
-        "{}",
-        "Preparing to submit PRs for the following branches...".yellow()
-    );
+    if !quiet {
+        println!(
+            "{}",
+            "Preparing to submit PRs for the following branches...".yellow()
+        );
+    }
 
     let rt = tokio::runtime::Runtime::new()?;
-    let client = rt.block_on(async { GitHubClient::new(&owner, &repo_name) })?;
+    let client = rt.block_on(async {
+        GitHubClient::new(&owner, &repo_name, remote_info.api_base_url.clone())
+    })?;
 
     let mut plans: Vec<PrPlan> = Vec::new();
 
@@ -191,7 +244,9 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
         } else {
             format!("(Update #{})", pr_number.unwrap()).blue()
         };
-        println!("  {} {} {}", "▸".white(), branch, action);
+        if !quiet {
+            println!("  {} {} {}", "▸".white(), branch, action);
+        }
 
         plans.push(PrPlan {
             branch: branch.clone(),
@@ -201,81 +256,113 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
             body: None,
         });
     }
-    println!();
+    if !quiet {
+        println!();
+    }
 
     // Collect PR details for new PRs BEFORE pushing
     if !no_pr {
+        let pr_template = load_pr_template(repo.workdir()?);
         let new_prs: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_none()).collect();
-        if !new_prs.is_empty() {
+        if !new_prs.is_empty() && !quiet {
             println!("{}", "Enter details for new PRs:".yellow());
             println!();
+        }
 
-            for plan in &mut plans {
-                if plan.existing_pr.is_none() {
-                    let default_title = plan
-                        .branch
-                        .split('/')
-                        .next_back()
-                        .unwrap_or(&plan.branch)
-                        .replace(['-', '_'], " ");
+        for plan in &mut plans {
+            if plan.existing_pr.is_some() {
+                continue;
+            }
 
-                    println!("  {} {}", "▸".cyan(), plan.branch.cyan());
+            let commit_messages =
+                collect_commit_messages(repo.workdir()?, &plan.parent, &plan.branch);
+            let default_title = default_pr_title(&commit_messages, &plan.branch);
+            let default_body =
+                build_default_pr_body(pr_template.as_deref(), &plan.branch, &commit_messages);
 
-                    let title: String = Input::with_theme(&ColorfulTheme::default())
-                        .with_prompt("  Title")
-                        .default(default_title)
-                        .interact_text()?;
+            if !quiet {
+                println!("  {} {}", "▸".cyan(), plan.branch.cyan());
+            }
 
-                    let body_options = vec!["Skip (leave empty)", "Enter description"];
-                    let body_choice = Select::with_theme(&ColorfulTheme::default())
-                        .with_prompt("  Body")
-                        .items(&body_options)
-                        .default(0)
-                        .interact()?;
+            let title = if no_prompt {
+                default_title
+            } else {
+                Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("  Title")
+                    .default(default_title)
+                    .interact_text()?
+            };
 
-                    let body = if body_choice == 1 {
-                        Input::with_theme(&ColorfulTheme::default())
-                            .with_prompt("  Description")
-                            .allow_empty(true)
-                            .interact_text()?
-                    } else {
-                        String::new()
-                    };
+            let body = if no_prompt {
+                default_body
+            } else {
+                let options = if default_body.trim().is_empty() {
+                    vec!["Edit", "Skip (leave empty)"]
+                } else {
+                    vec!["Use default", "Edit", "Skip (leave empty)"]
+                };
 
-                    plan.title = Some(title);
-                    plan.body = Some(body);
-                    println!();
+                let choice = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("  Body")
+                    .items(&options)
+                    .default(0)
+                    .interact()?;
+
+                match options[choice] {
+                    "Use default" => default_body,
+                    "Edit" => Editor::new()
+                        .edit(&default_body)?
+                        .unwrap_or(default_body),
+                    _ => String::new(),
                 }
+            };
+
+            plan.title = Some(title);
+            plan.body = Some(body);
+
+            if !quiet {
+                println!();
             }
         }
     }
 
     // Now push all branches
-    println!(
-        "Pushing {} branch(es) to {}/{}...",
-        branches_to_submit.len().to_string().cyan(),
-        owner,
-        repo_name
-    );
+    if !quiet {
+        println!(
+            "Pushing {} branch(es) to {} ({}/{})...",
+            branches_to_submit.len().to_string().cyan(),
+            remote_info.name,
+            owner,
+            repo_name
+        );
+    }
 
     for branch in &branches_to_submit {
-        print!("  Pushing {}... ", branch.white());
-        push_branch(repo.workdir()?, branch)?;
-        println!("{}", "✓".green());
+        if !quiet {
+            print!("  Pushing {}... ", branch.white());
+        }
+        push_branch(repo.workdir()?, &remote_info.name, branch)?;
+        if !quiet {
+            println!("{}", "✓".green());
+        }
     }
 
     if no_pr {
-        println!();
-        println!(
-            "{}",
-            "✓ Branches pushed (--no-pr, skipping PR creation)".green()
-        );
+        if !quiet {
+            println!();
+            println!(
+                "{}",
+                "✓ Branches pushed (--no-pr, skipping PR creation)".green()
+            );
+        }
         return Ok(());
     }
 
     // Create/update PRs
-    println!();
-    println!("Creating/updating PRs...");
+    if !quiet {
+        println!();
+        println!("Creating/updating PRs...");
+    }
 
     rt.block_on(async {
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();
@@ -289,7 +376,9 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
                 let title = plan.title.as_ref().unwrap();
                 let body = plan.body.as_ref().unwrap();
 
-                print!("  Creating PR for {}... ", plan.branch.white());
+                if !quiet {
+                    print!("  Creating PR for {}... ", plan.branch.white());
+                }
 
                 let pr = client
                     .create_pr(&plan.branch, &plan.parent, title, body, draft)
@@ -303,9 +392,51 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
                         plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
                     ))?;
 
-                println!("{} {}", "✓".green(), format!("#{}", pr.number).dimmed());
+                if !quiet {
+                    println!("{} {}", "✓".green(), format!("#{}", pr.number).dimmed());
+                }
 
                 // Update metadata with PR info
+                let updated_meta = BranchMetadata {
+                    pr_info: Some(crate::engine::metadata::PrInfo {
+                        number: pr.number,
+                        state: pr.state.clone(),
+                        is_draft: Some(pr.is_draft),
+                    }),
+                    ..meta
+                };
+                updated_meta.write(repo.inner(), &plan.branch)?;
+
+                apply_pr_metadata(&client, pr.number, &reviewers, &labels, &assignees).await?;
+
+                pr_infos.push(StackPrInfo {
+                    branch: plan.branch.clone(),
+                    pr_number: Some(pr.number),
+                    pr_title: Some(title.clone()),
+                });
+            } else {
+                // Update existing PR
+                let pr_number = plan.existing_pr.unwrap();
+                if !quiet {
+                    print!(
+                        "  Updating PR #{} for {}... ",
+                        pr_number,
+                        plan.branch.white()
+                    );
+                }
+
+                // Update base if needed
+                client.update_pr_base(pr_number, &plan.parent).await?;
+
+                apply_pr_metadata(&client, pr_number, &reviewers, &labels, &assignees).await?;
+
+                if !quiet {
+                    println!("{}", "✓".green());
+                }
+
+                // Get current PR state
+                let pr = client.get_pr(pr_number).await?;
+
                 let updated_meta = BranchMetadata {
                     pr_info: Some(crate::engine::metadata::PrInfo {
                         number: pr.number,
@@ -319,62 +450,52 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
                 pr_infos.push(StackPrInfo {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
-                    pr_title: Some(title.clone()),
-                });
-            } else {
-                // Update existing PR
-                let pr_number = plan.existing_pr.unwrap();
-                print!(
-                    "  Updating PR #{} for {}... ",
-                    pr_number,
-                    plan.branch.white()
-                );
-
-                // Update base if needed
-                client.update_pr_base(pr_number, &plan.parent).await?;
-
-                println!("{}", "✓".green());
-
-                // Get current PR state
-                let pr = client.get_pr(pr_number).await?;
-
-                pr_infos.push(StackPrInfo {
-                    branch: plan.branch.clone(),
-                    pr_number: Some(pr.number),
                     pr_title: Some(pr.title.clone()),
                 });
             }
         }
 
-        // Update stack comments on all PRs
+        // Update a single stack summary comment
         if !pr_infos.is_empty() {
-            println!();
-            println!("Updating stack comments...");
+            let summary_pr = pr_infos
+                .iter()
+                .find(|p| p.branch == current && p.pr_number.is_some())
+                .and_then(|p| p.pr_number)
+                .or_else(|| pr_infos.iter().rev().find_map(|p| p.pr_number));
 
-            for pr_info in &pr_infos {
-                if let Some(num) = pr_info.pr_number {
-                    print!("  PR #{}... ", num);
-                    let stack_comment = generate_stack_comment(&pr_infos, num, &owner, &repo_name, &stack.trunk);
-                    client.update_stack_comment(num, &stack_comment).await?;
+            if let Some(num) = summary_pr {
+                if !quiet {
+                    println!();
+                    println!("Updating stack summary...");
+                    print!("  {} #{}... ", remote_info.provider.pr_label(), num);
+                }
+                let stack_comment = generate_stack_comment(
+                    &pr_infos,
+                    num,
+                    &remote_info,
+                    &stack.trunk,
+                );
+                client.update_stack_comment(num, &stack_comment).await?;
+                if !quiet {
                     println!("{}", "✓".green());
                 }
             }
         }
 
-        println!();
-        println!("{}", "✓ Stack submitted successfully!".green());
+        if !quiet {
+            println!();
+            println!("{}", "✓ Stack submitted successfully!".green());
+        }
 
         // Print PR URLs
-        if !pr_infos.is_empty() {
+        if !pr_infos.is_empty() && !quiet {
             println!();
             for pr_info in &pr_infos {
                 if let Some(num) = pr_info.pr_number {
                     println!(
-                        "  {} → https://github.com/{}/{}/pull/{}",
+                        "  {} → {}",
                         pr_info.branch.white(),
-                        owner,
-                        repo_name,
-                        num
+                        remote_info.pr_url(num)
                     );
                 }
             }
@@ -386,69 +507,9 @@ pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn get_remote_url(workdir: &std::path::Path) -> Result<String> {
-    let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(workdir)
-        .output()
-        .context("Failed to get remote URL")?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "No git remote 'origin' found.\n\n\
-             To fix this, add a GitHub remote:\n\n  \
-             git remote add origin git@github.com:owner/repo.git\n\n\
-             Or:\n\n  \
-             git remote add origin https://github.com/owner/repo.git"
-        );
-    }
-
-    let url = String::from_utf8(output.stdout)?.trim().to_string();
-
-    if url.is_empty() {
-        anyhow::bail!(
-            "Git remote 'origin' has no URL configured.\n\n\
-             To fix this, set the remote URL:\n\n  \
-             git remote set-url origin git@github.com:owner/repo.git"
-        );
-    }
-
-    Ok(url)
-}
-
-fn get_remote_branches(workdir: &std::path::Path) -> Result<Vec<String>> {
-    let output = Command::new("git")
-        .args(["branch", "-r", "--format=%(refname:short)"])
-        .current_dir(workdir)
-        .output()
-        .context("Failed to list remote branches")?;
-
-    let branches: Vec<String> = String::from_utf8(output.stdout)?
-        .lines()
-        .map(|s| s.trim().strip_prefix("origin/").unwrap_or(s).to_string())
-        .collect();
-
-    Ok(branches)
-}
-
-fn fetch_origin(workdir: &std::path::Path) -> Result<()> {
+fn push_branch(workdir: &std::path::Path, remote: &str, branch: &str) -> Result<()> {
     let status = Command::new("git")
-        .args(["fetch", "origin"])
-        .current_dir(workdir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("Failed to fetch from origin")?;
-
-    if !status.success() {
-        anyhow::bail!("Failed to fetch from origin");
-    }
-    Ok(())
-}
-
-fn push_branch(workdir: &std::path::Path, branch: &str) -> Result<()> {
-    let status = Command::new("git")
-        .args(["push", "-f", "origin", branch])
+        .args(["push", "-f", remote, branch])
         .current_dir(workdir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -458,5 +519,136 @@ fn push_branch(workdir: &std::path::Path, branch: &str) -> Result<()> {
     if !status.success() {
         anyhow::bail!("Failed to push branch {}", branch);
     }
+    Ok(())
+}
+
+fn collect_commit_messages(workdir: &Path, parent: &str, branch: &str) -> Vec<String> {
+    let output = Command::new("git")
+        .args([
+            "log",
+            "--reverse",
+            "--format=%s",
+            &format!("{}..{}", parent, branch),
+        ])
+        .current_dir(workdir)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn default_pr_title(commit_messages: &[String], branch: &str) -> String {
+    if let Some(first) = commit_messages.first() {
+        return first.clone();
+    }
+
+    branch
+        .split('/')
+        .next_back()
+        .unwrap_or(branch)
+        .replace(['-', '_'], " ")
+}
+
+fn build_default_pr_body(
+    template: Option<&str>,
+    branch: &str,
+    commit_messages: &[String],
+) -> String {
+    let commits_text = render_commit_list(commit_messages);
+
+    let mut body = if let Some(template) = template {
+        template.to_string()
+    } else if commits_text.is_empty() {
+        String::new()
+    } else {
+        format!("## Summary\n\n{}", commits_text)
+    };
+
+    if !body.is_empty() {
+        body = body.replace("{{BRANCH}}", branch);
+        body = body.replace("{{COMMITS}}", &commits_text);
+    }
+
+    body
+}
+
+fn render_commit_list(commit_messages: &[String]) -> String {
+    if commit_messages.is_empty() {
+        return String::new();
+    }
+
+    commit_messages
+        .iter()
+        .map(|msg| format!("- {}", msg))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn load_pr_template(workdir: &Path) -> Option<String> {
+    let candidates = [
+        ".github/pull_request_template.md",
+        ".github/PULL_REQUEST_TEMPLATE.md",
+        "PULL_REQUEST_TEMPLATE.md",
+        "pull_request_template.md",
+    ];
+
+    for candidate in &candidates {
+        let path = workdir.join(candidate);
+        if path.is_file() {
+            if let Ok(content) = fs::read_to_string(path) {
+                return Some(content);
+            }
+        }
+    }
+
+    let dir = workdir.join(".github").join("pull_request_template");
+    if dir.is_dir() {
+        let mut entries: Vec<_> = fs::read_dir(dir)
+            .ok()?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .map(|ext| ext == "md")
+                    .unwrap_or(false)
+            })
+            .collect();
+        entries.sort_by_key(|entry| entry.path());
+        if let Some(entry) = entries.first() {
+            if let Ok(content) = fs::read_to_string(entry.path()) {
+                return Some(content);
+            }
+        }
+    }
+
+    None
+}
+
+async fn apply_pr_metadata(
+    client: &GitHubClient,
+    pr_number: u64,
+    reviewers: &[String],
+    labels: &[String],
+    assignees: &[String],
+) -> Result<()> {
+    if !reviewers.is_empty() {
+        client.request_reviewers(pr_number, reviewers).await?;
+    }
+
+    if !labels.is_empty() {
+        client.add_labels(pr_number, labels).await?;
+    }
+
+    if !assignees.is_empty() {
+        client.add_assignees(pr_number, assignees).await?;
+    }
+
     Ok(())
 }

@@ -5,7 +5,7 @@ use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Select};
 
 /// Move up the stack (to a child branch)
-pub fn up() -> Result<()> {
+pub fn up(index: Option<usize>) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -25,7 +25,16 @@ pub fn up() -> Result<()> {
         return Ok(());
     }
 
-    let target = if children.len() == 1 {
+    let target = if let Some(idx) = index {
+        if idx == 0 || idx > children.len() {
+            anyhow::bail!(
+                "Child index {} out of range (1-{})",
+                idx,
+                children.len()
+            );
+        }
+        children[idx - 1].clone()
+    } else if children.len() == 1 {
         children[0].clone()
     } else {
         // Multiple children - let user choose

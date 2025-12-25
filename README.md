@@ -59,6 +59,10 @@ stax ss
 stax rs --restack
 ```
 
+## Initialization
+
+On first run, stax will initialize the repository by selecting a trunk branch (usually `main` or `master`). In non-interactive mode, it auto-detects the trunk if possible.
+
 ## Commands
 
 ### Shortcuts (freephite compatible)
@@ -71,8 +75,6 @@ stax rs --restack
 | `stax bco` | **B**ranch **c**heck**o**ut - interactive branch picker |
 | `stax bc <name>` | **B**ranch **c**reate - create a new stacked branch |
 | `stax bc -m "msg"` | Create branch from message (spaces replaced) |
-| `stax bu` | **B**ranch **u**p - move to child branch |
-| `stax bd` | **B**ranch **d**own - move to parent branch |
 
 ### Full Commands
 
@@ -80,6 +82,8 @@ stax rs --restack
 |---------|-------|-------------|
 | `stax status` | `s`, `ls` | Show the current stack (simple view) |
 | `stax log` | `l` | Show stack with commits and PR info |
+| `stax diff` | | Show diffs for each branch vs parent + aggregate stack diff |
+| `stax range-diff` | | Show range-diff for branches that need restack |
 | `stax sync` | `rs` | Pull trunk, delete merged branches |
 | `stax sync --restack` | | Also restack after syncing |
 | `stax restack` | | Rebase current branch onto parent |
@@ -88,11 +92,46 @@ stax rs --restack
 | `stax submit --draft` | | Create PRs as drafts |
 | `stax submit --no-pr` | | Just push, skip PR creation |
 | `stax checkout [branch]` | `co`, `bco` | Checkout a branch (interactive if no arg) |
-| `stax up` | `bu` | Move up the stack (to child branch) |
-| `stax down` | `bd` | Move down the stack (to parent branch) |
 | `stax continue` | `cont` | Continue after resolving conflicts |
 | `stax auth` | | Set GitHub personal access token |
 | `stax config` | | Show config file path and contents |
+| `stax doctor` | | Check stax configuration and repo health |
+
+### Notable Flags and Behavior
+
+#### Output and scripting
+
+- `stax status --json --compact --stack <branch> --all --quiet`
+- `stax log --json --compact --stack <branch> --all --quiet`
+- Status/log output includes PR state, CI status, and ahead/behind counts.
+
+#### Submit
+
+- Prefills PR title/body from branch names, commit messages, and PR templates.
+- `stax submit --reviewers alice,bob --labels bug --assignees alice --yes --no-prompt`
+- Updates a single "stack summary" comment with PR links.
+
+#### Sync/Restack
+
+- Detects dirty working tree and offers to stash before restack/sync.
+- `stax sync --safe` avoids `reset --hard` when updating trunk.
+- `stax sync --continue` and `stax restack --continue` resume after conflicts.
+
+#### Branching and navigation
+
+- `stax bc --from <branch>` or `stax branch create --from <branch>` choose a base branch.
+- `stax branch reparent --branch <name> --parent <name>` reattach branches.
+- Parent selection is interactive when ambiguous; warnings when parent is missing on remote.
+- `stax checkout --trunk`, `--parent`, `--child <n>` quick jumps; picker shows commits/PR info/restack status.
+
+#### Diffs
+
+- `stax diff` shows each branch vs parent plus an aggregate stack diff.
+- `stax range-diff` highlights restack effects.
+
+#### Doctor
+
+- `stax doctor` checks repo health, remotes, and provider configuration.
 
 ### Branch Commands
 
@@ -101,7 +140,12 @@ stax rs --restack
 | `stax branch create <name>` | `b c` | Create a new stacked branch |
 | `stax branch checkout` | `b co` | Interactive branch checkout |
 | `stax branch track` | | Track an existing branch |
+| `stax branch reparent` | | Change the parent of a tracked branch |
 | `stax branch delete` | `b d` | Delete a branch |
+| `stax branch fold` | `b f` | Fold current branch into its parent |
+| `stax branch squash` | `b sq` | Squash commits on current branch |
+| `stax branch up` | `b u` | Move up the stack (to child branch) |
+| `stax branch down` | | Move down the stack (to parent branch) |
 
 ### Upstack/Downstack
 
@@ -135,8 +179,8 @@ stax s
 # ○─┘  main
 
 # Navigate the stack
-stax bd  # move down to feat/auth-api
-stax bu  # move back up to feat/auth-ui
+stax branch down  # move down to feat/auth-api
+stax branch up    # move back up to feat/auth-ui
 
 # Submit all PRs
 stax ss
@@ -176,6 +220,12 @@ replacement = "-"      # Character to replace spaces and special chars
 
 [ui]
 tips = true            # Show helpful tips
+
+[remote]
+name = "origin"        # Remote name to use
+provider = "github"    # github, gitlab, gitea
+base_url = "https://github.com" # Web base URL
+api_base_url = "https://api.github.com" # Optional (GitHub Enterprise)
 ```
 
 View your config with `stax config`.
@@ -210,8 +260,6 @@ stax s  # shows your stack
 stax rs # syncs repo
 stax ss # submits PRs
 ```
-
-> **Note:** freephite is no longer actively maintained. stax is a modern alternative with active development.
 
 ## stax vs freephite
 

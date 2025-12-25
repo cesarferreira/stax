@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use octocrab::params::pulls::Sort;
 
 use super::GitHubClient;
+use crate::remote::RemoteInfo;
 
 #[derive(Debug)]
 pub struct PrInfo {
@@ -131,6 +132,49 @@ impl GitHubClient {
 
         Ok(())
     }
+
+    pub async fn request_reviewers(&self, pr_number: u64, reviewers: &[String]) -> Result<()> {
+        if reviewers.is_empty() {
+            return Ok(());
+        }
+
+        self.octocrab
+            .pulls(&self.owner, &self.repo)
+            .request_reviews(pr_number, reviewers.to_vec(), Vec::<String>::new())
+            .await
+            .context("Failed to request reviewers")?;
+
+        Ok(())
+    }
+
+    pub async fn add_labels(&self, pr_number: u64, labels: &[String]) -> Result<()> {
+        if labels.is_empty() {
+            return Ok(());
+        }
+
+        self.octocrab
+            .issues(&self.owner, &self.repo)
+            .add_labels(pr_number, &labels.to_vec())
+            .await
+            .context("Failed to add labels")?;
+
+        Ok(())
+    }
+
+    pub async fn add_assignees(&self, pr_number: u64, assignees: &[String]) -> Result<()> {
+        if assignees.is_empty() {
+            return Ok(());
+        }
+
+        let assignees_refs: Vec<&str> = assignees.iter().map(|s| s.as_str()).collect();
+        self.octocrab
+            .issues(&self.owner, &self.repo)
+            .add_assignees(pr_number, &assignees_refs)
+            .await
+            .context("Failed to add assignees")?;
+
+        Ok(())
+    }
 }
 
 /// PR info for stack comment generation
@@ -145,8 +189,7 @@ pub struct StackPrInfo {
 pub fn generate_stack_comment(
     prs: &[StackPrInfo],
     current_pr_number: u64,
-    owner: &str,
-    repo: &str,
+    remote: &RemoteInfo,
     trunk: &str,
 ) -> String {
     let mut lines = vec![
@@ -173,8 +216,14 @@ pub fn generate_stack_comment(
 
         let pr_text = match pr_info.pr_number {
             Some(num) => {
-                let url = format!("https://github.com/{}/{}/pull/{}", owner, repo, num);
-                format!("PR ᛘ [{}]({}){}", title, url, pointer)
+                let url = remote.pr_url(num);
+                format!(
+                    "{} ᛘ [{}]({}){}",
+                    remote.provider.pr_label(),
+                    title,
+                    url,
+                    pointer
+                )
             }
             None => format!("`{}`{}", pr_info.branch, pointer),
         };

@@ -11,6 +11,8 @@ pub struct Config {
     pub branch: BranchConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub remote: RemoteConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +35,21 @@ pub struct UiConfig {
     pub tips: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RemoteConfig {
+    /// Git remote name (default: "origin")
+    #[serde(default = "default_remote_name")]
+    pub name: String,
+    /// Hosting provider (github, gitlab, gitea)
+    #[serde(default = "default_remote_provider")]
+    pub provider: String,
+    /// Base web URL for the provider (e.g., https://github.com)
+    #[serde(default = "default_remote_base_url")]
+    pub base_url: String,
+    /// API base URL (GitHub Enterprise), e.g., https://github.company.com/api/v3
+    #[serde(default)]
+    pub api_base_url: Option<String>,
+}
 
 impl Default for BranchConfig {
     fn default() -> Self {
@@ -52,12 +69,35 @@ impl Default for UiConfig {
     }
 }
 
+impl Default for RemoteConfig {
+    fn default() -> Self {
+        Self {
+            name: default_remote_name(),
+            provider: default_remote_provider(),
+            base_url: default_remote_base_url(),
+            api_base_url: None,
+        }
+    }
+}
+
 fn default_replacement() -> String {
     "-".to_string()
 }
 
 fn default_tips() -> bool {
     true
+}
+
+fn default_remote_name() -> String {
+    "origin".to_string()
+}
+
+fn default_remote_provider() -> String {
+    "github".to_string()
+}
+
+fn default_remote_base_url() -> String {
+    "https://github.com".to_string()
 }
 
 impl Config {
@@ -196,6 +236,19 @@ impl Config {
 
         result
     }
+
+    pub fn remote_name(&self) -> &str {
+        self.remote.name.as_str()
+    }
+
+    pub fn remote_provider(&self) -> &str {
+        self.remote.provider.as_str()
+    }
+
+    pub fn remote_base_url(&self) -> &str {
+        self.remote.base_url.as_str()
+    }
+
 }
 
 #[cfg(test)]
@@ -210,6 +263,9 @@ mod tests {
         assert!(!config.branch.date);
         assert_eq!(config.branch.replacement, "-");
         assert!(config.ui.tips);
+        assert_eq!(config.remote.name, "origin");
+        assert_eq!(config.remote.provider, "github");
+        assert_eq!(config.remote.base_url, "https://github.com");
     }
 
     #[test]

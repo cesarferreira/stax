@@ -3,6 +3,7 @@ mod config;
 mod engine;
 mod git;
 mod github;
+mod remote;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -20,11 +21,43 @@ struct Cli {
 enum Commands {
     /// Show the current stack (simple tree view)
     #[command(visible_aliases = ["s", "ls"])]
-    Status,
+    Status {
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+        /// Show only the stack for this branch
+        #[arg(long)]
+        stack: Option<String>,
+        /// Show all stacks
+        #[arg(long)]
+        all: bool,
+        /// Compact output for scripts
+        #[arg(long)]
+        compact: bool,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
+    },
 
     /// Show detailed stack with commits and PR info
     #[command(visible_alias = "l")]
-    Log,
+    Log {
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+        /// Show only the stack for this branch
+        #[arg(long)]
+        stack: Option<String>,
+        /// Show all stacks
+        #[arg(long)]
+        all: bool,
+        /// Compact output for scripts
+        #[arg(long)]
+        compact: bool,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
+    },
 
     /// Submit stack - push branches and create/update PRs
     #[command(visible_alias = "ss")]
@@ -38,6 +71,24 @@ enum Commands {
         /// Skip restack check and submit anyway
         #[arg(short, long)]
         force: bool,
+        /// Auto-approve prompts
+        #[arg(long)]
+        yes: bool,
+        /// Disable interactive prompts (use defaults)
+        #[arg(long)]
+        no_prompt: bool,
+        /// Assign reviewers (comma-separated or repeat)
+        #[arg(long, value_delimiter = ',')]
+        reviewers: Vec<String>,
+        /// Add labels (comma-separated or repeat)
+        #[arg(long, value_delimiter = ',')]
+        labels: Vec<String>,
+        /// Assign users (comma-separated or repeat)
+        #[arg(long, value_delimiter = ',')]
+        assignees: Vec<String>,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
     },
 
     /// Sync repo - pull trunk, delete merged branches
@@ -52,6 +103,15 @@ enum Commands {
         /// Force sync without prompts
         #[arg(short, long)]
         force: bool,
+        /// Avoid hard reset when updating trunk
+        #[arg(long)]
+        safe: bool,
+        /// Continue after resolving restack conflicts
+        #[arg(long)]
+        r#continue: bool,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
     },
 
     /// Restack (rebase) the current branch onto its parent
@@ -59,6 +119,12 @@ enum Commands {
         /// Restack all branches in the stack
         #[arg(short, long)]
         all: bool,
+        /// Continue after resolving conflicts
+        #[arg(long)]
+        r#continue: bool,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
     },
 
     /// Checkout a branch in the stack
@@ -66,6 +132,15 @@ enum Commands {
     Checkout {
         /// Branch name (interactive if not provided)
         branch: Option<String>,
+        /// Jump directly to trunk
+        #[arg(long)]
+        trunk: bool,
+        /// Jump to parent of current branch
+        #[arg(long)]
+        parent: bool,
+        /// Jump to child branch by index (1-based)
+        #[arg(long)]
+        child: Option<usize>,
     },
 
     /// Continue after resolving conflicts
@@ -82,6 +157,29 @@ enum Commands {
     /// Show config file path and contents
     Config,
 
+    /// Show diffs for each branch vs parent plus an aggregate stack diff
+    Diff {
+        /// Show only the stack for this branch
+        #[arg(long)]
+        stack: Option<String>,
+        /// Show all stacks
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Show range-diff for branches that need restack
+    RangeDiff {
+        /// Show only the stack for this branch
+        #[arg(long)]
+        stack: Option<String>,
+        /// Show all stacks
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Check stax configuration and repo health
+    Doctor,
+
     /// Branch management commands
     #[command(subcommand, visible_alias = "b")]
     Branch(BranchCommands),
@@ -94,21 +192,23 @@ enum Commands {
     #[command(subcommand, visible_alias = "ds")]
     Downstack(DownstackCommands),
 
-    /// Move up the stack (to child branch)
-    #[command(visible_alias = "bu")]
-    Up,
-
-    /// Move down the stack (to parent branch)
-    #[command(visible_alias = "bd")]
-    Down,
-
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
     Bc {
         name: Option<String>,
         #[arg(short, long)]
         message: Option<String>,
+        /// Base branch to create from (defaults to current)
+        #[arg(long)]
+        from: Option<String>,
     },
+    #[command(hide = true)]
+    Bu {
+        /// Child index (1-based)
+        index: Option<usize>,
+    },
+    #[command(hide = true)]
+    Bd,
 }
 
 #[derive(Subcommand)]
@@ -121,6 +221,9 @@ enum BranchCommands {
         /// Message/description to use as branch name (spaces replaced)
         #[arg(short, long)]
         message: Option<String>,
+        /// Base branch to create from (defaults to current)
+        #[arg(long)]
+        from: Option<String>,
     },
 
     /// Checkout a branch in the stack
@@ -128,11 +231,30 @@ enum BranchCommands {
     Checkout {
         /// Branch name (interactive if not provided)
         branch: Option<String>,
+        /// Jump directly to trunk
+        #[arg(long)]
+        trunk: bool,
+        /// Jump to parent of current branch
+        #[arg(long)]
+        parent: bool,
+        /// Jump to child branch by index (1-based)
+        #[arg(long)]
+        child: Option<usize>,
     },
 
     /// Track an existing branch (set its parent)
     Track {
         /// Parent branch name
+        #[arg(short, long)]
+        parent: Option<String>,
+    },
+
+    /// Change the parent of a tracked branch
+    Reparent {
+        /// Branch to reparent (defaults to current)
+        #[arg(short, long)]
+        branch: Option<String>,
+        /// New parent branch name
         #[arg(short, long)]
         parent: Option<String>,
     },
@@ -162,6 +284,16 @@ enum BranchCommands {
         #[arg(short, long)]
         keep: bool,
     },
+
+    /// Move up the stack (to child branch)
+    #[command(visible_alias = "u")]
+    Up {
+        /// Child index (1-based)
+        index: Option<usize>,
+    },
+
+    /// Move down the stack (to parent branch)
+    Down,
 }
 
 #[derive(Subcommand)]
@@ -186,6 +318,7 @@ fn main() -> Result<()> {
     match &cli.command {
         Commands::Auth { token } => return commands::auth::run(token.clone()),
         Commands::Config => return commands::config::run(),
+        Commands::Doctor => return commands::doctor::run(),
         _ => {}
     }
 
@@ -193,34 +326,97 @@ fn main() -> Result<()> {
     commands::init::ensure_initialized()?;
 
     match cli.command {
-        Commands::Status => commands::status::run(),
-        Commands::Log => commands::log::run(),
-        Commands::Submit { draft, no_pr, force } => commands::submit::run(draft, no_pr, force),
-        Commands::Sync { restack, no_delete, force } => commands::sync::run(restack, !no_delete, force),
-        Commands::Restack { all } => commands::restack::run(all),
-        Commands::Checkout { branch } => commands::checkout::run(branch),
+        Commands::Status {
+            json,
+            stack,
+            all,
+            compact,
+            quiet,
+        } => commands::status::run(json, stack, all, compact, quiet),
+        Commands::Log {
+            json,
+            stack,
+            all,
+            compact,
+            quiet,
+        } => commands::log::run(json, stack, all, compact, quiet),
+        Commands::Submit {
+            draft,
+            no_pr,
+            force,
+            yes,
+            no_prompt,
+            reviewers,
+            labels,
+            assignees,
+            quiet,
+        } => commands::submit::run(
+            draft,
+            no_pr,
+            force,
+            yes,
+            no_prompt,
+            reviewers,
+            labels,
+            assignees,
+            quiet,
+        ),
+        Commands::Sync {
+            restack,
+            no_delete,
+            force,
+            safe,
+            r#continue,
+            quiet,
+        } => commands::sync::run(restack, !no_delete, force, safe, r#continue, quiet),
+        Commands::Restack {
+            all,
+            r#continue,
+            quiet,
+        } => commands::restack::run(all, r#continue, quiet),
+        Commands::Checkout {
+            branch,
+            trunk,
+            parent,
+            child,
+        } => commands::checkout::run(branch, trunk, parent, child),
         Commands::Continue => commands::continue_cmd::run(),
         Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Config => unreachable!(),      // Handled above
+        Commands::Diff { stack, all } => commands::diff::run(stack, all),
+        Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
+        Commands::Doctor => unreachable!(), // Handled above
         Commands::Branch(cmd) => match cmd {
-            BranchCommands::Create { name, message } => commands::branch::create::run(name, message),
-            BranchCommands::Checkout { branch } => commands::checkout::run(branch),
+            BranchCommands::Create { name, message, from } => {
+                commands::branch::create::run(name, message, from)
+            }
+            BranchCommands::Checkout {
+                branch,
+                trunk,
+                parent,
+                child,
+            } => commands::checkout::run(branch, trunk, parent, child),
             BranchCommands::Track { parent } => commands::branch::track::run(parent),
+            BranchCommands::Reparent { branch, parent } => {
+                commands::branch::reparent::run(branch, parent)
+            }
             BranchCommands::Delete { branch, force } => {
                 commands::branch::delete::run(branch, force)
             }
             BranchCommands::Squash { message } => commands::branch::squash::run(message),
             BranchCommands::Fold { keep } => commands::branch::fold::run(keep),
+            BranchCommands::Up { index } => commands::navigate::up(index),
+            BranchCommands::Down => commands::navigate::down(),
         },
         Commands::Upstack(cmd) => match cmd {
             UpstackCommands::Restack => commands::upstack::restack::run(),
         },
         Commands::Downstack(cmd) => match cmd {
-            DownstackCommands::Get => commands::status::run(),
+            DownstackCommands::Get => commands::status::run(false, None, false, false, false),
         },
-        Commands::Up => commands::navigate::up(),
-        Commands::Down => commands::navigate::down(),
         // Hidden shortcuts
-        Commands::Bc { name, message } => commands::branch::create::run(name, message),
+        Commands::Bc { name, message, from } => commands::branch::create::run(name, message, from),
+        Commands::Bu { index } => commands::navigate::up(index),
+        Commands::Bd => commands::navigate::down(),
     }
 }
