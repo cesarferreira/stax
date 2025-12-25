@@ -96,24 +96,20 @@ pub fn run(
     // Build display list: each trunk child gets its own column, stacked left to right
     let mut display_branches: Vec<DisplayBranch> = Vec::new();
     let mut max_column = 0;
-    let mut next_column = 0;
     let mut sorted_trunk_children = trunk_children;
-    sorted_trunk_children.sort_by(|a, b| {
-        let size_a = count_chain_size(&stack, a, allowed_branches.as_ref());
-        let size_b = count_chain_size(&stack, b, allowed_branches.as_ref());
-        size_b.cmp(&size_a).then_with(|| a.cmp(b))
-    });
+    // Sort trunk children alphabetically (like fp)
+    sorted_trunk_children.sort();
 
-    for root in &sorted_trunk_children {
+    // Each trunk child gets column = index (first at 0, second at 1, etc.)
+    for (i, root) in sorted_trunk_children.iter().enumerate() {
         collect_display_branches_with_nesting(
             &stack,
             root,
-            next_column,
+            i,
             &mut display_branches,
             &mut max_column,
             allowed_branches.as_ref(),
         );
-        next_column = max_column + 1;
     }
 
     let tree_target_width = (max_column + 1) * 2;
@@ -362,8 +358,19 @@ pub fn run(
 }
 
 /// Collect branches with proper nesting for branches that have multiple children
-/// Order: main child's subtree -> side branches -> current branch
+/// fp-style: children sorted alphabetically, each child gets column + index
 fn collect_display_branches_with_nesting(
+    stack: &Stack,
+    branch: &str,
+    base_column: usize,
+    result: &mut Vec<DisplayBranch>,
+    max_column: &mut usize,
+    allowed: Option<&HashSet<String>>,
+) {
+    collect_recursive(stack, branch, base_column, result, max_column, allowed);
+}
+
+fn collect_recursive(
     stack: &Stack,
     branch: &str,
     column: usize,
@@ -371,65 +378,38 @@ fn collect_display_branches_with_nesting(
     max_column: &mut usize,
     allowed: Option<&HashSet<String>>,
 ) {
-    if allowed.map_or(false, |set| !set.contains(branch)) {
+    if allowed.is_some_and(|set| !set.contains(branch)) {
         return;
     }
 
     *max_column = (*max_column).max(column);
 
     if let Some(info) = stack.branches.get(branch) {
-        let children = &info.children;
+        let mut children: Vec<&String> = info
+            .children
+            .iter()
+            .filter(|c| allowed.map_or(true, |set| set.contains(*c)))
+            .collect();
 
-        if children.len() > 1 {
-            // Multiple children - find the "main" child (one with largest subtree, or first alphabetically if tied)
-            let mut children_with_sizes: Vec<(&String, usize)> = children
-                .iter()
-                .map(|c| (c, count_chain_size(stack, c, allowed)))
-                .collect();
+        if !children.is_empty() {
+            // Sort children alphabetically (like fp)
+            children.sort();
 
-            // Sort by size descending, then alphabetically for ties
-            children_with_sizes.sort_by(|a, b| {
-                b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0))
-            });
-
-            let main_child = children_with_sizes[0].0;
-            let side_children: Vec<&String> = children_with_sizes[1..].iter().map(|(c, _)| *c).collect();
-
-            // 1. Process main child first (continues at same column)
-            collect_display_branches_with_nesting(
-                stack,
-                main_child,
-                column,
-                result,
-                max_column,
-                allowed,
-            );
-
-            // 2. Process side branches at column + 1 (shown after main child's subtree)
-            for side in &side_children {
-                collect_display_branches_with_nesting(
+            // Each child gets column + index: first child at same column, second at +1, etc.
+            for (i, child) in children.iter().enumerate() {
+                collect_recursive(
                     stack,
-                    side,
-                    column + 1,
+                    child,
+                    column + i,
                     result,
                     max_column,
                     allowed,
                 );
             }
-        } else if children.len() == 1 {
-            // Single child - continues at same column
-            collect_display_branches_with_nesting(
-                stack,
-                &children[0],
-                column,
-                result,
-                max_column,
-                allowed,
-            );
         }
     }
 
-    // 3. Add current branch after all children are processed
+    // Add current branch after all children are processed (post-order)
     result.push(DisplayBranch {
         name: branch.to_string(),
         column,
@@ -508,20 +488,6 @@ fn get_line_diff_stats(
     }
 
     Some((additions, deletions))
-}
-
-fn count_chain_size(stack: &Stack, root: &str, allowed: Option<&HashSet<String>>) -> usize {
-    if allowed.map_or(false, |set| !set.contains(root)) {
-        return 0;
-    }
-
-    let mut count = 1;
-    if let Some(info) = stack.branches.get(root) {
-        for child in &info.children {
-            count += count_chain_size(stack, child, allowed);
-        }
-    }
-    count
 }
 
 fn fetch_ci_states(
