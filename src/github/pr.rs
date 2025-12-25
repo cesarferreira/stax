@@ -8,7 +8,6 @@ pub struct PrInfo {
     pub number: u64,
     pub state: String,
     pub title: String,
-    pub url: String,
     pub is_draft: bool,
 }
 
@@ -30,7 +29,6 @@ impl GitHubClient {
                 number: pr.number,
                 state: pr.state.as_ref().map(|s| format!("{:?}", s)).unwrap_or_default(),
                 title: pr.title.clone().unwrap_or_default(),
-                url: pr.html_url.as_ref().map(|u| u.to_string()).unwrap_or_default(),
                 is_draft: pr.draft.unwrap_or(false),
             }))
         } else {
@@ -61,7 +59,6 @@ impl GitHubClient {
             number: pr.number,
             state: pr.state.as_ref().map(|s| format!("{:?}", s)).unwrap_or_default(),
             title: pr.title.clone().unwrap_or_default(),
-            url: pr.html_url.as_ref().map(|u| u.to_string()).unwrap_or_default(),
             is_draft: pr.draft.unwrap_or(false),
         })
     }
@@ -79,7 +76,6 @@ impl GitHubClient {
             number: pr.number,
             state: pr.state.as_ref().map(|s| format!("{:?}", s)).unwrap_or_default(),
             title: pr.title.clone().unwrap_or_default(),
-            url: pr.html_url.as_ref().map(|u| u.to_string()).unwrap_or_default(),
             is_draft: pr.draft.unwrap_or(false),
         })
     }
@@ -143,8 +139,6 @@ pub struct StackPrInfo {
     pub branch: String,
     pub pr_number: Option<u64>,
     pub pr_title: Option<String>,
-    pub state: Option<String>, // "Open", "Merged", "Closed"
-    pub is_draft: bool,
 }
 
 /// Generate the stack comment body in freephite style
@@ -172,10 +166,9 @@ pub fn generate_stack_comment(
             pr_info
                 .branch
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or(&pr_info.branch)
-                .replace('-', " ")
-                .replace('_', " ")
+                .replace(['-', '_'], " ")
         });
 
         let pr_text = match pr_info.pr_number {

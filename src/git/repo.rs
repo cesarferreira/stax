@@ -133,16 +133,6 @@ impl GitRepo {
         }
     }
 
-    /// Abort an in-progress rebase
-    pub fn rebase_abort(&self) -> Result<()> {
-        Command::new("git")
-            .args(["rebase", "--abort"])
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to abort rebase")?;
-        Ok(())
-    }
-
     /// Check if a rebase is in progress
     pub fn rebase_in_progress(&self) -> Result<bool> {
         let git_dir = self.repo.path();

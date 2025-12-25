@@ -2,6 +2,7 @@ use crate::engine::Stack;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Confirm};
 use std::process::Command;
 
 /// Sync repo: pull trunk from remote, delete merged branches, optionally restack
@@ -17,7 +18,7 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
     print!("  Fetching from origin... ");
     let status = Command::new("git")
         .args(["fetch", "origin"])
-        .current_dir(&workdir)
+        .current_dir(workdir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -39,7 +40,7 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
         // Pull directly
         let status = Command::new("git")
             .args(["pull", "--ff-only", "origin", &stack.trunk])
-            .current_dir(&workdir)
+            .current_dir(workdir)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -51,7 +52,7 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
             // Try reset to origin
             let status = Command::new("git")
                 .args(["reset", "--hard", &format!("origin/{}", stack.trunk)])
-                .current_dir(&workdir)
+                .current_dir(workdir)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -67,7 +68,7 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
         // Update trunk without switching to it
         let status = Command::new("git")
             .args(["fetch", "origin", &format!("{}:{}", stack.trunk, stack.trunk)])
-            .current_dir(&workdir)
+            .current_dir(workdir)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -82,27 +83,39 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
 
     // 3. Delete merged branches
     if delete_merged {
-        let merged = find_merged_branches(&workdir, &stack)?;
+        let merged = find_merged_branches(workdir, &stack)?;
 
         if !merged.is_empty() {
-            println!("  Deleting merged branches:");
+            println!("  Found {} merged branch(es):", merged.len().to_string().cyan());
             for branch in &merged {
-                print!("    {} ", branch.bright_black());
+                println!("    {} {}", "▸".bright_black(), branch);
+            }
+            println!();
 
-                // Delete local branch
-                let status = Command::new("git")
-                    .args(["branch", "-d", branch])
-                    .current_dir(&workdir)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status();
+            for branch in &merged {
+                let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt(format!("Delete '{}'?", branch))
+                    .default(true)
+                    .interact()?;
 
-                if status.map(|s| s.success()).unwrap_or(false) {
-                    // Also delete metadata
-                    let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
-                    println!("{}", "deleted".green());
+                if confirm {
+                    // Delete local branch
+                    let status = Command::new("git")
+                        .args(["branch", "-d", branch])
+                        .current_dir(workdir)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+
+                    if status.map(|s| s.success()).unwrap_or(false) {
+                        // Also delete metadata
+                        let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+                        println!("    {} {}", branch.bright_black(), "deleted".green());
+                    } else {
+                        println!("    {} {}", branch.bright_black(), "skipped (not fully merged)".yellow());
+                    }
                 } else {
-                    println!("{}", "skipped (not fully merged)".yellow());
+                    println!("    {} {}", branch.bright_black(), "skipped".dimmed());
                 }
             }
         } else {
@@ -127,7 +140,7 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
                 // Checkout and rebase
                 let checkout = Command::new("git")
                     .args(["checkout", branch])
-                    .current_dir(&workdir)
+                    .current_dir(workdir)
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .status();
@@ -142,7 +155,7 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
                     if let Some(parent) = &info.parent {
                         let rebase = Command::new("git")
                             .args(["rebase", parent])
-                            .current_dir(&workdir)
+                            .current_dir(workdir)
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
                             .status();
@@ -160,7 +173,7 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
             // Return to original branch
             let _ = Command::new("git")
                 .args(["checkout", &current])
-                .current_dir(&workdir)
+                .current_dir(workdir)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
