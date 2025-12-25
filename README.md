@@ -120,6 +120,7 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 #### Branching and navigation
 
 - `stax bc --from <branch>` or `stax branch create --from <branch>` choose a base branch.
+- `stax bc --prefix feature -m "auth"` overrides the configured prefix for this branch.
 - `stax branch reparent --branch <name> --parent <name>` reattach branches.
 - Parent selection is interactive when ambiguous; warnings when parent is missing on remote.
 - `stax checkout --trunk`, `--parent`, `--child <n>` quick jumps; picker shows commits/PR info/restack status.
@@ -217,9 +218,6 @@ Config is stored at `~/.config/stax/config.toml`:
 prefix = "cesar/"      # Auto-prefix new branches (e.g., "my-feature" → "cesar/my-feature")
 date = false           # Add date to branch names (e.g., "2024-01-15-my-feature")
 replacement = "-"      # Character to replace spaces and special chars
-
-[ui]
-tips = true            # Show helpful tips
 
 [remote]
 name = "origin"        # Remote name to use

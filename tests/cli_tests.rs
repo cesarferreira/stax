@@ -166,6 +166,7 @@ fn test_branch_create_help_flags() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("from"));
+    assert!(stdout.contains("prefix"));
 }
 
 #[test]

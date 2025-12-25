@@ -5,7 +5,12 @@ use crate::remote;
 use anyhow::{bail, Result};
 use colored::Colorize;
 
-pub fn run(name: Option<String>, message: Option<String>, from: Option<String>) -> Result<()> {
+pub fn run(
+    name: Option<String>,
+    message: Option<String>,
+    from: Option<String>,
+    prefix: Option<String>,
+) -> Result<()> {
     let repo = GitRepo::open()?;
     let config = Config::load()?;
     let current = repo.current_branch()?;
@@ -23,7 +28,10 @@ pub fn run(name: Option<String>, message: Option<String>, from: Option<String>) 
     };
 
     // Format the branch name according to config
-    let branch_name = config.format_branch_name(&input);
+    let branch_name = match prefix.as_deref() {
+        Some(_) => config.format_branch_name_with_prefix_override(&input, prefix.as_deref()),
+        None => config.format_branch_name(&input),
+    };
 
     // Create the branch
     if parent_branch == current {

@@ -201,6 +201,9 @@ enum Commands {
         /// Base branch to create from (defaults to current)
         #[arg(long)]
         from: Option<String>,
+        /// Override branch prefix (e.g. "feature/")
+        #[arg(long)]
+        prefix: Option<String>,
     },
     #[command(hide = true)]
     Bu {
@@ -224,6 +227,9 @@ enum BranchCommands {
         /// Base branch to create from (defaults to current)
         #[arg(long)]
         from: Option<String>,
+        /// Override branch prefix (e.g. "feature/")
+        #[arg(long)]
+        prefix: Option<String>,
     },
 
     /// Checkout a branch in the stack
@@ -387,9 +393,12 @@ fn main() -> Result<()> {
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
         Commands::Doctor => unreachable!(), // Handled above
         Commands::Branch(cmd) => match cmd {
-            BranchCommands::Create { name, message, from } => {
-                commands::branch::create::run(name, message, from)
-            }
+            BranchCommands::Create {
+                name,
+                message,
+                from,
+                prefix,
+            } => commands::branch::create::run(name, message, from, prefix),
             BranchCommands::Checkout {
                 branch,
                 trunk,
@@ -415,7 +424,12 @@ fn main() -> Result<()> {
             DownstackCommands::Get => commands::status::run(false, None, false, false, false),
         },
         // Hidden shortcuts
-        Commands::Bc { name, message, from } => commands::branch::create::run(name, message, from),
+        Commands::Bc {
+            name,
+            message,
+            from,
+            prefix,
+        } => commands::branch::create::run(name, message, from, prefix),
         Commands::Bu { index } => commands::navigate::up(index),
         Commands::Bd => commands::navigate::down(),
     }

@@ -10,8 +10,6 @@ pub struct Config {
     #[serde(default)]
     pub branch: BranchConfig,
     #[serde(default)]
-    pub ui: UiConfig,
-    #[serde(default)]
     pub remote: RemoteConfig,
 }
 
@@ -26,13 +24,6 @@ pub struct BranchConfig {
     /// Character to replace spaces and special chars (default: "-")
     #[serde(default = "default_replacement")]
     pub replacement: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UiConfig {
-    /// Whether to show tips
-    #[serde(default = "default_tips")]
-    pub tips: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,14 +52,6 @@ impl Default for BranchConfig {
     }
 }
 
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self {
-            tips: default_tips(),
-        }
-    }
-}
-
 impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
@@ -82,10 +65,6 @@ impl Default for RemoteConfig {
 
 fn default_replacement() -> String {
     "-".to_string()
-}
-
-fn default_tips() -> bool {
-    true
 }
 
 fn default_remote_name() -> String {
@@ -201,6 +180,15 @@ impl Config {
 
     /// Format a branch name according to config settings
     pub fn format_branch_name(&self, name: &str) -> String {
+        self.format_branch_name_with_prefix_override(name, None)
+    }
+
+    /// Format a branch name, optionally overriding the configured prefix
+    pub fn format_branch_name_with_prefix_override(
+        &self,
+        name: &str,
+        prefix_override: Option<&str>,
+    ) -> String {
         let mut result = name.to_string();
 
         // Replace spaces and special characters
@@ -227,14 +215,32 @@ impl Config {
             result = format!("{}{}{}", date, replacement, result);
         }
 
-        // Add prefix if set
-        if let Some(prefix) = &self.branch.prefix {
-            if !result.starts_with(prefix) {
+        let prefix = if let Some(override_prefix) = prefix_override {
+            let trimmed = override_prefix.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(Self::normalize_prefix_override(trimmed))
+            }
+        } else {
+            self.branch.prefix.clone()
+        };
+
+        if let Some(prefix) = prefix {
+            if !result.starts_with(&prefix) {
                 result = format!("{}{}", prefix, result);
             }
         }
 
         result
+    }
+
+    fn normalize_prefix_override(prefix: &str) -> String {
+        if prefix.ends_with('/') || prefix.ends_with('-') || prefix.ends_with('_') {
+            prefix.to_string()
+        } else {
+            format!("{}/", prefix)
+        }
     }
 
     pub fn remote_name(&self) -> &str {
@@ -262,7 +268,6 @@ mod tests {
         assert!(config.branch.prefix.is_none());
         assert!(!config.branch.date);
         assert_eq!(config.branch.replacement, "-");
-        assert!(config.ui.tips);
         assert_eq!(config.remote.name, "origin");
         assert_eq!(config.remote.provider, "github");
         assert_eq!(config.remote.base_url, "https://github.com");
@@ -287,6 +292,26 @@ mod tests {
         config.branch.prefix = Some("cesar/".to_string());
         // If name already has prefix, don't add it again
         assert_eq!(config.format_branch_name("cesar/my-feature"), "cesar/my-feature");
+    }
+
+    #[test]
+    fn test_format_branch_name_prefix_override() {
+        let mut config = Config::default();
+        config.branch.prefix = Some("cesar/".to_string());
+        assert_eq!(
+            config.format_branch_name_with_prefix_override("auth", Some("feature")),
+            "feature/auth"
+        );
+    }
+
+    #[test]
+    fn test_format_branch_name_prefix_override_empty_disables() {
+        let mut config = Config::default();
+        config.branch.prefix = Some("cesar/".to_string());
+        assert_eq!(
+            config.format_branch_name_with_prefix_override("auth", Some("")),
+            "auth"
+        );
     }
 
     #[test]
