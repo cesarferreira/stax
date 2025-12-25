@@ -89,6 +89,8 @@ impl GitRepo {
         let status = Command::new("git")
             .args(["checkout", branch])
             .current_dir(self.workdir()?)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .context("Failed to run git checkout")?;
 

@@ -21,20 +21,29 @@ pub fn run(branch: Option<String>) -> Result<()> {
             let mut items = Vec::new();
             let mut branch_names = Vec::new();
 
-            // Get trunk children (each starts a stack)
+            // Get trunk children (each starts a chain)
             let trunk_info = stack.branches.get(&stack.trunk);
             let mut trunk_children: Vec<String> = trunk_info
                 .map(|b| b.children.clone())
                 .unwrap_or_default();
             trunk_children.sort();
 
-            // Find which stack contains the current branch
-            let current_stack_root = find_stack_containing(&stack, &trunk_children, &current);
+            // Find the largest chain - only it gets vertical lines
+            let mut largest_chain_root: Option<String> = None;
+            let mut largest_chain_size = 0;
+            for chain_root in trunk_children.iter() {
+                let chain_size = count_chain_size(&stack, chain_root);
+                if chain_size > largest_chain_size {
+                    largest_chain_size = chain_size;
+                    largest_chain_root = Some(chain_root.clone());
+                }
+            }
 
-            // Collect branches from each stack
-            for stack_root in trunk_children.iter() {
-                let is_current_stack = current_stack_root.as_ref() == Some(stack_root);
-                collect_stack_items(&stack, stack_root, &current, is_current_stack, &mut items, &mut branch_names);
+            // Collect branches from each chain
+            for chain_root in trunk_children.iter() {
+                // Only the largest chain (with 2+ branches) gets vertical lines
+                let is_largest_multi = largest_chain_root.as_ref() == Some(chain_root) && largest_chain_size > 1;
+                collect_stack_items(&stack, chain_root, &current, is_largest_multi, &mut items, &mut branch_names);
             }
 
             // Add trunk
@@ -72,7 +81,7 @@ fn collect_stack_items(
     stack: &Stack,
     branch: &str,
     current: &str,
-    is_current_stack: bool,
+    is_multi_branch_chain: bool,
     items: &mut Vec<String>,
     branch_names: &mut Vec<String>,
 ) {
@@ -85,8 +94,8 @@ fn collect_stack_items(
         let is_current = *b == current;
         let indicator = if is_current { "◉" } else { "○" };
 
-        // fp style: "○    name" for non-current, "│ ○  name" for current
-        let mut display = if is_current_stack {
+        // fp style: multi-branch chains at column 1 with vertical line, isolated branches at column 0
+        let mut display = if is_multi_branch_chain {
             format!("│ {}  {}", indicator, b)
         } else {
             format!("{}    {}", indicator, b)
@@ -115,25 +124,12 @@ fn collect_stack_branches<'a>(stack: &'a Stack, branch: &'a str, result: &mut Ve
     result.push(branch);
 }
 
-fn find_stack_containing(stack: &Stack, stack_roots: &[String], current: &str) -> Option<String> {
-    for root in stack_roots {
-        if branch_is_in_stack(stack, root, current) {
-            return Some(root.clone());
-        }
-    }
-    None
-}
-
-fn branch_is_in_stack(stack: &Stack, root: &str, target: &str) -> bool {
-    if root == target {
-        return true;
-    }
+fn count_chain_size(stack: &Stack, root: &str) -> usize {
+    let mut count = 1;
     if let Some(info) = stack.branches.get(root) {
         for child in &info.children {
-            if branch_is_in_stack(stack, child, target) {
-                return true;
-            }
+            count += count_chain_size(stack, child);
         }
     }
-    false
+    count
 }

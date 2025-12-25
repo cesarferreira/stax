@@ -45,38 +45,54 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    // Get the current branch's stack (ancestors from current to trunk)
-    let current_stack: std::collections::HashSet<String> = {
-        let mut ancestors = stack.ancestors(&current);
-        ancestors.push(current.clone());
-        ancestors.into_iter().collect()
+    // Group branches by their chain (each trunk child starts a chain)
+    // Only the LARGEST chain shows vertical lines, others are at column 0
+    let trunk_info = stack.branches.get(&stack.trunk);
+    let trunk_children: Vec<String> = trunk_info
+        .map(|b| b.children.clone())
+        .unwrap_or_default();
+
+    // Find all chains and identify the largest one
+    let mut largest_chain: Vec<String> = Vec::new();
+    for chain_root in &trunk_children {
+        let chain_branches = collect_chain_branches(&stack, chain_root);
+        if chain_branches.len() > largest_chain.len() {
+            largest_chain = chain_branches;
+        }
+    }
+
+    // Only the largest chain (if it has multiple branches) gets vertical lines
+    let multi_branch_chains: HashSet<String> = if largest_chain.len() > 1 {
+        largest_chain.into_iter().collect()
+    } else {
+        HashSet::new()
     };
 
-    // Separate branches into "in current stack" vs "not in current stack"
-    let (mut in_stack, mut not_in_stack): (Vec<_>, Vec<_>) = branches_with_depth
+    // Separate into multi-branch chain vs isolated branches
+    let (mut in_chain, mut isolated): (Vec<_>, Vec<_>) = branches_with_depth
         .into_iter()
-        .partition(|(name, _)| current_stack.contains(name));
+        .partition(|(name, _)| multi_branch_chains.contains(name));
 
     // Sort both by depth descending
-    in_stack.sort_by(|a, b| b.1.cmp(&a.1));
-    not_in_stack.sort_by(|a, b| b.1.cmp(&a.1));
+    in_chain.sort_by(|a, b| b.1.cmp(&a.1));
+    isolated.sort_by(|a, b| b.1.cmp(&a.1));
 
-    // Display order: [not in stack] then [in stack]
-    let display_order: Vec<(String, usize, bool)> = not_in_stack
+    // Display order: [isolated branches] then [multi-branch chain branches]
+    let display_order: Vec<(String, usize, bool)> = isolated
         .into_iter()
-        .map(|(name, depth)| (name, depth, false)) // false = not in stack
-        .chain(in_stack.into_iter().map(|(name, depth)| (name, depth, true))) // true = in stack
+        .map(|(name, depth)| (name, depth, false)) // false = isolated
+        .chain(in_chain.into_iter().map(|(name, depth)| (name, depth, true))) // true = in chain
         .collect();
 
-    let has_stack_branches = display_order.iter().any(|(_, _, in_stack)| *in_stack);
+    let has_chain_branches = display_order.iter().any(|(_, _, in_chain)| *in_chain);
 
     // Render each branch
-    for (branch, _depth, in_current_stack) in &display_order {
+    for (branch, _depth, in_chain) in &display_order {
         let info = stack.branches.get(branch);
         let is_current = branch == &current;
         let has_remote = remote_branches.contains(branch);
 
-        let color = if *in_current_stack {
+        let color = if *in_chain {
             DEPTH_COLORS[1 % DEPTH_COLORS.len()]
         } else {
             DEPTH_COLORS[0]
@@ -85,14 +101,14 @@ pub fn run() -> Result<()> {
         // Build tree graphics
         let mut tree = String::new();
 
-        if *in_current_stack {
-            // Branches in current stack: vertical line at column 0, circle at column 1
+        if *in_chain {
+            // Branches in multi-branch chain: vertical line at column 0, circle at column 1
             tree.push_str(&format!("{} ", "│".color(DEPTH_COLORS[0])));
             let circle = if is_current { "◉" } else { "○" };
             tree.push_str(&format!("{}", circle.color(color)));
             tree.push_str("  "); // 2 spaces to align (total: 5 chars before name)
         } else {
-            // Branches not in current stack: circle at column 0, no vertical line
+            // Isolated branches: circle at column 0, no vertical line
             let circle = if is_current { "◉" } else { "○" };
             tree.push_str(&format!("{}", circle.color(color)));
             tree.push_str("    "); // 4 spaces to align (total: 5 chars before name)
@@ -148,8 +164,8 @@ pub fn run() -> Result<()> {
     // Add the trunk circle
     trunk_tree.push_str(&format!("{}", "○".color(trunk_color)));
 
-    // Add corner connector if there are stack branches above
-    if has_stack_branches {
+    // Add corner connector if there are chain branches above
+    if has_chain_branches {
         // Draw horizontal line and corner to connect to column 1
         trunk_tree.push_str(&format!("{}", "─".color(trunk_color)));
         trunk_tree.push_str(&format!("{}", "┘".color(trunk_color)));
@@ -230,4 +246,14 @@ fn get_commits_ahead(workdir: &std::path::Path, parent: &str, branch: &str) -> O
     } else {
         None
     }
+}
+
+fn collect_chain_branches(stack: &Stack, branch: &str) -> Vec<String> {
+    let mut result = vec![branch.to_string()];
+    if let Some(info) = stack.branches.get(branch) {
+        for child in &info.children {
+            result.extend(collect_chain_branches(stack, child));
+        }
+    }
+    result
 }
