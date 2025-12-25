@@ -4,6 +4,7 @@ use crate::git::GitRepo;
 use crate::remote;
 use anyhow::{bail, Result};
 use colored::Colorize;
+use std::process::Command;
 
 pub fn run(
     name: Option<String>,
@@ -21,9 +22,10 @@ pub fn run(
     }
 
     // Get the branch name from either name or message
-    let input = match (name, message) {
-        (Some(n), _) => n,
-        (None, Some(m)) => m,
+    // When using -m, the message is used for both branch name AND commit message
+    let (input, commit_message) = match (&name, &message) {
+        (Some(n), _) => (n.clone(), None),
+        (None, Some(m)) => (m.clone(), Some(m.clone())),
         (None, None) => bail!("Branch name required. Use: stax bc <name> or stax bc -m \"message\""),
     };
 
@@ -67,6 +69,43 @@ pub fn run(
         branch_name.green(),
         parent_branch.blue()
     );
+
+    // If -m was used, stage all changes and commit with the message
+    if let Some(msg) = commit_message {
+        let workdir = repo.workdir()?;
+
+        // Stage all changes (git add -A)
+        let add_status = Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(workdir)
+            .status()?;
+
+        if !add_status.success() {
+            bail!("Failed to stage changes");
+        }
+
+        // Check if there are changes to commit
+        let diff_output = Command::new("git")
+            .args(["diff", "--cached", "--quiet"])
+            .current_dir(workdir)
+            .status()?;
+
+        if !diff_output.success() {
+            // There are staged changes, commit them
+            let commit_status = Command::new("git")
+                .args(["commit", "-m", &msg])
+                .current_dir(workdir)
+                .status()?;
+
+            if !commit_status.success() {
+                bail!("Failed to commit changes");
+            }
+
+            println!("Committed: {}", msg.cyan());
+        } else {
+            println!("{}", "No changes to commit".dimmed());
+        }
+    }
 
     Ok(())
 }
