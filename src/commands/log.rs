@@ -1,8 +1,12 @@
+use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
+use crate::github::GitHubClient;
+use crate::remote::{self, Provider, RemoteInfo};
 use anyhow::Result;
 use colored::{Color, Colorize};
-use std::collections::HashSet;
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
 // Colors for different depths (matching status.rs)
@@ -23,32 +27,96 @@ struct DisplayBranch {
     column: usize,
 }
 
-pub fn run() -> Result<()> {
+#[derive(Serialize, Clone)]
+struct CommitJson {
+    short_hash: String,
+    message: String,
+}
+
+#[derive(Serialize, Clone)]
+struct BranchLogJson {
+    name: String,
+    parent: Option<String>,
+    is_current: bool,
+    is_trunk: bool,
+    needs_restack: bool,
+    pr_number: Option<u64>,
+    pr_state: Option<String>,
+    pr_is_draft: Option<bool>,
+    pr_url: Option<String>,
+    ci_state: Option<String>,
+    ahead: usize,
+    behind: usize,
+    has_remote: bool,
+    age: Option<String>,
+    commits: Vec<CommitJson>,
+}
+
+#[derive(Serialize)]
+struct LogJson {
+    trunk: String,
+    current: String,
+    branches: Vec<BranchLogJson>,
+}
+
+pub fn run(
+    json: bool,
+    stack_filter: Option<String>,
+    all: bool,
+    compact: bool,
+    quiet: bool,
+) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
     let workdir = repo.workdir()?;
+    let config = Config::load()?;
 
     if stack.branches.len() <= 1 {
-        println!("{}", "No tracked branches in stack.".dimmed());
-        println!(
-            "Use {} to start tracking branches.",
-            "stax branch track".cyan()
-        );
+        if !quiet {
+            println!("{}", "No tracked branches in stack.".dimmed());
+            println!(
+                "Use {} to start tracking branches.",
+                "stax branch track".cyan()
+            );
+        }
         return Ok(());
     }
 
-    let remote_branches = get_remote_branches(workdir);
-    let repo_url = get_repo_url(workdir);
+    let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
+    let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<HashSet<_>>();
+
+    let allowed_branches = if all {
+        None
+    } else {
+        let target = stack_filter.clone().unwrap_or_else(|| current.clone());
+        if !stack.branches.contains_key(&target) {
+            if stack_filter.is_none() {
+                None
+            } else {
+                anyhow::bail!("Branch '{}' is not tracked in the stack.", target);
+            }
+        } else {
+            Some(stack.current_stack(&target).into_iter().collect::<HashSet<_>>())
+        }
+    };
 
     // Get trunk children and build display list with proper tree structure
     let trunk_info = stack.branches.get(&stack.trunk);
     let trunk_children: Vec<String> = trunk_info
         .map(|b| b.children.clone())
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| allowed_branches.as_ref().map_or(true, |a| a.contains(b)))
+        .collect();
 
     if trunk_children.is_empty() {
-        println!("{}", "No tracked branches in stack.".dimmed());
+        if !quiet {
+            println!("{}", "No tracked branches in stack.".dimmed());
+        }
         return Ok(());
     }
 
@@ -56,7 +124,7 @@ pub fn run() -> Result<()> {
     let mut largest_chain_root: Option<String> = None;
     let mut largest_chain_size = 0;
     for chain_root in &trunk_children {
-        let size = count_chain_size(&stack, chain_root);
+        let size = count_chain_size(&stack, chain_root, allowed_branches.as_ref());
         if size > largest_chain_size {
             largest_chain_size = size;
             largest_chain_root = Some(chain_root.clone());
@@ -69,7 +137,13 @@ pub fn run() -> Result<()> {
     // Add isolated chains (not the largest) at column 0
     for chain_root in &trunk_children {
         if largest_chain_root.as_ref() != Some(chain_root) {
-            collect_display_branches(&stack, chain_root, 0, &mut display_branches);
+            collect_display_branches(
+                &stack,
+                chain_root,
+                0,
+                &mut display_branches,
+                allowed_branches.as_ref(),
+            );
         }
     }
 
@@ -77,19 +151,132 @@ pub fn run() -> Result<()> {
     let mut max_column = 0;
     if let Some(ref root) = largest_chain_root {
         if largest_chain_size > 1 {
-            collect_display_branches_with_nesting(&stack, root, 1, &mut display_branches, &mut max_column);
+            collect_display_branches_with_nesting(
+                &stack,
+                root,
+                1,
+                &mut display_branches,
+                &mut max_column,
+                allowed_branches.as_ref(),
+            );
         } else {
             // Single branch chain, show at column 0
-            collect_display_branches(&stack, root, 0, &mut display_branches);
+            collect_display_branches(
+                &stack,
+                root,
+                0,
+                &mut display_branches,
+                allowed_branches.as_ref(),
+            );
         }
     }
 
     let tree_target_width = (max_column + 1) * 2;
 
+    let mut ordered_branches: Vec<String> =
+        display_branches.iter().map(|b| b.name.clone()).collect();
+    ordered_branches.push(stack.trunk.clone());
+
+    let ci_states =
+        fetch_ci_states(&repo, remote_info.as_ref(), &stack, &ordered_branches);
+
+    let mut branch_logs: Vec<BranchLogJson> = Vec::new();
+    let mut branch_log_map: HashMap<String, BranchLogJson> = HashMap::new();
+
+    for name in &ordered_branches {
+        let info = stack.branches.get(name);
+        let parent = info.and_then(|b| b.parent.clone());
+        let (ahead, behind) = parent
+            .as_deref()
+            .and_then(|p| get_commits_ahead_behind(workdir, p, name))
+            .unwrap_or((0, 0));
+
+        let pr_state = info
+            .and_then(|b| b.pr_state.clone())
+            .and_then(|s| if s.trim().is_empty() { None } else { Some(s) });
+
+        let pr_number = info.and_then(|b| b.pr_number);
+        let pr_url = pr_number.and_then(|n| remote_info.as_ref().map(|r| r.pr_url(n)));
+        let ci_state = ci_states.get(name).cloned();
+
+        let commits = repo
+            .branch_commits(name, parent.as_deref())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| CommitJson {
+                short_hash: c.short_hash,
+                message: c.message,
+            })
+            .collect::<Vec<_>>();
+
+        let age = repo.branch_age(name).ok();
+
+        let entry = BranchLogJson {
+            name: name.clone(),
+            parent: parent.clone(),
+            is_current: name == &current,
+            is_trunk: name == &stack.trunk,
+            needs_restack: info.map(|b| b.needs_restack).unwrap_or(false),
+            pr_number,
+            pr_state,
+            pr_is_draft: info.and_then(|b| b.pr_is_draft),
+            pr_url,
+            ci_state,
+            ahead,
+            behind,
+            has_remote: remote_branches.contains(name),
+            age,
+            commits,
+        };
+
+        branch_log_map.insert(name.clone(), entry.clone());
+        branch_logs.push(entry);
+    }
+
+    if json {
+        let output = LogJson {
+            trunk: stack.trunk.clone(),
+            current: current.clone(),
+            branches: branch_logs,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    if compact {
+        for entry in &branch_logs {
+            let parent = entry.parent.clone().unwrap_or_default();
+            let pr_state = entry.pr_state.clone().unwrap_or_default();
+            let pr_number = entry
+                .pr_number
+                .map(|n| n.to_string())
+                .unwrap_or_default();
+            let ci_state = entry.ci_state.clone().unwrap_or_default();
+            let age = entry.age.clone().unwrap_or_default();
+            let last_commit = entry
+                .commits
+                .first()
+                .map(|c| format!("{} {}", c.short_hash, c.message))
+                .unwrap_or_default();
+            println!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                entry.name,
+                parent,
+                entry.ahead,
+                entry.behind,
+                pr_number,
+                pr_state,
+                ci_state,
+                age,
+                last_commit
+            );
+        }
+        return Ok(());
+    }
+
     // Render each branch
     for (i, db) in display_branches.iter().enumerate() {
         let branch = &db.name;
-        let info = stack.branches.get(branch);
         let is_current = branch == &current;
         let has_remote = remote_branches.contains(branch);
         let color = DEPTH_COLORS[db.column % DEPTH_COLORS.len()];
@@ -154,38 +341,45 @@ pub fn run() -> Result<()> {
             info_str.push_str(branch);
         }
 
-        // Commits ahead/behind
-        if let Some(branch_info) = info {
-            if let Some(parent) = &branch_info.parent {
-                if let Some((ahead, behind)) = get_commits_ahead_behind(workdir, parent, branch) {
-                    let mut commit_info = String::new();
-                    if ahead > 0 {
-                        commit_info.push_str(&format!(" +{}", ahead));
-                    }
-                    if behind > 0 {
-                        commit_info.push_str(&format!(" -{}", behind));
-                    }
-                    if !commit_info.is_empty() {
-                        if is_current {
-                            info_str.push_str(&format!("{}", commit_info.bright_green()));
-                        } else {
-                            info_str.push_str(&format!("{}", commit_info.dimmed()));
-                        }
-                    }
+        if let Some(entry) = branch_log_map.get(branch) {
+            if entry.ahead > 0 || entry.behind > 0 {
+                let mut commit_info = String::new();
+                if entry.ahead > 0 {
+                    commit_info.push_str(&format!(" +{}", entry.ahead));
                 }
-            }
-        }
-
-        // PR info with link
-        if let Some(branch_info) = info {
-            if let Some(pr) = branch_info.pr_number {
-                if let Some(ref url) = repo_url {
-                    info_str.push_str(&format!("{}", format!(" PR #{} {}/pull/{}", pr, url, pr).bright_magenta()));
+                if entry.behind > 0 {
+                    commit_info.push_str(&format!(" -{}", entry.behind));
+                }
+                if is_current {
+                    info_str.push_str(&format!("{}", commit_info.bright_green()));
                 } else {
-                    info_str.push_str(&format!("{}", format!(" PR #{}", pr).bright_magenta()));
+                    info_str.push_str(&format!("{}", commit_info.dimmed()));
                 }
             }
-            if branch_info.needs_restack {
+
+            if let Some(pr_number) = entry.pr_number {
+                let pr_label = remote_info
+                    .as_ref()
+                    .map(|r| r.provider.pr_label())
+                    .unwrap_or("PR");
+                let mut pr_text = format!(" {} #{}", pr_label, pr_number);
+                if let Some(ref state) = entry.pr_state {
+                    pr_text.push_str(&format!(" {}", state.to_lowercase()));
+                }
+                if entry.pr_is_draft.unwrap_or(false) {
+                    pr_text.push_str(" draft");
+                }
+                if let Some(ref url) = entry.pr_url {
+                    pr_text.push_str(&format!(" {}", url));
+                }
+                info_str.push_str(&format!("{}", pr_text.bright_magenta()));
+            }
+
+            if let Some(ref ci) = entry.ci_state {
+                info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
+            }
+
+            if entry.needs_restack {
                 info_str.push_str(&format!("{}", " ↻ needs restack".bright_yellow()));
             }
         }
@@ -193,18 +387,15 @@ pub fn run() -> Result<()> {
         println!("{}{}", tree, info_str);
 
         // Show commits for this branch
-        let parent = info.and_then(|i| i.parent.as_deref());
-        if let Ok(commits) = repo.branch_commits(branch, parent) {
-            // Build detail tree prefix (vertical lines for columns below)
-            let detail_prefix = build_detail_prefix(&display_branches, i, tree_target_width, max_column);
+        if let Some(entry) = branch_log_map.get(branch) {
+            let detail_prefix =
+                build_detail_prefix(&display_branches, i, tree_target_width, max_column);
 
-            // Show age
-            if let Ok(age) = repo.branch_age(branch) {
+            if let Some(ref age) = entry.age {
                 println!("{}   {}", detail_prefix, age.dimmed());
             }
 
-            // Show commits
-            for commit in commits.iter().take(3) {
+            for commit in entry.commits.iter().take(3) {
                 println!(
                     "{}   {} {}",
                     detail_prefix,
@@ -250,11 +441,11 @@ pub fn run() -> Result<()> {
 
     // Trunk details
     let trunk_detail_prefix = " ".repeat(tree_target_width);
-    if let Ok(age) = repo.branch_age(&stack.trunk) {
-        println!("{}   {}", trunk_detail_prefix, age.dimmed());
-    }
-    if let Ok(commits) = repo.branch_commits(&stack.trunk, None) {
-        for commit in commits.iter().take(3) {
+    if let Some(entry) = branch_log_map.get(&stack.trunk) {
+        if let Some(ref age) = entry.age {
+            println!("{}   {}", trunk_detail_prefix, age.dimmed());
+        }
+        for commit in entry.commits.iter().take(3) {
             println!(
                 "{}   {} {}",
                 trunk_detail_prefix,
@@ -266,7 +457,7 @@ pub fn run() -> Result<()> {
 
     // Show restack hint
     let needs_restack = stack.needs_restack();
-    if !needs_restack.is_empty() {
+    if !needs_restack.is_empty() && !quiet {
         println!();
         println!(
             "{}",
@@ -317,10 +508,15 @@ fn collect_display_branches(
     branch: &str,
     column: usize,
     result: &mut Vec<DisplayBranch>,
+    allowed: Option<&HashSet<String>>,
 ) {
+    if allowed.map_or(false, |set| !set.contains(branch)) {
+        return;
+    }
+
     if let Some(info) = stack.branches.get(branch) {
         for child in &info.children {
-            collect_display_branches(stack, child, column, result);
+            collect_display_branches(stack, child, column, result, allowed);
         }
     }
     result.push(DisplayBranch {
@@ -336,7 +532,12 @@ fn collect_display_branches_with_nesting(
     column: usize,
     result: &mut Vec<DisplayBranch>,
     max_column: &mut usize,
+    allowed: Option<&HashSet<String>>,
 ) {
+    if allowed.map_or(false, |set| !set.contains(branch)) {
+        return;
+    }
+
     *max_column = (*max_column).max(column);
 
     if let Some(info) = stack.branches.get(branch) {
@@ -345,7 +546,7 @@ fn collect_display_branches_with_nesting(
         if children.len() > 1 {
             let mut children_with_sizes: Vec<(&String, usize)> = children
                 .iter()
-                .map(|c| (c, count_chain_size(stack, c)))
+                .map(|c| (c, count_chain_size(stack, c, allowed)))
                 .collect();
 
             children_with_sizes.sort_by(|a, b| {
@@ -355,13 +556,34 @@ fn collect_display_branches_with_nesting(
             let main_child = children_with_sizes[0].0;
             let side_children: Vec<&String> = children_with_sizes[1..].iter().map(|(c, _)| *c).collect();
 
-            collect_display_branches_with_nesting(stack, main_child, column, result, max_column);
+            collect_display_branches_with_nesting(
+                stack,
+                main_child,
+                column,
+                result,
+                max_column,
+                allowed,
+            );
 
             for side in &side_children {
-                collect_display_branches_with_nesting(stack, side, column + 1, result, max_column);
+                collect_display_branches_with_nesting(
+                    stack,
+                    side,
+                    column + 1,
+                    result,
+                    max_column,
+                    allowed,
+                );
             }
         } else if children.len() == 1 {
-            collect_display_branches_with_nesting(stack, &children[0], column, result, max_column);
+            collect_display_branches_with_nesting(
+                stack,
+                &children[0],
+                column,
+                result,
+                max_column,
+                allowed,
+            );
         }
     }
 
@@ -369,47 +591,6 @@ fn collect_display_branches_with_nesting(
         name: branch.to_string(),
         column,
     });
-}
-
-fn get_remote_branches(workdir: &std::path::Path) -> HashSet<String> {
-    let output = Command::new("git")
-        .args(["branch", "-r", "--format=%(refname:short)"])
-        .current_dir(workdir)
-        .output();
-
-    match output {
-        Ok(out) => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter_map(|s| s.trim().strip_prefix("origin/"))
-            .map(|s| s.to_string())
-            .collect(),
-        Err(_) => HashSet::new(),
-    }
-}
-
-fn get_repo_url(workdir: &std::path::Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        // Convert SSH URL to HTTPS URL for display
-        let url = if url.starts_with("git@github.com:") {
-            url.replace("git@github.com:", "https://github.com/")
-                .trim_end_matches(".git")
-                .to_string()
-        } else if url.starts_with("https://") {
-            url.trim_end_matches(".git").to_string()
-        } else {
-            return None;
-        };
-        Some(url)
-    } else {
-        None
-    }
 }
 
 fn get_commits_ahead_behind(workdir: &std::path::Path, parent: &str, branch: &str) -> Option<(usize, usize)> {
@@ -448,12 +629,76 @@ fn get_commits_ahead_behind(workdir: &std::path::Path, parent: &str, branch: &st
     Some((ahead, behind))
 }
 
-fn count_chain_size(stack: &Stack, root: &str) -> usize {
+fn count_chain_size(stack: &Stack, root: &str, allowed: Option<&HashSet<String>>) -> usize {
+    if allowed.map_or(false, |set| !set.contains(root)) {
+        return 0;
+    }
+
     let mut count = 1;
     if let Some(info) = stack.branches.get(root) {
         for child in &info.children {
-            count += count_chain_size(stack, child);
+            count += count_chain_size(stack, child, allowed);
         }
     }
     count
+}
+
+fn fetch_ci_states(
+    repo: &GitRepo,
+    remote_info: Option<&RemoteInfo>,
+    stack: &Stack,
+    branches: &[String],
+) -> HashMap<String, String> {
+    let Some(remote) = remote_info else {
+        return HashMap::new();
+    };
+
+    if remote.provider != Provider::GitHub {
+        return HashMap::new();
+    }
+
+    if Config::github_token().is_none() {
+        return HashMap::new();
+    }
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(_) => return HashMap::new(),
+    };
+
+    let client = match rt.block_on(async {
+        GitHubClient::new(remote.owner(), &remote.repo, remote.api_base_url.clone())
+    }) {
+        Ok(client) => client,
+        Err(_) => return HashMap::new(),
+    };
+
+    let mut results = HashMap::new();
+    for branch in branches {
+        let has_pr = stack
+            .branches
+            .get(branch)
+            .and_then(|b| b.pr_number)
+            .is_some();
+
+        if !has_pr {
+            continue;
+        }
+
+        let sha = match repo.branch_commit(branch) {
+            Ok(sha) => sha,
+            Err(_) => continue,
+        };
+
+        let state = rt
+            .block_on(async { client.combined_status_state(&sha).await })
+            .ok()
+            .flatten();
+
+        if let Some(state) = state {
+            results.insert(branch.clone(), state);
+        }
+    }
+
+    results
 }

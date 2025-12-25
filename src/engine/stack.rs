@@ -11,6 +11,8 @@ pub struct StackBranch {
     pub children: Vec<String>,
     pub needs_restack: bool,
     pub pr_number: Option<u64>,
+    pub pr_state: Option<String>,
+    pub pr_is_draft: Option<bool>,
 }
 
 /// The full stack structure
@@ -38,7 +40,9 @@ impl Stack {
                         parent: Some(meta.parent_branch_name.clone()),
                         children: Vec::new(),
                         needs_restack,
-                        pr_number: meta.pr_info.map(|p| p.number),
+                        pr_number: meta.pr_info.as_ref().map(|p| p.number),
+                        pr_state: meta.pr_info.as_ref().map(|p| p.state.clone()),
+                        pr_is_draft: meta.pr_info.as_ref().and_then(|p| p.is_draft),
                     },
                 );
             }
@@ -81,6 +85,8 @@ impl Stack {
                 children: trunk_children,
                 needs_restack: false,
                 pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
             },
         );
 

@@ -8,14 +8,52 @@ struct DisplayBranch {
     column: usize,
 }
 
-pub fn run(branch: Option<String>) -> Result<()> {
+pub fn run(
+    branch: Option<String>,
+    trunk: bool,
+    parent: bool,
+    child: Option<usize>,
+) -> Result<()> {
     let repo = GitRepo::open()?;
+    let current = repo.current_branch()?;
 
-    let target = match branch {
-        Some(b) => b,
-        None => {
-            let stack = Stack::load(&repo)?;
-            let current = repo.current_branch()?;
+    if branch.is_some() && (trunk || parent || child.is_some()) {
+        anyhow::bail!("Cannot combine explicit branch with --trunk/--parent/--child");
+    }
+
+    let target = if trunk || parent || child.is_some() {
+        let stack = Stack::load(&repo)?;
+        if trunk {
+            stack.trunk.clone()
+        } else if parent {
+            let parent_branch = stack
+                .branches
+                .get(&current)
+                .and_then(|b| b.parent.clone())
+                .ok_or_else(|| anyhow::anyhow!("Branch '{}' has no tracked parent.", current))?;
+            parent_branch
+        } else {
+            let children: Vec<String> = stack
+                .branches
+                .get(&current)
+                .map(|b| b.children.clone())
+                .unwrap_or_default();
+
+            if children.is_empty() {
+                anyhow::bail!("Branch '{}' has no tracked children.", current);
+            }
+
+            let idx = child.unwrap_or(1);
+            if idx == 0 || idx > children.len() {
+                anyhow::bail!("Child index {} out of range (1-{})", idx, children.len());
+            }
+            children[idx - 1].clone()
+        }
+    } else {
+        match branch {
+            Some(b) => b,
+            None => {
+                let stack = Stack::load(&repo)?;
 
             if stack.branches.is_empty() {
                 println!("No branches found.");
@@ -123,7 +161,22 @@ pub fn run(branch: Option<String>) -> Result<()> {
                         display.push_str(" ↻");
                     }
                     if let Some(pr) = info.pr_number {
-                        display.push_str(&format!(" PR #{}", pr));
+                        let mut pr_text = format!(" PR #{}", pr);
+                        if let Some(ref state) = info.pr_state {
+                            pr_text.push_str(&format!(" {}", state.to_lowercase()));
+                        }
+                        display.push_str(&pr_text);
+                    }
+
+                    let parent = info.parent.as_deref();
+                    if let Ok(commits) = repo.branch_commits(&db.name, parent) {
+                        if let Some(commit) = commits.first() {
+                            display.push_str(&format!(
+                                " · {} {}",
+                                commit.short_hash,
+                                commit.message
+                            ));
+                        }
                     }
                 }
 
@@ -148,7 +201,17 @@ pub fn run(branch: Option<String>) -> Result<()> {
                 trunk_visual_width += 1;
             }
 
-            items.push(format!("{} {}", trunk_tree, stack.trunk));
+            let mut trunk_display = format!("{} {}", trunk_tree, stack.trunk);
+            if let Ok(commits) = repo.branch_commits(&stack.trunk, None) {
+                if let Some(commit) = commits.first() {
+                    trunk_display.push_str(&format!(
+                        " · {} {}",
+                        commit.short_hash,
+                        commit.message
+                    ));
+                }
+            }
+            items.push(trunk_display);
             branch_names.push(stack.trunk.clone());
 
             if items.is_empty() {
@@ -156,14 +219,15 @@ pub fn run(branch: Option<String>) -> Result<()> {
                 return Ok(());
             }
 
-            let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-                .with_prompt("Checkout a branch (autocomplete or arrow keys)")
-                .items(&items)
-                .default(0)
-                .highlight_matches(true)
-                .interact()?;
+                let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Checkout a branch (autocomplete or arrow keys)")
+                    .items(&items)
+                    .default(0)
+                    .highlight_matches(true)
+                    .interact()?;
 
-            branch_names[selection].clone()
+                branch_names[selection].clone()
+            }
         }
     };
 
