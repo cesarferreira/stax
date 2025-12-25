@@ -99,20 +99,37 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
                     .interact()?;
 
                 if confirm {
-                    // Delete local branch
-                    let status = Command::new("git")
-                        .args(["branch", "-d", branch])
+                    // Delete local branch (force delete since we confirmed)
+                    let local_status = Command::new("git")
+                        .args(["branch", "-D", branch])
                         .current_dir(workdir)
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .status();
 
-                    if status.map(|s| s.success()).unwrap_or(false) {
-                        // Also delete metadata
-                        let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
-                        println!("    {} {}", branch.bright_black(), "deleted".green());
+                    let local_deleted = local_status.map(|s| s.success()).unwrap_or(false);
+
+                    // Delete remote branch
+                    let remote_status = Command::new("git")
+                        .args(["push", "origin", "--delete", branch])
+                        .current_dir(workdir)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+
+                    let remote_deleted = remote_status.map(|s| s.success()).unwrap_or(false);
+
+                    // Delete metadata
+                    let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+
+                    if local_deleted && remote_deleted {
+                        println!("    {} {}", branch.bright_black(), "deleted (local + remote)".green());
+                    } else if local_deleted {
+                        println!("    {} {}", branch.bright_black(), "deleted (local only)".yellow());
+                    } else if remote_deleted {
+                        println!("    {} {}", branch.bright_black(), "deleted (remote only)".yellow());
                     } else {
-                        println!("    {} {}", branch.bright_black(), "skipped (not fully merged)".yellow());
+                        println!("    {} {}", branch.bright_black(), "failed to delete".red());
                     }
                 } else {
                     println!("    {} {}", branch.bright_black(), "skipped".dimmed());

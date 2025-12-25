@@ -44,15 +44,33 @@ impl Stack {
             }
         }
 
-        // Second pass: populate children
+        // Second pass: populate children and find orphans
         let branch_names: Vec<String> = branches.keys().cloned().collect();
+        let mut orphaned_branches: Vec<String> = Vec::new();
+
         for name in branch_names {
             if let Some(parent_name) = branches.get(&name).and_then(|b| b.parent.clone()) {
+                if parent_name == trunk {
+                    // Direct child of trunk - will be handled below
+                    continue;
+                }
                 if let Some(parent) = branches.get_mut(&parent_name) {
                     parent.children.push(name.clone());
+                } else {
+                    // Parent doesn't exist - this branch is orphaned
+                    // Treat it as a direct child of trunk
+                    orphaned_branches.push(name.clone());
                 }
             }
         }
+
+        // Collect direct children of trunk (including orphaned branches)
+        let mut trunk_children: Vec<String> = branches
+            .values()
+            .filter(|b| b.parent.as_ref() == Some(&trunk))
+            .map(|b| b.name.clone())
+            .collect();
+        trunk_children.extend(orphaned_branches);
 
         // Add trunk as a root
         branches.insert(
@@ -60,11 +78,7 @@ impl Stack {
             StackBranch {
                 name: trunk.clone(),
                 parent: None,
-                children: branches
-                    .values()
-                    .filter(|b| b.parent.as_ref() == Some(&trunk))
-                    .map(|b| b.name.clone())
-                    .collect(),
+                children: trunk_children,
                 needs_restack: false,
                 pr_number: None,
             },
