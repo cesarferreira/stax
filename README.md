@@ -3,10 +3,7 @@
   <p>
     <strong>A modern CLI for stacked Git branches and PRs.</strong>
   </p>
-  <p>
-    Built in Rust for speed, inspired by <a href="https://github.com/bradymadden97/freephite">freephite</a> but reimagined with a cleaner UX, better error messages, and new features.
-  </p>
-
+  
   <p>
     <img alt="Startup" src="https://img.shields.io/badge/startup-~18ms-brightgreen">
     <img alt="Git" src="https://img.shields.io/badge/git-git2-f34f29">
@@ -15,6 +12,10 @@
   </p>
   <p>
     <img alt="stax status screenshot" src="assets/screenshot.png">
+    <p>
+    Built in Rust for speed, inspired by <a href="https://github.com/bradymadden97/freephite">freephite</a> but reimagined with a cleaner UX and new features.
+  </p>
+
   </p>
 </div>
 
