@@ -17,6 +17,12 @@ const DEPTH_COLORS: &[Color] = &[
     Color::BrightGreen,
 ];
 
+/// Represents a branch in the display with its column position
+struct DisplayBranch {
+    name: String,
+    column: usize,
+}
+
 pub fn run() -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
@@ -33,89 +39,106 @@ pub fn run() -> Result<()> {
 
     let remote_branches = get_remote_branches(repo.workdir()?);
 
-    // Build display list: collect all branches with their depth from trunk
-    let mut branches_with_depth: Vec<(String, usize)> = Vec::new();
-    collect_branches_with_depth(&stack, &stack.trunk, 0, &mut branches_with_depth);
-
-    // Remove trunk (we'll render it separately)
-    branches_with_depth.retain(|(name, _)| name != &stack.trunk);
-
-    if branches_with_depth.is_empty() {
-        println!("{}", "No tracked branches in stack.".dimmed());
-        return Ok(());
-    }
-
-    // Group branches by their chain (each trunk child starts a chain)
-    // Only the LARGEST chain shows vertical lines, others are at column 0
+    // Get trunk children and build display list with proper tree structure
     let trunk_info = stack.branches.get(&stack.trunk);
     let trunk_children: Vec<String> = trunk_info
         .map(|b| b.children.clone())
         .unwrap_or_default();
 
-    // Find all chains and identify the largest one
-    let mut largest_chain: Vec<String> = Vec::new();
+    if trunk_children.is_empty() {
+        println!("{}", "No tracked branches in stack.".dimmed());
+        return Ok(());
+    }
+
+    // Find the largest chain to display at column 1
+    let mut largest_chain_root: Option<String> = None;
+    let mut largest_chain_size = 0;
     for chain_root in &trunk_children {
-        let chain_branches = collect_chain_branches(&stack, chain_root);
-        if chain_branches.len() > largest_chain.len() {
-            largest_chain = chain_branches;
+        let size = count_chain_size(&stack, chain_root);
+        if size > largest_chain_size {
+            largest_chain_size = size;
+            largest_chain_root = Some(chain_root.clone());
         }
     }
 
-    // Only the largest chain (if it has multiple branches) gets vertical lines
-    let multi_branch_chains: HashSet<String> = if largest_chain.len() > 1 {
-        largest_chain.into_iter().collect()
-    } else {
-        HashSet::new()
-    };
+    // Build display list: isolated branches first (column 0), then the main chain (column 1+)
+    let mut display_branches: Vec<DisplayBranch> = Vec::new();
 
-    // Separate into multi-branch chain vs isolated branches
-    let (mut in_chain, mut isolated): (Vec<_>, Vec<_>) = branches_with_depth
-        .into_iter()
-        .partition(|(name, _)| multi_branch_chains.contains(name));
+    // Add isolated chains (not the largest) at column 0
+    for chain_root in &trunk_children {
+        if largest_chain_root.as_ref() != Some(chain_root) {
+            collect_display_branches(&stack, chain_root, 0, &mut display_branches);
+        }
+    }
 
-    // Sort both by depth descending
-    in_chain.sort_by(|a, b| b.1.cmp(&a.1));
-    isolated.sort_by(|a, b| b.1.cmp(&a.1));
-
-    // Display order: [isolated branches] then [multi-branch chain branches]
-    let display_order: Vec<(String, usize, bool)> = isolated
-        .into_iter()
-        .map(|(name, depth)| (name, depth, false)) // false = isolated
-        .chain(in_chain.into_iter().map(|(name, depth)| (name, depth, true))) // true = in chain
-        .collect();
-
-    let has_chain_branches = display_order.iter().any(|(_, _, in_chain)| *in_chain);
+    // Add the largest chain at column 1 (with proper nested columns)
+    let mut max_column = 0;
+    if let Some(ref root) = largest_chain_root {
+        if largest_chain_size > 1 {
+            collect_display_branches_with_nesting(&stack, root, 1, &mut display_branches, &mut max_column);
+        } else {
+            // Single branch chain, show at column 0
+            collect_display_branches(&stack, root, 0, &mut display_branches);
+        }
+    }
 
     // Render each branch
-    for (branch, _depth, in_chain) in &display_order {
+    for (i, db) in display_branches.iter().enumerate() {
+        let branch = &db.name;
         let info = stack.branches.get(branch);
         let is_current = branch == &current;
         let has_remote = remote_branches.contains(branch);
+        let color = DEPTH_COLORS[db.column % DEPTH_COLORS.len()];
 
-        let color = if *in_chain {
-            DEPTH_COLORS[1 % DEPTH_COLORS.len()]
-        } else {
-            DEPTH_COLORS[0]
+        // Check if there are branches at column X below this row (for vertical lines)
+        // Column 0 is always "active" for non-column-0 branches because it connects to trunk
+        let has_below_at_col = |col: usize| -> bool {
+            if col == 0 && db.column > 0 {
+                // Column 0 connects to trunk via the corner connector
+                true
+            } else {
+                display_branches[i + 1..].iter().any(|b| b.column == col)
+            }
         };
+
+        // Check if we need a corner connector - this happens when the PREVIOUS branch was at a higher column
+        // The corner shows that a side branch joins back to this level
+        let prev_branch_col = if i > 0 { Some(display_branches[i - 1].column) } else { None };
+        let needs_corner = prev_branch_col.map_or(false, |pc| pc > db.column);
 
         // Build tree graphics
         let mut tree = String::new();
 
-        if *in_chain {
-            // Branches in multi-branch chain: vertical line at column 0, circle at column 1
-            tree.push_str(&format!("{} ", "│".color(DEPTH_COLORS[0])));
-            let circle = if is_current { "◉" } else { "○" };
-            tree.push_str(&format!("{}", circle.color(color)));
-            tree.push_str("  "); // 2 spaces to align (total: 5 chars before name)
-        } else {
-            // Isolated branches: circle at column 0, no vertical line
-            let circle = if is_current { "◉" } else { "○" };
-            tree.push_str(&format!("{}", circle.color(color)));
-            tree.push_str("    "); // 4 spaces to align (total: 5 chars before name)
+        // Draw columns 0 to max_column
+        for col in 0..=max_column {
+            if col == db.column {
+                // This is our column - draw circle
+                let circle = if is_current { "◉" } else { "○" };
+                tree.push_str(&format!("{}", circle.color(color)));
+
+                // Check if we need corner connector (side branch ending)
+                if needs_corner {
+                    tree.push_str(&format!("{}", "─┘".color(color)));
+                } else {
+                    tree.push(' ');
+                }
+            } else if col < db.column {
+                // Columns to our left - draw vertical line if there are branches at this column below
+                if has_below_at_col(col) {
+                    let line_color = DEPTH_COLORS[col % DEPTH_COLORS.len()];
+                    tree.push_str(&format!("{} ", "│".color(line_color)));
+                } else {
+                    tree.push_str("  ");
+                }
+            } else {
+                // Columns to our right - just space
+                tree.push_str("  ");
+            }
         }
 
         // Build info part
         let mut info_str = String::new();
+        info_str.push(' '); // Space after tree
 
         if has_remote {
             info_str.push_str(&format!("{} ", "☁".bright_blue()));
@@ -160,19 +183,16 @@ pub fn run() -> Result<()> {
     let trunk_color = DEPTH_COLORS[0];
 
     let mut trunk_tree = String::new();
-
-    // Add the trunk circle
     trunk_tree.push_str(&format!("{}", "○".color(trunk_color)));
 
-    // Add corner connector if there are chain branches above
-    if has_chain_branches {
-        // Draw horizontal line and corner to connect to column 1
-        trunk_tree.push_str(&format!("{}", "─".color(trunk_color)));
-        trunk_tree.push_str(&format!("{}", "┘".color(trunk_color)));
-        trunk_tree.push_str("  "); // 2 spaces to align (total: 5 chars before name)
-    } else {
-        trunk_tree.push_str("    "); // 4 spaces to align (total: 5 chars before name)
+    // Corner connector to the main chain (column 1) if it exists
+    if max_column >= 1 {
+        trunk_tree.push_str(&format!("{}", "─┘".color(trunk_color)));
+        for _ in 2..=max_column {
+            trunk_tree.push_str("  ");
+        }
     }
+    trunk_tree.push(' ');
 
     let mut trunk_info = String::new();
     if remote_branches.contains(&stack.trunk) {
@@ -200,19 +220,72 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn collect_branches_with_depth(
+/// Collect branches for display at a fixed column (for isolated chains)
+fn collect_display_branches(
     stack: &Stack,
     branch: &str,
-    depth: usize,
-    result: &mut Vec<(String, usize)>,
+    column: usize,
+    result: &mut Vec<DisplayBranch>,
 ) {
-    result.push((branch.to_string(), depth));
-
+    // First collect all descendants (depth-first, children before parent)
     if let Some(info) = stack.branches.get(branch) {
         for child in &info.children {
-            collect_branches_with_depth(stack, child, depth + 1, result);
+            collect_display_branches(stack, child, column, result);
         }
     }
+    result.push(DisplayBranch {
+        name: branch.to_string(),
+        column,
+    });
+}
+
+/// Collect branches with proper nesting for branches that have multiple children
+/// Order: main child's subtree -> side branches -> current branch
+fn collect_display_branches_with_nesting(
+    stack: &Stack,
+    branch: &str,
+    column: usize,
+    result: &mut Vec<DisplayBranch>,
+    max_column: &mut usize,
+) {
+    *max_column = (*max_column).max(column);
+
+    if let Some(info) = stack.branches.get(branch) {
+        let children = &info.children;
+
+        if children.len() > 1 {
+            // Multiple children - find the "main" child (one with largest subtree, or first alphabetically if tied)
+            let mut children_with_sizes: Vec<(&String, usize)> = children
+                .iter()
+                .map(|c| (c, count_chain_size(stack, c)))
+                .collect();
+
+            // Sort by size descending, then alphabetically for ties
+            children_with_sizes.sort_by(|a, b| {
+                b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0))
+            });
+
+            let main_child = children_with_sizes[0].0;
+            let side_children: Vec<&String> = children_with_sizes[1..].iter().map(|(c, _)| *c).collect();
+
+            // 1. Process main child first (continues at same column)
+            collect_display_branches_with_nesting(stack, main_child, column, result, max_column);
+
+            // 2. Process side branches at column + 1 (shown after main child's subtree)
+            for side in &side_children {
+                collect_display_branches_with_nesting(stack, side, column + 1, result, max_column);
+            }
+        } else if children.len() == 1 {
+            // Single child - continues at same column
+            collect_display_branches_with_nesting(stack, &children[0], column, result, max_column);
+        }
+    }
+
+    // 3. Add current branch after all children are processed
+    result.push(DisplayBranch {
+        name: branch.to_string(),
+        column,
+    });
 }
 
 fn get_remote_branches(workdir: &std::path::Path) -> HashSet<String> {
@@ -248,12 +321,12 @@ fn get_commits_ahead(workdir: &std::path::Path, parent: &str, branch: &str) -> O
     }
 }
 
-fn collect_chain_branches(stack: &Stack, branch: &str) -> Vec<String> {
-    let mut result = vec![branch.to_string()];
-    if let Some(info) = stack.branches.get(branch) {
+fn count_chain_size(stack: &Stack, root: &str) -> usize {
+    let mut count = 1;
+    if let Some(info) = stack.branches.get(root) {
         for child in &info.children {
-            result.extend(collect_chain_branches(stack, child));
+            count += count_chain_size(stack, child);
         }
     }
-    result
+    count
 }
