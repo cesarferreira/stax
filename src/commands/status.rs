@@ -256,12 +256,21 @@ pub fn run(
         }
 
         if let Some(entry) = branch_status_map.get(branch) {
-            if entry.lines_added > 0 || entry.lines_deleted > 0 {
-                info_str.push_str(&format!(
-                    " {}{}",
-                    format!("+{}", entry.lines_added).green(),
-                    format!("-{}", entry.lines_deleted).red()
-                ));
+            // Show commits ahead/behind with arrows
+            if entry.ahead > 0 || entry.behind > 0 {
+                let mut commits_str = String::new();
+                if entry.ahead > 0 {
+                    commits_str.push_str(&format!(" {}", format!("{}↑", entry.ahead).green()));
+                }
+                if entry.behind > 0 {
+                    commits_str.push_str(&format!(" {}", format!("{}↓", entry.behind).red()));
+                }
+                info_str.push_str(&commits_str);
+            }
+
+            // Show restack icon
+            if entry.needs_restack {
+                info_str.push_str(&format!(" {}", "↻".bright_yellow()));
             }
 
             if let Some(pr_number) = entry.pr_number {
@@ -285,16 +294,12 @@ pub fn run(
             if let Some(ref ci) = entry.ci_state {
                 info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
             }
-
-            if entry.needs_restack {
-                info_str.push_str(&format!("{}", " (needs restack)".bright_yellow()));
-            }
         }
 
         println!("{}{}", tree, info_str);
     }
 
-    // Render trunk with corner connector (fp-style: just ○─┘ to rightmost column)
+    // Render trunk with corner connector (fp-style: ○─┘ for 1 col, ○─┴─┘ for 2, ○─┴─┴─┘ for 3, etc.)
     let is_trunk_current = stack.trunk == current;
     let trunk_color = DEPTH_COLORS[0];
 
@@ -305,10 +310,16 @@ pub fn run(
     trunk_tree.push_str(&format!("{}", trunk_circle.color(trunk_color)));
     trunk_visual_width += 1;
 
-    // Only show ─┘ if there are branches to the right (max_column >= 1)
+    // Show connectors for all columns: ─┴ for middle columns, ─┘ for the last
     if max_column >= 1 {
-        trunk_tree.push_str(&format!("{}", "─┘".color(trunk_color)));
-        trunk_visual_width += 2;
+        for col in 1..=max_column {
+            if col < max_column {
+                trunk_tree.push_str(&format!("{}", "─┴".color(trunk_color)));
+            } else {
+                trunk_tree.push_str(&format!("{}", "─┘".color(trunk_color)));
+            }
+            trunk_visual_width += 2;
+        }
     }
 
     // Pad to match branch name alignment

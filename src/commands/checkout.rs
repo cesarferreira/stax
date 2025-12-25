@@ -135,17 +135,20 @@ pub fn run(
 
                     if let Some(info) = stack.branches.get(&db.name) {
                         if let Some(parent) = info.parent.as_deref() {
-                            if let Some((additions, deletions)) =
-                                get_line_diff_stats(workdir, parent, &db.name)
+                            if let Some((ahead, behind)) =
+                                get_commits_ahead_behind(workdir, parent, &db.name)
                             {
-                                if additions > 0 || deletions > 0 {
-                                    display.push_str(&format!(" +{}-{}", additions, deletions));
+                                if ahead > 0 {
+                                    display.push_str(&format!(" {}↑", ahead));
+                                }
+                                if behind > 0 {
+                                    display.push_str(&format!(" {}↓", behind));
                                 }
                             }
                         }
 
                         if info.needs_restack {
-                            display.push_str(" (needs restack)");
+                            display.push_str(" ↻");
                         }
                         if let Some(pr) = info.pr_number {
                             let mut pr_text = format!(" PR #{}", pr);
@@ -169,10 +172,16 @@ pub fn run(
                 trunk_tree.push_str(trunk_circle);
                 trunk_visual_width += 1;
 
-                // fp-style: just ○─┘ to rightmost column
+                // fp-style: ○─┘ for 1 col, ○─┴─┘ for 2, ○─┴─┴─┘ for 3, etc.
                 if max_column >= 1 {
-                    trunk_tree.push_str("─┘");
-                    trunk_visual_width += 2;
+                    for col in 1..=max_column {
+                        if col < max_column {
+                            trunk_tree.push_str("─┴");
+                        } else {
+                            trunk_tree.push_str("─┘");
+                        }
+                        trunk_visual_width += 2;
+                    }
                 }
 
                 while trunk_visual_width < tree_target_width {
@@ -211,40 +220,43 @@ pub fn run(
     Ok(())
 }
 
-/// Get line additions and deletions between parent and branch
-fn get_line_diff_stats(
+/// Get commits ahead and behind between parent and branch
+fn get_commits_ahead_behind(
     workdir: &std::path::Path,
     parent: &str,
     branch: &str,
 ) -> Option<(usize, usize)> {
-    let output = Command::new("git")
-        .args(["diff", "--numstat", &format!("{}...{}", parent, branch)])
+    let ahead_output = Command::new("git")
+        .args(["rev-list", "--count", &format!("{}..{}", parent, branch)])
         .current_dir(workdir)
         .output()
         .ok()?;
 
-    if !output.status.success() {
-        return None;
-    }
+    let ahead = if ahead_output.status.success() {
+        String::from_utf8_lossy(&ahead_output.stdout)
+            .trim()
+            .parse()
+            .ok()?
+    } else {
+        0
+    };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut additions = 0usize;
-    let mut deletions = 0usize;
+    let behind_output = Command::new("git")
+        .args(["rev-list", "--count", &format!("{}..{}", branch, parent)])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
 
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 2 {
-            // Binary files show "-" instead of numbers
-            if let Ok(add) = parts[0].parse::<usize>() {
-                additions += add;
-            }
-            if let Ok(del) = parts[1].parse::<usize>() {
-                deletions += del;
-            }
-        }
-    }
+    let behind = if behind_output.status.success() {
+        String::from_utf8_lossy(&behind_output.stdout)
+            .trim()
+            .parse()
+            .ok()?
+    } else {
+        0
+    };
 
-    Some((additions, deletions))
+    Some((ahead, behind))
 }
 
 /// fp-style: children sorted alphabetically, each child gets column + index
