@@ -13,6 +13,9 @@
     <img alt="Async" src="https://img.shields.io/badge/async-tokio-2f74c0">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   </p>
+  <p>
+    <img alt="stax status screenshot" src="assets/screenshot.png">
+  </p>
 </div>
 
 ## Why stax?
