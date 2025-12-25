@@ -294,7 +294,7 @@ pub fn run(
         println!("{}{}", tree, info_str);
     }
 
-    // Render trunk with corner connector
+    // Render trunk with corner connector (fp-style: just ○─┘ to rightmost column)
     let is_trunk_current = stack.trunk == current;
     let trunk_color = DEPTH_COLORS[0];
 
@@ -305,15 +305,10 @@ pub fn run(
     trunk_tree.push_str(&format!("{}", trunk_circle.color(trunk_color)));
     trunk_visual_width += 1;
 
+    // Only show ─┘ if there are branches to the right (max_column >= 1)
     if max_column >= 1 {
-        for col in 1..=max_column {
-            if col < max_column {
-                trunk_tree.push_str(&format!("{}", "─┴".color(trunk_color)));
-            } else {
-                trunk_tree.push_str(&format!("{}", "─┘".color(trunk_color)));
-            }
-            trunk_visual_width += 2;
-        }
+        trunk_tree.push_str(&format!("{}", "─┘".color(trunk_color)));
+        trunk_visual_width += 2;
     }
 
     // Pad to match branch name alignment
