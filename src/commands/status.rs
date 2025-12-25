@@ -126,10 +126,19 @@ pub fn run(
     for name in &ordered_branches {
         let info = stack.branches.get(name);
         let parent = info.and_then(|b| b.parent.clone());
-        let (ahead, behind) = parent
-            .as_deref()
-            .and_then(|p| get_commits_ahead_behind(workdir, p, name))
-            .unwrap_or((0, 0));
+        let is_trunk = name == &stack.trunk;
+
+        // For trunk, compare against remote tracking branch (e.g., origin/main)
+        // For other branches, compare against parent
+        let (ahead, behind) = if is_trunk {
+            let remote_ref = format!("{}/{}", config.remote_name(), name);
+            get_commits_ahead_behind(workdir, &remote_ref, name).unwrap_or((0, 0))
+        } else {
+            parent
+                .as_deref()
+                .and_then(|p| get_commits_ahead_behind(workdir, p, name))
+                .unwrap_or((0, 0))
+        };
         let (lines_added, lines_deleted) = parent
             .as_deref()
             .and_then(|p| get_line_diff_stats(workdir, p, name))
@@ -337,6 +346,18 @@ pub fn run(
         trunk_info.push_str(&format!("{}", stack.trunk.bold()));
     } else {
         trunk_info.push_str(&stack.trunk);
+    }
+
+    // Show commits ahead/behind for trunk (compared to origin)
+    if let Some(entry) = branch_status_map.get(&stack.trunk) {
+        if entry.ahead > 0 || entry.behind > 0 {
+            if entry.ahead > 0 {
+                trunk_info.push_str(&format!(" {}", format!("{}↑", entry.ahead).green()));
+            }
+            if entry.behind > 0 {
+                trunk_info.push_str(&format!(" {}", format!("{}↓", entry.behind).red()));
+            }
+        }
     }
 
     println!("{}{}", trunk_tree, trunk_info);
