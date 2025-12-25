@@ -45,43 +45,57 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    // Sort by depth descending (leaves first = deepest at top)
-    branches_with_depth.sort_by(|a, b| b.1.cmp(&a.1));
+    // Get the current branch's stack (ancestors from current to trunk)
+    let current_stack: std::collections::HashSet<String> = {
+        let mut ancestors = stack.ancestors(&current);
+        ancestors.push(current.clone());
+        ancestors.into_iter().collect()
+    };
 
-    // In fp style:
-    // - First branch (leaf/top): circle at column 0, no vertical line
-    // - Middle branches: vertical line at column 0, circle at column 1
-    // - Trunk: circle at column 0 with corner connector to column 1
+    // Separate branches into "in current stack" vs "not in current stack"
+    let (mut in_stack, mut not_in_stack): (Vec<_>, Vec<_>) = branches_with_depth
+        .into_iter()
+        .partition(|(name, _)| current_stack.contains(name));
 
-    let has_branches = !branches_with_depth.is_empty();
+    // Sort both by depth descending
+    in_stack.sort_by(|a, b| b.1.cmp(&a.1));
+    not_in_stack.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Display order: [not in stack] then [in stack]
+    let display_order: Vec<(String, usize, bool)> = not_in_stack
+        .into_iter()
+        .map(|(name, depth)| (name, depth, false)) // false = not in stack
+        .chain(in_stack.into_iter().map(|(name, depth)| (name, depth, true))) // true = in stack
+        .collect();
+
+    let has_stack_branches = display_order.iter().any(|(_, _, in_stack)| *in_stack);
 
     // Render each branch
-    for (i, (branch, _depth)) in branches_with_depth.iter().enumerate() {
+    for (branch, _depth, in_current_stack) in &display_order {
         let info = stack.branches.get(branch);
         let is_current = branch == &current;
         let has_remote = remote_branches.contains(branch);
-        let is_first = i == 0;
 
-        let color = if is_first {
-            DEPTH_COLORS[0]
-        } else {
+        let color = if *in_current_stack {
             DEPTH_COLORS[1 % DEPTH_COLORS.len()]
+        } else {
+            DEPTH_COLORS[0]
         };
 
         // Build tree graphics
         let mut tree = String::new();
 
-        if is_first {
-            // First branch (leaf): circle at column 0, no vertical line
-            let circle = if is_current { "◉" } else { "○" };
-            tree.push_str(&format!("{}", circle.color(color)));
-            tree.push_str("    "); // 4 spaces to align (total: 5 chars before name)
-        } else {
-            // Middle branches: vertical line at column 0, circle at column 1
+        if *in_current_stack {
+            // Branches in current stack: vertical line at column 0, circle at column 1
             tree.push_str(&format!("{} ", "│".color(DEPTH_COLORS[0])));
             let circle = if is_current { "◉" } else { "○" };
             tree.push_str(&format!("{}", circle.color(color)));
             tree.push_str("  "); // 2 spaces to align (total: 5 chars before name)
+        } else {
+            // Branches not in current stack: circle at column 0, no vertical line
+            let circle = if is_current { "◉" } else { "○" };
+            tree.push_str(&format!("{}", circle.color(color)));
+            tree.push_str("    "); // 4 spaces to align (total: 5 chars before name)
         }
 
         // Build info part
@@ -134,8 +148,8 @@ pub fn run() -> Result<()> {
     // Add the trunk circle
     trunk_tree.push_str(&format!("{}", "○".color(trunk_color)));
 
-    // Add corner connector if there are branches above
-    if has_branches {
+    // Add corner connector if there are stack branches above
+    if has_stack_branches {
         // Draw horizontal line and corner to connect to column 1
         trunk_tree.push_str(&format!("{}", "─".color(trunk_color)));
         trunk_tree.push_str(&format!("{}", "┘".color(trunk_color)));
