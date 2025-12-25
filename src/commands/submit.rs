@@ -23,7 +23,7 @@ struct PrPlan {
 pub fn run(
     draft: bool,
     no_pr: bool,
-    force: bool,
+    _force: bool, // kept for CLI compatibility
     yes: bool,
     no_prompt: bool,
     reviewers: Vec<String>,
@@ -60,7 +60,7 @@ pub fn run(
         println!();
     }
 
-    // Check for needs restack
+    // Check for needs restack - show warning but continue (like fp)
     let needs_restack: Vec<_> = stack_branches
         .iter()
         .filter(|b| {
@@ -72,33 +72,17 @@ pub fn run(
         })
         .collect();
 
-    if !needs_restack.is_empty() && !force {
-        if !quiet {
+    if !needs_restack.is_empty() && !quiet {
+        for b in &needs_restack {
             println!(
                 "{}",
-                "⚠ Some branches need restacking:".yellow().bold()
+                format!(
+                    "Note: {} has fallen behind its parent. You may encounter conflicts if you attempt to merge it.",
+                    b
+                ).yellow()
             );
-            println!();
-            for b in &needs_restack {
-                println!("  {} {}", "▸".yellow(), b);
-            }
-            println!();
-            println!("{}", "This happens when a parent branch has new commits since".dimmed());
-            println!("{}", "these branches were created or last rebased.".dimmed());
-            println!();
-            println!("Options:");
-            println!("  {} - Rebase branches onto their updated parents", "stax rs --restack".cyan());
-            println!("  {} - Submit anyway (PRs may show extra commits)", "stax ss --force".yellow());
         }
-        return Ok(());
-    } else if !needs_restack.is_empty() && force {
-        if !quiet {
-            println!(
-                "{}",
-                "⚠ Skipping restack check (--force)".yellow()
-            );
-            println!();
-        }
+        println!();
     }
 
     // Check for branches with no changes (empty branches)

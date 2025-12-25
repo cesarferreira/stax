@@ -180,6 +180,9 @@ enum Commands {
     /// Check stax configuration and repo health
     Doctor,
 
+    /// Switch to the trunk branch
+    Trunk,
+
     /// Branch management commands
     #[command(subcommand, visible_alias = "b")]
     Branch(BranchCommands),
@@ -392,6 +395,7 @@ fn main() -> Result<()> {
         Commands::Diff { stack, all } => commands::diff::run(stack, all),
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
         Commands::Doctor => unreachable!(), // Handled above
+        Commands::Trunk => commands::checkout::run(None, true, false, None),
         Commands::Branch(cmd) => match cmd {
             BranchCommands::Create {
                 name,
