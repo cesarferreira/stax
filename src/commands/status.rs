@@ -106,23 +106,25 @@ pub fn run() -> Result<()> {
         let prev_branch_col = if i > 0 { Some(display_branches[i - 1].column) } else { None };
         let needs_corner = prev_branch_col.map_or(false, |pc| pc > db.column);
 
-        // Build tree graphics
+        // Build tree graphics - pad to consistent width based on max_column
         let mut tree = String::new();
+        let mut visual_width = 0;
+        let tree_target_width = (max_column + 1) * 2;
 
-        // Draw columns 0 to max_column
-        for col in 0..=max_column {
+        // Draw columns 0 to db.column
+        for col in 0..=db.column {
             if col == db.column {
                 // This is our column - draw circle
                 let circle = if is_current { "◉" } else { "○" };
                 tree.push_str(&format!("{}", circle.color(color)));
+                visual_width += 1;
 
                 // Check if we need corner connector (side branch ending)
                 if needs_corner {
                     tree.push_str(&format!("{}", "─┘".color(color)));
-                } else {
-                    tree.push(' ');
+                    visual_width += 2;
                 }
-            } else if col < db.column {
+            } else {
                 // Columns to our left - draw vertical line if there are branches at this column below
                 if has_below_at_col(col) {
                     let line_color = DEPTH_COLORS[col % DEPTH_COLORS.len()];
@@ -130,10 +132,14 @@ pub fn run() -> Result<()> {
                 } else {
                     tree.push_str("  ");
                 }
-            } else {
-                // Columns to our right - just space
-                tree.push_str("  ");
+                visual_width += 2;
             }
+        }
+
+        // Pad to consistent width so branch names align
+        while visual_width < tree_target_width {
+            tree.push(' ');
+            visual_width += 1;
         }
 
         // Build info part
@@ -183,18 +189,26 @@ pub fn run() -> Result<()> {
     let trunk_color = DEPTH_COLORS[0];
 
     let mut trunk_tree = String::new();
+    let mut trunk_visual_width = 0;
+    let tree_target_width = (max_column + 1) * 2;
+
     trunk_tree.push_str(&format!("{}", "○".color(trunk_color)));
+    trunk_visual_width += 1;
 
     // Corner connector to the main chain (column 1) if it exists
     if max_column >= 1 {
         trunk_tree.push_str(&format!("{}", "─┘".color(trunk_color)));
-        for _ in 2..=max_column {
-            trunk_tree.push_str("  ");
-        }
+        trunk_visual_width += 2;
     }
-    trunk_tree.push(' ');
+
+    // Pad to match branch name alignment
+    while trunk_visual_width < tree_target_width {
+        trunk_tree.push(' ');
+        trunk_visual_width += 1;
+    }
 
     let mut trunk_info = String::new();
+    trunk_info.push(' '); // Space after tree (same as branches)
     if remote_branches.contains(&stack.trunk) {
         trunk_info.push_str(&format!("{} ", "☁".bright_blue()));
     }
