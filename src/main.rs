@@ -181,6 +181,7 @@ enum Commands {
     Doctor,
 
     /// Switch to the trunk branch
+    #[command(visible_alias = "t")]
     Trunk,
 
     /// Branch management commands
