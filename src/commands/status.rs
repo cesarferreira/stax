@@ -5,8 +5,8 @@ use colored::{Color, Colorize};
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
-// Colors for different stacks (cycle through these)
-const STACK_COLORS: &[Color] = &[
+// Colors for different branches (cycle through these)
+const BRANCH_COLORS: &[Color] = &[
     Color::Yellow,
     Color::Green,
     Color::Magenta,
@@ -17,16 +17,16 @@ const STACK_COLORS: &[Color] = &[
     Color::BrightGreen,
 ];
 
-struct BranchInfo {
+struct BranchDisplay {
     name: String,
-    column: usize,      // Which column this branch is in
+    column: usize,
     color: Color,
     is_current: bool,
     has_remote: bool,
     commits_ahead: Option<usize>,
     pr_number: Option<u64>,
     needs_restack: bool,
-    has_children: bool, // Does this branch have children below it?
+    depth: usize, // depth from trunk (for sorting)
 }
 
 pub fn run() -> Result<()> {
@@ -46,142 +46,147 @@ pub fn run() -> Result<()> {
     // Get remote branches
     let remote_branches = get_remote_branches(repo.workdir()?);
 
-    // Collect all stacks (each direct child of trunk starts a stack)
+    // Get trunk's direct children
     let trunk_info = stack.branches.get(&stack.trunk);
     let mut trunk_children: Vec<String> = trunk_info
         .map(|b| b.children.clone())
         .unwrap_or_default();
     trunk_children.sort();
 
-    // Assign colors and columns to stacks
-    let mut branch_colors: HashMap<String, Color> = HashMap::new();
-    let mut branch_columns: HashMap<String, usize> = HashMap::new();
-
-    for (idx, root) in trunk_children.iter().enumerate() {
-        let color = STACK_COLORS[idx % STACK_COLORS.len()];
-        assign_stack_info(&stack, root, idx, color, &mut branch_columns, &mut branch_colors);
+    if trunk_children.is_empty() {
+        println!("{}", "No tracked branches in stack.".dimmed());
+        return Ok(());
     }
 
-    let total_columns = trunk_children.len();
+    // Assign columns using DFS - each branch gets a column based on tree position
+    // First child inherits parent column, additional children get new columns
+    let mut branch_columns: HashMap<String, usize> = HashMap::new();
+    let mut branch_colors: HashMap<String, Color> = HashMap::new();
+    let mut next_column: usize = 0;
 
-    // Collect all branches in display order (leaves first, then parents)
-    let mut display_order: Vec<BranchInfo> = Vec::new();
     for root in &trunk_children {
-        collect_branch_info(
+        assign_columns_dfs(
             &stack,
             root,
-            &current,
-            &remote_branches,
-            &branch_columns,
-            &branch_colors,
-            repo.workdir()?,
-            &mut display_order,
+            &mut next_column,
+            &mut branch_columns,
+            &mut branch_colors,
+            true, // first child of trunk
         );
     }
 
-    // Track which columns have active lines (branches still to be rendered)
-    let mut active_columns: HashSet<usize> = HashSet::new();
-    for bi in &display_order {
-        if bi.has_children {
-            active_columns.insert(bi.column);
+    let max_column = next_column;
+
+    // Collect branches with depth info
+    let mut display_list: Vec<BranchDisplay> = Vec::new();
+    collect_branches_with_depth(
+        &stack,
+        &stack.trunk,
+        0,
+        &current,
+        &remote_branches,
+        &branch_columns,
+        &branch_colors,
+        repo.workdir()?,
+        &mut display_list,
+    );
+
+    // Sort: higher column first, then by depth descending (leaves first)
+    display_list.sort_by(|a, b| {
+        match b.column.cmp(&a.column) {
+            std::cmp::Ordering::Equal => b.depth.cmp(&a.depth),
+            other => other,
         }
-    }
+    });
+
+    // Track active columns (need vertical lines)
+    let mut active_columns: HashSet<usize> = HashSet::new();
 
     // Render each branch
-    for bi in &display_order {
-        // Build the column indicators
-        let mut line = String::new();
+    for bd in &display_list {
+        // Build tree graphics
+        let mut tree_part = String::new();
 
-        for col in 0..total_columns {
-            if col == bi.column {
-                // This is our branch's column - show the node
-                let indicator = if bi.is_current { "◉" } else { "○" };
-                if bi.is_current {
-                    line.push_str(&format!("{}", indicator.color(bi.color).bold()));
-                } else {
-                    line.push_str(&format!("{}", indicator.color(bi.color)));
-                }
+        for col in 0..max_column {
+            if col == bd.column {
+                let circle = if bd.is_current { "◉" } else { "○" };
+                tree_part.push_str(&format!("{}", circle.color(bd.color)));
             } else if active_columns.contains(&col) {
-                // Another stack has active branches - show line
-                let col_color = STACK_COLORS[col % STACK_COLORS.len()];
-                line.push_str(&format!("{}", "│".color(col_color)));
+                // Find the color for this column
+                let color = find_color_for_column(&branch_columns, &branch_colors, col);
+                tree_part.push_str(&format!("{}", "│".color(color)));
             } else {
-                line.push(' ');
+                tree_part.push(' ');
             }
         }
 
-        // Add spacing and branch name
-        line.push_str("  ");
+        // After rendering, update active columns
+        // Add this column (it continues down toward trunk)
+        active_columns.insert(bd.column);
 
-        // Remote icon
-        if bi.has_remote {
-            line.push_str(&format!("{}", "☁ ".bright_blue()));
+        // Build info part
+        let mut info_part = String::new();
+        info_part.push_str("  ");
+
+        if bd.has_remote {
+            info_part.push_str(&format!("{}", "☁ ".bright_blue()));
         }
 
-        // Branch name
-        if bi.is_current {
-            line.push_str(&format!("{}", bi.name.bold()));
+        if bd.is_current {
+            info_part.push_str(&format!("{}", bd.name.bold()));
         } else {
-            line.push_str(&bi.name);
+            info_part.push_str(&bd.name);
         }
 
-        // Commits ahead
-        if let Some(n) = bi.commits_ahead {
+        if let Some(n) = bd.commits_ahead {
             if n > 0 {
-                if bi.is_current {
-                    line.push_str(&format!("{}", format!(" +{}", n).bright_green()));
+                let commit_str = format!(" +{}", n);
+                if bd.is_current {
+                    info_part.push_str(&format!("{}", commit_str.bright_green()));
                 } else {
-                    line.push_str(&format!("{}", format!(" +{}", n).dimmed()));
+                    info_part.push_str(&format!("{}", commit_str.dimmed()));
                 }
             }
         }
 
-        // PR number
-        if let Some(pr) = bi.pr_number {
-            line.push_str(&format!("{}", format!(" PR #{}", pr).bright_magenta()));
+        if let Some(pr) = bd.pr_number {
+            info_part.push_str(&format!("{}", format!(" PR #{}", pr).bright_magenta()));
         }
 
-        // Restack warning
-        if bi.needs_restack {
-            line.push_str(&format!("{}", " ↻".bright_yellow()));
+        if bd.needs_restack {
+            info_part.push_str(&format!("{}", " ↻".bright_yellow()));
         }
 
-        println!("{}", line);
-
-        // If this branch has no children, its column is no longer active
-        if !bi.has_children {
-            active_columns.remove(&bi.column);
-        }
+        println!("{}{}", tree_part, info_part);
     }
 
     // Render trunk
-    let is_trunk_current = stack.trunk == current;
-    let mut trunk_line = String::new();
-
-    // Show remaining active columns converging to trunk
-    for col in 0..total_columns {
-        if active_columns.contains(&col) || col == 0 {
-            let col_color = STACK_COLORS[col % STACK_COLORS.len()];
-            trunk_line.push_str(&format!("{}", "○".color(col_color)));
+    let mut trunk_tree = String::new();
+    for col in 0..max_column {
+        if active_columns.contains(&col) {
+            // Find color for this column
+            let color = find_color_for_column(&branch_columns, &branch_colors, col);
+            trunk_tree.push_str(&format!("{}", "○".color(color)));
         } else {
-            trunk_line.push(' ');
+            trunk_tree.push(' ');
         }
     }
 
-    trunk_line.push_str("  ");
+    let is_trunk_current = stack.trunk == current;
+    let mut trunk_info = String::new();
+    trunk_info.push_str("  ");
     if remote_branches.contains(&stack.trunk) {
-        trunk_line.push_str(&format!("{}", "☁ ".bright_blue()));
+        trunk_info.push_str(&format!("{}", "☁ ".bright_blue()));
     }
-
     if is_trunk_current {
-        trunk_line.push_str(&format!("{}", stack.trunk.bold()));
+        trunk_info.push_str(&format!("{}", stack.trunk.bold()));
     } else {
-        trunk_line.push_str(&stack.trunk);
+        trunk_info.push_str(&stack.trunk);
     }
 
-    println!("{}", trunk_line);
+    println!("{}{}", trunk_tree, trunk_info);
 
-    // Show hint if restack needed
+    // Show restack hint
     let needs_restack = stack.needs_restack();
     if !needs_restack.is_empty() {
         println!();
@@ -195,51 +200,83 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn assign_stack_info(
+fn find_color_for_column(
+    columns: &HashMap<String, usize>,
+    colors: &HashMap<String, Color>,
+    col: usize,
+) -> Color {
+    for (name, &c) in columns {
+        if c == col {
+            if let Some(&color) = colors.get(name) {
+                return color;
+            }
+        }
+    }
+    Color::White
+}
+
+/// Assign columns using DFS traversal
+/// Each branch gets its own column, spreading to the right
+fn assign_columns_dfs(
     stack: &Stack,
     branch: &str,
-    column: usize,
-    color: Color,
+    next_column: &mut usize,
     columns: &mut HashMap<String, usize>,
     colors: &mut HashMap<String, Color>,
+    _is_first_child: bool,
 ) {
-    columns.insert(branch.to_string(), column);
-    colors.insert(branch.to_string(), color);
+    // Each branch gets its own column, spreading right
+    let my_column = *next_column;
+    *next_column += 1;
 
+    columns.insert(branch.to_string(), my_column);
+    colors.insert(branch.to_string(), BRANCH_COLORS[my_column % BRANCH_COLORS.len()]);
+
+    // Process children in sorted order
     if let Some(info) = stack.branches.get(branch) {
-        for child in &info.children {
-            assign_stack_info(stack, child, column, color, columns, colors);
+        let mut children: Vec<_> = info.children.iter().collect();
+        children.sort();
+
+        for child in children {
+            assign_columns_dfs(stack, child, next_column, columns, colors, false);
         }
     }
 }
 
-fn collect_branch_info(
+/// Collect branches with depth information
+#[allow(clippy::too_many_arguments)]
+fn collect_branches_with_depth(
     stack: &Stack,
     branch: &str,
+    depth: usize,
     current: &str,
     remote_branches: &HashSet<String>,
     columns: &HashMap<String, usize>,
     colors: &HashMap<String, Color>,
     workdir: &std::path::Path,
-    result: &mut Vec<BranchInfo>,
+    result: &mut Vec<BranchDisplay>,
 ) {
-    let info = stack.branches.get(branch);
-    let has_children = info.map(|i| !i.children.is_empty()).unwrap_or(false);
-
-    // First collect children (leaves first)
-    if let Some(info) = info {
-        for child in &info.children {
-            collect_branch_info(stack, child, current, remote_branches, columns, colors, workdir, result);
+    // Skip trunk itself (we render it separately)
+    if branch == stack.trunk {
+        if let Some(info) = stack.branches.get(branch) {
+            for child in &info.children {
+                collect_branches_with_depth(
+                    stack, child, 1, current, remote_branches,
+                    columns, colors, workdir, result,
+                );
+            }
         }
+        return;
     }
+
+    let info = stack.branches.get(branch);
 
     // Get commits ahead
     let commits_ahead = info
         .and_then(|i| i.parent.as_ref())
         .and_then(|parent| get_commits_ahead(workdir, parent, branch));
 
-    // Then add this branch
-    result.push(BranchInfo {
+    result.push(BranchDisplay {
         name: branch.to_string(),
         column: *columns.get(branch).unwrap_or(&0),
         color: *colors.get(branch).unwrap_or(&Color::White),
@@ -248,8 +285,18 @@ fn collect_branch_info(
         commits_ahead,
         pr_number: info.and_then(|i| i.pr_number),
         needs_restack: info.map(|i| i.needs_restack).unwrap_or(false),
-        has_children,
+        depth,
     });
+
+    // Recurse into children
+    if let Some(info) = info {
+        for child in &info.children {
+            collect_branches_with_depth(
+                stack, child, depth + 1, current, remote_branches,
+                columns, colors, workdir, result,
+            );
+        }
+    }
 }
 
 fn get_remote_branches(workdir: &std::path::Path) -> HashSet<String> {
@@ -282,5 +329,134 @@ fn get_commits_ahead(workdir: &std::path::Path, parent: &str, branch: &str) -> O
             .ok()
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::stack::{Stack, StackBranch};
+
+    fn make_test_stack(trunk: &str, branches: Vec<(&str, Option<&str>, Vec<&str>)>) -> Stack {
+        let mut branch_map: HashMap<String, StackBranch> = HashMap::new();
+
+        for (name, parent, children) in branches {
+            branch_map.insert(
+                name.to_string(),
+                StackBranch {
+                    name: name.to_string(),
+                    parent: parent.map(|p| p.to_string()),
+                    children: children.iter().map(|c| c.to_string()).collect(),
+                    needs_restack: false,
+                    pr_number: None,
+                },
+            );
+        }
+
+        Stack {
+            branches: branch_map,
+            trunk: trunk.to_string(),
+        }
+    }
+
+    fn get_column_assignments(stack: &Stack) -> HashMap<String, usize> {
+        let trunk_info = stack.branches.get(&stack.trunk);
+        let mut trunk_children: Vec<String> = trunk_info
+            .map(|b| b.children.clone())
+            .unwrap_or_default();
+        trunk_children.sort();
+
+        let mut columns: HashMap<String, usize> = HashMap::new();
+        let mut colors: HashMap<String, Color> = HashMap::new();
+        let mut next_column: usize = 0;
+
+        for root in &trunk_children {
+            assign_columns_dfs(stack, root, &mut next_column, &mut columns, &mut colors, true);
+        }
+
+        columns
+    }
+
+    #[test]
+    fn test_linear_chain_columns() {
+        // main -> a -> b -> c
+        // Each branch should get its own column (0, 1, 2)
+        let stack = make_test_stack(
+            "main",
+            vec![
+                ("main", None, vec!["a"]),
+                ("a", Some("main"), vec!["b"]),
+                ("b", Some("a"), vec!["c"]),
+                ("c", Some("b"), vec![]),
+            ],
+        );
+
+        let columns = get_column_assignments(&stack);
+
+        // Each branch gets incrementing columns
+        assert_eq!(columns.get("a"), Some(&0));
+        assert_eq!(columns.get("b"), Some(&1));
+        assert_eq!(columns.get("c"), Some(&2));
+    }
+
+    #[test]
+    fn test_two_roots_columns() {
+        // main -> stack1 -> s1child
+        // main -> stack2
+        let stack = make_test_stack(
+            "main",
+            vec![
+                ("main", None, vec!["stack1", "stack2"]),
+                ("stack1", Some("main"), vec!["s1child"]),
+                ("s1child", Some("stack1"), vec![]),
+                ("stack2", Some("main"), vec![]),
+            ],
+        );
+
+        let columns = get_column_assignments(&stack);
+
+        // DFS order: stack1 (0), s1child (1), stack2 (2)
+        assert_eq!(columns.get("stack1"), Some(&0));
+        assert_eq!(columns.get("s1child"), Some(&1));
+        assert_eq!(columns.get("stack2"), Some(&2));
+    }
+
+    #[test]
+    fn test_complex_tree_columns() {
+        // Simulating fp ls structure:
+        // main -> old-feature1 -> old-feature2 -> old-feature3
+        // main -> debug-test
+        // main -> stack1 -> stack2
+        // main -> test-debug -> test-debug2
+        let stack = make_test_stack(
+            "main",
+            vec![
+                ("main", None, vec!["debug-test", "old-feature1", "stack1", "test-debug"]),
+                ("old-feature1", Some("main"), vec!["old-feature2"]),
+                ("old-feature2", Some("old-feature1"), vec!["old-feature3"]),
+                ("old-feature3", Some("old-feature2"), vec![]),
+                ("debug-test", Some("main"), vec![]),
+                ("stack1", Some("main"), vec!["stack2"]),
+                ("stack2", Some("stack1"), vec![]),
+                ("test-debug", Some("main"), vec!["test-debug2"]),
+                ("test-debug2", Some("test-debug"), vec![]),
+            ],
+        );
+
+        let columns = get_column_assignments(&stack);
+
+        // DFS order (sorted children): debug-test, old-feature1/2/3, stack1/2, test-debug/2
+        // debug-test: 0
+        // old-feature1: 1, old-feature2: 2, old-feature3: 3
+        // stack1: 4, stack2: 5
+        // test-debug: 6, test-debug2: 7
+        assert_eq!(columns.get("debug-test"), Some(&0));
+        assert_eq!(columns.get("old-feature1"), Some(&1));
+        assert_eq!(columns.get("old-feature2"), Some(&2));
+        assert_eq!(columns.get("old-feature3"), Some(&3));
+        assert_eq!(columns.get("stack1"), Some(&4));
+        assert_eq!(columns.get("stack2"), Some(&5));
+        assert_eq!(columns.get("test-debug"), Some(&6));
+        assert_eq!(columns.get("test-debug2"), Some(&7));
     }
 }

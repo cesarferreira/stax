@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 /// Main config (safe to commit to dotfiles)
 #[derive(Debug, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub branch: BranchConfig,
@@ -32,14 +33,6 @@ pub struct UiConfig {
     pub tips: bool,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            branch: BranchConfig::default(),
-            ui: UiConfig::default(),
-        }
-    }
-}
 
 impl Default for BranchConfig {
     fn default() -> Self {

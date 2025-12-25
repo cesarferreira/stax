@@ -203,10 +203,9 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
                     let default_title = plan
                         .branch
                         .split('/')
-                        .last()
+                        .next_back()
                         .unwrap_or(&plan.branch)
-                        .replace('-', " ")
-                        .replace('_', " ");
+                        .replace(['-', '_'], " ");
 
                     println!("  {} {}", "▸".cyan(), plan.branch.cyan());
 
@@ -309,8 +308,6 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
                     pr_title: Some(title.clone()),
-                    state: Some(pr.state.clone()),
-                    is_draft: pr.is_draft,
                 });
             } else {
                 // Update existing PR
@@ -333,8 +330,6 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
                     pr_title: Some(pr.title.clone()),
-                    state: Some(pr.state.clone()),
-                    is_draft: pr.is_draft,
                 });
             }
         }

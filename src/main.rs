@@ -143,6 +143,22 @@ enum BranchCommands {
         #[arg(short, long)]
         force: bool,
     },
+
+    /// Squash all commits on current branch into one
+    #[command(visible_alias = "sq")]
+    Squash {
+        /// Commit message for the squashed commit
+        #[arg(short, long)]
+        message: Option<String>,
+    },
+
+    /// Fold current branch into its parent
+    #[command(visible_alias = "f")]
+    Fold {
+        /// Keep the branch after folding (don't delete)
+        #[arg(short, long)]
+        keep: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -190,6 +206,8 @@ fn main() -> Result<()> {
             BranchCommands::Delete { branch, force } => {
                 commands::branch::delete::run(branch, force)
             }
+            BranchCommands::Squash { message } => commands::branch::squash::run(message),
+            BranchCommands::Fold { keep } => commands::branch::fold::run(keep),
         },
         Commands::Upstack(cmd) => match cmd {
             UpstackCommands::Restack => commands::upstack::restack::run(),
