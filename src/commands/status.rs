@@ -95,55 +95,27 @@ pub fn run(
         .filter(|b| allowed_branches.as_ref().map_or(true, |a| a.contains(b)))
         .collect();
 
-    // Find the largest chain to display at column 1
-    let mut largest_chain_root: Option<String> = None;
-    let mut largest_chain_size = 0;
-    for chain_root in &trunk_children {
-        let size = count_chain_size(&stack, chain_root, allowed_branches.as_ref());
-        if size > largest_chain_size {
-            largest_chain_size = size;
-            largest_chain_root = Some(chain_root.clone());
-        }
-    }
-
-    // Build display list: isolated branches first (column 0), then the main chain (column 1+)
+    // Build display list: each trunk child gets its own column, stacked left to right
     let mut display_branches: Vec<DisplayBranch> = Vec::new();
-
-    // Add isolated chains (not the largest) at column 0
-    for chain_root in &trunk_children {
-        if largest_chain_root.as_ref() != Some(chain_root) {
-            collect_display_branches(
-                &stack,
-                chain_root,
-                0,
-                &mut display_branches,
-                allowed_branches.as_ref(),
-            );
-        }
-    }
-
-    // Add the largest chain at column 1 (with proper nested columns)
     let mut max_column = 0;
-    if let Some(ref root) = largest_chain_root {
-        if largest_chain_size > 1 {
-            collect_display_branches_with_nesting(
-                &stack,
-                root,
-                1,
-                &mut display_branches,
-                &mut max_column,
-                allowed_branches.as_ref(),
-            );
-        } else {
-            // Single branch chain, show at column 0
-            collect_display_branches(
-                &stack,
-                root,
-                0,
-                &mut display_branches,
-                allowed_branches.as_ref(),
-            );
-        }
+    let mut next_column = 0;
+    let mut sorted_trunk_children = trunk_children;
+    sorted_trunk_children.sort_by(|a, b| {
+        let size_a = count_chain_size(&stack, a, allowed_branches.as_ref());
+        let size_b = count_chain_size(&stack, b, allowed_branches.as_ref());
+        size_b.cmp(&size_a).then_with(|| a.cmp(b))
+    });
+
+    for root in &sorted_trunk_children {
+        collect_display_branches_with_nesting(
+            &stack,
+            root,
+            next_column,
+            &mut display_branches,
+            &mut max_column,
+            allowed_branches.as_ref(),
+        );
+        next_column = max_column + 1;
     }
 
     let tree_target_width = (max_column + 1) * 2;
@@ -234,17 +206,6 @@ pub fn run(
         let has_remote = remote_branches.contains(branch);
         let color = DEPTH_COLORS[db.column % DEPTH_COLORS.len()];
 
-        // Check if there are branches at column X below this row (for vertical lines)
-        // Column 0 is always "active" for non-column-0 branches because it connects to trunk
-        let has_below_at_col = |col: usize| -> bool {
-            if col == 0 && db.column > 0 {
-                // Column 0 connects to trunk via the corner connector
-                true
-            } else {
-                display_branches[i + 1..].iter().any(|b| b.column == col)
-            }
-        };
-
         // Check if we need a corner connector - this happens when the PREVIOUS branch was at a higher column
         // The corner shows that a side branch joins back to this level
         let prev_branch_col = if i > 0 { Some(display_branches[i - 1].column) } else { None };
@@ -267,13 +228,9 @@ pub fn run(
                     visual_width += 2;
                 }
             } else {
-                // Columns to our left - draw vertical line if there are branches at this column below
-                if has_below_at_col(col) {
-                    let line_color = DEPTH_COLORS[col % DEPTH_COLORS.len()];
-                    tree.push_str(&format!("{} ", "│".color(line_color)));
-                } else {
-                    tree.push_str("  ");
-                }
+                // Columns to our left - always draw vertical lines for active columns
+                let line_color = DEPTH_COLORS[col % DEPTH_COLORS.len()];
+                tree.push_str(&format!("{} ", "│".color(line_color)));
                 visual_width += 2;
             }
         }
@@ -351,13 +308,19 @@ pub fn run(
     let mut trunk_tree = String::new();
     let mut trunk_visual_width = 0;
 
-    trunk_tree.push_str(&format!("{}", "○".color(trunk_color)));
+    let trunk_circle = if is_trunk_current { "◉" } else { "○" };
+    trunk_tree.push_str(&format!("{}", trunk_circle.color(trunk_color)));
     trunk_visual_width += 1;
 
-    // Corner connector to the main chain (column 1) if it exists
     if max_column >= 1 {
-        trunk_tree.push_str(&format!("{}", "─┘".color(trunk_color)));
-        trunk_visual_width += 2;
+        for col in 1..=max_column {
+            if col < max_column {
+                trunk_tree.push_str(&format!("{}", "─┴".color(trunk_color)));
+            } else {
+                trunk_tree.push_str(&format!("{}", "─┘".color(trunk_color)));
+            }
+            trunk_visual_width += 2;
+        }
     }
 
     // Pad to match branch name alignment
@@ -399,30 +362,6 @@ pub fn run(
     }
 
     Ok(())
-}
-
-/// Collect branches for display at a fixed column (for isolated chains)
-fn collect_display_branches(
-    stack: &Stack,
-    branch: &str,
-    column: usize,
-    result: &mut Vec<DisplayBranch>,
-    allowed: Option<&HashSet<String>>,
-) {
-    if allowed.map_or(false, |set| !set.contains(branch)) {
-        return;
-    }
-
-    // First collect all descendants (depth-first, children before parent)
-    if let Some(info) = stack.branches.get(branch) {
-        for child in &info.children {
-            collect_display_branches(stack, child, column, result, allowed);
-        }
-    }
-    result.push(DisplayBranch {
-        name: branch.to_string(),
-        column,
-    });
 }
 
 /// Collect branches with proper nesting for branches that have multiple children
