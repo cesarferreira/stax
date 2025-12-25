@@ -1,4 +1,4 @@
-use crate::engine::Stack;
+use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -178,6 +178,13 @@ pub fn run(restack: bool, delete_merged: bool, _force: bool) -> Result<()> {
                             .status();
 
                         if rebase.map(|s| s.success()).unwrap_or(false) {
+                            // Update metadata with new parent revision
+                            if let Ok(parent_commit) = repo.branch_commit(parent) {
+                                if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch) {
+                                    meta.parent_branch_revision = parent_commit;
+                                    let _ = meta.write(repo.inner(), branch);
+                                }
+                            }
                             println!("{}", "done".green());
                         } else {
                             println!("{}", "conflicts - run 'stax continue' after resolving".yellow());

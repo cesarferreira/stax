@@ -16,7 +16,7 @@ struct PrPlan {
     body: Option<String>,
 }
 
-pub fn run(draft: bool, no_pr: bool) -> Result<()> {
+pub fn run(draft: bool, no_pr: bool, force: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -52,17 +52,29 @@ pub fn run(draft: bool, no_pr: bool) -> Result<()> {
         })
         .collect();
 
-    if !needs_restack.is_empty() {
+    if !needs_restack.is_empty() && !force {
         println!(
             "{}",
-            "WARNING: Some branches need restacking before submit:".red()
+            "⚠ Some branches need restacking:".yellow().bold()
         );
+        println!();
         for b in &needs_restack {
-            println!("  {} {}", "▸".red(), b);
+            println!("  {} {}", "▸".yellow(), b);
         }
         println!();
-        println!("Run {} first.", "stax rs --restack".cyan());
+        println!("{}", "This happens when a parent branch has new commits since".dimmed());
+        println!("{}", "these branches were created or last rebased.".dimmed());
+        println!();
+        println!("Options:");
+        println!("  {} - Rebase branches onto their updated parents", "stax rs --restack".cyan());
+        println!("  {} - Submit anyway (PRs may show extra commits)", "stax ss --force".yellow());
         return Ok(());
+    } else if !needs_restack.is_empty() && force {
+        println!(
+            "{}",
+            "⚠ Skipping restack check (--force)".yellow()
+        );
+        println!();
     }
 
     // Check for branches with no changes (empty branches)
