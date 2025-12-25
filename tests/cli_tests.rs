@@ -76,6 +76,8 @@ fn test_branch_subcommands() {
     assert!(stdout.contains("reparent"));
     assert!(stdout.contains("fold"));
     assert!(stdout.contains("squash"));
+    assert!(stdout.contains("up"));
+    assert!(stdout.contains("down"));
 }
 
 #[test]

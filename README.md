@@ -75,8 +75,6 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 | `stax bco` | **B**ranch **c**heck**o**ut - interactive branch picker |
 | `stax bc <name>` | **B**ranch **c**reate - create a new stacked branch |
 | `stax bc -m "msg"` | Create branch from message (spaces replaced) |
-| `stax bu` | **B**ranch **u**p - move to child branch |
-| `stax bd` | **B**ranch **d**own - move to parent branch |
 
 ### Full Commands
 
@@ -94,8 +92,6 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 | `stax submit --draft` | | Create PRs as drafts |
 | `stax submit --no-pr` | | Just push, skip PR creation |
 | `stax checkout [branch]` | `co`, `bco` | Checkout a branch (interactive if no arg) |
-| `stax up` | `bu` | Move up the stack (to child branch) |
-| `stax down` | `bd` | Move down the stack (to parent branch) |
 | `stax continue` | `cont` | Continue after resolving conflicts |
 | `stax auth` | | Set GitHub personal access token |
 | `stax config` | | Show config file path and contents |
@@ -148,6 +144,8 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 | `stax branch delete` | `b d` | Delete a branch |
 | `stax branch fold` | `b f` | Fold current branch into its parent |
 | `stax branch squash` | `b sq` | Squash commits on current branch |
+| `stax branch up` | `b u` | Move up the stack (to child branch) |
+| `stax branch down` | | Move down the stack (to parent branch) |
 
 ### Upstack/Downstack
 
@@ -181,8 +179,8 @@ stax s
 # ○─┘  main
 
 # Navigate the stack
-stax bd  # move down to feat/auth-api
-stax bu  # move back up to feat/auth-ui
+stax branch down  # move down to feat/auth-api
+stax branch up    # move back up to feat/auth-ui
 
 # Submit all PRs
 stax ss
