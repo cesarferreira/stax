@@ -192,17 +192,6 @@ enum Commands {
     #[command(subcommand, visible_alias = "ds")]
     Downstack(DownstackCommands),
 
-    /// Move up the stack (to child branch)
-    #[command(visible_alias = "bu")]
-    Up {
-        /// Child index (1-based)
-        index: Option<usize>,
-    },
-
-    /// Move down the stack (to parent branch)
-    #[command(visible_alias = "bd")]
-    Down,
-
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
     Bc {
@@ -213,6 +202,13 @@ enum Commands {
         #[arg(long)]
         from: Option<String>,
     },
+    #[command(hide = true)]
+    Bu {
+        /// Child index (1-based)
+        index: Option<usize>,
+    },
+    #[command(hide = true)]
+    Bd,
 }
 
 #[derive(Subcommand)]
@@ -288,6 +284,16 @@ enum BranchCommands {
         #[arg(short, long)]
         keep: bool,
     },
+
+    /// Move up the stack (to child branch)
+    #[command(visible_alias = "u")]
+    Up {
+        /// Child index (1-based)
+        index: Option<usize>,
+    },
+
+    /// Move down the stack (to parent branch)
+    Down,
 }
 
 #[derive(Subcommand)]
@@ -399,6 +405,8 @@ fn main() -> Result<()> {
             }
             BranchCommands::Squash { message } => commands::branch::squash::run(message),
             BranchCommands::Fold { keep } => commands::branch::fold::run(keep),
+            BranchCommands::Up { index } => commands::navigate::up(index),
+            BranchCommands::Down => commands::navigate::down(),
         },
         Commands::Upstack(cmd) => match cmd {
             UpstackCommands::Restack => commands::upstack::restack::run(),
@@ -406,9 +414,9 @@ fn main() -> Result<()> {
         Commands::Downstack(cmd) => match cmd {
             DownstackCommands::Get => commands::status::run(false, None, false, false, false),
         },
-        Commands::Up { index } => commands::navigate::up(index),
-        Commands::Down => commands::navigate::down(),
         // Hidden shortcuts
         Commands::Bc { name, message, from } => commands::branch::create::run(name, message, from),
+        Commands::Bu { index } => commands::navigate::up(index),
+        Commands::Bd => commands::navigate::down(),
     }
 }
