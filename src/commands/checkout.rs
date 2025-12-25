@@ -169,15 +169,10 @@ pub fn run(
                 trunk_tree.push_str(trunk_circle);
                 trunk_visual_width += 1;
 
+                // fp-style: just ○─┘ to rightmost column
                 if max_column >= 1 {
-                    for col in 1..=max_column {
-                        if col < max_column {
-                            trunk_tree.push_str("─┴");
-                        } else {
-                            trunk_tree.push_str("─┘");
-                        }
-                        trunk_visual_width += 2;
-                    }
+                    trunk_tree.push_str("─┘");
+                    trunk_visual_width += 2;
                 }
 
                 while trunk_visual_width < tree_target_width {
