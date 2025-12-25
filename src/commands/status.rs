@@ -63,17 +63,7 @@ pub fn run(
     let stack = Stack::load(&repo)?;
     let config = Config::load()?;
     let workdir = repo.workdir()?;
-
-    if stack.branches.len() <= 1 {
-        if !quiet {
-            println!("{}", "No tracked branches in stack.".dimmed());
-            println!(
-                "Use {} to start tracking branches.",
-                "stax branch track".cyan()
-            );
-        }
-        return Ok(());
-    }
+    let has_tracked = stack.branches.len() > 1;
 
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
     let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
@@ -104,13 +94,6 @@ pub fn run(
         .into_iter()
         .filter(|b| allowed_branches.as_ref().map_or(true, |a| a.contains(b)))
         .collect();
-
-    if trunk_children.is_empty() {
-        if !quiet {
-            println!("{}", "No tracked branches in stack.".dimmed());
-        }
-        return Ok(());
-    }
 
     // Find the largest chain to display at column 1
     let mut largest_chain_root: Option<String> = None;
@@ -395,6 +378,14 @@ pub fn run(
     }
 
     println!("{}{}", trunk_tree, trunk_info);
+
+    if !has_tracked && !quiet {
+        println!("{}", "No tracked branches yet (showing trunk only).".dimmed());
+        println!(
+            "Use {} to start tracking branches.",
+            "stax branch track".cyan()
+        );
+    }
 
     // Show restack hint
     let needs_restack = stack.needs_restack();
