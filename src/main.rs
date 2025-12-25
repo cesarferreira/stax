@@ -35,6 +35,9 @@ enum Commands {
         /// Only push, don't create/update PRs
         #[arg(long)]
         no_pr: bool,
+        /// Skip restack check and submit anyway
+        #[arg(short, long)]
+        force: bool,
     },
 
     /// Sync repo - pull trunk, delete merged branches
@@ -192,7 +195,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Status => commands::status::run(),
         Commands::Log => commands::log::run(),
-        Commands::Submit { draft, no_pr } => commands::submit::run(draft, no_pr),
+        Commands::Submit { draft, no_pr, force } => commands::submit::run(draft, no_pr, force),
         Commands::Sync { restack, no_delete, force } => commands::sync::run(restack, !no_delete, force),
         Commands::Restack { all } => commands::restack::run(all),
         Commands::Checkout { branch } => commands::checkout::run(branch),

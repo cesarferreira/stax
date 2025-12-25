@@ -1,7 +1,10 @@
 <div align="center">
   <h1>stax</h1>
   <p>
-    Fast stacked Git branches and PRs. A Rust rewrite of <a href="https://github.com/bradymadden97/freephite">freephite</a>.
+    <strong>A modern CLI for stacked Git branches and PRs.</strong>
+  </p>
+  <p>
+    Built in Rust for speed, inspired by <a href="https://github.com/bradymadden97/freephite">freephite</a> but reimagined with a cleaner UX, better error messages, and new features.
   </p>
 
   <p>
@@ -11,6 +14,14 @@
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   </p>
 </div>
+
+## Why stax?
+
+- **Fast** - Native Rust binary starts in ~18ms (vs ~300ms for Node.js tools)
+- **Modern UX** - Clear error messages with actionable suggestions
+- **Visual stack view** - Beautiful tree rendering with colors and PR status
+- **Flexible** - Force flags, detailed logs, and smart defaults
+- **Compatible** - Uses same metadata format as freephite (migrate instantly)
 
 ## Install
 
@@ -191,7 +202,7 @@ stax auth
 
 ## Migrating from freephite
 
-stax uses the same metadata format as freephite. Just install stax and your existing stacks will work:
+stax uses the same metadata format as freephite, so migration is instant - just install stax and your existing stacks work:
 
 ```bash
 # Your existing fp stacks just work
@@ -200,13 +211,20 @@ stax rs # syncs repo
 stax ss # submits PRs
 ```
 
-## Why Rust?
+> **Note:** freephite is no longer actively maintained. stax is a modern alternative with active development.
 
-| | stax (Rust) | fp (Node.js) |
+## stax vs freephite
+
+| | stax | freephite |
 |---|---|---|
+| Language | Rust | Node.js |
 | Startup time | ~18ms | ~300ms |
-| Binary size | 6.2MB | ~50MB (with node_modules) |
-| Dependencies | Compiled in | npm install required |
+| Binary size | ~6MB | ~50MB (with node_modules) |
+| Install | Single binary | npm install |
+| Status | Active | Unmaintained |
+| Error messages | Detailed with suggestions | Basic |
+| Visual tree | Colored, multi-level nesting | Basic |
+| Force submit | `--force` flag | Not available |
 
 ## License
 
