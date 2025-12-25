@@ -270,7 +270,7 @@ pub fn run(
 
             // Show restack icon
             if entry.needs_restack {
-                info_str.push_str(&format!(" {}", "↻".bright_yellow()));
+                info_str.push_str(&format!(" {}", "⟳".bright_yellow()));
             }
 
             if let Some(pr_number) = entry.pr_number {
@@ -355,7 +355,7 @@ pub fn run(
         println!();
         println!(
             "{}",
-            format!("↻ {} branch(es) need restacking", needs_restack.len()).bright_yellow()
+            format!("⟳ {} branch(es) need restacking", needs_restack.len()).bright_yellow()
         );
         println!("Run {} to rebase.", "stax rs --restack".bright_cyan());
     }

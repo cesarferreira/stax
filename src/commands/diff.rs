@@ -54,7 +54,7 @@ pub fn run(stack_filter: Option<String>, all: bool) -> Result<()> {
             continue;
         };
 
-        let restack_marker = if needs_restack { " ↻" } else { "" };
+        let restack_marker = if needs_restack { " ⟳" } else { "" };
         println!(
             "\n{} {}{}",
             "Diff".cyan(),

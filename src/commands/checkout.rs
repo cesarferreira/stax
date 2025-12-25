@@ -148,7 +148,7 @@ pub fn run(
                         }
 
                         if info.needs_restack {
-                            display.push_str(" ↻");
+                            display.push_str(" ⟳");
                         }
                         if let Some(pr) = info.pr_number {
                             let mut pr_text = format!(" PR #{}", pr);

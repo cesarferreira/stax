@@ -318,7 +318,7 @@ pub fn run(
             }
 
             if entry.needs_restack {
-                info_str.push_str(&format!("{}", " ↻ needs restack".bright_yellow()));
+                info_str.push_str(&format!("{}", " ⟳ needs restack".bright_yellow()));
             }
         }
 
@@ -414,7 +414,7 @@ pub fn run(
         println!();
         println!(
             "{}",
-            format!("↻ {} branch(es) need restacking", needs_restack.len()).bright_yellow()
+            format!("⟳ {} branch(es) need restacking", needs_restack.len()).bright_yellow()
         );
         println!("Run {} to rebase.", "stax rs --restack".bright_cyan());
     }
