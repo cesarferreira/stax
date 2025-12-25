@@ -41,6 +41,8 @@ struct BranchStatusJson {
     ci_state: Option<String>,
     ahead: usize,
     behind: usize,
+    lines_added: usize,
+    lines_deleted: usize,
     has_remote: bool,
 }
 
@@ -71,20 +73,16 @@ pub fn run(
         .into_iter()
         .collect::<HashSet<_>>();
 
-    let allowed_branches = if all {
-        None
-    } else {
-        let target = stack_filter.clone().unwrap_or_else(|| current.clone());
-        if !stack.branches.contains_key(&target) {
-            if stack_filter.is_none() {
-                None
-            } else {
-                anyhow::bail!("Branch '{}' is not tracked in the stack.", target);
-            }
-        } else {
-            Some(stack.current_stack(&target).into_iter().collect::<HashSet<_>>())
+    // By default show all branches (like fp ls). Use --stack to filter to a specific stack.
+    let allowed_branches = if let Some(ref filter) = stack_filter {
+        if !stack.branches.contains_key(filter) {
+            anyhow::bail!("Branch '{}' is not tracked in the stack.", filter);
         }
+        Some(stack.current_stack(filter).into_iter().collect::<HashSet<_>>())
+    } else {
+        None // Show all branches by default
     };
+    let _ = all; // --all flag kept for backwards compatibility but is now the default
 
     // Get trunk children and build display list with proper tree structure
     let trunk_info = stack.branches.get(&stack.trunk);
@@ -136,6 +134,10 @@ pub fn run(
             .as_deref()
             .and_then(|p| get_commits_ahead_behind(workdir, p, name))
             .unwrap_or((0, 0));
+        let (lines_added, lines_deleted) = parent
+            .as_deref()
+            .and_then(|p| get_line_diff_stats(workdir, p, name))
+            .unwrap_or((0, 0));
 
         let pr_state = info
             .and_then(|b| b.pr_state.clone())
@@ -158,6 +160,8 @@ pub fn run(
             ci_state,
             ahead,
             behind,
+            lines_added,
+            lines_deleted,
             has_remote: remote_branches.contains(name),
         };
 
@@ -256,19 +260,12 @@ pub fn run(
         }
 
         if let Some(entry) = branch_status_map.get(branch) {
-            if entry.ahead > 0 || entry.behind > 0 {
-                let mut commit_str = String::new();
-                if entry.ahead > 0 {
-                    commit_str.push_str(&format!(" +{}", entry.ahead));
-                }
-                if entry.behind > 0 {
-                    commit_str.push_str(&format!(" -{}", entry.behind));
-                }
-                if is_current {
-                    info_str.push_str(&format!("{}", commit_str.bright_green()));
-                } else {
-                    info_str.push_str(&format!("{}", commit_str.dimmed()));
-                }
+            if entry.lines_added > 0 || entry.lines_deleted > 0 {
+                info_str.push_str(&format!(
+                    " {}{}",
+                    format!("+{}", entry.lines_added).green(),
+                    format!("-{}", entry.lines_deleted).red()
+                ));
             }
 
             if let Some(pr_number) = entry.pr_number {
@@ -294,7 +291,7 @@ pub fn run(
             }
 
             if entry.needs_restack {
-                info_str.push_str(&format!("{}", " ↻".bright_yellow()));
+                info_str.push_str(&format!("{}", " (needs restack)".bright_yellow()));
             }
         }
 
@@ -475,6 +472,42 @@ fn get_commits_ahead_behind(
     };
 
     Some((ahead, behind))
+}
+
+/// Get line additions and deletions between parent and branch
+fn get_line_diff_stats(
+    workdir: &std::path::Path,
+    parent: &str,
+    branch: &str,
+) -> Option<(usize, usize)> {
+    let output = Command::new("git")
+        .args(["diff", "--numstat", &format!("{}...{}", parent, branch)])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 2 {
+            // Binary files show "-" instead of numbers
+            if let Ok(add) = parts[0].parse::<usize>() {
+                additions += add;
+            }
+            if let Ok(del) = parts[1].parse::<usize>() {
+                deletions += del;
+            }
+        }
+    }
+
+    Some((additions, deletions))
 }
 
 fn count_chain_size(stack: &Stack, root: &str, allowed: Option<&HashSet<String>>) -> usize {

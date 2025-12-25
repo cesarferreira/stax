@@ -79,20 +79,16 @@ pub fn run(
         .into_iter()
         .collect::<HashSet<_>>();
 
-    let allowed_branches = if all {
-        None
-    } else {
-        let target = stack_filter.clone().unwrap_or_else(|| current.clone());
-        if !stack.branches.contains_key(&target) {
-            if stack_filter.is_none() {
-                None
-            } else {
-                anyhow::bail!("Branch '{}' is not tracked in the stack.", target);
-            }
-        } else {
-            Some(stack.current_stack(&target).into_iter().collect::<HashSet<_>>())
+    // By default show all branches (like fp ls). Use --stack to filter to a specific stack.
+    let allowed_branches = if let Some(ref filter) = stack_filter {
+        if !stack.branches.contains_key(filter) {
+            anyhow::bail!("Branch '{}' is not tracked in the stack.", filter);
         }
+        Some(stack.current_stack(filter).into_iter().collect::<HashSet<_>>())
+    } else {
+        None // Show all branches by default
     };
+    let _ = all; // --all flag kept for backwards compatibility but is now the default
 
     // Get trunk children and build display list with proper tree structure
     let trunk_info = stack.branches.get(&stack.trunk);

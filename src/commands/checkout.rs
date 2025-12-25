@@ -106,7 +106,7 @@ pub fn run(
                     // Check if we need a corner connector
                     let prev_branch_col =
                         if i > 0 { Some(display_branches[i - 1].column) } else { None };
-                    let needs_corner = prev_branch_col.map_or(false, |pc| pc > db.column);
+                    let needs_corner = prev_branch_col.is_some_and(|pc| pc > db.column);
 
                     // Build tree graphics (plain text for dialoguer compatibility)
                     let mut tree = String::new();
@@ -139,24 +139,17 @@ pub fn run(
 
                     if let Some(info) = stack.branches.get(&db.name) {
                         if let Some(parent) = info.parent.as_deref() {
-                            if let Some((ahead, behind)) =
-                                get_commits_ahead_behind(workdir, parent, &db.name)
+                            if let Some((additions, deletions)) =
+                                get_line_diff_stats(workdir, parent, &db.name)
                             {
-                                if ahead > 0 || behind > 0 {
-                                    let mut parts = Vec::new();
-                                    if ahead > 0 {
-                                        parts.push(format!("{} ahead", ahead));
-                                    }
-                                    if behind > 0 {
-                                        parts.push(format!("{} behind", behind));
-                                    }
-                                    display.push_str(&format!(" ({})", parts.join(", ")));
+                                if additions > 0 || deletions > 0 {
+                                    display.push_str(&format!(" +{}-{}", additions, deletions));
                                 }
                             }
                         }
 
                         if info.needs_restack {
-                            display.push_str(" ↻");
+                            display.push_str(" (needs restack)");
                         }
                         if let Some(pr) = info.pr_number {
                             let mut pr_text = format!(" PR #{}", pr);
@@ -227,42 +220,40 @@ pub fn run(
     Ok(())
 }
 
-fn get_commits_ahead_behind(
+/// Get line additions and deletions between parent and branch
+fn get_line_diff_stats(
     workdir: &std::path::Path,
     parent: &str,
     branch: &str,
 ) -> Option<(usize, usize)> {
-    let ahead_output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", parent, branch)])
+    let output = Command::new("git")
+        .args(["diff", "--numstat", &format!("{}...{}", parent, branch)])
         .current_dir(workdir)
         .output()
         .ok()?;
 
-    let ahead = if ahead_output.status.success() {
-        String::from_utf8_lossy(&ahead_output.stdout)
-            .trim()
-            .parse()
-            .ok()?
-    } else {
-        0
-    };
+    if !output.status.success() {
+        return None;
+    }
 
-    let behind_output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", branch, parent)])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
 
-    let behind = if behind_output.status.success() {
-        String::from_utf8_lossy(&behind_output.stdout)
-            .trim()
-            .parse()
-            .ok()?
-    } else {
-        0
-    };
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 2 {
+            // Binary files show "-" instead of numbers
+            if let Ok(add) = parts[0].parse::<usize>() {
+                additions += add;
+            }
+            if let Ok(del) = parts[1].parse::<usize>() {
+                deletions += del;
+            }
+        }
+    }
 
-    Some((ahead, behind))
+    Some((additions, deletions))
 }
 
 fn collect_display_branches_with_nesting(
