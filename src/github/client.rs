@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use octocrab::Octocrab;
+use octocrab::params::repos::Reference;
 
 use crate::config::Config;
 
@@ -11,14 +12,18 @@ pub struct GitHubClient {
 
 impl GitHubClient {
     /// Create a new GitHub client from config
-    pub fn new(owner: &str, repo: &str) -> Result<Self> {
+    pub fn new(owner: &str, repo: &str, api_base_url: Option<String>) -> Result<Self> {
         let token = Config::github_token()
             .context("GitHub token not set. Run `stax auth` or set GITHUB_TOKEN env var.")?;
 
-        let octocrab = Octocrab::builder()
-            .personal_token(token.to_string())
-            .build()
-            .context("Failed to create GitHub client")?;
+        let mut builder = Octocrab::builder().personal_token(token.to_string());
+        if let Some(api_base) = api_base_url {
+            builder = builder
+                .base_uri(api_base)
+                .context("Failed to set GitHub API base URL")?;
+        }
+
+        let octocrab = builder.build().context("Failed to create GitHub client")?;
 
         Ok(Self {
             octocrab,
@@ -27,38 +32,13 @@ impl GitHubClient {
         })
     }
 
-    /// Parse owner/repo from git remote URL
-    pub fn from_remote(remote_url: &str) -> Result<(String, String)> {
-        // Handle SSH format: git@github.com:owner/repo.git
-        if remote_url.starts_with("git@github.com:") {
-            let path = remote_url
-                .strip_prefix("git@github.com:")
-                .unwrap()
-                .trim_end_matches(".git");
-            let parts: Vec<&str> = path.split('/').collect();
-            if parts.len() >= 2 {
-                return Ok((parts[0].to_string(), parts[1].to_string()));
-            }
-        }
+    pub async fn combined_status_state(&self, commit_sha: &str) -> Result<Option<String>> {
+        let status = self
+            .octocrab
+            .repos(&self.owner, &self.repo)
+            .combined_status_for_ref(&Reference::Branch(commit_sha.to_string()))
+            .await?;
 
-        // Handle HTTPS format: https://github.com/owner/repo.git
-        if remote_url.contains("github.com/") {
-            let path = remote_url
-                .split("github.com/")
-                .nth(1)
-                .context("Invalid GitHub URL")?
-                .trim_end_matches(".git");
-            let parts: Vec<&str> = path.split('/').collect();
-            if parts.len() >= 2 {
-                return Ok((parts[0].to_string(), parts[1].to_string()));
-            }
-        }
-
-        anyhow::bail!(
-            "Could not parse GitHub remote URL: {}\n\n\
-             stax only supports GitHub repositories.\n\
-             Expected format: git@github.com:owner/repo.git or https://github.com/owner/repo.git",
-            remote_url
-        )
+        Ok(Some(format!("{:?}", status.state).to_lowercase()))
     }
 }

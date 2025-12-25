@@ -79,6 +79,56 @@ impl GitRepo {
         super::refs::is_initialized(&self.repo)
     }
 
+    /// Check if working tree has uncommitted changes
+    pub fn is_dirty(&self) -> Result<bool> {
+        let output = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(self.workdir()?)
+            .output()
+            .context("Failed to check git status")?;
+
+        if !output.status.success() {
+            anyhow::bail!("git status failed");
+        }
+
+        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    }
+
+    /// Stash local changes (including untracked)
+    pub fn stash_push(&self) -> Result<bool> {
+        let output = Command::new("git")
+            .args(["stash", "push", "-u", "-m", "stax auto-stash"])
+            .current_dir(self.workdir()?)
+            .output()
+            .context("Failed to stash changes")?;
+
+        if !output.status.success() {
+            anyhow::bail!("git stash failed");
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.contains("No local changes") {
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// Pop the most recent stash
+    pub fn stash_pop(&self) -> Result<()> {
+        let status = Command::new("git")
+            .args(["stash", "pop"])
+            .current_dir(self.workdir()?)
+            .status()
+            .context("Failed to pop stash")?;
+
+        if !status.success() {
+            anyhow::bail!("git stash pop failed");
+        }
+
+        Ok(())
+    }
+
     /// Set the trunk branch
     pub fn set_trunk(&self, trunk: &str) -> Result<()> {
         super::refs::write_trunk(&self.repo, trunk)
@@ -147,6 +197,36 @@ impl GitRepo {
         let commit = head.peel_to_commit()?;
         self.repo.branch(name, &commit, false)?;
         Ok(())
+    }
+
+    /// Create a new branch from another local branch
+    pub fn create_branch_at(&self, name: &str, base_branch: &str) -> Result<()> {
+        let reference = self
+            .repo
+            .find_branch(base_branch, BranchType::Local)
+            .with_context(|| format!("Branch '{}' not found", base_branch))?;
+        let commit = reference.get().peel_to_commit()?;
+        self.repo.branch(name, &commit, false)?;
+        Ok(())
+    }
+
+    /// Find merge-base commit between two local branches
+    pub fn merge_base(&self, left: &str, right: &str) -> Result<String> {
+        let left_commit = self
+            .repo
+            .find_branch(left, BranchType::Local)?
+            .get()
+            .peel_to_commit()?;
+        let right_commit = self
+            .repo
+            .find_branch(right, BranchType::Local)?
+            .get()
+            .peel_to_commit()?;
+
+        let base = self
+            .repo
+            .merge_base(left_commit.id(), right_commit.id())?;
+        Ok(base.to_string())
     }
 
     /// Delete a branch

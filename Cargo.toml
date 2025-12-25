@@ -27,7 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Terminal UI
-dialoguer = { version = "0.11", features = ["fuzzy-select"] }
+dialoguer = { version = "0.11", features = ["fuzzy-select", "editor"] }
 console = "0.15"
 colored = "3"
 
