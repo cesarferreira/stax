@@ -21,6 +21,11 @@ impl GitRepo {
             .context("Repository has no working directory")
     }
 
+    /// Get the .git directory path
+    pub fn git_dir(&self) -> Result<&Path> {
+        Ok(self.repo.path())
+    }
+
     /// Get the current branch name
     pub fn current_branch(&self) -> Result<String> {
         let head = self.repo.head().context("Failed to get HEAD")?;
@@ -52,6 +57,39 @@ impl GitRepo {
             .with_context(|| format!("Branch '{}' not found", branch))?;
         let commit = reference.get().peel_to_commit()?;
         Ok(commit.id().to_string())
+    }
+
+    /// Get commits ahead/behind between two branches (uses libgit2, no subprocess)
+    pub fn commits_ahead_behind(&self, base: &str, head: &str) -> Result<(usize, usize)> {
+        let base_oid = self.resolve_to_oid(base)?;
+        let head_oid = self.resolve_to_oid(head)?;
+        let (ahead, behind) = self.repo.graph_ahead_behind(head_oid, base_oid)?;
+        Ok((ahead, behind))
+    }
+
+    /// Resolve a branch name or ref to an OID
+    fn resolve_to_oid(&self, refspec: &str) -> Result<git2::Oid> {
+        // Try as local branch first
+        if let Ok(branch) = self.repo.find_branch(refspec, BranchType::Local) {
+            if let Some(oid) = branch.get().target() {
+                return Ok(oid);
+            }
+        }
+        // Try as remote branch (e.g., "origin/main")
+        if let Ok(branch) = self.repo.find_branch(refspec, BranchType::Remote) {
+            if let Some(oid) = branch.get().target() {
+                return Ok(oid);
+            }
+        }
+        // Try as reference
+        if let Ok(reference) = self.repo.find_reference(refspec) {
+            if let Some(oid) = reference.target() {
+                return Ok(oid);
+            }
+        }
+        // Try revparse
+        let obj = self.repo.revparse_single(refspec)?;
+        Ok(obj.id())
     }
 
     /// Get the trunk branch name (from stored setting or auto-detect main/master)

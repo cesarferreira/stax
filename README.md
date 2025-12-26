@@ -130,7 +130,8 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 
 - `stax status --json --compact --stack <branch> --all --quiet`
 - `stax log --json --compact --stack <branch> --all --quiet`
-- Status/log output includes PR state, CI status, and ahead/behind counts.
+- `stax ls --ci` fetches CI status from GitHub (slower, requires network)
+- Status/log output includes PR state, ahead/behind counts, and CI status (with `--ci`).
 
 #### Submit
 
