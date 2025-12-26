@@ -199,6 +199,26 @@ enum Commands {
     #[command(visible_alias = "t")]
     Trunk,
 
+    /// Move up the stack (to child branch)
+    #[command(visible_alias = "u")]
+    Up {
+        /// Number of branches to move up (default: 1)
+        count: Option<usize>,
+    },
+
+    /// Move down the stack (to parent branch)
+    #[command(visible_alias = "d")]
+    Down {
+        /// Number of branches to move down (default: 1)
+        count: Option<usize>,
+    },
+
+    /// Move to the top of the stack (tip/leaf branch)
+    Top,
+
+    /// Move to the bottom of the stack (first branch above trunk)
+    Bottom,
+
     /// Branch management commands
     #[command(subcommand, visible_alias = "b")]
     Branch(BranchCommands),
@@ -251,11 +271,14 @@ enum Commands {
     },
     #[command(hide = true)]
     Bu {
-        /// Child index (1-based)
-        index: Option<usize>,
+        /// Number of branches to move up
+        count: Option<usize>,
     },
     #[command(hide = true)]
-    Bd,
+    Bd {
+        /// Number of branches to move down
+        count: Option<usize>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -341,12 +364,21 @@ enum BranchCommands {
     /// Move up the stack (to child branch)
     #[command(visible_alias = "u")]
     Up {
-        /// Child index (1-based)
-        index: Option<usize>,
+        /// Number of branches to move up (default: 1)
+        count: Option<usize>,
     },
 
     /// Move down the stack (to parent branch)
-    Down,
+    Down {
+        /// Number of branches to move down (default: 1)
+        count: Option<usize>,
+    },
+
+    /// Move to the top of the stack (tip/leaf branch)
+    Top,
+
+    /// Move to the bottom of the stack (first branch above trunk)
+    Bottom,
 }
 
 #[derive(Subcommand)]
@@ -442,6 +474,10 @@ fn main() -> Result<()> {
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
         Commands::Doctor => unreachable!(), // Handled above
         Commands::Trunk => commands::checkout::run(None, true, false, None),
+        Commands::Up { count } => commands::navigate::up(count),
+        Commands::Down { count } => commands::navigate::down(count),
+        Commands::Top => commands::navigate::top(),
+        Commands::Bottom => commands::navigate::bottom(),
         Commands::Create {
             name,
             all,
@@ -473,8 +509,10 @@ fn main() -> Result<()> {
             }
             BranchCommands::Squash { message } => commands::branch::squash::run(message),
             BranchCommands::Fold { keep } => commands::branch::fold::run(keep),
-            BranchCommands::Up { index } => commands::navigate::up(index),
-            BranchCommands::Down => commands::navigate::down(),
+            BranchCommands::Up { count } => commands::navigate::up(count),
+            BranchCommands::Down { count } => commands::navigate::down(count),
+            BranchCommands::Top => commands::navigate::top(),
+            BranchCommands::Bottom => commands::navigate::bottom(),
         },
         Commands::Upstack(cmd) => match cmd {
             UpstackCommands::Restack => commands::upstack::restack::run(),
@@ -490,7 +528,7 @@ fn main() -> Result<()> {
             from,
             prefix,
         } => commands::branch::create::run(name, message, from, prefix, all),
-        Commands::Bu { index } => commands::navigate::up(index),
-        Commands::Bd => commands::navigate::down(),
+        Commands::Bu { count } => commands::navigate::up(count),
+        Commands::Bd { count } => commands::navigate::down(count),
     }
 }

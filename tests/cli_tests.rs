@@ -192,3 +192,323 @@ fn test_doctor_help() {
     let output = stax(&["doctor", "--help"]);
     assert!(output.status.success());
 }
+
+// ============================================================================
+// Freephite (fp) Command Parity Tests
+// These tests ensure stax maintains compatibility with freephite commands
+// ============================================================================
+
+#[test]
+fn fp_parity_ss_submit_stack() {
+    // fp ss -> stax ss (submit stack)
+    let output = stax(&["ss", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Submit stack"));
+}
+
+#[test]
+fn fp_parity_rs_repo_sync() {
+    // fp rs -> stax rs (repo sync)
+    let output = stax(&["rs", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Sync repo"));
+}
+
+#[test]
+fn fp_parity_bc_branch_create() {
+    // fp bc -> stax bc (branch create)
+    let output = stax(&["bc", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("message")); // -m flag
+    assert!(stdout.contains("from"));    // --from flag
+}
+
+#[test]
+fn fp_parity_bco_branch_checkout() {
+    // fp bco -> stax bco (branch checkout)
+    let output = stax(&["bco", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_bu_branch_up() {
+    // fp bu -> stax bu (branch up)
+    let output = stax(&["bu", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("COUNT")); // supports count argument
+}
+
+#[test]
+fn fp_parity_bd_branch_down() {
+    // fp bd -> stax bd (branch down)
+    let output = stax(&["bd", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("COUNT")); // supports count argument
+}
+
+#[test]
+fn fp_parity_s_status() {
+    // fp s -> stax s (status)
+    let output = stax(&["s", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_ls_status() {
+    // fp ls -> stax ls (status/list)
+    let output = stax(&["ls", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_l_log() {
+    // fp l -> stax l (log)
+    let output = stax(&["l", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_co_checkout() {
+    // fp co -> stax co (checkout)
+    let output = stax(&["co", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_cont_continue() {
+    // fp cont -> stax cont (continue)
+    let output = stax(&["cont", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_b_branch() {
+    // fp b -> stax b (branch subcommand)
+    let output = stax(&["b", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("create"));
+    assert!(stdout.contains("checkout"));
+    assert!(stdout.contains("track"));
+    assert!(stdout.contains("delete"));
+}
+
+#[test]
+fn fp_parity_b_c_branch_create() {
+    // fp b c -> stax b c (branch create)
+    let output = stax(&["b", "c", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_b_co_branch_checkout() {
+    // fp b co -> stax b co (branch checkout)
+    let output = stax(&["b", "co", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_b_d_branch_delete() {
+    // fp b d -> stax b d (branch delete)
+    let output = stax(&["b", "d", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_b_u_branch_up() {
+    // fp b u -> stax b u (branch up)
+    let output = stax(&["b", "u", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_us_upstack() {
+    // fp us -> stax us (upstack)
+    let output = stax(&["us", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_ds_downstack() {
+    // fp ds -> stax ds (downstack)
+    let output = stax(&["ds", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn fp_parity_bc_with_message() {
+    // fp bc -m "message" -> stax bc -m "message"
+    let _output = stax(&["bc", "-m", "test", "--help"]);
+    // This tests that -m is a valid flag (help still shows)
+    let output2 = stax(&["bc", "--help"]);
+    assert!(output2.status.success());
+    let stdout = String::from_utf8_lossy(&output2.stdout);
+    assert!(stdout.contains("-m"));
+    assert!(stdout.contains("--message"));
+}
+
+#[test]
+fn fp_parity_bc_with_all_flag() {
+    // fp bc -a -> stax bc -a (stage all changes)
+    let output = stax(&["bc", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("-a"));
+    assert!(stdout.contains("--all"));
+}
+
+#[test]
+fn fp_parity_rs_restack_flag() {
+    // fp rs --restack -> stax rs --restack
+    let output = stax(&["rs", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--restack"));
+    assert!(stdout.contains("-r")); // short flag
+}
+
+#[test]
+fn fp_parity_ss_draft_flag() {
+    // fp ss --draft -> stax ss --draft
+    let output = stax(&["ss", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--draft"));
+    assert!(stdout.contains("-d")); // short flag
+}
+
+// ============================================================================
+// Graphite (gt) Command Parity Tests
+// These tests ensure stax also supports graphite-style commands
+// ============================================================================
+
+#[test]
+fn gt_parity_create_command() {
+    // gt create -> stax create
+    let output = stax(&["create", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Create a new branch"));
+}
+
+#[test]
+fn gt_parity_c_alias() {
+    // gt c -> stax c (create alias)
+    let output = stax(&["c", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn gt_parity_create_am_flags() {
+    // gt create -am "message" -> stax create -am "message"
+    let output = stax(&["create", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("-a"));
+    assert!(stdout.contains("--all"));
+    assert!(stdout.contains("-m"));
+    assert!(stdout.contains("--message"));
+}
+
+#[test]
+fn gt_parity_modify_command() {
+    // gt modify -> stax modify
+    let output = stax(&["modify", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("amend"));
+}
+
+#[test]
+fn gt_parity_m_alias() {
+    // gt m -> stax m (modify alias)
+    let output = stax(&["m", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn gt_parity_up_command() {
+    // gt up -> stax up
+    let output = stax(&["up", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Move up"));
+    assert!(stdout.contains("COUNT"));
+}
+
+#[test]
+fn gt_parity_u_alias() {
+    // gt u -> stax u (up alias)
+    let output = stax(&["u", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn gt_parity_down_command() {
+    // gt down -> stax down
+    let output = stax(&["down", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Move down"));
+    assert!(stdout.contains("COUNT"));
+}
+
+#[test]
+fn gt_parity_d_alias() {
+    // gt d -> stax d (down alias)
+    let output = stax(&["d", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn gt_parity_top_command() {
+    // gt top -> stax top
+    let output = stax(&["top", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("top") || stdout.contains("tip"));
+}
+
+#[test]
+fn gt_parity_bottom_command() {
+    // gt bottom -> stax bottom
+    let output = stax(&["bottom", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("bottom") || stdout.contains("base"));
+}
+
+#[test]
+fn gt_parity_trunk_command() {
+    // gt checkout --trunk -> stax trunk (or stax t)
+    let output = stax(&["trunk", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn gt_parity_t_alias() {
+    // stax t -> trunk
+    let output = stax(&["t", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn gt_parity_pr_command() {
+    // gt pr -> stax pr (open PR in browser)
+    let output = stax(&["pr", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("PR") || stdout.contains("browser"));
+}
+
+#[test]
+fn gt_parity_submit_command() {
+    // gt submit -> stax submit
+    let output = stax(&["submit", "--help"]);
+    assert!(output.status.success());
+}

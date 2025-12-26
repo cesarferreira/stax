@@ -88,8 +88,12 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 | `stax m` | **M**odify - stage all changes and amend to current commit |
 | `stax t` | Switch to **t**runk branch |
 | `stax pr` | Open the current branch's PR in browser |
-| `stax bu` | **B**ranch **u**p - move to child branch |
-| `stax bd` | **B**ranch **d**own - move to parent branch |
+| `stax u` / `stax bu` | Move **u**p the stack (to child branch) |
+| `stax u 2` | Move up 2 branches |
+| `stax d` / `stax bd` | Move **d**own the stack (to parent branch) |
+| `stax d 3` | Move down 3 branches |
+| `stax top` | Move to the tip of the stack |
+| `stax bottom` | Move to the base of the stack (above trunk) |
 
 ### Full Commands
 
@@ -109,6 +113,10 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 | `stax submit --no-pr` | | Just push, skip PR creation |
 | `stax checkout [branch]` | `co`, `bco` | Checkout a branch (interactive if no arg) |
 | `stax trunk` | `t` | Switch to trunk branch |
+| `stax up [n]` | `u` | Move up n branches (default: 1) |
+| `stax down [n]` | `d` | Move down n branches (default: 1) |
+| `stax top` | | Move to the tip of the stack |
+| `stax bottom` | | Move to the base of the stack (above trunk) |
 | `stax continue` | `cont` | Continue after resolving conflicts |
 | `stax modify` | `m` | Stage all changes and amend to current commit |
 | `stax pr` | | Open the current branch's PR in browser |
@@ -203,9 +211,12 @@ stax s
 # ○─┘  main
 
 # Navigate the stack
-stax bd  # move down to feat/auth-api
-stax bu  # move back up to feat/auth-ui
-stax t   # jump to trunk
+stax d       # move down to feat/auth-api (or: stax bd)
+stax u       # move back up to feat/auth-ui (or: stax bu)
+stax u 2     # move up 2 branches
+stax top     # jump to the tip of the stack
+stax bottom  # jump to the base (first branch above trunk)
+stax t       # jump to trunk
 
 # Submit all PRs
 stax ss
