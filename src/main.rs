@@ -11,6 +11,7 @@ use config::Config;
 
 #[derive(Parser)]
 #[command(name = "stax")]
+#[command(version)]
 #[command(about = "Fast stacked Git branches and PRs", long_about = None)]
 struct Cli {
     #[command(subcommand)]
