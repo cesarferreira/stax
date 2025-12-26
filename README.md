@@ -9,7 +9,7 @@
     <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml">
       <img alt="CI" src="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml/badge.svg">
     </a>
-    <img alt="Startup" src="https://img.shields.io/badge/startup-~18ms-brightgreen">
+    <img alt="Performance" src="https://img.shields.io/badge/~21ms-startup-brightgreen">
     <img alt="Git" src="https://img.shields.io/badge/git-git2-f34f29">
     <img alt="Async" src="https://img.shields.io/badge/async-tokio-2f74c0">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
@@ -25,7 +25,7 @@
 
 ## Why stax?
 
-- **Fast** - Native Rust binary starts in ~18ms (vs ~300ms for Node.js tools)
+- **Fast** - Native Rust binary with libgit2, runs in ~21ms
 - **Modern UX** - Clear error messages with actionable suggestions
 - **Visual stack view** - Beautiful tree rendering with colors and PR status
 - **Flexible** - Force flags, detailed logs, and smart defaults
@@ -130,8 +130,7 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 
 - `stax status --json --compact --stack <branch> --all --quiet`
 - `stax log --json --compact --stack <branch> --all --quiet`
-- `stax ls --ci` fetches CI status from GitHub (slower, requires network)
-- Status/log output includes PR state, ahead/behind counts, and CI status (with `--ci`).
+- Status/log output includes PR state, ahead/behind counts, and CI status (cached with 5-min TTL).
 
 #### Submit
 
@@ -295,18 +294,29 @@ stax rs # syncs repo
 stax ss # submits PRs
 ```
 
-## stax vs freephite
+## Benchmarks
 
-| | stax | freephite |
-|---|---|---|
-| Language | Rust | Node.js |
-| Startup time | ~18ms | ~300ms |
-| Binary size | ~6MB | ~50MB (with node_modules) |
-| Install | Single binary | npm install |
-| Status | Active | Unmaintained |
-| Error messages | Detailed with suggestions | Basic |
-| Visual tree | Colored, multi-level nesting | Basic |
-| Force submit | `--force` flag | Not available |
+Measured with `hyperfine --shell=none` on a 10-branch stack:
+
+| Command | Time |
+|---------|------|
+| `stax ls` | 21ms |
+| `fp ls` | 363ms |
+
+<details>
+<summary>Full benchmark output</summary>
+
+```
+$ hyperfine 'stax ls' 'fp ls' --shell=none
+Benchmark 1: stax ls
+  Time (mean ± σ):      21.5 ms ±   2.0 ms
+Benchmark 2: fp ls
+  Time (mean ± σ):     362.7 ms ±  16.1 ms
+
+Summary
+  stax ls ran 16.87 ± 1.71 times faster than fp ls
+```
+</details>
 
 ## License
 
