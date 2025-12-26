@@ -7,6 +7,7 @@ pub mod diff;
 pub mod doctor;
 pub mod init;
 pub mod log;
+pub mod modify;
 pub mod navigate;
 pub mod range_diff;
 pub mod restack;
