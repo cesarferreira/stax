@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build binaries for each target
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../stax-${{ matrix.target }}.tar.gz stax
+          cd ../../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stax-${{ matrix.target }}
+          path: stax-${{ matrix.target }}.tar.gz
+
+  # Create release and update Homebrew
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+
+      - name: Compute checksums
+        run: |
+          cd artifacts
+          echo "ARM_SHA=$(sha256sum stax-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)" >> $GITHUB_ENV
+          echo "INTEL_SHA=$(sha256sum stax-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)" >> $GITHUB_ENV
+          echo "LINUX_SHA=$(sha256sum stax-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)" >> $GITHUB_ENV
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: cesarferreira/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update formula
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          FORMULA=tap/Formula/stax.rb
+
+          sed -i "s/version \".*\"/version \"$VERSION\"/" $FORMULA
+          sed -i "s|releases/download/v[^/]*/stax-|releases/download/v$VERSION/stax-|g" $FORMULA
+          sed -i "s/sha256 \"[a-f0-9]\{64\}\"/sha256 \"PLACEHOLDER\"/g" $FORMULA
+          
+          # Now replace with actual SHAs in order
+          sed -i "0,/PLACEHOLDER/s/PLACEHOLDER/$ARM_SHA/" $FORMULA
+          sed -i "0,/PLACEHOLDER/s/PLACEHOLDER/$INTEL_SHA/" $FORMULA
+          sed -i "0,/PLACEHOLDER/s/PLACEHOLDER/$LINUX_SHA/" $FORMULA
+
+      - name: Commit and push tap
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/stax.rb
+          git commit -m "stax $VERSION"
+          git push
+        env:
+          VERSION: ${{ github.ref_name }}
+

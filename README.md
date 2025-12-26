@@ -33,11 +33,26 @@
 
 ## Install
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew tap cesarferreira/tap
+brew install stax
+```
+
+### Cargo binstall (prebuilt binaries)
+
+```bash
+cargo binstall stax
+```
+
+### Cargo (build from source)
+
 ```bash
 cargo install --git https://github.com/cesarferreira/stax
 ```
 
-Or build from source:
+### From source
 
 ```bash
 git clone https://github.com/cesarferreira/stax
