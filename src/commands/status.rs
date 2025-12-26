@@ -212,7 +212,9 @@ pub fn run(
     for (i, db) in display_branches.iter().enumerate() {
         let branch = &db.name;
         let is_current = branch == &current;
-        let has_remote = remote_branches.contains(branch);
+        let entry = branch_status_map.get(branch);
+        // Show cloud if branch exists on remote OR has a PR (PR implies it was pushed)
+        let has_remote = remote_branches.contains(branch) || entry.and_then(|e| e.pr_number).is_some();
         let color = DEPTH_COLORS[db.column % DEPTH_COLORS.len()];
 
         // Check if we need a corner connector - this happens when the PREVIOUS branch was at a higher column
@@ -264,7 +266,7 @@ pub fn run(
             info_str.push_str(branch);
         }
 
-        if let Some(entry) = branch_status_map.get(branch) {
+        if let Some(entry) = entry {
             // Show commits ahead/behind with arrows
             if entry.ahead > 0 || entry.behind > 0 {
                 let mut commits_str = String::new();

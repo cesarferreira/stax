@@ -4,6 +4,7 @@ use crate::git::{GitRepo, RebaseResult};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
+use std::io::Write;
 use std::process::Command;
 
 /// Sync repo: pull trunk from remote, delete merged branches, optionally restack
@@ -14,6 +15,7 @@ pub fn run(
     safe: bool,
     r#continue: bool,
     quiet: bool,
+    verbose: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let stack = Stack::load(&repo)?;
@@ -63,26 +65,44 @@ pub fn run(
     // 1. Fetch from remote
     if !quiet {
         print!("  Fetching from {}... ", remote_name);
+        let _ = std::io::stdout().flush();
     }
-    let status = Command::new("git")
+
+    let output = Command::new("git")
         .args(["fetch", &remote_name])
         .current_dir(workdir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .output()
         .context("Failed to fetch")?;
 
     if !quiet {
-        if status.success() {
+        if output.status.success() {
             println!("{}", "done".green());
+            if verbose {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.trim().is_empty() {
+                    for line in stderr.lines() {
+                        println!("    {}", line.dimmed());
+                    }
+                }
+            }
         } else {
-            println!("{}", "failed".red());
+            // Fetch may fail partially (lock files, etc.) but still update most refs
+            println!("{}", "done (with warnings)".yellow());
+            if verbose {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.trim().is_empty() {
+                    for line in stderr.lines() {
+                        println!("    {}", line.dimmed());
+                    }
+                }
+            }
         }
     }
 
     // 2. Update trunk branch
     if !quiet {
         print!("  Updating {}... ", stack.trunk.cyan());
+        let _ = std::io::stdout().flush();
     }
 
     // Check if we're on trunk
@@ -90,59 +110,85 @@ pub fn run(
 
     if was_on_trunk {
         // Pull directly
-        let status = Command::new("git")
+        let output = Command::new("git")
             .args(["pull", "--ff-only", &remote_name, &stack.trunk])
             .current_dir(workdir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+            .output()
             .context("Failed to pull trunk")?;
 
-        if status.success() {
+        if output.status.success() {
             if !quiet {
                 println!("{}", "done".green());
+                if verbose {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if !stdout.trim().is_empty() {
+                        for line in stdout.lines() {
+                            println!("    {}", line.dimmed());
+                        }
+                    }
+                }
             }
         } else if safe {
             if !quiet {
                 println!("{}", "failed (safe mode, no reset)".yellow());
+                if verbose {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
+                        }
+                    }
+                }
             }
         } else {
             // Try reset to remote
-            let status = Command::new("git")
+            let reset_output = Command::new("git")
                 .args(["reset", "--hard", &format!("{}/{}", remote_name, stack.trunk)])
                 .current_dir(workdir)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
+                .output()
                 .context("Failed to reset trunk")?;
 
             if !quiet {
-                if status.success() {
+                if reset_output.status.success() {
                     println!("{}", "reset to remote".yellow());
                 } else {
                     println!("{}", "failed".red());
+                    if verbose {
+                        let stderr = String::from_utf8_lossy(&reset_output.stderr);
+                        if !stderr.trim().is_empty() {
+                            for line in stderr.lines() {
+                                println!("    {}", line.dimmed());
+                            }
+                        }
+                    }
                 }
             }
         }
     } else {
         // Update trunk without switching to it
-        let status = Command::new("git")
+        let output = Command::new("git")
             .args([
                 "fetch",
                 &remote_name,
                 &format!("{}:{}", stack.trunk, stack.trunk),
             ])
             .current_dir(workdir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
+            .output()
             .context("Failed to update trunk")?;
 
         if !quiet {
-            if status.success() {
+            if output.status.success() {
                 println!("{}", "done".green());
             } else {
                 println!("{}", "failed (may need manual update)".yellow());
+                if verbose {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
+                        }
+                    }
+                }
             }
         }
     }

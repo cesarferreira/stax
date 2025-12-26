@@ -112,6 +112,9 @@ enum Commands {
         /// Suppress extra output
         #[arg(long)]
         quiet: bool,
+        /// Show detailed output including git errors
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Restack (rebase) the current branch onto its parent
@@ -378,7 +381,8 @@ fn main() -> Result<()> {
             safe,
             r#continue,
             quiet,
-        } => commands::sync::run(restack, !no_delete, force, safe, r#continue, quiet),
+            verbose,
+        } => commands::sync::run(restack, !no_delete, force, safe, r#continue, quiet, verbose),
         Commands::Restack {
             all,
             r#continue,
