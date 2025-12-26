@@ -6,6 +6,9 @@
   
   <p>
     <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue">
+    <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml">
+      <img alt="CI" src="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml/badge.svg">
+    </a>
     <img alt="Startup" src="https://img.shields.io/badge/startup-~18ms-brightgreen">
     <img alt="Git" src="https://img.shields.io/badge/git-git2-f34f29">
     <img alt="Async" src="https://img.shields.io/badge/async-tokio-2f74c0">
