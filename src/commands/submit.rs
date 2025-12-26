@@ -18,6 +18,7 @@ struct PrPlan {
     // For new PRs, we'll collect these upfront
     title: Option<String>,
     body: Option<String>,
+    is_draft: Option<bool>,
 }
 
 pub fn run(
@@ -36,6 +37,9 @@ pub fn run(
     let stack = Stack::load(&repo)?;
     let config = Config::load()?;
     let auto_confirm = yes || no_prompt;
+
+    // Track if --draft was explicitly passed (we'll ask interactively if not)
+    let draft_flag_set = draft;
 
     // Get branches in current stack (excluding trunk)
     let stack_branches: Vec<String> = stack
@@ -238,6 +242,7 @@ pub fn run(
             existing_pr: pr_number,
             title: None,
             body: None,
+            is_draft: None,
         });
     }
     if !quiet {
@@ -301,8 +306,24 @@ pub fn run(
                 }
             };
 
+            // Ask about draft vs publish (only if --draft wasn't explicitly set)
+            let is_draft = if draft_flag_set {
+                draft
+            } else if no_prompt {
+                false // default to publish in no-prompt mode
+            } else {
+                let options = vec!["Publish immediately", "Create as draft"];
+                let choice = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("  PR type")
+                    .items(&options)
+                    .default(0)
+                    .interact()?;
+                choice == 1
+            };
+
             plan.title = Some(title);
             plan.body = Some(body);
+            plan.is_draft = Some(is_draft);
 
             if !quiet {
                 println!();
@@ -359,13 +380,14 @@ pub fn run(
                 // Create new PR
                 let title = plan.title.as_ref().unwrap();
                 let body = plan.body.as_ref().unwrap();
+                let is_draft = plan.is_draft.unwrap_or(draft);
 
                 if !quiet {
                     print!("  Creating PR for {}... ", plan.branch.white());
                 }
 
                 let pr = client
-                    .create_pr(&plan.branch, &plan.parent, title, body, draft)
+                    .create_pr(&plan.branch, &plan.parent, title, body, is_draft)
                     .await
                     .context(format!(
                         "Failed to create PR for '{}' with base '{}'\n\

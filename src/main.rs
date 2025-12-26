@@ -211,10 +211,35 @@ enum Commands {
     #[command(subcommand, visible_alias = "ds")]
     Downstack(DownstackCommands),
 
+    /// Create a new branch stacked on current
+    #[command(visible_alias = "c")]
+    Create {
+        /// Name for the new branch
+        name: Option<String>,
+        /// Stage all changes (like git commit --all)
+        #[arg(short, long)]
+        all: bool,
+        /// Commit message (also used as branch name if no name provided)
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Base branch to create from (defaults to current)
+        #[arg(long)]
+        from: Option<String>,
+        /// Override branch prefix (e.g. "feature/")
+        #[arg(long)]
+        prefix: Option<String>,
+    },
+
+    /// Open the PR for the current branch in browser
+    Pr,
+
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
     Bc {
         name: Option<String>,
+        /// Stage all changes (like git commit --all)
+        #[arg(short, long)]
+        all: bool,
         #[arg(short, long)]
         message: Option<String>,
         /// Base branch to create from (defaults to current)
@@ -240,7 +265,10 @@ enum BranchCommands {
     Create {
         /// Name for the new branch
         name: Option<String>,
-        /// Message/description to use as branch name (spaces replaced)
+        /// Stage all changes (like git commit --all)
+        #[arg(short, long)]
+        all: bool,
+        /// Commit message (also used as branch name if no name provided)
         #[arg(short, long)]
         message: Option<String>,
         /// Base branch to create from (defaults to current)
@@ -414,13 +442,22 @@ fn main() -> Result<()> {
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
         Commands::Doctor => unreachable!(), // Handled above
         Commands::Trunk => commands::checkout::run(None, true, false, None),
+        Commands::Create {
+            name,
+            all,
+            message,
+            from,
+            prefix,
+        } => commands::branch::create::run(name, message, from, prefix, all),
+        Commands::Pr => commands::pr::run(),
         Commands::Branch(cmd) => match cmd {
             BranchCommands::Create {
                 name,
+                all,
                 message,
                 from,
                 prefix,
-            } => commands::branch::create::run(name, message, from, prefix),
+            } => commands::branch::create::run(name, message, from, prefix, all),
             BranchCommands::Checkout {
                 branch,
                 trunk,
@@ -448,10 +485,11 @@ fn main() -> Result<()> {
         // Hidden shortcuts
         Commands::Bc {
             name,
+            all,
             message,
             from,
             prefix,
-        } => commands::branch::create::run(name, message, from, prefix),
+        } => commands::branch::create::run(name, message, from, prefix, all),
         Commands::Bu { index } => commands::navigate::up(index),
         Commands::Bd => commands::navigate::down(),
     }

@@ -9,6 +9,7 @@ pub mod init;
 pub mod log;
 pub mod modify;
 pub mod navigate;
+pub mod pr;
 pub mod range_diff;
 pub mod restack;
 pub mod status;

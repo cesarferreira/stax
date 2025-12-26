@@ -11,6 +11,7 @@ pub fn run(
     message: Option<String>,
     from: Option<String>,
     prefix: Option<String>,
+    all: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let config = Config::load()?;
@@ -23,11 +24,15 @@ pub fn run(
 
     // Get the branch name from either name or message
     // When using -m, the message is used for both branch name AND commit message
+    // When using -a (--all), stage changes but only commit if -m is also provided
     let (input, commit_message) = match (&name, &message) {
         (Some(n), _) => (n.clone(), None),
         (None, Some(m)) => (m.clone(), Some(m.clone())),
         (None, None) => bail!("Branch name required. Use: stax bc <name> or stax bc -m \"message\""),
     };
+
+    // -a/--all flag: stage changes (like git commit --all)
+    let should_stage = all || message.is_some();
 
     // Format the branch name according to config
     let branch_name = match prefix.as_deref() {
@@ -70,8 +75,8 @@ pub fn run(
         parent_branch.blue()
     );
 
-    // If -m was used, stage all changes and commit with the message
-    if let Some(msg) = commit_message {
+    // Stage changes if -a or -m was used
+    if should_stage {
         let workdir = repo.workdir()?;
 
         // Stage all changes (git add -A)
@@ -84,26 +89,31 @@ pub fn run(
             bail!("Failed to stage changes");
         }
 
-        // Check if there are changes to commit
-        let diff_output = Command::new("git")
-            .args(["diff", "--cached", "--quiet"])
-            .current_dir(workdir)
-            .status()?;
-
-        if !diff_output.success() {
-            // There are staged changes, commit them
-            let commit_status = Command::new("git")
-                .args(["commit", "-m", &msg])
+        // Only commit if -m was provided
+        if let Some(msg) = commit_message {
+            // Check if there are changes to commit
+            let diff_output = Command::new("git")
+                .args(["diff", "--cached", "--quiet"])
                 .current_dir(workdir)
                 .status()?;
 
-            if !commit_status.success() {
-                bail!("Failed to commit changes");
-            }
+            if !diff_output.success() {
+                // There are staged changes, commit them
+                let commit_status = Command::new("git")
+                    .args(["commit", "-m", &msg])
+                    .current_dir(workdir)
+                    .status()?;
 
-            println!("Committed: {}", msg.cyan());
+                if !commit_status.success() {
+                    bail!("Failed to commit changes");
+                }
+
+                println!("Committed: {}", msg.cyan());
+            } else {
+                println!("{}", "No changes to commit".dimmed());
+            }
         } else {
-            println!("{}", "No changes to commit".dimmed());
+            println!("{}", "Changes staged".dimmed());
         }
     }
 

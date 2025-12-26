@@ -81,10 +81,13 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 | `stax rs` | **R**epo **s**ync - pull trunk, delete merged branches |
 | `stax rs --restack` | Repo sync + restack branches |
 | `stax bco` | **B**ranch **c**heck**o**ut - interactive branch picker |
-| `stax bc <name>` | **B**ranch **c**reate - create a new stacked branch |
-| `stax bc -m "msg"` | Create branch, stage all changes, and commit with message |
+| `stax create <name>` | Create a new stacked branch (alias: `c`, `bc`) |
+| `stax create -m "msg"` | Create branch, stage all, and commit with message |
+| `stax create -a` | Create branch and stage all changes (like `git commit -a`) |
+| `stax create -am "msg"` | Create branch, stage all, and commit (like `git commit -am`) |
 | `stax m` | **M**odify - stage all changes and amend to current commit |
 | `stax t` | Switch to **t**runk branch |
+| `stax pr` | Open the current branch's PR in browser |
 | `stax bu` | **B**ranch **u**p - move to child branch |
 | `stax bd` | **B**ranch **d**own - move to parent branch |
 
@@ -94,19 +97,21 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 |---------|-------|-------------|
 | `stax status` | `s`, `ls` | Show the current stack (simple view) |
 | `stax log` | `l` | Show stack with commits and PR info |
+| `stax create` | `c`, `bc` | Create a new stacked branch |
 | `stax diff` | | Show diffs for each branch vs parent + aggregate stack diff |
 | `stax range-diff` | | Show range-diff for branches that need restack |
 | `stax sync` | `rs` | Pull trunk, delete merged branches |
 | `stax sync --restack` | | Also restack after syncing |
 | `stax restack` | | Rebase current branch onto parent |
 | `stax restack --all` | | Restack all branches that need it |
-| `stax submit` | `ss` | Push and create/update PRs |
+| `stax submit` | `ss` | Push and create/update PRs (interactive prompts) |
 | `stax submit --draft` | | Create PRs as drafts |
 | `stax submit --no-pr` | | Just push, skip PR creation |
 | `stax checkout [branch]` | `co`, `bco` | Checkout a branch (interactive if no arg) |
 | `stax trunk` | `t` | Switch to trunk branch |
 | `stax continue` | `cont` | Continue after resolving conflicts |
 | `stax modify` | `m` | Stage all changes and amend to current commit |
+| `stax pr` | | Open the current branch's PR in browser |
 | `stax auth` | | Set GitHub personal access token |
 | `stax config` | | Show config file path and contents |
 | `stax doctor` | | Check stax configuration and repo health |
@@ -121,9 +126,11 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 
 #### Submit
 
+- Interactive prompts for new PRs: edit title, edit body in `$EDITOR`, choose draft or publish.
 - Prefills PR title/body from branch names, commit messages, and PR templates.
 - `stax submit --reviewers alice,bob --labels bug --assignees alice --yes --no-prompt`
 - Updates a single "stack summary" comment with PR links.
+- Prints PR URLs when done; use `stax pr` to open in browser.
 
 #### Sync/Restack
 
@@ -134,8 +141,10 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 
 #### Branching and navigation
 
-- `stax bc --from <branch>` or `stax branch create --from <branch>` choose a base branch.
-- `stax bc --prefix feature -m "auth"` overrides the configured prefix for this branch.
+- `stax create -am "message"` stages all changes and commits, like `git commit -am`.
+- `stax create -a` stages all changes without committing (like `git add -A`).
+- `stax create --from <branch>` chooses a base branch (defaults to current).
+- `stax create --prefix feature -m "auth"` overrides the configured prefix for this branch.
 - `stax branch reparent --branch <name> --parent <name>` reattach branches.
 - Parent selection is interactive when ambiguous; warnings when parent is missing on remote.
 - `stax checkout --trunk`, `--parent`, `--child <n>` quick jumps; picker shows commits/PR info/restack status.
