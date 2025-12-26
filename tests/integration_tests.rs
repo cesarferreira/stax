@@ -115,6 +115,13 @@ impl TestRepo {
             .output()
             .expect("Failed to clone remote");
 
+        // Ensure we have a local main branch even if remote HEAD isn't set
+        Command::new("git")
+            .args(["checkout", "-B", "main", "origin/main"])
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to checkout main");
+
         // Configure git user
         Command::new("git")
             .args(["config", "user.email", "other@test.com"])
@@ -159,6 +166,13 @@ impl TestRepo {
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to clone remote");
+
+        // Ensure we have a local main branch even if remote HEAD isn't set
+        Command::new("git")
+            .args(["checkout", "-B", "main", "origin/main"])
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to checkout main");
 
         // Configure git user
         Command::new("git")
@@ -1531,4 +1545,3 @@ mod github_mock_tests {
         assert_eq!(prs[0]["number"], 42);
     }
 }
-
