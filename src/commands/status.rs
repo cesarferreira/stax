@@ -1,3 +1,4 @@
+use crate::cache::CiCache;
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
@@ -66,6 +67,7 @@ pub fn run(
     let config = Config::load()?;
     let workdir = repo.workdir()?;
     let has_tracked = stack.branches.len() > 1;
+    let git_dir = repo.git_dir()?;
 
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
     let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
@@ -117,8 +119,23 @@ pub fn run(
         display_branches.iter().map(|b| b.name.clone()).collect();
     ordered_branches.push(stack.trunk.clone());
 
-    let ci_states =
-        fetch_ci_states(&repo, remote_info.as_ref(), &stack, &ordered_branches);
+    // Load CI cache and refresh if stale (TTL expired)
+    let mut cache = CiCache::load(&git_dir);
+    if cache.is_stale() {
+        let fresh_states = fetch_ci_states(&repo, remote_info.as_ref(), &stack, &ordered_branches);
+        for (branch, state) in fresh_states {
+            cache.update(&branch, Some(state), None);
+        }
+        cache.mark_refreshed();
+        cache.cleanup(&ordered_branches);
+        let _ = cache.save(&git_dir);
+    }
+
+    // Build CI states from cache
+    let ci_states: HashMap<String, String> = ordered_branches
+        .iter()
+        .filter_map(|b| cache.get_ci_state(b).map(|s| (b.clone(), s)))
+        .collect();
 
     let mut branch_statuses: Vec<BranchStatusJson> = Vec::new();
     let mut branch_status_map: HashMap<String, BranchStatusJson> = HashMap::new();
@@ -129,20 +146,25 @@ pub fn run(
         let is_trunk = name == &stack.trunk;
 
         // For trunk, compare against remote tracking branch (e.g., origin/main)
-        // For other branches, compare against parent
+        // For other branches, compare against parent (using libgit2, no subprocess)
         let (ahead, behind) = if is_trunk {
             let remote_ref = format!("{}/{}", config.remote_name(), name);
-            get_commits_ahead_behind(workdir, &remote_ref, name).unwrap_or((0, 0))
+            repo.commits_ahead_behind(&remote_ref, name).unwrap_or((0, 0))
         } else {
             parent
                 .as_deref()
-                .and_then(|p| get_commits_ahead_behind(workdir, p, name))
+                .and_then(|p| repo.commits_ahead_behind(p, name).ok())
                 .unwrap_or((0, 0))
         };
-        let (lines_added, lines_deleted) = parent
-            .as_deref()
-            .and_then(|p| get_line_diff_stats(workdir, p, name))
-            .unwrap_or((0, 0));
+        // Only compute line stats for JSON output (expensive subprocess per branch)
+        let (lines_added, lines_deleted) = if json {
+            parent
+                .as_deref()
+                .and_then(|p| get_line_diff_stats(workdir, p, name))
+                .unwrap_or((0, 0))
+        } else {
+            (0, 0)
+        };
 
         let pr_state = info
             .and_then(|b| b.pr_state.clone())
@@ -443,44 +465,6 @@ fn collect_recursive(
         name: branch.to_string(),
         column,
     });
-}
-
-fn get_commits_ahead_behind(
-    workdir: &std::path::Path,
-    parent: &str,
-    branch: &str,
-) -> Option<(usize, usize)> {
-    let ahead_output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", parent, branch)])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
-
-    let ahead = if ahead_output.status.success() {
-        String::from_utf8_lossy(&ahead_output.stdout)
-            .trim()
-            .parse()
-            .ok()?
-    } else {
-        0
-    };
-
-    let behind_output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", branch, parent)])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
-
-    let behind = if behind_output.status.success() {
-        String::from_utf8_lossy(&behind_output.stdout)
-            .trim()
-            .parse()
-            .ok()?
-    } else {
-        0
-    };
-
-    Some((ahead, behind))
 }
 
 /// Get line additions and deletions between parent and branch

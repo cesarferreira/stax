@@ -1,6 +1,9 @@
+use crate::cache::CiCache;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
+use crate::github::GitHubClient;
+use crate::remote::{Provider, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -355,6 +358,11 @@ pub fn run(
         }
     }
 
+    // Refresh CI cache in background (non-blocking for user experience)
+    let git_dir = repo.git_dir()?;
+    let branches: Vec<String> = stack.branches.keys().cloned().collect();
+    refresh_ci_cache(&repo, &config, &stack, &branches, git_dir);
+
     if !quiet {
         println!();
         println!("{}", "Sync complete!".green().bold());
@@ -389,4 +397,68 @@ fn find_merged_branches(workdir: &std::path::Path, stack: &Stack) -> Result<Vec<
     }
 
     Ok(merged)
+}
+
+/// Refresh CI cache by fetching latest CI states from GitHub
+fn refresh_ci_cache(
+    repo: &GitRepo,
+    config: &Config,
+    stack: &Stack,
+    branches: &[String],
+    git_dir: &std::path::Path,
+) {
+    let remote_info = match RemoteInfo::from_repo(repo, config) {
+        Ok(info) => info,
+        Err(_) => return,
+    };
+
+    if remote_info.provider != Provider::GitHub {
+        return;
+    }
+
+    if Config::github_token().is_none() {
+        return;
+    }
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(_) => return,
+    };
+
+    let client = match rt.block_on(async {
+        GitHubClient::new(remote_info.owner(), &remote_info.repo, remote_info.api_base_url.clone())
+    }) {
+        Ok(client) => client,
+        Err(_) => return,
+    };
+
+    let mut cache = CiCache::load(git_dir);
+
+    for branch in branches {
+        let has_pr = stack
+            .branches
+            .get(branch)
+            .and_then(|b| b.pr_number)
+            .is_some();
+
+        if !has_pr {
+            continue;
+        }
+
+        let sha = match repo.branch_commit(branch) {
+            Ok(sha) => sha,
+            Err(_) => continue,
+        };
+
+        let state = rt
+            .block_on(async { client.combined_status_state(&sha).await })
+            .ok()
+            .flatten();
+
+        cache.update(branch, state, None);
+    }
+
+    cache.mark_refreshed();
+    cache.cleanup(branches);
+    let _ = cache.save(git_dir);
 }

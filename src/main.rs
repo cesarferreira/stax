@@ -1,3 +1,4 @@
+mod cache;
 mod commands;
 mod config;
 mod engine;

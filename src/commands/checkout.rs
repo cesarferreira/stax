@@ -2,7 +2,6 @@ use crate::engine::Stack;
 use crate::git::GitRepo;
 use anyhow::Result;
 use dialoguer::{theme::ColorfulTheme, FuzzySelect};
-use std::process::Command;
 
 struct DisplayBranch {
     name: String,
@@ -55,7 +54,7 @@ pub fn run(
             Some(b) => b,
             None => {
                 let stack = Stack::load(&repo)?;
-                let workdir = repo.workdir()?;
+                let _workdir = repo.workdir()?;
 
                 if stack.branches.is_empty() {
                     println!("No branches found.");
@@ -135,8 +134,8 @@ pub fn run(
 
                     if let Some(info) = stack.branches.get(&db.name) {
                         if let Some(parent) = info.parent.as_deref() {
-                            if let Some((ahead, behind)) =
-                                get_commits_ahead_behind(workdir, parent, &db.name)
+                            if let Ok((ahead, behind)) =
+                                repo.commits_ahead_behind(parent, &db.name)
                             {
                                 if ahead > 0 {
                                     display.push_str(&format!(" {}↑", ahead));
@@ -218,45 +217,6 @@ pub fn run(
     }
 
     Ok(())
-}
-
-/// Get commits ahead and behind between parent and branch
-fn get_commits_ahead_behind(
-    workdir: &std::path::Path,
-    parent: &str,
-    branch: &str,
-) -> Option<(usize, usize)> {
-    let ahead_output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", parent, branch)])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
-
-    let ahead = if ahead_output.status.success() {
-        String::from_utf8_lossy(&ahead_output.stdout)
-            .trim()
-            .parse()
-            .ok()?
-    } else {
-        0
-    };
-
-    let behind_output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", branch, parent)])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
-
-    let behind = if behind_output.status.success() {
-        String::from_utf8_lossy(&behind_output.stdout)
-            .trim()
-            .parse()
-            .ok()?
-    } else {
-        0
-    };
-
-    Some((ahead, behind))
 }
 
 /// fp-style: children sorted alphabetically, each child gets column + index

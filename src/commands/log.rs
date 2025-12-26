@@ -1,3 +1,4 @@
+use crate::cache::CiCache;
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
@@ -7,7 +8,6 @@ use anyhow::Result;
 use colored::{Color, Colorize};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
 
 // Colors for different depths (matching status.rs)
 const DEPTH_COLORS: &[Color] = &[
@@ -72,6 +72,7 @@ pub fn run(
     let workdir = repo.workdir()?;
     let config = Config::load()?;
     let has_tracked = stack.branches.len() > 1;
+    let git_dir = repo.git_dir()?;
 
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
     let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
@@ -128,8 +129,23 @@ pub fn run(
         display_branches.iter().map(|b| b.name.clone()).collect();
     ordered_branches.push(stack.trunk.clone());
 
-    let ci_states =
-        fetch_ci_states(&repo, remote_info.as_ref(), &stack, &ordered_branches);
+    // Load CI cache and refresh if stale (TTL expired)
+    let mut cache = CiCache::load(&git_dir);
+    if cache.is_stale() {
+        let fresh_states = fetch_ci_states(&repo, remote_info.as_ref(), &stack, &ordered_branches);
+        for (branch, state) in fresh_states {
+            cache.update(&branch, Some(state), None);
+        }
+        cache.mark_refreshed();
+        cache.cleanup(&ordered_branches);
+        let _ = cache.save(&git_dir);
+    }
+
+    // Build CI states from cache
+    let ci_states: HashMap<String, String> = ordered_branches
+        .iter()
+        .filter_map(|b| cache.get_ci_state(b).map(|s| (b.clone(), s)))
+        .collect();
 
     let mut branch_logs: Vec<BranchLogJson> = Vec::new();
     let mut branch_log_map: HashMap<String, BranchLogJson> = HashMap::new();
@@ -139,7 +155,7 @@ pub fn run(
         let parent = info.and_then(|b| b.parent.clone());
         let (ahead, behind) = parent
             .as_deref()
-            .and_then(|p| get_commits_ahead_behind(workdir, p, name))
+            .and_then(|p| repo.commits_ahead_behind(p, name).ok())
             .unwrap_or((0, 0));
 
         let pr_state = info
@@ -512,42 +528,6 @@ fn collect_display_branches_with_nesting(
         name: branch.to_string(),
         column,
     });
-}
-
-fn get_commits_ahead_behind(workdir: &std::path::Path, parent: &str, branch: &str) -> Option<(usize, usize)> {
-    // Commits ahead: parent..branch
-    let ahead_output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", parent, branch)])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
-
-    let ahead = if ahead_output.status.success() {
-        String::from_utf8_lossy(&ahead_output.stdout)
-            .trim()
-            .parse()
-            .ok()?
-    } else {
-        0
-    };
-
-    // Commits behind: branch..parent
-    let behind_output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", branch, parent)])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
-
-    let behind = if behind_output.status.success() {
-        String::from_utf8_lossy(&behind_output.stdout)
-            .trim()
-            .parse()
-            .ok()?
-    } else {
-        0
-    };
-
-    Some((ahead, behind))
 }
 
 fn count_chain_size(stack: &Stack, root: &str, allowed: Option<&HashSet<String>>) -> usize {
