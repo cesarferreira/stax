@@ -1,12 +1,40 @@
 use crate::engine::Stack;
 use crate::git::GitRepo;
 use anyhow::Result;
-use dialoguer::{theme::ColorfulTheme, FuzzySelect};
+use skim::prelude::*;
+use std::borrow::Cow;
 
 struct DisplayBranch {
     name: String,
     column: usize,
 }
+
+// Custom SkimItem that handles ANSI colors properly
+struct BranchItem {
+    display: String,      // with ANSI codes for display
+    search_text: String,  // plain text for fuzzy matching
+    branch_name: String,  // actual branch name for checkout
+}
+
+impl SkimItem for BranchItem {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.search_text)
+    }
+
+    fn display<'a>(&'a self, _context: DisplayContext<'a>) -> AnsiString<'a> {
+        AnsiString::parse(&self.display)
+    }
+
+    fn output(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.branch_name)
+    }
+}
+
+// ANSI color codes
+const YELLOW: &str = "\x1b[33m";
+const GREEN: &str = "\x1b[32m";
+const CYAN: &str = "\x1b[36m";
+const RESET: &str = "\x1b[0m";
 
 pub fn run(
     branch: Option<String>,
@@ -90,47 +118,22 @@ pub fn run(
                     );
                 }
 
-                // Build display items with proper alignment
-                let mut items: Vec<String> = Vec::new();
-                let mut branch_names: Vec<String> = Vec::new();
-                let tree_target_width = (max_column + 1) * 2;
+                // Build display items - simpler format for fuzzy finder
+                // Show indentation based on depth, no complex tree graphics
+                let mut items: Vec<BranchItem> = Vec::new();
 
-                for (i, db) in display_branches.iter().enumerate() {
+                for db in display_branches.iter() {
                     let is_current = db.name == current;
 
-                    // Check if we need a corner connector
-                    let prev_branch_col =
-                        if i > 0 { Some(display_branches[i - 1].column) } else { None };
-                    let needs_corner = prev_branch_col.is_some_and(|pc| pc > db.column);
+                    // Build simple indented display
+                    let indent = "  ".repeat(db.column);
+                    let (color, circle) = if is_current {
+                        (GREEN, "◉")
+                    } else {
+                        (YELLOW, "○")
+                    };
 
-                    // Build tree graphics (plain text for dialoguer compatibility)
-                    let mut tree = String::new();
-                    let mut visual_width = 0;
-
-                    for col in 0..=db.column {
-                        if col == db.column {
-                            let circle = if is_current { "◉" } else { "○" };
-                            tree.push_str(circle);
-                            visual_width += 1;
-
-                            if needs_corner {
-                                tree.push_str("─┘");
-                                visual_width += 2;
-                            }
-                        } else {
-                            tree.push_str("│ ");
-                            visual_width += 2;
-                        }
-                    }
-
-                    // Pad to consistent width
-                    while visual_width < tree_target_width {
-                        tree.push(' ');
-                        visual_width += 1;
-                    }
-
-                    // Build full display string
-                    let mut display = format!("{} {}", tree, db.name);
+                    let mut display = format!("{}{}{}{} {}", indent, color, circle, RESET, db.name);
 
                     if let Some(info) = stack.branches.get(&db.name) {
                         if let Some(parent) = info.parent.as_deref() {
@@ -138,73 +141,92 @@ pub fn run(
                                 repo.commits_ahead_behind(parent, &db.name)
                             {
                                 if ahead > 0 {
-                                    display.push_str(&format!(" {}↑", ahead));
+                                    display.push_str(&format!(" {}{}↑{}", GREEN, ahead, RESET));
                                 }
                                 if behind > 0 {
-                                    display.push_str(&format!(" {}↓", behind));
+                                    display.push_str(&format!(" {}{}↓{}", YELLOW, behind, RESET));
                                 }
                             }
                         }
 
                         if info.needs_restack {
-                            display.push_str(" ⟳");
+                            display.push_str(&format!(" {}⟳{}", YELLOW, RESET));
                         }
                         if let Some(pr) = info.pr_number {
-                            let mut pr_text = format!(" PR #{}", pr);
+                            let mut pr_text = format!(" {}PR #{}", CYAN, pr);
                             if let Some(ref state) = info.pr_state {
                                 pr_text.push_str(&format!(" {}", state.to_lowercase()));
                             }
+                            pr_text.push_str(RESET);
                             display.push_str(&pr_text);
                         }
                     }
 
-                    items.push(display);
-                    branch_names.push(db.name.clone());
+                    let plain_display = console::strip_ansi_codes(&display).to_string();
+
+                    items.push(BranchItem {
+                        display,
+                        search_text: plain_display,
+                        branch_name: db.name.clone(),
+                    });
                 }
 
-                // Add trunk with matching style
+                // Add trunk at the end
                 let is_trunk_current = stack.trunk == current;
-                let mut trunk_tree = String::new();
-                let mut trunk_visual_width = 0;
-                let trunk_circle = if is_trunk_current { "◉" } else { "○" };
+                let (trunk_color, trunk_circle) = if is_trunk_current {
+                    (GREEN, "◉")
+                } else {
+                    (YELLOW, "○")
+                };
 
-                trunk_tree.push_str(trunk_circle);
-                trunk_visual_width += 1;
+                let trunk_display = format!("{}{}{} {}", trunk_color, trunk_circle, RESET, stack.trunk);
+                let trunk_plain = console::strip_ansi_codes(&trunk_display).to_string();
+                items.push(BranchItem {
+                    display: trunk_display,
+                    search_text: trunk_plain,
+                    branch_name: stack.trunk.clone(),
+                });
 
-                // fp-style: ○─┘ for 1 col, ○─┴─┘ for 2, ○─┴─┴─┘ for 3, etc.
-                if max_column >= 1 {
-                    for col in 1..=max_column {
-                        if col < max_column {
-                            trunk_tree.push_str("─┴");
-                        } else {
-                            trunk_tree.push_str("─┘");
-                        }
-                        trunk_visual_width += 2;
-                    }
-                }
-
-                while trunk_visual_width < tree_target_width {
-                    trunk_tree.push(' ');
-                    trunk_visual_width += 1;
-                }
-
-                let trunk_display = format!("{} {}", trunk_tree, stack.trunk);
-                items.push(trunk_display);
-                branch_names.push(stack.trunk.clone());
+                // Reverse so trunk is at bottom (matching stax ls)
+                items.reverse();
 
                 if items.is_empty() {
                     println!("No branches found.");
                     return Ok(());
                 }
 
-                let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-                    .with_prompt("Checkout a branch (autocomplete or arrow keys)")
-                    .items(&items)
-                    .default(0)
-                    .highlight_matches(true)
-                    .interact()?;
+                // Use skim for fuzzy selection with custom colored items
+                let options = SkimOptionsBuilder::default()
+                    .height("~40%".to_string())  // ~ means minimum height, grows to fit
+                    .multi(false)
+                    .reverse(true)  // Show list bottom-up so trunk is at bottom
+                    .prompt("Checkout branch > ".to_string())
+                    .build()
+                    .unwrap();
 
-                branch_names[selection].clone()
+                // Convert items to Arc<dyn SkimItem> for skim
+                let skim_items: Vec<Arc<dyn SkimItem>> = items
+                    .into_iter()
+                    .map(|item| Arc::new(item) as Arc<dyn SkimItem>)
+                    .collect();
+
+                let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
+                for item in skim_items {
+                    let _ = tx.send(item);
+                }
+                drop(tx);
+
+                let selected = Skim::run_with(&options, Some(rx))
+                    .filter(|out| !out.is_abort)
+                    .map(|out| out.selected_items)
+                    .unwrap_or_default();
+
+                if selected.is_empty() {
+                    return Ok(());
+                }
+
+                // output() returns the branch name directly
+                selected[0].output().to_string()
             }
         }
     };

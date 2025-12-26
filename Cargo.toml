@@ -30,6 +30,7 @@ serde_json = "1"
 dialoguer = { version = "0.11", features = ["fuzzy-select", "editor"] }
 console = "0.15"
 colored = "3"
+skim = "0.20"
 
 # Error handling
 anyhow = "1"
