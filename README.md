@@ -78,7 +78,11 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 | `stax rs --restack` | Repo sync + restack branches |
 | `stax bco` | **B**ranch **c**heck**o**ut - interactive branch picker |
 | `stax bc <name>` | **B**ranch **c**reate - create a new stacked branch |
-| `stax bc -m "msg"` | Create branch from message (spaces replaced) |
+| `stax bc -m "msg"` | Create branch, stage all changes, and commit with message |
+| `stax m` | **M**odify - stage all changes and amend to current commit |
+| `stax t` | Switch to **t**runk branch |
+| `stax bu` | **B**ranch **u**p - move to child branch |
+| `stax bd` | **B**ranch **d**own - move to parent branch |
 
 ### Full Commands
 
@@ -96,7 +100,9 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 | `stax submit --draft` | | Create PRs as drafts |
 | `stax submit --no-pr` | | Just push, skip PR creation |
 | `stax checkout [branch]` | `co`, `bco` | Checkout a branch (interactive if no arg) |
+| `stax trunk` | `t` | Switch to trunk branch |
 | `stax continue` | `cont` | Continue after resolving conflicts |
+| `stax modify` | `m` | Stage all changes and amend to current commit |
 | `stax auth` | | Set GitHub personal access token |
 | `stax config` | | Show config file path and contents |
 | `stax doctor` | | Check stax configuration and repo health |
@@ -119,6 +125,7 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 
 - Detects dirty working tree and offers to stash before restack/sync.
 - `stax sync --safe` avoids `reset --hard` when updating trunk.
+- `stax sync --verbose` shows detailed git output for debugging.
 - `stax sync --continue` and `stax restack --continue` resume after conflicts.
 
 #### Branching and navigation
@@ -165,17 +172,16 @@ On first run, stax will initialize the repository by selecting a trunk branch (u
 # Start on main
 git checkout main
 
-# Create a stacked branch for your feature
-stax bc feat/auth-api
-
-# Make changes and commit
-git add . && git commit -m "Add auth API"
+# Create a stacked branch for your feature (stages + commits if -m provided)
+stax bc -m "Add auth API"
 
 # Create another branch on top
-stax bc feat/auth-ui
+stax bc -m "Add auth UI"
 
-# Make more changes
-git add . && git commit -m "Add auth UI"
+# Need to make changes? Amend them to the current commit
+echo "fix" >> auth.rs
+stax m                    # stages all + amends to current commit
+stax m -m "new message"   # ...or with a new commit message
 
 # View your stack
 stax s
@@ -184,8 +190,9 @@ stax s
 # ○─┘  main
 
 # Navigate the stack
-stax branch down  # move down to feat/auth-api
-stax branch up    # move back up to feat/auth-ui
+stax bd  # move down to feat/auth-api
+stax bu  # move back up to feat/auth-ui
+stax t   # jump to trunk
 
 # Submit all PRs
 stax ss

@@ -150,6 +150,17 @@ enum Commands {
     #[command(visible_alias = "cont")]
     Continue,
 
+    /// Stage all changes and amend them to the current commit
+    #[command(visible_alias = "m")]
+    Modify {
+        /// New commit message (keeps existing if not provided)
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
+    },
+
     /// Authenticate with GitHub
     Auth {
         /// GitHub personal access token
@@ -395,6 +406,7 @@ fn main() -> Result<()> {
             child,
         } => commands::checkout::run(branch, trunk, parent, child),
         Commands::Continue => commands::continue_cmd::run(),
+        Commands::Modify { message, quiet } => commands::modify::run(message, quiet),
         Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Config => unreachable!(),      // Handled above
         Commands::Diff { stack, all } => commands::diff::run(stack, all),
