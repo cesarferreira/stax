@@ -1,11 +1,26 @@
 use crate::engine::Stack;
 use crate::git::GitRepo;
 use anyhow::Result;
+use colored::{Color, Colorize};
 use dialoguer::{theme::ColorfulTheme, FuzzySelect};
+use std::collections::HashMap;
+
+// Colors for different stacks (same as status.rs)
+const DEPTH_COLORS: &[Color] = &[
+    Color::Yellow,
+    Color::Green,
+    Color::Magenta,
+    Color::Cyan,
+    Color::Blue,
+    Color::BrightRed,
+    Color::BrightYellow,
+    Color::BrightGreen,
+];
 
 struct DisplayBranch {
     name: String,
     column: usize,
+    stack_index: usize,
 }
 
 pub fn run(
@@ -80,11 +95,13 @@ pub fn run(
                 sorted_trunk_children.sort();
 
                 // Each trunk child gets column = index (first at 0, second at 1, etc.)
+                // stack_index tracks which stack each branch belongs to for coloring
                 for (i, root) in sorted_trunk_children.iter().enumerate() {
                     collect_display_branches_with_nesting(
                         &stack,
                         root,
                         i,  // column
+                        i,  // stack_index
                         &mut display_branches,
                         &mut max_column,
                     );
@@ -95,30 +112,40 @@ pub fn run(
                 let mut branch_names: Vec<String> = Vec::new();
                 let tree_target_width = (max_column + 1) * 2;
 
+                // Build column -> stack_index mapping for vertical line coloring
+                let mut column_stack: HashMap<usize, usize> = HashMap::new();
+                for db in &display_branches {
+                    column_stack.insert(db.column, db.stack_index);
+                }
+
                 for (i, db) in display_branches.iter().enumerate() {
                     let is_current = db.name == current;
+                    let color = DEPTH_COLORS[db.stack_index % DEPTH_COLORS.len()];
 
                     // Check if we need a corner connector
                     let prev_branch_col =
                         if i > 0 { Some(display_branches[i - 1].column) } else { None };
                     let needs_corner = prev_branch_col.is_some_and(|pc| pc > db.column);
 
-                    // Build tree graphics (no colors - dialoguer doesn't handle ANSI well)
+                    // Build tree graphics with stack colors
                     let mut tree = String::new();
                     let mut visual_width = 0;
 
                     for col in 0..=db.column {
                         if col == db.column {
                             let circle = if is_current { "◉" } else { "○" };
-                            tree.push_str(circle);
+                            tree.push_str(&format!("{}", circle.color(color)));
                             visual_width += 1;
 
                             if needs_corner {
-                                tree.push_str("─┘");
+                                tree.push_str(&format!("{}", "─┘".color(color)));
                                 visual_width += 2;
                             }
                         } else {
-                            tree.push_str("│ ");
+                            // Use stack color for vertical lines
+                            let stack_idx = column_stack.get(&col).copied().unwrap_or(col);
+                            let line_color = DEPTH_COLORS[stack_idx % DEPTH_COLORS.len()];
+                            tree.push_str(&format!("{} ", "│".color(line_color)));
                             visual_width += 2;
                         }
                     }
@@ -129,7 +156,7 @@ pub fn run(
                         visual_width += 1;
                     }
 
-                    // Build full display string
+                    // Build full display string (branch name stays white)
                     let mut display = format!("{} {}", tree, db.name);
 
                     if let Some(info) = stack.branches.get(&db.name) {
@@ -155,22 +182,23 @@ pub fn run(
                     branch_names.push(db.name.clone());
                 }
 
-                // Add trunk with matching style (no colors - dialoguer doesn't handle ANSI well)
+                // Add trunk with matching style (trunk uses first color)
                 let is_trunk_current = stack.trunk == current;
+                let trunk_color = DEPTH_COLORS[0];
                 let mut trunk_tree = String::new();
                 let mut trunk_visual_width = 0;
                 let trunk_circle = if is_trunk_current { "◉" } else { "○" };
 
-                trunk_tree.push_str(trunk_circle);
+                trunk_tree.push_str(&format!("{}", trunk_circle.color(trunk_color)));
                 trunk_visual_width += 1;
 
                 // fp-style: ○─┘ for 1 col, ○─┴─┘ for 2, ○─┴─┴─┘ for 3, etc.
                 if max_column >= 1 {
                     for col in 1..=max_column {
                         if col < max_column {
-                            trunk_tree.push_str("─┴");
+                            trunk_tree.push_str(&format!("{}", "─┴".color(trunk_color)));
                         } else {
-                            trunk_tree.push_str("─┘");
+                            trunk_tree.push_str(&format!("{}", "─┘".color(trunk_color)));
                         }
                         trunk_visual_width += 2;
                     }
@@ -194,7 +222,7 @@ pub fn run(
                     .with_prompt("Checkout a branch (autocomplete or arrow keys)")
                     .items(&items)
                     .default(0)
-                    .highlight_matches(true)
+                    .highlight_matches(false)  // Disabled - conflicts with ANSI colors
                     .interact()?;
 
                 branch_names[selection].clone()
@@ -217,16 +245,18 @@ fn collect_display_branches_with_nesting(
     stack: &Stack,
     branch: &str,
     base_column: usize,
+    stack_index: usize,
     result: &mut Vec<DisplayBranch>,
     max_column: &mut usize,
 ) {
-    collect_recursive(stack, branch, base_column, result, max_column);
+    collect_recursive(stack, branch, base_column, stack_index, result, max_column);
 }
 
 fn collect_recursive(
     stack: &Stack,
     branch: &str,
     column: usize,
+    stack_index: usize,
     result: &mut Vec<DisplayBranch>,
     max_column: &mut usize,
 ) {
@@ -241,7 +271,7 @@ fn collect_recursive(
 
             // Each child gets column + index: first child at same column, second at +1, etc.
             for (i, child) in children.iter().enumerate() {
-                collect_recursive(stack, child, column + i, result, max_column);
+                collect_recursive(stack, child, column + i, stack_index, result, max_column);
             }
         }
     }
@@ -249,5 +279,6 @@ fn collect_recursive(
     result.push(DisplayBranch {
         name: branch.to_string(),
         column,
+        stack_index,
     });
 }
