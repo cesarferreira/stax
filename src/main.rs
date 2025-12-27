@@ -5,6 +5,7 @@ mod engine;
 mod git;
 mod github;
 mod remote;
+mod tui;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -16,7 +17,7 @@ use config::Config;
 #[command(about = "Fast stacked Git branches and PRs", long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -419,8 +420,18 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // No command = launch TUI
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            // TUI requires initialized repo
+            commands::init::ensure_initialized()?;
+            return tui::run();
+        }
+    };
+
     // Commands that don't need repo initialization
-    match &cli.command {
+    match &command {
         Commands::Auth { token } => return commands::auth::run(token.clone()),
         Commands::Config => return commands::config::run(),
         Commands::Doctor => return commands::doctor::run(),
@@ -430,7 +441,7 @@ fn main() -> Result<()> {
     // Ensure repo is initialized for all other commands
     commands::init::ensure_initialized()?;
 
-    match cli.command {
+    match command {
         Commands::Status {
             json,
             stack,
