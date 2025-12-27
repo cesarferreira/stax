@@ -198,7 +198,7 @@ pub fn run(
 
     // 3. Delete merged branches
     if delete_merged {
-        let merged = find_merged_branches(workdir, &stack)?;
+        let merged = find_merged_branches(workdir, &stack, &remote_name)?;
 
         if !merged.is_empty() {
             if !quiet {
@@ -256,19 +256,20 @@ pub fn run(
                             println!(
                                 "    {} {}",
                                 branch.bright_black(),
-                                "deleted (local only)".yellow()
+                                "deleted (local only)".green()
                             );
                         } else if remote_deleted {
                             println!(
                                 "    {} {}",
                                 branch.bright_black(),
-                                "deleted (remote only)".yellow()
+                                "deleted (remote only)".green()
                             );
                         } else {
+                            // Branch was already deleted (orphaned), just cleaned up metadata
                             println!(
                                 "    {} {}",
                                 branch.bright_black(),
-                                "failed to delete".red()
+                                "cleaned up (already deleted)".green()
                             );
                         }
                     }
@@ -371,8 +372,15 @@ pub fn run(
     Ok(())
 }
 
-/// Find branches that have been merged into trunk
-fn find_merged_branches(workdir: &std::path::Path, stack: &Stack) -> Result<Vec<String>> {
+/// Find branches that have been merged into trunk or are orphaned (no longer exist locally/remotely)
+fn find_merged_branches(
+    workdir: &std::path::Path,
+    stack: &Stack,
+    remote_name: &str,
+) -> Result<Vec<String>> {
+    let mut merged = Vec::new();
+
+    // Method 1: git branch --merged (finds local branches merged into trunk)
     let output = Command::new("git")
         .args(["branch", "--merged", &stack.trunk])
         .current_dir(workdir)
@@ -380,7 +388,6 @@ fn find_merged_branches(workdir: &std::path::Path, stack: &Stack) -> Result<Vec<
         .context("Failed to list merged branches")?;
 
     let merged_output = String::from_utf8_lossy(&output.stdout);
-    let mut merged = Vec::new();
 
     for line in merged_output.lines() {
         let branch = line.trim().trim_start_matches("* ");
@@ -393,6 +400,55 @@ fn find_merged_branches(workdir: &std::path::Path, stack: &Stack) -> Result<Vec<
         // Only include branches we're tracking
         if stack.branches.contains_key(branch) {
             merged.push(branch.to_string());
+        }
+    }
+
+    // Method 2: Find orphaned branches (tracked but no longer exist locally or remotely)
+    // Get list of all local branches
+    let local_output = Command::new("git")
+        .args(["branch", "--format=%(refname:short)"])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to list local branches")?;
+
+    let local_branches: std::collections::HashSet<String> =
+        String::from_utf8_lossy(&local_output.stdout)
+            .lines()
+            .map(|s| s.trim().to_string())
+            .collect();
+
+    // Get list of remote branches
+    let remote_output = Command::new("git")
+        .args(["branch", "-r", "--format=%(refname:short)"])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to list remote branches")?;
+
+    let remote_branches: std::collections::HashSet<String> =
+        String::from_utf8_lossy(&remote_output.stdout)
+            .lines()
+            .map(|s| s.trim().to_string())
+            .collect();
+
+    // Check each tracked branch
+    for branch in stack.branches.keys() {
+        // Skip trunk
+        if branch == &stack.trunk {
+            continue;
+        }
+
+        // Skip if already in merged list
+        if merged.contains(branch) {
+            continue;
+        }
+
+        let local_exists = local_branches.contains(branch);
+        let remote_ref = format!("{}/{}", remote_name, branch);
+        let remote_exists = remote_branches.contains(&remote_ref);
+
+        // If branch doesn't exist locally AND doesn't exist remotely, it's orphaned
+        if !local_exists && !remote_exists {
+            merged.push(branch.clone());
         }
     }
 
