@@ -3,335 +3,288 @@
   <p>
     <strong>A modern CLI for stacked Git branches and PRs.</strong>
   </p>
-  
+
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-0.1.0-blue">
+    <img alt="Version" src="https://img.shields.io/badge/version-0.2.1-blue">
     <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml">
       <img alt="CI" src="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml/badge.svg">
     </a>
     <img alt="Performance" src="https://img.shields.io/badge/~21ms-startup-brightgreen">
-    <img alt="Git" src="https://img.shields.io/badge/git-git2-f34f29">
-    <img alt="Async" src="https://img.shields.io/badge/async-tokio-2f74c0">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
-  </p>
-  <p>
-    <img alt="stax status screenshot" src="assets/screenshot.png">
-    <p>
-    Built in Rust for speed, inspired by <a href="https://github.com/bradymadden97/freephite">freephite</a> but reimagined with a cleaner UX and new features.
-  </p>
-
   </p>
 </div>
 
+## What are Stacked Branches?
+
+Instead of one massive PR with 50 files, stacked branches let you split work into small, reviewable pieces that build on each other:
+
+```
+○      bugfix/auth-validation-edge-case 1↑
+○      feature/auth-validation 1↑
+◉      feature/auth-login 1↑           ← you are here
+○      feature/auth 1↑ 1↓ ⟳
+│ ○    bugfix/payments-retries 1↑ 1↓ ⟳
+│ ○    feature/payments-api 2↑
+│ ○    feature/payments 1↑ 1↓ ⟳
+│ │ ○  feature/profile-edit 1↑
+│ │ ○  ☁ feature/profile 1↑ PR #42
+○─┴─┘  ☁ main
+```
+
+Each branch is a focused PR. Reviewers see small diffs. You ship faster.
+
 ## Why stax?
 
-- **Fast** - Native Rust binary with libgit2, runs in ~21ms
-- **Modern UX** - Clear error messages with actionable suggestions
-- **Visual stack view** - Beautiful tree rendering with colors and PR status
-- **Flexible** - Force flags, detailed logs, and smart defaults
+- **Fast** - Native Rust binary, runs in ~21ms (17x faster than alternatives)
+- **Visual** - Beautiful tree rendering showing your entire stack at a glance
+- **Smart** - Tracks what needs rebasing, shows PR status, handles conflicts gracefully
 - **Compatible** - Uses same metadata format as freephite (migrate instantly)
 
 ## Install
 
-### Homebrew (macOS/Linux)
-
 ```bash
-brew tap cesarferreira/tap
-brew install stax
-```
+# Homebrew (macOS/Linux)
+brew tap cesarferreira/tap && brew install stax
 
-### Cargo binstall (prebuilt binaries)
-
-```bash
-cargo binstall stax
-```
-
-### Cargo (build from source)
-
-```bash
+# Or with cargo
 cargo install --git https://github.com/cesarferreira/stax
-```
-
-### From source
-
-```bash
-git clone https://github.com/cesarferreira/stax
-cd stax
-cargo install --path .
 ```
 
 ## Quick Start
 
 ```bash
-# Authenticate with GitHub (for PR creation)
+# 1. Authenticate with GitHub
 stax auth
 
-# Create your first stacked branch
-stax bc feat/my-feature
+# 2. Create stacked branches
+stax create auth-api           # First branch off main
+stax create auth-ui            # Second branch, stacked on first
 
-# Make changes, commit, then create another branch on top
-stax bc feat/another-feature
+# 3. View your stack
+stax ls
 
-# View your stack
-stax s
-
-# Submit all branches as PRs
+# 4. Submit PRs for the whole stack
 stax ss
 
-# When parent branch changes, sync and restack
+# 5. After reviews, sync and rebase
 stax rs --restack
 ```
 
-## Initialization
+## Core Commands
 
-On first run, stax will initialize the repository by selecting a trunk branch (usually `main` or `master`). In non-interactive mode, it auto-detects the trunk if possible.
+| Command | What it does |
+|---------|--------------|
+| `stax ls` | Show your stack with PR status and what needs rebasing |
+| `stax create <name>` | Create a new branch stacked on current |
+| `stax ss` | Submit stack - push all branches and create/update PRs |
+| `stax rs` | Repo sync - pull trunk, clean up merged branches |
+| `stax rs --restack` | Sync and rebase all branches onto updated trunk |
+| `stax co` | Interactive branch checkout with fuzzy search |
+| `stax u` / `stax d` | Move up/down the stack |
+| `stax m` | Modify - stage all changes and amend current commit |
+| `stax pr` | Open current branch's PR in browser |
 
-## Commands
+## Real-World Example
 
-### Shortcuts (freephite compatible)
-
-| Command | Description |
-|---------|-------------|
-| `stax ss` | **S**ubmit **s**tack - push branches and create/update PRs |
-| `stax rs` | **R**epo **s**ync - pull trunk, delete merged branches |
-| `stax rs --restack` | Repo sync + restack branches |
-| `stax bco` | **B**ranch **c**heck**o**ut - interactive branch picker |
-| `stax create <name>` | Create a new stacked branch (alias: `c`, `bc`) |
-| `stax create -m "msg"` | Create branch, stage all, and commit with message |
-| `stax create -a` | Create branch and stage all changes (like `git commit -a`) |
-| `stax create -am "msg"` | Create branch, stage all, and commit (like `git commit -am`) |
-| `stax m` | **M**odify - stage all changes and amend to current commit |
-| `stax t` | Switch to **t**runk branch |
-| `stax pr` | Open the current branch's PR in browser |
-| `stax u` / `stax bu` | Move **u**p the stack (to child branch) |
-| `stax u 2` | Move up 2 branches |
-| `stax d` / `stax bd` | Move **d**own the stack (to parent branch) |
-| `stax d 3` | Move down 3 branches |
-| `stax top` | Move to the tip of the stack |
-| `stax bottom` | Move to the base of the stack (above trunk) |
-
-### Full Commands
-
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `stax status` | `s`, `ls` | Show the current stack (simple view) |
-| `stax log` | `l` | Show stack with commits and PR info |
-| `stax create` | `c`, `bc` | Create a new stacked branch |
-| `stax diff` | | Show diffs for each branch vs parent + aggregate stack diff |
-| `stax range-diff` | | Show range-diff for branches that need restack |
-| `stax sync` | `rs` | Pull trunk, delete merged branches |
-| `stax sync --restack` | | Also restack after syncing |
-| `stax restack` | | Rebase current branch onto parent |
-| `stax restack --all` | | Restack all branches that need it |
-| `stax submit` | `ss` | Push and create/update PRs (interactive prompts) |
-| `stax submit --draft` | | Create PRs as drafts |
-| `stax submit --no-pr` | | Just push, skip PR creation |
-| `stax checkout [branch]` | `co`, `bco` | Checkout a branch (interactive if no arg) |
-| `stax trunk` | `t` | Switch to trunk branch |
-| `stax up [n]` | `u` | Move up n branches (default: 1) |
-| `stax down [n]` | `d` | Move down n branches (default: 1) |
-| `stax top` | | Move to the tip of the stack |
-| `stax bottom` | | Move to the base of the stack (above trunk) |
-| `stax continue` | `cont` | Continue after resolving conflicts |
-| `stax modify` | `m` | Stage all changes and amend to current commit |
-| `stax pr` | | Open the current branch's PR in browser |
-| `stax auth` | | Set GitHub personal access token |
-| `stax config` | | Show config file path and contents |
-| `stax doctor` | | Check stax configuration and repo health |
-
-### Notable Flags and Behavior
-
-#### Output and scripting
-
-- `stax status --json --compact --stack <branch> --all --quiet`
-- `stax log --json --compact --stack <branch> --all --quiet`
-- Status/log output includes PR state, ahead/behind counts, and CI status (cached with 5-min TTL).
-
-#### Submit
-
-- Interactive prompts for new PRs: edit title, edit body in `$EDITOR`, choose draft or publish.
-- Prefills PR title/body from branch names, commit messages, and PR templates.
-- `stax submit --reviewers alice,bob --labels bug --assignees alice --yes --no-prompt`
-- Updates a single "stack summary" comment with PR links.
-- Prints PR URLs when done; use `stax pr` to open in browser.
-
-#### Sync/Restack
-
-- Detects dirty working tree and offers to stash before restack/sync.
-- `stax sync --safe` avoids `reset --hard` when updating trunk.
-- `stax sync --verbose` shows detailed git output for debugging.
-- `stax sync --continue` and `stax restack --continue` resume after conflicts.
-
-#### Branching and navigation
-
-- `stax create -am "message"` stages all changes and commits, like `git commit -am`.
-- `stax create -a` stages all changes without committing (like `git add -A`).
-- `stax create --from <branch>` chooses a base branch (defaults to current).
-- `stax create --prefix feature -m "auth"` overrides the configured prefix for this branch.
-- `stax branch reparent --branch <name> --parent <name>` reattach branches.
-- Parent selection is interactive when ambiguous; warnings when parent is missing on remote.
-- `stax checkout --trunk`, `--parent`, `--child <n>` quick jumps; picker shows commits/PR info/restack status.
-
-#### Diffs
-
-- `stax diff` shows each branch vs parent plus an aggregate stack diff.
-- `stax range-diff` highlights restack effects.
-
-#### Doctor
-
-- `stax doctor` checks repo health, remotes, and provider configuration.
-
-### Branch Commands
-
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `stax branch create <name>` | `b c` | Create a new stacked branch |
-| `stax branch checkout` | `b co` | Interactive branch checkout |
-| `stax branch track` | | Track an existing branch |
-| `stax branch reparent` | | Change the parent of a tracked branch |
-| `stax branch delete` | `b d` | Delete a branch |
-| `stax branch fold` | `b f` | Fold current branch into its parent |
-| `stax branch squash` | `b sq` | Squash commits on current branch |
-| `stax branch up` | `b u` | Move up the stack (to child branch) |
-| `stax branch down` | | Move down the stack (to parent branch) |
-
-### Upstack/Downstack
-
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `stax upstack restack` | `us restack` | Restack all branches above current |
-| `stax downstack get` | `ds get` | Show branches below current |
-
-## Example Workflow
+You're building a payments feature. Instead of one 2000-line PR:
 
 ```bash
-# Start on main
-git checkout main
+# Start the foundation
+stax create payments-models
+# ... write database models, commit ...
 
-# Create a stacked branch for your feature (stages + commits if -m provided)
-stax bc -m "Add auth API"
+# Stack the API layer on top
+stax create payments-api
+# ... write API endpoints, commit ...
 
-# Create another branch on top
-stax bc -m "Add auth UI"
-
-# Need to make changes? Amend them to the current commit
-echo "fix" >> auth.rs
-stax m                    # stages all + amends to current commit
-stax m -m "new message"   # ...or with a new commit message
+# Stack the UI on top of that
+stax create payments-ui
+# ... write React components, commit ...
 
 # View your stack
-stax s
-# │ ◉  feat/auth-ui   ← you are here
-# │ ○  feat/auth-api
-# ○─┘  main
+stax ls
+# ◉  payments-ui 1↑           ← you are here
+# ○  payments-api 1↑
+# ○  payments-models 1↑
+# ○  main
 
-# Navigate the stack
-stax d       # move down to feat/auth-api (or: stax bd)
-stax u       # move back up to feat/auth-ui (or: stax bu)
-stax u 2     # move up 2 branches
-stax top     # jump to the tip of the stack
-stax bottom  # jump to the base (first branch above trunk)
-stax t       # jump to trunk
-
-# Submit all PRs
+# Submit all 3 as separate PRs (each targeting its parent)
 stax ss
-# Submitting 2 branch(es) to owner/repo...
-#   Pushing feat/auth-api... ✓
-#   Pushing feat/auth-ui... ✓
-# Creating/updating PRs...
-#   Creating PR for feat/auth-api... ✓ #123
-#   Creating PR for feat/auth-ui... ✓ #124
-
-# If main gets updated, sync and restack
-stax rs --restack
+# Creating PR for payments-models... ✓ #101 (targets main)
+# Creating PR for payments-api... ✓ #102 (targets payments-models)
+# Creating PR for payments-ui... ✓ #103 (targets payments-api)
 ```
 
-## How It Works
+Reviewers can now review 3 small PRs instead of one giant one. When `payments-models` is approved and merged:
 
-stax stores stack metadata in Git refs (`refs/branch-metadata/<branch>`), the same format as freephite. This means:
+```bash
+stax rs --restack
+# ✓ Pulled latest main
+# ✓ Cleaned up payments-models (merged)
+# ✓ Rebased payments-api onto main
+# ✓ Rebased payments-ui onto payments-api
+# ✓ Updated PR #102 to target main
+```
 
-- No external files or databases
-- Metadata travels with your repo
-- You can use both `stax` and `fp` on the same repo
+## Working with Multiple Stacks
 
-Each branch tracks:
-- Parent branch name
-- Parent branch revision (to detect when restack is needed)
-- PR info (number, state)
+You can have multiple independent stacks at once:
+
+```bash
+# You're working on auth...
+stax create auth
+stax create auth-login
+stax create auth-validation
+
+# Teammate needs urgent bugfix reviewed - start a new stack
+stax co main                   # or: stax t
+stax create hotfix-payment
+
+# View everything
+stax ls
+# ○  auth-validation 1↑
+# ○  auth-login 1↑
+# ○  auth 1↑
+# │ ◉  hotfix-payment 1↑      ← you are here
+# ○─┘  main
+```
+
+## Navigation
+
+| Command | What it does |
+|---------|--------------|
+| `stax u` | Move up to child branch |
+| `stax d` | Move down to parent branch |
+| `stax u 3` | Move up 3 branches |
+| `stax top` | Jump to tip of current stack |
+| `stax bottom` | Jump to base of stack (first branch above trunk) |
+| `stax t` | Jump to trunk (main/master) |
+| `stax co` | Interactive picker with fuzzy search |
+
+## Reading the Stack View
+
+```
+○      feature/validation 1↑
+◉      feature/auth 2↑ 1↓ ⟳
+│ ○    ☁ feature/payments PR #42
+○─┘    ☁ main
+```
+
+| Symbol | Meaning |
+|--------|---------|
+| `◉` | Current branch |
+| `○` | Other branch |
+| `☁` | Has remote tracking |
+| `1↑` | 1 commit ahead of parent |
+| `1↓` | 1 commit behind parent |
+| `⟳` | Needs restacking (parent changed) |
+| `PR #42` | Has open PR |
 
 ## Configuration
 
-Config is stored at `~/.config/stax/config.toml`:
+```bash
+stax config  # Show config path and current settings
+```
+
+Config at `~/.config/stax/config.toml`:
 
 ```toml
 [branch]
-prefix = "cesar/"      # Auto-prefix new branches (e.g., "my-feature" → "cesar/my-feature")
-date = false           # Add date to branch names (e.g., "2024-01-15-my-feature")
-replacement = "-"      # Character to replace spaces and special chars
+prefix = "cesar/"      # Auto-prefix branches: "auth" → "cesar/auth"
 
 [remote]
-name = "origin"        # Remote name to use
+name = "origin"
 provider = "github"    # github, gitlab, gitea
-base_url = "https://github.com" # Web base URL
-api_base_url = "https://api.github.com" # Optional (GitHub Enterprise)
 ```
-
-View your config with `stax config`.
 
 ### GitHub Authentication
 
-GitHub token is stored **separately** from config (not in dotfiles).
-
-**Priority order:**
-1. `STAX_GITHUB_TOKEN` env var (highest)
-2. `GITHUB_TOKEN` env var
-3. `~/.config/stax/.credentials` file (lowest)
-
 ```bash
-# Option 1: stax-specific env var (recommended)
+# Option 1: Environment variable (recommended)
 export STAX_GITHUB_TOKEN="ghp_xxxx"
 
-# Option 2: Generic GitHub token
-export GITHUB_TOKEN="ghp_xxxx"
-
-# Option 3: Use stax auth command (saves to credentials file)
+# Option 2: Interactive setup
 stax auth
 ```
 
-## Migrating from freephite
+## Freephite/Graphite Compatibility
 
-stax uses the same metadata format as freephite, so migration is instant - just install stax and your existing stacks work:
+stax uses the same metadata format as freephite and supports similar commands:
 
-```bash
-# Your existing fp stacks just work
-stax s  # shows your stack
-stax rs # syncs repo
-stax ss # submits PRs
-```
+| freephite | stax | graphite | stax |
+|-----------|------|----------|------|
+| `fp ss` | `stax ss` | `gt submit` | `stax submit` |
+| `fp rs` | `stax rs` | `gt sync` | `stax sync` |
+| `fp bc` | `stax bc` | `gt create` | `stax create` |
+| `fp bco` | `stax bco` | `gt checkout` | `stax co` |
+| `fp bu` | `stax bu` | `gt up` | `stax u` |
+| `fp bd` | `stax bd` | `gt down` | `stax d` |
+| `fp ls` | `stax ls` | `gt log` | `stax log` |
+
+**Migration is instant** - just install stax and your existing stacks work.
+
+## All Commands
+
+<details>
+<summary>Click to expand full command reference</summary>
+
+### Stack Operations
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `stax status` | `s`, `ls` | Show stack (simple view) |
+| `stax log` | `l` | Show stack with commits and PR info |
+| `stax submit` | `ss` | Push and create/update PRs |
+| `stax sync` | `rs` | Pull trunk, delete merged branches |
+| `stax restack` | | Rebase current branch onto parent |
+| `stax diff` | | Show diffs for each branch vs parent |
+| `stax range-diff` | | Show range-diff for branches needing restack |
+
+### Branch Management
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `stax create <name>` | `c`, `bc` | Create stacked branch |
+| `stax checkout` | `co`, `bco` | Interactive branch picker |
+| `stax modify` | `m` | Stage all + amend current commit |
+| `stax branch track` | | Track an existing branch |
+| `stax branch reparent` | | Change parent of a branch |
+| `stax branch delete` | | Delete a branch |
+| `stax branch fold` | | Fold branch into parent |
+| `stax branch squash` | | Squash commits on branch |
+
+### Navigation
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `stax up [n]` | `u`, `bu` | Move up n branches |
+| `stax down [n]` | `d`, `bd` | Move down n branches |
+| `stax top` | | Move to stack tip |
+| `stax bottom` | | Move to stack base |
+| `stax trunk` | `t` | Switch to trunk |
+
+### Utilities
+| Command | Description |
+|---------|-------------|
+| `stax auth` | Set GitHub token |
+| `stax config` | Show configuration |
+| `stax doctor` | Check repo health |
+| `stax continue` | Continue after resolving conflicts |
+| `stax pr` | Open PR in browser |
+
+### Common Flags
+- `stax create -m "msg"` - Create branch with commit message
+- `stax create -a` - Stage all changes
+- `stax create -am "msg"` - Stage all and commit
+- `stax submit --draft` - Create PRs as drafts
+- `stax submit --reviewers alice,bob` - Add reviewers
+- `stax sync --restack` - Sync and rebase all branches
+- `stax status --json` - Output as JSON
+
+</details>
 
 ## Benchmarks
 
-Measured with `hyperfine --shell=none` on a 10-branch stack:
-
-| Command | Time |
-|---------|------|
-| `stax ls` | 21ms |
-| `fp ls` | 363ms |
-
-<details>
-<summary>Full benchmark output</summary>
-
-```
-$ hyperfine 'stax ls' 'fp ls' --shell=none
-Benchmark 1: stax ls
-  Time (mean ± σ):      21.5 ms ±   2.0 ms
-Benchmark 2: fp ls
-  Time (mean ± σ):     362.7 ms ±  16.1 ms
-
-Summary
-  stax ls ran 16.87 ± 1.71 times faster than fp ls
-```
-</details>
+| Command | stax | freephite |
+|---------|------|-----------|
+| `ls` (10-branch stack) | 21ms | 363ms |
 
 ## License
 
