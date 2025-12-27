@@ -145,4 +145,35 @@ impl Stack {
             .collect()
     }
 
+    /// Get siblings of a branch (other branches with the same parent)
+    pub fn get_siblings(&self, branch: &str) -> Vec<String> {
+        let branch_info = match self.branches.get(branch) {
+            Some(b) => b,
+            None => return vec![branch.to_string()],
+        };
+
+        let parent = match &branch_info.parent {
+            Some(p) => p,
+            None => return vec![branch.to_string()], // trunk has no siblings
+        };
+
+        // Get all children of the parent (including the branch itself)
+        let parent_info = match self.branches.get(parent) {
+            Some(p) => p,
+            None => {
+                // Parent not in stack - find other branches with same parent
+                let mut siblings: Vec<String> = self.branches
+                    .values()
+                    .filter(|b| b.parent.as_ref() == Some(&parent.to_string()))
+                    .map(|b| b.name.clone())
+                    .collect();
+                siblings.sort();
+                return siblings;
+            }
+        };
+
+        let mut siblings = parent_info.children.clone();
+        siblings.sort();
+        siblings
+    }
 }

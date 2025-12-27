@@ -1,5 +1,5 @@
 use crate::tui::app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
-use crate::tui::widgets::{render_details, render_diff, render_stack_tree};
+use crate::tui::widgets::{render_details, render_diff, render_reorder_preview, render_stack_tree};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -32,7 +32,13 @@ pub fn render(f: &mut Frame, app: &App) {
 
     render_stack_tree(f, app, left_chunks[0]);
     render_details(f, app, left_chunks[1]);
-    render_diff(f, app, main_chunks[1]);
+    
+    // Show reorder preview panel in reorder mode, otherwise show diff
+    if matches!(app.mode, Mode::Reorder) || matches!(app.mode, Mode::Confirm(ConfirmAction::ApplyReorder)) {
+        render_reorder_preview(f, app, main_chunks[1]);
+    } else {
+        render_diff(f, app, main_chunks[1]);
+    }
 
     // Status bar
     render_status_bar(f, app, chunks[1]);
@@ -83,6 +89,8 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
                     Span::raw(" new  "),
                     Span::styled("e", Style::default().fg(Color::Cyan)),
                     Span::raw(" rename  "),
+                    Span::styled("o", Style::default().fg(Color::Cyan)),
+                    Span::raw(" reorder  "),
                     Span::styled("/", Style::default().fg(Color::Cyan)),
                     Span::raw(" search  "),
                     Span::styled("?", Style::default().fg(Color::Cyan)),
@@ -109,6 +117,24 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
             Mode::Input(_) => Line::from(vec![
                 Span::styled("⏎", Style::default().fg(Color::Cyan)),
                 Span::raw(" confirm  "),
+                Span::styled("Esc", Style::default().fg(Color::Cyan)),
+                Span::raw(" cancel"),
+            ]),
+            Mode::Reorder => Line::from(vec![
+                Span::styled(
+                    " ◀ REORDER ▶ ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+                Span::raw(" navigate  "),
+                Span::styled("⇧↑↓", Style::default().fg(Color::Magenta)),
+                Span::raw(" move branch  "),
+                Span::styled("⏎", Style::default().fg(Color::Cyan)),
+                Span::raw(" apply & restack  "),
                 Span::styled("Esc", Style::default().fg(Color::Cyan)),
                 Span::raw(" cancel"),
             ]),
@@ -152,6 +178,16 @@ fn render_help_modal(f: &mut Frame) {
         Line::from("  n        Create new branch"),
         Line::from("  e        Rename current branch"),
         Line::from("  d        Delete selected branch"),
+        Line::from("  o        Reorder siblings"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Reorder Mode",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  ⇧↑/⇧K    Move branch up among siblings"),
+        Line::from("  ⇧↓/⇧J    Move branch down among siblings"),
+        Line::from("  Enter    Apply changes and restack"),
+        Line::from("  Esc      Cancel reorder"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Other",
@@ -188,6 +224,7 @@ fn render_confirm_modal(f: &mut Frame, action: &ConfirmAction) {
         ConfirmAction::Delete(branch) => format!("Delete branch '{}'?", branch),
         ConfirmAction::Restack(branch) => format!("Restack '{}'?", branch),
         ConfirmAction::RestackAll => "Restack all branches?".to_string(),
+        ConfirmAction::ApplyReorder => "Apply reorder and restack affected branches?".to_string(),
     };
 
     let content = vec![

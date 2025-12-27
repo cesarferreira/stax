@@ -471,6 +471,88 @@ impl GitRepo {
         }
         Ok(merged)
     }
+
+    /// Check if rebasing a branch onto target would produce conflicts
+    /// Uses git merge-tree to detect potential conflicts without actually rebasing
+    /// Returns a list of files that would have conflicts
+    pub fn check_rebase_conflicts(&self, branch: &str, onto: &str) -> Result<Vec<String>> {
+        // Get the merge base between the branch and onto target
+        let merge_base = match self.merge_base(onto, branch) {
+            Ok(base) => base,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        // Use git merge-tree to check for conflicts
+        // git merge-tree --write-tree <base> <onto> <branch>
+        let output = Command::new("git")
+            .args(["merge-tree", "--write-tree", "--no-messages", &merge_base, onto, branch])
+            .current_dir(self.workdir()?)
+            .output()
+            .context("Failed to run git merge-tree")?;
+
+        // If the command fails (non-zero exit), there are conflicts
+        // The output will contain the conflicting files
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            
+            // Parse conflict information from output
+            let mut conflict_files = Vec::new();
+            
+            // The output format typically shows conflicting files
+            for line in stdout.lines().chain(stderr.lines()) {
+                // Look for lines indicating conflicts (file paths in merge conflicts)
+                if line.contains("CONFLICT") {
+                    // Extract filename from conflict message
+                    // Format: "CONFLICT (content): Merge conflict in <file>"
+                    if let Some(file) = line.split("Merge conflict in ").nth(1) {
+                        conflict_files.push(file.trim().to_string());
+                    } else if let Some(file) = line.split("CONFLICT (").nth(1) {
+                        // Other conflict formats
+                        if let Some(f) = file.split("):").nth(1) {
+                            conflict_files.push(f.trim().to_string());
+                        }
+                    }
+                }
+            }
+
+            return Ok(conflict_files);
+        }
+
+        Ok(Vec::new())
+    }
+
+    /// Get files modified in a branch compared to its parent
+    #[allow(dead_code)] // Reserved for future conflict detection improvements
+    pub fn files_modified(&self, branch: &str, parent: &str) -> Result<Vec<String>> {
+        let output = Command::new("git")
+            .args(["diff", "--name-only", parent, branch])
+            .current_dir(self.workdir()?)
+            .output()
+            .context("Failed to get modified files")?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let files = String::from_utf8_lossy(&output.stdout);
+        Ok(files.lines().map(|s| s.to_string()).collect())
+    }
+
+    /// Check for overlapping files between two branches that could cause conflicts
+    #[allow(dead_code)] // Reserved for future conflict detection improvements
+    pub fn check_overlapping_files(&self, branch1: &str, branch2: &str, common_parent: &str) -> Result<Vec<String>> {
+        let files1 = self.files_modified(branch1, common_parent)?;
+        let files2 = self.files_modified(branch2, common_parent)?;
+        
+        let files1_set: std::collections::HashSet<_> = files1.into_iter().collect();
+        let overlapping: Vec<String> = files2
+            .into_iter()
+            .filter(|f| files1_set.contains(f))
+            .collect();
+        
+        Ok(overlapping)
+    }
 }
 
 #[derive(Debug, PartialEq)]

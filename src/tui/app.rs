@@ -66,6 +66,7 @@ pub enum Mode {
     Help,
     Confirm(ConfirmAction),
     Input(InputAction),
+    Reorder,
 }
 
 /// Actions that require text input
@@ -81,6 +82,39 @@ pub enum ConfirmAction {
     Delete(String),
     Restack(String),
     RestackAll,
+    ApplyReorder,
+}
+
+/// Information about a potential conflict
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConflictInfo {
+    pub file: String,
+    pub branches_involved: Vec<String>,
+}
+
+/// Preview of what will happen during restack
+#[derive(Debug, Clone, Default)]
+pub struct ReorderPreview {
+    /// branch name -> list of commit messages
+    pub commits_to_rebase: Vec<(String, Vec<String>)>,
+    /// potential conflicts detected
+    pub potential_conflicts: Vec<ConflictInfo>,
+}
+
+/// State for reorder mode
+#[derive(Debug, Clone)]
+pub struct ReorderState {
+    /// Original sibling order before any changes
+    pub original_order: Vec<String>,
+    /// New proposed order after user reordering
+    pub pending_order: Vec<String>,
+    /// Common parent branch
+    #[allow(dead_code)] // Reserved for future reparenting support
+    pub parent: String,
+    /// Index of the branch being moved within siblings
+    pub moving_index: usize,
+    /// Computed preview of restack impact
+    pub preview: ReorderPreview,
 }
 
 /// Main application state
@@ -106,6 +140,7 @@ pub struct App {
     pub status_set_at: Option<Instant>,
     pub should_quit: bool,
     pub needs_refresh: bool,
+    pub reorder_state: Option<ReorderState>,
 }
 
 impl App {
@@ -139,6 +174,7 @@ impl App {
             status_set_at: None,
             should_quit: false,
             needs_refresh: true,
+            reorder_state: None,
         };
 
         app.refresh_branches()?;
@@ -398,5 +434,123 @@ impl App {
                 self.status_set_at = None;
             }
         }
+    }
+
+    /// Initialize reorder mode for the selected branch
+    pub fn init_reorder_state(&mut self) -> bool {
+        let branch = match self.selected_branch() {
+            Some(b) => b.clone(),
+            None => return false,
+        };
+
+        // Cannot reorder trunk
+        if branch.is_trunk {
+            self.set_status("Cannot reorder trunk branch");
+            return false;
+        }
+
+        let parent = match &branch.parent {
+            Some(p) => p.clone(),
+            None => return false,
+        };
+
+        // Get siblings (branches with same parent)
+        let siblings = self.stack.get_siblings(&branch.name);
+        if siblings.len() <= 1 {
+            self.set_status("No siblings to reorder with");
+            return false;
+        }
+
+        let moving_index = siblings.iter().position(|s| s == &branch.name).unwrap_or(0);
+
+        self.reorder_state = Some(ReorderState {
+            original_order: siblings.clone(),
+            pending_order: siblings,
+            parent,
+            moving_index,
+            preview: ReorderPreview::default(),
+        });
+
+        self.update_reorder_preview();
+        true
+    }
+
+    /// Move the selected branch up in reorder mode
+    pub fn reorder_move_up(&mut self) {
+        if let Some(ref mut state) = self.reorder_state {
+            if state.moving_index > 0 {
+                state.pending_order.swap(state.moving_index, state.moving_index - 1);
+                state.moving_index -= 1;
+                self.update_reorder_preview();
+            }
+        }
+    }
+
+    /// Move the selected branch down in reorder mode
+    pub fn reorder_move_down(&mut self) {
+        if let Some(ref mut state) = self.reorder_state {
+            if state.moving_index < state.pending_order.len() - 1 {
+                state.pending_order.swap(state.moving_index, state.moving_index + 1);
+                state.moving_index += 1;
+                self.update_reorder_preview();
+            }
+        }
+    }
+
+    /// Check if reorder has pending changes
+    pub fn reorder_has_changes(&self) -> bool {
+        self.reorder_state
+            .as_ref()
+            .map(|s| s.original_order != s.pending_order)
+            .unwrap_or(false)
+    }
+
+    /// Update the preview for reorder mode
+    pub fn update_reorder_preview(&mut self) {
+        let state = match &self.reorder_state {
+            Some(s) => s.clone(),
+            None => return,
+        };
+
+        let mut commits_to_rebase = Vec::new();
+        let mut potential_conflicts = Vec::new();
+
+        // For each branch in the new order, compute what will be rebased
+        for branch_name in &state.pending_order {
+            if let Some(branch_info) = self.stack.branches.get(branch_name) {
+                if let Some(parent) = &branch_info.parent {
+                    // Get commits that will be rebased
+                    let commits = self.repo
+                        .commits_between(parent, branch_name)
+                        .unwrap_or_default();
+
+                    if !commits.is_empty() {
+                        commits_to_rebase.push((branch_name.clone(), commits));
+                    }
+
+                    // Check for potential conflicts
+                    if let Ok(conflict_files) = self.repo.check_rebase_conflicts(branch_name, parent) {
+                        for file in conflict_files {
+                            potential_conflicts.push(ConflictInfo {
+                                file,
+                                branches_involved: vec![branch_name.clone(), parent.clone()],
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(ref mut reorder_state) = self.reorder_state {
+            reorder_state.preview = ReorderPreview {
+                commits_to_rebase,
+                potential_conflicts,
+            };
+        }
+    }
+
+    /// Clear reorder state
+    pub fn clear_reorder_state(&mut self) {
+        self.reorder_state = None;
     }
 }

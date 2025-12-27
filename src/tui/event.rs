@@ -34,6 +34,11 @@ pub enum KeyAction {
     Search,
     Help,
     Quit,
+    ReorderMode,
+
+    // Reorder mode actions
+    MoveUp,
+    MoveDown,
 
     // Text input
     Char(char),
@@ -57,10 +62,15 @@ impl From<KeyEvent> for KeyAction {
             }
         }
 
-        // Handle Shift for uppercase
+        // Handle Shift modifiers
         if key.modifiers.contains(KeyModifiers::SHIFT) {
-            if let KeyCode::Char('R') | KeyCode::Char('r') = key.code {
-                return KeyAction::RestackAll;
+            match key.code {
+                KeyCode::Char('R') | KeyCode::Char('r') => return KeyAction::RestackAll,
+                KeyCode::Char('K') | KeyCode::Char('k') => return KeyAction::MoveUp,
+                KeyCode::Char('J') | KeyCode::Char('j') => return KeyAction::MoveDown,
+                KeyCode::Up => return KeyAction::MoveUp,
+                KeyCode::Down => return KeyAction::MoveDown,
+                _ => {}
             }
         }
 
@@ -92,6 +102,7 @@ impl From<KeyEvent> for KeyAction {
             KeyCode::Char('/') => KeyAction::Search,
             KeyCode::Char('?') => KeyAction::Help,
             KeyCode::Char('q') => KeyAction::Quit,
+            KeyCode::Char('o') => KeyAction::ReorderMode,
 
             // Text input (for search mode)
             KeyCode::Char(c) => KeyAction::Char(c),
