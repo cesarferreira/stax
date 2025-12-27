@@ -342,9 +342,31 @@ stax uses the same metadata format as freephite and supports similar commands:
 
 ## Benchmarks
 
-| Command | stax | freephite |
-|---------|------|-----------|
-| `ls` (10-branch stack) | 21ms | 363ms |
+| Command | [stax](https://github.com/cesarferreira/stax) | [freephite](https://github.com/bradymadden97/freephite) | [graphite](https://github.com/withgraphite/graphite-cli) |
+|---------|------|-----------|----------|
+| `ls` (10-branch stack) | 22.8ms | 369.5ms | 209.1ms |
+
+Raw `hyperfine` results:
+
+```
+➜ hyperfine 'stax ls' 'fp ls' 'gt ls' --warmup 3
+Benchmark 1: stax ls
+  Time (mean ± σ):      22.8 ms ±   1.0 ms    [User: 9.0 ms, System: 11.3 ms]
+  Range (min … max):    21.1 ms …  26.9 ms    112 runs
+
+Benchmark 2: fp ls
+  Time (mean ± σ):     369.5 ms ±   7.0 ms    [User: 268.8 ms, System: 184.2 ms]
+  Range (min … max):   360.7 ms … 380.4 ms    10 runs
+
+Benchmark 3: gt ls
+  Time (mean ± σ):     209.1 ms ±   2.8 ms    [User: 152.5 ms, System: 52.6 ms]
+  Range (min … max):   205.9 ms … 215.7 ms    13 runs
+
+Summary
+  stax ls ran
+   9.18 ± 0.43 times faster than gt ls
+   16.23 ± 0.79 times faster than fp ls
+```
 
 ## License
 
