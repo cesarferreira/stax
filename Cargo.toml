@@ -19,7 +19,7 @@ clap = { version = "4", features = ["derive"] }
 git2 = "0.20"
 
 # GitHub API
-octocrab = "0.44"
+octocrab = "0.49"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 # Serialization
@@ -27,18 +27,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Terminal UI
-dialoguer = { version = "0.11", features = ["fuzzy-select", "editor"] }
-console = "0.15"
+dialoguer = { version = "0.12", features = ["fuzzy-select", "editor"] }
+console = "0.16"
 colored = "3"
 
 # Error handling
 anyhow = "1"
 
-# Use vendored OpenSSL for cross-compilation
+# Vendored OpenSSL for cross-compilation
 openssl = { version = "0.10", features = ["vendored"] }
 
 # Config
-toml = "0.8"
+toml = "0.9"
 dirs = "6"
 chrono = "0.4"
 
