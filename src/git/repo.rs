@@ -399,6 +399,50 @@ impl GitRepo {
         self.repo.find_branch(&remote_name, BranchType::Remote).is_ok()
     }
 
+    /// Get diff between a branch and its parent
+    pub fn diff_against_parent(&self, branch: &str, parent: &str) -> Result<Vec<String>> {
+        let output = Command::new("git")
+            .args(["diff", "--color=never", parent, branch])
+            .current_dir(self.workdir()?)
+            .output()
+            .context("Failed to get diff")?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let diff = String::from_utf8_lossy(&output.stdout);
+        Ok(diff.lines().map(|s| s.to_string()).collect())
+    }
+
+    /// Get diff stat (numstat) between a branch and its parent
+    pub fn diff_stat(&self, branch: &str, parent: &str) -> Result<Vec<(String, usize, usize)>> {
+        let output = Command::new("git")
+            .args(["diff", "--numstat", parent, branch])
+            .current_dir(self.workdir()?)
+            .output()
+            .context("Failed to get diff stat")?;
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let stat = String::from_utf8_lossy(&output.stdout);
+        let mut results = Vec::new();
+
+        for line in stat.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 3 {
+                let additions = parts[0].parse().unwrap_or(0);
+                let deletions = parts[1].parse().unwrap_or(0);
+                let file = parts[2].to_string();
+                results.push((file, additions, deletions));
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Get all branches that are merged into trunk (excluding trunk itself)
     pub fn merged_branches(&self) -> Result<Vec<String>> {
         let trunk = self.trunk_branch()?;

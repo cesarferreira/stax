@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-/// Render the details panel (right side)
+/// Render the details panel (bottom left)
 pub fn render_details(f: &mut Frame, app: &App, area: Rect) {
     let branch = app.selected_branch();
 
@@ -17,11 +17,12 @@ pub fn render_details(f: &mut Frame, app: &App, area: Rect) {
         vec![Line::from("No branch selected")]
     };
 
+    // Details panel is never focused, so always use dim styling
     let paragraph = Paragraph::new(content).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Details ")
-            .border_style(Style::default().fg(Color::White)),
+            .title(Span::styled(" Details ", Style::default().fg(Color::DarkGray)))
+            .border_style(Style::default().fg(Color::DarkGray)),
     );
 
     f.render_widget(paragraph, area);
@@ -29,18 +30,6 @@ pub fn render_details(f: &mut Frame, app: &App, area: Rect) {
 
 fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-
-    // Branch name (header)
-    lines.push(Line::from(vec![Span::styled(
-        branch.name.clone(),
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-    )]));
-
-    // Separator
-    lines.push(Line::from("─".repeat(30)));
-    lines.push(Line::from(""));
 
     // Parent info
     if let Some(parent) = &branch.parent {
@@ -63,46 +52,15 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
         lines.push(Line::from(vec![
             Span::styled("PR: ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("#{}", pr_num), Style::default().fg(Color::Cyan)),
-            Span::raw(" • "),
+            Span::raw(" "),
             Span::styled(state, Style::default().fg(state_color)),
         ]));
 
-        // PR URL
         if let Some(url) = &branch.pr_url {
             lines.push(Line::from(vec![
                 Span::styled(url.clone(), Style::default().fg(Color::Blue)),
             ]));
         }
-    }
-
-    lines.push(Line::from(""));
-
-    // Status indicators
-    let mut status_parts = Vec::new();
-
-    if branch.has_remote {
-        status_parts.push(Span::styled("☁ remote", Style::default().fg(Color::Cyan)));
-        status_parts.push(Span::raw("  "));
-    }
-
-    if branch.is_current {
-        status_parts.push(Span::styled(
-            "◉ current",
-            Style::default().fg(Color::Green),
-        ));
-        status_parts.push(Span::raw("  "));
-    }
-
-    if branch.needs_restack {
-        status_parts.push(Span::styled(
-            "⟳ needs restack",
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-
-    if !status_parts.is_empty() {
-        lines.push(Line::from(status_parts));
-        lines.push(Line::from(""));
     }
 
     // Ahead/behind
@@ -111,9 +69,10 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
 
         if branch.ahead > 0 {
             parts.push(Span::styled(
-                format!("{}↑ ahead", branch.ahead),
+                format!("{}↑", branch.ahead),
                 Style::default().fg(Color::Green),
             ));
+            parts.push(Span::raw(" ahead"));
         }
 
         if branch.ahead > 0 && branch.behind > 0 {
@@ -122,36 +81,66 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
 
         if branch.behind > 0 {
             parts.push(Span::styled(
-                format!("{}↓ behind", branch.behind),
+                format!("{}↓", branch.behind),
                 Style::default().fg(Color::Red),
             ));
+            parts.push(Span::raw(" behind"));
         }
 
         lines.push(Line::from(parts));
-        lines.push(Line::from(""));
+    }
+
+    // Status indicators
+    let mut status_parts = Vec::new();
+
+    if branch.has_remote {
+        status_parts.push(Span::styled("☁ remote", Style::default().fg(Color::Cyan)));
+    }
+
+    if branch.is_current {
+        if !status_parts.is_empty() {
+            status_parts.push(Span::raw("  "));
+        }
+        status_parts.push(Span::styled("◉ current", Style::default().fg(Color::Green)));
+    }
+
+    if branch.needs_restack {
+        if !status_parts.is_empty() {
+            status_parts.push(Span::raw("  "));
+        }
+        status_parts.push(Span::styled("⟳ needs restack", Style::default().fg(Color::Yellow)));
+    }
+
+    if !status_parts.is_empty() {
+        lines.push(Line::from(status_parts));
     }
 
     // Commits
     if !branch.commits.is_empty() {
+        lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             format!("Commits ({}):", branch.commits.len()),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
+            Style::default().add_modifier(Modifier::BOLD),
         )]));
 
-        for commit in &branch.commits {
-            // Truncate long commit messages
-            let msg = if commit.len() > 40 {
-                format!("{}...", &commit[..37])
+        for commit in branch.commits.iter().take(3) {
+            let msg = if commit.len() > 35 {
+                format!("{}...", &commit[..32])
             } else {
                 commit.clone()
             };
 
             lines.push(Line::from(vec![
-                Span::styled("  • ", Style::default().fg(Color::DarkGray)),
+                Span::styled("• ", Style::default().fg(Color::DarkGray)),
                 Span::raw(msg),
             ]));
+        }
+
+        if branch.commits.len() > 3 {
+            lines.push(Line::from(vec![Span::styled(
+                format!("  +{} more", branch.commits.len() - 3),
+                Style::default().fg(Color::DarkGray),
+            )]));
         }
     }
 

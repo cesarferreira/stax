@@ -1,5 +1,5 @@
-use crate::tui::app::{App, ConfirmAction, InputAction, Mode};
-use crate::tui::widgets::{render_details, render_stack_tree};
+use crate::tui::app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
+use crate::tui::widgets::{render_details, render_diff, render_stack_tree};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -18,14 +18,21 @@ pub fn render(f: &mut Frame, app: &App) {
         ])
         .split(f.area());
 
-    // Main content: details (top) + stack tree (bottom)
+    // Main content: left panel (stack + details) + right panel (diff)
     let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(chunks[0]);
 
-    render_details(f, app, main_chunks[0]);
-    render_stack_tree(f, app, main_chunks[1]);
+    // Left panel: stack tree (top) + details (bottom)
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(main_chunks[0]);
+
+    render_stack_tree(f, app, left_chunks[0]);
+    render_details(f, app, left_chunks[1]);
+    render_diff(f, app, main_chunks[1]);
 
     // Status bar
     render_status_bar(f, app, chunks[1]);
@@ -41,26 +48,74 @@ pub fn render(f: &mut Frame, app: &App) {
 
 /// Render the bottom status bar with keybindings
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let (content, style) = if let Some(msg) = &app.status_message {
-        (
+    let content: Line = if let Some(msg) = &app.status_message {
+        Line::from(Span::styled(
             msg.clone(),
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )
+        ))
     } else {
-        let bindings = match app.mode {
+        match app.mode {
             Mode::Normal => {
-                "↑↓/jk navigate  ⏎ checkout  r restack  s submit  p PR  n new  e rename  d delete  / search  ? help  q quit"
+                let (focus_label, focus_color) = match app.focused_pane {
+                    FocusedPane::Stack => ("◀ STACK", Color::Cyan),
+                    FocusedPane::Diff => ("DIFF ▶", Color::Green),
+                };
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", focus_label),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(focus_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled("Tab", Style::default().fg(Color::Cyan)),
+                    Span::raw(" switch  "),
+                    Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+                    Span::raw(" navigate  "),
+                    Span::styled("⏎", Style::default().fg(Color::Cyan)),
+                    Span::raw(" checkout  "),
+                    Span::styled("r", Style::default().fg(Color::Cyan)),
+                    Span::raw(" restack  "),
+                    Span::styled("s", Style::default().fg(Color::Cyan)),
+                    Span::raw(" submit  "),
+                    Span::styled("n", Style::default().fg(Color::Cyan)),
+                    Span::raw(" new  "),
+                    Span::styled("e", Style::default().fg(Color::Cyan)),
+                    Span::raw(" rename  "),
+                    Span::styled("/", Style::default().fg(Color::Cyan)),
+                    Span::raw(" search  "),
+                    Span::styled("?", Style::default().fg(Color::Cyan)),
+                    Span::raw(" help  "),
+                    Span::styled("q", Style::default().fg(Color::Cyan)),
+                    Span::raw(" quit"),
+                ])
             }
-            Mode::Search => "↑↓ navigate  ⏎ select  Esc cancel  Type to filter...",
-            Mode::Help => "Press any key to close",
-            Mode::Confirm(_) => "y confirm  n/Esc cancel",
-            Mode::Input(_) => "⏎ confirm  Esc cancel",
-        };
-        (bindings.to_string(), Style::default().fg(Color::White))
+            Mode::Search => Line::from(vec![
+                Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+                Span::raw(" navigate  "),
+                Span::styled("⏎", Style::default().fg(Color::Cyan)),
+                Span::raw(" select  "),
+                Span::styled("Esc", Style::default().fg(Color::Cyan)),
+                Span::raw(" cancel  Type to filter..."),
+            ]),
+            Mode::Help => Line::from("Press any key to close"),
+            Mode::Confirm(_) => Line::from(vec![
+                Span::styled("y", Style::default().fg(Color::Cyan)),
+                Span::raw(" confirm  "),
+                Span::styled("n/Esc", Style::default().fg(Color::Cyan)),
+                Span::raw(" cancel"),
+            ]),
+            Mode::Input(_) => Line::from(vec![
+                Span::styled("⏎", Style::default().fg(Color::Cyan)),
+                Span::raw(" confirm  "),
+                Span::styled("Esc", Style::default().fg(Color::Cyan)),
+                Span::raw(" cancel"),
+            ]),
+        }
     };
 
     let paragraph = Paragraph::new(content)
-        .style(style)
         .block(Block::default().borders(Borders::ALL));
 
     f.render_widget(paragraph, area);

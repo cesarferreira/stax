@@ -6,6 +6,30 @@ use crate::remote::RemoteInfo;
 use anyhow::Result;
 use std::time::Instant;
 
+/// A line in a diff with its type
+#[derive(Debug, Clone)]
+pub struct DiffLine {
+    pub content: String,
+    pub line_type: DiffLineType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DiffLineType {
+    Header,
+    Addition,
+    Deletion,
+    Context,
+    Hunk,
+}
+
+/// A line in diff stat output
+#[derive(Debug, Clone)]
+pub struct DiffStatLine {
+    pub file: String,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
 /// Branch display information for the TUI
 #[derive(Debug, Clone)]
 pub struct BranchDisplay {
@@ -22,6 +46,14 @@ pub struct BranchDisplay {
     pub pr_state: Option<String>,
     pub pr_url: Option<String>,
     pub commits: Vec<String>,
+}
+
+/// Which pane is focused
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum FocusedPane {
+    #[default]
+    Stack,
+    Diff,
 }
 
 /// Application mode
@@ -64,6 +96,10 @@ pub struct App {
     pub filtered_indices: Vec<usize>,
     pub input_buffer: String,
     pub input_cursor: usize,
+    pub selected_diff: Vec<DiffLine>,
+    pub diff_scroll: usize,
+    pub focused_pane: FocusedPane,
+    pub diff_stat: Vec<DiffStatLine>,
     pub status_message: Option<String>,
     pub status_set_at: Option<Instant>,
     pub should_quit: bool,
@@ -93,6 +129,10 @@ impl App {
             filtered_indices: Vec::new(),
             input_buffer: String::new(),
             input_cursor: 0,
+            selected_diff: Vec::new(),
+            diff_scroll: 0,
+            focused_pane: FocusedPane::Stack,
+            diff_stat: Vec::new(),
             status_message: None,
             status_set_at: None,
             should_quit: false,
@@ -101,6 +141,7 @@ impl App {
 
         app.refresh_branches()?;
         app.select_current_branch();
+        app.update_diff();
 
         Ok(app)
     }
@@ -111,6 +152,7 @@ impl App {
         self.current_branch = self.repo.current_branch()?;
         self.branches = self.build_branch_list()?;
         self.needs_refresh = false;
+        self.update_diff();
         Ok(())
     }
 
@@ -251,6 +293,7 @@ impl App {
 
         if len > 0 && self.selected_index > 0 {
             self.selected_index -= 1;
+            self.update_diff();
         }
     }
 
@@ -264,6 +307,7 @@ impl App {
 
         if len > 0 && self.selected_index < len - 1 {
             self.selected_index += 1;
+            self.update_diff();
         }
     }
 
@@ -278,6 +322,58 @@ impl App {
             .map(|(i, _)| i)
             .collect();
         self.selected_index = 0;
+    }
+
+    /// Update the diff for the currently selected branch
+    pub fn update_diff(&mut self) {
+        self.selected_diff.clear();
+        self.diff_stat.clear();
+        self.diff_scroll = 0;
+
+        if let Some(branch) = self.selected_branch() {
+            if let Some(parent) = &branch.parent {
+                let branch_name = branch.name.clone();
+                let parent_name = parent.clone();
+
+                // Get diff stat
+                if let Ok(stats) = self.repo.diff_stat(&branch_name, &parent_name) {
+                    self.diff_stat = stats
+                        .into_iter()
+                        .map(|(file, additions, deletions)| DiffStatLine {
+                            file,
+                            additions,
+                            deletions,
+                        })
+                        .collect();
+                }
+
+                // Get full diff
+                if let Ok(lines) = self.repo.diff_against_parent(&branch_name, &parent_name) {
+                    self.selected_diff = lines
+                        .into_iter()
+                        .map(|line| {
+                            let line_type = if line.starts_with("+++") || line.starts_with("---") {
+                                DiffLineType::Header
+                            } else if line.starts_with('+') {
+                                DiffLineType::Addition
+                            } else if line.starts_with('-') {
+                                DiffLineType::Deletion
+                            } else if line.starts_with("@@") {
+                                DiffLineType::Hunk
+                            } else if line.starts_with("diff ") || line.starts_with("index ") {
+                                DiffLineType::Header
+                            } else {
+                                DiffLineType::Context
+                            };
+                            DiffLine {
+                                content: line,
+                                line_type,
+                            }
+                        })
+                        .collect();
+                }
+            }
+        }
     }
 
     /// Set a status message (auto-clears after timeout)

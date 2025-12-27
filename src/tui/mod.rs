@@ -3,7 +3,7 @@ mod event;
 mod ui;
 mod widgets;
 
-use app::{App, ConfirmAction, InputAction, Mode};
+use app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
 use event::{poll_event, KeyAction};
 
 use anyhow::Result;
@@ -88,8 +88,32 @@ fn handle_action(app: &mut App, action: KeyAction) -> Result<()> {
 /// Handle actions in normal mode
 fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
     match action {
-        KeyAction::Up => app.select_previous(),
-        KeyAction::Down => app.select_next(),
+        KeyAction::Tab => {
+            app.focused_pane = match app.focused_pane {
+                FocusedPane::Stack => FocusedPane::Diff,
+                FocusedPane::Diff => FocusedPane::Stack,
+            };
+        }
+        KeyAction::Up => {
+            match app.focused_pane {
+                FocusedPane::Stack => app.select_previous(),
+                FocusedPane::Diff => {
+                    if app.diff_scroll > 0 {
+                        app.diff_scroll -= 1;
+                    }
+                }
+            }
+        }
+        KeyAction::Down => {
+            match app.focused_pane {
+                FocusedPane::Stack => app.select_next(),
+                FocusedPane::Diff => {
+                    if app.diff_scroll < app.selected_diff.len().saturating_sub(1) {
+                        app.diff_scroll += 1;
+                    }
+                }
+            }
+        }
         KeyAction::Enter => {
             if let Some(branch) = app.selected_branch() {
                 if !branch.is_current {

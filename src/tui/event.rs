@@ -41,6 +41,9 @@ pub enum KeyAction {
     Home,
     End,
 
+    // Pane navigation
+    Tab,
+
     // Unknown
     None,
 }
@@ -71,6 +74,7 @@ impl From<KeyEvent> for KeyAction {
             KeyCode::Esc => KeyAction::Escape,
             KeyCode::Home => KeyAction::Home,
             KeyCode::End => KeyAction::End,
+            KeyCode::Tab => KeyAction::Tab,
 
             // Vim navigation
             KeyCode::Char('k') => KeyAction::Up,

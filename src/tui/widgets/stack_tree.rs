@@ -1,4 +1,4 @@
-use crate::tui::app::{App, Mode};
+use crate::tui::app::{App, FocusedPane, Mode};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -9,6 +9,7 @@ use ratatui::{
 
 /// Render the stack tree widget (left panel)
 pub fn render_stack_tree(f: &mut Frame, app: &App, area: Rect) {
+    let is_focused = app.focused_pane == FocusedPane::Stack;
     let branches = if app.mode == Mode::Search && !app.filtered_indices.is_empty() {
         app.filtered_indices
             .iter()
@@ -118,12 +119,18 @@ pub fn render_stack_tree(f: &mut Frame, app: &App, area: Rect) {
         " Stack ".to_string()
     };
 
+    let (border_color, title_style) = if is_focused {
+        (Color::Cyan, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+    } else {
+        (Color::DarkGray, Style::default().fg(Color::DarkGray))
+    };
+
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(title)
-                .border_style(Style::default().fg(Color::White)),
+                .title(Span::styled(title, title_style))
+                .border_style(Style::default().fg(border_color)),
         )
         .highlight_style(Style::default());
 
