@@ -12,6 +12,9 @@
     <img alt="Performance" src="https://img.shields.io/badge/~21ms-startup-brightgreen">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   </p>
+  <p>
+    <img alt="stax screenshot" src="assets/screenshot.png">
+  </p>
 </div>
 
 ## What are Stacked Branches?
