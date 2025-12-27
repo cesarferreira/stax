@@ -34,6 +34,9 @@ colored = "3"
 # Error handling
 anyhow = "1"
 
+# Use vendored OpenSSL for cross-compilation
+openssl = { version = "0.10", features = ["vendored"] }
+
 # Config
 toml = "0.8"
 dirs = "6"
