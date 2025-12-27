@@ -2,4 +2,4 @@ sign-commit = false
 sign-tag = false
 publish = true 
 push = true
-tag-name = "v{{version}}"'
+tag-name = "v{{version}}"
