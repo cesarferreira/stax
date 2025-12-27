@@ -254,6 +254,15 @@ enum Commands {
     /// Open the PR for the current branch in browser
     Pr,
 
+    /// Rename the current branch
+    Rename {
+        /// New branch name (interactive if not provided)
+        name: Option<String>,
+        /// Edit the commit message
+        #[arg(short, long)]
+        edit: bool,
+    },
+
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
     Bc {
@@ -334,6 +343,16 @@ enum BranchCommands {
         /// New parent branch name
         #[arg(short, long)]
         parent: Option<String>,
+    },
+
+    /// Rename the current branch
+    #[command(visible_alias = "r")]
+    Rename {
+        /// New branch name (interactive if not provided)
+        name: Option<String>,
+        /// Edit the commit message
+        #[arg(short, long)]
+        edit: bool,
     },
 
     /// Delete a branch and its metadata
@@ -487,6 +506,7 @@ fn main() -> Result<()> {
             prefix,
         } => commands::branch::create::run(name, message, from, prefix, all),
         Commands::Pr => commands::pr::run(),
+        Commands::Rename { name, edit } => commands::branch::rename::run(name, edit),
         Commands::Branch(cmd) => match cmd {
             BranchCommands::Create {
                 name,
@@ -505,6 +525,7 @@ fn main() -> Result<()> {
             BranchCommands::Reparent { branch, parent } => {
                 commands::branch::reparent::run(branch, parent)
             }
+            BranchCommands::Rename { name, edit } => commands::branch::rename::run(name, edit),
             BranchCommands::Delete { branch, force } => {
                 commands::branch::delete::run(branch, force)
             }
