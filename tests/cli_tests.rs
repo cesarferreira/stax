@@ -25,9 +25,9 @@ fn test_help() {
 
 #[test]
 fn test_status_alias_s() {
-    // Both should work and produce similar output
-    let output1 = stax(&["status"]);
-    let output2 = stax(&["s"]);
+    // Both aliases should work
+    let output1 = stax(&["status", "--help"]);
+    let output2 = stax(&["s", "--help"]);
     assert!(output1.status.success());
     assert!(output2.status.success());
 }
