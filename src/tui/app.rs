@@ -38,10 +38,12 @@ pub struct BranchDisplay {
     pub column: usize,
     pub is_current: bool,
     pub is_trunk: bool,
-    pub ahead: usize,
-    pub behind: usize,
+    pub ahead: usize,        // commits ahead of parent
+    pub behind: usize,       // commits behind parent
     pub needs_restack: bool,
     pub has_remote: bool,
+    pub unpushed: usize,     // commits ahead of remote (unpushed)
+    pub unpulled: usize,     // commits behind remote (unpulled)
     pub pr_number: Option<u64>,
     pub pr_state: Option<String>,
     pub pr_url: Option<String>,
@@ -231,6 +233,10 @@ impl App {
 
         let needs_restack = info.map(|i| i.needs_restack).unwrap_or(false);
         let has_remote = self.repo.has_remote(branch);
+
+        // Get ahead/behind vs remote
+        let (unpushed, unpulled) = self.repo.commits_vs_remote(branch).unwrap_or((0, 0));
+
         let pr_number = info.and_then(|i| i.pr_number);
         let pr_state = info.and_then(|i| i.pr_state.clone());
         let pr_url = pr_number.and_then(|n| self.remote_info.as_ref().map(|r| r.pr_url(n)));
@@ -258,6 +264,8 @@ impl App {
             behind,
             needs_restack,
             has_remote,
+            unpushed,
+            unpulled,
             pr_number,
             pr_state,
             pr_url,

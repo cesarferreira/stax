@@ -55,27 +55,41 @@ pub fn render_stack_tree(f: &mut Frame, app: &App, area: Rect) {
                 tree.push(' ');
             }
 
-            // Build status indicators
-            let mut status = String::new();
+            // Build status spans with individual styling
+            let mut status_spans: Vec<Span> = Vec::new();
 
-            if branch.has_remote {
-                status.push_str(" ☁");
+            // Show unpushed commits (ahead of remote) - most important
+            if branch.unpushed > 0 {
+                status_spans.push(Span::styled(
+                    format!(" {}⬆", branch.unpushed),
+                    Style::default().fg(Color::Yellow),
+                ));
             }
 
-            if branch.ahead > 0 {
-                status.push_str(&format!(" {}↑", branch.ahead));
+            // Show unpulled commits (behind remote)
+            if branch.unpulled > 0 {
+                status_spans.push(Span::styled(
+                    format!(" {}⬇", branch.unpulled),
+                    Style::default().fg(Color::Magenta),
+                ));
             }
 
-            if branch.behind > 0 {
-                status.push_str(&format!(" {}↓", branch.behind));
+            // Show synced with remote indicator (cloud icon)
+            if branch.has_remote && branch.unpushed == 0 && branch.unpulled == 0 {
+                status_spans.push(Span::styled(" ✓", Style::default().fg(Color::Green)));
             }
 
+            // Needs restack indicator
             if branch.needs_restack {
-                status.push_str(" ⟳");
+                status_spans.push(Span::styled(" ⟳", Style::default().fg(Color::Red)));
             }
 
+            // PR info
             if let Some(pr_num) = branch.pr_number {
-                status.push_str(&format!(" PR #{}", pr_num));
+                status_spans.push(Span::styled(
+                    format!(" #{}", pr_num),
+                    Style::default().fg(Color::Cyan),
+                ));
             }
 
             // Build the line with styling
@@ -89,19 +103,12 @@ pub fn render_stack_tree(f: &mut Frame, app: &App, area: Rect) {
 
             let tree_style = Style::default().fg(Color::DarkGray);
 
-            let status_style = if branch.needs_restack {
-                Style::default().fg(Color::Yellow)
-            } else if branch.pr_number.is_some() {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            let line = Line::from(vec![
+            let mut line_spans = vec![
                 Span::styled(tree, tree_style),
                 Span::styled(&branch.name, branch_style),
-                Span::styled(status, status_style),
-            ]);
+            ];
+            line_spans.extend(status_spans);
+            let line = Line::from(line_spans);
 
             let item_style = if is_selected {
                 Style::default().bg(Color::DarkGray)

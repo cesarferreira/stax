@@ -63,9 +63,45 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
         }
     }
 
-    // Ahead/behind
+    // Remote status (vs origin)
+    if branch.has_remote {
+        let mut remote_parts = Vec::new();
+        remote_parts.push(Span::styled("Remote: ", Style::default().fg(Color::DarkGray)));
+
+        if branch.unpushed > 0 {
+            remote_parts.push(Span::styled(
+                format!("{}⬆ unpushed", branch.unpushed),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+
+        if branch.unpushed > 0 && branch.unpulled > 0 {
+            remote_parts.push(Span::raw("  "));
+        }
+
+        if branch.unpulled > 0 {
+            remote_parts.push(Span::styled(
+                format!("{}⬇ unpulled", branch.unpulled),
+                Style::default().fg(Color::Magenta),
+            ));
+        }
+
+        if branch.unpushed == 0 && branch.unpulled == 0 {
+            remote_parts.push(Span::styled("✓ synced", Style::default().fg(Color::Green)));
+        }
+
+        lines.push(Line::from(remote_parts));
+    } else if !branch.is_trunk {
+        lines.push(Line::from(vec![
+            Span::styled("Remote: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("not pushed", Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    // Ahead/behind vs parent
     if branch.ahead > 0 || branch.behind > 0 {
         let mut parts = Vec::new();
+        parts.push(Span::styled("Parent: ", Style::default().fg(Color::DarkGray)));
 
         if branch.ahead > 0 {
             parts.push(Span::styled(
@@ -93,14 +129,7 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
     // Status indicators
     let mut status_parts = Vec::new();
 
-    if branch.has_remote {
-        status_parts.push(Span::styled("☁ remote", Style::default().fg(Color::Cyan)));
-    }
-
     if branch.is_current {
-        if !status_parts.is_empty() {
-            status_parts.push(Span::raw("  "));
-        }
         status_parts.push(Span::styled("◉ current", Style::default().fg(Color::Green)));
     }
 
@@ -108,7 +137,7 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
         if !status_parts.is_empty() {
             status_parts.push(Span::raw("  "));
         }
-        status_parts.push(Span::styled("⟳ needs restack", Style::default().fg(Color::Yellow)));
+        status_parts.push(Span::styled("⟳ needs restack", Style::default().fg(Color::Red)));
     }
 
     if !status_parts.is_empty() {

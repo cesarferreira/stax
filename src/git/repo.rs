@@ -399,6 +399,17 @@ impl GitRepo {
         self.repo.find_branch(&remote_name, BranchType::Remote).is_ok()
     }
 
+    /// Get commits ahead/behind compared to remote tracking branch (origin/branch)
+    /// Returns (unpushed, unpulled) or None if no remote tracking branch exists
+    pub fn commits_vs_remote(&self, branch: &str) -> Option<(usize, usize)> {
+        let remote_name = format!("origin/{}", branch);
+        if self.repo.find_branch(&remote_name, BranchType::Remote).is_ok() {
+            self.commits_ahead_behind(&remote_name, branch).ok()
+        } else {
+            None
+        }
+    }
+
     /// Get diff between a branch and its parent
     pub fn diff_against_parent(&self, branch: &str, parent: &str) -> Result<Vec<String>> {
         let output = Command::new("git")
