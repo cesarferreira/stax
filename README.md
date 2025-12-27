@@ -66,9 +66,14 @@ stax create auth-ui            # Second branch, stacked on first
 
 # 3. View your stack
 stax ls
+# ◉  auth-ui 1↑                ← you are here
+# ○  auth-api 1↑
+# ○  main
 
 # 4. Submit PRs for the whole stack
 stax ss
+# Creating PR for auth-api... ✓ #12 (targets main)
+# Creating PR for auth-ui... ✓ #13 (targets auth-api)
 
 # 5. After reviews, sync and rebase
 stax rs --restack
