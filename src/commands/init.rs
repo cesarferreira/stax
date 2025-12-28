@@ -46,6 +46,24 @@ fn run_init(repo: &GitRepo) -> Result<bool> {
     let detected_trunk = repo.detect_trunk().ok();
     let branches = repo.list_branches()?;
 
+    // Handle empty repo (no branches yet)
+    if branches.is_empty() {
+        if let Some(detected) = detected_trunk {
+            // Use detected trunk even if no branches exist yet
+            repo.set_trunk(&detected)?;
+            println!("Trunk set to {}", detected.cyan());
+            println!();
+            println!("{}", "Ready to go! Try `stax bc <name>` to create your first branch.".green());
+            return Ok(true);
+        } else {
+            // No branches and can't detect trunk - need at least one commit
+            anyhow::bail!(
+                "No branches found. Please make an initial commit first:\n  \
+                 git add . && git commit -m \"Initial commit\""
+            );
+        }
+    }
+
     let trunk = if let Some(detected) = &detected_trunk {
         // Show selection with detected as default
         let prompt = format!(
