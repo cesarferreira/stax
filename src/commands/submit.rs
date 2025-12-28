@@ -6,7 +6,7 @@ use crate::github::GitHubClient;
 use crate::remote::{self, Provider, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, Editor, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Editor, Input, Select};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -22,6 +22,8 @@ struct PrPlan {
     // Track if this is a no-op (already synced)
     needs_push: bool,
     needs_pr_update: bool,
+    // Empty branches get pushed but no PR created
+    is_empty: bool,
 }
 
 pub fn run(
@@ -39,7 +41,7 @@ pub fn run(
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
     let config = Config::load()?;
-    let auto_confirm = yes || no_prompt;
+    let _ = yes; // Used for future auto-confirm features
 
     // Track if --draft was explicitly passed (we'll ask interactively if not)
     let draft_flag_set = draft;
@@ -102,40 +104,22 @@ pub fn run(
         })
         .collect();
 
-    if !empty_branches.is_empty() {
-        if !quiet {
-            println!("  {} Empty branches (will be skipped):", "!".yellow());
-            for b in &empty_branches {
-                println!("    {}", b.dimmed());
-            }
-        }
+    // Empty branches will be pushed but won't get PRs created
+    let empty_set: std::collections::HashSet<_> = empty_branches.iter().cloned().collect();
 
-        let proceed = if auto_confirm {
-            true
-        } else {
-            Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt("Skip empty branches and continue?")
-                .default(true)
-                .interact()?
-        };
-
-        if !proceed {
-            println!("  {}", "Aborted.".red());
-            return Ok(());
+    if !empty_branches.is_empty() && !quiet {
+        println!("  {} Empty branches (will push, skip PR):", "!".yellow());
+        for b in &empty_branches {
+            println!("    {}", b.dimmed());
         }
     }
 
-    // Filter out empty branches
-    let empty_set: std::collections::HashSet<_> = empty_branches.iter().cloned().collect();
-    let branches_to_submit: Vec<_> = stack_branches
-        .iter()
-        .filter(|b| !empty_set.contains(b))
-        .cloned()
-        .collect();
+    // Submit all branches in the stack
+    let branches_to_submit = stack_branches.clone();
 
     if branches_to_submit.is_empty() {
         if !quiet {
-            println!("{}", "No branches with changes to submit.".yellow());
+            println!("{}", "No branches to submit.".yellow());
         }
         return Ok(());
     }
@@ -199,23 +183,26 @@ pub fn run(
         let meta = BranchMetadata::read(repo.inner(), branch)?
             .context(format!("No metadata for branch {}", branch))?;
 
-        // Check if PR exists
-        let existing_pr = rt.block_on(async { client.find_pr(branch).await })?;
+        let is_empty = empty_set.contains(branch);
+
+        // Check if PR exists (skip for empty branches)
+        let existing_pr = if is_empty {
+            None
+        } else {
+            rt.block_on(async { client.find_pr(branch).await })?
+        };
         let pr_number = existing_pr.as_ref().map(|p| p.number);
 
         // Determine the base branch for PR
-        let base = if remote_branches.contains(&meta.parent_branch_name) {
-            meta.parent_branch_name.clone()
-        } else {
-            // Parent not on remote - will be pushed, use it anyway
-            meta.parent_branch_name.clone()
-        };
+        let base = meta.parent_branch_name.clone();
 
         // Check if we actually need to push
         let needs_push = branch_needs_push(repo.workdir()?, &remote_info.name, branch);
 
-        // Check if PR base needs updating
-        let needs_pr_update = if let Some(pr) = &existing_pr {
+        // Check if PR base needs updating (not for empty branches)
+        let needs_pr_update = if is_empty {
+            false
+        } else if let Some(pr) = &existing_pr {
             pr.base != base || needs_push
         } else {
             true // New PR always needs creation
@@ -230,16 +217,17 @@ pub fn run(
             is_draft: None,
             needs_push,
             needs_pr_update,
+            is_empty,
         });
     }
     if !quiet {
         println!("{}", "done".green());
     }
 
-    // Show plan summary
-    let creates: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_none()).collect();
-    let updates: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_some() && p.needs_pr_update).collect();
-    let noops: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_some() && !p.needs_pr_update && !p.needs_push).collect();
+    // Show plan summary (exclude empty branches from PR counts)
+    let creates: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_none() && !p.is_empty).collect();
+    let updates: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_some() && p.needs_pr_update && !p.is_empty).collect();
+    let noops: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_some() && !p.needs_pr_update && !p.needs_push && !p.is_empty).collect();
 
     if !quiet {
         if !creates.is_empty() {
@@ -253,17 +241,17 @@ pub fn run(
         }
     }
 
-    // Collect PR details for new PRs BEFORE pushing
+    // Collect PR details for new PRs BEFORE pushing (skip empty branches)
     if !no_pr {
         let pr_template = load_pr_template(repo.workdir()?);
-        let new_prs: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_none()).collect();
+        let new_prs: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_none() && !p.is_empty).collect();
         if !new_prs.is_empty() && !quiet {
             println!();
             println!("{}", "New PR details:".bold());
         }
 
         for plan in &mut plans {
-            if plan.existing_pr.is_some() {
+            if plan.existing_pr.is_some() || plan.is_empty {
                 continue;
             }
 
@@ -360,8 +348,8 @@ pub fn run(
         return Ok(());
     }
 
-    // Check if anything needs to be done
-    let any_pr_work = plans.iter().any(|p| p.existing_pr.is_none() || p.needs_pr_update);
+    // Check if anything needs to be done (exclude empty branches)
+    let any_pr_work = plans.iter().any(|p| !p.is_empty && (p.existing_pr.is_none() || p.needs_pr_update));
 
     if !any_pr_work && branches_needing_push.is_empty() {
         if !quiet {
@@ -381,6 +369,11 @@ pub fn run(
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();
 
         for plan in &plans {
+            // Skip empty branches for PR operations
+            if plan.is_empty {
+                continue;
+            }
+
             let meta = BranchMetadata::read(repo.inner(), &plan.branch)?
                 .context(format!("No metadata for branch {}", plan.branch))?;
 

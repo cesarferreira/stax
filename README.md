@@ -334,9 +334,18 @@ stax uses the same metadata format as freephite and supports similar commands:
 - `stax rename new-name` - Rename current branch
 - `stax rename -e` - Rename and edit commit message
 - `stax submit --draft` - Create PRs as drafts
+- `stax submit --yes` - Auto-approve prompts
+- `stax submit --no-prompt` - Use defaults, skip interactive prompts
 - `stax submit --reviewers alice,bob` - Add reviewers
+- `stax submit --labels bug,urgent` - Add labels
+- `stax submit --assignees alice` - Assign users
 - `stax sync --restack` - Sync and rebase all branches
 - `stax status --json` - Output as JSON
+
+**CI/Automation example:**
+```bash
+stax submit --draft --yes --no-prompt
+```
 
 </details>
 
