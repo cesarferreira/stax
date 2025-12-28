@@ -5,16 +5,13 @@
   </p>
 
   <p>
-    <img alt="Version" src="https://img.shields.io/badge/version-0.2.1-blue">
-    <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml">
-      <img alt="CI" src="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml/badge.svg">
-    </a>
-    <img alt="Performance" src="https://img.shields.io/badge/~21ms-startup-brightgreen">
+    <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml"><img alt="CI" src="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml/badge.svg"></a>
+    <img alt="Performance" src="https://img.shields.io/badge/~21ms-startup-blue">
+    <img alt="TUI" src="https://img.shields.io/badge/TUI-ratatui-5f5fff">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   </p>
-  <p>
-    <img alt="stax screenshot" src="assets/screenshot.png">
-  </p>
+
+  <img src="assets/screenshot.png" width="900" alt="stax screenshot">
 </div>
 
 ## What are Stacked Branches?
