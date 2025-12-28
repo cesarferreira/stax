@@ -8,7 +8,7 @@ use std::io::IsTerminal;
 use std::process::Command;
 
 /// Rename the current branch and optionally edit the commit message
-pub fn run(new_name: Option<String>, edit_message: bool, literal: bool) -> Result<()> {
+pub fn run(new_name: Option<String>, edit_message: bool, push_remote: bool, literal: bool) -> Result<()> {
     let is_interactive = std::io::stdin().is_terminal();
     let repo = GitRepo::open()?;
     let old_name = repo.current_branch()?;
@@ -94,18 +94,25 @@ pub fn run(new_name: Option<String>, edit_message: bool, literal: bool) -> Resul
     let remote_name = config.remote_name();
     let remote_branches = crate::remote::get_remote_branches(&workdir, remote_name).unwrap_or_default();
 
-    if remote_branches.contains(&old_name) && is_interactive {
-        let push_new = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(format!(
-                "Push '{}' and delete old remote '{}'?",
-                new_name, old_name
-            ))
-            .default(true)
-            .interact()?;
+    if remote_branches.contains(&old_name) {
+        let should_push = if push_remote {
+            true // --push flag was passed
+        } else if is_interactive {
+            Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt(format!(
+                    "Push '{}' and delete old remote '{}'?",
+                    new_name, old_name
+                ))
+                .default(true)
+                .interact()?
+        } else {
+            false
+        };
 
-        if push_new {
+        if should_push {
             // Push new branch
             print!("  Pushing {}... ", new_name.cyan());
+            std::io::Write::flush(&mut std::io::stdout()).ok();
             let push_status = Command::new("git")
                 .args(["push", "-u", remote_name, &new_name])
                 .current_dir(&workdir)
@@ -121,6 +128,7 @@ pub fn run(new_name: Option<String>, edit_message: bool, literal: bool) -> Resul
 
             // Delete old remote branch
             print!("  Deleting remote {}... ", old_name.bright_black());
+            std::io::Write::flush(&mut std::io::stdout()).ok();
             let delete_status = Command::new("git")
                 .args(["push", remote_name, "--delete", &old_name])
                 .current_dir(&workdir)

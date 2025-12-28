@@ -282,6 +282,9 @@ enum Commands {
         /// Edit the commit message
         #[arg(short, long)]
         edit: bool,
+        /// Push new branch and delete old remote (non-interactive)
+        #[arg(short, long)]
+        push: bool,
         /// Use name literally without applying prefix
         #[arg(long, hide = true)]
         literal: bool,
@@ -377,6 +380,9 @@ enum BranchCommands {
         /// Edit the commit message
         #[arg(short, long)]
         edit: bool,
+        /// Push new branch and delete old remote (non-interactive)
+        #[arg(short, long)]
+        push: bool,
         /// Use name literally without applying prefix
         #[arg(long, hide = true)]
         literal: bool,
@@ -550,7 +556,7 @@ fn main() -> Result<()> {
             prefix,
         } => commands::branch::create::run(name, message, from, prefix, all),
         Commands::Pr => commands::pr::run(),
-        Commands::Rename { name, edit, literal } => commands::branch::rename::run(name, edit, literal),
+        Commands::Rename { name, edit, push, literal } => commands::branch::rename::run(name, edit, push, literal),
         Commands::Branch(cmd) => match cmd {
             BranchCommands::Create {
                 name,
@@ -569,7 +575,7 @@ fn main() -> Result<()> {
             BranchCommands::Reparent { branch, parent } => {
                 commands::branch::reparent::run(branch, parent)
             }
-            BranchCommands::Rename { name, edit, literal } => commands::branch::rename::run(name, edit, literal),
+            BranchCommands::Rename { name, edit, push, literal } => commands::branch::rename::run(name, edit, push, literal),
             BranchCommands::Delete { branch, force } => {
                 commands::branch::delete::run(branch, force)
             }

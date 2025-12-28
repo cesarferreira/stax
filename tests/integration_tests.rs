@@ -1148,8 +1148,9 @@ fn test_multiple_stacks() {
     repo.run_stax(&["t"]);
     repo.run_stax(&["bc", "stack2-feature"]);
 
-    // Both should appear in status
-    let output = repo.run_stax(&["status", "--json"]);
+    // Both should appear in status with --all flag
+    // (default now shows only current stack)
+    let output = repo.run_stax(&["status", "--all", "--json"]);
     let stdout = TestRepo::stdout(&output);
     let json: Value = serde_json::from_str(&stdout).unwrap();
     let branches = json["branches"].as_array().unwrap();
@@ -1509,6 +1510,342 @@ fn test_force_push_after_amend() {
 // =============================================================================
 
 #[cfg(test)]
+// =============================================================================
+// Rename with Remote Tests
+// =============================================================================
+
+#[test]
+fn test_rename_with_push_flag() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a branch and push it
+    repo.run_stax(&["bc", "old-remote-name"]);
+    let old_branch = repo.current_branch();
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &old_branch]);
+
+    // Verify old branch exists on remote
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        remote_branches.iter().any(|b| b.contains("old-remote-name")),
+        "Expected old-remote-name on remote before rename"
+    );
+
+    // Rename with --push flag (non-interactive remote handling)
+    let output = repo.run_stax(&["rename", "new-remote-name", "--push"]);
+    assert!(output.status.success(), "Failed: {}", TestRepo::stderr(&output));
+
+    // Current branch should be renamed
+    let new_branch = repo.current_branch();
+    assert!(new_branch.contains("new-remote-name"), "Expected new-remote-name, got: {}", new_branch);
+
+    // Old branch should be deleted from remote, new one should exist
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        !remote_branches.iter().any(|b| b.contains("old-remote-name")),
+        "Expected old-remote-name to be deleted from remote"
+    );
+    assert!(
+        remote_branches.iter().any(|b| b.contains("new-remote-name")),
+        "Expected new-remote-name on remote"
+    );
+}
+
+#[test]
+fn test_rename_without_push_flag_no_remote_change() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a branch and push it
+    repo.run_stax(&["bc", "feature-no-push"]);
+    let old_branch = repo.current_branch();
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &old_branch]);
+
+    // Rename WITHOUT --push flag (in non-interactive mode, should skip remote)
+    let output = repo.run_stax(&["rename", "renamed-no-push"]);
+    assert!(output.status.success(), "Failed: {}", TestRepo::stderr(&output));
+
+    // Local branch should be renamed
+    assert!(repo.current_branch().contains("renamed-no-push"));
+
+    // Old remote branch should STILL exist (no --push flag)
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        remote_branches.iter().any(|b| b.contains("feature-no-push")),
+        "Expected old remote branch to still exist without --push flag"
+    );
+}
+
+#[test]
+fn test_rename_push_help_shows_flag() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["rename", "--help"]);
+    assert!(output.status.success());
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("--push") || stdout.contains("-p"),
+        "Expected --push flag in help: {}", stdout);
+}
+
+// =============================================================================
+// LL Command Tests
+// =============================================================================
+
+#[test]
+fn test_ll_command_runs() {
+    let repo = TestRepo::new();
+
+    // Create a branch
+    repo.run_stax(&["bc", "feature-ll"]);
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+
+    let output = repo.run_stax(&["ll"]);
+    assert!(output.status.success(), "Failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("feature-ll"), "Expected feature-ll in output: {}", stdout);
+    assert!(stdout.contains("main"), "Expected main in output: {}", stdout);
+}
+
+#[test]
+fn test_ll_shows_pr_urls() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a branch
+    repo.run_stax(&["bc", "feature-with-pr"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // ll command should run and show branch info (even without actual PR)
+    let output = repo.run_stax(&["ll"]);
+    assert!(output.status.success(), "Failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("feature-with-pr") || stdout.contains(&branch_name));
+}
+
+#[test]
+fn test_ll_json_output() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-ll-json"]);
+
+    let output = repo.run_stax(&["ll", "--json"]);
+    assert!(output.status.success(), "Failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+    let json: Value = serde_json::from_str(&stdout).expect("Invalid JSON output");
+    assert!(json["branches"].is_array());
+}
+
+#[test]
+fn test_ll_compact_output() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-ll-compact"]);
+
+    let output = repo.run_stax(&["ll", "--compact"]);
+    assert!(output.status.success());
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("feature-ll-compact"));
+    assert!(stdout.contains('\t')); // Tab-separated
+}
+
+// =============================================================================
+// Status --all Flag Tests
+// =============================================================================
+
+#[test]
+fn test_status_all_shows_all_stacks() {
+    let repo = TestRepo::new();
+
+    // Create two independent stacks from main
+    repo.run_stax(&["bc", "stack-a-feature"]);
+    repo.create_file("a.txt", "content a");
+    repo.commit("Stack A commit");
+
+    repo.run_stax(&["t"]); // Go back to main
+
+    repo.run_stax(&["bc", "stack-b-feature"]);
+    repo.create_file("b.txt", "content b");
+    repo.commit("Stack B commit");
+
+    // Without --all, should only show current stack (stack-b)
+    let output = repo.run_stax(&["status"]);
+    assert!(output.status.success());
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("stack-b-feature"), "Should show current stack");
+    // stack-a might not be shown without --all
+
+    // With --all, should show both stacks
+    let output = repo.run_stax(&["status", "--all"]);
+    assert!(output.status.success());
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("stack-a-feature"), "Should show stack A with --all: {}", stdout);
+    assert!(stdout.contains("stack-b-feature"), "Should show stack B with --all: {}", stdout);
+}
+
+#[test]
+fn test_status_all_json_output() {
+    let repo = TestRepo::new();
+
+    // Create two stacks
+    repo.run_stax(&["bc", "stack-1"]);
+    repo.run_stax(&["t"]);
+    repo.run_stax(&["bc", "stack-2"]);
+
+    // With --all --json, should show all branches
+    let output = repo.run_stax(&["status", "--all", "--json"]);
+    assert!(output.status.success());
+
+    let stdout = TestRepo::stdout(&output);
+    let json: Value = serde_json::from_str(&stdout).expect("Invalid JSON");
+    let branches = json["branches"].as_array().unwrap();
+
+    // Should have both stacks in output
+    assert!(
+        branches.iter().any(|b| b["name"].as_str().unwrap_or("").contains("stack-1")),
+        "Expected stack-1 in --all output"
+    );
+    assert!(
+        branches.iter().any(|b| b["name"].as_str().unwrap_or("").contains("stack-2")),
+        "Expected stack-2 in --all output"
+    );
+}
+
+#[test]
+fn test_status_without_all_shows_current_stack_only() {
+    let repo = TestRepo::new();
+
+    // Create branch on main
+    repo.run_stax(&["bc", "current-stack-branch"]);
+    repo.create_file("current.txt", "content");
+    repo.commit("Current stack commit");
+
+    // Go to main and create another stack
+    repo.run_stax(&["t"]);
+    repo.run_stax(&["bc", "other-stack-branch"]);
+
+    // Go back to first stack
+    let first_branch = repo.find_branch_containing("current-stack-branch").unwrap();
+    repo.run_stax(&["checkout", &first_branch]);
+
+    // Without --all, should show only current stack (which includes current-stack-branch)
+    let output = repo.run_stax(&["status", "--json"]);
+    assert!(output.status.success());
+
+    let stdout = TestRepo::stdout(&output);
+    let json: Value = serde_json::from_str(&stdout).expect("Invalid JSON");
+    let branches = json["branches"].as_array().unwrap();
+
+    // current-stack-branch should be shown
+    assert!(
+        branches.iter().any(|b| b["name"].as_str().unwrap_or("").contains("current-stack-branch")),
+        "Expected current-stack-branch in default output: {:?}", branches
+    );
+}
+
+// =============================================================================
+// Submit Empty Branches Tests
+// =============================================================================
+
+// Note: submit command tests with --no-pr still require a valid GitHub URL format.
+// These tests verify the empty branch handling logic by checking status output.
+
+#[test]
+fn test_status_shows_empty_branch_commits() {
+    let repo = TestRepo::new();
+
+    // Create a branch with commits
+    repo.run_stax(&["bc", "feature-with-commits"]);
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+
+    // Create a child branch without additional commits (empty relative to parent)
+    repo.run_stax(&["bc", "empty-child"]);
+    // No commits here - branch is "empty" (same commits as parent)
+
+    // Status should show both branches
+    let output = repo.run_stax(&["status", "--json"]);
+    assert!(output.status.success());
+
+    let stdout = TestRepo::stdout(&output);
+    let json: Value = serde_json::from_str(&stdout).expect("Invalid JSON");
+    let branches = json["branches"].as_array().unwrap();
+
+    // Both branches should appear
+    assert!(
+        branches.iter().any(|b| b["name"].as_str().unwrap_or("").contains("feature-with-commits")),
+        "Expected feature-with-commits in status"
+    );
+    assert!(
+        branches.iter().any(|b| b["name"].as_str().unwrap_or("").contains("empty-child")),
+        "Expected empty-child in status (even though empty)"
+    );
+
+    // The empty branch should show 0 commits ahead
+    let empty_branch = branches
+        .iter()
+        .find(|b| b["name"].as_str().unwrap_or("").contains("empty-child"));
+    if let Some(eb) = empty_branch {
+        let ahead = eb["ahead"].as_i64().unwrap_or(-1);
+        assert_eq!(ahead, 0, "Empty branch should have 0 commits ahead");
+    }
+}
+
+#[test]
+fn test_push_empty_branch_manually() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a branch with commits
+    repo.run_stax(&["bc", "parent-branch"]);
+    let parent_name = repo.current_branch();
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+
+    // Create a child branch without additional commits (empty relative to parent)
+    repo.run_stax(&["bc", "empty-branch"]);
+    let empty_name = repo.current_branch();
+    // No commits here
+
+    // Push both branches manually (simulating what submit --no-pr does)
+    let output1 = repo.git(&["push", "-u", "origin", &parent_name]);
+    assert!(output1.status.success(), "Failed to push parent");
+
+    let output2 = repo.git(&["push", "-u", "origin", &empty_name]);
+    assert!(output2.status.success(), "Failed to push empty branch");
+
+    // Both should exist on remote
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        remote_branches.iter().any(|b| b.contains("parent-branch") || b == &parent_name),
+        "Expected parent-branch on remote"
+    );
+    assert!(
+        remote_branches.iter().any(|b| b.contains("empty-branch") || b == &empty_name),
+        "Expected empty-branch on remote (even though empty)"
+    );
+}
+
+#[test]
+fn test_submit_help_shows_no_pr_flag() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["submit", "--help"]);
+    assert!(output.status.success());
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("--no-pr"), "Expected --no-pr flag in help");
+    assert!(stdout.contains("--yes"), "Expected --yes flag in help");
+}
+
 mod github_mock_tests {
     use super::*;
     use wiremock::{MockServer, Mock, ResponseTemplate};

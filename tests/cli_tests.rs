@@ -540,3 +540,49 @@ fn test_branch_rename_alias() {
     let output = stax(&["b", "r", "--help"]);
     assert!(output.status.success());
 }
+
+// ============================================================================
+// LL Command Tests
+// ============================================================================
+
+#[test]
+fn test_ll_command_help() {
+    let output = stax(&["ll", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("PR") || stdout.contains("details") || stdout.contains("full"));
+}
+
+#[test]
+fn test_ll_command_flags() {
+    let output = stax(&["ll", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--json"));
+    assert!(stdout.contains("--stack"));
+    assert!(stdout.contains("--all"));
+    assert!(stdout.contains("--compact"));
+    assert!(stdout.contains("--quiet"));
+}
+
+// ============================================================================
+// Rename --push Flag Tests
+// ============================================================================
+
+#[test]
+fn test_rename_push_flag_help() {
+    let output = stax(&["rename", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--push") || stdout.contains("-p"),
+        "Expected --push flag in rename help: {}", stdout);
+}
+
+#[test]
+fn test_branch_rename_push_flag_help() {
+    let output = stax(&["branch", "rename", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--push") || stdout.contains("-p"),
+        "Expected --push flag in branch rename help: {}", stdout);
+}
