@@ -519,29 +519,26 @@ pub fn run(
             }
         }
 
-        // Update a single stack summary comment
-        if !pr_infos.is_empty() {
-            let summary_pr = pr_infos
-                .iter()
-                .find(|p| p.branch == current && p.pr_number.is_some())
-                .and_then(|p| p.pr_number)
-                .or_else(|| pr_infos.iter().rev().find_map(|p| p.pr_number));
+        // Update stack comment on ALL PRs in the stack
+        let prs_with_numbers: Vec<_> = pr_infos
+            .iter()
+            .filter_map(|p| p.pr_number.map(|num| (num, p.branch.clone())))
+            .collect();
 
-            if let Some(num) = summary_pr {
-                if !quiet {
-                    print!("  Updating stack comment on #{}... ", num);
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                }
-                let stack_comment = generate_stack_comment(
-                    &pr_infos,
-                    num,
-                    &remote_info,
-                    &stack.trunk,
-                );
-                client.update_stack_comment(num, &stack_comment).await?;
-                if !quiet {
-                    println!("{}", "done".green());
-                }
+        for (pr_number, _branch) in &prs_with_numbers {
+            if !quiet {
+                print!("  Updating stack comment on #{}... ", pr_number);
+                std::io::Write::flush(&mut std::io::stdout()).ok();
+            }
+            let stack_comment = generate_stack_comment(
+                &pr_infos,
+                *pr_number,
+                &remote_info,
+                &stack.trunk,
+            );
+            client.update_stack_comment(*pr_number, &stack_comment).await?;
+            if !quiet {
+                println!("{}", "done".green());
             }
         }
 
