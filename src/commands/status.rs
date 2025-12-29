@@ -11,15 +11,16 @@ use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
 // Colors for different columns (fp-style: each column has its own color)
+// Avoiding yellow since it's used for "needs restack" indicator
 const COLUMN_COLORS: &[Color] = &[
     Color::Cyan,
     Color::Green,
-    Color::Yellow,
-    Color::Red,
     Color::Magenta,
     Color::Blue,
     Color::BrightCyan,
     Color::BrightGreen,
+    Color::BrightMagenta,
+    Color::BrightBlue,
 ];
 
 /// Represents a branch in the display with its column position
@@ -284,11 +285,12 @@ pub fn run(
             info_str.push_str(&format!("{} ", "☁".bright_blue()));
         }
 
-        // Keep branch names white/neutral, only tree graphics are colored by stack
+        // Color branch names to match their column in the graph
+        let branch_color = COLUMN_COLORS[db.column % COLUMN_COLORS.len()];
         if is_current {
-            info_str.push_str(&format!("{}", branch.bold()));
+            info_str.push_str(&format!("{}", branch.color(branch_color).bold()));
         } else {
-            info_str.push_str(branch);
+            info_str.push_str(&format!("{}", branch.color(branch_color)));
         }
 
         if let Some(entry) = entry {
@@ -313,29 +315,32 @@ pub fn run(
                 }
             }
 
-            if let Some(pr_number) = entry.pr_number {
-                let pr_label = remote_info
-                    .as_ref()
-                    .map(|r| r.provider.pr_label())
-                    .unwrap_or("PR");
-                let mut pr_text = format!(" {} #{}", pr_label, pr_number);
-                if let Some(ref state) = entry.pr_state {
-                    pr_text.push_str(&format!(" {}", state.to_lowercase()));
-                }
-                if entry.pr_is_draft.unwrap_or(false) {
-                    pr_text.push_str(" draft");
-                }
-                // Only show URL in verbose mode (ll command)
-                if verbose {
+            // Only show PR info in verbose mode (ll command)
+            if verbose {
+                if let Some(pr_number) = entry.pr_number {
+                    let pr_label = remote_info
+                        .as_ref()
+                        .map(|r| r.provider.pr_label())
+                        .unwrap_or("PR");
+                    let mut pr_text = format!(" {} #{}", pr_label, pr_number);
+                    if let Some(ref state) = entry.pr_state {
+                        pr_text.push_str(&format!(" {}", state.to_lowercase()));
+                    }
+                    if entry.pr_is_draft.unwrap_or(false) {
+                        pr_text.push_str(" draft");
+                    }
                     if let Some(ref url) = entry.pr_url {
                         pr_text.push_str(&format!(" {}", url));
                     }
+                    info_str.push_str(&format!("{}", pr_text.bright_magenta()));
                 }
-                info_str.push_str(&format!("{}", pr_text.bright_magenta()));
             }
 
-            if let Some(ref ci) = entry.ci_state {
-                info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
+            // Only show CI state in verbose mode (ll command)
+            if verbose {
+                if let Some(ref ci) = entry.ci_state {
+                    info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
+                }
             }
         }
 
@@ -379,10 +384,11 @@ pub fn run(
     if remote_branches.contains(&stack.trunk) {
         trunk_info.push_str(&format!("{} ", "☁".bright_blue()));
     }
+    // Color trunk name to match column 0
     if is_trunk_current {
-        trunk_info.push_str(&format!("{}", stack.trunk.bold()));
+        trunk_info.push_str(&format!("{}", stack.trunk.color(trunk_color).bold()));
     } else {
-        trunk_info.push_str(&stack.trunk);
+        trunk_info.push_str(&format!("{}", stack.trunk.color(trunk_color)));
     }
 
     // Show commits ahead/behind for trunk (compared to origin)
