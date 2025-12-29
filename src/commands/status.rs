@@ -313,29 +313,32 @@ pub fn run(
                 }
             }
 
-            if let Some(pr_number) = entry.pr_number {
-                let pr_label = remote_info
-                    .as_ref()
-                    .map(|r| r.provider.pr_label())
-                    .unwrap_or("PR");
-                let mut pr_text = format!(" {} #{}", pr_label, pr_number);
-                if let Some(ref state) = entry.pr_state {
-                    pr_text.push_str(&format!(" {}", state.to_lowercase()));
-                }
-                if entry.pr_is_draft.unwrap_or(false) {
-                    pr_text.push_str(" draft");
-                }
-                // Only show URL in verbose mode (ll command)
-                if verbose {
+            // Only show PR info in verbose mode (ll command)
+            if verbose {
+                if let Some(pr_number) = entry.pr_number {
+                    let pr_label = remote_info
+                        .as_ref()
+                        .map(|r| r.provider.pr_label())
+                        .unwrap_or("PR");
+                    let mut pr_text = format!(" {} #{}", pr_label, pr_number);
+                    if let Some(ref state) = entry.pr_state {
+                        pr_text.push_str(&format!(" {}", state.to_lowercase()));
+                    }
+                    if entry.pr_is_draft.unwrap_or(false) {
+                        pr_text.push_str(" draft");
+                    }
                     if let Some(ref url) = entry.pr_url {
                         pr_text.push_str(&format!(" {}", url));
                     }
+                    info_str.push_str(&format!("{}", pr_text.bright_magenta()));
                 }
-                info_str.push_str(&format!("{}", pr_text.bright_magenta()));
             }
 
-            if let Some(ref ci) = entry.ci_state {
-                info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
+            // Only show CI state in verbose mode (ll command)
+            if verbose {
+                if let Some(ref ci) = entry.ci_state {
+                    info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
+                }
             }
         }
 
