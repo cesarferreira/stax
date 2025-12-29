@@ -281,8 +281,11 @@ pub fn run(
         let mut info_str = String::new();
         info_str.push(' '); // Space after tree
 
+        // Show cloud icon or space for alignment
         if has_remote {
             info_str.push_str(&format!("{} ", "☁".bright_blue()));
+        } else {
+            info_str.push_str("  "); // Space for alignment when no remote
         }
 
         // Color branch names to match their column in the graph
@@ -381,8 +384,11 @@ pub fn run(
 
     let mut trunk_info = String::new();
     trunk_info.push(' '); // Space after tree (same as branches)
+    // Show cloud icon or space for alignment
     if remote_branches.contains(&stack.trunk) {
         trunk_info.push_str(&format!("{} ", "☁".bright_blue()));
+    } else {
+        trunk_info.push_str("  "); // Space for alignment when no remote
     }
     // Color trunk name to match column 0
     if is_trunk_current {
