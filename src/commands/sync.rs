@@ -211,19 +211,91 @@ pub fn run(
                 println!();
             }
 
+            // Track if we need to switch branches at the end
+            let mut switched_from_current = false;
+            let mut new_current = current.clone();
+
             for branch in &merged {
+                let is_current_branch = branch == &current;
+
+                // Get parent branch for context
+                let parent_branch = stack
+                    .branches
+                    .get(branch)
+                    .and_then(|b| b.parent.clone())
+                    .unwrap_or_else(|| stack.trunk.clone());
+
+                let prompt = if is_current_branch {
+                    format!(
+                        "Delete '{}' and checkout '{}'?",
+                        branch,
+                        parent_branch
+                    )
+                } else {
+                    format!("Delete '{}'?", branch)
+                };
+
                 let confirm = if auto_confirm {
                     true
                 } else if quiet {
                     false
                 } else {
                     Confirm::with_theme(&ColorfulTheme::default())
-                        .with_prompt(format!("Delete '{}'?", branch))
+                        .with_prompt(prompt)
                         .default(true)
                         .interact()?
                 };
 
                 if confirm {
+                    // If we're on this branch, checkout parent first
+                    if is_current_branch {
+                        let checkout_status = Command::new("git")
+                            .args(["checkout", &parent_branch])
+                            .current_dir(workdir)
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status();
+
+                        if checkout_status.map(|s| s.success()).unwrap_or(false) {
+                            switched_from_current = true;
+                            new_current = parent_branch.clone();
+                            if !quiet {
+                                println!(
+                                    "    {} checked out {}",
+                                    "→".cyan(),
+                                    parent_branch.cyan()
+                                );
+                            }
+
+                            // Pull latest changes for the parent branch
+                            let pull_status = Command::new("git")
+                                .args(["pull", "--ff-only", &remote_name, &parent_branch])
+                                .current_dir(workdir)
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .status();
+
+                            if let Ok(status) = pull_status {
+                                if status.success() && !quiet {
+                                    println!(
+                                        "    {} pulled latest {}",
+                                        "↓".cyan(),
+                                        parent_branch.cyan()
+                                    );
+                                }
+                            }
+                        } else {
+                            if !quiet {
+                                println!(
+                                    "    {} {}",
+                                    branch.bright_black(),
+                                    "failed to checkout parent, skipping".red()
+                                );
+                            }
+                            continue;
+                        }
+                    }
+
                     // Delete local branch (force delete since we confirmed)
                     let local_status = Command::new("git")
                         .args(["branch", "-D", branch])
@@ -430,20 +502,52 @@ fn find_merged_branches(
         }
     }
 
-    // Method 2: Find orphaned branches (tracked but no longer exist locally or remotely)
-    // Get list of all local branches
-    let local_output = Command::new("git")
-        .args(["branch", "--format=%(refname:short)"])
-        .current_dir(workdir)
-        .output()
-        .context("Failed to list local branches")?;
+    // Method 2: Check PR state from metadata - if PR is merged, branch should be deleted
+    for (branch, info) in &stack.branches {
+        // Skip trunk
+        if branch == &stack.trunk {
+            continue;
+        }
 
-    let local_branches: std::collections::HashSet<String> =
-        String::from_utf8_lossy(&local_output.stdout)
-            .lines()
-            .map(|s| s.trim().to_string())
-            .collect();
+        // Skip if already in merged list
+        if merged.contains(branch) {
+            continue;
+        }
 
+        // Check if PR state is "merged"
+        if info.pr_state.as_deref() == Some("merged") {
+            merged.push(branch.clone());
+        }
+    }
+
+    // Method 3: Check if branch has empty diff against trunk (catches squash/rebase merges)
+    for branch in stack.branches.keys() {
+        // Skip trunk
+        if branch == &stack.trunk {
+            continue;
+        }
+
+        // Skip if already in merged list
+        if merged.contains(branch) {
+            continue;
+        }
+
+        // Check if branch has any changes vs trunk
+        let diff_output = Command::new("git")
+            .args(["diff", "--quiet", &stack.trunk, branch])
+            .current_dir(workdir)
+            .status();
+
+        // --quiet returns 0 if no diff, 1 if there are differences
+        if let Ok(status) = diff_output {
+            if status.success() {
+                // No diff = branch is effectively merged
+                merged.push(branch.clone());
+            }
+        }
+    }
+
+    // Method 4: Check if remote branch was deleted (GitHub deletes branch after merge)
     // Get list of remote branches
     let remote_output = Command::new("git")
         .args(["branch", "-r", "--format=%(refname:short)"])
@@ -457,7 +561,40 @@ fn find_merged_branches(
             .map(|s| s.trim().to_string())
             .collect();
 
-    // Check each tracked branch
+    for branch in stack.branches.keys() {
+        // Skip trunk
+        if branch == &stack.trunk {
+            continue;
+        }
+
+        // Skip if already in merged list
+        if merged.contains(branch) {
+            continue;
+        }
+
+        // Check if remote branch was deleted (strong signal it was merged)
+        let remote_ref = format!("{}/{}", remote_name, branch);
+        if !remote_branches.contains(&remote_ref) {
+            // Remote branch doesn't exist - likely merged and deleted
+            merged.push(branch.clone());
+        }
+    }
+
+    // Method 5: Find orphaned branches (tracked but no longer exist locally or remotely)
+    // Get list of all local branches
+    let local_output = Command::new("git")
+        .args(["branch", "--format=%(refname:short)"])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to list local branches")?;
+
+    let local_branches: std::collections::HashSet<String> =
+        String::from_utf8_lossy(&local_output.stdout)
+            .lines()
+            .map(|s| s.trim().to_string())
+            .collect();
+
+    // Check each tracked branch (remote_branches already fetched in Method 4)
     for branch in stack.branches.keys() {
         // Skip trunk
         if branch == &stack.trunk {

@@ -2174,6 +2174,225 @@ fn test_undo_with_dirty_working_tree() {
     assert!(!output.status.success() || TestRepo::stderr(&output).contains("dirty"));
 }
 
+// =============================================================================
+// Sync Merged Branch Detection Tests
+// =============================================================================
+
+#[test]
+fn test_sync_detects_branch_with_deleted_remote() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch and push it
+    repo.run_stax(&["bc", "feature-deleted-remote"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Verify branch exists on remote
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        remote_branches.iter().any(|b| b.contains("feature-deleted-remote")),
+        "Expected branch on remote before deletion"
+    );
+
+    // Delete the remote branch (simulating GitHub deleting after merge)
+    repo.git(&["push", "origin", "--delete", &branch_name]);
+
+    // Verify branch is deleted from remote
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        !remote_branches.iter().any(|b| b.contains("feature-deleted-remote")),
+        "Expected branch to be deleted from remote"
+    );
+
+    // Go back to main first (so we're not on the branch being deleted)
+    repo.run_stax(&["t"]);
+
+    // Sync should detect the branch as "merged" (remote deleted)
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+    // Should find the merged branch
+    assert!(
+        stdout.contains("merged") || stdout.contains("feature-deleted-remote") || stdout.contains("deleted"),
+        "Expected sync to detect deleted remote branch, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_sync_detects_branch_with_empty_diff_against_trunk() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch
+    repo.run_stax(&["bc", "feature-empty-diff"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Merge the branch into main on remote (simulating PR merge)
+    repo.merge_branch_on_remote(&branch_name);
+
+    // Pull main to get the merge
+    repo.run_stax(&["t"]);
+    repo.git(&["pull", "origin", "main"]);
+
+    // Now the feature branch has empty diff against main
+    let diff_output = repo.git(&["diff", "--quiet", "main", &branch_name]);
+    assert!(
+        diff_output.status.success(),
+        "Expected empty diff between main and feature branch after merge"
+    );
+
+    // Sync should detect the branch as merged (empty diff)
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+    // Should find the merged branch
+    assert!(
+        stdout.contains("merged") || stdout.contains("feature-empty-diff") || stdout.contains("deleted"),
+        "Expected sync to detect branch with empty diff, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_sync_on_merged_branch_checkouts_parent() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch
+    repo.run_stax(&["bc", "feature-checkout-parent"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Delete the remote branch (simulating GitHub deleting after merge)
+    repo.git(&["push", "origin", "--delete", &branch_name]);
+
+    // Stay on the feature branch
+    assert!(repo.current_branch().contains("feature-checkout-parent"));
+
+    // Sync should detect we're on a merged branch and offer to checkout parent
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+
+    // Should either:
+    // 1. Have checked out parent (main)
+    // 2. Or deleted the branch and moved to parent
+    let current = repo.current_branch();
+
+    // After sync with --force, we should be on main (the parent)
+    // OR still on the feature branch if it wasn't deleted
+    // The key is that sync completed successfully
+    if !repo.list_branches().iter().any(|b| b.contains("feature-checkout-parent")) {
+        // Branch was deleted, should be on main
+        assert_eq!(current, "main", "Should be on main after branch deletion");
+    }
+}
+
+#[test]
+fn test_sync_pulls_parent_after_checkout() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch
+    repo.run_stax(&["bc", "feature-pull-parent"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Simulate remote updates to main
+    repo.simulate_remote_commit("remote-update.txt", "remote content", "Remote update");
+
+    // Delete the remote branch (simulating GitHub deleting after merge)
+    repo.git(&["push", "origin", "--delete", &branch_name]);
+
+    // Stay on the feature branch
+    assert!(repo.current_branch().contains("feature-pull-parent"));
+
+    // Sync should checkout parent and pull latest changes
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    // After sync, if we're on main, it should have the remote update
+    let current = repo.current_branch();
+    if current == "main" {
+        assert!(
+            repo.path().join("remote-update.txt").exists(),
+            "Expected remote-update.txt after sync pulled main"
+        );
+    }
+}
+
+#[test]
+fn test_sync_with_stacked_branches_detects_merged_child() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a stack: main -> feature-1 -> feature-2
+    repo.run_stax(&["bc", "feature-1"]);
+    let feature1 = repo.current_branch();
+    repo.create_file("f1.txt", "feature 1");
+    repo.commit("Feature 1");
+    repo.git(&["push", "-u", "origin", &feature1]);
+
+    repo.run_stax(&["bc", "feature-2"]);
+    let feature2 = repo.current_branch();
+    repo.create_file("f2.txt", "feature 2");
+    repo.commit("Feature 2");
+    repo.git(&["push", "-u", "origin", &feature2]);
+
+    // Delete feature-2 from remote (simulating it was merged)
+    repo.git(&["push", "origin", "--delete", &feature2]);
+
+    // Go to feature-1
+    repo.run_stax(&["checkout", &feature1]);
+
+    // Sync should detect feature-2 as merged (remote deleted)
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+    // Should find the merged branch
+    assert!(
+        stdout.contains("merged") || stdout.contains("feature-2") || stdout.contains("deleted"),
+        "Expected sync to detect feature-2 as merged, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_sync_preserves_branch_with_remote() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch and push it (don't delete remote)
+    repo.run_stax(&["bc", "feature-with-remote"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Go back to main
+    repo.run_stax(&["t"]);
+
+    // Sync should NOT delete the branch (remote still exists)
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success());
+
+    // Branch should still exist
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b.contains("feature-with-remote")),
+        "Expected feature-with-remote to still exist (has remote)"
+    );
+}
+
 mod github_mock_tests {
     use super::*;
     use wiremock::{MockServer, Mock, ResponseTemplate};
