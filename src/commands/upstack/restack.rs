@@ -24,7 +24,26 @@ pub fn run() -> Result<()> {
         .collect();
 
     if branches_to_restack.is_empty() {
-        println!("{}", "✓ Upstack is up to date, nothing to restack.".green());
+        // Check if the current branch itself needs restacking
+        let current_needs_restack = stack
+            .branches
+            .get(&current)
+            .map(|b| b.needs_restack)
+            .unwrap_or(false);
+
+        if current_needs_restack {
+            println!("{}", "✓ No descendants need restacking.".green());
+            println!(
+                "{}",
+                format!(
+                    "  Tip: '{}' itself needs restack. Run {} to include it.",
+                    current,
+                    "stax restack".cyan()
+                )
+            );
+        } else {
+            println!("{}", "✓ Upstack is up to date, nothing to restack.".green());
+        }
         return Ok(());
     }
 
