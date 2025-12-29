@@ -608,7 +608,7 @@ fn find_merged_branches(
             .map(|s| s.trim().to_string())
             .collect();
 
-    for branch in stack.branches.keys() {
+    for (branch, info) in &stack.branches {
         // Skip trunk
         if branch == &stack.trunk {
             continue;
@@ -619,10 +619,16 @@ fn find_merged_branches(
             continue;
         }
 
+        // Only consider "remote deleted" if branch had a PR before (was pushed)
+        // This prevents false positives for branches that were never pushed
+        if info.pr_number.is_none() {
+            continue;
+        }
+
         // Check if remote branch was deleted (strong signal it was merged)
         let remote_ref = format!("{}/{}", remote_name, branch);
         if !remote_branches.contains(&remote_ref) {
-            // Remote branch doesn't exist - likely merged and deleted
+            // Remote branch doesn't exist and had a PR - likely merged and deleted
             merged.push(branch.clone());
         }
     }
