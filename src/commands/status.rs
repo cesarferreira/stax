@@ -11,15 +11,16 @@ use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
 // Colors for different columns (fp-style: each column has its own color)
+// Avoiding yellow since it's used for "needs restack" indicator
 const COLUMN_COLORS: &[Color] = &[
     Color::Cyan,
     Color::Green,
-    Color::Yellow,
-    Color::Red,
     Color::Magenta,
     Color::Blue,
     Color::BrightCyan,
     Color::BrightGreen,
+    Color::BrightMagenta,
+    Color::BrightBlue,
 ];
 
 /// Represents a branch in the display with its column position
@@ -284,11 +285,12 @@ pub fn run(
             info_str.push_str(&format!("{} ", "☁".bright_blue()));
         }
 
-        // Keep branch names white/neutral, only tree graphics are colored by stack
+        // Color branch names to match their column in the graph
+        let branch_color = COLUMN_COLORS[db.column % COLUMN_COLORS.len()];
         if is_current {
-            info_str.push_str(&format!("{}", branch.bold()));
+            info_str.push_str(&format!("{}", branch.color(branch_color).bold()));
         } else {
-            info_str.push_str(branch);
+            info_str.push_str(&format!("{}", branch.color(branch_color)));
         }
 
         if let Some(entry) = entry {
@@ -382,10 +384,11 @@ pub fn run(
     if remote_branches.contains(&stack.trunk) {
         trunk_info.push_str(&format!("{} ", "☁".bright_blue()));
     }
+    // Color trunk name to match column 0
     if is_trunk_current {
-        trunk_info.push_str(&format!("{}", stack.trunk.bold()));
+        trunk_info.push_str(&format!("{}", stack.trunk.color(trunk_color).bold()));
     } else {
-        trunk_info.push_str(&stack.trunk);
+        trunk_info.push_str(&format!("{}", stack.trunk.color(trunk_color)));
     }
 
     // Show commits ahead/behind for trunk (compared to origin)
