@@ -1,5 +1,7 @@
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
+use crate::ops::receipt::{OpKind, PlanSummary};
+use crate::ops::tx::Transaction;
 use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -71,6 +73,16 @@ pub fn run(all: bool, r#continue: bool, quiet: bool) -> Result<()> {
         );
     }
 
+    // Begin transaction
+    let mut tx = Transaction::begin(OpKind::Restack, &repo, quiet)?;
+    tx.plan_branches(&repo, &branches_to_restack)?;
+    tx.set_plan_summary(PlanSummary {
+        branches_to_rebase: branches_to_restack.len(),
+        branches_to_push: 0,
+        description: vec![format!("Restack {} branch(es)", branches_to_restack.len())],
+    });
+    tx.snapshot()?;
+
     let mut summary: Vec<(String, String)> = Vec::new();
 
     for branch in &branches_to_restack {
@@ -97,6 +109,10 @@ pub fn run(all: bool, r#continue: bool, quiet: bool) -> Result<()> {
                     ..meta
                 };
                 updated_meta.write(repo.inner(), branch)?;
+                
+                // Record the after-OID for this branch
+                tx.record_after(&repo, branch)?;
+                
                 if !quiet {
                     println!("    {}", "✓ done".green());
                 }
@@ -114,6 +130,14 @@ pub fn run(all: bool, r#continue: bool, quiet: bool) -> Result<()> {
                     println!("{}", "Stash kept to avoid conflicts.".yellow());
                 }
                 summary.push((branch.clone(), "conflict".to_string()));
+                
+                // Finish transaction with error
+                tx.finish_err(
+                    "Rebase conflict",
+                    Some("rebase"),
+                    Some(branch),
+                )?;
+                
                 return Ok(());
             }
         }
@@ -121,6 +145,9 @@ pub fn run(all: bool, r#continue: bool, quiet: bool) -> Result<()> {
 
     // Return to original branch
     repo.checkout(&current)?;
+
+    // Finish transaction successfully
+    tx.finish_ok()?;
 
     if !quiet {
         println!();

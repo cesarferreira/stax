@@ -133,6 +133,58 @@ Rearrange branches within your stack without manually running reparent commands:
 | `stax u` / `stax d` | Move up/down the stack |
 | `stax m` | Modify - stage all changes and amend current commit |
 | `stax pr` | Open current branch's PR in browser |
+| `stax undo` | Undo last operation (restack, submit, etc.) |
+
+## Safe History Rewriting with Undo
+
+Stax makes rebasing and force-pushing **safe** with automatic backups and one-command recovery:
+
+```bash
+# Make a mistake while restacking? No problem.
+stax restack
+# ✗ conflict in feature/auth
+# Your repo is recoverable via: stax undo
+
+# Instantly restore to before the restack
+stax undo
+# ✓ Undone! Restored 3 branch(es).
+```
+
+### How It Works
+
+Every potentially-destructive operation (`restack`, `submit`, `sync --restack`, TUI reorder) is **transactional**:
+
+1. **Snapshot** - Before touching anything, stax records the current commit SHA of each affected branch
+2. **Backup refs** - Creates Git refs at `refs/stax/backups/<op-id>/<branch>` pointing to original commits
+3. **Execute** - Performs the operation (rebase, force-push, etc.)
+4. **Receipt** - Saves an operation receipt to `.git/stax/ops/<op-id>.json`
+
+If anything goes wrong, `stax undo` reads the receipt and restores all branches to their exact prior state.
+
+### Undo & Redo Commands
+
+| Command | Description |
+|---------|-------------|
+| `stax undo` | Undo the last operation |
+| `stax undo <op-id>` | Undo a specific operation |
+| `stax redo` | Redo (re-apply) the last undone operation |
+
+**Flags:**
+- `--yes` - Auto-approve prompts (useful for scripts)
+- `--no-push` - Only restore local branches, don't touch remote
+
+### Remote Recovery
+
+If the undone operation had force-pushed branches, stax will prompt:
+
+```bash
+stax undo
+# ✓ Restored 2 local branch(es)
+# This operation force-pushed 2 branch(es) to remote.
+# Force-push to restore remote branches too? [y/N]
+```
+
+Use `--yes` to auto-approve or `--no-push` to skip remote restoration.
 
 ## Real-World Example
 
@@ -316,6 +368,13 @@ stax uses the same metadata format as freephite and supports similar commands:
 |---------|-------------|
 | `stax` | Launch interactive TUI |
 
+### Recovery
+| Command | Description |
+|---------|-------------|
+| `stax undo` | Undo last operation (restack, submit, etc.) |
+| `stax undo <op-id>` | Undo a specific operation by ID |
+| `stax redo` | Re-apply the last undone operation |
+
 ### Utilities
 | Command | Description |
 |---------|-------------|
@@ -339,6 +398,8 @@ stax uses the same metadata format as freephite and supports similar commands:
 - `stax submit --assignees alice` - Assign users
 - `stax sync --restack` - Sync and rebase all branches
 - `stax status --json` - Output as JSON
+- `stax undo --yes` - Undo without prompts
+- `stax undo --no-push` - Undo locally only, skip remote
 
 **CI/Automation example:**
 ```bash

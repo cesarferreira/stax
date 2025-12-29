@@ -6,6 +6,10 @@ mod widgets;
 use app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
 use event::{poll_event, KeyAction};
 
+use crate::engine::BranchMetadata;
+use crate::git::RebaseResult;
+use crate::ops::receipt::{OpKind, PlanSummary};
+use crate::ops::tx::Transaction;
 use anyhow::Result;
 use crossterm::{
     event::Event,
@@ -407,7 +411,7 @@ fn run_external_command(app: &mut App, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Apply reorder changes - reparent branches and trigger restack
+/// Apply reorder changes - reparent branches and trigger restack (as single transaction)
 fn apply_reorder_changes(app: &mut App) -> Result<()> {
     // Get the reparent operations before clearing state
     let reparent_ops = app.get_reparent_operations();
@@ -431,27 +435,117 @@ fn apply_reorder_changes(app: &mut App) -> Result<()> {
         return Ok(());
     }
 
-    app.set_status(format!("Reparenting {} branch(es)...", reparent_ops.len()));
+    app.set_status(format!("Applying reorder ({} branch(es))...", reparent_ops.len()));
     
-    // Apply each reparent operation using the CLI command
+    // Collect all affected branches (those being reparented)
+    let affected_branches: Vec<String> = reparent_ops.iter().map(|(b, _)| b.clone()).collect();
+    
+    // Begin single transaction for entire reorder operation
+    let mut tx = Transaction::begin(OpKind::Reorder, &app.repo, true)?;
+    tx.plan_branches(&app.repo, &affected_branches)?;
+    tx.set_plan_summary(PlanSummary {
+        branches_to_rebase: affected_branches.len(),
+        branches_to_push: 0,
+        description: vec![format!("Reorder {} branch(es)", affected_branches.len())],
+    });
+    tx.snapshot()?;
+    
+    // Apply each reparent operation directly (update metadata)
     for (branch, new_parent) in &reparent_ops {
-        let result = run_external_command(app, &[
-            "branch", "reparent", 
-            "--branch", branch, 
-            "--parent", new_parent
-        ]);
+        let parent_rev = match app.repo.branch_commit(new_parent) {
+            Ok(rev) => rev,
+            Err(e) => {
+                tx.finish_err(
+                    &format!("Failed to get commit for parent {}: {}", new_parent, e),
+                    Some("reparent"),
+                    Some(branch),
+                )?;
+                app.set_status(format!("✗ Failed to reparent {}", branch));
+                return Ok(());
+            }
+        };
         
-        if let Err(e) = result {
-            app.set_status(format!("✗ Failed to reparent {}: {}", branch, e));
+        let merge_base = app.repo.merge_base(new_parent, branch).unwrap_or(parent_rev.clone());
+        
+        // Read existing metadata or create new
+        let existing = BranchMetadata::read(app.repo.inner(), branch)?;
+        let updated = if let Some(meta) = existing {
+            BranchMetadata {
+                parent_branch_name: new_parent.clone(),
+                parent_branch_revision: merge_base,
+                ..meta
+            }
+        } else {
+            BranchMetadata::new(new_parent, &merge_base)
+        };
+        
+        if let Err(e) = updated.write(app.repo.inner(), branch) {
+            tx.finish_err(
+                &format!("Failed to write metadata for {}: {}", branch, e),
+                Some("reparent"),
+                Some(branch),
+            )?;
+            app.set_status(format!("✗ Failed to reparent {}", branch));
             return Ok(());
         }
     }
     
-    // Now restack all affected branches
-    app.set_status("Restacking affected branches...");
-    run_external_command(app, &["restack", "--quiet"])?;
+    // Now restack all affected branches (in order from the pending chain)
+    let current_branch = app.repo.current_branch()?;
     
-    app.set_status(format!("✓ Reparented {} branch(es) and restacked", reparent_ops.len()));
+    for (branch, new_parent) in &reparent_ops {
+        // Checkout and rebase
+        if let Err(e) = app.repo.checkout(branch) {
+            tx.finish_err(
+                &format!("Failed to checkout {}: {}", branch, e),
+                Some("restack"),
+                Some(branch),
+            )?;
+            app.set_status(format!("✗ Failed to checkout {}", branch));
+            return Ok(());
+        }
+        
+        match app.repo.rebase(new_parent) {
+            Ok(RebaseResult::Success) => {
+                // Update metadata with new parent revision
+                if let Some(mut meta) = BranchMetadata::read(app.repo.inner(), branch)? {
+                    if let Ok(new_parent_rev) = app.repo.branch_commit(new_parent) {
+                        meta.parent_branch_revision = new_parent_rev;
+                        let _ = meta.write(app.repo.inner(), branch);
+                    }
+                }
+                
+                // Record after-OID
+                let _ = tx.record_after(&app.repo, branch);
+            }
+            Ok(RebaseResult::Conflict) => {
+                tx.finish_err(
+                    "Rebase conflict",
+                    Some("restack"),
+                    Some(branch),
+                )?;
+                app.set_status(format!("✗ Conflict rebasing {} (stax undo to recover)", branch));
+                return Ok(());
+            }
+            Err(e) => {
+                tx.finish_err(
+                    &format!("Rebase failed: {}", e),
+                    Some("restack"),
+                    Some(branch),
+                )?;
+                app.set_status(format!("✗ Rebase failed for {}", branch));
+                return Ok(());
+            }
+        }
+    }
+    
+    // Return to original branch
+    let _ = app.repo.checkout(&current_branch);
+    
+    // Finish transaction successfully
+    tx.finish_ok()?;
+    
+    app.set_status(format!("✓ Reordered {} branch(es)", reparent_ops.len()));
     
     Ok(())
 }

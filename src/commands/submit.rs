@@ -3,6 +3,8 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::github::pr::{generate_stack_comment, StackPrInfo};
 use crate::github::GitHubClient;
+use crate::ops::receipt::{OpKind, PlanSummary};
+use crate::ops::tx::Transaction;
 use crate::remote::{self, Provider, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -322,6 +324,31 @@ pub fn run(
     // Now push branches that need it
     let branches_needing_push: Vec<_> = plans.iter().filter(|p| p.needs_push).collect();
 
+    // Create transaction if we have branches to push
+    let mut tx = if !branches_needing_push.is_empty() {
+        let mut tx = Transaction::begin(OpKind::Submit, &repo, quiet)?;
+        
+        // Plan local branches (for backup)
+        let branch_names: Vec<String> = branches_needing_push.iter().map(|p| p.branch.clone()).collect();
+        tx.plan_branches(&repo, &branch_names)?;
+        
+        // Plan remote refs (record current remote state before pushing)
+        for plan in &branches_needing_push {
+            tx.plan_remote_branch(&repo, &remote_info.name, &plan.branch)?;
+        }
+        
+        tx.set_plan_summary(PlanSummary {
+            branches_to_rebase: 0,
+            branches_to_push: branches_needing_push.len(),
+            description: vec![format!("Submit {} branch(es)", branches_needing_push.len())],
+        });
+        tx.snapshot()?;
+        
+        Some(tx)
+    } else {
+        None
+    };
+
     if !branches_needing_push.is_empty() {
         if !quiet {
             println!();
@@ -333,14 +360,42 @@ pub fn run(
                 print!("  {}... ", plan.branch);
                 std::io::Write::flush(&mut std::io::stdout()).ok();
             }
-            push_branch(repo.workdir()?, &remote_info.name, &plan.branch)?;
-            if !quiet {
-                println!("{}", "done".green());
+            
+            // Get local OID before push (this is what we're pushing)
+            let local_oid = repo.branch_commit(&plan.branch).ok();
+            
+            match push_branch(repo.workdir()?, &remote_info.name, &plan.branch) {
+                Ok(()) => {
+                    // Record after-OIDs
+                    if let Some(ref mut tx) = tx {
+                        let _ = tx.record_after(&repo, &plan.branch);
+                        if let Some(oid) = &local_oid {
+                            tx.record_remote_after(&remote_info.name, &plan.branch, oid);
+                        }
+                    }
+                    if !quiet {
+                        println!("{}", "done".green());
+                    }
+                }
+                Err(e) => {
+                    if let Some(tx) = tx {
+                        tx.finish_err(
+                            &format!("Push failed: {}", e),
+                            Some("push"),
+                            Some(&plan.branch),
+                        )?;
+                    }
+                    return Err(e);
+                }
             }
         }
     }
 
     if no_pr {
+        // Finish transaction successfully
+        if let Some(tx) = tx {
+            tx.finish_ok()?;
+        }
         if !quiet {
             println!();
             println!("{}", "✓ Branches pushed successfully!".green().bold());
@@ -464,29 +519,26 @@ pub fn run(
             }
         }
 
-        // Update a single stack summary comment
-        if !pr_infos.is_empty() {
-            let summary_pr = pr_infos
-                .iter()
-                .find(|p| p.branch == current && p.pr_number.is_some())
-                .and_then(|p| p.pr_number)
-                .or_else(|| pr_infos.iter().rev().find_map(|p| p.pr_number));
+        // Update stack comment on ALL PRs in the stack
+        let prs_with_numbers: Vec<_> = pr_infos
+            .iter()
+            .filter_map(|p| p.pr_number.map(|num| (num, p.branch.clone())))
+            .collect();
 
-            if let Some(num) = summary_pr {
-                if !quiet {
-                    print!("  Updating stack comment on #{}... ", num);
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                }
-                let stack_comment = generate_stack_comment(
-                    &pr_infos,
-                    num,
-                    &remote_info,
-                    &stack.trunk,
-                );
-                client.update_stack_comment(num, &stack_comment).await?;
-                if !quiet {
-                    println!("{}", "done".green());
-                }
+        for (pr_number, _branch) in &prs_with_numbers {
+            if !quiet {
+                print!("  Updating stack comment on #{}... ", pr_number);
+                std::io::Write::flush(&mut std::io::stdout()).ok();
+            }
+            let stack_comment = generate_stack_comment(
+                &pr_infos,
+                *pr_number,
+                &remote_info,
+                &stack.trunk,
+            );
+            client.update_stack_comment(*pr_number, &stack_comment).await?;
+            if !quiet {
+                println!("{}", "done".green());
             }
         }
 
@@ -511,12 +563,17 @@ pub fn run(
         Ok::<(), anyhow::Error>(())
     })?;
 
+    // Finish transaction successfully
+    if let Some(tx) = tx {
+        tx.finish_ok()?;
+    }
+
     Ok(())
 }
 
 fn push_branch(workdir: &std::path::Path, remote: &str, branch: &str) -> Result<()> {
     let status = Command::new("git")
-        .args(["push", "-f", remote, branch])
+        .args(["push", "-f", "-u", remote, branch])
         .current_dir(workdir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

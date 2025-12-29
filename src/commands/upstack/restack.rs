@@ -1,5 +1,7 @@
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
+use crate::ops::receipt::{OpKind, PlanSummary};
+use crate::ops::tx::Transaction;
 use anyhow::Result;
 use colored::Colorize;
 
@@ -8,9 +10,11 @@ pub fn run() -> Result<()> {
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
 
-    // Get descendants that need restacking
-    let descendants = stack.descendants(&current);
-    let branches_to_restack: Vec<String> = descendants
+    // Get current branch + descendants that need restacking
+    let mut upstack = vec![current.clone()];
+    upstack.extend(stack.descendants(&current));
+
+    let branches_to_restack: Vec<String> = upstack
         .into_iter()
         .filter(|b| {
             stack
@@ -22,15 +26,43 @@ pub fn run() -> Result<()> {
         .collect();
 
     if branches_to_restack.is_empty() {
-        println!("{}", "✓ Upstack is up to date, nothing to restack.".green());
+        // Check if the current branch itself needs restacking
+        let current_needs_restack = stack
+            .branches
+            .get(&current)
+            .map(|b| b.needs_restack)
+            .unwrap_or(false);
+
+        if current_needs_restack {
+            println!("{}", "✓ No descendants need restacking.".green());
+            println!(
+                "{}",
+                format!(
+                    "  Tip: '{}' itself needs restack. Run {} to include it.",
+                    current,
+                    "stax restack".cyan()
+                )
+            );
+        } else {
+            println!("{}", "✓ Upstack is up to date, nothing to restack.".green());
+        }
         return Ok(());
     }
 
     println!(
-        "Restacking {} branch(es) above {}...",
-        branches_to_restack.len().to_string().cyan(),
-        current.blue()
+        "Restacking {} branch(es)...",
+        branches_to_restack.len().to_string().cyan()
     );
+
+    // Begin transaction
+    let mut tx = Transaction::begin(OpKind::UpstackRestack, &repo, false)?;
+    tx.plan_branches(&repo, &branches_to_restack)?;
+    tx.set_plan_summary(PlanSummary {
+        branches_to_rebase: branches_to_restack.len(),
+        branches_to_push: 0,
+        description: vec![format!("Upstack restack {} branch(es)", branches_to_restack.len())],
+    });
+    tx.snapshot()?;
 
     for branch in &branches_to_restack {
         let meta = match BranchMetadata::read(repo.inner(), branch)? {
@@ -54,6 +86,10 @@ pub fn run() -> Result<()> {
                     ..meta
                 };
                 updated_meta.write(repo.inner(), branch)?;
+                
+                // Record the after-OID for this branch
+                tx.record_after(&repo, branch)?;
+                
                 println!("    {}", "✓ done".green());
             }
             RebaseResult::Conflict => {
@@ -61,6 +97,14 @@ pub fn run() -> Result<()> {
                 println!();
                 println!("{}", "Resolve conflicts and run:".yellow());
                 println!("  {}", "stax continue".cyan());
+                
+                // Finish transaction with error
+                tx.finish_err(
+                    "Rebase conflict",
+                    Some("rebase"),
+                    Some(branch),
+                )?;
+                
                 return Ok(());
             }
         }
@@ -68,6 +112,9 @@ pub fn run() -> Result<()> {
 
     // Return to original branch
     repo.checkout(&current)?;
+
+    // Finish transaction successfully
+    tx.finish_ok()?;
 
     println!();
     println!("{}", "✓ Upstack restacked successfully!".green());

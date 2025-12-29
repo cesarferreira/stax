@@ -4,6 +4,7 @@ mod config;
 mod engine;
 mod git;
 mod github;
+mod ops;
 mod remote;
 mod tui;
 
@@ -290,6 +291,36 @@ enum Commands {
         literal: bool,
     },
 
+    /// Undo the last stax operation (or a specific one)
+    Undo {
+        /// Operation ID to undo (defaults to last)
+        op_id: Option<String>,
+        /// Auto-approve prompts
+        #[arg(long)]
+        yes: bool,
+        /// Don't restore remote refs (local only)
+        #[arg(long)]
+        no_push: bool,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
+    },
+
+    /// Redo the last undone stax operation
+    Redo {
+        /// Operation ID to redo (defaults to last)
+        op_id: Option<String>,
+        /// Auto-approve prompts
+        #[arg(long)]
+        yes: bool,
+        /// Don't restore remote refs (local only)
+        #[arg(long)]
+        no_push: bool,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
+    },
+
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
     Bc {
@@ -557,6 +588,8 @@ fn main() -> Result<()> {
         } => commands::branch::create::run(name, message, from, prefix, all),
         Commands::Pr => commands::pr::run(),
         Commands::Rename { name, edit, push, literal } => commands::branch::rename::run(name, edit, push, literal),
+        Commands::Undo { op_id, yes, no_push, quiet } => commands::undo::run(op_id, yes, no_push, quiet),
+        Commands::Redo { op_id, yes, no_push, quiet } => commands::redo::run(op_id, yes, no_push, quiet),
         Commands::Branch(cmd) => match cmd {
             BranchCommands::Create {
                 name,

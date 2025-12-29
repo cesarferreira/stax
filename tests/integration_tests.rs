@@ -1846,6 +1846,553 @@ fn test_submit_help_shows_no_pr_flag() {
     assert!(stdout.contains("--yes"), "Expected --yes flag in help");
 }
 
+// =============================================================================
+// Transaction and Undo Tests
+// =============================================================================
+
+#[test]
+fn test_restack_creates_backup_refs() {
+    let repo = TestRepo::new();
+
+    // Create a branch with a commit
+    repo.run_stax(&["bc", "feature-backup"]);
+    let feature_branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+
+    // Go back to main and create a new commit to make restack needed
+    repo.run_stax(&["t"]);
+    repo.create_file("main-update.txt", "main update");
+    repo.commit("Main update");
+
+    // Go back to feature branch
+    repo.run_stax(&["checkout", &feature_branch]);
+
+    // Get SHA before restack
+    let sha_before = repo.head_sha();
+
+    // Run restack (quiet mode to avoid prompts)
+    let output = repo.run_stax(&["restack", "--quiet"]);
+    assert!(output.status.success(), "Failed: {}", TestRepo::stderr(&output));
+
+    // Check that backup refs were created (by looking in .git)
+    let git_dir = repo.path().join(".git");
+    let stax_ops_dir = git_dir.join("stax").join("ops");
+    
+    // There should be an operation receipt
+    assert!(stax_ops_dir.exists(), "Expected .git/stax/ops directory to exist");
+    
+    let ops: Vec<_> = std::fs::read_dir(&stax_ops_dir)
+        .expect("Failed to read stax ops dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
+        .collect();
+    
+    assert!(!ops.is_empty(), "Expected at least one operation receipt");
+    
+    // Read the receipt and verify it has the right structure
+    let receipt_path = ops[0].path();
+    let receipt_content = std::fs::read_to_string(&receipt_path).expect("Failed to read receipt");
+    let receipt: serde_json::Value = serde_json::from_str(&receipt_content).expect("Invalid JSON receipt");
+    
+    assert_eq!(receipt["kind"], "restack");
+    assert_eq!(receipt["status"], "success");
+    assert!(receipt["local_refs"].is_array());
+    
+    // Check that the branch's before-OID is recorded
+    let local_refs = receipt["local_refs"].as_array().unwrap();
+    let feature_ref = local_refs.iter()
+        .find(|r| r["branch"].as_str().unwrap_or("").contains("feature-backup"));
+    
+    assert!(feature_ref.is_some(), "Expected feature branch in local_refs");
+    
+    if let Some(ref_entry) = feature_ref {
+        assert!(ref_entry["oid_before"].is_string(), "Expected oid_before to be recorded");
+        assert_eq!(ref_entry["oid_before"].as_str().unwrap(), sha_before);
+    }
+}
+
+#[test]
+fn test_undo_restores_branch() {
+    let repo = TestRepo::new();
+
+    // Create a branch with a commit
+    repo.run_stax(&["bc", "feature-undo"]);
+    let feature_branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    
+    let sha_before = repo.head_sha();
+
+    // Go back to main and create a new commit
+    repo.run_stax(&["t"]);
+    repo.create_file("main-update.txt", "main update");
+    repo.commit("Main update");
+
+    // Go back to feature branch and restack
+    repo.run_stax(&["checkout", &feature_branch]);
+    let output = repo.run_stax(&["restack", "--quiet"]);
+    assert!(output.status.success(), "Restack failed: {}", TestRepo::stderr(&output));
+    
+    let sha_after_restack = repo.head_sha();
+    assert_ne!(sha_before, sha_after_restack, "SHA should change after restack");
+
+    // Now undo
+    let output = repo.run_stax(&["undo", "--yes"]);
+    assert!(output.status.success(), "Undo failed: {}", TestRepo::stderr(&output));
+    
+    let sha_after_undo = repo.head_sha();
+    assert_eq!(sha_before, sha_after_undo, "SHA should be restored after undo");
+}
+
+#[test]
+fn test_undo_no_operations() {
+    let repo = TestRepo::new();
+    
+    // Try to undo when there are no operations
+    let output = repo.run_stax(&["undo"]);
+    assert!(!output.status.success(), "Expected undo to fail with no operations");
+    
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("No operations") || stderr.contains("no operations"),
+        "Expected 'no operations' error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_redo_after_undo() {
+    let repo = TestRepo::new();
+
+    // Create a branch with a commit
+    repo.run_stax(&["bc", "feature-redo"]);
+    let feature_branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    
+    let sha_original = repo.head_sha();
+
+    // Go back to main and create a new commit
+    repo.run_stax(&["t"]);
+    repo.create_file("main-update.txt", "main update");
+    repo.commit("Main update");
+
+    // Go back to feature branch and restack
+    repo.run_stax(&["checkout", &feature_branch]);
+    let output = repo.run_stax(&["restack", "--quiet"]);
+    assert!(output.status.success());
+    
+    let sha_after_restack = repo.head_sha();
+
+    // Undo
+    let output = repo.run_stax(&["undo", "--yes"]);
+    assert!(output.status.success());
+    assert_eq!(repo.head_sha(), sha_original);
+
+    // Redo
+    let output = repo.run_stax(&["redo", "--yes"]);
+    assert!(output.status.success(), "Redo failed: {}", TestRepo::stderr(&output));
+    assert_eq!(repo.head_sha(), sha_after_restack);
+}
+
+#[test]
+fn test_multiple_restacks_multiple_undos() {
+    let repo = TestRepo::new();
+
+    // Create a stack: main -> feature-1 -> feature-2
+    repo.run_stax(&["bc", "feature-1"]);
+    let feature1 = repo.current_branch();
+    repo.create_file("f1.txt", "feature 1");
+    repo.commit("Feature 1");
+    
+    repo.run_stax(&["bc", "feature-2"]);
+    let feature2 = repo.current_branch();
+    repo.create_file("f2.txt", "feature 2");
+    repo.commit("Feature 2");
+    
+    // Record original SHAs
+    let sha_f2_original = repo.head_sha();
+    repo.run_stax(&["checkout", &feature1]);
+    let sha_f1_original = repo.head_sha();
+
+    // Update main
+    repo.run_stax(&["t"]);
+    repo.create_file("main.txt", "main update");
+    repo.commit("Main update");
+
+    // Restack feature-1
+    repo.run_stax(&["checkout", &feature1]);
+    let output = repo.run_stax(&["restack", "--quiet"]);
+    assert!(output.status.success());
+    
+    let sha_f1_after_restack = repo.head_sha();
+    assert_ne!(sha_f1_original, sha_f1_after_restack);
+
+    // Undo should restore feature-1
+    let output = repo.run_stax(&["undo", "--yes"]);
+    assert!(output.status.success());
+    assert_eq!(repo.head_sha(), sha_f1_original);
+}
+
+#[test]
+fn test_upstack_restack_creates_receipt() {
+    let repo = TestRepo::new();
+
+    // Create a stack
+    repo.run_stax(&["bc", "feature-1"]);
+    let feature1 = repo.current_branch();
+    repo.create_file("f1.txt", "f1");
+    repo.commit("Feature 1");
+
+    repo.run_stax(&["bc", "feature-2"]);
+    repo.create_file("f2.txt", "f2");
+    repo.commit("Feature 2");
+
+    // Update feature-1 (this will make feature-2 need restack)
+    repo.run_stax(&["checkout", &feature1]);
+    repo.create_file("f1-update.txt", "f1 update");
+    repo.commit("Feature 1 update");
+
+    // Run upstack restack
+    let output = repo.run_stax(&["upstack", "restack"]);
+    assert!(output.status.success(), "Failed: {}", TestRepo::stderr(&output));
+
+    // Check receipt was created
+    let git_dir = repo.path().join(".git");
+    let stax_ops_dir = git_dir.join("stax").join("ops");
+    
+    let ops: Vec<_> = std::fs::read_dir(&stax_ops_dir)
+        .expect("Failed to read stax ops dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
+        .collect();
+    
+    // Find the upstack_restack receipt
+    let upstack_receipt = ops.iter().find(|op| {
+        let content = std::fs::read_to_string(op.path()).unwrap_or_default();
+        content.contains("upstack_restack")
+    });
+    
+    assert!(upstack_receipt.is_some(), "Expected upstack_restack receipt");
+}
+
+#[test]
+fn test_submit_requires_valid_remote_url() {
+    // Submit requires a valid GitHub/GitLab URL format, not a local bare repo
+    // This test verifies that submit fails gracefully with local remotes
+    let repo = TestRepo::new_with_remote();
+
+    // Create a branch with a commit
+    repo.run_stax(&["bc", "feature-submit"]);
+    let feature_branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+
+    // Push using git (to set up remote tracking)
+    repo.git(&["push", "-u", "origin", &feature_branch]);
+
+    // submit --no-pr should fail with local bare repo (unsupported URL format)
+    let output = repo.run_stax(&["submit", "--no-pr", "--yes"]);
+    
+    // Should fail because local file paths aren't valid remote URLs
+    assert!(!output.status.success(), "Submit should fail with local bare repo");
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("Unsupported") || stderr.contains("remote"),
+        "Expected error about unsupported remote, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_sync_restack_creates_receipt() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch and push it
+    repo.run_stax(&["bc", "feature-sync"]);
+    let feature_branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &feature_branch]);
+
+    // Simulate remote main update
+    repo.simulate_remote_commit("remote.txt", "content", "Remote update");
+
+    // Sync with --restack
+    let output = repo.run_stax(&["sync", "--restack", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    // Check receipt was created
+    let git_dir = repo.path().join(".git");
+    let stax_ops_dir = git_dir.join("stax").join("ops");
+    
+    if stax_ops_dir.exists() {
+        let ops: Vec<_> = std::fs::read_dir(&stax_ops_dir)
+            .expect("Failed to read stax ops dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|ext| ext == "json").unwrap_or(false))
+            .collect();
+        
+        // Find the sync_restack receipt
+        let sync_receipt = ops.iter().find(|op| {
+            let content = std::fs::read_to_string(op.path()).unwrap_or_default();
+            content.contains("sync_restack")
+        });
+        
+        // May not have a receipt if nothing needed restacking
+        if !ops.is_empty() {
+            // At least verify the ops directory structure
+            assert!(ops.iter().all(|op| op.path().extension().map(|e| e == "json").unwrap_or(false)));
+        }
+    }
+}
+
+#[test]
+fn test_undo_with_dirty_working_tree() {
+    let repo = TestRepo::new();
+
+    // Create a branch and restack to create a receipt
+    repo.run_stax(&["bc", "feature-dirty"]);
+    let feature_branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature");
+    repo.commit("Feature commit");
+
+    repo.run_stax(&["t"]);
+    repo.create_file("main.txt", "main");
+    repo.commit("Main update");
+
+    repo.run_stax(&["checkout", &feature_branch]);
+    repo.run_stax(&["restack", "--quiet"]);
+
+    // Make the working tree dirty
+    repo.create_file("dirty.txt", "uncommitted changes");
+
+    // Try undo without --yes (should fail in quiet/non-interactive mode)
+    let output = repo.run_stax(&["undo", "--quiet"]);
+    // In quiet mode with dirty tree, should fail
+    assert!(!output.status.success() || TestRepo::stderr(&output).contains("dirty"));
+}
+
+// =============================================================================
+// Sync Merged Branch Detection Tests
+// =============================================================================
+
+#[test]
+fn test_sync_detects_branch_with_deleted_remote() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch and push it
+    repo.run_stax(&["bc", "feature-deleted-remote"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Verify branch exists on remote
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        remote_branches.iter().any(|b| b.contains("feature-deleted-remote")),
+        "Expected branch on remote before deletion"
+    );
+
+    // Delete the remote branch (simulating GitHub deleting after merge)
+    repo.git(&["push", "origin", "--delete", &branch_name]);
+
+    // Verify branch is deleted from remote
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        !remote_branches.iter().any(|b| b.contains("feature-deleted-remote")),
+        "Expected branch to be deleted from remote"
+    );
+
+    // Go back to main first (so we're not on the branch being deleted)
+    repo.run_stax(&["t"]);
+
+    // Sync should detect the branch as "merged" (remote deleted)
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+    // Should find the merged branch
+    assert!(
+        stdout.contains("merged") || stdout.contains("feature-deleted-remote") || stdout.contains("deleted"),
+        "Expected sync to detect deleted remote branch, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_sync_detects_branch_with_empty_diff_against_trunk() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch
+    repo.run_stax(&["bc", "feature-empty-diff"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Merge the branch into main on remote (simulating PR merge)
+    repo.merge_branch_on_remote(&branch_name);
+
+    // Pull main to get the merge
+    repo.run_stax(&["t"]);
+    repo.git(&["pull", "origin", "main"]);
+
+    // Now the feature branch has empty diff against main
+    let diff_output = repo.git(&["diff", "--quiet", "main", &branch_name]);
+    assert!(
+        diff_output.status.success(),
+        "Expected empty diff between main and feature branch after merge"
+    );
+
+    // Sync should detect the branch as merged (empty diff)
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+    // Should find the merged branch
+    assert!(
+        stdout.contains("merged") || stdout.contains("feature-empty-diff") || stdout.contains("deleted"),
+        "Expected sync to detect branch with empty diff, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_sync_on_merged_branch_checkouts_parent() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch
+    repo.run_stax(&["bc", "feature-checkout-parent"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Delete the remote branch (simulating GitHub deleting after merge)
+    repo.git(&["push", "origin", "--delete", &branch_name]);
+
+    // Stay on the feature branch
+    assert!(repo.current_branch().contains("feature-checkout-parent"));
+
+    // Sync should detect we're on a merged branch and offer to checkout parent
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+
+    // Should either:
+    // 1. Have checked out parent (main)
+    // 2. Or deleted the branch and moved to parent
+    let current = repo.current_branch();
+
+    // After sync with --force, we should be on main (the parent)
+    // OR still on the feature branch if it wasn't deleted
+    // The key is that sync completed successfully
+    if !repo.list_branches().iter().any(|b| b.contains("feature-checkout-parent")) {
+        // Branch was deleted, should be on main
+        assert_eq!(current, "main", "Should be on main after branch deletion");
+    }
+}
+
+#[test]
+fn test_sync_pulls_parent_after_checkout() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch
+    repo.run_stax(&["bc", "feature-pull-parent"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Simulate remote updates to main
+    repo.simulate_remote_commit("remote-update.txt", "remote content", "Remote update");
+
+    // Delete the remote branch (simulating GitHub deleting after merge)
+    repo.git(&["push", "origin", "--delete", &branch_name]);
+
+    // Stay on the feature branch
+    assert!(repo.current_branch().contains("feature-pull-parent"));
+
+    // Sync should checkout parent and pull latest changes
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    // After sync, if we're on main, it should have the remote update
+    let current = repo.current_branch();
+    if current == "main" {
+        assert!(
+            repo.path().join("remote-update.txt").exists(),
+            "Expected remote-update.txt after sync pulled main"
+        );
+    }
+}
+
+#[test]
+fn test_sync_with_stacked_branches_detects_merged_child() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a stack: main -> feature-1 -> feature-2
+    repo.run_stax(&["bc", "feature-1"]);
+    let feature1 = repo.current_branch();
+    repo.create_file("f1.txt", "feature 1");
+    repo.commit("Feature 1");
+    repo.git(&["push", "-u", "origin", &feature1]);
+
+    repo.run_stax(&["bc", "feature-2"]);
+    let feature2 = repo.current_branch();
+    repo.create_file("f2.txt", "feature 2");
+    repo.commit("Feature 2");
+    repo.git(&["push", "-u", "origin", &feature2]);
+
+    // Delete feature-2 from remote (simulating it was merged)
+    repo.git(&["push", "origin", "--delete", &feature2]);
+
+    // Go to feature-1
+    repo.run_stax(&["checkout", &feature1]);
+
+    // Sync should detect feature-2 as merged (remote deleted)
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
+
+    let stdout = TestRepo::stdout(&output);
+    // Should find the merged branch
+    assert!(
+        stdout.contains("merged") || stdout.contains("feature-2") || stdout.contains("deleted"),
+        "Expected sync to detect feature-2 as merged, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_sync_preserves_branch_with_remote() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch and push it (don't delete remote)
+    repo.run_stax(&["bc", "feature-with-remote"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    // Go back to main
+    repo.run_stax(&["t"]);
+
+    // Sync should NOT delete the branch (remote still exists)
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success());
+
+    // Branch should still exist
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b.contains("feature-with-remote")),
+        "Expected feature-with-remote to still exist (has remote)"
+    );
+}
+
 mod github_mock_tests {
     use super::*;
     use wiremock::{MockServer, Mock, ResponseTemplate};

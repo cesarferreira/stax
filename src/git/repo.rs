@@ -553,6 +553,105 @@ impl GitRepo {
         
         Ok(overlapping)
     }
+
+    /// Abort an in-progress rebase
+    pub fn rebase_abort(&self) -> Result<()> {
+        if !self.rebase_in_progress()? {
+            return Ok(());
+        }
+        
+        let status = Command::new("git")
+            .args(["rebase", "--abort"])
+            .current_dir(self.workdir()?)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .context("Failed to run git rebase --abort")?;
+
+        if !status.success() {
+            anyhow::bail!("git rebase --abort failed");
+        }
+        Ok(())
+    }
+
+    /// Update a ref to point to a specific OID
+    pub fn update_ref(&self, refname: &str, oid: &str) -> Result<()> {
+        let status = Command::new("git")
+            .args(["update-ref", refname, oid])
+            .current_dir(self.workdir()?)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .context("Failed to run git update-ref")?;
+
+        if !status.success() {
+            anyhow::bail!("git update-ref {} {} failed", refname, oid);
+        }
+        Ok(())
+    }
+
+    /// Delete a ref
+    pub fn delete_ref(&self, refname: &str) -> Result<()> {
+        let status = Command::new("git")
+            .args(["update-ref", "-d", refname])
+            .current_dir(self.workdir()?)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .context("Failed to run git update-ref -d")?;
+
+        if !status.success() {
+            anyhow::bail!("git update-ref -d {} failed", refname);
+        }
+        Ok(())
+    }
+
+    /// Resolve a refspec to an OID (git rev-parse)
+    pub fn rev_parse(&self, refspec: &str) -> Result<String> {
+        let output = Command::new("git")
+            .args(["rev-parse", refspec])
+            .current_dir(self.workdir()?)
+            .output()
+            .context("Failed to run git rev-parse")?;
+
+        if !output.status.success() {
+            anyhow::bail!("git rev-parse {} failed", refspec);
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Force push a branch to remote
+    pub fn force_push(&self, remote: &str, branch: &str) -> Result<()> {
+        let status = Command::new("git")
+            .args(["push", "-f", remote, branch])
+            .current_dir(self.workdir()?)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .context("Failed to run git push -f")?;
+
+        if !status.success() {
+            anyhow::bail!("git push -f {} {} failed", remote, branch);
+        }
+        Ok(())
+    }
+
+    /// Hard reset to a specific ref/OID
+    pub fn reset_hard(&self, target: &str) -> Result<()> {
+        let status = Command::new("git")
+            .args(["reset", "--hard", target])
+            .current_dir(self.workdir()?)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .context("Failed to run git reset --hard")?;
+
+        if !status.success() {
+            anyhow::bail!("git reset --hard {} failed", target);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, PartialEq)]
