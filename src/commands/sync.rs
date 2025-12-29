@@ -296,6 +296,34 @@ pub fn run(
                         }
                     }
 
+                    // Reparent children of this branch to its parent before deleting
+                    let children: Vec<String> = stack
+                        .branches
+                        .iter()
+                        .filter(|(_, info)| info.parent.as_deref() == Some(branch))
+                        .map(|(name, _)| name.clone())
+                        .collect();
+
+                    for child in &children {
+                        if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
+                            // Set parent_branch_revision to empty to force needs_restack
+                            let updated_meta = BranchMetadata {
+                                parent_branch_name: parent_branch.clone(),
+                                parent_branch_revision: String::new(), // Forces needs_restack
+                                ..child_meta
+                            };
+                            updated_meta.write(repo.inner(), child)?;
+                            if !quiet {
+                                println!(
+                                    "    {} reparented {} → {}",
+                                    "↪".cyan(),
+                                    child.cyan(),
+                                    parent_branch.cyan()
+                                );
+                            }
+                        }
+                    }
+
                     // Delete local branch (force delete since we confirmed)
                     let local_status = Command::new("git")
                         .args(["branch", "-D", branch])
