@@ -424,6 +424,17 @@ impl App {
         }
     }
 
+    /// Calculate total scrollable lines in diff view (stats header + diff content)
+    pub fn total_diff_lines(&self) -> usize {
+        let stat_lines = if self.diff_stat.is_empty() {
+            0
+        } else {
+            // Summary line + blank + file lines + blank + separator + blank
+            4 + self.diff_stat.len()
+        };
+        stat_lines + self.selected_diff.len()
+    }
+
     /// Set a status message (auto-clears after timeout)
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_message = Some(msg.into());

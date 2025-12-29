@@ -109,7 +109,7 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
             match app.focused_pane {
                 FocusedPane::Stack => app.select_next(),
                 FocusedPane::Diff => {
-                    if app.diff_scroll < app.selected_diff.len().saturating_sub(1) {
+                    if app.diff_scroll < app.total_diff_lines().saturating_sub(1) {
                         app.diff_scroll += 1;
                     }
                 }
