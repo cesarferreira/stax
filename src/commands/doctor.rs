@@ -126,7 +126,7 @@ pub fn run() -> Result<()> {
             println!(
                 "{} {}",
                 "⚠".yellow(),
-                format!("{} branch(es) need restack", needs_restack.len()).yellow()
+                format!("{} {} need restack", needs_restack.len(), if needs_restack.len() == 1 { "branch" } else { "branches" }).yellow()
             );
         }
     }

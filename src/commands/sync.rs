@@ -204,7 +204,8 @@ pub fn run(
 
         if !merged.is_empty() {
             if !quiet {
-                println!("  Found {} merged branch(es):", merged.len().to_string().cyan());
+                let branch_word = if merged.len() == 1 { "branch" } else { "branches" };
+                println!("  Found {} merged {}:", merged.len().to_string().cyan(), branch_word);
                 for branch in &merged {
                     println!("    {} {}", "▸".bright_black(), branch);
                 }
@@ -404,7 +405,7 @@ pub fn run(
             tx.set_plan_summary(PlanSummary {
                 branches_to_rebase: needs_restack.len(),
                 branches_to_push: 0,
-                description: vec![format!("Sync restack {} branch(es)", needs_restack.len())],
+                description: vec![format!("Sync restack {} {}", needs_restack.len(), if needs_restack.len() == 1 { "branch" } else { "branches" })],
             });
             tx.snapshot()?;
 

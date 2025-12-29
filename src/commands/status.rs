@@ -419,16 +419,50 @@ pub fn run(
         );
     }
 
-    // Show restack hint (only in verbose mode to reduce noise in simple ls)
+    // Show restack hint (show in both ls and ll when tips enabled)
     let needs_restack = stack.needs_restack();
     let config = Config::load().unwrap_or_default();
-    if !needs_restack.is_empty() && !quiet && verbose && config.ui.tips {
+    if !needs_restack.is_empty() && !quiet && config.ui.tips {
         println!();
         println!(
             "{}",
-            format!("⟳ {} branch(es) need restacking", needs_restack.len()).bright_yellow()
+            format!("⟳ {} {} need restacking", needs_restack.len(), if needs_restack.len() == 1 { "branch" } else { "branches" }).bright_yellow()
         );
         println!("Run {} to rebase.", "stax rs --restack".bright_cyan());
+    }
+
+    // Show additional stats only in verbose mode (ll command)
+    if verbose && !quiet && config.ui.tips {
+        let total_branches = stack.branches.len().saturating_sub(1); // Exclude trunk
+        let open_prs: usize = branch_statuses
+            .iter()
+            .filter(|b| {
+                b.pr_number.is_some()
+                    && b.pr_state
+                        .as_ref()
+                        .map(|s| s.to_lowercase() == "open")
+                        .unwrap_or(false)
+            })
+            .count();
+        let branches_with_remote: usize = branch_statuses
+            .iter()
+            .filter(|b| b.has_remote && !b.is_trunk)
+            .count();
+
+        // Only show summary if there are branches to show
+        if total_branches > 0 {
+            if needs_restack.is_empty() {
+                println!(); // Add newline if we didn't already print restack hint
+            }
+            let mut stats = vec![format!("{} {}", total_branches, if total_branches == 1 { "branch" } else { "branches" })];
+            if branches_with_remote > 0 {
+                stats.push(format!("{} pushed", branches_with_remote));
+            }
+            if open_prs > 0 {
+                stats.push(format!("{} open {}", open_prs, if open_prs == 1 { "PR" } else { "PRs" }));
+            }
+            println!("{}", stats.join(" · ").dimmed());
+        }
     }
 
     Ok(())

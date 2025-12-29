@@ -128,8 +128,9 @@ pub fn run(op_id: Option<String>, yes: bool, no_push: bool, quiet: bool) -> Resu
                 println!(
                     "{}",
                     format!(
-                        "This operation had force-pushed {} branch(es) to remote.",
-                        remote_count
+                        "This operation had force-pushed {} {} to remote.",
+                        remote_count,
+                        if remote_count == 1 { "branch" } else { "branches" }
                     ).yellow()
                 );
             }
@@ -157,7 +158,7 @@ pub fn run(op_id: Option<String>, yes: bool, no_push: bool, quiet: bool) -> Resu
         println!();
         println!(
             "{}",
-            format!("✓ Redone! Restored {} branch(es) to after-state.", restored_count).green().bold()
+            format!("✓ Redone! Restored {} {} to after-state.", restored_count, if restored_count == 1 { "branch" } else { "branches" }).green().bold()
         );
     }
     

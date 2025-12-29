@@ -229,17 +229,19 @@ pub fn print_plan(kind: &OpKind, summary: &PlanSummary, quiet: bool) {
     
     if summary.branches_to_rebase > 0 {
         println!(
-            "  {} About to rebase {} branch(es)",
+            "  {} About to rebase {} {}",
             "▸".dimmed(),
-            summary.branches_to_rebase.to_string().cyan()
+            summary.branches_to_rebase.to_string().cyan(),
+            if summary.branches_to_rebase == 1 { "branch" } else { "branches" }
         );
     }
-    
+
     if summary.branches_to_push > 0 {
         println!(
-            "  {} Will force-push {} branch(es)",
+            "  {} Will force-push {} {}",
             "▸".dimmed(),
-            summary.branches_to_push.to_string().cyan()
+            summary.branches_to_push.to_string().cyan(),
+            if summary.branches_to_push == 1 { "branch" } else { "branches" }
         );
     }
     

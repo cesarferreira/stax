@@ -435,18 +435,19 @@ fn apply_reorder_changes(app: &mut App) -> Result<()> {
         return Ok(());
     }
 
-    app.set_status(format!("Applying reorder ({} branch(es))...", reparent_ops.len()));
-    
+    let branch_word = if reparent_ops.len() == 1 { "branch" } else { "branches" };
+    app.set_status(format!("Applying reorder ({} {})...", reparent_ops.len(), branch_word));
+
     // Collect all affected branches (those being reparented)
     let affected_branches: Vec<String> = reparent_ops.iter().map(|(b, _)| b.clone()).collect();
-    
+
     // Begin single transaction for entire reorder operation
     let mut tx = Transaction::begin(OpKind::Reorder, &app.repo, true)?;
     tx.plan_branches(&app.repo, &affected_branches)?;
     tx.set_plan_summary(PlanSummary {
         branches_to_rebase: affected_branches.len(),
         branches_to_push: 0,
-        description: vec![format!("Reorder {} branch(es)", affected_branches.len())],
+        description: vec![format!("Reorder {} {}", affected_branches.len(), branch_word)],
     });
     tx.snapshot()?;
     
@@ -545,7 +546,7 @@ fn apply_reorder_changes(app: &mut App) -> Result<()> {
     // Finish transaction successfully
     tx.finish_ok()?;
     
-    app.set_status(format!("✓ Reordered {} branch(es)", reparent_ops.len()));
+    app.set_status(format!("✓ Reordered {} {}", reparent_ops.len(), branch_word));
     
     Ok(())
 }

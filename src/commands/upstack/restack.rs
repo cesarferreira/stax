@@ -53,9 +53,11 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
+    let branch_word = if branches_to_restack.len() == 1 { "branch" } else { "branches" };
     println!(
-        "Restacking {} branch(es)...",
-        branches_to_restack.len().to_string().cyan()
+        "Restacking {} {}...",
+        branches_to_restack.len().to_string().cyan(),
+        branch_word
     );
 
     // Begin transaction
@@ -64,7 +66,7 @@ pub fn run() -> Result<()> {
     tx.set_plan_summary(PlanSummary {
         branches_to_rebase: branches_to_restack.len(),
         branches_to_push: 0,
-        description: vec![format!("Upstack restack {} branch(es)", branches_to_restack.len())],
+        description: vec![format!("Upstack restack {} {}", branches_to_restack.len(), branch_word)],
     });
     tx.snapshot()?;
 

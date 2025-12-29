@@ -233,13 +233,13 @@ pub fn run(
 
     if !quiet {
         if !creates.is_empty() {
-            println!("  {} {} PR(s) to create", creates.len().to_string().cyan(), "▸".dimmed());
+            println!("  {} {} {} to create", creates.len().to_string().cyan(), "▸".dimmed(), if creates.len() == 1 { "PR" } else { "PRs" });
         }
         if !updates.is_empty() {
-            println!("  {} {} PR(s) to update", updates.len().to_string().cyan(), "▸".dimmed());
+            println!("  {} {} {} to update", updates.len().to_string().cyan(), "▸".dimmed(), if updates.len() == 1 { "PR" } else { "PRs" });
         }
         if !noops.is_empty() {
-            println!("  {} {} PR(s) already up to date", noops.len().to_string().dimmed(), "▸".dimmed());
+            println!("  {} {} {} already up to date", noops.len().to_string().dimmed(), "▸".dimmed(), if noops.len() == 1 { "PR" } else { "PRs" });
         }
     }
 
@@ -340,7 +340,7 @@ pub fn run(
         tx.set_plan_summary(PlanSummary {
             branches_to_rebase: 0,
             branches_to_push: branches_needing_push.len(),
-            description: vec![format!("Submit {} branch(es)", branches_needing_push.len())],
+            description: vec![format!("Submit {} {}", branches_needing_push.len(), if branches_needing_push.len() == 1 { "branch" } else { "branches" })],
         });
         tx.snapshot()?;
         
