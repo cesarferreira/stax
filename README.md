@@ -127,6 +127,7 @@ Rearrange branches within your stack without manually running reparent commands:
 | `stax ls` | Show your stack with PR status and what needs rebasing |
 | `stax create <name>` | Create a new branch stacked on current |
 | `stax ss` | Submit stack - push all branches and create/update PRs |
+| `stax merge` | Merge PRs from bottom of stack up to current branch |
 | `stax rs` | Repo sync - pull trunk, clean up merged branches |
 | `stax rs --restack` | Sync and rebase all branches onto updated trunk |
 | `stax co` | Interactive branch checkout with fuzzy search |
@@ -226,6 +227,130 @@ stax rs --restack
 # ✓ Rebased payments-api onto main
 # ✓ Rebased payments-ui onto payments-api
 # ✓ Updated PR #102 to target main
+```
+
+## Cascade Stack Merge
+
+Merge your entire stack with one command! `stax merge` intelligently merges PRs from the bottom of your stack up to your current branch, handling rebases and PR updates automatically.
+
+### How It Works
+
+```
+Stack:  main ← PR-A ← PR-B ← PR-C ← PR-D
+
+Position        │ What gets merged
+────────────────┼─────────────────────────────
+On PR-A         │ Just PR-A (1 PR)
+On PR-B         │ PR-A, then PR-B (2 PRs)
+On PR-C         │ PR-A → PR-B → PR-C (3 PRs)
+On PR-D (top)   │ Entire stack (4 PRs)
+```
+
+The merge scope depends on your current branch:
+- **Bottom of stack**: Merges just that one PR
+- **Middle of stack**: Merges all PRs from bottom up to current
+- **Top of stack**: Merges the entire stack
+
+### Example Usage
+
+```bash
+# View your stack
+stax ls
+# ◉  payments-ui 1↑           ← you are here
+# ○  payments-api 1↑
+# ○  payments-models 1↑
+# ○  main
+
+# Merge all 3 PRs into main
+stax merge
+```
+
+You'll see an interactive preview before merging:
+
+```
+╭──────────────────────────────────────────────────────╮
+│                    Stack Merge                       │
+╰──────────────────────────────────────────────────────╯
+
+You are on: payments-ui (PR #103)
+
+This will merge 3 PRs from bottom → current:
+
+  ┌─────────────────────────────────────────────────┐
+  │  1. payments-models (#101)       ✓ Ready        │
+  │     ├─ CI: ✓ passed                             │
+  │     ├─ Reviews: ✓ 2/2 approved                  │
+  │     └─ Merges into: main                        │
+  ├─────────────────────────────────────────────────┤
+  │  2. payments-api (#102)          ✓ Ready        │
+  │     ├─ CI: ✓ passed                             │
+  │     ├─ Reviews: ✓ 1/1 approved                  │
+  │     └─ Merges into: main (after rebase)         │
+  ├─────────────────────────────────────────────────┤
+  │  3. payments-ui (#103)           ✓ Ready        │  ← you are here
+  │     ├─ CI: ✓ passed                             │
+  │     ├─ Reviews: ✓ 1/1 approved                  │
+  │     └─ Merges into: main (after rebase)         │
+  └─────────────────────────────────────────────────┘
+
+Merge method: squash (change with --method)
+
+? Proceed with merge? [y/N]
+```
+
+### What Happens During Merge
+
+For each PR in the stack (bottom to top):
+
+1. **Wait for CI** - Polls until CI passes (or use `--no-wait` to skip)
+2. **Merge** - Merges the PR using your chosen method (squash/merge/rebase)
+3. **Rebase next** - Rebases the next PR onto updated main
+4. **Update PR base** - Changes the next PR's target from the merged branch to main
+5. **Push** - Force-pushes the rebased branch
+6. **Repeat** - Continues until all PRs are merged
+
+If anything fails (CI, conflicts, permissions), the merge stops safely. Already-merged PRs remain merged, and you can fix the issue and run `stax merge` again to continue.
+
+### Merge Options
+
+```bash
+# Merge with preview only (no actual merge)
+stax merge --dry-run
+
+# Merge entire stack regardless of current position
+stax merge --all
+
+# Choose merge strategy
+stax merge --method squash    # (default) Squash and merge
+stax merge --method merge     # Create merge commit
+stax merge --method rebase    # Rebase and merge
+
+# Skip CI polling (fail if not ready)
+stax merge --no-wait
+
+# Keep branches after merge (don't delete)
+stax merge --no-delete
+
+# Set custom CI timeout (default: 30 minutes)
+stax merge --timeout 60
+
+# Skip confirmation prompt
+stax merge --yes
+```
+
+### Partial Stack Merge
+
+You can merge just part of your stack by checking out a middle branch:
+
+```bash
+# Stack: main ← auth ← auth-api ← auth-ui ← auth-tests
+stax checkout auth-api
+
+# This merges only: auth, auth-api (not auth-ui or auth-tests)
+stax merge
+
+# Remaining branches (auth-ui, auth-tests) are rebased onto main
+# Run stax merge again later to merge those too
 ```
 
 ## Working with Multiple Stacks
@@ -339,6 +464,7 @@ stax uses the same metadata format as freephite and supports similar commands:
 | `stax status` | `s`, `ls` | Show stack (simple view) |
 | `stax log` | `l` | Show stack with commits and PR info |
 | `stax submit` | `ss` | Push and create/update PRs |
+| `stax merge` | | Merge PRs from bottom of stack to current |
 | `stax sync` | `rs` | Pull trunk, delete merged branches |
 | `stax restack` | | Rebase current branch onto parent |
 | `stax diff` | | Show diffs for each branch vs parent |
@@ -399,6 +525,10 @@ stax uses the same metadata format as freephite and supports similar commands:
 - `stax submit --reviewers alice,bob` - Add reviewers
 - `stax submit --labels bug,urgent` - Add labels
 - `stax submit --assignees alice` - Assign users
+- `stax merge --all` - Merge entire stack
+- `stax merge --method squash` - Choose merge method (squash/merge/rebase)
+- `stax merge --dry-run` - Preview merge without executing
+- `stax merge --no-wait` - Don't wait for CI, fail if not ready
 - `stax sync --restack` - Sync and rebase all branches
 - `stax status --json` - Output as JSON
 - `stax undo --yes` - Undo without prompts
@@ -407,6 +537,7 @@ stax uses the same metadata format as freephite and supports similar commands:
 **CI/Automation example:**
 ```bash
 stax submit --draft --yes --no-prompt
+stax merge --yes --method squash
 ```
 
 </details>
