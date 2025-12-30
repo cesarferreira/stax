@@ -115,6 +115,34 @@ enum Commands {
         quiet: bool,
     },
 
+    /// Merge PRs from bottom of stack up to current branch
+    Merge {
+        /// Merge entire stack (ignore current position)
+        #[arg(long)]
+        all: bool,
+        /// Show merge plan without merging
+        #[arg(long)]
+        dry_run: bool,
+        /// Merge method: squash, merge, rebase
+        #[arg(long, default_value = "squash")]
+        method: String,
+        /// Keep branches after merge (don't delete)
+        #[arg(long)]
+        no_delete: bool,
+        /// Fail if CI pending (don't poll/wait)
+        #[arg(long)]
+        no_wait: bool,
+        /// Max wait time for CI per PR in minutes
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+        /// Minimal output
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
     /// Sync repo - pull trunk, delete merged branches
     #[command(visible_alias = "rs")]
     Sync {
@@ -547,6 +575,19 @@ fn main() -> Result<()> {
             assignees,
             quiet,
         ),
+        Commands::Merge {
+            all,
+            dry_run,
+            method,
+            no_delete,
+            no_wait,
+            timeout,
+            yes,
+            quiet,
+        } => {
+            let merge_method = method.parse().unwrap_or_default();
+            commands::merge::run(all, dry_run, merge_method, no_delete, no_wait, timeout, yes, quiet)
+        }
         Commands::Sync {
             restack,
             no_delete,
