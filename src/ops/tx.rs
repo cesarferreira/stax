@@ -199,7 +199,6 @@ impl Transaction {
     }
     
     /// Get the operation kind
-    #[allow(dead_code)]
     pub fn kind(&self) -> &OpKind {
         &self.receipt.kind
     }
@@ -226,7 +225,6 @@ impl Drop for Transaction {
 }
 
 /// Print the plan before executing
-#[allow(dead_code)]
 pub fn print_plan(_kind: &OpKind, summary: &PlanSummary, quiet: bool) {
     if quiet {
         return;

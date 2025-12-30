@@ -9,6 +9,7 @@
 pub mod receipt;
 pub mod tx;
 
+use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -90,8 +91,9 @@ pub fn create_backup_ref(workdir: &Path, op_id: &str, branch: &str, oid: &str) -
 }
 
 /// Delete backup refs for an operation
-pub fn delete_backup_refs(workdir: &Path, op_id: &str) -> Result<()> {
+pub fn delete_backup_refs(repo: &GitRepo, op_id: &str) -> Result<()> {
     let prefix = backup_ref_prefix(op_id);
+    let workdir = repo.workdir()?;
     
     // List all refs with this prefix
     let output = Command::new("git")
@@ -109,10 +111,7 @@ pub fn delete_backup_refs(workdir: &Path, op_id: &str) -> Result<()> {
         if ref_name.is_empty() {
             continue;
         }
-        let _ = Command::new("git")
-            .args(["update-ref", "-d", ref_name])
-            .current_dir(workdir)
-            .status();
+        let _ = repo.delete_ref(ref_name);
     }
     
     Ok(())

@@ -169,7 +169,7 @@ pub fn run(op_id: Option<String>, yes: bool, no_push: bool, quiet: bool) -> Resu
     }
     
     // Clean up backup refs for this operation
-    ops::delete_backup_refs(repo.workdir()?, &receipt.op_id)?;
+    ops::delete_backup_refs(&repo, &receipt.op_id)?;
     
     if !quiet {
         println!();

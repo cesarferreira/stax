@@ -4,7 +4,7 @@ use crate::git::GitRepo;
 use crate::github::pr::{generate_stack_comment, StackPrInfo};
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
-use crate::ops::tx::Transaction;
+use crate::ops::tx::{self, Transaction};
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -328,11 +328,13 @@ pub fn run(
             tx.plan_remote_branch(&repo, &remote_info.name, &plan.branch)?;
         }
         
-        tx.set_plan_summary(PlanSummary {
+        let summary = PlanSummary {
             branches_to_rebase: 0,
             branches_to_push: branches_needing_push.len(),
             description: vec![format!("Submit {} {}", branches_needing_push.len(), if branches_needing_push.len() == 1 { "branch" } else { "branches" })],
-        });
+        };
+        tx::print_plan(tx.kind(), &summary, quiet);
+        tx.set_plan_summary(summary);
         tx.snapshot()?;
         
         Some(tx)

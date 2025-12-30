@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
-use crate::ops::tx::Transaction;
+use crate::ops::tx::{self, Transaction};
 use anyhow::Result;
 use colored::Colorize;
 
@@ -63,11 +63,13 @@ pub fn run() -> Result<()> {
     // Begin transaction
     let mut tx = Transaction::begin(OpKind::UpstackRestack, &repo, false)?;
     tx.plan_branches(&repo, &branches_to_restack)?;
-    tx.set_plan_summary(PlanSummary {
+    let summary = PlanSummary {
         branches_to_rebase: branches_to_restack.len(),
         branches_to_push: 0,
         description: vec![format!("Upstack restack {} {}", branches_to_restack.len(), branch_word)],
-    });
+    };
+    tx::print_plan(tx.kind(), &summary, false);
+    tx.set_plan_summary(summary);
     tx.snapshot()?;
 
     for branch in &branches_to_restack {

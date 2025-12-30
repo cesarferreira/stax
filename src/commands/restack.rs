@@ -1,7 +1,7 @@
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
-use crate::ops::tx::Transaction;
+use crate::ops::tx::{self, Transaction};
 use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -78,11 +78,13 @@ pub fn run(all: bool, r#continue: bool, quiet: bool) -> Result<()> {
     // Begin transaction
     let mut tx = Transaction::begin(OpKind::Restack, &repo, quiet)?;
     tx.plan_branches(&repo, &branches_to_restack)?;
-    tx.set_plan_summary(PlanSummary {
+    let summary = PlanSummary {
         branches_to_rebase: branches_to_restack.len(),
         branches_to_push: 0,
         description: vec![format!("Restack {} {}", branches_to_restack.len(), branch_word)],
-    });
+    };
+    tx::print_plan(tx.kind(), &summary, quiet);
+    tx.set_plan_summary(summary);
     tx.snapshot()?;
 
     let mut summary: Vec<(String, String)> = Vec::new();

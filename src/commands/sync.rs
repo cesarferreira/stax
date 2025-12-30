@@ -4,7 +4,7 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
-use crate::ops::tx::Transaction;
+use crate::ops::tx::{self, Transaction};
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -396,11 +396,13 @@ pub fn run(
             // Begin transaction for restack phase
             let mut tx = Transaction::begin(OpKind::SyncRestack, &repo, quiet)?;
             tx.plan_branches(&repo, &needs_restack)?;
-            tx.set_plan_summary(PlanSummary {
+            let summary = PlanSummary {
                 branches_to_rebase: needs_restack.len(),
                 branches_to_push: 0,
                 description: vec![format!("Sync restack {} {}", needs_restack.len(), if needs_restack.len() == 1 { "branch" } else { "branches" })],
-            });
+            };
+            tx::print_plan(tx.kind(), &summary, quiet);
+            tx.set_plan_summary(summary);
             tx.snapshot()?;
 
             let mut summary: Vec<(String, String)> = Vec::new();

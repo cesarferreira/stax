@@ -591,7 +591,6 @@ impl GitRepo {
     }
 
     /// Delete a ref
-    #[allow(dead_code)]
     pub fn delete_ref(&self, refname: &str) -> Result<()> {
         let status = Command::new("git")
             .args(["update-ref", "-d", refname])
