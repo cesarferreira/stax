@@ -83,6 +83,7 @@ impl CiStatus {
         matches!(self, CiStatus::Failure)
     }
 
+    #[allow(dead_code)]
     pub fn display_text(&self) -> &'static str {
         match self {
             CiStatus::Success => "passed",
