@@ -13,11 +13,7 @@ pub fn run(stack_filter: Option<String>, all: bool) -> Result<()> {
     let target = stack_filter.clone().unwrap_or_else(|| current.clone());
     let show_all = if all {
         true
-    } else if stack_filter.is_none() && !stack.branches.contains_key(&target) {
-        true
-    } else {
-        false
-    };
+    } else { stack_filter.is_none() && !stack.branches.contains_key(&target) };
 
     if !show_all && !stack.branches.contains_key(&target) {
         anyhow::bail!("Branch '{}' is not tracked in the stack.", target);
@@ -26,9 +22,7 @@ pub fn run(stack_filter: Option<String>, all: bool) -> Result<()> {
     let branches: Vec<String> = if show_all {
         let mut list: Vec<String> = stack
             .branches
-            .keys()
-            .cloned()
-            .filter(|b| b != &stack.trunk)
+            .keys().filter(|&b| b != &stack.trunk).cloned()
             .collect();
         list.sort();
         list

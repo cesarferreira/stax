@@ -39,12 +39,9 @@ pub fn run() -> Result<()> {
             let config = Config::load().unwrap_or_default();
             if config.ui.tips {
                 println!(
-                    "{}",
-                    format!(
-                        "  Tip: '{}' itself needs restack. Run {} to include it.",
-                        current,
-                        "stax restack".cyan()
-                    )
+                    "  Tip: '{}' itself needs restack. Run {} to include it.",
+                    current,
+                    "stax restack".cyan()
                 );
             }
         } else {

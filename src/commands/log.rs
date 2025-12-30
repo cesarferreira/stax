@@ -97,7 +97,7 @@ pub fn run(
         .map(|b| b.children.clone())
         .unwrap_or_default()
         .into_iter()
-        .filter(|b| allowed_branches.as_ref().map_or(true, |a| a.contains(b)))
+        .filter(|b| allowed_branches.as_ref().is_none_or(|a| a.contains(b)))
         .collect();
 
     // Build display list: each trunk child gets its own column, stacked left to right
@@ -130,7 +130,7 @@ pub fn run(
     ordered_branches.push(stack.trunk.clone());
 
     // Load CI cache and refresh if stale (TTL expired)
-    let mut cache = CiCache::load(&git_dir);
+    let mut cache = CiCache::load(git_dir);
     if cache.is_stale() {
         let fresh_states = fetch_ci_states(&repo, remote_info.as_ref(), &stack, &ordered_branches);
         for (branch, state) in fresh_states {
@@ -138,7 +138,7 @@ pub fn run(
         }
         cache.mark_refreshed();
         cache.cleanup(&ordered_branches);
-        let _ = cache.save(&git_dir);
+        let _ = cache.save(git_dir);
     }
 
     // Build CI states from cache
@@ -250,7 +250,7 @@ pub fn run(
 
         // Check if we need a corner connector
         let prev_branch_col = if i > 0 { Some(display_branches[i - 1].column) } else { None };
-        let needs_corner = prev_branch_col.map_or(false, |pc| pc > db.column);
+        let needs_corner = prev_branch_col.is_some_and(|pc| pc > db.column);
 
         // Build tree graphics
         let mut tree = String::new();
@@ -468,7 +468,7 @@ fn collect_display_branches_with_nesting(
     max_column: &mut usize,
     allowed: Option<&HashSet<String>>,
 ) {
-    if allowed.map_or(false, |set| !set.contains(branch)) {
+    if allowed.is_some_and(|set| !set.contains(branch)) {
         return;
     }
 
@@ -528,7 +528,7 @@ fn collect_display_branches_with_nesting(
 }
 
 fn count_chain_size(stack: &Stack, root: &str, allowed: Option<&HashSet<String>>) -> usize {
-    if allowed.map_or(false, |set| !set.contains(root)) {
+    if allowed.is_some_and(|set| !set.contains(root)) {
         return 0;
     }
 

@@ -56,11 +56,9 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
         terminal.draw(|f| ui::render(f, app))?;
 
         // Handle events
-        if let Some(event) = poll_event(Duration::from_millis(100))? {
-            if let Event::Key(key) = event {
-                let action = KeyAction::from(key);
-                handle_action(app, action)?;
-            }
+        if let Some(Event::Key(key)) = poll_event(Duration::from_millis(100))? {
+            let action = KeyAction::from(key);
+            handle_action(app, action)?;
         }
 
         if app.should_quit {

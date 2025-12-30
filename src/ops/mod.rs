@@ -26,7 +26,7 @@ pub fn generate_op_id() -> String {
     // Format as ISO-ish timestamp
     let secs = now.as_secs();
     let datetime = chrono::DateTime::from_timestamp(secs as i64, 0)
-        .unwrap_or_else(|| chrono::Utc::now());
+        .unwrap_or_else(chrono::Utc::now);
     let timestamp = datetime.format("%Y%m%dT%H%M%SZ").to_string();
     
     // Add random suffix for uniqueness

@@ -2007,12 +2007,12 @@ fn test_multiple_restacks_multiple_undos() {
     repo.commit("Feature 1");
     
     repo.run_stax(&["bc", "feature-2"]);
-    let feature2 = repo.current_branch();
+    let _feature2 = repo.current_branch();
     repo.create_file("f2.txt", "feature 2");
     repo.commit("Feature 2");
     
     // Record original SHAs
-    let sha_f2_original = repo.head_sha();
+    let _sha_f2_original = repo.head_sha();
     repo.run_stax(&["checkout", &feature1]);
     let sha_f1_original = repo.head_sha();
 
@@ -2135,7 +2135,7 @@ fn test_sync_restack_creates_receipt() {
             .collect();
         
         // Find the sync_restack receipt
-        let sync_receipt = ops.iter().find(|op| {
+        let _sync_receipt = ops.iter().find(|op| {
             let content = std::fs::read_to_string(op.path()).unwrap_or_default();
             content.contains("sync_restack")
         });
@@ -2281,7 +2281,7 @@ fn test_sync_on_merged_branch_checkouts_parent() {
     let output = repo.run_stax(&["sync", "--force"]);
     assert!(output.status.success(), "Sync failed: {}", TestRepo::stderr(&output));
 
-    let stdout = TestRepo::stdout(&output);
+    let _stdout = TestRepo::stdout(&output);
 
     // Should either:
     // 1. Have checked out parent (main)

@@ -33,7 +33,7 @@ pub fn render_stack_tree(f: &mut Frame, app: &App, area: Rect) {
 
             // Selection indicator
             if is_selected {
-                tree.push_str("▶");
+                tree.push('▶');
             } else {
                 tree.push(' ');
             }

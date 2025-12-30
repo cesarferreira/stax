@@ -28,6 +28,7 @@ struct PrPlan {
     is_empty: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     draft: bool,
     no_pr: bool,

@@ -56,7 +56,7 @@ pub fn run(new_name: Option<String>, edit_message: bool, push_remote: bool, lite
     // 1. Rename the local branch
     let status = Command::new("git")
         .args(["branch", "-m", &old_name, &new_name])
-        .current_dir(&workdir)
+        .current_dir(workdir)
         .status()
         .context("Failed to rename branch")?;
 
@@ -92,7 +92,7 @@ pub fn run(new_name: Option<String>, edit_message: bool, push_remote: bool, lite
 
     // 4. Handle remote branch
     let remote_name = config.remote_name();
-    let remote_branches = crate::remote::get_remote_branches(&workdir, remote_name).unwrap_or_default();
+    let remote_branches = crate::remote::get_remote_branches(workdir, remote_name).unwrap_or_default();
 
     if remote_branches.contains(&old_name) {
         let should_push = if push_remote {
@@ -115,7 +115,7 @@ pub fn run(new_name: Option<String>, edit_message: bool, push_remote: bool, lite
             std::io::Write::flush(&mut std::io::stdout()).ok();
             let push_status = Command::new("git")
                 .args(["push", "-u", remote_name, &new_name])
-                .current_dir(&workdir)
+                .current_dir(workdir)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
@@ -131,7 +131,7 @@ pub fn run(new_name: Option<String>, edit_message: bool, push_remote: bool, lite
             std::io::Write::flush(&mut std::io::stdout()).ok();
             let delete_status = Command::new("git")
                 .args(["push", remote_name, "--delete", &old_name])
-                .current_dir(&workdir)
+                .current_dir(workdir)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
@@ -159,7 +159,7 @@ pub fn run(new_name: Option<String>, edit_message: bool, push_remote: bool, lite
     if should_edit {
         let status = Command::new("git")
             .args(["commit", "--amend"])
-            .current_dir(&workdir)
+            .current_dir(workdir)
             .status()
             .context("Failed to amend commit")?;
 
