@@ -202,6 +202,28 @@ pub fn run(
     if delete_merged {
         let merged = find_merged_branches(workdir, &stack, &remote_name)?;
 
+        // Lazy-initialize GitHub client for updating PR bases (only if needed)
+        let github_client: Option<(tokio::runtime::Runtime, GitHubClient)> = {
+            let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
+            let has_github_token = Config::github_token().is_some();
+            
+            if has_github_token {
+                if let Some(info) = remote_info {
+                    tokio::runtime::Runtime::new()
+                        .ok()
+                        .and_then(|rt| {
+                            GitHubClient::new(info.owner(), &info.repo, info.api_base_url.clone())
+                                .ok()
+                                .map(|client| (rt, client))
+                        })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         if !merged.is_empty() {
             if !quiet {
                 let branch_word = if merged.len() == 1 { "branch" } else { "branches" };
@@ -305,9 +327,39 @@ pub fn run(
                             let updated_meta = BranchMetadata {
                                 parent_branch_name: parent_branch.clone(),
                                 parent_branch_revision: String::new(), // Forces needs_restack
-                                ..child_meta
+                                ..child_meta.clone()
                             };
                             updated_meta.write(repo.inner(), child)?;
+
+                            // Update PR base on GitHub if this branch has a PR
+                            if let Some(pr_info) = &child_meta.pr_info {
+                                if let Some((rt, client)) = &github_client {
+                                    match rt.block_on(client.update_pr_base(pr_info.number, &parent_branch)) {
+                                        Ok(()) => {
+                                            if !quiet {
+                                                println!(
+                                                    "    {} updated PR #{} base → {}",
+                                                    "↪".cyan(),
+                                                    pr_info.number,
+                                                    parent_branch.cyan()
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            // Log warning but don't fail - PR might already be closed/merged
+                                            if !quiet {
+                                                println!(
+                                                    "    {} couldn't update PR #{} base: {}",
+                                                    "⚠".yellow(),
+                                                    pr_info.number,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             if !quiet {
                                 println!(
                                     "    {} reparented {} → {}",
