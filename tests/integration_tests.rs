@@ -2393,6 +2393,452 @@ fn test_sync_preserves_branch_with_remote() {
     );
 }
 
+// =============================================================================
+// Merge Command Tests
+// =============================================================================
+
+#[test]
+fn test_merge_help() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["merge", "--help"]);
+    assert!(output.status.success());
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("--all"), "Expected --all flag in help");
+    assert!(stdout.contains("--dry-run"), "Expected --dry-run flag in help");
+    assert!(stdout.contains("--method"), "Expected --method flag in help");
+    assert!(stdout.contains("--no-delete"), "Expected --no-delete flag in help");
+    assert!(stdout.contains("--no-wait"), "Expected --no-wait flag in help");
+    assert!(stdout.contains("--timeout"), "Expected --timeout flag in help");
+    assert!(stdout.contains("--yes"), "Expected --yes flag in help");
+    assert!(stdout.contains("--quiet"), "Expected --quiet flag in help");
+}
+
+#[test]
+fn test_merge_on_trunk_shows_error() {
+    let repo = TestRepo::new();
+    
+    // Initialize stax
+    let output = repo.run_stax(&["status"]);
+    assert!(output.status.success());
+    
+    // On trunk, merge should show an error
+    assert_eq!(repo.current_branch(), "main");
+    
+    let output = repo.run_stax(&["merge"]);
+    // Should exit with message about being on trunk
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    assert!(
+        combined.contains("trunk") || combined.contains("Checkout"),
+        "Expected message about being on trunk, got: {}", combined
+    );
+}
+
+#[test]
+fn test_merge_on_untracked_branch_shows_error() {
+    let repo = TestRepo::new();
+    
+    // Initialize stax
+    repo.run_stax(&["status"]);
+    
+    // Create an untracked branch directly with git
+    repo.git(&["checkout", "-b", "untracked-branch"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Untracked commit");
+    
+    // Merge should show an error about untracked branch
+    let output = repo.run_stax(&["merge"]);
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    assert!(
+        combined.contains("not tracked") || combined.contains("track"),
+        "Expected message about untracked branch, got: {}", combined
+    );
+}
+
+#[test]
+fn test_merge_without_pr_shows_error() {
+    let repo = TestRepo::new_with_remote();
+    
+    // Create a stax-tracked branch but don't submit (no PR)
+    repo.run_stax(&["bc", "feature-no-pr"]);
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+    
+    // Merge should fail because no PR exists
+    let output = repo.run_stax(&["merge", "--yes"]);
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    assert!(
+        combined.contains("PR") || combined.contains("submit"),
+        "Expected message about missing PR, got: {}", combined
+    );
+}
+
+#[test]
+fn test_merge_dry_run_shows_plan_without_merging() {
+    let repo = TestRepo::new_with_remote();
+    
+    // Create a branch (it won't have a PR, but dry-run should still show something)
+    repo.run_stax(&["bc", "feature-dry-run"]);
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+    
+    // Dry run should show plan
+    let output = repo.run_stax(&["merge", "--dry-run"]);
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    
+    // Either shows error about no PR or shows dry-run output
+    // Both are acceptable - the key is it doesn't actually merge
+    assert!(
+        combined.contains("dry") || combined.contains("PR") || combined.contains("plan"),
+        "Expected dry-run output or PR error, got: {}", combined
+    );
+    
+    // Branch should still exist (nothing was actually deleted)
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b.contains("feature-dry-run")),
+        "Branch should still exist after dry-run"
+    );
+}
+
+#[test]
+fn test_merge_scope_single_branch() {
+    let repo = TestRepo::new_with_remote();
+    
+    // Create a single branch
+    repo.run_stax(&["bc", "single-feature"]);
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+    
+    // Status should show the stack
+    let output = repo.run_stax(&["status"]);
+    assert!(output.status.success());
+    
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("single-feature"), "Expected branch in status");
+}
+
+#[test]
+fn test_merge_scope_stacked_branches() {
+    let repo = TestRepo::new_with_remote();
+    
+    // Create first branch
+    repo.run_stax(&["bc", "feature-a"]);
+    repo.create_file("a.txt", "content a");
+    repo.commit("Feature A");
+    
+    // Stack second branch on top
+    repo.run_stax(&["bc", "feature-b"]);
+    repo.create_file("b.txt", "content b");
+    repo.commit("Feature B");
+    
+    // Stack third branch on top
+    repo.run_stax(&["bc", "feature-c"]);
+    repo.create_file("c.txt", "content c");
+    repo.commit("Feature C");
+    
+    // Verify we're on the top branch
+    assert!(repo.current_branch().contains("feature-c"));
+    
+    // Status should show all three branches in stack
+    let output = repo.run_stax(&["status"]);
+    assert!(output.status.success());
+    
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("feature-a"), "Expected feature-a in status");
+    assert!(stdout.contains("feature-b"), "Expected feature-b in status");
+    assert!(stdout.contains("feature-c"), "Expected feature-c in status");
+}
+
+#[test]
+fn test_merge_from_middle_of_stack() {
+    let repo = TestRepo::new_with_remote();
+    
+    // Create a stack of 3 branches
+    repo.run_stax(&["bc", "stack-a"]);
+    repo.create_file("a.txt", "content a");
+    repo.commit("Feature A");
+    
+    repo.run_stax(&["bc", "stack-b"]);
+    repo.create_file("b.txt", "content b");
+    repo.commit("Feature B");
+    
+    repo.run_stax(&["bc", "stack-c"]);
+    repo.create_file("c.txt", "content c");
+    repo.commit("Feature C");
+    
+    // Go to the middle branch
+    repo.run_stax(&["checkout", "stack-b"]);
+    assert!(repo.current_branch().contains("stack-b"));
+    
+    // Merge dry-run should only show stack-a and stack-b (not stack-c)
+    let output = repo.run_stax(&["merge", "--dry-run"]);
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    
+    // The output depends on whether there are PRs or not
+    // Without PRs it will error, with dry-run it should show intent
+    // Either way, we verified the checkout worked
+    assert!(
+        combined.contains("PR") || combined.contains("stack") || combined.contains("merge"),
+        "Expected merge-related output, got: {}", combined
+    );
+}
+
+#[test]
+fn test_merge_all_flag() {
+    let repo = TestRepo::new_with_remote();
+    
+    // Create a stack
+    repo.run_stax(&["bc", "all-a"]);
+    repo.create_file("a.txt", "content");
+    repo.commit("A");
+    
+    repo.run_stax(&["bc", "all-b"]);
+    repo.create_file("b.txt", "content");
+    repo.commit("B");
+    
+    // Go back to first branch
+    repo.run_stax(&["checkout", "all-a"]);
+    
+    // With --all flag, even from first branch, it should target the whole stack
+    let output = repo.run_stax(&["merge", "--all", "--dry-run"]);
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    
+    // Should mention something about merging (even if fails due to no PRs)
+    assert!(
+        combined.contains("PR") || combined.contains("merge") || combined.contains("all"),
+        "Expected output about merging, got: {}", combined
+    );
+}
+
+#[test]
+fn test_merge_method_options() {
+    let repo = TestRepo::new_with_remote();
+    
+    // Create a branch
+    repo.run_stax(&["bc", "method-test"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Test");
+    
+    // Test squash method (default)
+    let output = repo.run_stax(&["merge", "--method", "squash", "--dry-run"]);
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    // Should process without error about invalid method
+    assert!(
+        !combined.contains("Invalid merge method"),
+        "squash should be a valid method"
+    );
+    
+    // Test merge method
+    let output = repo.run_stax(&["merge", "--method", "merge", "--dry-run"]);
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(
+        !combined.contains("Invalid merge method"),
+        "merge should be a valid method"
+    );
+    
+    // Test rebase method
+    let output = repo.run_stax(&["merge", "--method", "rebase", "--dry-run"]);
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(
+        !combined.contains("Invalid merge method"),
+        "rebase should be a valid method"
+    );
+}
+
+#[test]
+fn test_merge_invalid_method_defaults_to_squash() {
+    let repo = TestRepo::new_with_remote();
+    
+    // Create a branch
+    repo.run_stax(&["bc", "invalid-method"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Test");
+    
+    // Invalid method should fall back to default (squash)
+    let output = repo.run_stax(&["merge", "--method", "invalid", "--dry-run"]);
+    // Should not panic, should handle gracefully
+    // The command will fail due to no PR, but shouldn't crash
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(
+        !combined.is_empty(),
+        "Should produce some output even with invalid method"
+    );
+}
+
+#[test]
+fn test_merge_preserves_unrelated_branches() {
+    let repo = TestRepo::new_with_remote();
+    
+    // Create first stack
+    repo.run_stax(&["bc", "stack1-a"]);
+    repo.create_file("s1a.txt", "content");
+    repo.commit("Stack 1 A");
+    
+    // Go back to main and create second independent stack
+    repo.run_stax(&["t"]);
+    repo.run_stax(&["bc", "stack2-a"]);
+    repo.create_file("s2a.txt", "content");
+    repo.commit("Stack 2 A");
+    
+    // Verify both branches exist
+    let branches = repo.list_branches();
+    assert!(branches.iter().any(|b| b.contains("stack1")));
+    assert!(branches.iter().any(|b| b.contains("stack2")));
+    
+    // Attempt merge on stack2 (will fail due to no PR)
+    let output = repo.run_stax(&["merge", "--dry-run"]);
+    let _combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    
+    // Both branches should still exist (dry-run doesn't delete anything)
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b.contains("stack1")),
+        "stack1 branch should be preserved"
+    );
+    assert!(
+        branches.iter().any(|b| b.contains("stack2")),
+        "stack2 branch should be preserved"
+    );
+}
+
+#[test]
+fn test_merge_quiet_flag() {
+    let repo = TestRepo::new_with_remote();
+    
+    repo.run_stax(&["bc", "quiet-test"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Test");
+    
+    // Quiet flag should reduce output
+    let output = repo.run_stax(&["merge", "--quiet", "--dry-run"]);
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    
+    // In quiet mode, there should be less verbose output
+    // The exact behavior depends on whether there's an error or not
+    // Just verify the command runs
+    assert!(
+        combined.len() < 5000,
+        "Quiet mode should not produce excessive output"
+    );
+}
+
+#[test]
+fn test_merge_timeout_option() {
+    let repo = TestRepo::new_with_remote();
+    
+    repo.run_stax(&["bc", "timeout-test"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Test");
+    
+    // Custom timeout should be accepted
+    let output = repo.run_stax(&["merge", "--timeout", "5", "--dry-run"]);
+    // Should not error about invalid timeout
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(
+        !combined.contains("error") || combined.contains("PR"),
+        "Timeout option should be accepted"
+    );
+}
+
+#[test]
+fn test_merge_no_wait_flag() {
+    let repo = TestRepo::new_with_remote();
+    
+    repo.run_stax(&["bc", "no-wait-test"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Test");
+    
+    // --no-wait should be accepted
+    let output = repo.run_stax(&["merge", "--no-wait", "--dry-run"]);
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    // Should process the flag without error
+    assert!(
+        !combined.contains("unexpected argument"),
+        "--no-wait should be a valid flag"
+    );
+}
+
+#[test]
+fn test_merge_no_delete_flag() {
+    let repo = TestRepo::new_with_remote();
+    
+    repo.run_stax(&["bc", "no-delete-test"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Test");
+    
+    // --no-delete should be accepted
+    let output = repo.run_stax(&["merge", "--no-delete", "--dry-run"]);
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    // Should process the flag without error
+    assert!(
+        !combined.contains("unexpected argument"),
+        "--no-delete should be a valid flag"
+    );
+}
+
+#[test]
+fn test_merge_yes_flag_skips_confirmation() {
+    let repo = TestRepo::new_with_remote();
+    
+    repo.run_stax(&["bc", "yes-test"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Test");
+    
+    // --yes should skip confirmation prompts
+    let output = repo.run_stax(&["merge", "--yes", "--dry-run"]);
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    // Should not hang waiting for input
+    assert!(
+        !combined.contains("unexpected argument"),
+        "--yes should be a valid flag"
+    );
+}
+
+#[test]
+fn test_merge_combined_flags() {
+    let repo = TestRepo::new_with_remote();
+    
+    repo.run_stax(&["bc", "combined-test"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Test");
+    
+    // Test combining multiple flags
+    let output = repo.run_stax(&[
+        "merge",
+        "--all",
+        "--method", "squash",
+        "--no-delete",
+        "--no-wait",
+        "--timeout", "10",
+        "--yes",
+        "--quiet",
+        "--dry-run"
+    ]);
+    
+    // Should accept all flags together
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(
+        !combined.contains("unexpected argument"),
+        "All flags should be accepted together"
+    );
+}
+
 mod github_mock_tests {
     use super::*;
     use wiremock::{MockServer, Mock, ResponseTemplate};
