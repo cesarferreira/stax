@@ -23,10 +23,10 @@ Instead of one massive PR with 50 files, stacked branches let you split work int
 ○        bugfix/auth-validation-edge-case 1↑
 ○        feature/auth-validation 1↑
 ◉        feature/auth-login 1↑           ← you are here
-○        feature/auth 1↑ 1↓ (needs restacking)
-│ ○      bugfix/payments-retries 1↑ 1↓ (needs restacking)
+○        feature/auth 1↑ 1↓ (needs restack)
+│ ○      bugfix/payments-retries 1↑ 1↓ (needs restack)
 │ ○      feature/payments-api 2↑
-│ ○      feature/payments 1↑ 1↓ (needs restacking)
+│ ○      feature/payments 1↑ 1↓ (needs restack)
 │ │ ○    feature/profile-edit 1↑
 │ │ ○  ☁ feature/profile 1↑
 ○─┴─┘  ☁ main
