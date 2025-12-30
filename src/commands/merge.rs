@@ -716,7 +716,7 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
             branch.branch,
             pr_text.dimmed()
         );
-        let padding = width.saturating_sub(strip_ansi(&branch_display).len() + strip_ansi(&status).len());
+        let padding = width.saturating_sub(display_width(&branch_display) + display_width(&status));
         println!(
             "  │ {}{}{}│",
             branch_display,
@@ -733,7 +733,7 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
                     CiStatus::Failure => format!("{} failed", "✗".red()),
                     CiStatus::NoCi => format!("{} no checks", "✓".green()),
                 };
-                println!("  │     ├─ CI: {}{}│", ci_text, " ".repeat(width - 15 - strip_ansi(&ci_text).len()));
+                println!("  │     ├─ CI: {}{}│", ci_text, " ".repeat(width.saturating_sub(15 + display_width(&ci_text))));
 
                 // Reviews
                 let review_text = if status.changes_requested {
@@ -746,7 +746,7 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
                 println!(
                     "  │     ├─ Reviews: {}{}│",
                     review_text,
-                    " ".repeat(width - 20 - strip_ansi(&review_text).len())
+                    " ".repeat(width.saturating_sub(20 + display_width(&review_text)))
                 );
 
                 // Merge target
@@ -758,23 +758,26 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
                 println!(
                     "  │     └─ Merges into: {}{}│",
                     merge_into,
-                    " ".repeat(width - 24 - merge_into.len())
+                    " ".repeat(width.saturating_sub(24 + merge_into.len()))
                 );
             }
 
             // Current branch marker
             if branch.is_current {
+                let marker = "← you are here";
                 println!(
                     "  │{}{}│",
-                    " ".repeat(width - 14),
-                    "← you are here".cyan()
+                    " ".repeat(width.saturating_sub(display_width(marker))),
+                    marker.cyan()
                 );
             }
         } else {
             // For non-included branches, show they'll be rebased
+            let rebase_msg = "  │     └─ Will remain open, rebased onto main";
             println!(
-                "  │     └─ Will remain open, rebased onto main{}│",
-                " ".repeat(width - 47)
+                "{}{}│",
+                rebase_msg,
+                " ".repeat(width.saturating_sub(display_width(rebase_msg) - 4)) // -4 for the "  │ " prefix
             );
         }
 
@@ -810,43 +813,89 @@ fn strip_ansi(s: &str) -> String {
     result
 }
 
+/// Calculate the display width of a string, accounting for ANSI codes and wide Unicode chars
+fn display_width(s: &str) -> usize {
+    let stripped = strip_ansi(s);
+    stripped.chars().map(char_width).sum()
+}
+
+/// Get the display width of a single character
+fn char_width(c: char) -> usize {
+    // Check for common wide characters (emojis, CJK, etc.)
+    match c {
+        // Control characters and zero-width
+        '\x00'..='\x1f' | '\x7f' => 0,
+        // ASCII is width 1
+        '\x20'..='\x7e' => 1,
+        // Common emoji and symbols that are typically double-width in terminals
+        '⏳' | '✓' | '✗' | '✔' | '✘' | '⚠' | '❌' | '✅' | '🔴' | '🟢' | '🟡' | '⬆' | '⬇' 
+        | '↑' | '↓' | '←' | '→' | '◉' | '○' | '●' | '◯' | '☁' | '🎉' => 2,
+        // Box drawing characters are width 1
+        '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' 
+        | '╭' | '╮' | '╯' | '╰' | '║' | '═' => 1,
+        // Other Unicode - estimate based on ranges
+        c if c >= '\u{1100}' => {
+            // CJK, emoji, and other wide characters
+            if (c >= '\u{1100}' && c <= '\u{115f}')   // Hangul Jamo
+                || (c >= '\u{2e80}' && c <= '\u{9fff}')  // CJK
+                || (c >= '\u{f900}' && c <= '\u{faff}')  // CJK Compatibility
+                || (c >= '\u{fe10}' && c <= '\u{fe1f}')  // Vertical forms
+                || (c >= '\u{fe30}' && c <= '\u{fe6f}')  // CJK Compatibility Forms
+                || (c >= '\u{ff00}' && c <= '\u{ff60}')  // Fullwidth Forms
+                || (c >= '\u{ffe0}' && c <= '\u{ffe6}')  // Fullwidth Forms
+                || (c >= '\u{1f300}' && c <= '\u{1f9ff}') // Emoji
+                || (c >= '\u{2600}' && c <= '\u{26ff}')  // Misc symbols
+                || (c >= '\u{2700}' && c <= '\u{27bf}')  // Dingbats
+            {
+                2
+            } else {
+                1
+            }
+        }
+        _ => 1,
+    }
+}
+
 fn print_header(title: &str) {
-    let width = 56;
-    let padding = (width - title.len()) / 2;
+    let width: usize = 56;
+    let title_width = display_width(title);
+    let padding = width.saturating_sub(title_width) / 2;
     println!("╭{}╮", "─".repeat(width));
     println!(
         "│{}{}{}│",
         " ".repeat(padding),
         title.bold(),
-        " ".repeat(width - padding - title.len())
+        " ".repeat(width.saturating_sub(padding + title_width))
     );
     println!("╰{}╯", "─".repeat(width));
 }
 
 fn print_header_success(title: &str) {
-    let width = 56;
+    let width: usize = 56;
     let full_title = format!("✓ {}", title);
-    let padding = (width - full_title.len() + 2) / 2; // +2 for the checkmark
+    let title_width = display_width(&full_title);
+    let padding = width.saturating_sub(title_width) / 2;
     println!("╭{}╮", "─".repeat(width));
     println!(
         "│{}{}{}│",
         " ".repeat(padding),
         full_title.green().bold(),
-        " ".repeat(width - padding - full_title.len() + 2)
+        " ".repeat(width.saturating_sub(padding + title_width))
     );
     println!("╰{}╯", "─".repeat(width));
 }
 
 fn print_header_error(title: &str) {
-    let width = 56;
+    let width: usize = 56;
     let full_title = format!("✗ {}", title);
-    let padding = (width - full_title.len() + 2) / 2;
+    let title_width = display_width(&full_title);
+    let padding = width.saturating_sub(title_width) / 2;
     println!("╭{}╮", "─".repeat(width));
     println!(
         "│{}{}{}│",
         " ".repeat(padding),
         full_title.red().bold(),
-        " ".repeat(width - padding - full_title.len() + 2)
+        " ".repeat(width.saturating_sub(padding + title_width))
     );
     println!("╰{}╯", "─".repeat(width));
 }
@@ -957,6 +1006,34 @@ mod tests {
     fn test_strip_ansi_preserves_unicode() {
         let with_emoji = "\x1b[32m✓\x1b[0m Success 🎉";
         assert_eq!(strip_ansi(with_emoji), "✓ Success 🎉");
+    }
+
+    #[test]
+    fn test_display_width_ascii() {
+        assert_eq!(display_width("hello"), 5);
+        assert_eq!(display_width("hello world"), 11);
+    }
+
+    #[test]
+    fn test_display_width_emojis() {
+        // Emojis are width 2
+        assert_eq!(display_width("✓"), 2);
+        assert_eq!(display_width("⏳"), 2);
+        assert_eq!(display_width("✗"), 2);
+    }
+
+    #[test]
+    fn test_display_width_mixed() {
+        // "✓ passed" = 2 (emoji) + 1 (space) + 6 (passed) = 9
+        assert_eq!(display_width("✓ passed"), 9);
+        // "⏳ pending" = 2 (emoji) + 1 (space) + 7 (pending) = 10
+        assert_eq!(display_width("⏳ pending"), 10);
+    }
+
+    #[test]
+    fn test_display_width_with_ansi() {
+        // ANSI codes should be ignored
+        assert_eq!(display_width("\x1b[32m✓\x1b[0m passed"), 9);
     }
 
     #[test]
