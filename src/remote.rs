@@ -4,44 +4,11 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Provider {
-    GitHub,
-    GitLab,
-    Gitea,
-}
-
-impl Provider {
-    pub fn from_str(value: &str) -> Self {
-        match value.to_lowercase().as_str() {
-            "gitlab" => Provider::GitLab,
-            "gitea" => Provider::Gitea,
-            _ => Provider::GitHub,
-        }
-    }
-
-    pub fn pr_label(&self) -> &'static str {
-        match self {
-            Provider::GitLab => "MR",
-            _ => "PR",
-        }
-    }
-
-    pub fn pr_path(&self, number: u64) -> String {
-        match self {
-            Provider::GitLab => format!("-/merge_requests/{}", number),
-            Provider::Gitea => format!("pulls/{}", number),
-            Provider::GitHub => format!("pull/{}", number),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct RemoteInfo {
     pub name: String,
     pub namespace: String,
     pub repo: String,
-    pub provider: Provider,
     pub base_url: String,
     pub api_base_url: Option<String>,
 }
@@ -53,7 +20,6 @@ impl RemoteInfo {
         let (host, path) = parse_remote_url(&url)?;
         let (namespace, repo_name) = split_namespace_repo(&path)?;
 
-        let provider = Provider::from_str(config.remote_provider());
         let configured_base = config.remote_base_url().trim_end_matches('/');
         let base_url = if configured_base.is_empty()
             || (configured_base == "https://github.com" && host != "github.com")
@@ -65,21 +31,17 @@ impl RemoteInfo {
 
         let api_base_url = if let Some(api) = &config.remote.api_base_url {
             Some(api.clone())
-        } else if provider == Provider::GitHub {
-            if base_url == "https://github.com" {
-                Some("https://api.github.com".to_string())
-            } else {
-                Some(format!("{}/api/v3", base_url))
-            }
+        } else if base_url == "https://github.com" {
+            Some("https://api.github.com".to_string())
         } else {
-            None
+            // GitHub Enterprise
+            Some(format!("{}/api/v3", base_url))
         };
 
         Ok(Self {
             name,
             namespace,
             repo: repo_name,
-            provider,
             base_url,
             api_base_url,
         })
@@ -94,7 +56,7 @@ impl RemoteInfo {
     }
 
     pub fn pr_url(&self, number: u64) -> String {
-        format!("{}/{}", self.repo_url(), self.provider.pr_path(number))
+        format!("{}/pull/{}", self.repo_url(), number)
     }
 }
 
