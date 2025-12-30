@@ -51,7 +51,8 @@ pub enum CiStatus {
     Pending,
     Success,
     Failure,
-    Unknown,
+    /// No CI checks configured - treat as passing
+    NoCi,
 }
 
 impl CiStatus {
@@ -60,12 +61,18 @@ impl CiStatus {
             "success" => CiStatus::Success,
             "pending" => CiStatus::Pending,
             "failure" | "error" => CiStatus::Failure,
-            _ => CiStatus::Unknown,
+            // GitHub returns "neutral" for skipped/cancelled checks - treat as success
+            "neutral" | "skipped" | "cancelled" => CiStatus::Success,
+            // Empty or unknown typically means no CI configured
+            "" | "none" | "unknown" => CiStatus::NoCi,
+            // Default: no CI configured (don't block on unrecognized states)
+            _ => CiStatus::NoCi,
         }
     }
 
     pub fn is_success(&self) -> bool {
-        matches!(self, CiStatus::Success)
+        // NoCi is treated as success (nothing to wait for)
+        matches!(self, CiStatus::Success | CiStatus::NoCi)
     }
 
     pub fn is_pending(&self) -> bool {
@@ -74,6 +81,15 @@ impl CiStatus {
 
     pub fn is_failure(&self) -> bool {
         matches!(self, CiStatus::Failure)
+    }
+
+    pub fn display_text(&self) -> &'static str {
+        match self {
+            CiStatus::Success => "passed",
+            CiStatus::Pending => "running",
+            CiStatus::Failure => "failed",
+            CiStatus::NoCi => "no checks",
+        }
     }
 }
 
@@ -140,7 +156,7 @@ impl PrMergeStatus {
         if self.is_ready() {
             return "Ready";
         }
-        "Unknown"
+        "Ready" // Default to ready if nothing is blocking
     }
 }
 
@@ -393,14 +409,14 @@ impl GitHubClient {
 
         let head_sha = pr.head.sha.clone();
 
-        // Get CI status
+        // Get CI status (default to NoCi if we can't fetch - don't block on missing info)
         let ci_status = self
             .combined_status_state(&head_sha)
             .await
             .ok()
             .flatten()
             .map(|s| CiStatus::from_str(&s))
-            .unwrap_or(CiStatus::Unknown);
+            .unwrap_or(CiStatus::NoCi);
 
         // Get review info via GraphQL
         let (review_decision, approvals, changes_requested) = self
@@ -592,8 +608,13 @@ mod tests {
         assert!(matches!(CiStatus::from_str("pending"), CiStatus::Pending));
         assert!(matches!(CiStatus::from_str("failure"), CiStatus::Failure));
         assert!(matches!(CiStatus::from_str("error"), CiStatus::Failure));
-        assert!(matches!(CiStatus::from_str("unknown"), CiStatus::Unknown));
-        assert!(matches!(CiStatus::from_str("random"), CiStatus::Unknown));
+        // Neutral/skipped/cancelled are treated as success
+        assert!(matches!(CiStatus::from_str("neutral"), CiStatus::Success));
+        assert!(matches!(CiStatus::from_str("skipped"), CiStatus::Success));
+        // Unknown states are treated as NoCi (no blocking)
+        assert!(matches!(CiStatus::from_str("unknown"), CiStatus::NoCi));
+        assert!(matches!(CiStatus::from_str("random"), CiStatus::NoCi));
+        assert!(matches!(CiStatus::from_str(""), CiStatus::NoCi));
     }
 
     #[test]
@@ -617,9 +638,18 @@ mod tests {
         assert!(!CiStatus::Failure.is_pending());
         assert!(CiStatus::Failure.is_failure());
 
-        assert!(!CiStatus::Unknown.is_success());
-        assert!(!CiStatus::Unknown.is_pending());
-        assert!(!CiStatus::Unknown.is_failure());
+        // NoCi is treated as success (nothing blocking)
+        assert!(CiStatus::NoCi.is_success());
+        assert!(!CiStatus::NoCi.is_pending());
+        assert!(!CiStatus::NoCi.is_failure());
+    }
+
+    #[test]
+    fn test_ci_status_display_text() {
+        assert_eq!(CiStatus::Success.display_text(), "passed");
+        assert_eq!(CiStatus::Pending.display_text(), "running");
+        assert_eq!(CiStatus::Failure.display_text(), "failed");
+        assert_eq!(CiStatus::NoCi.display_text(), "no checks");
     }
 
     #[test]

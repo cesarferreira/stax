@@ -731,7 +731,7 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
                     CiStatus::Success => format!("{} passed", "✓".green()),
                     CiStatus::Pending => format!("{} running", "⏳".yellow()),
                     CiStatus::Failure => format!("{} failed", "✗".red()),
-                    CiStatus::Unknown => "? unknown".dimmed().to_string(),
+                    CiStatus::NoCi => format!("{} no checks", "✓".green()),
                 };
                 println!("  │     ├─ CI: {}{}│", ci_text, " ".repeat(width - 15 - strip_ansi(&ci_text).len()));
 
