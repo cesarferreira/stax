@@ -248,6 +248,7 @@ impl OpReceipt {
     }
     
     /// Count branches that were actually modified
+    #[allow(dead_code)]
     pub fn modified_branch_count(&self) -> usize {
         self.local_refs.iter()
             .filter(|r| r.oid_before != r.oid_after)

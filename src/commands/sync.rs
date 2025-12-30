@@ -212,10 +212,6 @@ pub fn run(
                 println!();
             }
 
-            // Track if we need to switch branches at the end
-            let mut switched_from_current = false;
-            let mut new_current = current.clone();
-
             for branch in &merged {
                 let is_current_branch = branch == &current;
 
@@ -258,8 +254,6 @@ pub fn run(
                             .status();
 
                         if checkout_status.map(|s| s.success()).unwrap_or(false) {
-                            switched_from_current = true;
-                            new_current = parent_branch.clone();
                             if !quiet {
                                 println!(
                                     "    {} checked out {}",

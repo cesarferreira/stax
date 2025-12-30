@@ -61,6 +61,7 @@ impl Transaction {
     }
     
     /// Get the operation ID
+    #[allow(dead_code)]
     pub fn op_id(&self) -> &str {
         &self.receipt.op_id
     }
@@ -142,6 +143,7 @@ impl Transaction {
     }
     
     /// Record after-OIDs for all planned branches
+    #[allow(dead_code)]
     pub fn record_all_after(&mut self, repo: &GitRepo) -> Result<()> {
         let branches: Vec<String> = self.receipt.local_refs.iter()
             .map(|r| r.branch.clone())
@@ -197,11 +199,13 @@ impl Transaction {
     }
     
     /// Get the operation kind
+    #[allow(dead_code)]
     pub fn kind(&self) -> &OpKind {
         &self.receipt.kind
     }
     
     /// Check if the transaction has been snapshotted
+    #[allow(dead_code)]
     pub fn is_snapshotted(&self) -> bool {
         self.snapshotted
     }
@@ -222,7 +226,8 @@ impl Drop for Transaction {
 }
 
 /// Print the plan before executing
-pub fn print_plan(kind: &OpKind, summary: &PlanSummary, quiet: bool) {
+#[allow(dead_code)]
+pub fn print_plan(_kind: &OpKind, summary: &PlanSummary, quiet: bool) {
     if quiet {
         return;
     }
