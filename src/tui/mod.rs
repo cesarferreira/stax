@@ -9,7 +9,7 @@ use event::{poll_event, KeyAction};
 use crate::engine::BranchMetadata;
 use crate::git::RebaseResult;
 use crate::ops::receipt::{OpKind, PlanSummary};
-use crate::ops::tx::Transaction;
+use crate::ops::tx::{self, Transaction};
 use anyhow::Result;
 use crossterm::{
     event::Event,
@@ -56,11 +56,9 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
         terminal.draw(|f| ui::render(f, app))?;
 
         // Handle events
-        if let Some(event) = poll_event(Duration::from_millis(100))? {
-            if let Event::Key(key) = event {
-                let action = KeyAction::from(key);
-                handle_action(app, action)?;
-            }
+        if let Some(Event::Key(key)) = poll_event(Duration::from_millis(100))? {
+            let action = KeyAction::from(key);
+            handle_action(app, action)?;
         }
 
         if app.should_quit {
@@ -444,11 +442,13 @@ fn apply_reorder_changes(app: &mut App) -> Result<()> {
     // Begin single transaction for entire reorder operation
     let mut tx = Transaction::begin(OpKind::Reorder, &app.repo, true)?;
     tx.plan_branches(&app.repo, &affected_branches)?;
-    tx.set_plan_summary(PlanSummary {
+    let summary = PlanSummary {
         branches_to_rebase: affected_branches.len(),
         branches_to_push: 0,
         description: vec![format!("Reorder {} {}", affected_branches.len(), branch_word)],
-    });
+    };
+    tx::print_plan(tx.kind(), &summary, true); // TUI is quiet
+    tx.set_plan_summary(summary);
     tx.snapshot()?;
     
     // Apply each reparent operation directly (update metadata)

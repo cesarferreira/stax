@@ -4,7 +4,7 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
-use crate::ops::tx::Transaction;
+use crate::ops::tx::{self, Transaction};
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -212,10 +212,6 @@ pub fn run(
                 println!();
             }
 
-            // Track if we need to switch branches at the end
-            let mut switched_from_current = false;
-            let mut new_current = current.clone();
-
             for branch in &merged {
                 let is_current_branch = branch == &current;
 
@@ -258,8 +254,6 @@ pub fn run(
                             .status();
 
                         if checkout_status.map(|s| s.success()).unwrap_or(false) {
-                            switched_from_current = true;
-                            new_current = parent_branch.clone();
                             if !quiet {
                                 println!(
                                     "    {} checked out {}",
@@ -402,11 +396,13 @@ pub fn run(
             // Begin transaction for restack phase
             let mut tx = Transaction::begin(OpKind::SyncRestack, &repo, quiet)?;
             tx.plan_branches(&repo, &needs_restack)?;
-            tx.set_plan_summary(PlanSummary {
+            let summary = PlanSummary {
                 branches_to_rebase: needs_restack.len(),
                 branches_to_push: 0,
                 description: vec![format!("Sync restack {} {}", needs_restack.len(), if needs_restack.len() == 1 { "branch" } else { "branches" })],
-            });
+            };
+            tx::print_plan(tx.kind(), &summary, quiet);
+            tx.set_plan_summary(summary);
             tx.snapshot()?;
 
             let mut summary: Vec<(String, String)> = Vec::new();

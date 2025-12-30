@@ -15,20 +15,13 @@ pub struct BranchCacheEntry {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[derive(Default)]
 pub struct CiCache {
     pub branches: HashMap<String, BranchCacheEntry>,
     #[serde(default)]
     pub last_refresh: u64,
 }
 
-impl Default for CiCache {
-    fn default() -> Self {
-        Self {
-            branches: HashMap::new(),
-            last_refresh: 0,
-        }
-    }
-}
 
 impl CiCache {
     /// Get cache file path for current repo

@@ -154,7 +154,7 @@ impl GitHubClient {
 
         self.octocrab
             .issues(&self.owner, &self.repo)
-            .add_labels(pr_number, &labels.to_vec())
+            .add_labels(pr_number, labels)
             .await
             .context("Failed to add labels")?;
 

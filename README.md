@@ -20,15 +20,15 @@
 Instead of one massive PR with 50 files, stacked branches let you split work into small, reviewable pieces that build on each other:
 
 ```
-○      bugfix/auth-validation-edge-case 1↑
-○      feature/auth-validation 1↑
-◉      feature/auth-login 1↑           ← you are here
-○      feature/auth 1↑ 1↓ ⟳
-│ ○    bugfix/payments-retries 1↑ 1↓ ⟳
-│ ○    feature/payments-api 2↑
-│ ○    feature/payments 1↑ 1↓ ⟳
-│ │ ○  feature/profile-edit 1↑
-│ │ ○  ☁ feature/profile 1↑ PR #42
+○        bugfix/auth-validation-edge-case 1↑
+○        feature/auth-validation 1↑
+◉        feature/auth-login 1↑           ← you are here
+○        feature/auth 1↑ 1↓ (needs restacking)
+│ ○      bugfix/payments-retries 1↑ 1↓ (needs restacking)
+│ ○      feature/payments-api 2↑
+│ ○      feature/payments 1↑ 1↓ (needs restacking)
+│ │ ○    feature/profile-edit 1↑
+│ │ ○  ☁ feature/profile 1↑
 ○─┴─┘  ☁ main
 ```
 
