@@ -5,7 +5,7 @@ use crate::git::{GitRepo, RebaseResult};
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::Transaction;
-use crate::remote::{Provider, RemoteInfo};
+use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -672,10 +672,6 @@ fn refresh_ci_cache(
         Ok(info) => info,
         Err(_) => return,
     };
-
-    if remote_info.provider != Provider::GitHub {
-        return;
-    }
 
     if Config::github_token().is_none() {
         return;

@@ -59,29 +59,13 @@ pub fn run() -> Result<()> {
         }
     }
 
-    let provider = config.remote_provider();
-    println!(
-        "{} {} {}",
-        "✓".green(),
-        "Provider:".dimmed(),
-        provider.cyan()
-    );
-
-    if provider.eq_ignore_ascii_case("github") {
-        if Config::github_token().is_some() {
-            println!("{} {}", "✓".green(), "GitHub token set".dimmed());
-        } else {
-            println!(
-                "{} {}",
-                "⚠".yellow(),
-                "GitHub token missing (PR creation disabled)".yellow()
-            );
-        }
+    if Config::github_token().is_some() {
+        println!("{} {}", "✓".green(), "GitHub token set".dimmed());
     } else {
         println!(
             "{} {}",
             "⚠".yellow(),
-            "Non-GitHub provider: PR creation is disabled".yellow()
+            "GitHub token missing (PR creation disabled)".yellow()
         );
     }
 

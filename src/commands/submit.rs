@@ -5,7 +5,7 @@ use crate::github::pr::{generate_stack_comment, StackPrInfo};
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::Transaction;
-use crate::remote::{self, Provider, RemoteInfo};
+use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Editor, Input, Select};
@@ -127,15 +127,6 @@ pub fn run(
     }
 
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
-    if remote_info.provider != Provider::GitHub && !no_pr {
-        anyhow::bail!(
-            "PR creation is only supported for GitHub remotes.\n\n\
-             Current provider: {}\n\
-             You can still push branches with:\n  \
-             stax submit --no-pr",
-            config.remote_provider()
-        );
-    }
 
     let owner = remote_info.owner().to_string();
     let repo_name = remote_info.repo.clone();

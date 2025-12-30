@@ -33,10 +33,7 @@ pub struct RemoteConfig {
     /// Git remote name (default: "origin")
     #[serde(default = "default_remote_name")]
     pub name: String,
-    /// Hosting provider (github, gitlab, gitea)
-    #[serde(default = "default_remote_provider")]
-    pub provider: String,
-    /// Base web URL for the provider (e.g., https://github.com)
+    /// Base web URL for GitHub (e.g., https://github.com or GitHub Enterprise URL)
     #[serde(default = "default_remote_base_url")]
     pub base_url: String,
     /// API base URL (GitHub Enterprise), e.g., https://github.company.com/api/v3
@@ -65,7 +62,6 @@ impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
             name: default_remote_name(),
-            provider: default_remote_provider(),
             base_url: default_remote_base_url(),
             api_base_url: None,
         }
@@ -86,10 +82,6 @@ fn default_replacement() -> String {
 
 fn default_remote_name() -> String {
     "origin".to_string()
-}
-
-fn default_remote_provider() -> String {
-    "github".to_string()
 }
 
 fn default_remote_base_url() -> String {
@@ -268,10 +260,6 @@ impl Config {
         self.remote.name.as_str()
     }
 
-    pub fn remote_provider(&self) -> &str {
-        self.remote.provider.as_str()
-    }
-
     pub fn remote_base_url(&self) -> &str {
         self.remote.base_url.as_str()
     }
@@ -290,7 +278,6 @@ mod tests {
         assert!(!config.branch.date);
         assert_eq!(config.branch.replacement, "-");
         assert_eq!(config.remote.name, "origin");
-        assert_eq!(config.remote.provider, "github");
         assert_eq!(config.remote.base_url, "https://github.com");
         assert!(config.ui.tips);
     }

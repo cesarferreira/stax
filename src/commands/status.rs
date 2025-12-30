@@ -3,7 +3,7 @@ use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
 use crate::github::GitHubClient;
-use crate::remote::{self, Provider, RemoteInfo};
+use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
 use colored::{Color, Colorize};
 use serde::Serialize;
@@ -321,11 +321,7 @@ pub fn run(
             // Only show PR info in verbose mode (ll command)
             if verbose {
                 if let Some(pr_number) = entry.pr_number {
-                    let pr_label = remote_info
-                        .as_ref()
-                        .map(|r| r.provider.pr_label())
-                        .unwrap_or("PR");
-                    let mut pr_text = format!(" {} #{}", pr_label, pr_number);
+                    let mut pr_text = format!(" PR #{}", pr_number);
                     if let Some(ref state) = entry.pr_state {
                         pr_text.push_str(&format!(" {}", state.to_lowercase()));
                     }
@@ -572,10 +568,6 @@ fn fetch_ci_states(
     let Some(remote) = remote_info else {
         return HashMap::new();
     };
-
-    if remote.provider != Provider::GitHub {
-        return HashMap::new();
-    }
 
     if Config::github_token().is_none() {
         return HashMap::new();
