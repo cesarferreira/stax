@@ -223,7 +223,6 @@ fn test_fold_scenario_valid_setup() {
     repo.commit("Feature 1 commit");
 
     repo.run_stax(&["bc", "feature-2"]);
-    let feature2 = repo.current_branch();
     repo.create_file("f2.txt", "content 2");
     repo.commit("Feature 2 commit");
 
@@ -290,7 +289,6 @@ fn test_fold_scenario_parent_is_not_trunk() {
     repo.commit("Feature 1");
 
     repo.run_stax(&["bc", "feature-2"]);
-    let feature2 = repo.current_branch();
 
     // Check parent is feature-1, not trunk
     let parent = repo.get_current_parent();

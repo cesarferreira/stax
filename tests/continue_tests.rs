@@ -160,7 +160,7 @@ fn test_continue_after_restack_creates_conflict_marker() {
     let repo = TestRepo::new();
 
     // Create the conflict scenario
-    let branch_name = repo.create_conflict_scenario();
+    let _branch_name = repo.create_conflict_scenario();
 
     // Try to restack - this should fail with conflict
     let output = repo.run_stax(&["restack", "--quiet"]);

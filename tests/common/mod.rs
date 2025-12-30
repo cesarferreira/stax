@@ -24,6 +24,7 @@ pub struct TestRepo {
     remote_dir: Option<TempDir>,
 }
 
+#[allow(dead_code)]
 impl TestRepo {
     /// Create a new test repository with git init and an initial commit on main
     pub fn new() -> Self {
@@ -498,6 +499,7 @@ impl TestRepo {
 // =============================================================================
 
 /// Extension trait for fluent assertions on command Output
+#[allow(dead_code)]
 pub trait OutputAssertions {
     fn assert_success(&self) -> &Self;
     fn assert_failure(&self) -> &Self;
@@ -506,6 +508,7 @@ pub trait OutputAssertions {
     fn assert_stdout_not_contains(&self, s: &str) -> &Self;
 }
 
+#[allow(dead_code)]
 impl OutputAssertions for Output {
     fn assert_success(&self) -> &Self {
         assert!(

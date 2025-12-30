@@ -329,7 +329,7 @@ fn test_down_to_trunk() {
     let repo = TestRepo::new();
 
     // Create a single branch
-    let branches = repo.create_stack(&["feature-1"]);
+    let _branches = repo.create_stack(&["feature-1"]);
 
     // On feature-1
     assert!(repo.current_branch_contains("feature-1"));
