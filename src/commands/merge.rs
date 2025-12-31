@@ -677,7 +677,7 @@ fn print_merge_preview(scope: &MergeScope, method: &MergeMethod) {
     );
 }
 
-/// Print branch info in a clean list format
+/// Print branch info in a clean, compact format
 fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
     println!();
 
@@ -687,83 +687,82 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
             .map(|n| format!("#{}", n))
             .unwrap_or_else(|| "no PR".to_string());
 
-        // Status indicator
-        let status_indicator = if included {
-            branch
-                .pr_status
-                .as_ref()
-                .map(|s| {
-                    if s.is_ready() {
-                        "✓".green().to_string()
-                    } else if s.is_waiting() {
-                        "○".yellow().to_string()
-                    } else {
-                        "✗".red().to_string()
-                    }
-                })
-                .unwrap_or_else(|| "?".dimmed().to_string())
-        } else {
-            "·".dimmed().to_string()
-        };
-
-        // Main branch line
-        println!(
-            "  {} {}. {} {}",
-            status_indicator,
-            branch.position,
-            branch.branch.bold(),
-            format!("({})", pr_text).dimmed()
-        );
-
         if included {
             if let Some(ref pr_status) = branch.pr_status {
-                // Status text
-                let status_text = if pr_status.is_ready() {
-                    "Ready to merge".green().to_string()
+                // Status indicator and text
+                let (indicator, status_text) = if pr_status.is_ready() {
+                    ("✓".green(), "Ready".green())
                 } else if pr_status.is_blocked() {
-                    pr_status.status_text().red().to_string()
+                    ("✗".red(), pr_status.status_text().red())
                 } else {
-                    pr_status.status_text().yellow().to_string()
+                    ("○".yellow(), pr_status.status_text().yellow())
                 };
-                println!("       {}", status_text);
 
-                // CI status
-                let ci_text = match pr_status.ci_status {
-                    CiStatus::Success => format!("{} CI passed", "✓".green()),
-                    CiStatus::Pending => format!("{} CI running", "○".yellow()),
-                    CiStatus::Failure => format!("{} CI failed", "✗".red()),
-                    CiStatus::NoCi => format!("{} No CI checks", "·".dimmed()),
+                // Main branch line with status
+                println!(
+                    "  {} {}. {}  {}  {}",
+                    indicator,
+                    branch.position,
+                    branch.branch.bold(),
+                    format!("({})", pr_text).dimmed(),
+                    status_text
+                );
+
+                // CI + Reviews on one line
+                let ci = match pr_status.ci_status {
+                    CiStatus::Success => format!("CI {}", "✓".green()),
+                    CiStatus::Pending => format!("CI {}", "○".yellow()),
+                    CiStatus::Failure => format!("CI {}", "✗".red()),
+                    CiStatus::NoCi => format!("CI {}", "·".dimmed()),
                 };
-                println!("       {}", ci_text);
 
-                // Reviews
-                let review_text = if pr_status.changes_requested {
-                    format!("{} Changes requested", "✗".red())
+                let reviews = if pr_status.changes_requested {
+                    format!("Review {}", "✗".red())
                 } else if pr_status.approvals > 0 {
-                    format!("{} {} approval(s)", "✓".green(), pr_status.approvals)
+                    format!("Review {} {}", "✓".green(), pr_status.approvals)
                 } else {
-                    format!("{} Awaiting review", "○".yellow())
+                    format!("Review {}", "○".yellow())
                 };
-                println!("       {}", review_text);
 
-                // Merge target
                 let merge_into = if branch.position == 1 {
                     "main"
                 } else {
-                    "main (after rebase)"
+                    "main (rebased)"
                 };
-                println!("       {} {}", "→".dimmed(), merge_into.dimmed());
-            }
 
-            // Current branch marker
-            if branch.is_current {
-                println!("       {}", "← you are here".cyan());
+                println!(
+                    "     {}  {}  {} {}",
+                    ci,
+                    reviews,
+                    "→".dimmed(),
+                    merge_into.dimmed()
+                );
+
+                // Current branch marker
+                if branch.is_current {
+                    println!("     {}", "← you are here".cyan());
+                }
+            } else {
+                // No PR status available
+                println!(
+                    "  {} {}. {}  {}",
+                    "?".dimmed(),
+                    branch.position,
+                    branch.branch.bold(),
+                    format!("({})", pr_text).dimmed()
+                );
             }
         } else {
+            // Not included in merge
             println!(
-                "       {}",
-                "Will remain open, rebased onto main".dimmed()
+                "  {} {}. {}  {}  {}",
+                "·".dimmed(),
+                branch.position,
+                branch.branch,
+                format!("({})", pr_text).dimmed(),
+                "not included".dimmed()
             );
+            println!("     {}", "Will be rebased onto main".dimmed());
         }
 
         // Add spacing between branches
