@@ -677,7 +677,7 @@ fn print_merge_preview(scope: &MergeScope, method: &MergeMethod) {
     );
 }
 
-/// Print branch info in a clean, compact format
+/// Print branch info as a checklist
 fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
     println!();
 
@@ -687,82 +687,56 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
             .map(|n| format!("#{}", n))
             .unwrap_or_else(|| "no PR".to_string());
 
+        // Branch header
+        println!(
+            "  {}. {} {}",
+            branch.position.to_string().bold(),
+            branch.branch.bold(),
+            format!("({})", pr_text).dimmed()
+        );
+
         if included {
             if let Some(ref pr_status) = branch.pr_status {
-                // Status indicator and text
-                let (indicator, status_text) = if pr_status.is_ready() {
-                    ("✓".green(), "Ready".green())
-                } else if pr_status.is_blocked() {
-                    ("✗".red(), pr_status.status_text().red())
-                } else {
-                    ("○".yellow(), pr_status.status_text().yellow())
+                // Checklist items
+                let ci_check = match pr_status.ci_status {
+                    CiStatus::Success => format!("  {} CI checks passed", "✓".green()),
+                    CiStatus::Pending => format!("  {} CI checks running...", "○".yellow()),
+                    CiStatus::Failure => format!("  {} CI checks failed", "✗".red()),
+                    CiStatus::NoCi => format!("  {} No CI checks required", "✓".green()),
                 };
+                println!("{}", ci_check);
 
-                // Main branch line with status
-                println!(
-                    "  {} {}. {}  {}  {}",
-                    indicator,
-                    branch.position,
-                    branch.branch.bold(),
-                    format!("({})", pr_text).dimmed(),
-                    status_text
-                );
-
-                // CI + Reviews on one line
-                let ci = match pr_status.ci_status {
-                    CiStatus::Success => format!("CI {}", "✓".green()),
-                    CiStatus::Pending => format!("CI {}", "○".yellow()),
-                    CiStatus::Failure => format!("CI {}", "✗".red()),
-                    CiStatus::NoCi => format!("CI {}", "·".dimmed()),
-                };
-
-                let reviews = if pr_status.changes_requested {
-                    format!("Review {}", "✗".red())
+                let review_check = if pr_status.changes_requested {
+                    format!("  {} Changes requested", "✗".red())
                 } else if pr_status.approvals > 0 {
-                    format!("Review {} {}", "✓".green(), pr_status.approvals)
+                    format!("  {} Approved ({} review{})", "✓".green(), pr_status.approvals, if pr_status.approvals == 1 { "" } else { "s" })
                 } else {
-                    format!("Review {}", "○".yellow())
+                    format!("  {} Awaiting review...", "○".yellow())
                 };
+                println!("{}", review_check);
 
+                let mergeable_check = if pr_status.mergeable == Some(false) {
+                    format!("  {} Has merge conflicts", "✗".red())
+                } else if pr_status.mergeable == Some(true) {
+                    format!("  {} No conflicts", "✓".green())
+                } else {
+                    format!("  {} Checking conflicts...", "○".yellow())
+                };
+                println!("{}", mergeable_check);
+
+                // Merge target
                 let merge_into = if branch.position == 1 {
-                    "main"
+                    "main".to_string()
                 } else {
-                    "main (rebased)"
+                    "main (after rebase)".to_string()
                 };
-
-                println!(
-                    "     {}  {}  {} {}",
-                    ci,
-                    reviews,
-                    "→".dimmed(),
-                    merge_into.dimmed()
-                );
-
-                // Current branch marker
-                if branch.is_current {
-                    println!("     {}", "← you are here".cyan());
-                }
+                println!("  {} Merge into {}", "→".dimmed(), merge_into);
             } else {
-                // No PR status available
-                println!(
-                    "  {} {}. {}  {}",
-                    "?".dimmed(),
-                    branch.position,
-                    branch.branch.bold(),
-                    format!("({})", pr_text).dimmed()
-                );
+                println!("  {} Fetching status...", "○".yellow());
             }
         } else {
-            // Not included in merge
-            println!(
-                "  {} {}. {}  {}  {}",
-                "·".dimmed(),
-                branch.position,
-                branch.branch,
-                format!("({})", pr_text).dimmed(),
-                "not included".dimmed()
-            );
-            println!("     {}", "Will be rebased onto main".dimmed());
+            println!("  {} Not included in this merge", "·".dimmed());
+            println!("  {} Will be rebased onto main", "→".dimmed());
         }
 
         // Add spacing between branches
