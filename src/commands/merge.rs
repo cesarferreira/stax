@@ -677,109 +677,102 @@ fn print_merge_preview(scope: &MergeScope, method: &MergeMethod) {
     );
 }
 
-/// Print a box with branch info
+/// Print branch info in a clean list format
 fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
-    let width = 55;
-
-    // Top border
-    println!("  ┌{}┐", "─".repeat(width));
+    println!();
 
     for (idx, branch) in branches.iter().enumerate() {
         let pr_text = branch
             .pr_number
-            .map(|n| format!("(#{})", n))
-            .unwrap_or_else(|| "(no PR)".to_string());
+            .map(|n| format!("#{}", n))
+            .unwrap_or_else(|| "no PR".to_string());
 
-        let status = if included {
+        // Status indicator
+        let status_indicator = if included {
             branch
                 .pr_status
                 .as_ref()
                 .map(|s| {
-                    let text = s.status_text();
                     if s.is_ready() {
-                        format!("{} {}", "✓".green(), text.green())
+                        "✓".green().to_string()
                     } else if s.is_waiting() {
-                        format!("{} {}", "⏳".yellow(), text.yellow())
+                        "○".yellow().to_string()
                     } else {
-                        format!("{} {}", "✗".red(), text.red())
+                        "✗".red().to_string()
                     }
                 })
-                .unwrap_or_else(|| "? Unknown".dimmed().to_string())
+                .unwrap_or_else(|| "?".dimmed().to_string())
         } else {
-            "(not included)".dimmed().to_string()
+            "·".dimmed().to_string()
         };
 
-        // Branch line with number
-        let branch_display = format!(
-            "  {}. {} {}",
-            branch.position,
-            branch.branch,
-            pr_text.dimmed()
-        );
-        let status_plain = strip_ansi(&status);
-        let branch_plain = strip_ansi(&branch_display);
-        let padding = width.saturating_sub(branch_plain.len() + status_plain.len() + 1);
+        // Main branch line
         println!(
-            "  │ {}{}{}│",
-            branch_display,
-            " ".repeat(padding),
-            status
+            "  {} {}. {} {}",
+            status_indicator,
+            branch.position,
+            branch.branch.bold(),
+            format!("({})", pr_text).dimmed()
         );
 
         if included {
             if let Some(ref pr_status) = branch.pr_status {
-                // CI status - use simple ASCII indicators for consistency
-                let ci_text = match pr_status.ci_status {
-                    CiStatus::Success => format!("{} passed", "✓".green()),
-                    CiStatus::Pending => format!("{} running", "~".yellow()),
-                    CiStatus::Failure => format!("{} failed", "✗".red()),
-                    CiStatus::NoCi => format!("{} no checks", "✓".green()),
-                };
-                let ci_line = format!("    ├─ CI: {}", ci_text);
-                println!("{}", box_line(&ci_line, width));
-
-                // Reviews - use simple ASCII indicators
-                let review_text = if pr_status.changes_requested {
-                    format!("{} changes requested", "✗".red())
-                } else if pr_status.approvals > 0 {
-                    format!("{} {} approved", "✓".green(), pr_status.approvals)
+                // Status text
+                let status_text = if pr_status.is_ready() {
+                    "Ready to merge".green().to_string()
+                } else if pr_status.is_blocked() {
+                    pr_status.status_text().red().to_string()
                 } else {
-                    format!("{} pending", "~".yellow())
+                    pr_status.status_text().yellow().to_string()
                 };
-                let review_line = format!("    ├─ Reviews: {}", review_text);
-                println!("{}", box_line(&review_line, width));
+                println!("       {}", status_text);
+
+                // CI status
+                let ci_text = match pr_status.ci_status {
+                    CiStatus::Success => format!("{} CI passed", "✓".green()),
+                    CiStatus::Pending => format!("{} CI running", "○".yellow()),
+                    CiStatus::Failure => format!("{} CI failed", "✗".red()),
+                    CiStatus::NoCi => format!("{} No CI checks", "·".dimmed()),
+                };
+                println!("       {}", ci_text);
+
+                // Reviews
+                let review_text = if pr_status.changes_requested {
+                    format!("{} Changes requested", "✗".red())
+                } else if pr_status.approvals > 0 {
+                    format!("{} {} approval(s)", "✓".green(), pr_status.approvals)
+                } else {
+                    format!("{} Awaiting review", "○".yellow())
+                };
+                println!("       {}", review_text);
 
                 // Merge target
                 let merge_into = if branch.position == 1 {
-                    "main".to_string()
+                    "main"
                 } else {
-                    "main (after rebase)".to_string()
+                    "main (after rebase)"
                 };
-                let merge_line = format!("    └─ Merges into: {}", merge_into);
-                println!("{}", box_line(&merge_line, width));
+                println!("       {} {}", "→".dimmed(), merge_into.dimmed());
             }
 
             // Current branch marker
             if branch.is_current {
-                let marker = format!("{}", "← you are here".cyan());
-                let marker_plain = "← you are here";
-                let padding = width.saturating_sub(marker_plain.len());
-                println!("  │{}{}│", " ".repeat(padding), marker);
+                println!("       {}", "← you are here".cyan());
             }
         } else {
-            // For non-included branches, show they'll be rebased
-            let rebase_line = "    └─ Will remain open, rebased onto main";
-            println!("{}", box_line(rebase_line, width));
+            println!(
+                "       {}",
+                "Will remain open, rebased onto main".dimmed()
+            );
         }
 
-        // Separator between branches (except last)
+        // Add spacing between branches
         if idx < branches.len() - 1 {
-            println!("  ├{}┤", "─".repeat(width));
+            println!();
         }
     }
 
-    // Bottom border
-    println!("  └{}┘", "─".repeat(width));
+    println!();
 }
 
 /// Strip ANSI codes for length calculation
@@ -829,13 +822,6 @@ fn char_width(c: char) -> usize {
         // Everything else (including emojis) - assume width 2
         _ => 2,
     }
-}
-
-/// Build a box line with proper padding - ensures consistent alignment
-fn box_line(content: &str, width: usize) -> String {
-    let content_width = display_width(content);
-    let padding = width.saturating_sub(content_width);
-    format!("  │{}{}│", content, " ".repeat(padding))
 }
 
 fn print_header(title: &str) {
