@@ -716,7 +716,9 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
             branch.branch,
             pr_text.dimmed()
         );
-        let padding = width.saturating_sub(display_width(&branch_display) + display_width(&status));
+        let status_plain = strip_ansi(&status);
+        let branch_plain = strip_ansi(&branch_display);
+        let padding = width.saturating_sub(branch_plain.len() + status_plain.len() + 1);
         println!(
             "  │ {}{}{}│",
             branch_display,
@@ -725,29 +727,27 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
         );
 
         if included {
-            if let Some(ref status) = branch.pr_status {
-                // CI status
-                let ci_text = match status.ci_status {
+            if let Some(ref pr_status) = branch.pr_status {
+                // CI status - use simple ASCII indicators for consistency
+                let ci_text = match pr_status.ci_status {
                     CiStatus::Success => format!("{} passed", "✓".green()),
-                    CiStatus::Pending => format!("{} running", "⏳".yellow()),
+                    CiStatus::Pending => format!("{} running", "~".yellow()),
                     CiStatus::Failure => format!("{} failed", "✗".red()),
                     CiStatus::NoCi => format!("{} no checks", "✓".green()),
                 };
-                println!("  │     ├─ CI: {}{}│", ci_text, " ".repeat(width.saturating_sub(15 + display_width(&ci_text))));
+                let ci_line = format!("    ├─ CI: {}", ci_text);
+                println!("{}", box_line(&ci_line, width));
 
-                // Reviews
-                let review_text = if status.changes_requested {
+                // Reviews - use simple ASCII indicators
+                let review_text = if pr_status.changes_requested {
                     format!("{} changes requested", "✗".red())
-                } else if status.approvals > 0 {
-                    format!("{} {} approved", "✓".green(), status.approvals)
+                } else if pr_status.approvals > 0 {
+                    format!("{} {} approved", "✓".green(), pr_status.approvals)
                 } else {
-                    format!("{} pending", "⏳".yellow())
+                    format!("{} pending", "~".yellow())
                 };
-                println!(
-                    "  │     ├─ Reviews: {}{}│",
-                    review_text,
-                    " ".repeat(width.saturating_sub(20 + display_width(&review_text)))
-                );
+                let review_line = format!("    ├─ Reviews: {}", review_text);
+                println!("{}", box_line(&review_line, width));
 
                 // Merge target
                 let merge_into = if branch.position == 1 {
@@ -755,30 +755,21 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
                 } else {
                     "main (after rebase)".to_string()
                 };
-                println!(
-                    "  │     └─ Merges into: {}{}│",
-                    merge_into,
-                    " ".repeat(width.saturating_sub(24 + merge_into.len()))
-                );
+                let merge_line = format!("    └─ Merges into: {}", merge_into);
+                println!("{}", box_line(&merge_line, width));
             }
 
             // Current branch marker
             if branch.is_current {
-                let marker = "← you are here";
-                println!(
-                    "  │{}{}│",
-                    " ".repeat(width.saturating_sub(display_width(marker))),
-                    marker.cyan()
-                );
+                let marker = format!("{}", "← you are here".cyan());
+                let marker_plain = "← you are here";
+                let padding = width.saturating_sub(marker_plain.len());
+                println!("  │{}{}│", " ".repeat(padding), marker);
             }
         } else {
             // For non-included branches, show they'll be rebased
-            let rebase_msg = "  │     └─ Will remain open, rebased onto main";
-            println!(
-                "{}{}│",
-                rebase_msg,
-                " ".repeat(width.saturating_sub(display_width(rebase_msg) - 4)) // -4 for the "  │ " prefix
-            );
+            let rebase_line = "    └─ Will remain open, rebased onto main";
+            println!("{}", box_line(rebase_line, width));
         }
 
         // Separator between branches (except last)
@@ -821,39 +812,30 @@ fn display_width(s: &str) -> usize {
 
 /// Get the display width of a single character
 fn char_width(c: char) -> usize {
-    // Check for common wide characters (emojis, CJK, etc.)
+    // Use unicode_width crate logic for accurate width calculation
+    // For now, use a simplified approach that works for our specific use case
     match c {
         // Control characters and zero-width
         '\x00'..='\x1f' | '\x7f' => 0,
         // ASCII is width 1
         '\x20'..='\x7e' => 1,
-        // Common emoji and symbols that are typically double-width in terminals
-        '⏳' | '✓' | '✗' | '✔' | '✘' | '⚠' | '❌' | '✅' | '🔴' | '🟢' | '🟡' | '⬆' | '⬇' 
-        | '↑' | '↓' | '←' | '→' | '◉' | '○' | '●' | '◯' | '☁' | '🎉' => 2,
         // Box drawing characters are width 1
         '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' 
         | '╭' | '╮' | '╯' | '╰' | '║' | '═' => 1,
-        // Other Unicode - estimate based on ranges
-        c if c >= '\u{1100}' => {
-            // CJK, emoji, and other wide characters
-            if (c >= '\u{1100}' && c <= '\u{115f}')   // Hangul Jamo
-                || (c >= '\u{2e80}' && c <= '\u{9fff}')  // CJK
-                || (c >= '\u{f900}' && c <= '\u{faff}')  // CJK Compatibility
-                || (c >= '\u{fe10}' && c <= '\u{fe1f}')  // Vertical forms
-                || (c >= '\u{fe30}' && c <= '\u{fe6f}')  // CJK Compatibility Forms
-                || (c >= '\u{ff00}' && c <= '\u{ff60}')  // Fullwidth Forms
-                || (c >= '\u{ffe0}' && c <= '\u{ffe6}')  // Fullwidth Forms
-                || (c >= '\u{1f300}' && c <= '\u{1f9ff}') // Emoji
-                || (c >= '\u{2600}' && c <= '\u{26ff}')  // Misc symbols
-                || (c >= '\u{2700}' && c <= '\u{27bf}')  // Dingbats
-            {
-                2
-            } else {
-                1
-            }
-        }
-        _ => 1,
+        // Arrows - typically width 1 in most terminals
+        '←' | '→' | '↑' | '↓' => 1,
+        // Checkmarks and X marks - width 1 in most monospace fonts
+        '✓' | '✗' | '✔' | '✘' => 1,
+        // Everything else (including emojis) - assume width 2
+        _ => 2,
     }
+}
+
+/// Build a box line with proper padding - ensures consistent alignment
+fn box_line(content: &str, width: usize) -> String {
+    let content_width = display_width(content);
+    let padding = width.saturating_sub(content_width);
+    format!("  │{}{}│", content, " ".repeat(padding))
 }
 
 fn print_header(title: &str) {
@@ -1015,25 +997,26 @@ mod tests {
     }
 
     #[test]
-    fn test_display_width_emojis() {
-        // Emojis are width 2
-        assert_eq!(display_width("✓"), 2);
+    fn test_display_width_symbols() {
+        // Check marks and X marks are width 1
+        assert_eq!(display_width("✓"), 1);
+        assert_eq!(display_width("✗"), 1);
+        // Other emojis are width 2
         assert_eq!(display_width("⏳"), 2);
-        assert_eq!(display_width("✗"), 2);
     }
 
     #[test]
     fn test_display_width_mixed() {
-        // "✓ passed" = 2 (emoji) + 1 (space) + 6 (passed) = 9
-        assert_eq!(display_width("✓ passed"), 9);
-        // "⏳ pending" = 2 (emoji) + 1 (space) + 7 (pending) = 10
-        assert_eq!(display_width("⏳ pending"), 10);
+        // "✓ passed" = 1 (checkmark) + 1 (space) + 6 (passed) = 8
+        assert_eq!(display_width("✓ passed"), 8);
+        // "~ pending" = 1 (~) + 1 (space) + 7 (pending) = 9 (using ASCII now)
+        assert_eq!(display_width("~ pending"), 9);
     }
 
     #[test]
     fn test_display_width_with_ansi() {
         // ANSI codes should be ignored
-        assert_eq!(display_width("\x1b[32m✓\x1b[0m passed"), 9);
+        assert_eq!(display_width("\x1b[32m✓\x1b[0m passed"), 8);
     }
 
     #[test]
