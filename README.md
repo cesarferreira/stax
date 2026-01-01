@@ -17,20 +17,23 @@
 
 ## What are Stacked Branches?
 
-Instead of one massive PR with 50 files, stacked branches let you split work into small, reviewable pieces that build on each other:
+Instead of one massive PR with 50 files, stacked branches let you split work into small, reviewable pieces that build on each other (and visualize it as a tree).
 
+**Why this is great:**
+- **Smaller reviews** - Each PR is focused, so reviewers move faster and catch more issues
+- **Parallel progress** - Keep building on top while lower PRs are still in review
+- **Safer shipping** - Merge foundations first; reduce the risk of “one giant PR” landing at once
+- **Cleaner history** - Each logical change lands independently (easier to understand, revert, and `git blame`)
+
+<details>
+<summary>Example stack</summary>
+
+```text
+◉  feature/auth-ui 1↑
+○  feature/auth-api 1↑
+○  main
 ```
-○        bugfix/auth-validation-edge-case 1↑
-○        feature/auth-validation 1↑
-◉        feature/auth-login 1↑           ← you are here
-○        feature/auth 1↑ 1↓ (needs restack)
-│ ○      bugfix/payments-retries 1↑ 1↓ (needs restack)
-│ ○      feature/payments-api 2↑
-│ ○      feature/payments 1↑ 1↓ (needs restack)
-│ │ ○    feature/profile-edit 1↑
-│ │ ○  ☁ feature/profile 1↑
-○─┴─┘  ☁ main
-```
+</details>
 
 Each branch is a focused PR. Reviewers see small diffs. You ship faster.
 
