@@ -109,18 +109,27 @@ pub fn get_remote_branches(workdir: &Path, remote: &str) -> Result<Vec<String>> 
 }
 
 pub fn fetch_remote(workdir: &Path, remote: &str) -> Result<()> {
-    let status = Command::new("git")
+    let output = Command::new("git")
         .args(["fetch", remote])
         .current_dir(workdir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("Failed to fetch from remote")?;
+        .output()
+        .context("Failed to run git fetch")?;
 
-    if !status.success() {
-        anyhow::bail!("Failed to fetch from {}", remote);
+    if output.status.success() {
+        return Ok(());
     }
-    Ok(())
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // git typically reports meaningful diagnostics on stderr (auth, network, DNS, etc.).
+    // Include both streams so users can self-diagnose without re-running manually.
+    anyhow::bail!(
+        "Failed to fetch from {}.\n\ngit stdout:\n{}\n\ngit stderr:\n{}",
+        remote,
+        stdout.trim(),
+        stderr.trim()
+    );
 }
 
 fn parse_remote_url(url: &str) -> Result<(String, String)> {

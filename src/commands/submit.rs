@@ -132,14 +132,22 @@ pub fn run(
     let owner = remote_info.owner().to_string();
     let repo_name = remote_info.repo.clone();
 
-    // Fetch to ensure we have latest remote refs
+    // Fetch to ensure we have latest remote refs (non-fatal if it fails)
     if !quiet {
         print!("  Fetching from {}... ", remote_info.name);
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
-    remote::fetch_remote(repo.workdir()?, &remote_info.name)?;
-    if !quiet {
-        println!("{}", "done".green());
+    match remote::fetch_remote(repo.workdir()?, &remote_info.name) {
+        Ok(()) => {
+            if !quiet {
+                println!("{}", "done".green());
+            }
+        }
+        Err(_) => {
+            if !quiet {
+                println!("{} (continuing with local refs)", "skipped".yellow());
+            }
+        }
     }
 
     // Check which branches exist on remote
