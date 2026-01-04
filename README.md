@@ -435,13 +435,24 @@ tips = true            # Show contextual suggestions (default: true)
 
 ### GitHub Authentication
 
+stax looks for a GitHub token in the following order (first found wins):
+
+1. `STAX_GITHUB_TOKEN` environment variable
+2. `GITHUB_TOKEN` environment variable
+3. Credentials file (`~/.config/stax/.credentials`)
+
 ```bash
-# Option 1: Environment variable (recommended)
+# Option 1: stax-specific env var (highest priority)
 export STAX_GITHUB_TOKEN="ghp_xxxx"
 
-# Option 2: Interactive setup
+# Option 2: Standard GitHub env var (works with other tools too)
+export GITHUB_TOKEN="ghp_xxxx"
+
+# Option 3: Interactive setup (saves to credentials file)
 stax auth
 ```
+
+The credentials file is created with `600` permissions (read/write for owner only).
 
 ## Freephite/Graphite Compatibility
 

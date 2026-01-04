@@ -452,4 +452,205 @@ prefix = "test/"
         let parsed: Config = toml::from_str(toml_without_ui).unwrap();
         assert!(parsed.ui.tips);
     }
+
+    #[test]
+    fn test_set_github_token_writes_to_file() {
+        // Save original HOME
+        let orig_home = env::var("HOME").ok();
+
+        // Create temp directory
+        let temp_dir = std::env::temp_dir().join(format!("stax-test-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Override HOME to use temp directory
+        env::set_var("HOME", &temp_dir);
+
+        // Write token
+        let test_token = "ghp_test_token_12345";
+        let result = Config::set_github_token(test_token);
+        assert!(result.is_ok(), "set_github_token should succeed");
+
+        // Verify file was created with correct content
+        let creds_path = temp_dir.join(".config").join("stax").join(".credentials");
+        assert!(creds_path.exists(), "Credentials file should exist");
+
+        let contents = fs::read_to_string(&creds_path).unwrap();
+        assert_eq!(contents, test_token);
+
+        // Verify permissions on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::metadata(&creds_path).unwrap().permissions();
+            assert_eq!(perms.mode() & 0o777, 0o600, "File should have 600 permissions");
+        }
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
+        match orig_home {
+            Some(v) => env::set_var("HOME", v),
+            None => env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn test_github_token_reads_from_credentials_file() {
+        // Save original values
+        let orig_home = env::var("HOME").ok();
+        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
+        let orig_github = env::var("GITHUB_TOKEN").ok();
+
+        // Create temp directory with credentials file
+        let temp_dir = std::env::temp_dir().join(format!("stax-test-read-{}", std::process::id()));
+        let config_dir = temp_dir.join(".config").join("stax");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let test_token = "ghp_file_token_67890";
+        fs::write(config_dir.join(".credentials"), test_token).unwrap();
+
+        // Override HOME and clear env vars
+        env::set_var("HOME", &temp_dir);
+        env::remove_var("STAX_GITHUB_TOKEN");
+        env::remove_var("GITHUB_TOKEN");
+
+        // Read token - should come from file
+        let token = Config::github_token();
+        assert_eq!(token, Some(test_token.to_string()));
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
+        match orig_home {
+            Some(v) => env::set_var("HOME", v),
+            None => env::remove_var("HOME"),
+        }
+        match orig_stax {
+            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
+            None => env::remove_var("STAX_GITHUB_TOKEN"),
+        }
+        match orig_github {
+            Some(v) => env::set_var("GITHUB_TOKEN", v),
+            None => env::remove_var("GITHUB_TOKEN"),
+        }
+    }
+
+    #[test]
+    fn test_github_token_roundtrip() {
+        // Save original values
+        let orig_home = env::var("HOME").ok();
+        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
+        let orig_github = env::var("GITHUB_TOKEN").ok();
+
+        // Create temp directory
+        let temp_dir = std::env::temp_dir().join(format!("stax-test-roundtrip-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Override HOME and clear env vars
+        env::set_var("HOME", &temp_dir);
+        env::remove_var("STAX_GITHUB_TOKEN");
+        env::remove_var("GITHUB_TOKEN");
+
+        // Write token
+        let test_token = "ghp_roundtrip_token_abcdef";
+        Config::set_github_token(test_token).unwrap();
+
+        // Read it back
+        let token = Config::github_token();
+        assert_eq!(token, Some(test_token.to_string()));
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
+        match orig_home {
+            Some(v) => env::set_var("HOME", v),
+            None => env::remove_var("HOME"),
+        }
+        match orig_stax {
+            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
+            None => env::remove_var("STAX_GITHUB_TOKEN"),
+        }
+        match orig_github {
+            Some(v) => env::set_var("GITHUB_TOKEN", v),
+            None => env::remove_var("GITHUB_TOKEN"),
+        }
+    }
+
+    #[test]
+    fn test_github_token_env_takes_priority_over_file() {
+        // Save original values
+        let orig_home = env::var("HOME").ok();
+        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
+        let orig_github = env::var("GITHUB_TOKEN").ok();
+
+        // Create temp directory with credentials file
+        let temp_dir = std::env::temp_dir().join(format!("stax-test-priority-{}", std::process::id()));
+        let config_dir = temp_dir.join(".config").join("stax");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let file_token = "ghp_from_file";
+        let env_token = "ghp_from_env";
+        fs::write(config_dir.join(".credentials"), file_token).unwrap();
+
+        // Set HOME and env var
+        env::set_var("HOME", &temp_dir);
+        env::remove_var("STAX_GITHUB_TOKEN");
+        env::set_var("GITHUB_TOKEN", env_token);
+
+        // Env var should take priority over file
+        let token = Config::github_token();
+        assert_eq!(token, Some(env_token.to_string()));
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
+        match orig_home {
+            Some(v) => env::set_var("HOME", v),
+            None => env::remove_var("HOME"),
+        }
+        match orig_stax {
+            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
+            None => env::remove_var("STAX_GITHUB_TOKEN"),
+        }
+        match orig_github {
+            Some(v) => env::set_var("GITHUB_TOKEN", v),
+            None => env::remove_var("GITHUB_TOKEN"),
+        }
+    }
+
+    #[test]
+    fn test_github_token_trims_whitespace_from_file() {
+        // Save original values
+        let orig_home = env::var("HOME").ok();
+        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
+        let orig_github = env::var("GITHUB_TOKEN").ok();
+
+        // Create temp directory with credentials file containing whitespace
+        let temp_dir = std::env::temp_dir().join(format!("stax-test-trim-{}", std::process::id()));
+        let config_dir = temp_dir.join(".config").join("stax");
+        fs::create_dir_all(&config_dir).unwrap();
+
+        let token_with_whitespace = "  ghp_token_with_spaces  \n";
+        fs::write(config_dir.join(".credentials"), token_with_whitespace).unwrap();
+
+        // Override HOME and clear env vars
+        env::set_var("HOME", &temp_dir);
+        env::remove_var("STAX_GITHUB_TOKEN");
+        env::remove_var("GITHUB_TOKEN");
+
+        // Token should be trimmed
+        let token = Config::github_token();
+        assert_eq!(token, Some("ghp_token_with_spaces".to_string()));
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
+        match orig_home {
+            Some(v) => env::set_var("HOME", v),
+            None => env::remove_var("HOME"),
+        }
+        match orig_stax {
+            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
+            None => env::remove_var("STAX_GITHUB_TOKEN"),
+        }
+        match orig_github {
+            Some(v) => env::set_var("GITHUB_TOKEN", v),
+            None => env::remove_var("GITHUB_TOKEN"),
+        }
+    }
 }
