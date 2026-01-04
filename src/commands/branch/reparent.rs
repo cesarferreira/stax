@@ -1,4 +1,4 @@
-use crate::engine::BranchMetadata;
+use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::remote;
 use anyhow::Result;
@@ -8,6 +8,7 @@ use dialoguer::{theme::ColorfulTheme, Select};
 /// Update the parent of a tracked branch
 pub fn run(branch: Option<String>, parent: Option<String>) -> Result<()> {
     let repo = GitRepo::open()?;
+    let stack = Stack::load(&repo)?;
     let current = repo.current_branch()?;
     let trunk = repo.trunk_branch()?;
     let target = branch.unwrap_or(current);
@@ -66,6 +67,19 @@ pub fn run(branch: Option<String>, parent: Option<String>) -> Result<()> {
 
     if parent_branch == target {
         anyhow::bail!("Parent branch cannot be the same as '{}'", target);
+    }
+
+    // Check for circular dependency: new parent cannot be a descendant of target
+    let descendants = stack.descendants(&target);
+    if descendants.contains(&parent_branch) {
+        anyhow::bail!(
+            "Cannot reparent '{}' onto '{}': would create circular dependency.\n\
+             '{}' is a descendant of '{}'.",
+            target,
+            parent_branch,
+            parent_branch,
+            target
+        );
     }
 
     let parent_rev = repo.branch_commit(&parent_branch)?;

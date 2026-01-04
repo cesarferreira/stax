@@ -6,7 +6,7 @@ use dialoguer::{theme::ColorfulTheme, Confirm};
 use std::process::Command;
 
 /// Fold the current branch into its parent (merge commits into parent)
-pub fn run(keep_branch: bool) -> Result<()> {
+pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -76,16 +76,18 @@ pub fn run(keep_branch: bool) -> Result<()> {
     }
     println!();
 
-    // Confirm
+    // Confirm (unless --yes flag)
     let action = if keep_branch { "fold" } else { "fold and delete" };
-    let confirm = Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt(format!("{}  '{}' into '{}'?", action, current, parent))
-        .default(true)
-        .interact()?;
+    if !skip_confirm {
+        let confirm = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt(format!("{}  '{}' into '{}'?", action, current, parent))
+            .default(true)
+            .interact()?;
 
-    if !confirm {
-        println!("{}", "Aborted.".red());
-        return Ok(());
+        if !confirm {
+            println!("{}", "Aborted.".red());
+            return Ok(());
+        }
     }
 
     // Checkout parent
@@ -116,7 +118,30 @@ pub fn run(keep_branch: bool) -> Result<()> {
 
     if !merge_status.success() {
         println!("{}", "failed".red());
-        anyhow::bail!("Failed to merge branch. There may be conflicts.");
+
+        // Abort merge and reset working tree
+        let _ = Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(workdir)
+            .status();
+
+        // Reset any staged changes from the failed squash merge
+        let _ = Command::new("git")
+            .args(["reset", "--hard", "HEAD"])
+            .current_dir(workdir)
+            .status();
+
+        // Restore original branch
+        let _ = Command::new("git")
+            .args(["checkout", &current])
+            .current_dir(workdir)
+            .status();
+
+        anyhow::bail!(
+            "Failed to merge branch. There may be conflicts.\n\
+             Restored to branch '{}'.",
+            current
+        );
     }
     println!("{}", "done".green());
 

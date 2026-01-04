@@ -464,6 +464,9 @@ enum BranchCommands {
         /// Commit message for the squashed commit
         #[arg(short, long)]
         message: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Fold current branch into its parent
@@ -472,6 +475,9 @@ enum BranchCommands {
         /// Keep the branch after folding (don't delete)
         #[arg(short, long)]
         keep: bool,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Move up the stack (to child branch)
@@ -672,8 +678,8 @@ fn main() -> Result<()> {
             BranchCommands::Delete { branch, force } => {
                 commands::branch::delete::run(branch, force)
             }
-            BranchCommands::Squash { message } => commands::branch::squash::run(message),
-            BranchCommands::Fold { keep } => commands::branch::fold::run(keep),
+            BranchCommands::Squash { message, yes } => commands::branch::squash::run(message, yes),
+            BranchCommands::Fold { keep, yes } => commands::branch::fold::run(keep, yes),
             BranchCommands::Up { count } => commands::navigate::up(count),
             BranchCommands::Down { count } => commands::navigate::down(count),
             BranchCommands::Top => commands::navigate::top(),

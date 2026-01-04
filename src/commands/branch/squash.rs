@@ -6,7 +6,7 @@ use dialoguer::{theme::ColorfulTheme, Confirm, Input};
 use std::process::Command;
 
 /// Squash all commits on the current branch into a single commit
-pub fn run(message: Option<String>) -> Result<()> {
+pub fn run(message: Option<String>, skip_confirm: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let workdir = repo.workdir()?;
@@ -63,6 +63,17 @@ pub fn run(message: Option<String>) -> Result<()> {
     // Get commit message
     let squash_message = if let Some(msg) = message {
         msg
+    } else if skip_confirm {
+        // In non-interactive mode, use first commit's message as default
+        let first_msg_output = Command::new("git")
+            .args(["log", "-1", "--format=%s", &format!("{}..HEAD", parent)])
+            .current_dir(workdir)
+            .output()
+            .context("Failed to get commit message")?;
+
+        String::from_utf8_lossy(&first_msg_output.stdout)
+            .trim()
+            .to_string()
     } else {
         // Get the first commit's message as default
         let first_msg_output = Command::new("git")
@@ -81,15 +92,17 @@ pub fn run(message: Option<String>) -> Result<()> {
             .interact_text()?
     };
 
-    // Confirm
-    let confirm = Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt(format!("Squash {} commits into one?", commit_count))
-        .default(true)
-        .interact()?;
+    // Confirm (unless --yes flag)
+    if !skip_confirm {
+        let confirm = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt(format!("Squash {} commits into one?", commit_count))
+            .default(true)
+            .interact()?;
 
-    if !confirm {
-        println!("{}", "Aborted.".red());
-        return Ok(());
+        if !confirm {
+            println!("{}", "Aborted.".red());
+            return Ok(());
+        }
     }
 
     // Perform soft reset to parent

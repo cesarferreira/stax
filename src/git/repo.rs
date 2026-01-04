@@ -29,6 +29,15 @@ impl GitRepo {
     /// Get the current branch name
     pub fn current_branch(&self) -> Result<String> {
         let head = self.repo.head().context("Failed to get HEAD")?;
+
+        // Check if HEAD is detached
+        if !head.is_branch() {
+            anyhow::bail!(
+                "HEAD is detached (not on a branch).\n\
+                 Please checkout a branch first: stax checkout <branch>"
+            );
+        }
+
         let name = head
             .shorthand()
             .context("HEAD is not a branch")?
