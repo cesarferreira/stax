@@ -101,3 +101,138 @@ impl CiCache {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_cache_path() {
+        let temp = TempDir::new().unwrap();
+        let path = CiCache::cache_path(temp.path());
+        assert!(path.to_string_lossy().contains("stax"));
+        assert!(path.to_string_lossy().contains("ci-cache.json"));
+    }
+
+    #[test]
+    fn test_cache_default() {
+        let cache = CiCache::default();
+        assert!(cache.branches.is_empty());
+        assert_eq!(cache.last_refresh, 0);
+    }
+
+    #[test]
+    fn test_cache_load_nonexistent() {
+        let temp = TempDir::new().unwrap();
+        let cache = CiCache::load(temp.path());
+        assert!(cache.branches.is_empty());
+    }
+
+    #[test]
+    fn test_cache_save_and_load() {
+        let temp = TempDir::new().unwrap();
+        let mut cache = CiCache::default();
+        cache.update("feature-1", Some("success".to_string()), Some("OPEN".to_string()));
+        cache.save(temp.path()).unwrap();
+
+        let loaded = CiCache::load(temp.path());
+        assert!(loaded.branches.contains_key("feature-1"));
+        assert_eq!(loaded.get_ci_state("feature-1"), Some("success".to_string()));
+    }
+
+    #[test]
+    fn test_cache_update() {
+        let mut cache = CiCache::default();
+        cache.update("branch-1", Some("pending".to_string()), Some("DRAFT".to_string()));
+
+        assert!(cache.branches.contains_key("branch-1"));
+        let entry = cache.branches.get("branch-1").unwrap();
+        assert_eq!(entry.ci_state, Some("pending".to_string()));
+        assert_eq!(entry.pr_state, Some("DRAFT".to_string()));
+        assert!(entry.updated_at > 0);
+    }
+
+    #[test]
+    fn test_cache_get_ci_state() {
+        let mut cache = CiCache::default();
+        assert_eq!(cache.get_ci_state("nonexistent"), None);
+
+        cache.update("feature", Some("success".to_string()), None);
+        assert_eq!(cache.get_ci_state("feature"), Some("success".to_string()));
+    }
+
+    #[test]
+    fn test_cache_is_stale() {
+        let cache = CiCache::default();
+        // Default cache with last_refresh = 0 should be stale
+        assert!(cache.is_stale());
+    }
+
+    #[test]
+    fn test_cache_mark_refreshed() {
+        let mut cache = CiCache::default();
+        cache.mark_refreshed();
+        // After marking refreshed, should not be stale (within TTL)
+        assert!(!cache.is_stale());
+        assert!(cache.last_refresh > 0);
+    }
+
+    #[test]
+    fn test_cache_cleanup() {
+        let mut cache = CiCache::default();
+        cache.update("keep-1", Some("success".to_string()), None);
+        cache.update("keep-2", Some("success".to_string()), None);
+        cache.update("remove-1", Some("failure".to_string()), None);
+        cache.update("remove-2", Some("pending".to_string()), None);
+
+        let valid = vec!["keep-1".to_string(), "keep-2".to_string()];
+        cache.cleanup(&valid);
+
+        assert!(cache.branches.contains_key("keep-1"));
+        assert!(cache.branches.contains_key("keep-2"));
+        assert!(!cache.branches.contains_key("remove-1"));
+        assert!(!cache.branches.contains_key("remove-2"));
+    }
+
+    #[test]
+    fn test_cache_cleanup_empty_valid() {
+        let mut cache = CiCache::default();
+        cache.update("branch-1", Some("success".to_string()), None);
+        cache.update("branch-2", Some("success".to_string()), None);
+
+        cache.cleanup(&[]);
+        assert!(cache.branches.is_empty());
+    }
+
+    #[test]
+    fn test_branch_cache_entry_serialization() {
+        let entry = BranchCacheEntry {
+            ci_state: Some("success".to_string()),
+            pr_state: Some("OPEN".to_string()),
+            updated_at: 1234567890,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("success"));
+        assert!(json.contains("OPEN"));
+        assert!(json.contains("1234567890"));
+
+        let deserialized: BranchCacheEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.ci_state, entry.ci_state);
+        assert_eq!(deserialized.pr_state, entry.pr_state);
+        assert_eq!(deserialized.updated_at, entry.updated_at);
+    }
+
+    #[test]
+    fn test_cache_serialization() {
+        let mut cache = CiCache::default();
+        cache.update("branch", Some("success".to_string()), Some("MERGED".to_string()));
+        cache.mark_refreshed();
+
+        let json = serde_json::to_string(&cache).unwrap();
+        let deserialized: CiCache = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.branches.len(), 1);
+        assert!(deserialized.last_refresh > 0);
+    }
+}
+

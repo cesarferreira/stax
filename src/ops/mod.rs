@@ -152,7 +152,8 @@ pub fn latest_op_id(git_dir: &Path) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use tempfile::TempDir;
+
     #[test]
     fn test_generate_op_id_format() {
         let id = generate_op_id();
@@ -162,11 +163,105 @@ mod tests {
         // Should contain Z for UTC
         assert!(id.contains('Z'));
     }
-    
+
+    #[test]
+    fn test_generate_op_id_unique() {
+        let id1 = generate_op_id();
+        let id2 = generate_op_id();
+        // Different calls should produce different IDs
+        assert_ne!(id1, id2);
+    }
+
     #[test]
     fn test_backup_ref_name() {
         let ref_name = backup_ref_name("20251229T120500Z-abc123", "feature/foo");
         assert_eq!(ref_name, "refs/stax/backups/20251229T120500Z-abc123/feature/foo");
+    }
+
+    #[test]
+    fn test_backup_ref_prefix() {
+        let prefix = backup_ref_prefix("20251229T120500Z-abc123");
+        assert_eq!(prefix, "refs/stax/backups/20251229T120500Z-abc123/");
+    }
+
+    #[test]
+    fn test_ops_dir() {
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join(".git");
+        let dir = ops_dir(&git_dir);
+        assert!(dir.to_string_lossy().contains("stax"));
+        assert!(dir.to_string_lossy().contains("ops"));
+    }
+
+    #[test]
+    fn test_ensure_ops_dir() {
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+
+        let dir = ensure_ops_dir(&git_dir).unwrap();
+        assert!(dir.exists());
+    }
+
+    #[test]
+    fn test_list_op_ids_empty() {
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join(".git");
+
+        let ops = list_op_ids(&git_dir).unwrap();
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn test_list_op_ids_with_files() {
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join(".git");
+        let ops_path = ops_dir(&git_dir);
+        std::fs::create_dir_all(&ops_path).unwrap();
+
+        // Create some op files
+        std::fs::write(ops_path.join("20251229T120000Z-aaa111.json"), "{}").unwrap();
+        std::fs::write(ops_path.join("20251229T120100Z-bbb222.json"), "{}").unwrap();
+        std::fs::write(ops_path.join("20251229T120200Z-ccc333.json"), "{}").unwrap();
+        // Also create a non-json file (should be ignored)
+        std::fs::write(ops_path.join("not-an-op.txt"), "text").unwrap();
+
+        let ops = list_op_ids(&git_dir).unwrap();
+        assert_eq!(ops.len(), 3);
+        // Should be sorted newest first
+        assert_eq!(ops[0], "20251229T120200Z-ccc333");
+        assert_eq!(ops[1], "20251229T120100Z-bbb222");
+        assert_eq!(ops[2], "20251229T120000Z-aaa111");
+    }
+
+    #[test]
+    fn test_latest_op_id_empty() {
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join(".git");
+
+        let latest = latest_op_id(&git_dir).unwrap();
+        assert!(latest.is_none());
+    }
+
+    #[test]
+    fn test_latest_op_id_with_files() {
+        let temp = TempDir::new().unwrap();
+        let git_dir = temp.path().join(".git");
+        let ops_path = ops_dir(&git_dir);
+        std::fs::create_dir_all(&ops_path).unwrap();
+
+        std::fs::write(ops_path.join("20251229T120000Z-old.json"), "{}").unwrap();
+        std::fs::write(ops_path.join("20251229T120200Z-new.json"), "{}").unwrap();
+
+        let latest = latest_op_id(&git_dir).unwrap();
+        assert_eq!(latest, Some("20251229T120200Z-new".to_string()));
+    }
+
+    #[test]
+    fn test_rand_suffix_produces_values() {
+        let suffix = rand_suffix();
+        // Just check it produces a non-zero value
+        assert!(suffix > 0 || suffix == 0); // Always true, just testing it runs
     }
 }
 

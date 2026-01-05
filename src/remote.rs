@@ -200,3 +200,172 @@ fn split_namespace_repo(path: &str) -> Result<(String, String)> {
 
     Ok((namespace, repo))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ssh_git_url() {
+        let (host, path) = parse_remote_url("git@github.com:owner/repo.git").unwrap();
+        assert_eq!(host, "github.com");
+        assert_eq!(path, "owner/repo");
+    }
+
+    #[test]
+    fn test_parse_ssh_git_url_without_extension() {
+        let (host, path) = parse_remote_url("git@github.com:owner/repo").unwrap();
+        assert_eq!(host, "github.com");
+        assert_eq!(path, "owner/repo");
+    }
+
+    #[test]
+    fn test_parse_https_url() {
+        let (host, path) = parse_remote_url("https://github.com/owner/repo.git").unwrap();
+        assert_eq!(host, "github.com");
+        assert_eq!(path, "owner/repo");
+    }
+
+    #[test]
+    fn test_parse_https_url_without_extension() {
+        let (host, path) = parse_remote_url("https://github.com/owner/repo").unwrap();
+        assert_eq!(host, "github.com");
+        assert_eq!(path, "owner/repo");
+    }
+
+    #[test]
+    fn test_parse_http_url() {
+        let (host, path) = parse_remote_url("http://github.com/owner/repo.git").unwrap();
+        assert_eq!(host, "github.com");
+        assert_eq!(path, "owner/repo");
+    }
+
+    #[test]
+    fn test_parse_ssh_scheme_url() {
+        let (host, path) = parse_remote_url("ssh://git@github.com/owner/repo.git").unwrap();
+        assert_eq!(host, "github.com");
+        assert_eq!(path, "owner/repo");
+    }
+
+    #[test]
+    fn test_parse_github_enterprise_ssh() {
+        let (host, path) = parse_remote_url("git@github.example.com:org/project.git").unwrap();
+        assert_eq!(host, "github.example.com");
+        assert_eq!(path, "org/project");
+    }
+
+    #[test]
+    fn test_parse_github_enterprise_https() {
+        let (host, path) = parse_remote_url("https://github.example.com/org/project.git").unwrap();
+        assert_eq!(host, "github.example.com");
+        assert_eq!(path, "org/project");
+    }
+
+    #[test]
+    fn test_parse_nested_namespace() {
+        let (host, path) = parse_remote_url("https://gitlab.com/group/subgroup/project.git").unwrap();
+        assert_eq!(host, "gitlab.com");
+        assert_eq!(path, "group/subgroup/project");
+    }
+
+    #[test]
+    fn test_parse_unsupported_url_format() {
+        let result = parse_remote_url("ftp://example.com/repo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_split_namespace_repo_simple() {
+        let (namespace, repo) = split_namespace_repo("owner/repo").unwrap();
+        assert_eq!(namespace, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_split_namespace_repo_nested() {
+        let (namespace, repo) = split_namespace_repo("org/team/project").unwrap();
+        assert_eq!(namespace, "org/team");
+        assert_eq!(repo, "project");
+    }
+
+    #[test]
+    fn test_split_namespace_repo_with_slashes() {
+        let (namespace, repo) = split_namespace_repo("/owner/repo/").unwrap();
+        assert_eq!(namespace, "owner");
+        assert_eq!(repo, "repo");
+    }
+
+    #[test]
+    fn test_split_namespace_repo_missing_parts() {
+        let result = split_namespace_repo("onlyrepo");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_split_namespace_repo_empty() {
+        let result = split_namespace_repo("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_remote_info_owner() {
+        let info = RemoteInfo {
+            name: "origin".to_string(),
+            namespace: "myorg".to_string(),
+            repo: "myrepo".to_string(),
+            base_url: "https://github.com".to_string(),
+            api_base_url: Some("https://api.github.com".to_string()),
+        };
+        assert_eq!(info.owner(), "myorg");
+    }
+
+    #[test]
+    fn test_remote_info_repo_url() {
+        let info = RemoteInfo {
+            name: "origin".to_string(),
+            namespace: "myorg".to_string(),
+            repo: "myrepo".to_string(),
+            base_url: "https://github.com".to_string(),
+            api_base_url: Some("https://api.github.com".to_string()),
+        };
+        assert_eq!(info.repo_url(), "https://github.com/myorg/myrepo");
+    }
+
+    #[test]
+    fn test_remote_info_pr_url() {
+        let info = RemoteInfo {
+            name: "origin".to_string(),
+            namespace: "myorg".to_string(),
+            repo: "myrepo".to_string(),
+            base_url: "https://github.com".to_string(),
+            api_base_url: Some("https://api.github.com".to_string()),
+        };
+        assert_eq!(info.pr_url(42), "https://github.com/myorg/myrepo/pull/42");
+    }
+
+    #[test]
+    fn test_remote_info_nested_namespace() {
+        let info = RemoteInfo {
+            name: "origin".to_string(),
+            namespace: "org/team".to_string(),
+            repo: "project".to_string(),
+            base_url: "https://gitlab.com".to_string(),
+            api_base_url: None,
+        };
+        assert_eq!(info.repo_url(), "https://gitlab.com/org/team/project");
+    }
+
+    #[test]
+    fn test_parse_http_remote_simple() {
+        let (host, path) = parse_http_remote("github.com/owner/repo").unwrap();
+        assert_eq!(host, "github.com");
+        assert_eq!(path, "owner/repo");
+    }
+
+    #[test]
+    fn test_parse_http_remote_with_git_extension() {
+        let (host, path) = parse_http_remote("github.com/owner/repo.git").unwrap();
+        assert_eq!(host, "github.com");
+        assert_eq!(path, "owner/repo");
+    }
+}

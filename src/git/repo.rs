@@ -689,3 +689,76 @@ fn format_duration(seconds: i64) -> String {
         format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_duration_just_now() {
+        assert_eq!(format_duration(0), "just now");
+        assert_eq!(format_duration(30), "just now");
+        assert_eq!(format_duration(59), "just now");
+    }
+
+    #[test]
+    fn test_format_duration_minutes() {
+        assert_eq!(format_duration(60), "1 minute ago");
+        assert_eq!(format_duration(120), "2 minutes ago");
+        assert_eq!(format_duration(3599), "59 minutes ago");
+    }
+
+    #[test]
+    fn test_format_duration_hours() {
+        assert_eq!(format_duration(3600), "1 hour ago");
+        assert_eq!(format_duration(7200), "2 hours ago");
+        assert_eq!(format_duration(86399), "23 hours ago");
+    }
+
+    #[test]
+    fn test_format_duration_days() {
+        assert_eq!(format_duration(86400), "1 day ago");
+        assert_eq!(format_duration(172800), "2 days ago");
+        assert_eq!(format_duration(604800), "7 days ago");
+    }
+
+    #[test]
+    fn test_rebase_result_eq() {
+        assert_eq!(RebaseResult::Success, RebaseResult::Success);
+        assert_eq!(RebaseResult::Conflict, RebaseResult::Conflict);
+        assert_ne!(RebaseResult::Success, RebaseResult::Conflict);
+    }
+
+    #[test]
+    fn test_rebase_result_debug() {
+        let result = RebaseResult::Success;
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("Success"));
+
+        let result = RebaseResult::Conflict;
+        let debug_str = format!("{:?}", result);
+        assert!(debug_str.contains("Conflict"));
+    }
+
+    #[test]
+    fn test_commit_info_clone() {
+        let commit = CommitInfo {
+            short_hash: "abc123".to_string(),
+            message: "Test commit".to_string(),
+        };
+        let cloned = commit.clone();
+        assert_eq!(cloned.short_hash, "abc123");
+        assert_eq!(cloned.message, "Test commit");
+    }
+
+    #[test]
+    fn test_commit_info_debug() {
+        let commit = CommitInfo {
+            short_hash: "abc123".to_string(),
+            message: "Test commit".to_string(),
+        };
+        let debug_str = format!("{:?}", commit);
+        assert!(debug_str.contains("abc123"));
+        assert!(debug_str.contains("Test commit"));
+    }
+}
