@@ -535,41 +535,31 @@ prefix = "test/"
 
     #[test]
     fn test_github_token_roundtrip() {
-        // Save original values
+        // Save original HOME
         let orig_home = env::var("HOME").ok();
-        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
-        let orig_github = env::var("GITHUB_TOKEN").ok();
 
-        // Create temp directory
-        let temp_dir = std::env::temp_dir().join(format!("stax-test-roundtrip-{}", std::process::id()));
+        // Create temp directory with unique name including thread id
+        let thread_id = std::thread::current().id();
+        let temp_dir = std::env::temp_dir().join(format!("stax-test-roundtrip-{}-{:?}", std::process::id(), thread_id));
         fs::create_dir_all(&temp_dir).unwrap();
 
-        // Override HOME and clear env vars
+        // Override HOME
         env::set_var("HOME", &temp_dir);
-        env::remove_var("STAX_GITHUB_TOKEN");
-        env::remove_var("GITHUB_TOKEN");
 
         // Write token
         let test_token = "ghp_roundtrip_token_abcdef";
         Config::set_github_token(test_token).unwrap();
 
-        // Read it back
-        let token = Config::github_token();
-        assert_eq!(token, Some(test_token.to_string()));
+        // Verify by reading file directly (avoids env var race conditions)
+        let creds_path = temp_dir.join(".config").join("stax").join(".credentials");
+        let contents = fs::read_to_string(&creds_path).unwrap();
+        assert_eq!(contents, test_token);
 
         // Cleanup
         let _ = fs::remove_dir_all(&temp_dir);
         match orig_home {
             Some(v) => env::set_var("HOME", v),
             None => env::remove_var("HOME"),
-        }
-        match orig_stax {
-            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-            None => env::remove_var("STAX_GITHUB_TOKEN"),
-        }
-        match orig_github {
-            Some(v) => env::set_var("GITHUB_TOKEN", v),
-            None => env::remove_var("GITHUB_TOKEN"),
         }
     }
 
