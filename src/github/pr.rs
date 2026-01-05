@@ -852,4 +852,155 @@ mod tests {
         };
         assert_eq!(status.status_text(), "Closed");
     }
+
+    #[test]
+    fn test_generate_stack_comment_single_pr() {
+        let remote = crate::remote::RemoteInfo {
+            name: "origin".to_string(),
+            namespace: "user".to_string(),
+            repo: "repo".to_string(),
+            base_url: "https://github.com".to_string(),
+            api_base_url: Some("https://api.github.com".to_string()),
+        };
+
+        let prs = vec![
+            StackPrInfo {
+                branch: "feature".to_string(),
+                pr_number: Some(1),
+            },
+        ];
+
+        let comment = generate_stack_comment(&prs, 1, &remote, "main");
+
+        assert!(comment.contains("Current dependencies"));
+        assert!(comment.contains("main"));
+        assert!(comment.contains("PR #1"));
+        assert!(comment.contains("👈")); // Current PR marker
+        assert!(comment.contains("stax"));
+    }
+
+    #[test]
+    fn test_generate_stack_comment_multiple_prs() {
+        let remote = crate::remote::RemoteInfo {
+            name: "origin".to_string(),
+            namespace: "user".to_string(),
+            repo: "repo".to_string(),
+            base_url: "https://github.com".to_string(),
+            api_base_url: Some("https://api.github.com".to_string()),
+        };
+
+        let prs = vec![
+            StackPrInfo {
+                branch: "feature-a".to_string(),
+                pr_number: Some(1),
+            },
+            StackPrInfo {
+                branch: "feature-b".to_string(),
+                pr_number: Some(2),
+            },
+            StackPrInfo {
+                branch: "feature-c".to_string(),
+                pr_number: Some(3),
+            },
+        ];
+
+        let comment = generate_stack_comment(&prs, 2, &remote, "main");
+
+        assert!(comment.contains("PR #1"));
+        assert!(comment.contains("PR #2"));
+        assert!(comment.contains("PR #3"));
+        // Only PR #2 should have the pointer (format is **PR #2** 👈)
+        assert!(comment.contains("#2** 👈"));
+    }
+
+    #[test]
+    fn test_generate_stack_comment_without_pr() {
+        let remote = crate::remote::RemoteInfo {
+            name: "origin".to_string(),
+            namespace: "user".to_string(),
+            repo: "repo".to_string(),
+            base_url: "https://github.com".to_string(),
+            api_base_url: Some("https://api.github.com".to_string()),
+        };
+
+        let prs = vec![
+            StackPrInfo {
+                branch: "feature-a".to_string(),
+                pr_number: Some(1),
+            },
+            StackPrInfo {
+                branch: "feature-b".to_string(),
+                pr_number: None, // No PR yet
+            },
+        ];
+
+        let comment = generate_stack_comment(&prs, 1, &remote, "main");
+
+        assert!(comment.contains("PR #1"));
+        assert!(comment.contains("`feature-b`")); // Branch name in backticks
+    }
+
+    #[test]
+    fn test_pr_info_debug() {
+        let pr = PrInfo {
+            number: 42,
+            state: "Open".to_string(),
+            is_draft: false,
+            base: "main".to_string(),
+        };
+        let debug_str = format!("{:?}", pr);
+        assert!(debug_str.contains("42"));
+        assert!(debug_str.contains("Open"));
+    }
+
+    #[test]
+    fn test_merge_method_clone() {
+        let method = MergeMethod::Squash;
+        let cloned = method;
+        assert!(matches!(cloned, MergeMethod::Squash));
+    }
+
+    #[test]
+    fn test_ci_status_clone() {
+        let status = CiStatus::Success;
+        let cloned = status.clone();
+        assert!(matches!(cloned, CiStatus::Success));
+    }
+
+    #[test]
+    fn test_ci_status_eq() {
+        assert_eq!(CiStatus::Success, CiStatus::Success);
+        assert_ne!(CiStatus::Success, CiStatus::Failure);
+    }
+
+    #[test]
+    fn test_stack_pr_info_clone() {
+        let info = StackPrInfo {
+            branch: "feature".to_string(),
+            pr_number: Some(42),
+        };
+        let cloned = info.clone();
+        assert_eq!(cloned.branch, "feature");
+        assert_eq!(cloned.pr_number, Some(42));
+    }
+
+    #[test]
+    fn test_pr_merge_status_clone() {
+        let status = PrMergeStatus {
+            number: 1,
+            title: "Test".to_string(),
+            state: "Open".to_string(),
+            is_draft: false,
+            mergeable: Some(true),
+            mergeable_state: "clean".to_string(),
+            ci_status: CiStatus::Success,
+            review_decision: None,
+            approvals: 1,
+            changes_requested: false,
+            head_sha: "abc123".to_string(),
+        };
+        let cloned = status.clone();
+        assert_eq!(cloned.number, 1);
+        assert_eq!(cloned.title, "Test");
+    }
 }
