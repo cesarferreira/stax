@@ -271,6 +271,10 @@ enum Commands {
     /// Move to the bottom of the stack (first branch above trunk)
     Bottom,
 
+    /// Switch to the previous branch (like git checkout -)
+    #[command(visible_alias = "p")]
+    Prev,
+
     /// Branch management commands
     #[command(subcommand, visible_alias = "b")]
     Branch(BranchCommands),
@@ -645,6 +649,7 @@ fn main() -> Result<()> {
         Commands::Down { count } => commands::navigate::down(count),
         Commands::Top => commands::navigate::top(),
         Commands::Bottom => commands::navigate::bottom(),
+        Commands::Prev => commands::navigate::prev(),
         Commands::Create {
             name,
             all,

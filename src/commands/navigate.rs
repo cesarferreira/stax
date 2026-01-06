@@ -1,5 +1,5 @@
 use crate::engine::Stack;
-use crate::git::GitRepo;
+use crate::git::{refs, GitRepo};
 use anyhow::{bail, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Select};
@@ -50,6 +50,8 @@ pub fn up(count: Option<usize>) -> Result<()> {
         };
     }
 
+    // Save current branch as previous before switching
+    let _ = refs::write_prev_branch(repo.inner(), &repo.current_branch()?);
     repo.checkout(&current)?;
     println!("Switched to branch '{}'", current.bright_cyan());
 
@@ -97,6 +99,8 @@ pub fn down(count: Option<usize>) -> Result<()> {
         }
     }
 
+    // Save current branch as previous before switching
+    let _ = refs::write_prev_branch(repo.inner(), &repo.current_branch()?);
     repo.checkout(&current)?;
     println!("Switched to branch '{}'", current.bright_cyan());
 
@@ -133,7 +137,8 @@ pub fn top() -> Result<()> {
         };
     }
 
-    if current == repo.current_branch()? {
+    let original = repo.current_branch()?;
+    if current == original {
         println!(
             "{}",
             "Already at the top of the stack.".dimmed()
@@ -141,6 +146,8 @@ pub fn top() -> Result<()> {
         return Ok(());
     }
 
+    // Save current branch as previous before switching
+    let _ = refs::write_prev_branch(repo.inner(), &original);
     repo.checkout(&current)?;
     println!("Switched to branch '{}'", current.bright_cyan());
 
@@ -170,6 +177,8 @@ pub fn bottom() -> Result<()> {
                 );
                 return Ok(());
             }
+            // Save current branch as previous before switching
+            let _ = refs::write_prev_branch(repo.inner(), &current);
             repo.checkout(target)?;
             println!("Switched to branch '{}'", target.bright_cyan());
         }
@@ -177,6 +186,45 @@ pub fn bottom() -> Result<()> {
             println!(
                 "{}",
                 "No branches above trunk in the current stack.".dimmed()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Switch to the previous branch (like git checkout -)
+pub fn prev() -> Result<()> {
+    let repo = GitRepo::open()?;
+    let current = repo.current_branch()?;
+
+    let prev_branch = refs::read_prev_branch(repo.inner())?;
+
+    match prev_branch {
+        Some(target) => {
+            if target == current {
+                println!(
+                    "{}",
+                    "Previous branch is the same as current branch.".dimmed()
+                );
+                return Ok(());
+            }
+
+            // Verify the branch still exists
+            let branches = repo.list_branches()?;
+            if !branches.contains(&target) {
+                bail!("Previous branch '{}' no longer exists.", target);
+            }
+
+            // Save current as previous before switching
+            let _ = refs::write_prev_branch(repo.inner(), &current);
+            repo.checkout(&target)?;
+            println!("Switched to branch '{}'", target.bright_cyan());
+        }
+        None => {
+            println!(
+                "{}",
+                "No previous branch recorded. Use checkout, up, down, etc. first.".dimmed()
             );
         }
     }

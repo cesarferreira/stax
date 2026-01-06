@@ -4,6 +4,7 @@ use std::process::Command;
 
 const METADATA_REF_PREFIX: &str = "refs/branch-metadata/";
 const STAX_TRUNK_REF: &str = "refs/stax/trunk";
+const STAX_PREV_BRANCH_REF: &str = "refs/stax/prev-branch";
 
 /// Read metadata JSON for a branch from git refs
 pub fn read_metadata(repo: &Repository, branch: &str) -> Result<Option<String>> {
@@ -132,6 +133,52 @@ pub fn write_trunk(repo: &Repository, trunk: &str) -> Result<()> {
         .current_dir(workdir)
         .status()
         .context("Failed to update trunk ref")?;
+
+    Ok(())
+}
+
+/// Read the previous branch (for `stax prev` command)
+pub fn read_prev_branch(repo: &Repository) -> Result<Option<String>> {
+    match repo.find_reference(STAX_PREV_BRANCH_REF) {
+        Ok(reference) => {
+            let oid = reference.target().context("Reference has no target")?;
+            let blob = repo.find_blob(oid)?;
+            let content = std::str::from_utf8(blob.content())?;
+            Ok(Some(content.trim().to_string()))
+        }
+        Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Write the previous branch (for `stax prev` command)
+pub fn write_prev_branch(repo: &Repository, branch: &str) -> Result<()> {
+    let workdir = repo
+        .workdir()
+        .context("Repository has no working directory")?;
+
+    // Create blob with branch name
+    let mut child = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(workdir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        stdin.write_all(branch.as_bytes())?;
+    }
+
+    let output = child.wait_with_output()?;
+    let hash = String::from_utf8(output.stdout)?.trim().to_string();
+
+    // Update the ref
+    Command::new("git")
+        .args(["update-ref", STAX_PREV_BRANCH_REF, &hash])
+        .current_dir(workdir)
+        .status()
+        .context("Failed to update prev-branch ref")?;
 
     Ok(())
 }

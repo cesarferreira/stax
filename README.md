@@ -392,6 +392,7 @@ stax ls
 | `stax top` | Jump to tip of current stack |
 | `stax bottom` | Jump to base of stack (first branch above trunk) |
 | `stax t` | Jump to trunk (main/master) |
+| `stax prev` | Toggle to previous branch (like `git checkout -`) |
 | `stax co` | Interactive picker with fuzzy search |
 
 ## Reading the Stack View
@@ -508,6 +509,7 @@ stax uses the same metadata format as freephite and supports similar commands:
 | `stax top` | | Move to stack tip |
 | `stax bottom` | | Move to stack base |
 | `stax trunk` | `t` | Switch to trunk |
+| `stax prev` | `p` | Toggle to previous branch |
 
 ### Interactive
 | Command | Description |

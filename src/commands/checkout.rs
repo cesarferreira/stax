@@ -1,5 +1,5 @@
 use crate::engine::Stack;
-use crate::git::GitRepo;
+use crate::git::{refs, GitRepo};
 use anyhow::Result;
 use colored::{Color, Colorize};
 use dialoguer::{theme::ColorfulTheme, FuzzySelect};
@@ -230,9 +230,13 @@ pub fn run(
         }
     };
 
-    if target == repo.current_branch()? {
+    if target == current {
         println!("Already on '{}'", target);
     } else {
+        // Save current branch as previous before switching
+        if let Err(e) = refs::write_prev_branch(repo.inner(), &current) {
+            eprintln!("Warning: failed to save previous branch: {}", e);
+        }
         repo.checkout(&target)?;
         println!("Switched to branch '{}'", target);
     }
