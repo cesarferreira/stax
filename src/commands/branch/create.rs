@@ -4,6 +4,8 @@ use crate::git::GitRepo;
 use crate::remote;
 use anyhow::{bail, Result};
 use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Input, Select};
+use std::path::Path;
 use std::process::Command;
 
 pub fn run(
@@ -25,14 +27,17 @@ pub fn run(
     // Get the branch name from either name or message
     // When using -m, the message is used for both branch name AND commit message
     // When using -a (--all), stage changes but only commit if -m is also provided
-    let (input, commit_message) = match (&name, &message) {
-        (Some(n), _) => (n.clone(), None),
-        (None, Some(m)) => (m.clone(), Some(m.clone())),
-        (None, None) => bail!("Branch name required. Use: stax bc <name> or stax bc -m \"message\""),
+    // When neither is provided, launch interactive wizard
+    let (input, commit_message, should_stage) = match (&name, &message) {
+        (Some(n), _) => (n.clone(), None, all),
+        (None, Some(m)) => (m.clone(), Some(m.clone()), true),
+        (None, None) => {
+            // Launch interactive wizard
+            let (wizard_name, wizard_msg, wizard_stage) =
+                run_wizard(repo.workdir()?, &parent_branch)?;
+            (wizard_name, wizard_msg, wizard_stage)
+        }
     };
-
-    // -a/--all flag: stage changes (like git commit --all)
-    let should_stage = all || message.is_some();
 
     // Format the branch name according to config
     let branch_name = match prefix.as_deref() {
@@ -103,7 +108,7 @@ pub fn run(
         parent_branch.blue()
     );
 
-    // Stage changes if -a or -m was used
+    // Stage changes if -a or -m was used or wizard selected it
     if should_stage {
         let workdir = repo.workdir()?;
 
@@ -146,4 +151,99 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// Interactive wizard for branch creation when no arguments provided
+fn run_wizard(workdir: &Path, parent_branch: &str) -> Result<(String, Option<String>, bool)> {
+    // Show header
+    println!();
+    println!("╭─ Create Stacked Branch ─────────────────────────────╮");
+    println!(
+        "│ Parent: {:<43} │",
+        format!("{} (current branch)", parent_branch.cyan())
+    );
+    println!("╰─────────────────────────────────────────────────────╯");
+    println!();
+
+    // 1. Branch name prompt (required)
+    let name: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Branch name")
+        .interact_text()?;
+
+    if name.trim().is_empty() {
+        bail!("Branch name cannot be empty");
+    }
+
+    // 2. Check for uncommitted changes
+    let has_changes = has_uncommitted_changes(workdir);
+    let change_count = count_uncommitted_changes(workdir);
+
+    let (should_stage, commit_message) = if has_changes {
+        println!();
+
+        // Show staging options with change count
+        let stage_label = if change_count > 0 {
+            format!("Stage all changes ({} files modified)", change_count)
+        } else {
+            "Stage all changes".to_string()
+        };
+
+        let options = vec![stage_label.as_str(), "Empty branch (no changes)"];
+
+        let choice = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("What to include")
+            .items(&options)
+            .default(0)
+            .interact()?;
+
+        let stage = choice == 0;
+
+        // 3. Optional commit message (only if staging)
+        let msg = if stage {
+            println!();
+            let m: String = Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Commit message (Enter to skip)")
+                .allow_empty(true)
+                .interact_text()?;
+            if m.is_empty() {
+                None
+            } else {
+                Some(m)
+            }
+        } else {
+            None
+        };
+
+        (stage, msg)
+    } else {
+        (false, None)
+    };
+
+    println!();
+    Ok((name, commit_message, should_stage))
+}
+
+/// Check if there are uncommitted changes in the working directory
+fn has_uncommitted_changes(workdir: &Path) -> bool {
+    Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(workdir)
+        .output()
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(false)
+}
+
+/// Count the number of files with uncommitted changes
+fn count_uncommitted_changes(workdir: &Path) -> usize {
+    Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(workdir)
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .count()
+        })
+        .unwrap_or(0)
 }
