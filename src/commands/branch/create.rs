@@ -4,6 +4,7 @@ use crate::git::GitRepo;
 use crate::remote;
 use anyhow::{bail, Result};
 use colored::Colorize;
+use console::Term;
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use std::path::Path;
 use std::process::Command;
@@ -32,6 +33,10 @@ pub fn run(
         (Some(n), _) => (n.clone(), None, all),
         (None, Some(m)) => (m.clone(), Some(m.clone()), true),
         (None, None) => {
+            // Check if we're in an interactive terminal
+            if !Term::stderr().is_term() {
+                bail!("Branch name required. Use: stax create <name> or stax create -m \"message\"");
+            }
             // Launch interactive wizard
             let (wizard_name, wizard_msg, wizard_stage) =
                 run_wizard(repo.workdir()?, &parent_branch)?;
