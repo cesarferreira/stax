@@ -342,6 +342,16 @@ enum Commands {
         pr: bool,
     },
 
+    /// Generate standup summary of stack status and recent activity
+    Standup {
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+        /// Show all stacks (not just current)
+        #[arg(long)]
+        all: bool,
+    },
+
     /// Rename the current branch
     Rename {
         /// New branch name (interactive if not provided)
@@ -703,6 +713,7 @@ fn main() -> Result<()> {
             };
             commands::copy::run(target)
         }
+        Commands::Standup { json, all } => commands::standup::run(json, all),
         Commands::Rename { name, edit, push, literal } => commands::branch::rename::run(name, edit, push, literal),
         Commands::Undo { op_id, yes, no_push, quiet } => commands::undo::run(op_id, yes, no_push, quiet),
         Commands::Redo { op_id, yes, no_push, quiet } => commands::redo::run(op_id, yes, no_push, quiet),

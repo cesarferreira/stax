@@ -19,6 +19,7 @@ pub mod range_diff;
 pub mod redo;
 pub mod restack;
 pub mod split;
+pub mod standup;
 pub mod status;
 pub mod submit;
 pub mod sync;
