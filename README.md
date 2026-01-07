@@ -203,6 +203,8 @@ Split uses the transaction system, so you can `stax undo` if needed.
 | `stax u` / `stax d` | Move up/down the stack |
 | `stax m` | Modify - stage all changes and amend current commit |
 | `stax pr` | Open current branch's PR in browser |
+| `stax copy` | Copy branch name to clipboard |
+| `stax copy --pr` | Copy PR URL to clipboard |
 | `stax undo` | Undo last operation (restack, submit, etc.) |
 
 ## Safe History Rewriting with Undo
@@ -598,6 +600,8 @@ stax uses the same metadata format as freephite and supports similar commands:
 | `stax ci` | Show CI status for branches in current stack |
 | `stax ci --all` | Show CI status for all tracked branches |
 | `stax ci --json` | Output CI status as JSON |
+| `stax copy` | Copy branch name to clipboard |
+| `stax copy --pr` | Copy PR URL to clipboard |
 | `stax comments` | Show PR comments with rendered markdown |
 | `stax comments --plain` | Show PR comments as raw markdown |
 

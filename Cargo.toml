@@ -37,6 +37,9 @@ termimad = "0.31"
 # Error handling
 anyhow = "1"
 
+# Clipboard
+arboard = "3"
+
 # Vendored OpenSSL for cross-compilation
 openssl = { version = "0.10", features = ["vendored"] }
 

@@ -5,6 +5,7 @@ pub mod ci;
 pub mod comments;
 pub mod config;
 pub mod continue_cmd;
+pub mod copy;
 pub mod diff;
 pub mod doctor;
 pub mod init;

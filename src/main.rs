@@ -332,6 +332,13 @@ enum Commands {
     /// Split the current branch into multiple stacked branches (interactive)
     Split,
 
+    /// Copy branch name or PR URL to clipboard
+    Copy {
+        /// Copy PR URL instead of branch name
+        #[arg(long)]
+        pr: bool,
+    },
+
     /// Rename the current branch
     Rename {
         /// New branch name (interactive if not provided)
@@ -684,6 +691,14 @@ fn main() -> Result<()> {
         Commands::Comments { plain } => commands::comments::run(plain),
         Commands::Ci { all, json, refresh } => commands::ci::run(all, json, refresh),
         Commands::Split => commands::split::run(),
+        Commands::Copy { pr } => {
+            let target = if pr {
+                commands::copy::CopyTarget::Pr
+            } else {
+                commands::copy::CopyTarget::Branch
+            };
+            commands::copy::run(target)
+        }
         Commands::Rename { name, edit, push, literal } => commands::branch::rename::run(name, edit, push, literal),
         Commands::Undo { op_id, yes, no_push, quiet } => commands::undo::run(op_id, yes, no_push, quiet),
         Commands::Redo { op_id, yes, no_push, quiet } => commands::redo::run(op_id, yes, no_push, quiet),
