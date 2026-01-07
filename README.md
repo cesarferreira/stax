@@ -595,7 +595,8 @@ stax uses the same metadata format as freephite and supports similar commands:
 | `stax doctor` | Check repo health |
 | `stax continue` | Continue after resolving conflicts |
 | `stax pr` | Open PR in browser |
-| `stax comments` | Show PR comments (conversation + inline reviews) |
+| `stax comments` | Show PR comments with rendered markdown |
+| `stax comments --plain` | Show PR comments as raw markdown |
 
 ### Common Flags
 - `stax create -m "msg"` - Create branch with commit message

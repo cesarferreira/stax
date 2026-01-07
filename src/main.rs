@@ -310,7 +310,11 @@ enum Commands {
     Pr,
 
     /// Show comments on the current branch's PR
-    Comments,
+    Comments {
+        /// Output raw markdown without rendering
+        #[arg(long)]
+        plain: bool,
+    },
 
     /// Split the current branch into multiple stacked branches (interactive)
     Split,
@@ -664,7 +668,7 @@ fn main() -> Result<()> {
             prefix,
         } => commands::branch::create::run(name, message, from, prefix, all),
         Commands::Pr => commands::pr::run(),
-        Commands::Comments => commands::comments::run(),
+        Commands::Comments { plain } => commands::comments::run(plain),
         Commands::Split => commands::split::run(),
         Commands::Rename { name, edit, push, literal } => commands::branch::rename::run(name, edit, push, literal),
         Commands::Undo { op_id, yes, no_push, quiet } => commands::undo::run(op_id, yes, no_push, quiet),
