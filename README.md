@@ -205,6 +205,7 @@ Split uses the transaction system, so you can `stax undo` if needed.
 | `stax pr` | Open current branch's PR in browser |
 | `stax copy` | Copy branch name to clipboard |
 | `stax copy --pr` | Copy PR URL to clipboard |
+| `stax standup` | Generate standup summary of stack status |
 | `stax undo` | Undo last operation (restack, submit, etc.) |
 
 ## Safe History Rewriting with Undo
@@ -604,6 +605,9 @@ stax uses the same metadata format as freephite and supports similar commands:
 | `stax copy --pr` | Copy PR URL to clipboard |
 | `stax comments` | Show PR comments with rendered markdown |
 | `stax comments --plain` | Show PR comments as raw markdown |
+| `stax standup` | Generate standup summary of stack status and activity |
+| `stax standup --all` | Include all stacks in standup summary |
+| `stax standup --json` | Output standup as JSON for scripting |
 
 ### Common Flags
 - `stax create -m "msg"` - Create branch with commit message
