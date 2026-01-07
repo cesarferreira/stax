@@ -289,3 +289,117 @@ async fn fetch_check_runs(
 
     Ok((overall, check_runs))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_run_info_serialization() {
+        let info = CheckRunInfo {
+            name: "build".to_string(),
+            status: "completed".to_string(),
+            conclusion: Some("success".to_string()),
+            url: Some("https://github.com/test/test/runs/123".to_string()),
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("build"));
+        assert!(json.contains("completed"));
+        assert!(json.contains("success"));
+
+        let deserialized: CheckRunInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "build");
+        assert_eq!(deserialized.status, "completed");
+        assert_eq!(deserialized.conclusion, Some("success".to_string()));
+    }
+
+    #[test]
+    fn test_check_run_info_without_url() {
+        let info = CheckRunInfo {
+            name: "test".to_string(),
+            status: "in_progress".to_string(),
+            conclusion: None,
+            url: None,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        // url should be skipped when None due to skip_serializing_if
+        assert!(!json.contains("url"));
+        assert!(json.contains("test"));
+        assert!(json.contains("in_progress"));
+    }
+
+    #[test]
+    fn test_branch_ci_status_serialization() {
+        let status = BranchCiStatus {
+            branch: "feature-branch".to_string(),
+            sha: "abc123def456".to_string(),
+            sha_short: "abc123d".to_string(),
+            overall_status: Some("success".to_string()),
+            check_runs: vec![
+                CheckRunInfo {
+                    name: "build".to_string(),
+                    status: "completed".to_string(),
+                    conclusion: Some("success".to_string()),
+                    url: None,
+                },
+            ],
+            pr_number: Some(42),
+        };
+
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("feature-branch"));
+        assert!(json.contains("abc123def456"));
+        assert!(json.contains("abc123d"));
+        assert!(json.contains("success"));
+        assert!(json.contains("build"));
+        assert!(json.contains("42"));
+    }
+
+    #[test]
+    fn test_branch_ci_status_without_pr() {
+        let status = BranchCiStatus {
+            branch: "no-pr-branch".to_string(),
+            sha: "xyz789".to_string(),
+            sha_short: "xyz789".to_string(),
+            overall_status: None,
+            check_runs: vec![],
+            pr_number: None,
+        };
+
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("no-pr-branch"));
+        assert!(json.contains("null")); // pr_number is null
+    }
+
+    #[test]
+    fn test_check_runs_response_deserialization() {
+        let json = r#"{
+            "total_count": 2,
+            "check_runs": [
+                {"name": "build", "status": "completed", "conclusion": "success", "html_url": "https://example.com/1"},
+                {"name": "test", "status": "in_progress", "conclusion": null, "html_url": null}
+            ]
+        }"#;
+
+        let response: CheckRunsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.total_count, 2);
+        assert_eq!(response.check_runs.len(), 2);
+        assert_eq!(response.check_runs[0].name, "build");
+        assert_eq!(response.check_runs[0].conclusion, Some("success".to_string()));
+        assert_eq!(response.check_runs[1].name, "test");
+        assert_eq!(response.check_runs[1].conclusion, None);
+    }
+
+    #[test]
+    fn test_check_run_detail_deserialization() {
+        let json = r#"{"name": "lint", "status": "queued", "conclusion": null, "html_url": "https://example.com"}"#;
+
+        let detail: CheckRunDetail = serde_json::from_str(json).unwrap();
+        assert_eq!(detail.name, "lint");
+        assert_eq!(detail.status, "queued");
+        assert_eq!(detail.conclusion, None);
+        assert_eq!(detail.html_url, Some("https://example.com".to_string()));
+    }
+}

@@ -586,3 +586,26 @@ fn test_branch_rename_push_flag_help() {
     assert!(stdout.contains("--push") || stdout.contains("-p"),
         "Expected --push flag in branch rename help: {}", stdout);
 }
+
+// ============================================================================
+// CI Command Tests
+// ============================================================================
+
+#[test]
+fn test_ci_command_help() {
+    let output = stax(&["ci", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("CI") || stdout.contains("status"),
+        "Expected CI-related help text: {}", stdout);
+}
+
+#[test]
+fn test_ci_command_flags() {
+    let output = stax(&["ci", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--all"), "Expected --all flag: {}", stdout);
+    assert!(stdout.contains("--json"), "Expected --json flag: {}", stdout);
+    assert!(stdout.contains("--refresh"), "Expected --refresh flag: {}", stdout);
+}
