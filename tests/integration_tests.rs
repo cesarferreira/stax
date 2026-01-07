@@ -450,6 +450,38 @@ fn test_branch_create_requires_name() {
     );
 }
 
+#[test]
+fn test_branch_create_requires_name_via_create_alias() {
+    let repo = TestRepo::new();
+
+    // Test with 'create' alias (not just 'bc')
+    let output = repo.run_stax(&["create"]);
+    assert!(!output.status.success());
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("name") || stderr.contains("required") || stderr.contains("stax create"),
+        "Expected error about name, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_branch_create_wizard_shows_usage_hint() {
+    let repo = TestRepo::new();
+
+    // When running non-interactively, should show usage hint with examples
+    let output = repo.run_stax(&["create"]);
+    assert!(!output.status.success());
+    let stderr = TestRepo::stderr(&output);
+    
+    // Should mention valid ways to use the command
+    assert!(
+        stderr.contains("stax create <name>") || stderr.contains("-m"),
+        "Expected usage hint in error, got: {}",
+        stderr
+    );
+}
+
 // =============================================================================
 // Status/Log Tests
 // =============================================================================

@@ -83,6 +83,29 @@ stax ss
 stax rs --restack
 ```
 
+## Interactive Branch Creation
+
+Run `stax create` without arguments to launch the guided wizard:
+
+```bash
+$ stax create
+
+╭─ Create Stacked Branch ─────────────────────────────╮
+│ Parent: feature/auth (current branch)               │
+╰─────────────────────────────────────────────────────╯
+
+? Branch name: auth-validation
+
+? What to include:
+  ● Stage all changes (3 files modified)
+  ○ Empty branch (no changes)
+
+? Commit message (Enter to skip): Validate auth tokens
+
+✓ Created cesar/auth-validation
+  → Stacked on feature/auth
+```
+
 ## Interactive TUI
 
 Run `stax` with no arguments to launch the interactive terminal UI:
