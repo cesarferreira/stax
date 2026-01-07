@@ -1,9 +1,66 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use octocrab::params::pulls::Sort;
 use serde::Deserialize;
 
 use super::GitHubClient;
 use crate::remote::RemoteInfo;
+
+/// A comment on a PR issue thread (conversation comment)
+#[derive(Debug, Clone)]
+pub struct IssueComment {
+    #[allow(dead_code)]
+    pub id: u64,
+    pub body: String,
+    pub user: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A review comment on a PR (inline code comment)
+#[derive(Debug, Clone)]
+pub struct ReviewComment {
+    #[allow(dead_code)]
+    pub id: u64,
+    pub body: String,
+    pub user: String,
+    pub path: String,
+    pub line: Option<u32>,
+    pub start_line: Option<u32>,
+    pub created_at: DateTime<Utc>,
+    pub diff_hunk: Option<String>,
+}
+
+/// Combined comment for unified display
+#[derive(Debug, Clone)]
+pub enum PrComment {
+    Issue(IssueComment),
+    Review(ReviewComment),
+}
+
+impl PrComment {
+    pub fn created_at(&self) -> DateTime<Utc> {
+        match self {
+            PrComment::Issue(c) => c.created_at,
+            PrComment::Review(c) => c.created_at,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn user(&self) -> &str {
+        match self {
+            PrComment::Issue(c) => &c.user,
+            PrComment::Review(c) => &c.user,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn body(&self) -> &str {
+        match self {
+            PrComment::Issue(c) => &c.body,
+            PrComment::Review(c) => &c.body,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct PrInfo {
@@ -505,6 +562,96 @@ impl GitHubClient {
             .context("Failed to get PR")?;
 
         Ok(pr.merged_at.is_some())
+    }
+
+    /// List all issue comments (conversation comments) on a PR
+    pub async fn list_issue_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>> {
+        let comments = self
+            .octocrab
+            .issues(&self.owner, &self.repo)
+            .list_comments(pr_number)
+            .send()
+            .await
+            .context("Failed to list issue comments")?;
+
+        Ok(comments
+            .items
+            .into_iter()
+            .map(|c| IssueComment {
+                id: c.id.into_inner(),
+                body: c.body.unwrap_or_default(),
+                user: c.user.login,
+                created_at: c.created_at,
+            })
+            .collect())
+    }
+
+    /// List all review comments (inline code comments) on a PR
+    pub async fn list_review_comments(&self, pr_number: u64) -> Result<Vec<ReviewComment>> {
+        let url = format!(
+            "/repos/{}/{}/pulls/{}/comments",
+            self.owner, self.repo, pr_number
+        );
+
+        #[derive(Deserialize)]
+        struct ApiReviewComment {
+            id: u64,
+            body: Option<String>,
+            user: ApiUser,
+            path: String,
+            line: Option<u32>,
+            start_line: Option<u32>,
+            created_at: DateTime<Utc>,
+            diff_hunk: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        struct ApiUser {
+            login: String,
+        }
+
+        let comments: Vec<ApiReviewComment> = self
+            .octocrab
+            .get(&url, None::<&()>)
+            .await
+            .context("Failed to list review comments")?;
+
+        Ok(comments
+            .into_iter()
+            .map(|c| ReviewComment {
+                id: c.id,
+                body: c.body.unwrap_or_default(),
+                user: c.user.login,
+                path: c.path,
+                line: c.line,
+                start_line: c.start_line,
+                created_at: c.created_at,
+                diff_hunk: c.diff_hunk,
+            })
+            .collect())
+    }
+
+    /// List all comments (both issue and review) on a PR, sorted by creation time
+    pub async fn list_all_comments(&self, pr_number: u64) -> Result<Vec<PrComment>> {
+        let (issue_comments, review_comments) = tokio::try_join!(
+            self.list_issue_comments(pr_number),
+            self.list_review_comments(pr_number)
+        )?;
+
+        let mut all_comments: Vec<PrComment> = Vec::new();
+
+        for c in issue_comments {
+            all_comments.push(PrComment::Issue(c));
+        }
+
+        for c in review_comments {
+            all_comments.push(PrComment::Review(c));
+        }
+
+        // Sort by creation time
+        all_comments.sort_by_key(|c| c.created_at());
+
+        Ok(all_comments)
     }
 }
 

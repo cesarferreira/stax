@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod branch;
 pub mod checkout;
+pub mod comments;
 pub mod config;
 pub mod continue_cmd;
 pub mod diff;
@@ -14,6 +15,7 @@ pub mod pr;
 pub mod range_diff;
 pub mod redo;
 pub mod restack;
+pub mod split;
 pub mod status;
 pub mod submit;
 pub mod sync;

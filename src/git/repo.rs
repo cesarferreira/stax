@@ -279,6 +279,16 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Create a new branch at a specific commit SHA
+    pub fn create_branch_at_commit(&self, name: &str, commit_sha: &str) -> Result<()> {
+        let oid = git2::Oid::from_str(commit_sha)
+            .with_context(|| format!("Invalid commit SHA: {}", commit_sha))?;
+        let commit = self.repo.find_commit(oid)
+            .with_context(|| format!("Commit '{}' not found", commit_sha))?;
+        self.repo.branch(name, &commit, false)?;
+        Ok(())
+    }
+
     /// Find merge-base commit between two local branches
     pub fn merge_base(&self, left: &str, right: &str) -> Result<String> {
         let left_commit = self

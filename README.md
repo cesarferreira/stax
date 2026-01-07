@@ -148,6 +148,46 @@ Rearrange branches within your stack without manually running reparent commands:
 3. Preview shows which reparent operations will happen
 4. Press `Enter` to apply changes and automatically restack
 
+### Split Mode
+
+Split a branch with many commits into multiple stacked branches:
+
+```bash
+stax split
+```
+
+<p align="center">
+  <img alt="stax split mode" src="assets/split-mode.png" width="800">
+</p>
+
+**How it works:**
+1. Run `stax split` on a branch with multiple commits
+2. Navigate commits with `j/k` or arrows
+3. Press `s` to mark a split point and enter a branch name
+4. Preview shows the resulting branch structure in real-time
+5. Press `Enter` to execute - new branches are created with proper metadata
+
+| Key | Action |
+|-----|--------|
+| `j/k` or `↑/↓` | Navigate commits |
+| `s` | Mark split point at cursor (enter branch name) |
+| `d` | Remove split point at cursor |
+| `Enter` | Execute split |
+| `?` | Show help |
+| `q/Esc` | Cancel and quit |
+
+**Example:** You have a branch with commits A→B→C→D→E. Mark splits after B ("part1") and D ("part2"):
+
+```
+Before:                    After:
+main                       main
+  └─ my-feature (A-E)        └─ part1 (A, B)
+                                 └─ part2 (C, D)
+                                      └─ my-feature (E)
+```
+
+Split uses the transaction system, so you can `stax undo` if needed.
+
 ## Core Commands
 
 | Command | What it does |
@@ -538,6 +578,7 @@ stax uses the same metadata format as freephite and supports similar commands:
 | Command | Description |
 |---------|-------------|
 | `stax` | Launch interactive TUI |
+| `stax split` | Interactive TUI to split branch into multiple stacked branches |
 
 ### Recovery
 | Command | Description |
@@ -554,6 +595,7 @@ stax uses the same metadata format as freephite and supports similar commands:
 | `stax doctor` | Check repo health |
 | `stax continue` | Continue after resolving conflicts |
 | `stax pr` | Open PR in browser |
+| `stax comments` | Show PR comments (conversation + inline reviews) |
 
 ### Common Flags
 - `stax create -m "msg"` - Create branch with commit message

@@ -24,6 +24,7 @@ pub enum OpKind {
     SyncRestack,
     Submit,
     Reorder,
+    Split,
 }
 
 impl OpKind {
@@ -34,6 +35,7 @@ impl OpKind {
             OpKind::SyncRestack => "sync --restack",
             OpKind::Submit => "submit",
             OpKind::Reorder => "reorder",
+            OpKind::Split => "split",
         }
     }
 }

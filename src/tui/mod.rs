@@ -1,5 +1,6 @@
 mod app;
 mod event;
+pub mod split;
 mod ui;
 mod widgets;
 
