@@ -156,9 +156,6 @@ Split a branch with many commits into multiple stacked branches:
 stax split
 ```
 
-<p align="center">
-  <img alt="stax split mode" src="assets/split-mode.png" width="800">
-</p>
 
 **How it works:**
 1. Run `stax split` on a branch with multiple commits
