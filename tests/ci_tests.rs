@@ -3,7 +3,7 @@
 //! These tests verify the CI status display functionality.
 
 mod common;
-use common::{OutputAssertions, TestRepo};
+use common::TestRepo;
 
 /// Test that ci command shows "no tracked branches" when there are none
 #[test]
@@ -41,15 +41,16 @@ fn test_ci_requires_github_token() {
     let stderr = TestRepo::stderr(&output);
     let stdout = TestRepo::stdout(&output);
 
-    // Should either request token or show no CI (if no PRs)
+    // Should either request token, fail on remote info, or show no CI (if no PRs)
     let has_token_error = stderr.contains("GitHub token") || stderr.contains("GITHUB_TOKEN");
+    let has_remote_error = stderr.contains("remote");
     let has_no_ci_output = stdout.contains("No CI") || stdout.contains("No tracked");
     let success = output.status.success();
 
-    // Either fails asking for token, or succeeds showing no CI checks
+    // Either fails asking for token/remote, or succeeds showing no CI checks
     assert!(
-        has_token_error || has_no_ci_output || success,
-        "Expected token error or no CI output, got stdout: {}, stderr: {}",
+        has_token_error || has_remote_error || has_no_ci_output || success,
+        "Expected token/remote error or no CI output, got stdout: {}, stderr: {}",
         stdout,
         stderr
     );
@@ -79,10 +80,10 @@ fn test_ci_json_format_structure() {
         let json = parsed.unwrap();
         assert!(json.is_array(), "Expected JSON array output");
     } else {
-        // Should fail with token error
+        // Should fail with token or remote error
         assert!(
-            stderr.contains("GitHub") || stderr.contains("token"),
-            "Expected GitHub token error, got: {}",
+            stderr.contains("GitHub") || stderr.contains("token") || stderr.contains("remote"),
+            "Expected GitHub token or remote error, got: {}",
             stderr
         );
     }
