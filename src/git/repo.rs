@@ -391,6 +391,36 @@ impl GitRepo {
 
         Ok(format_duration(diff))
     }
+
+    /// Get recent commits on a branch within the last N hours
+    /// Returns (branch_name, commit_count, most_recent_age)
+    pub fn recent_branch_activity(&self, branch: &str, hours: i64) -> Result<Option<(usize, String)>> {
+        let workdir = self.workdir()?;
+        let since_arg = format!("--since={} hours ago", hours);
+
+        let output = Command::new("git")
+            .args(["log", &since_arg, "--oneline", branch])
+            .current_dir(workdir)
+            .output()
+            .context("Failed to run git log")?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let commit_count = stdout.lines().filter(|l| !l.is_empty()).count();
+
+        if commit_count == 0 {
+            return Ok(None);
+        }
+
+        // Get the age of the most recent commit
+        let age = self.branch_age(branch).ok();
+
+        Ok(Some((commit_count, age.unwrap_or_else(|| "recently".to_string()))))
+    }
+
     /// Check if a branch is merged into trunk
     pub fn is_branch_merged(&self, branch: &str) -> Result<bool> {
         let trunk = self.trunk_branch()?;

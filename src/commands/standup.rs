@@ -1,48 +1,67 @@
-use crate::cache::CiCache;
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
-use crate::github::GitHubClient;
+use crate::github::{GitHubClient, PrActivity, ReviewActivity};
 use crate::remote::RemoteInfo;
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::Serialize;
-use std::collections::HashMap;
 
-#[derive(Serialize, Clone)]
-struct BranchSummary {
-    name: String,
-    commits_ahead: usize,
-    pr_number: Option<u64>,
-    pr_state: Option<String>,
-    pr_is_draft: Option<bool>,
-    ci_state: Option<String>,
-    needs_restack: bool,
-    age: Option<String>,
-    is_current: bool,
+/// JSON output structure for standup
+#[derive(Serialize)]
+struct StandupJson {
+    period_hours: i64,
+    current_branch: String,
+    trunk: String,
+    merged_prs: Vec<PrActivityJson>,
+    opened_prs: Vec<PrActivityJson>,
+    reviews_received: Vec<ReviewActivityJson>,
+    reviews_given: Vec<ReviewActivityJson>,
+    recent_pushes: Vec<PushActivity>,
+    needs_attention: NeedsAttention,
 }
 
 #[derive(Serialize)]
-struct StandupJson {
-    current_branch: String,
-    trunk: String,
-    total_branches: usize,
-    branches_needing_restack: Vec<String>,
-    open_prs: Vec<BranchSummary>,
-    in_progress: Vec<BranchSummary>,
-    ci_failing: Vec<String>,
-    ci_pending: Vec<String>,
+struct PrActivityJson {
+    number: u64,
+    title: String,
+    timestamp: String,
+    age: String,
 }
 
-pub fn run(json: bool, all: bool) -> Result<()> {
+#[derive(Serialize)]
+struct ReviewActivityJson {
+    pr_number: u64,
+    pr_title: String,
+    reviewer: String,
+    state: String,
+    timestamp: String,
+    age: String,
+}
+
+#[derive(Serialize)]
+struct PushActivity {
+    branch: String,
+    commit_count: usize,
+    age: String,
+}
+
+#[derive(Serialize)]
+struct NeedsAttention {
+    branches_needing_restack: Vec<String>,
+    ci_failing: Vec<String>,
+    prs_with_requested_changes: Vec<String>,
+}
+
+pub fn run(json: bool, all: bool, hours: i64) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
     let config = Config::load()?;
-    let git_dir = repo.git_dir()?;
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
 
-    // Get branches to show (current stack or all)
+    // Get branches to check for activity
     let branches_to_show: Vec<String> = if all {
         stack
             .branches
@@ -58,582 +77,472 @@ pub fn run(json: bool, all: bool) -> Result<()> {
             .collect()
     };
 
-    // Load CI cache
-    let cache = CiCache::load(git_dir);
+    // Fetch GitHub activity
+    let (merged_prs, opened_prs, reviews_received, reviews_given) =
+        fetch_github_activity(&remote_info, hours);
 
-    // Fetch fresh CI states if needed
-    let ci_states = if cache.is_stale() {
-        fetch_ci_states(&repo, remote_info.as_ref(), &stack, &branches_to_show)
-    } else {
-        branches_to_show
-            .iter()
-            .filter_map(|b| cache.get_ci_state(b).map(|s| (b.clone(), s)))
-            .collect()
-    };
+    // Get recent push activity from git
+    let recent_pushes = get_recent_pushes(&repo, &branches_to_show, hours);
 
-    // Build branch summaries
-    let mut summaries: Vec<BranchSummary> = Vec::new();
-    for name in &branches_to_show {
-        let info = stack.branches.get(name);
-        let parent = info.and_then(|b| b.parent.clone());
-
-        let (ahead, _behind) = parent
-            .as_deref()
-            .and_then(|p| repo.commits_ahead_behind(p, name).ok())
-            .unwrap_or((0, 0));
-
-        let pr_state = info
-            .and_then(|b| b.pr_state.clone())
-            .and_then(|s| if s.trim().is_empty() { None } else { Some(s) });
-
-        let summary = BranchSummary {
-            name: name.clone(),
-            commits_ahead: ahead,
-            pr_number: info.and_then(|b| b.pr_number),
-            pr_state,
-            pr_is_draft: info.and_then(|b| b.pr_is_draft),
-            ci_state: ci_states.get(name).cloned(),
-            needs_restack: info.map(|b| b.needs_restack).unwrap_or(false),
-            age: repo.branch_age(name).ok(),
-            is_current: name == &current,
-        };
-        summaries.push(summary);
-    }
-
-    // Categorize branches
-    let needs_restack: Vec<String> = summaries
-        .iter()
-        .filter(|s| s.needs_restack)
-        .map(|s| s.name.clone())
-        .collect();
-
-    let open_prs: Vec<BranchSummary> = summaries
-        .iter()
-        .filter(|s| {
-            s.pr_number.is_some()
-                && s.pr_state
-                    .as_ref()
-                    .map(|st| st.to_lowercase() == "open")
-                    .unwrap_or(false)
-        })
-        .cloned()
-        .collect();
-
-    let in_progress: Vec<BranchSummary> = summaries
-        .iter()
-        .filter(|s| s.pr_number.is_none() && s.commits_ahead > 0)
-        .cloned()
-        .collect();
-
-    let ci_failing: Vec<String> = summaries
-        .iter()
-        .filter(|s| {
-            s.ci_state
-                .as_ref()
-                .map(|st| st.to_lowercase() == "failure" || st.to_lowercase() == "error")
-                .unwrap_or(false)
-        })
-        .map(|s| s.name.clone())
-        .collect();
-
-    let ci_pending: Vec<String> = summaries
-        .iter()
-        .filter(|s| {
-            s.ci_state
-                .as_ref()
-                .map(|st| st.to_lowercase() == "pending")
-                .unwrap_or(false)
-        })
-        .map(|s| s.name.clone())
-        .collect();
+    // Build needs attention section
+    let needs_attention = build_needs_attention(&repo, &stack, &branches_to_show, &reviews_received);
 
     if json {
         let output = StandupJson {
+            period_hours: hours,
             current_branch: current.clone(),
             trunk: stack.trunk.clone(),
-            total_branches: branches_to_show.len(),
-            branches_needing_restack: needs_restack,
-            open_prs,
-            in_progress,
-            ci_failing,
-            ci_pending,
+            merged_prs: merged_prs
+                .iter()
+                .map(|pr| PrActivityJson {
+                    number: pr.number,
+                    title: pr.title.clone(),
+                    timestamp: pr.timestamp.to_rfc3339(),
+                    age: format_age(pr.timestamp),
+                })
+                .collect(),
+            opened_prs: opened_prs
+                .iter()
+                .map(|pr| PrActivityJson {
+                    number: pr.number,
+                    title: pr.title.clone(),
+                    timestamp: pr.timestamp.to_rfc3339(),
+                    age: format_age(pr.timestamp),
+                })
+                .collect(),
+            reviews_received: reviews_received
+                .iter()
+                .map(|r| ReviewActivityJson {
+                    pr_number: r.pr_number,
+                    pr_title: r.pr_title.clone(),
+                    reviewer: r.reviewer.clone(),
+                    state: r.state.clone(),
+                    timestamp: r.timestamp.to_rfc3339(),
+                    age: format_age(r.timestamp),
+                })
+                .collect(),
+            reviews_given: reviews_given
+                .iter()
+                .map(|r| ReviewActivityJson {
+                    pr_number: r.pr_number,
+                    pr_title: r.pr_title.clone(),
+                    reviewer: r.reviewer.clone(),
+                    state: r.state.clone(),
+                    timestamp: r.timestamp.to_rfc3339(),
+                    age: format_age(r.timestamp),
+                })
+                .collect(),
+            recent_pushes,
+            needs_attention,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
 
     // Human-readable output
-    println!("{}", "📋 Standup Summary".bold());
+    let period = if hours == 24 {
+        "last 24 hours".to_string()
+    } else {
+        format!("last {} hours", hours)
+    };
+
+    println!(
+        "{}",
+        format!("Standup Summary ({})", period).bold()
+    );
+    println!("{}", "─".repeat(40).dimmed());
     println!();
 
-    // Current position
-    println!(
-        "{}  on {} (trunk: {})",
-        "📍".dimmed(),
-        current.cyan().bold(),
-        stack.trunk.dimmed()
-    );
-
-    let scope = if all { "all stacks" } else { "current stack" };
-    println!(
-        "{}  {} branches in {}",
-        "📊".dimmed(),
-        branches_to_show.len(),
-        scope
-    );
-    println!();
-
-    // Needs attention section
-    let has_attention_items =
-        !needs_restack.is_empty() || !ci_failing.is_empty() || !ci_pending.is_empty();
-
-    if has_attention_items {
-        println!("{}", "⚠️  Needs Attention".yellow().bold());
-
-        if !needs_restack.is_empty() {
+    // Merged PRs
+    if !merged_prs.is_empty() {
+        println!("{}", "Merged".green().bold());
+        for pr in &merged_prs {
             println!(
-                "   {} {} need restacking:",
-                "⟳".bright_yellow(),
-                needs_restack.len()
+                "   {} PR #{}: {} ({})",
+                "•".green(),
+                pr.number.to_string().bright_magenta(),
+                pr.title,
+                format_age(pr.timestamp).dimmed()
             );
-            for branch in &needs_restack {
-                let marker = if branch == &current { " ◉" } else { "  " };
-                println!("     {}{}", marker, branch.bright_yellow());
-            }
-        }
-
-        if !ci_failing.is_empty() {
-            println!(
-                "   {} {} with failing CI:",
-                "✗".red(),
-                ci_failing.len()
-            );
-            for branch in &ci_failing {
-                let marker = if branch == &current { " ◉" } else { "  " };
-                println!("     {}{}", marker, branch.red());
-            }
-        }
-
-        if !ci_pending.is_empty() {
-            println!(
-                "   {} {} with pending CI:",
-                "⏳".bright_yellow(),
-                ci_pending.len()
-            );
-            for branch in &ci_pending {
-                let marker = if branch == &current { " ◉" } else { "  " };
-                println!("     {}{}", marker, branch.bright_yellow());
-            }
         }
         println!();
     }
 
-    // Open PRs section
-    if !open_prs.is_empty() {
-        println!("{}", "🔄 Open PRs".green().bold());
-        for pr in &open_prs {
-            let marker = if pr.is_current { "◉" } else { "○" };
-            let draft_indicator = if pr.pr_is_draft.unwrap_or(false) {
-                " (draft)".dimmed().to_string()
-            } else {
-                String::new()
-            };
-            let ci_indicator = match pr.ci_state.as_deref() {
-                Some("success") => " ✓".green().to_string(),
-                Some("failure") | Some("error") => " ✗".red().to_string(),
-                Some("pending") => " ⏳".yellow().to_string(),
-                _ => String::new(),
-            };
-            let pr_num = pr
-                .pr_number
-                .map(|n| format!(" PR #{}", n).bright_magenta().to_string())
-                .unwrap_or_default();
-
+    // Opened PRs
+    if !opened_prs.is_empty() {
+        println!("{}", "Opened".cyan().bold());
+        for pr in &opened_prs {
             println!(
-                "   {} {}{}{}{}",
-                marker.cyan(),
-                pr.name.cyan(),
-                pr_num,
-                draft_indicator,
-                ci_indicator
+                "   {} PR #{}: {} ({})",
+                "•".cyan(),
+                pr.number.to_string().bright_magenta(),
+                pr.title,
+                format_age(pr.timestamp).dimmed()
             );
-
-            if let Some(age) = &pr.age {
-                println!("     {}", age.dimmed());
-            }
         }
         println!();
     }
 
-    // In progress (no PR yet)
-    if !in_progress.is_empty() {
-        println!("{}", "🚧 In Progress (no PR)".blue().bold());
-        for branch in &in_progress {
-            let marker = if branch.is_current { "◉" } else { "○" };
-            let commits = if branch.commits_ahead == 1 {
-                "1 commit".to_string()
-            } else {
-                format!("{} commits", branch.commits_ahead)
-            };
+    // Reviews
+    if !reviews_received.is_empty() || !reviews_given.is_empty() {
+        println!("{}", "Reviews".blue().bold());
 
+        for review in &reviews_received {
+            let state_str = format_review_state(&review.state);
             println!(
-                "   {} {} ({})",
-                marker.blue(),
-                branch.name.blue(),
-                commits.dimmed()
+                "   {} {} on PR #{} from @{} ({})",
+                "•".blue(),
+                state_str,
+                review.pr_number.to_string().bright_magenta(),
+                review.reviewer.cyan(),
+                format_age(review.timestamp).dimmed()
             );
+        }
 
-            if let Some(age) = &branch.age {
-                println!("     {}", age.dimmed());
-            }
+        for review in &reviews_given {
+            let state_str = format_review_state(&review.state);
+            println!(
+                "   {} You {} PR #{} ({})",
+                "•".blue(),
+                state_str.to_lowercase(),
+                review.pr_number.to_string().bright_magenta(),
+                format_age(review.timestamp).dimmed()
+            );
         }
         println!();
     }
 
-    // Quick actions
-    if has_attention_items || !in_progress.is_empty() {
-        println!("{}", "💡 Suggested Actions".dimmed());
-        if !needs_restack.is_empty() {
-            println!("   {} to rebase branches", "stax rs --restack".cyan());
+    // Recent pushes
+    let pushes_with_activity: Vec<_> = recent_pushes.iter().filter(|p| p.commit_count > 0).collect();
+    if !pushes_with_activity.is_empty() {
+        println!("{}", "Pushed".yellow().bold());
+        for push in &pushes_with_activity {
+            let commit_word = if push.commit_count == 1 { "commit" } else { "commits" };
+            println!(
+                "   {} {} {} to {} ({})",
+                "•".yellow(),
+                push.commit_count,
+                commit_word,
+                push.branch.cyan(),
+                push.age.dimmed()
+            );
         }
-        if !in_progress.is_empty() {
-            println!("   {} to push and create PRs", "stax submit".cyan());
+        println!();
+    }
+
+    // Needs attention
+    let has_attention = !needs_attention.branches_needing_restack.is_empty()
+        || !needs_attention.ci_failing.is_empty()
+        || !needs_attention.prs_with_requested_changes.is_empty();
+
+    if has_attention {
+        println!("{}", "Needs Attention".red().bold());
+
+        for branch in &needs_attention.prs_with_requested_changes {
+            println!("   {} PR on {} has requested changes", "•".red(), branch.cyan());
         }
-        if !ci_failing.is_empty() {
-            println!("   Check CI failures and push fixes");
+
+        for branch in &needs_attention.ci_failing {
+            println!("   {} CI failing on {}", "•".red(), branch.cyan());
         }
-    } else if open_prs.is_empty() && in_progress.is_empty() {
-        println!("{}", "✨ All caught up! No active work in progress.".green());
+
+        for branch in &needs_attention.branches_needing_restack {
+            println!("   {} {} needs restack", "•".yellow(), branch.cyan());
+        }
+        println!();
+    }
+
+    // Empty state
+    if merged_prs.is_empty()
+        && opened_prs.is_empty()
+        && reviews_received.is_empty()
+        && reviews_given.is_empty()
+        && pushes_with_activity.is_empty()
+        && !has_attention
+    {
+        println!(
+            "{}",
+            "No activity in the last {} hours.".dimmed()
+        );
+        println!();
     }
 
     Ok(())
 }
 
-fn fetch_ci_states(
-    repo: &GitRepo,
-    remote_info: Option<&RemoteInfo>,
-    stack: &Stack,
-    branches: &[String],
-) -> HashMap<String, String> {
+fn fetch_github_activity(
+    remote_info: &Option<RemoteInfo>,
+    hours: i64,
+) -> (Vec<PrActivity>, Vec<PrActivity>, Vec<ReviewActivity>, Vec<ReviewActivity>) {
     let Some(remote) = remote_info else {
-        return HashMap::new();
+        return (vec![], vec![], vec![], vec![]);
     };
 
     if Config::github_token().is_none() {
-        return HashMap::new();
+        return (vec![], vec![], vec![], vec![]);
     }
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
-        Err(_) => return HashMap::new(),
+        Err(_) => return (vec![], vec![], vec![], vec![]),
     };
 
     let client = match rt.block_on(async {
         GitHubClient::new(remote.owner(), &remote.repo, remote.api_base_url.clone())
     }) {
         Ok(client) => client,
-        Err(_) => return HashMap::new(),
+        Err(_) => return (vec![], vec![], vec![], vec![]),
     };
 
-    let mut results = HashMap::new();
-    for branch in branches {
-        let has_pr = stack
-            .branches
-            .get(branch)
-            .and_then(|b| b.pr_number)
-            .is_some();
+    // Get current user
+    let username = rt
+        .block_on(async { client.get_current_user().await })
+        .unwrap_or_default();
 
-        if !has_pr {
-            continue;
-        }
-
-        let sha = match repo.branch_commit(branch) {
-            Ok(sha) => sha,
-            Err(_) => continue,
-        };
-
-        let state = rt
-            .block_on(async { client.combined_status_state(&sha).await })
-            .ok()
-            .flatten();
-
-        if let Some(state) = state {
-            results.insert(branch.clone(), state);
-        }
+    if username.is_empty() {
+        return (vec![], vec![], vec![], vec![]);
     }
 
-    results
+    // Fetch all activity in parallel-ish
+    let merged_prs = rt
+        .block_on(async { client.get_recent_merged_prs(hours).await })
+        .unwrap_or_default();
+
+    let opened_prs = rt
+        .block_on(async { client.get_recent_opened_prs(hours).await })
+        .unwrap_or_default();
+
+    let reviews_received = rt
+        .block_on(async { client.get_reviews_received(hours, &username).await })
+        .unwrap_or_default();
+
+    let reviews_given = rt
+        .block_on(async { client.get_reviews_given(hours, &username).await })
+        .unwrap_or_default();
+
+    (merged_prs, opened_prs, reviews_received, reviews_given)
+}
+
+fn get_recent_pushes(repo: &GitRepo, branches: &[String], hours: i64) -> Vec<PushActivity> {
+    branches
+        .iter()
+        .filter_map(|branch| {
+            repo.recent_branch_activity(branch, hours)
+                .ok()
+                .flatten()
+                .map(|(count, age)| PushActivity {
+                    branch: branch.clone(),
+                    commit_count: count,
+                    age,
+                })
+        })
+        .collect()
+}
+
+fn build_needs_attention(
+    _repo: &GitRepo,
+    stack: &Stack,
+    branches: &[String],
+    reviews_received: &[ReviewActivity],
+) -> NeedsAttention {
+    let branches_needing_restack: Vec<String> = branches
+        .iter()
+        .filter(|b| {
+            stack
+                .branches
+                .get(*b)
+                .map(|info| info.needs_restack)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+
+    // Find PRs with "CHANGES_REQUESTED" reviews
+    let prs_with_requested_changes: Vec<String> = reviews_received
+        .iter()
+        .filter(|r| r.state == "CHANGES_REQUESTED")
+        .filter_map(|r| {
+            // Find the branch for this PR
+            branches.iter().find(|b| {
+                stack
+                    .branches
+                    .get(*b)
+                    .and_then(|info| info.pr_number)
+                    == Some(r.pr_number)
+            })
+        })
+        .cloned()
+        .collect();
+
+    // Note: CI failing would require fetching CI status which adds latency
+    // For now, we skip it to keep standup fast
+    let ci_failing: Vec<String> = vec![];
+
+    NeedsAttention {
+        branches_needing_restack,
+        ci_failing,
+        prs_with_requested_changes,
+    }
+}
+
+fn format_age(timestamp: DateTime<Utc>) -> String {
+    let now = Utc::now();
+    let diff = now.signed_duration_since(timestamp);
+
+    let minutes = diff.num_minutes();
+    let hours = diff.num_hours();
+
+    if minutes < 1 {
+        "just now".to_string()
+    } else if minutes < 60 {
+        format!("{}m ago", minutes)
+    } else if hours < 24 {
+        format!("{}h ago", hours)
+    } else {
+        let days = hours / 24;
+        format!("{}d ago", days)
+    }
+}
+
+fn format_review_state(state: &str) -> String {
+    match state {
+        "APPROVED" => "Approved".green().to_string(),
+        "CHANGES_REQUESTED" => "Changes requested".red().to_string(),
+        "COMMENTED" => "Commented".blue().to_string(),
+        "DISMISSED" => "Dismissed".dimmed().to_string(),
+        _ => state.to_string(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
-    fn make_summary(
-        name: &str,
-        commits_ahead: usize,
-        pr_number: Option<u64>,
-        pr_state: Option<&str>,
-        ci_state: Option<&str>,
-        needs_restack: bool,
-        is_current: bool,
-    ) -> BranchSummary {
-        BranchSummary {
-            name: name.to_string(),
-            commits_ahead,
-            pr_number,
-            pr_state: pr_state.map(|s| s.to_string()),
-            pr_is_draft: Some(false),
-            ci_state: ci_state.map(|s| s.to_string()),
-            needs_restack,
-            age: Some("1 hour ago".to_string()),
-            is_current,
-        }
+    #[test]
+    fn test_format_age_just_now() {
+        let now = Utc::now();
+        assert_eq!(format_age(now), "just now");
     }
 
     #[test]
-    fn test_branch_summary_serialization() {
-        let summary = make_summary("feature-1", 3, Some(123), Some("open"), Some("success"), false, true);
-        let json = serde_json::to_string(&summary).unwrap();
-        assert!(json.contains("\"name\":\"feature-1\""));
-        assert!(json.contains("\"commits_ahead\":3"));
-        assert!(json.contains("\"pr_number\":123"));
-        assert!(json.contains("\"pr_state\":\"open\""));
-        assert!(json.contains("\"ci_state\":\"success\""));
-        assert!(json.contains("\"needs_restack\":false"));
-        assert!(json.contains("\"is_current\":true"));
+    fn test_format_age_minutes() {
+        let timestamp = Utc::now() - Duration::minutes(30);
+        assert_eq!(format_age(timestamp), "30m ago");
+    }
+
+    #[test]
+    fn test_format_age_hours() {
+        let timestamp = Utc::now() - Duration::hours(5);
+        assert_eq!(format_age(timestamp), "5h ago");
+    }
+
+    #[test]
+    fn test_format_age_days() {
+        let timestamp = Utc::now() - Duration::hours(48);
+        assert_eq!(format_age(timestamp), "2d ago");
+    }
+
+    #[test]
+    fn test_format_review_state_approved() {
+        let result = format_review_state("APPROVED");
+        assert!(result.contains("Approved"));
+    }
+
+    #[test]
+    fn test_format_review_state_changes_requested() {
+        let result = format_review_state("CHANGES_REQUESTED");
+        assert!(result.contains("Changes requested"));
+    }
+
+    #[test]
+    fn test_format_review_state_commented() {
+        let result = format_review_state("COMMENTED");
+        assert!(result.contains("Commented"));
+    }
+
+    #[test]
+    fn test_format_review_state_unknown() {
+        let result = format_review_state("UNKNOWN_STATE");
+        assert_eq!(result, "UNKNOWN_STATE");
     }
 
     #[test]
     fn test_standup_json_serialization() {
-        let summary = make_summary("feature-1", 2, Some(42), Some("open"), Some("pending"), false, true);
-        let standup = StandupJson {
+        let output = StandupJson {
+            period_hours: 24,
             current_branch: "feature-1".to_string(),
             trunk: "main".to_string(),
-            total_branches: 3,
-            branches_needing_restack: vec!["feature-2".to_string()],
-            open_prs: vec![summary],
-            in_progress: vec![],
-            ci_failing: vec![],
-            ci_pending: vec!["feature-1".to_string()],
+            merged_prs: vec![PrActivityJson {
+                number: 42,
+                title: "Add feature".to_string(),
+                timestamp: "2024-01-01T00:00:00Z".to_string(),
+                age: "2h ago".to_string(),
+            }],
+            opened_prs: vec![],
+            reviews_received: vec![],
+            reviews_given: vec![],
+            recent_pushes: vec![PushActivity {
+                branch: "feature-1".to_string(),
+                commit_count: 3,
+                age: "1h ago".to_string(),
+            }],
+            needs_attention: NeedsAttention {
+                branches_needing_restack: vec!["feature-2".to_string()],
+                ci_failing: vec![],
+                prs_with_requested_changes: vec![],
+            },
         };
-        let json = serde_json::to_string_pretty(&standup).unwrap();
+
+        let json = serde_json::to_string_pretty(&output).unwrap();
+        assert!(json.contains("\"period_hours\": 24"));
         assert!(json.contains("\"current_branch\": \"feature-1\""));
-        assert!(json.contains("\"trunk\": \"main\""));
-        assert!(json.contains("\"total_branches\": 3"));
-        assert!(json.contains("\"branches_needing_restack\""));
+        assert!(json.contains("\"number\": 42"));
+        assert!(json.contains("\"commit_count\": 3"));
         assert!(json.contains("feature-2"));
     }
 
     #[test]
-    fn test_filter_needs_restack() {
-        let summaries = vec![
-            make_summary("branch-1", 1, None, None, None, true, false),
-            make_summary("branch-2", 2, None, None, None, false, false),
-            make_summary("branch-3", 3, None, None, None, true, true),
-        ];
-
-        let needs_restack: Vec<String> = summaries
-            .iter()
-            .filter(|s| s.needs_restack)
-            .map(|s| s.name.clone())
-            .collect();
-
-        assert_eq!(needs_restack.len(), 2);
-        assert!(needs_restack.contains(&"branch-1".to_string()));
-        assert!(needs_restack.contains(&"branch-3".to_string()));
-    }
-
-    #[test]
-    fn test_filter_open_prs() {
-        let summaries = vec![
-            make_summary("branch-1", 1, Some(1), Some("open"), None, false, false),
-            make_summary("branch-2", 2, Some(2), Some("closed"), None, false, false),
-            make_summary("branch-3", 3, Some(3), Some("merged"), None, false, false),
-            make_summary("branch-4", 4, None, None, None, false, false),
-            make_summary("branch-5", 5, Some(5), Some("OPEN"), None, false, true), // uppercase
-        ];
-
-        let open_prs: Vec<BranchSummary> = summaries
-            .iter()
-            .filter(|s| {
-                s.pr_number.is_some()
-                    && s.pr_state
-                        .as_ref()
-                        .map(|st| st.to_lowercase() == "open")
-                        .unwrap_or(false)
-            })
-            .cloned()
-            .collect();
-
-        assert_eq!(open_prs.len(), 2);
-        assert_eq!(open_prs[0].name, "branch-1");
-        assert_eq!(open_prs[1].name, "branch-5");
-    }
-
-    #[test]
-    fn test_filter_in_progress() {
-        let summaries = vec![
-            make_summary("branch-1", 3, None, None, None, false, false), // in progress
-            make_summary("branch-2", 0, None, None, None, false, false), // no commits
-            make_summary("branch-3", 2, Some(1), Some("open"), None, false, false), // has PR
-            make_summary("branch-4", 5, None, None, None, false, true), // in progress, current
-        ];
-
-        let in_progress: Vec<BranchSummary> = summaries
-            .iter()
-            .filter(|s| s.pr_number.is_none() && s.commits_ahead > 0)
-            .cloned()
-            .collect();
-
-        assert_eq!(in_progress.len(), 2);
-        assert_eq!(in_progress[0].name, "branch-1");
-        assert_eq!(in_progress[1].name, "branch-4");
-    }
-
-    #[test]
-    fn test_filter_ci_failing() {
-        let summaries = vec![
-            make_summary("branch-1", 1, Some(1), Some("open"), Some("failure"), false, false),
-            make_summary("branch-2", 2, Some(2), Some("open"), Some("success"), false, false),
-            make_summary("branch-3", 3, Some(3), Some("open"), Some("error"), false, false),
-            make_summary("branch-4", 4, Some(4), Some("open"), Some("pending"), false, false),
-            make_summary("branch-5", 5, Some(5), Some("open"), None, false, false),
-        ];
-
-        let ci_failing: Vec<String> = summaries
-            .iter()
-            .filter(|s| {
-                s.ci_state
-                    .as_ref()
-                    .map(|st| st.to_lowercase() == "failure" || st.to_lowercase() == "error")
-                    .unwrap_or(false)
-            })
-            .map(|s| s.name.clone())
-            .collect();
-
-        assert_eq!(ci_failing.len(), 2);
-        assert!(ci_failing.contains(&"branch-1".to_string()));
-        assert!(ci_failing.contains(&"branch-3".to_string()));
-    }
-
-    #[test]
-    fn test_filter_ci_pending() {
-        let summaries = vec![
-            make_summary("branch-1", 1, Some(1), Some("open"), Some("pending"), false, false),
-            make_summary("branch-2", 2, Some(2), Some("open"), Some("success"), false, false),
-            make_summary("branch-3", 3, Some(3), Some("open"), Some("PENDING"), false, false), // uppercase
-        ];
-
-        let ci_pending: Vec<String> = summaries
-            .iter()
-            .filter(|s| {
-                s.ci_state
-                    .as_ref()
-                    .map(|st| st.to_lowercase() == "pending")
-                    .unwrap_or(false)
-            })
-            .map(|s| s.name.clone())
-            .collect();
-
-        assert_eq!(ci_pending.len(), 2);
-        assert!(ci_pending.contains(&"branch-1".to_string()));
-        assert!(ci_pending.contains(&"branch-3".to_string()));
-    }
-
-    #[test]
-    fn test_branch_summary_clone() {
-        let summary = make_summary("test", 5, Some(100), Some("open"), Some("success"), true, true);
-        let cloned = summary.clone();
-        assert_eq!(cloned.name, "test");
-        assert_eq!(cloned.commits_ahead, 5);
-        assert_eq!(cloned.pr_number, Some(100));
-        assert_eq!(cloned.pr_state, Some("open".to_string()));
-        assert_eq!(cloned.ci_state, Some("success".to_string()));
-        assert!(cloned.needs_restack);
-        assert!(cloned.is_current);
-    }
-
-    #[test]
-    fn test_empty_summaries() {
-        let summaries: Vec<BranchSummary> = vec![];
-
-        let needs_restack: Vec<String> = summaries
-            .iter()
-            .filter(|s| s.needs_restack)
-            .map(|s| s.name.clone())
-            .collect();
-
-        let open_prs: Vec<BranchSummary> = summaries
-            .iter()
-            .filter(|s| {
-                s.pr_number.is_some()
-                    && s.pr_state
-                        .as_ref()
-                        .map(|st| st.to_lowercase() == "open")
-                        .unwrap_or(false)
-            })
-            .cloned()
-            .collect();
-
-        assert!(needs_restack.is_empty());
-        assert!(open_prs.is_empty());
-    }
-
-    #[test]
-    fn test_commit_count_formatting() {
-        // Test single commit
-        let branch = make_summary("test", 1, None, None, None, false, false);
-        let commits = if branch.commits_ahead == 1 {
-            "1 commit".to_string()
-        } else {
-            format!("{} commits", branch.commits_ahead)
+    fn test_push_activity_serialization() {
+        let push = PushActivity {
+            branch: "my-branch".to_string(),
+            commit_count: 5,
+            age: "30m ago".to_string(),
         };
-        assert_eq!(commits, "1 commit");
 
-        // Test multiple commits
-        let branch = make_summary("test", 5, None, None, None, false, false);
-        let commits = if branch.commits_ahead == 1 {
-            "1 commit".to_string()
-        } else {
-            format!("{} commits", branch.commits_ahead)
-        };
-        assert_eq!(commits, "5 commits");
+        let json = serde_json::to_string(&push).unwrap();
+        assert!(json.contains("\"branch\":\"my-branch\""));
+        assert!(json.contains("\"commit_count\":5"));
+        assert!(json.contains("\"age\":\"30m ago\""));
     }
 
     #[test]
-    fn test_draft_pr_handling() {
-        let mut summary = make_summary("feature", 2, Some(42), Some("open"), None, false, false);
-        summary.pr_is_draft = Some(true);
-
-        assert!(summary.pr_is_draft.unwrap_or(false));
-
-        let draft_indicator = if summary.pr_is_draft.unwrap_or(false) {
-            " (draft)"
-        } else {
-            ""
+    fn test_needs_attention_empty() {
+        let needs = NeedsAttention {
+            branches_needing_restack: vec![],
+            ci_failing: vec![],
+            prs_with_requested_changes: vec![],
         };
-        assert_eq!(draft_indicator, " (draft)");
+
+        let has_attention = !needs.branches_needing_restack.is_empty()
+            || !needs.ci_failing.is_empty()
+            || !needs.prs_with_requested_changes.is_empty();
+
+        assert!(!has_attention);
     }
 
     #[test]
-    fn test_ci_indicator_matching() {
-        let test_cases = vec![
-            (Some("success"), "✓"),
-            (Some("failure"), "✗"),
-            (Some("error"), "✗"),
-            (Some("pending"), "⏳"),
-            (None, ""),
-        ];
+    fn test_needs_attention_with_items() {
+        let needs = NeedsAttention {
+            branches_needing_restack: vec!["branch-1".to_string()],
+            ci_failing: vec![],
+            prs_with_requested_changes: vec!["branch-2".to_string()],
+        };
 
-        for (ci_state, expected_icon) in test_cases {
-            let indicator = match ci_state {
-                Some("success") => "✓",
-                Some("failure") | Some("error") => "✗",
-                Some("pending") => "⏳",
-                _ => "",
-            };
-            assert_eq!(indicator, expected_icon);
-        }
+        let has_attention = !needs.branches_needing_restack.is_empty()
+            || !needs.ci_failing.is_empty()
+            || !needs.prs_with_requested_changes.is_empty();
+
+        assert!(has_attention);
     }
 }
