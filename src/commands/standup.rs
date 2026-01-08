@@ -3,11 +3,11 @@ use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
 use crate::github::GitHubClient;
-use crate::remote::{self, RemoteInfo};
+use crate::remote::RemoteInfo;
 use anyhow::Result;
 use colored::Colorize;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Serialize, Clone)]
 struct BranchSummary {
@@ -39,14 +39,8 @@ pub fn run(json: bool, all: bool) -> Result<()> {
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
     let config = Config::load()?;
-    let workdir = repo.workdir()?;
     let git_dir = repo.git_dir()?;
-
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
-    let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<HashSet<_>>();
 
     // Get branches to show (current stack or all)
     let branches_to_show: Vec<String> = if all {
