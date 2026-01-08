@@ -309,6 +309,9 @@ enum Commands {
     /// Open the PR for the current branch in browser
     Pr,
 
+    /// Open the repository in browser
+    Open,
+
     /// Show comments on the current branch's PR
     Comments {
         /// Output raw markdown without rendering
@@ -688,6 +691,7 @@ fn main() -> Result<()> {
             prefix,
         } => commands::branch::create::run(name, message, from, prefix, all),
         Commands::Pr => commands::pr::run(),
+        Commands::Open => commands::open::run(),
         Commands::Comments { plain } => commands::comments::run(plain),
         Commands::Ci { all, json, refresh } => commands::ci::run(all, json, refresh),
         Commands::Split => commands::split::run(),

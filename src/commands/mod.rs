@@ -13,6 +13,7 @@ pub mod log;
 pub mod merge;
 pub mod modify;
 pub mod navigate;
+pub mod open;
 pub mod pr;
 pub mod range_diff;
 pub mod redo;
