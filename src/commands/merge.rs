@@ -78,7 +78,30 @@ pub fn run(
         return Ok(());
     }
 
-    // Check that all branches have PRs
+    // Set up GitHub client for PR lookups
+    let remote_info = RemoteInfo::from_repo(&repo, &config);
+    let rt = tokio::runtime::Runtime::new()?;
+
+    // Try to create GitHub client (may fail if no remote or no token)
+    let client = remote_info.as_ref().ok().and_then(|info| {
+        rt.block_on(async {
+            GitHubClient::new(info.owner(), &info.repo, info.api_base_url.clone())
+        })
+        .ok()
+    });
+
+    // For branches missing PR metadata, check GitHub for existing PRs
+    if let Some(ref client) = client {
+        for branch_info in &mut scope.to_merge {
+            if branch_info.pr_number.is_none() {
+                if let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(&branch_info.branch).await }) {
+                    branch_info.pr_number = Some(pr_info.number);
+                }
+            }
+        }
+    }
+
+    // Check that all branches have PRs (after GitHub lookup)
     let missing_prs: Vec<_> = scope
         .to_merge
         .iter()
@@ -93,12 +116,9 @@ pub fn run(
         );
     }
 
-    // Fetch PR status for all branches
-    let remote_info = RemoteInfo::from_repo(&repo, &config)?;
-    let rt = tokio::runtime::Runtime::new()?;
-    let client = rt.block_on(async {
-        GitHubClient::new(remote_info.owner(), &remote_info.repo, remote_info.api_base_url.clone())
-    })?;
+    // Get remote info and client (will fail with clear error if not available)
+    let remote_info = remote_info?;
+    let client = client.ok_or_else(|| anyhow::anyhow!("Failed to connect to GitHub. Check your token and remote configuration."))?;
 
     if !quiet {
         print!("Fetching PR status... ");
