@@ -303,13 +303,13 @@ fn fetch_github_activity(
         return (vec![], vec![], vec![], vec![]);
     }
 
-    // Fetch all activity in parallel-ish
+    // Fetch all activity - using search API filtered by user (fast)
     let merged_prs = rt
-        .block_on(async { client.get_recent_merged_prs(hours).await })
+        .block_on(async { client.get_recent_merged_prs(hours, &username).await })
         .unwrap_or_default();
 
     let opened_prs = rt
-        .block_on(async { client.get_recent_opened_prs(hours).await })
+        .block_on(async { client.get_recent_opened_prs(hours, &username).await })
         .unwrap_or_default();
 
     let reviews_received = rt

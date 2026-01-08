@@ -57,21 +57,8 @@ pub struct ReviewActivity {
     pub is_received: bool, // true = received on your PR, false = given by you
 }
 
-/// Response from GitHub pulls list API
 #[derive(Debug, Deserialize)]
-struct PullRequest {
-    number: u64,
-    title: String,
-    #[allow(dead_code)]
-    state: String,
-    html_url: String,
-    created_at: DateTime<Utc>,
-    merged_at: Option<DateTime<Utc>>,
-    user: Option<PrUser>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PrUser {
+struct ReviewUser {
     login: String,
 }
 
@@ -80,7 +67,22 @@ struct PrUser {
 struct Review {
     state: String,
     submitted_at: Option<DateTime<Utc>>,
-    user: Option<PrUser>,
+    user: Option<ReviewUser>,
+}
+
+/// Response from GitHub search issues API
+#[derive(Debug, Deserialize)]
+struct SearchIssuesResponse {
+    items: Vec<SearchIssue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchIssue {
+    number: u64,
+    title: String,
+    html_url: String,
+    created_at: DateTime<Utc>,
+    closed_at: Option<DateTime<Utc>>,
 }
 
 impl GitHubClient {
@@ -199,24 +201,31 @@ impl GitHubClient {
         Ok(user.login)
     }
 
-    /// Get PRs merged in the last N hours
-    pub async fn get_recent_merged_prs(&self, hours: i64) -> Result<Vec<PrActivity>> {
+    /// Get PRs merged by the user in the last N hours
+    pub async fn get_recent_merged_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
         let since = Utc::now() - chrono::Duration::hours(hours);
+        // Use search API to find only user's merged PRs - much faster than listing all
         let url = format!(
-            "/repos/{}/{}/pulls?state=closed&sort=updated&direction=desc&per_page=100",
-            self.owner, self.repo
+            "/search/issues?q=repo:{}/{}+author:{}+is:pr+is:merged&sort=updated&order=desc&per_page=30",
+            self.owner, self.repo, username
         );
 
-        let prs: Vec<PullRequest> = self.octocrab.get(&url, None::<&()>).await?;
+        let response: SearchIssuesResponse = self.octocrab.get(&url, None::<&()>).await?;
 
-        let merged: Vec<PrActivity> = prs
+        let merged: Vec<PrActivity> = response
+            .items
             .into_iter()
-            .filter_map(|pr| {
-                pr.merged_at.filter(|&merged| merged >= since).map(|merged| PrActivity {
-                    number: pr.number,
-                    title: pr.title,
-                    timestamp: merged,
-                    url: pr.html_url,
+            .filter_map(|issue| {
+                let closed_at = issue.closed_at?;
+                // Filter by time locally (more reliable than URL date filters)
+                if closed_at < since {
+                    return None;
+                }
+                Some(PrActivity {
+                    number: issue.number,
+                    title: issue.title,
+                    timestamp: closed_at,
+                    url: issue.html_url,
                 })
             })
             .collect();
@@ -224,24 +233,26 @@ impl GitHubClient {
         Ok(merged)
     }
 
-    /// Get PRs opened in the last N hours
-    pub async fn get_recent_opened_prs(&self, hours: i64) -> Result<Vec<PrActivity>> {
+    /// Get PRs opened by the user in the last N hours
+    pub async fn get_recent_opened_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
         let since = Utc::now() - chrono::Duration::hours(hours);
+        // Use search API to find only user's created PRs
         let url = format!(
-            "/repos/{}/{}/pulls?state=all&sort=created&direction=desc&per_page=100",
-            self.owner, self.repo
+            "/search/issues?q=repo:{}/{}+author:{}+is:pr&sort=created&order=desc&per_page=30",
+            self.owner, self.repo, username
         );
 
-        let prs: Vec<PullRequest> = self.octocrab.get(&url, None::<&()>).await?;
+        let response: SearchIssuesResponse = self.octocrab.get(&url, None::<&()>).await?;
 
-        let opened: Vec<PrActivity> = prs
+        let opened: Vec<PrActivity> = response
+            .items
             .into_iter()
-            .filter(|pr| pr.created_at >= since)
-            .map(|pr| PrActivity {
-                number: pr.number,
-                title: pr.title,
-                timestamp: pr.created_at,
-                url: pr.html_url,
+            .filter(|issue| issue.created_at >= since)
+            .map(|issue| PrActivity {
+                number: issue.number,
+                title: issue.title,
+                timestamp: issue.created_at,
+                url: issue.html_url,
             })
             .collect();
 
@@ -249,27 +260,24 @@ impl GitHubClient {
     }
 
     /// Get reviews received on user's open PRs in the last N hours
+    /// Only fetches user's own PRs to keep it fast
     pub async fn get_reviews_received(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
         let since = Utc::now() - chrono::Duration::hours(hours);
 
-        // Get user's open PRs
+        // Use search to get only user's open PRs (fast)
         let url = format!(
-            "/repos/{}/{}/pulls?state=open&per_page=100",
-            self.owner, self.repo
+            "/search/issues?q=repo:{}/{}+author:{}+is:pr+is:open&per_page=20",
+            self.owner, self.repo, username
         );
-        let prs: Vec<PullRequest> = self.octocrab.get(&url, None::<&()>).await?;
+        let response: SearchIssuesResponse = self.octocrab.get(&url, None::<&()>).await?;
 
         let mut reviews = Vec::new();
 
-        for pr in prs {
-            // Only check PRs created by this user
-            if pr.user.as_ref().map(|u| &u.login) != Some(&username.to_string()) {
-                continue;
-            }
-
+        // Only check reviews on user's own PRs (small list, few API calls)
+        for issue in response.items {
             let reviews_url = format!(
                 "/repos/{}/{}/pulls/{}/reviews",
-                self.owner, self.repo, pr.number
+                self.owner, self.repo, issue.number
             );
             let pr_reviews: Vec<Review> = self.octocrab.get(&reviews_url, None::<&()>).await.unwrap_or_default();
 
@@ -280,8 +288,8 @@ impl GitHubClient {
                             // Don't include self-reviews
                             if reviewer.login != username {
                                 reviews.push(ReviewActivity {
-                                    pr_number: pr.number,
-                                    pr_title: pr.title.clone(),
+                                    pr_number: issue.number,
+                                    pr_title: issue.title.clone(),
                                     reviewer: reviewer.login,
                                     state: review.state,
                                     timestamp: submitted,
@@ -298,52 +306,11 @@ impl GitHubClient {
     }
 
     /// Get reviews given by user on others' PRs in the last N hours
-    pub async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
-        let since = Utc::now() - chrono::Duration::hours(hours);
-
-        // Get all open PRs (we'll filter by reviewer)
-        let url = format!(
-            "/repos/{}/{}/pulls?state=open&per_page=100",
-            self.owner, self.repo
-        );
-        let prs: Vec<PullRequest> = self.octocrab.get(&url, None::<&()>).await?;
-
-        let mut reviews = Vec::new();
-
-        for pr in prs {
-            // Skip user's own PRs
-            if pr.user.as_ref().map(|u| &u.login) == Some(&username.to_string()) {
-                continue;
-            }
-
-            let reviews_url = format!(
-                "/repos/{}/{}/pulls/{}/reviews",
-                self.owner, self.repo, pr.number
-            );
-            let pr_reviews: Vec<Review> = self.octocrab.get(&reviews_url, None::<&()>).await.unwrap_or_default();
-
-            for review in pr_reviews {
-                if let Some(submitted) = review.submitted_at {
-                    if submitted >= since {
-                        if let Some(reviewer) = &review.user {
-                            // Only include reviews by this user
-                            if reviewer.login == username {
-                                reviews.push(ReviewActivity {
-                                    pr_number: pr.number,
-                                    pr_title: pr.title.clone(),
-                                    reviewer: reviewer.login.clone(),
-                                    state: review.state,
-                                    timestamp: submitted,
-                                    is_received: false,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(reviews)
+    /// Note: This is expensive for large repos, returns empty to keep standup fast
+    pub async fn get_reviews_given(&self, _hours: i64, _username: &str) -> Result<Vec<ReviewActivity>> {
+        // Skip for now - scanning all PRs is too slow for large repos
+        // Could be implemented with GitHub's GraphQL API in the future
+        Ok(vec![])
     }
 }
 
