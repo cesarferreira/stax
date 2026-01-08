@@ -205,8 +205,22 @@ Split uses the transaction system, so you can `stax undo` if needed.
 | `stax pr` | Open current branch's PR in browser |
 | `stax copy` | Copy branch name to clipboard |
 | `stax copy --pr` | Copy PR URL to clipboard |
-| `stax standup` | Show recent activity (merged PRs, reviews, pushes) |
+| `stax standup` | Show your recent activity for standups |
 | `stax undo` | Undo last operation (restack, submit, etc.) |
+
+## Standup Summary
+
+Struggling to remember what you worked on yesterday? Run `stax standup` to get a quick summary of your recent activity:
+
+![Standup Summary](assets/standup.png)
+
+Shows your merged PRs, opened PRs, recent pushes, and anything that needs attention - perfect for daily standups.
+
+```bash
+stax standup              # Last 24 hours (default)
+stax standup --hours 48   # Look back further
+stax standup --json       # For scripting
+```
 
 ## Safe History Rewriting with Undo
 
@@ -605,9 +619,8 @@ stax uses the same metadata format as freephite and supports similar commands:
 | `stax copy --pr` | Copy PR URL to clipboard |
 | `stax comments` | Show PR comments with rendered markdown |
 | `stax comments --plain` | Show PR comments as raw markdown |
-| `stax standup` | Show recent activity (merged PRs, opened PRs, reviews, pushes) |
+| `stax standup` | Show your recent activity for standups |
 | `stax standup --hours 48` | Look back 48 hours instead of default 24 |
-| `stax standup --all` | Include all stacks in activity summary |
 | `stax standup --json` | Output activity as JSON for scripting |
 
 ### Common Flags
