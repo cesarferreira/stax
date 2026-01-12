@@ -165,10 +165,10 @@ pub fn run(
                                 repo.commits_ahead_behind(parent, &db.name)
                             {
                                 if ahead > 0 {
-                                    display.push_str(&format!(" {}↑", ahead));
+                                    display.push_str(&format!(" {} ahead", ahead));
                                 }
                                 if behind > 0 {
-                                    display.push_str(&format!(" {}↓", behind));
+                                    display.push_str(&format!(" {} behind", behind));
                                 }
                             }
                         }

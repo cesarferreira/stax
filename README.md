@@ -436,6 +436,22 @@ stax merge
 # Run stax merge again later to merge those too
 ```
 
+## Import Your Open PRs
+
+Already have open PRs on GitHub that aren't tracked by stax? Import them all at once:
+
+```bash
+stax branch track --all-prs
+```
+
+This command:
+- Fetches all your open PRs from GitHub
+- Downloads any missing branches from remote
+- Sets up tracking with the correct parent (based on each PR's target branch)
+- Stores PR metadata for each branch
+
+Perfect for onboarding an existing repository or after cloning a fresh copy.
+
 ## Working with Multiple Stacks
 
 You can have multiple independent stacks at once:
@@ -573,6 +589,7 @@ stax uses the same metadata format as freephite and supports similar commands:
 | `stax modify` | `m` | Stage all + amend current commit |
 | `stax rename` | `b r` | Rename branch and optionally edit commit message |
 | `stax branch track` | | Track an existing branch |
+| `stax branch track --all-prs` | | Track all your open PRs |
 | `stax branch reparent` | | Change parent of a branch |
 | `stax branch delete` | | Delete a branch |
 | `stax branch fold` | | Fold branch into parent |

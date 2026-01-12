@@ -297,14 +297,14 @@ pub fn run(
         }
 
         if let Some(entry) = entry {
-            // Show commits ahead/behind with arrows
+            // Show commits ahead/behind
             if entry.ahead > 0 || entry.behind > 0 {
                 let mut commits_str = String::new();
                 if entry.ahead > 0 {
-                    commits_str.push_str(&format!(" {}", format!("{}↑", entry.ahead).green()));
+                    commits_str.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
                 }
                 if entry.behind > 0 {
-                    commits_str.push_str(&format!(" {}", format!("{}↓", entry.behind).red()));
+                    commits_str.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
                 }
                 info_str.push_str(&commits_str);
             }
@@ -397,10 +397,10 @@ pub fn run(
     if let Some(entry) = branch_status_map.get(&stack.trunk) {
         if entry.ahead > 0 || entry.behind > 0 {
             if entry.ahead > 0 {
-                trunk_info.push_str(&format!(" {}", format!("{}↑", entry.ahead).green()));
+                trunk_info.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
             }
             if entry.behind > 0 {
-                trunk_info.push_str(&format!(" {}", format!("{}↓", entry.behind).red()));
+                trunk_info.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
             }
         }
     }

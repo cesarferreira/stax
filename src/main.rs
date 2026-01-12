@@ -468,8 +468,11 @@ enum BranchCommands {
     /// Track an existing branch (set its parent)
     Track {
         /// Parent branch name
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "all_prs")]
         parent: Option<String>,
+        /// Track all open PRs authored by you
+        #[arg(long)]
+        all_prs: bool,
     },
 
     /// Change the parent of a tracked branch
@@ -734,7 +737,7 @@ fn main() -> Result<()> {
                 parent,
                 child,
             } => commands::checkout::run(branch, trunk, parent, child),
-            BranchCommands::Track { parent } => commands::branch::track::run(parent),
+            BranchCommands::Track { parent, all_prs } => commands::branch::track::run(parent, all_prs),
             BranchCommands::Reparent { branch, parent } => {
                 commands::branch::reparent::run(branch, parent)
             }

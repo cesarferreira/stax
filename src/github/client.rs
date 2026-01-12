@@ -57,6 +57,16 @@ pub struct ReviewActivity {
     pub is_received: bool, // true = received on your PR, false = given by you
 }
 
+/// Open PR info for tracking command
+#[derive(Debug, Clone)]
+pub struct OpenPrInfo {
+    pub number: u64,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub state: String,
+    pub is_draft: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct ReviewUser {
     login: String,
@@ -311,6 +321,46 @@ impl GitHubClient {
         // Skip for now - scanning all PRs is too slow for large repos
         // Could be implemented with GitHub's GraphQL API in the future
         Ok(vec![])
+    }
+
+    /// Get all open PRs authored by the given user
+    /// Uses Search API for efficient server-side filtering
+    pub async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
+        // Use search API to efficiently find user's open PRs
+        let url = format!(
+            "/search/issues?q=repo:{}/{}+author:{}+is:pr+is:open&per_page=100",
+            self.owner, self.repo, username
+        );
+
+        let response: SearchIssuesResponse = self
+            .octocrab
+            .get(&url, None::<&()>)
+            .await
+            .context("Failed to search PRs")?;
+
+        // For each PR from search, we need to get the branch info
+        // Search API doesn't include head/base branch refs, so we fetch each PR
+        let mut results = Vec::new();
+        for issue in response.items {
+            // Fetch full PR details to get branch info
+            let pr = self
+                .octocrab
+                .pulls(&self.owner, &self.repo)
+                .get(issue.number)
+                .await;
+
+            if let Ok(pr) = pr {
+                results.push(OpenPrInfo {
+                    number: pr.number,
+                    head_branch: pr.head.ref_field.clone(),
+                    base_branch: pr.base.ref_field.clone(),
+                    state: "OPEN".to_string(),
+                    is_draft: pr.draft.unwrap_or(false),
+                });
+            }
+        }
+
+        Ok(results)
     }
 }
 
