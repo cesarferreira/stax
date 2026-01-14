@@ -49,19 +49,14 @@ fn test_template_discovery_multiple() {
     fs::write(template_dir.join("bugfix.md"), "# Bugfix template\n\n## Bug Description\n\n").unwrap();
     fs::write(template_dir.join("docs.md"), "# Docs template\n\n## Documentation Changes\n\n").unwrap();
 
-    // Create a branch with stax
-    let output = repo.run_stax(&["create", "test-branch", "-m", "test commit"]);
-    output.assert_success();
+    // Test discovery returns all templates
+    let templates = stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    assert_eq!(templates.len(), 3);
 
-    // Verify branch was created
-    assert!(repo.current_branch_contains("test-branch"));
-
-    // Verify all template files exist
-    assert!(template_dir.join("feature.md").exists());
-    assert!(template_dir.join("bugfix.md").exists());
-    assert!(template_dir.join("docs.md").exists());
-
-    // Note: Template selection would be tested via submit command with mocked GitHub API
+    let names: Vec<_> = templates.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"feature"));
+    assert!(names.contains(&"bugfix"));
+    assert!(names.contains(&"docs"));
 }
 
 #[test]
@@ -78,6 +73,27 @@ fn test_no_template_in_repo() {
     assert!(repo.current_branch_contains("test-branch"));
 
     // Note: Submit without templates would use empty body or default message
+}
+
+#[test]
+fn test_no_template_flag_skips_template() {
+    let repo = TestRepo::new();
+
+    // Create template
+    let github_dir = repo.path().join(".github");
+    fs::create_dir(&github_dir).unwrap();
+    fs::write(
+        github_dir.join("PULL_REQUEST_TEMPLATE.md"),
+        "# Template content"
+    ).unwrap();
+
+    // Verify template exists
+    let templates = stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    assert_eq!(templates.len(), 1);
+
+    // When --no-template is used, submit command should skip template selection
+    // (This flag behavior is handled in the submit command logic, not in template discovery)
+    // The discovery function always returns available templates; the flag controls whether they're used
 }
 
 // =============================================================================

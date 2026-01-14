@@ -7,6 +7,10 @@ license = "MIT"
 authors = ["Cesar Ferreira"]
 repository = "https://github.com/cesarferreira/stax"
 
+[lib]
+name = "stax"
+path = "src/lib.rs"
+
 [[bin]]
 name = "stax"
 path = "src/main.rs"
