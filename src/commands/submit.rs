@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::github::pr::{generate_stack_comment, StackPrInfo};
+use crate::github::pr_template::{discover_pr_templates, select_template_interactive};
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
@@ -43,10 +44,6 @@ pub fn run(
     no_template: bool,
     edit: bool,
 ) -> Result<()> {
-    let _ = template; // Will be used in Task 4
-    let _ = no_template; // Will be used in Task 4
-    let _ = edit; // Will be used in Task 4
-
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -252,7 +249,12 @@ pub fn run(
 
     // Collect PR details for new PRs BEFORE pushing (skip empty branches)
     if !no_pr {
-        let pr_template = load_pr_template(repo.workdir()?);
+        // Discover all available PR templates
+        let discovered_templates = if no_template {
+            Vec::new()
+        } else {
+            discover_pr_templates(repo.workdir()?).unwrap_or_default()
+        };
         let new_prs: Vec<_> = plans.iter().filter(|p| p.existing_pr.is_none() && !p.is_empty).collect();
         if !new_prs.is_empty() && !quiet {
             println!();
@@ -264,11 +266,35 @@ pub fn run(
                 continue;
             }
 
+            // Template selection per branch
+            let selected_template = if no_template {
+                None
+            } else if let Some(ref template_name) = template {
+                // --template flag: find by name
+                discovered_templates
+                    .iter()
+                    .find(|t| t.name == *template_name)
+                    .cloned()
+            } else if no_prompt {
+                // --no-prompt: use first template if exactly one exists
+                if discovered_templates.len() == 1 {
+                    Some(discovered_templates[0].clone())
+                } else {
+                    None
+                }
+            } else {
+                // Interactive selection (handles empty list, single template, and multiple)
+                select_template_interactive(&discovered_templates)?
+            };
+
             let commit_messages =
                 collect_commit_messages(repo.workdir()?, &plan.parent, &plan.branch);
             let default_title = default_pr_title(&commit_messages, &plan.branch);
+
+            // Use selected template content if available
+            let template_content = selected_template.as_ref().map(|t| t.content.as_str());
             let default_body =
-                build_default_pr_body(pr_template.as_deref(), &plan.branch, &commit_messages);
+                build_default_pr_body(template_content, &plan.branch, &commit_messages);
 
             if !quiet {
                 println!("  {}", plan.branch.cyan());
@@ -285,7 +311,13 @@ pub fn run(
 
             let body = if no_prompt {
                 default_body
+            } else if edit {
+                // --edit flag: always open editor
+                Editor::new()
+                    .edit(&default_body)?
+                    .unwrap_or(default_body)
             } else {
+                // Interactive prompt
                 let options = if default_body.trim().is_empty() {
                     vec!["Edit", "Skip (leave empty)"]
                 } else {
@@ -691,6 +723,8 @@ fn render_commit_list(commit_messages: &[String]) -> String {
         .join("\n")
 }
 
+// Deprecated: Use github::pr_template::discover_pr_templates instead
+#[allow(dead_code)]
 fn load_pr_template(workdir: &Path) -> Option<String> {
     let candidates = [
         ".github/pull_request_template.md",
