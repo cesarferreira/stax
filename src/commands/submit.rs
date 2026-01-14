@@ -271,10 +271,15 @@ pub fn run(
                 None
             } else if let Some(ref template_name) = template {
                 // --template flag: find by name
-                discovered_templates
+                let found = discovered_templates
                     .iter()
                     .find(|t| t.name == *template_name)
-                    .cloned()
+                    .cloned();
+
+                if found.is_none() && !quiet {
+                    eprintln!("  {} Template '{}' not found, using no template", "!".yellow(), template_name);
+                }
+                found
             } else if no_prompt {
                 // --no-prompt: use first template if exactly one exists
                 if discovered_templates.len() == 1 {
