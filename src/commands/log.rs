@@ -313,18 +313,25 @@ pub fn run(
         }
 
         if let Some(entry) = branch_log_map.get(branch) {
-            if entry.ahead > 0 || entry.behind > 0 {
-                let mut commit_info = String::new();
-                if entry.behind > 0 {
-                    commit_info.push_str(&format!(" -{}", entry.behind));
+            // Show status indicators with emojis
+            let has_behind = entry.behind > 0;
+            let has_ahead = entry.ahead > 0;
+
+            if entry.needs_restack {
+                // Diverged/needs restack indicator
+                info_str.push_str(&format!("{}", " ⇅".bright_yellow()));
+            } else if has_behind || has_ahead {
+                let mut status_str = String::new();
+                if has_behind {
+                    status_str.push_str(&format!(" ↓{}", entry.behind));
                 }
-                if entry.ahead > 0 {
-                    commit_info.push_str(&format!(" +{}", entry.ahead));
+                if has_ahead {
+                    status_str.push_str(&format!(" ↑{}", entry.ahead));
                 }
                 if is_current {
-                    info_str.push_str(&format!("{}", commit_info.bright_green()));
+                    info_str.push_str(&format!("{}", status_str.bright_green()));
                 } else {
-                    info_str.push_str(&format!("{}", commit_info.dimmed()));
+                    info_str.push_str(&format!("{}", status_str.dimmed()));
                 }
             }
 
@@ -344,10 +351,6 @@ pub fn run(
 
             if let Some(ref ci) = entry.ci_state {
                 info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
-            }
-
-            if entry.needs_restack {
-                info_str.push_str(&format!("{}", " ⟳ needs restack".bright_yellow()));
             }
         }
 
@@ -440,25 +443,35 @@ pub fn run(
         );
     }
 
-    // Show restack hint
+    // Show legend and restack hint
     let needs_restack = stack.needs_restack();
     let config = Config::load().unwrap_or_default();
-    if !needs_restack.is_empty() && !quiet && config.ui.tips {
+    if !quiet && config.ui.tips {
         println!();
-        println!(
-            "{}",
-            format!(
-                "⟳ {} {} need restacking",
-                needs_restack.len(),
-                if needs_restack.len() == 1 {
-                    "branch"
-                } else {
-                    "branches"
-                }
-            )
-            .bright_yellow()
-        );
-        println!("Run {} to rebase.", "stax rs --restack".bright_cyan());
+        // Always show the legend when there are tracked branches
+        if has_tracked {
+            println!(
+                "{}",
+                "↑ ahead   ↓ behind   ⇅ needs restack".dimmed()
+            );
+        }
+
+        if !needs_restack.is_empty() {
+            println!(
+                "{}",
+                format!(
+                    "⇅ {} {} need restacking. Run {} to rebase.",
+                    needs_restack.len(),
+                    if needs_restack.len() == 1 {
+                        "branch"
+                    } else {
+                        "branches"
+                    },
+                    "stax rs --restack"
+                )
+                .bright_yellow()
+            );
+        }
     }
 
     Ok(())
