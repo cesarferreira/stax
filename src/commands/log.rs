@@ -62,7 +62,7 @@ struct LogJson {
 pub fn run(
     json: bool,
     stack_filter: Option<String>,
-    all: bool,
+    current_only: bool,
     compact: bool,
     quiet: bool,
 ) -> Result<()> {
@@ -80,7 +80,7 @@ pub fn run(
         .into_iter()
         .collect::<HashSet<_>>();
 
-    // By default show all branches (like fp ls). Use --stack to filter to a specific stack.
+    // By default show all branches. Use --current to show only current stack.
     let allowed_branches = if let Some(ref filter) = stack_filter {
         if !stack.branches.contains_key(filter) {
             anyhow::bail!("Branch '{}' is not tracked in the stack.", filter);
@@ -91,10 +91,17 @@ pub fn run(
                 .into_iter()
                 .collect::<HashSet<_>>(),
         )
+    } else if current_only {
+        // Show only current stack
+        Some(
+            stack
+                .current_stack(&current)
+                .into_iter()
+                .collect::<HashSet<_>>(),
+        )
     } else {
-        None // Show all branches by default
+        None // Default: show all branches
     };
-    let _ = all; // --all flag kept for backwards compatibility but is now the default
 
     // Get trunk children and build display list with proper tree structure
     let trunk_info = stack.branches.get(&stack.trunk);

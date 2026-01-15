@@ -58,7 +58,7 @@ struct StatusJson {
 pub fn run(
     json: bool,
     stack_filter: Option<String>,
-    all: bool,
+    current_only: bool,
     compact: bool,
     quiet: bool,
     verbose: bool,
@@ -77,10 +77,8 @@ pub fn run(
         .into_iter()
         .collect::<HashSet<_>>();
 
-    // By default show only the current stack (like fp ls). Use --all to show all branches.
-    let allowed_branches = if all {
-        None // Show all branches
-    } else if let Some(ref filter) = stack_filter {
+    // By default show all branches. Use --current to show only current stack.
+    let allowed_branches = if let Some(ref filter) = stack_filter {
         if !stack.branches.contains_key(filter) {
             anyhow::bail!("Branch '{}' is not tracked in the stack.", filter);
         }
@@ -90,14 +88,16 @@ pub fn run(
                 .into_iter()
                 .collect::<HashSet<_>>(),
         )
-    } else {
-        // Default: show only current stack
+    } else if current_only {
+        // Show only current stack
         Some(
             stack
                 .current_stack(&current)
                 .into_iter()
                 .collect::<HashSet<_>>(),
         )
+    } else {
+        None // Default: show all branches
     };
 
     // Get trunk children and build display list with proper tree structure

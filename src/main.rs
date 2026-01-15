@@ -24,7 +24,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show the current stack (simple tree view)
+    /// Show all stacks (simple tree view)
     #[command(visible_aliases = ["s", "ls"])]
     Status {
         /// Output JSON for scripting
@@ -33,9 +33,9 @@ enum Commands {
         /// Show only the stack for this branch
         #[arg(long)]
         stack: Option<String>,
-        /// Show all stacks
-        #[arg(long)]
-        all: bool,
+        /// Show only the current stack
+        #[arg(short, long)]
+        current: bool,
         /// Compact output for scripts
         #[arg(long)]
         compact: bool,
@@ -44,7 +44,7 @@ enum Commands {
         quiet: bool,
     },
 
-    /// Show stack with PR URLs and full details
+    /// Show all stacks with PR URLs and full details
     #[command(name = "ll")]
     Ll {
         /// Output JSON for scripting
@@ -53,9 +53,9 @@ enum Commands {
         /// Show only the stack for this branch
         #[arg(long)]
         stack: Option<String>,
-        /// Show all stacks
-        #[arg(long)]
-        all: bool,
+        /// Show only the current stack
+        #[arg(short, long)]
+        current: bool,
         /// Compact output for scripts
         #[arg(long)]
         compact: bool,
@@ -64,7 +64,7 @@ enum Commands {
         quiet: bool,
     },
 
-    /// Show detailed stack with commits and PR info
+    /// Show all stacks with commits and PR info
     #[command(visible_alias = "l")]
     Log {
         /// Output JSON for scripting
@@ -73,9 +73,9 @@ enum Commands {
         /// Show only the stack for this branch
         #[arg(long)]
         stack: Option<String>,
-        /// Show all stacks
-        #[arg(long)]
-        all: bool,
+        /// Show only the current stack
+        #[arg(short, long)]
+        current: bool,
         /// Compact output for scripts
         #[arg(long)]
         compact: bool,
@@ -623,24 +623,24 @@ fn main() -> Result<()> {
         Commands::Status {
             json,
             stack,
-            all,
+            current,
             compact,
             quiet,
-        } => commands::status::run(json, stack, all, compact, quiet, false),
+        } => commands::status::run(json, stack, current, compact, quiet, false),
         Commands::Ll {
             json,
             stack,
-            all,
+            current,
             compact,
             quiet,
-        } => commands::status::run(json, stack, all, compact, quiet, true),
+        } => commands::status::run(json, stack, current, compact, quiet, true),
         Commands::Log {
             json,
             stack,
-            all,
+            current,
             compact,
             quiet,
-        } => commands::log::run(json, stack, all, compact, quiet),
+        } => commands::log::run(json, stack, current, compact, quiet),
         Commands::Submit {
             draft,
             no_pr,
