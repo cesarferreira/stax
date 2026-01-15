@@ -567,7 +567,8 @@ fn test_status_orders_behind_before_ahead() {
     repo.create_file("main.txt", "main");
     repo.commit("Main commit");
 
-    let output = repo.run_stax(&["status"]);
+    // Use ll (verbose status) to get text output with "behind" and "ahead" words
+    let output = repo.run_stax(&["ll"]);
     assert!(
         output.status.success(),
         "Failed: {}",
