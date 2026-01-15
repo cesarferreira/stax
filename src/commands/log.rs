@@ -458,18 +458,18 @@ pub fn run(
 
         if !needs_restack.is_empty() {
             println!(
-                "{}",
+                "{} Run {} to rebase.",
                 format!(
-                    "⇅ {} {} need restacking. Run {} to rebase.",
+                    "⇅ {} {} need restacking.",
                     needs_restack.len(),
                     if needs_restack.len() == 1 {
                         "branch"
                     } else {
                         "branches"
-                    },
-                    "stax rs --restack"
+                    }
                 )
-                .bright_yellow()
+                .bright_yellow(),
+                "stax rs --restack".bright_cyan()
             );
         }
     }
