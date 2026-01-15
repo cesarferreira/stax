@@ -1,6 +1,6 @@
 [package]
 name = "stax"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2021"
 description = "Fast stacked Git branches and PRs"
 license = "MIT"
