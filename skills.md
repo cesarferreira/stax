@@ -158,7 +158,7 @@ stax undo --no-push           # Undo locally only
 
 ```
 ◉  feature/validation 1↑        # ◉ = current branch, 1↑ = 1 commit ahead
-○  feature/auth 2↑ 1↓ ⟳         # ○ = other branch, ⟳ = needs restack
+○  feature/auth 1↓ 2↑ ⟳         # ○ = other branch, ⟳ = needs restack
 │ ○    ☁ feature/payments PR #42  # ☁ = has remote, PR #42 = open PR
 ○─┘    ☁ main                   # trunk branch
 ```

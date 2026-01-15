@@ -553,6 +553,48 @@ fn test_status_with_branches() {
 }
 
 #[test]
+fn test_status_orders_behind_before_ahead() {
+    let repo = TestRepo::new();
+
+    // Create a branch and commit on it (ahead of parent)
+    repo.run_stax(&["bc", "feature-1"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature");
+    repo.commit("Feature commit");
+
+    // Commit on trunk after branching (branch is behind parent)
+    repo.run_stax(&["t"]);
+    repo.create_file("main.txt", "main");
+    repo.commit("Main commit");
+
+    let output = repo.run_stax(&["status"]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let line = stdout
+        .lines()
+        .find(|line| line.contains(&branch_name))
+        .expect("Expected branch line in status output");
+
+    let behind_pos = line
+        .find("behind")
+        .expect("Expected 'behind' in status output line");
+    let ahead_pos = line
+        .find("ahead")
+        .expect("Expected 'ahead' in status output line");
+
+    assert!(
+        behind_pos < ahead_pos,
+        "Expected 'behind' before 'ahead' in status output line: {}",
+        line
+    );
+}
+
+#[test]
 fn test_status_json_output() {
     let repo = TestRepo::new();
 

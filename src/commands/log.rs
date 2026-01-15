@@ -308,11 +308,11 @@ pub fn run(
         if let Some(entry) = branch_log_map.get(branch) {
             if entry.ahead > 0 || entry.behind > 0 {
                 let mut commit_info = String::new();
-                if entry.ahead > 0 {
-                    commit_info.push_str(&format!(" +{}", entry.ahead));
-                }
                 if entry.behind > 0 {
                     commit_info.push_str(&format!(" -{}", entry.behind));
+                }
+                if entry.ahead > 0 {
+                    commit_info.push_str(&format!(" +{}", entry.ahead));
                 }
                 if is_current {
                     info_str.push_str(&format!("{}", commit_info.bright_green()));

@@ -116,24 +116,24 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         ));
 
-        if branch.ahead > 0 {
-            parts.push(Span::styled(
-                format!("{}↑", branch.ahead),
-                Style::default().fg(Color::Green),
-            ));
-            parts.push(Span::raw(" ahead"));
-        }
-
-        if branch.ahead > 0 && branch.behind > 0 {
-            parts.push(Span::raw("  "));
-        }
-
         if branch.behind > 0 {
             parts.push(Span::styled(
                 format!("{}↓", branch.behind),
                 Style::default().fg(Color::Red),
             ));
             parts.push(Span::raw(" behind"));
+        }
+
+        if branch.behind > 0 && branch.ahead > 0 {
+            parts.push(Span::raw("  "));
+        }
+
+        if branch.ahead > 0 {
+            parts.push(Span::styled(
+                format!("{}↑", branch.ahead),
+                Style::default().fg(Color::Green),
+            ));
+            parts.push(Span::raw(" ahead"));
         }
 
         lines.push(Line::from(parts));

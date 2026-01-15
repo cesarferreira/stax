@@ -317,11 +317,11 @@ pub fn run(
             // Show commits ahead/behind
             if entry.ahead > 0 || entry.behind > 0 {
                 let mut commits_str = String::new();
-                if entry.ahead > 0 {
-                    commits_str.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
-                }
                 if entry.behind > 0 {
                     commits_str.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
+                }
+                if entry.ahead > 0 {
+                    commits_str.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
                 }
                 info_str.push_str(&commits_str);
             }
@@ -417,11 +417,11 @@ pub fn run(
     // Show commits ahead/behind for trunk (compared to origin)
     if let Some(entry) = branch_status_map.get(&stack.trunk) {
         if entry.ahead > 0 || entry.behind > 0 {
-            if entry.ahead > 0 {
-                trunk_info.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
-            }
             if entry.behind > 0 {
                 trunk_info.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
+            }
+            if entry.ahead > 0 {
+                trunk_info.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
             }
         }
     }

@@ -160,11 +160,11 @@ pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usiz
                         if let Some(parent) = info.parent.as_deref() {
                             if let Ok((ahead, behind)) = repo.commits_ahead_behind(parent, &db.name)
                             {
-                                if ahead > 0 {
-                                    display.push_str(&format!(" {} ahead", ahead));
-                                }
                                 if behind > 0 {
                                     display.push_str(&format!(" {} behind", behind));
+                                }
+                                if ahead > 0 {
+                                    display.push_str(&format!(" {} ahead", ahead));
                                 }
                             }
                         }
