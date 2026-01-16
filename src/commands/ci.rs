@@ -8,6 +8,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Individual check run info
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +57,16 @@ struct CheckRunDetail {
     html_url: Option<String>,
     started_at: Option<String>,
     completed_at: Option<String>,
+}
+
+/// Response from the commit statuses API
+#[derive(Debug, Deserialize)]
+struct CommitStatus {
+    context: String,  // This is like the "name" for statuses
+    state: String,    // success, pending, failure, error
+    target_url: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
 }
 
 pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
@@ -116,8 +127,10 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
         let sha_short = sha.chars().take(7).collect::<String>();
         let pr_number = stack.branches.get(branch).and_then(|b| b.pr_number);
 
-        // Fetch detailed check runs
-        let check_runs_result = rt.block_on(async { fetch_check_runs(&repo, &client, &sha).await });
+        // Fetch both check runs and commit statuses
+        let check_runs_result = rt.block_on(async {
+            fetch_all_checks(&repo, &client, &sha).await
+        });
 
         let (overall_status, check_runs) = match check_runs_result {
             Ok((status, runs)) => (status, runs),
@@ -312,6 +325,156 @@ fn format_duration(secs: u64) -> String {
     }
 }
 
+/// Fetch all checks (both check runs and commit statuses)
+async fn fetch_all_checks(
+    repo: &GitRepo,
+    client: &GitHubClient,
+    commit_sha: &str,
+) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
+    // Fetch check runs (newer GitHub Actions-style checks)
+    let (check_runs_overall, mut all_checks) = fetch_check_runs(repo, client, commit_sha).await?;
+
+    // Fetch commit statuses (older external CI systems)
+    let (statuses_overall, status_checks) = fetch_commit_statuses(repo, client, commit_sha).await?;
+
+    // Combine both types of checks
+    all_checks.extend(status_checks);
+
+    // Combine overall statuses (failure > pending > success)
+    let combined_overall = match (check_runs_overall, statuses_overall) {
+        (Some(ref a), Some(ref b)) if a == "failure" || b == "failure" => Some("failure".to_string()),
+        (Some(ref a), Some(ref b)) if a == "pending" || b == "pending" => Some("pending".to_string()),
+        (Some(a), Some(_)) => Some(a),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+
+    Ok((combined_overall, all_checks))
+}
+
+/// Fetch commit statuses (older CI systems like Buildkite, CircleCI, etc.)
+async fn fetch_commit_statuses(
+    repo: &GitRepo,
+    client: &GitHubClient,
+    commit_sha: &str,
+) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
+    let url = format!(
+        "/repos/{}/{}/commits/{}/statuses",
+        client.owner, client.repo, commit_sha
+    );
+
+    let statuses: Vec<CommitStatus> = match client.octocrab.get(&url, None::<&()>).await {
+        Ok(s) => s,
+        Err(_) => return Ok((None, Vec::new())),
+    };
+
+    if statuses.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+
+    let mut check_runs: Vec<CheckRunInfo> = Vec::new();
+
+    for status in statuses {
+        // Convert commit status to CheckRunInfo format
+        // Commit statuses don't have detailed timing, so we estimate based on created/updated
+        let (status_str, conclusion, elapsed_secs) = match status.state.as_str() {
+            "success" => {
+                let elapsed = if let (Some(created), Some(updated)) = (&status.created_at, &status.updated_at) {
+                    if let (Ok(created_time), Ok(updated_time)) = (
+                        created.parse::<DateTime<Utc>>(),
+                        updated.parse::<DateTime<Utc>>(),
+                    ) {
+                        let duration = updated_time.signed_duration_since(created_time);
+                        Some(duration.num_seconds().max(0) as u64)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                ("completed".to_string(), Some("success".to_string()), elapsed)
+            },
+            "failure" | "error" => ("completed".to_string(), Some("failure".to_string()), None),
+            "pending" => ("in_progress".to_string(), None, None),
+            _ => ("queued".to_string(), None, None),
+        };
+
+        // Load history and calculate average
+        let average_secs = match history::load_check_history(repo, &status.context) {
+            Ok(hist) => history::calculate_average(&hist),
+            Err(_) => None,
+        };
+
+        // Calculate completion percentage (only for in_progress checks)
+        let completion_percent = if status_str == "in_progress" {
+            if let (Some(elapsed), Some(avg)) = (elapsed_secs, average_secs) {
+                if avg > 0 {
+                    let pct: u64 = ((elapsed * 100) / avg).min(99);
+                    Some(pct as u8)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        check_runs.push(CheckRunInfo {
+            name: status.context,
+            status: status_str,
+            conclusion,
+            url: status.target_url,
+            started_at: status.created_at,
+            completed_at: status.updated_at.clone(),
+            elapsed_secs,
+            average_secs,
+            completion_percent,
+        });
+    }
+
+    // Calculate overall status
+    let mut has_pending = false;
+    let mut has_failure = false;
+    let mut all_success = true;
+
+    for run in &check_runs {
+        match run.status.as_str() {
+            "completed" => match run.conclusion.as_deref() {
+                Some("success") => {}
+                Some("failure") | Some("error") => {
+                    has_failure = true;
+                    all_success = false;
+                }
+                _ => {
+                    all_success = false;
+                }
+            },
+            "in_progress" | "queued" | "pending" => {
+                has_pending = true;
+                all_success = false;
+            }
+            _ => {
+                all_success = false;
+            }
+        }
+    }
+
+    let overall = if has_failure {
+        Some("failure".to_string())
+    } else if has_pending {
+        Some("pending".to_string())
+    } else if all_success && !check_runs.is_empty() {
+        Some("success".to_string())
+    } else {
+        None
+    };
+
+    Ok((overall, check_runs))
+}
+
 async fn fetch_check_runs(
     repo: &GitRepo,
     client: &GitHubClient,
@@ -402,7 +565,38 @@ async fn fetch_check_runs(
         });
     }
 
-    // Sort by name for consistent ordering
+    // Deduplicate check runs by name, keeping only the most recent for each
+    let mut unique_checks: HashMap<String, CheckRunInfo> = HashMap::new();
+    for check in check_runs {
+        let should_replace = if let Some(existing) = unique_checks.get(&check.name) {
+            // Keep the one with the most recent started_at timestamp
+            match (&check.started_at, &existing.started_at) {
+                (Some(new_start), Some(existing_start)) => {
+                    // Parse and compare timestamps
+                    if let (Ok(new_time), Ok(existing_time)) = (
+                        new_start.parse::<DateTime<Utc>>(),
+                        existing_start.parse::<DateTime<Utc>>(),
+                    ) {
+                        new_time > existing_time
+                    } else {
+                        false // Keep existing if we can't parse
+                    }
+                }
+                (Some(_), None) => true,  // New has timestamp, existing doesn't
+                (None, Some(_)) => false, // Existing has timestamp, new doesn't
+                (None, None) => true,     // Neither has timestamp, keep new one
+            }
+        } else {
+            true // No existing check with this name
+        };
+
+        if should_replace {
+            unique_checks.insert(check.name.clone(), check);
+        }
+    }
+
+    // Convert back to vector and sort by name for consistent ordering
+    let mut check_runs: Vec<CheckRunInfo> = unique_checks.into_values().collect();
     check_runs.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Calculate overall status
