@@ -69,6 +69,76 @@ struct CommitStatus {
     updated_at: Option<String>,
 }
 
+/// Calculate overall timing for the entire branch CI run
+fn calculate_branch_timing(repo: &GitRepo, branch_name: &str, checks: &[CheckRunInfo]) -> Option<String> {
+    if checks.is_empty() {
+        return None;
+    }
+
+    // Find the earliest started_at time (when CI run began)
+    let earliest_start = checks
+        .iter()
+        .filter_map(|c| c.started_at.as_ref())
+        .filter_map(|s| s.parse::<DateTime<Utc>>().ok())
+        .min()?;
+
+    // Calculate elapsed time
+    let now = Utc::now();
+    let is_complete = checks.iter().all(|c| c.status == "completed");
+
+    let elapsed_secs = if is_complete {
+        // Find the latest completed_at time
+        let latest_complete = checks
+            .iter()
+            .filter_map(|c| c.completed_at.as_ref())
+            .filter_map(|s| s.parse::<DateTime<Utc>>().ok())
+            .max()?;
+
+        let duration = latest_complete.signed_duration_since(earliest_start);
+        duration.num_seconds().max(0) as u64
+    } else {
+        // Still running, calculate from start to now
+        let duration = now.signed_duration_since(earliest_start);
+        duration.num_seconds().max(0) as u64
+    };
+
+    let elapsed_str = format_duration(elapsed_secs);
+
+    // Load historical average for this branch
+    let history_key = format!("branch-overall:{}", branch_name);
+    let average_secs = match history::load_check_history(repo, &history_key) {
+        Ok(hist) => history::calculate_average(&hist),
+        Err(_) => None,
+    };
+
+    // Format according to user requirements
+    if let Some(avg) = average_secs {
+        if is_complete {
+            // Completed with history: elapsed | avg
+            Some(format!("Build time: {} | avg: {}", elapsed_str, format_duration(avg)))
+        } else {
+            // In progress with history: elapsed | avg, ETA, percentage
+            let (eta_str, pct) = if elapsed_secs >= avg {
+                ("overdue".to_string(), 99)
+            } else {
+                let remaining = avg - elapsed_secs;
+                let pct = ((elapsed_secs * 100) / avg).min(99) as u8;
+                (format_duration(remaining), pct)
+            };
+            Some(format!(
+                "Build time: {} | avg: {}, ETA: {} ({}%)",
+                elapsed_str,
+                format_duration(avg),
+                eta_str,
+                pct
+            ))
+        }
+    } else {
+        // No history, just show elapsed
+        Some(format!("Build time: {}", elapsed_str))
+    }
+}
+
 pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
@@ -159,6 +229,9 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
     for status in &statuses {
         let is_current = status.branch == current;
 
+        // Calculate overall branch timing
+        let branch_timing = calculate_branch_timing(&repo, &status.branch, &status.check_runs);
+
         // Branch header
         let branch_display = if is_current {
             format!("◉ {}", status.branch).bold()
@@ -242,6 +315,11 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
             }
         }
 
+        // Display overall branch timing at the bottom
+        if let Some(timing_str) = branch_timing {
+            println!("    {}", timing_str.dimmed());
+        }
+
         println!(); // Blank line between branches
     }
 
@@ -293,6 +371,41 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
 
                 // Silently ignore errors - don't fail the command if history update fails
                 let _ = history::add_completion(&repo, &check.name, elapsed, completed_at);
+            }
+        }
+
+        // Also save branch-level overall timing if all checks are completed successfully
+        let all_completed = !status.check_runs.is_empty()
+            && status.check_runs.iter().all(|c| c.status == "completed");
+        let all_success = status.check_runs.iter().all(|c| {
+            c.conclusion.as_deref() == Some("success")
+                || c.conclusion.as_deref() == Some("skipped")
+                || c.conclusion.as_deref() == Some("neutral")
+        });
+
+        if all_completed && all_success {
+            // Calculate branch-level elapsed time
+            if let (Some(earliest), Some(latest)) = (
+                status
+                    .check_runs
+                    .iter()
+                    .filter_map(|c| c.started_at.as_ref())
+                    .filter_map(|s| s.parse::<DateTime<Utc>>().ok())
+                    .min(),
+                status
+                    .check_runs
+                    .iter()
+                    .filter_map(|c| c.completed_at.as_ref())
+                    .filter_map(|s| s.parse::<DateTime<Utc>>().ok())
+                    .max(),
+            ) {
+                let duration = latest.signed_duration_since(earliest);
+                let elapsed_secs = duration.num_seconds().max(0) as u64;
+                let completed_at = latest.to_rfc3339();
+                let history_key = format!("branch-overall:{}", status.branch);
+
+                // Silently ignore errors
+                let _ = history::add_completion(&repo, &history_key, elapsed_secs, completed_at);
             }
         }
     }
