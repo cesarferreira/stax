@@ -314,36 +314,19 @@ pub fn run(
         }
 
         if let Some(entry) = entry {
-            // Show commits ahead/behind and restack status
-            if verbose {
-                // Verbose mode: show full text like "1 behind 1 ahead (needs restack)"
-                if entry.ahead > 0 || entry.behind > 0 {
-                    let mut commits_str = String::new();
-                    if entry.behind > 0 {
-                        commits_str.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
-                    }
-                    if entry.ahead > 0 {
-                        commits_str.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
-                    }
-                    info_str.push_str(&commits_str);
+            // Show commits ahead/behind and restack status (always show full text)
+            if entry.ahead > 0 || entry.behind > 0 {
+                let mut commits_str = String::new();
+                if entry.behind > 0 {
+                    commits_str.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
                 }
-                if entry.needs_restack {
-                    info_str.push_str(&format!(" {}", "(needs restack)".bright_yellow()));
+                if entry.ahead > 0 {
+                    commits_str.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
                 }
-            } else {
-                // Default mode: compact emoji indicators
-                if entry.needs_restack {
-                    info_str.push_str(&format!(" {}", "⇅".bright_yellow()));
-                } else if entry.ahead > 0 || entry.behind > 0 {
-                    let mut status_str = String::new();
-                    if entry.behind > 0 {
-                        status_str.push_str(&format!(" ↓{}", entry.behind));
-                    }
-                    if entry.ahead > 0 {
-                        status_str.push_str(&format!(" ↑{}", entry.ahead));
-                    }
-                    info_str.push_str(&format!("{}", status_str.dimmed()));
-                }
+                info_str.push_str(&commits_str);
+            }
+            if entry.needs_restack {
+                info_str.push_str(&format!(" {}", "(needs restack)".bright_yellow()));
             }
 
             // Only show PR info in verbose mode (ll command)
@@ -428,24 +411,11 @@ pub fn run(
     // Show commits ahead/behind for trunk (compared to origin)
     if let Some(entry) = branch_status_map.get(&stack.trunk) {
         if entry.ahead > 0 || entry.behind > 0 {
-            if verbose {
-                // Verbose mode: show full text
-                if entry.behind > 0 {
-                    trunk_info.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
-                }
-                if entry.ahead > 0 {
-                    trunk_info.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
-                }
-            } else {
-                // Default mode: compact emoji indicators
-                let mut status_str = String::new();
-                if entry.behind > 0 {
-                    status_str.push_str(&format!(" ↓{}", entry.behind));
-                }
-                if entry.ahead > 0 {
-                    status_str.push_str(&format!(" ↑{}", entry.ahead));
-                }
-                trunk_info.push_str(&format!("{}", status_str.dimmed()));
+            if entry.behind > 0 {
+                trunk_info.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
+            }
+            if entry.ahead > 0 {
+                trunk_info.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
             }
         }
     }
@@ -463,23 +433,12 @@ pub fn run(
         );
     }
 
-    // Show legend and restack hint
+    // Show restack hint
     let needs_restack = stack.needs_restack();
     let config = Config::load().unwrap_or_default();
     if !quiet && config.ui.tips {
-        // Show legend in default (non-verbose) mode when there are tracked branches
-        if !verbose && has_tracked {
-            println!();
-            println!(
-                "{}",
-                "↑ ahead   ↓ behind   ⇅ needs restack".dimmed()
-            );
-        }
-
         if !needs_restack.is_empty() {
-            if verbose {
-                println!();
-            }
+            println!();
             println!(
                 "{} Run {} to rebase.",
                 format!(
