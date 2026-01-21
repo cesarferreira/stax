@@ -340,6 +340,12 @@ enum Commands {
         /// Force refresh (bypass cache)
         #[arg(long)]
         refresh: bool,
+        /// Watch CI until completion (polls periodically)
+        #[arg(long, short)]
+        watch: bool,
+        /// Polling interval in seconds (default: 15)
+        #[arg(long, default_value = "15")]
+        interval: u64,
     },
 
     /// Split the current branch into multiple stacked branches (interactive)
@@ -734,7 +740,7 @@ fn main() -> Result<()> {
         Commands::Pr => commands::pr::run(),
         Commands::Open => commands::open::run(),
         Commands::Comments { plain } => commands::comments::run(plain),
-        Commands::Ci { all, json, refresh } => commands::ci::run(all, json, refresh),
+        Commands::Ci { all, json, refresh, watch, interval } => commands::ci::run(all, json, refresh, watch, interval),
         Commands::Split => commands::split::run(),
         Commands::Copy { pr } => {
             let target = if pr {

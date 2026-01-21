@@ -1,4 +1,5 @@
 use crate::cache::CiCache;
+use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
@@ -249,6 +250,11 @@ pub fn run(
                     println!("    {} {}", "▸".bright_black(), branch);
                 }
                 println!();
+            }
+
+            // Record CI history for merged branches before deleting them
+            if let Some((ref rt, ref client)) = github_client {
+                record_ci_history_for_merged(&repo, rt, client, &merged, &stack, quiet);
             }
 
             for branch in &merged {
@@ -856,4 +862,47 @@ fn refresh_ci_cache(
     cache.mark_refreshed();
     cache.cleanup(branches);
     let _ = cache.save(git_dir);
+}
+
+/// Record CI history for merged branches before they are deleted
+fn record_ci_history_for_merged(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &GitHubClient,
+    merged_branches: &[String],
+    stack: &Stack,
+    quiet: bool,
+) {
+    // Only process branches that still exist locally (can get their commit SHA)
+    let branches_to_check: Vec<String> = merged_branches
+        .iter()
+        .filter(|b| repo.branch_commit(b).is_ok())
+        .cloned()
+        .collect();
+
+    if branches_to_check.is_empty() {
+        return;
+    }
+
+    if !quiet {
+        print!("  Recording CI history for merged branches... ");
+        let _ = std::io::stdout().flush();
+    }
+
+    // Fetch CI statuses for merged branches
+    match fetch_ci_statuses(repo, rt, client, stack, &branches_to_check) {
+        Ok(statuses) => {
+            // Record the CI history
+            record_ci_history(repo, &statuses);
+
+            if !quiet {
+                println!("{}", "done".green());
+            }
+        }
+        Err(_) => {
+            if !quiet {
+                println!("{}", "skipped (couldn't fetch)".dimmed());
+            }
+        }
+    }
 }

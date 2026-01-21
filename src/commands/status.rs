@@ -436,24 +436,22 @@ pub fn run(
     // Show restack hint
     let needs_restack = stack.needs_restack();
     let config = Config::load().unwrap_or_default();
-    if !quiet && config.ui.tips {
-        if !needs_restack.is_empty() {
-            println!();
-            println!(
-                "{} Run {} to rebase.",
-                format!(
-                    "⇅ {} {} need restacking.",
-                    needs_restack.len(),
-                    if needs_restack.len() == 1 {
-                        "branch"
-                    } else {
-                        "branches"
-                    }
-                )
-                .bright_yellow(),
-                "stax rs --restack".bright_cyan()
-            );
-        }
+    if !quiet && config.ui.tips && !needs_restack.is_empty() {
+        println!();
+        println!(
+            "{} Run {} to rebase.",
+            format!(
+                "⇅ {} {} need restacking.",
+                needs_restack.len(),
+                if needs_restack.len() == 1 {
+                    "branch"
+                } else {
+                    "branches"
+                }
+            )
+            .bright_yellow(),
+            "stax rs --restack".bright_cyan()
+        );
     }
 
     // Show additional stats only in verbose mode (ll command)

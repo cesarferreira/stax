@@ -1,3 +1,4 @@
+use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
@@ -273,6 +274,9 @@ pub fn run(
                     println!("{}", "done".green());
                 }
                 merged_prs.push((branch_info.branch.clone(), pr_number));
+
+                // Record CI history for the merged branch
+                record_ci_history_for_branch(&repo, &rt, &client, &stack, &branch_info.branch);
             }
             Err(e) => {
                 if !quiet {
@@ -956,6 +960,27 @@ fn wait_for_pr_ready(
 
         // Wait before next poll
         std::thread::sleep(poll_interval);
+    }
+}
+
+/// Record CI history for a single branch after it's merged
+fn record_ci_history_for_branch(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &GitHubClient,
+    stack: &Stack,
+    branch: &str,
+) {
+    // Verify the branch still exists before fetching CI status
+    if repo.branch_commit(branch).is_err() {
+        return; // Branch might already be deleted
+    }
+
+    // Fetch CI statuses for this single branch
+    let branches = vec![branch.to_string()];
+    if let Ok(statuses) = fetch_ci_statuses(repo, rt, client, stack, &branches) {
+        // Record the CI history (silently - we don't want to interrupt the merge flow)
+        record_ci_history(repo, &statuses);
     }
 }
 

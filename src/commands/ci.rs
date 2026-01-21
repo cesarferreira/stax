@@ -9,6 +9,8 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
+use std::time::Duration;
 
 /// Individual check run info
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,7 +141,7 @@ fn calculate_branch_timing(repo: &GitRepo, branch_name: &str, checks: &[CheckRun
     }
 }
 
-pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
+pub fn run(all: bool, json: bool, _refresh: bool, watch: bool, interval: u64) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -185,10 +187,36 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
         GitHubClient::new(remote.owner(), &remote.repo, remote.api_base_url.clone())
     })?;
 
-    // Collect CI status for all branches
+    // Watch mode: loop until all CI checks complete
+    if watch {
+        return run_watch_mode(&repo, &rt, &client, &stack, &branches_to_check, &current, interval, json);
+    }
+
+    // Single run mode (original behavior)
+    let statuses = fetch_ci_statuses(&repo, &rt, &client, &stack, &branches_to_check)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&statuses)?);
+        return Ok(());
+    }
+
+    display_ci_statuses(&repo, &statuses, &current);
+    record_ci_history(&repo, &statuses);
+
+    Ok(())
+}
+
+/// Fetch CI statuses for all branches
+pub fn fetch_ci_statuses(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &GitHubClient,
+    stack: &Stack,
+    branches_to_check: &[String],
+) -> Result<Vec<BranchCiStatus>> {
     let mut statuses: Vec<BranchCiStatus> = Vec::new();
 
-    for branch in &branches_to_check {
+    for branch in branches_to_check {
         let sha = match repo.branch_commit(branch) {
             Ok(sha) => sha,
             Err(_) => continue,
@@ -199,7 +227,7 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
 
         // Fetch both check runs and commit statuses
         let check_runs_result = rt.block_on(async {
-            fetch_all_checks(&repo, &client, &sha).await
+            fetch_all_checks(repo, client, &sha).await
         });
 
         let (overall_status, check_runs) = match check_runs_result {
@@ -220,17 +248,16 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
     // Sort by branch name for consistent output
     statuses.sort_by(|a, b| a.branch.cmp(&b.branch));
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&statuses)?);
-        return Ok(());
-    }
+    Ok(statuses)
+}
 
-    // Display in a nice format
-    for status in &statuses {
+/// Display CI statuses in a nice format
+fn display_ci_statuses(repo: &GitRepo, statuses: &[BranchCiStatus], current: &str) {
+    for status in statuses {
         let is_current = status.branch == current;
 
         // Calculate overall branch timing
-        let branch_timing = calculate_branch_timing(&repo, &status.branch, &status.check_runs);
+        let branch_timing = calculate_branch_timing(repo, &status.branch, &status.check_runs);
 
         // Branch header
         let branch_display = if is_current {
@@ -356,9 +383,11 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
             pending_count
         );
     }
+}
 
-    // Update CI history for completed successful checks
-    for status in &statuses {
+/// Record CI history for completed successful checks
+pub fn record_ci_history(repo: &GitRepo, statuses: &[BranchCiStatus]) {
+    for status in statuses {
         for check in &status.check_runs {
             // Only record successful completions with valid timing data
             if check.status == "completed"
@@ -370,7 +399,7 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
                 let completed_at = check.completed_at.as_ref().unwrap().clone();
 
                 // Silently ignore errors - don't fail the command if history update fails
-                let _ = history::add_completion(&repo, &check.name, elapsed, completed_at);
+                let _ = history::add_completion(repo, &check.name, elapsed, completed_at);
             }
         }
 
@@ -405,12 +434,84 @@ pub fn run(all: bool, json: bool, _refresh: bool) -> Result<()> {
                 let history_key = format!("branch-overall:{}", status.branch);
 
                 // Silently ignore errors
-                let _ = history::add_completion(&repo, &history_key, elapsed_secs, completed_at);
+                let _ = history::add_completion(repo, &history_key, elapsed_secs, completed_at);
             }
         }
     }
+}
 
-    Ok(())
+/// Check if all CI checks are complete (not pending)
+fn all_checks_complete(statuses: &[BranchCiStatus]) -> bool {
+    statuses.iter().all(|s| {
+        s.overall_status.as_deref() != Some("pending") && !s.check_runs.is_empty()
+    })
+}
+
+/// Run watch mode - poll CI status until all checks complete
+#[allow(clippy::too_many_arguments)]
+fn run_watch_mode(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &GitHubClient,
+    stack: &Stack,
+    branches_to_check: &[String],
+    current: &str,
+    interval: u64,
+    json: bool,
+) -> Result<()> {
+    let poll_duration = Duration::from_secs(interval);
+    let mut iteration = 0;
+
+    println!("{}", "Watching CI status (Ctrl+C to stop)...".cyan().bold());
+    println!();
+
+    loop {
+        iteration += 1;
+
+        // Fetch current CI statuses
+        let statuses = fetch_ci_statuses(repo, rt, client, stack, branches_to_check)?;
+
+        // Clear screen for clean output (except first iteration)
+        if iteration > 1 {
+            // Move cursor up and clear previous output
+            // Using ANSI escape codes for portability
+            print!("\x1B[2J\x1B[H"); // Clear screen and move to home
+            let _ = std::io::stdout().flush();
+            println!("{}", "Watching CI status (Ctrl+C to stop)...".cyan().bold());
+            println!();
+        }
+
+        if json {
+            println!("{}", serde_json::to_string_pretty(&statuses)?);
+        } else {
+            display_ci_statuses(repo, &statuses, current);
+        }
+
+        // Check if all complete
+        let complete = all_checks_complete(&statuses);
+
+        if complete {
+            println!();
+            println!("{}", "All CI checks complete!".green().bold());
+
+            // Record history now that everything is done
+            record_ci_history(repo, &statuses);
+
+            return Ok(());
+        }
+
+        // Show next refresh time
+        if !json {
+            println!();
+            println!(
+                "{}",
+                format!("Refreshing in {}s... (iteration #{})", interval, iteration).dimmed()
+            );
+        }
+
+        // Wait before next poll
+        std::thread::sleep(poll_duration);
+    }
 }
 
 /// Format duration in seconds to human-readable string

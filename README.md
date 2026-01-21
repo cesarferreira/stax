@@ -687,6 +687,8 @@ stax submit --edit             # Force editor open
 | `stax pr` | Open PR in browser |
 | `stax ci` | Show CI status for branches in current stack |
 | `stax ci --all` | Show CI status for all tracked branches |
+| `stax ci --watch` | Watch CI until completion (polls every 15s, records history) |
+| `stax ci --watch --interval 30` | Watch with custom polling interval in seconds |
 | `stax ci --json` | Output CI status as JSON |
 | `stax copy` | Copy branch name to clipboard |
 | `stax copy --pr` | Copy PR URL to clipboard |
