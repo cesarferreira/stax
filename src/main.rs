@@ -371,6 +371,21 @@ enum Commands {
         hours: i64,
     },
 
+    /// Generate changelog between two refs
+    Changelog {
+        /// Starting ref (tag, branch, or commit)
+        from: String,
+        /// Ending ref (defaults to HEAD)
+        #[arg(default_value = "HEAD")]
+        to: String,
+        /// Filter commits to those touching this path
+        #[arg(long)]
+        path: Option<String>,
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Rename the current branch
     Rename {
         /// New branch name (interactive if not provided)
@@ -751,6 +766,7 @@ fn main() -> Result<()> {
             commands::copy::run(target)
         }
         Commands::Standup { json, all, hours } => commands::standup::run(json, all, hours),
+        Commands::Changelog { from, to, path, json } => commands::changelog::run(from, to, path, json),
         Commands::Rename {
             name,
             edit,

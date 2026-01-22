@@ -3030,6 +3030,7 @@ dependencies = [
  "octocrab",
  "openssl",
  "ratatui",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
