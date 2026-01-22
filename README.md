@@ -236,9 +236,9 @@ Example output:
 Changelog: v1.0.0 → HEAD (5 commits)
 ──────────────────────────────────────────────────
 
-  abc1234  feat: implement user auth                  #42   @john-doe
-  def5678  fix: resolve cache issue                   #38   @jane-smith
-  ghi9012  chore: update deps                         -     @bob
+  abc1234 #42 feat: implement user auth (@johndoe)
+  def5678 #38 fix: resolve cache issue (@janesmith)
+  ghi9012     chore: update deps (@bob)
 ```
 
 ### Monorepo Support
@@ -271,7 +271,7 @@ stax changelog v1.0.0 --json
       "hash": "abc1234567890",
       "short_hash": "abc1234",
       "message": "feat: add feature (#42)",
-      "author": "john-doe",
+      "author": "johndoe",
       "pr_number": 42
     }
   ]

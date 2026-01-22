@@ -55,10 +55,11 @@ pub fn run(from: String, to: String, path: Option<String>, json: bool) -> Result
 
     // Build git log command
     // Use %x00 (NULL byte) as delimiter to handle messages with special characters
+    // %aN gives us the author name from git config (user.name)
     let range = format!("{}..{}", from, to);
     let mut args = vec![
         "log".to_string(),
-        "--format=%H%x00%s%x00%an".to_string(),
+        "--format=%H%x00%s%x00%aN".to_string(),
         range.clone(),
     ];
 
@@ -163,7 +164,7 @@ fn print_changelog(from: &str, to: &str, path: &Option<String>, commits: &[Commi
         return;
     }
 
-    // Calculate column widths for alignment
+    // Calculate column width for PR number alignment
     let max_pr_width = commits
         .iter()
         .filter_map(|c| c.pr_number)
@@ -171,40 +172,29 @@ fn print_changelog(from: &str, to: &str, path: &Option<String>, commits: &[Commi
         .max()
         .unwrap_or(1)
         .max(1);
-    let max_author_width = commits
-        .iter()
-        .map(|c| c.author.len())
-        .max()
-        .unwrap_or(1)
-        .min(15); // Cap author width
 
     for commit in commits {
         let hash = &commit.short_hash;
         let pr_str = commit
             .pr_number
             .map(|n| format!("#{}", n))
-            .unwrap_or_else(|| "-".to_string());
-        let author = if commit.author.len() > 15 {
-            format!("{}…", &commit.author[..14])
-        } else {
-            commit.author.clone()
-        };
-
+            .unwrap_or_else(|| "     ".to_string()); // Empty space if no PR
+        
         // Clean message (remove PR number suffix for cleaner display)
         let clean_message = remove_pr_suffix(&commit.message);
 
+        // Format: hash  pr_number  message (author)
         println!(
-            "  {}  {:<50}  {:>pr_width$}  {:author_width$}",
+            "  {} {:width$} {} {}",
             hash.bright_yellow(),
-            clean_message,
             if commit.pr_number.is_some() {
                 pr_str.bright_magenta().to_string()
             } else {
                 pr_str.dimmed().to_string()
             },
-            format!("@{}", author).cyan(),
-            pr_width = max_pr_width,
-            author_width = max_author_width + 1, // +1 for @ prefix
+            clean_message,
+            format!("(@{})", commit.author).cyan().dimmed(),
+            width = max_pr_width,
         );
     }
 
@@ -223,7 +213,8 @@ mod tests {
 
     #[test]
     fn test_parse_commits_basic() {
-        // Uses NULL byte as delimiter (matches git log --format=%H%x00%s%x00%an)
+        // Uses NULL byte as delimiter (matches git log --format=%H%x00%s%x00%aN)
+        // %aN gives author name from git config (user.name)
         let output = "abc1234567890\0feat: add feature\0John Doe\ndef9876543210\0fix: bug fix\0Jane Smith";
         let commits = parse_commits(output).unwrap();
 
@@ -294,7 +285,7 @@ mod tests {
                 hash: "abc123".to_string(),
                 short_hash: "abc123".to_string(),
                 message: "test".to_string(),
-                author: "Author".to_string(),
+                author: "Test User".to_string(),
                 pr_number: None,
             }],
         };
