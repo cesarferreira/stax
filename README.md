@@ -203,6 +203,7 @@ Split uses the transaction system, so you can `stax undo` if needed.
 | `stax copy` | Copy branch name to clipboard |
 | `stax copy --pr` | Copy PR URL to clipboard |
 | `stax standup` | Show your recent activity for standups |
+| `stax changelog` | Generate changelog between two refs |
 | `stax undo` | Undo last operation (restack, submit, etc.) |
 
 ## Standup Summary
@@ -218,6 +219,66 @@ stax standup              # Last 24 hours (default)
 stax standup --hours 48   # Look back further
 stax standup --json       # For scripting
 ```
+
+## Changelog Generation
+
+Generate a pretty changelog between two git refs - perfect for release notes or understanding what changed between versions:
+
+```bash
+stax changelog v1.0.0              # From v1.0.0 to HEAD
+stax changelog v1.0.0 v2.0.0       # Between two tags
+stax changelog abc123 def456       # Between commits
+```
+
+Example output:
+
+```
+Changelog: v1.0.0 → HEAD (5 commits)
+──────────────────────────────────────────────────
+
+  abc1234  #42   @john-doe    feat: implement user auth
+  def5678  #38   @jane-smith  fix: resolve cache issue
+  ghi9012  -     @bob         chore: update deps
+```
+
+### Monorepo Support
+
+Working in a monorepo? Filter commits to only those touching a specific folder:
+
+```bash
+stax changelog v1.0.0 --path apps/frontend
+stax changelog v1.0.0 --path packages/shared-utils
+```
+
+This shows only commits that modified files within that path - ideal for generating changelogs for individual packages or services.
+
+### JSON Output
+
+For scripting or CI pipelines:
+
+```bash
+stax changelog v1.0.0 --json
+```
+
+```json
+{
+  "from": "v1.0.0",
+  "to": "HEAD",
+  "path": null,
+  "commit_count": 3,
+  "commits": [
+    {
+      "hash": "abc1234567890",
+      "short_hash": "abc1234",
+      "message": "feat: add feature (#42)",
+      "author": "john-doe",
+      "pr_number": 42
+    }
+  ]
+}
+```
+
+PR numbers are automatically extracted from commit messages (GitHub's squash merge format: `(#123)`).
 
 ## Safe History Rewriting with Undo
 
@@ -697,6 +758,9 @@ stax submit --edit             # Force editor open
 | `stax standup` | Show your recent activity for standups |
 | `stax standup --hours 48` | Look back 48 hours instead of default 24 |
 | `stax standup --json` | Output activity as JSON for scripting |
+| `stax changelog <from> [to]` | Generate changelog between two refs |
+| `stax changelog v1.0 --path src/` | Changelog filtered by path (monorepo) |
+| `stax changelog v1.0 --json` | Output changelog as JSON |
 
 ### Common Flags
 - `stax create -m "msg"` - Create branch with commit message
