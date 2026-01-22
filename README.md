@@ -236,9 +236,9 @@ Example output:
 Changelog: v1.0.0 → HEAD (5 commits)
 ──────────────────────────────────────────────────
 
-  abc1234  #42   @john-doe    feat: implement user auth
-  def5678  #38   @jane-smith  fix: resolve cache issue
-  ghi9012  -     @bob         chore: update deps
+  abc1234  feat: implement user auth                  #42   @john-doe
+  def5678  fix: resolve cache issue                   #38   @jane-smith
+  ghi9012  chore: update deps                         -     @bob
 ```
 
 ### Monorepo Support

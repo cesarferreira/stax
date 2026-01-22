@@ -3,6 +3,8 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use regex::Regex;
 use serde::Serialize;
+use std::env;
+use std::path::PathBuf;
 use std::process::Command;
 
 /// A single commit entry in the changelog
@@ -29,6 +31,28 @@ pub fn run(from: String, to: String, path: Option<String>, json: bool) -> Result
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?;
 
+    // Resolve path filter relative to current directory and make it relative to repo root
+    let resolved_path = if let Some(p) = path.as_ref() {
+        let current_dir = env::current_dir().context("Failed to get current directory")?;
+        let path_buf = PathBuf::from(p);
+        
+        // Make path absolute if it's relative
+        let abs_path = if path_buf.is_absolute() {
+            path_buf
+        } else {
+            current_dir.join(path_buf)
+        };
+        
+        // Make it relative to the repo root
+        let rel_path = abs_path
+            .strip_prefix(workdir)
+            .context("Path is outside repository")?;
+        
+        Some(rel_path.to_string_lossy().to_string())
+    } else {
+        None
+    };
+
     // Build git log command
     // Use %x00 (NULL byte) as delimiter to handle messages with special characters
     let range = format!("{}..{}", from, to);
@@ -39,7 +63,7 @@ pub fn run(from: String, to: String, path: Option<String>, json: bool) -> Result
     ];
 
     // Add path filter if specified
-    if let Some(ref p) = path {
+    if let Some(ref p) = resolved_path {
         args.push("--".to_string());
         args.push(p.clone());
     }
@@ -62,7 +86,7 @@ pub fn run(from: String, to: String, path: Option<String>, json: bool) -> Result
         let output = ChangelogJson {
             from: from.clone(),
             to: to.clone(),
-            path: path.clone(),
+            path: resolved_path.clone(),
             commit_count: commits.len(),
             commits,
         };
@@ -71,7 +95,7 @@ pub fn run(from: String, to: String, path: Option<String>, json: bool) -> Result
     }
 
     // Pretty output
-    print_changelog(&from, &to, &path, &commits);
+    print_changelog(&from, &to, &resolved_path, &commits);
 
     Ok(())
 }
@@ -170,15 +194,15 @@ fn print_changelog(from: &str, to: &str, path: &Option<String>, commits: &[Commi
         let clean_message = remove_pr_suffix(&commit.message);
 
         println!(
-            "  {}  {:>pr_width$}  {:author_width$}  {}",
+            "  {}  {:<50}  {:>pr_width$}  {:author_width$}",
             hash.bright_yellow(),
+            clean_message,
             if commit.pr_number.is_some() {
                 pr_str.bright_magenta().to_string()
             } else {
                 pr_str.dimmed().to_string()
             },
             format!("@{}", author).cyan(),
-            clean_message,
             pr_width = max_pr_width,
             author_width = max_author_width + 1, // +1 for @ prefix
         );
