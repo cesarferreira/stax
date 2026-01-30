@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
+use git2::{ConfigLevel, Repository};
 use std::path::Path;
 use std::process::Command;
 
@@ -61,6 +62,18 @@ impl RemoteInfo {
 }
 
 pub fn get_remote_url(workdir: &Path, remote: &str) -> Result<String> {
+    if let Ok(repo) = Repository::discover(workdir) {
+        if let Ok(config) = repo.config() {
+            if let Ok(local) = config.open_level(ConfigLevel::Local) {
+                if let Ok(url) = local.get_string(&format!("remote.{}.url", remote)) {
+                    if !url.trim().is_empty() {
+                        return Ok(url);
+                    }
+                }
+            }
+        }
+    }
+
     let output = Command::new("git")
         .args(["remote", "get-url", remote])
         .current_dir(workdir)
@@ -200,6 +213,8 @@ fn split_namespace_repo(path: &str) -> Result<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+    use std::process::Command;
 
     #[test]
     fn test_parse_ssh_git_url() {
@@ -255,6 +270,34 @@ mod tests {
         let (host, path) = parse_remote_url("https://github.example.com/org/project.git").unwrap();
         assert_eq!(host, "github.example.com");
         assert_eq!(path, "org/project");
+    }
+
+    #[test]
+    fn test_get_remote_url_ignores_insteadof_rewrite() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let path = dir.path();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to init git repo");
+
+        Command::new("git")
+            .args(["remote", "add", "origin", "https://github.com/test/repo.git"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to add remote");
+
+        let base = format!("file://{}/", path.display());
+        Command::new("git")
+            .args(["config", &format!("url.{}.insteadOf", base), "https://github.com/"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to set insteadOf");
+
+        let url = get_remote_url(path, "origin").unwrap();
+        assert_eq!(url, "https://github.com/test/repo.git");
     }
 
     #[test]

@@ -3454,11 +3454,86 @@ mod github_mock_tests {
         fs::write(&config_path, config).expect("Failed to write config");
     }
 
+    fn ensure_empty_gitconfig(home: &Path) -> std::path::PathBuf {
+        let path = home.join("gitconfig");
+        if !path.exists() {
+            fs::write(&path, "").expect("Failed to write empty gitconfig");
+        }
+        path
+    }
+
+    fn git_with_env(repo: &TestRepo, home: &Path, args: &[&str]) -> Output {
+        let gitconfig = ensure_empty_gitconfig(home);
+        Command::new("git")
+            .args(args)
+            .current_dir(repo.path())
+            .env("HOME", home)
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env("GIT_CONFIG_SYSTEM", &gitconfig)
+            .output()
+            .expect("Failed to run git command")
+    }
+
+    fn setup_fake_github_remote(repo: &TestRepo, home: &Path) -> TempDir {
+        let remote_root = TempDir::new().expect("Failed to create temp remote root");
+        let remote_repo = remote_root.path().join("test").join("repo.git");
+        if let Some(parent) = remote_repo.parent() {
+            std::fs::create_dir_all(parent).expect("Failed to create remote parent dirs");
+        }
+        std::fs::create_dir_all(&remote_repo).expect("Failed to create remote repo dir");
+
+        Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&remote_repo)
+            .output()
+            .expect("Failed to init bare remote repo");
+
+        let add_remote = git_with_env(
+            repo,
+            home,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/test/repo.git",
+            ],
+        );
+        assert!(
+            add_remote.status.success(),
+            "Failed to add origin: {}",
+            TestRepo::stderr(&add_remote)
+        );
+
+        let file_base = format!("file://{}/", remote_root.path().display());
+        let set_instead_of = git_with_env(
+            repo,
+            home,
+            &["config", &format!("url.{}.insteadOf", file_base), "https://github.com/"],
+        );
+        assert!(
+            set_instead_of.status.success(),
+            "Failed to set insteadOf: {}",
+            TestRepo::stderr(&set_instead_of)
+        );
+
+        let push = git_with_env(repo, home, &["push", "-u", "origin", "main"]);
+        assert!(
+            push.status.success(),
+            "Failed to push to fake remote: {}",
+            TestRepo::stderr(&push)
+        );
+
+        remote_root
+    }
+
     fn run_stax_with_env(repo: &TestRepo, home: &Path, args: &[&str]) -> Output {
+        let gitconfig = ensure_empty_gitconfig(home);
         Command::new(stax_bin())
             .args(args)
             .current_dir(repo.path())
             .env("HOME", home)
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env("GIT_CONFIG_SYSTEM", &gitconfig)
             .env("STAX_GITHUB_TOKEN", "mock-token")
             .output()
             .expect("Failed to execute stax")
@@ -3542,15 +3617,9 @@ mod github_mock_tests {
             .mount(&mock_server)
             .await;
 
-        let repo = TestRepo::new();
-        repo.git(&[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/test/repo.git",
-        ]);
-
         let home = TempDir::new().expect("Failed to create temp home");
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
         write_test_config(home.path(), &mock_server.uri());
 
         let output = run_stax_with_env(&repo, home.path(), &["bc", "feature-branch"]);
@@ -3563,16 +3632,7 @@ mod github_mock_tests {
         repo.create_file("feature.txt", "content");
         repo.commit("Feature commit");
 
-        let main_sha = repo.get_commit_sha("main");
-        repo.git(&["update-ref", "refs/remotes/origin/main", &main_sha]);
-
         let branch = repo.current_branch();
-        let branch_sha = repo.head_sha();
-        repo.git(&[
-            "update-ref",
-            &format!("refs/remotes/origin/{}", branch),
-            &branch_sha,
-        ]);
 
         let output = run_stax_with_env(&repo, home.path(), &["submit", "--no-pr", "--yes"]);
         assert!(
@@ -3616,15 +3676,9 @@ mod github_mock_tests {
             .mount(&mock_server)
             .await;
 
-        let repo = TestRepo::new();
-        repo.git(&[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/test/repo.git",
-        ]);
-
         let home = TempDir::new().expect("Failed to create temp home");
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
         write_test_config(home.path(), &mock_server.uri());
 
         let output = run_stax_with_env(&repo, home.path(), &["bc", "feature-branch"]);
@@ -3637,16 +3691,7 @@ mod github_mock_tests {
         repo.create_file("feature.txt", "content");
         repo.commit("Feature commit");
 
-        let main_sha = repo.get_commit_sha("main");
-        repo.git(&["update-ref", "refs/remotes/origin/main", &main_sha]);
-
         let branch = repo.current_branch();
-        let branch_sha = repo.head_sha();
-        repo.git(&[
-            "update-ref",
-            &format!("refs/remotes/origin/{}", branch),
-            &branch_sha,
-        ]);
 
         let output = run_stax_with_env(&repo, home.path(), &["submit", "--no-pr", "--yes"]);
         assert!(
