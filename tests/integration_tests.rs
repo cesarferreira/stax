@@ -3439,6 +3439,30 @@ mod github_mock_tests {
     use super::*;
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    use tempfile::TempDir;
+    use std::fs;
+    use std::path::Path;
+
+    fn write_test_config(home: &Path, api_base_url: &str) {
+        let config_dir = home.join(".config").join("stax");
+        std::fs::create_dir_all(&config_dir).expect("Failed to create config dir");
+        let config_path = config_dir.join("config.toml");
+        let config = format!(
+            "[remote]\napi_base_url = \"{}\"\n",
+            api_base_url
+        );
+        fs::write(&config_path, config).expect("Failed to write config");
+    }
+
+    fn run_stax_with_env(repo: &TestRepo, home: &Path, args: &[&str]) -> Output {
+        Command::new(stax_bin())
+            .args(args)
+            .current_dir(repo.path())
+            .env("HOME", home)
+            .env("STAX_GITHUB_TOKEN", "mock-token")
+            .output()
+            .expect("Failed to execute stax")
+    }
 
     /// Create a test repo configured to use a mock GitHub API
     async fn setup_mock_github() -> (TestRepo, MockServer) {
@@ -3495,6 +3519,80 @@ mod github_mock_tests {
         assert!(
             mock_server.received_requests().await.is_none()
                 || mock_server.received_requests().await.unwrap().is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submit_persists_pr_info_for_existing_pr() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/42",
+                    "id": 42,
+                    "number": 42,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-branch", "sha": "aaaa" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let repo = TestRepo::new();
+        repo.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/test/repo.git",
+        ]);
+
+        let home = TempDir::new().expect("Failed to create temp home");
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "feature-branch"]);
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+
+        repo.create_file("feature.txt", "content");
+        repo.commit("Feature commit");
+
+        let main_sha = repo.get_commit_sha("main");
+        repo.git(&["update-ref", "refs/remotes/origin/main", &main_sha]);
+
+        let branch = repo.current_branch();
+        let branch_sha = repo.head_sha();
+        repo.git(&[
+            "update-ref",
+            &format!("refs/remotes/origin/{}", branch),
+            &branch_sha,
+        ]);
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--no-pr", "--yes"]);
+        assert!(
+            output.status.success(),
+            "Submit failed: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let metadata_ref = format!("refs/branch-metadata/{}", branch);
+        let output = repo.git(&["show", &metadata_ref]);
+        assert!(
+            output.status.success(),
+            "Failed to read metadata: {}",
+            TestRepo::stderr(&output)
+        );
+        let metadata = TestRepo::stdout(&output);
+        assert!(
+            metadata.contains("\"number\":42"),
+            "Expected PR number in metadata, got: {}",
+            metadata
         );
     }
 

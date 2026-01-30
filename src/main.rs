@@ -115,6 +115,9 @@ enum Commands {
         /// Suppress extra output
         #[arg(long)]
         quiet: bool,
+        /// Show detailed output
+        #[arg(short, long)]
+        verbose: bool,
         /// Specify template by name (skip picker)
         #[arg(long)]
         template: Option<String>,
@@ -673,6 +676,7 @@ fn main() -> Result<()> {
             labels,
             assignees,
             quiet,
+            verbose,
             template,
             no_template,
             edit,
@@ -686,6 +690,7 @@ fn main() -> Result<()> {
             labels,
             assignees,
             quiet,
+            verbose,
             template,
             no_template,
             edit,

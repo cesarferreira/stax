@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use octocrab::params::pulls::Sort;
 use octocrab::params::State;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use super::GitHubClient;
 use crate::remote::RemoteInfo;
@@ -63,12 +64,18 @@ impl PrComment {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PrInfo {
     pub number: u64,
     pub state: String,
     pub is_draft: bool,
     pub base: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrInfoWithHead {
+    pub info: PrInfo,
+    pub head: String,
 }
 
 /// Merge method for PRs
@@ -316,6 +323,56 @@ impl GitHubClient {
         Ok(None) // No matching open PR found
     }
 
+    /// List all open PRs and index them by head branch name
+    pub async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfo>> {
+        let mut page = 1u32;
+        const PER_PAGE: u8 = 100;
+        let mut prs_by_head = HashMap::new();
+
+        loop {
+            let prs = self
+                .octocrab
+                .pulls(&self.owner, &self.repo)
+                .list()
+                .state(State::Open)
+                .per_page(PER_PAGE)
+                .page(page)
+                .sort(Sort::Created)
+                .send()
+                .await
+                .context("Failed to list PRs")?;
+
+            for pr in &prs.items {
+                let head = pr.head.ref_field.clone();
+                if prs_by_head.contains_key(&head) {
+                    continue;
+                }
+
+                prs_by_head.insert(
+                    head,
+                    PrInfo {
+                        number: pr.number,
+                        state: pr
+                            .state
+                            .as_ref()
+                            .map(|s| format!("{:?}", s))
+                            .unwrap_or_default(),
+                        is_draft: pr.draft.unwrap_or(false),
+                        base: pr.base.ref_field.clone(),
+                    },
+                );
+            }
+
+            if (prs.items.len() as u8) < PER_PAGE {
+                break;
+            }
+
+            page += 1;
+        }
+
+        Ok(prs_by_head)
+    }
+
     /// Create a new PR
     pub async fn create_pr(
         &self,
@@ -365,6 +422,30 @@ impl GitHubClient {
                 .unwrap_or_default(),
             is_draft: pr.draft.unwrap_or(false),
             base: pr.base.ref_field.clone(),
+        })
+    }
+
+    /// Get a PR by number, including head branch name
+    pub async fn get_pr_with_head(&self, pr_number: u64) -> Result<PrInfoWithHead> {
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .context("Failed to get PR")?;
+
+        Ok(PrInfoWithHead {
+            head: pr.head.ref_field.clone(),
+            info: PrInfo {
+                number: pr.number,
+                state: pr
+                    .state
+                    .as_ref()
+                    .map(|s| format!("{:?}", s))
+                    .unwrap_or_default(),
+                is_draft: pr.draft.unwrap_or(false),
+                base: pr.base.ref_field.clone(),
+            },
         })
     }
 
@@ -749,6 +830,9 @@ pub fn generate_stack_comment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use octocrab::Octocrab;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_merge_method_from_str_squash() {
@@ -1196,6 +1280,84 @@ mod tests {
         let cloned = status.clone();
         assert_eq!(cloned.number, 1);
         assert_eq!(cloned.title, "Test");
+    }
+
+    async fn create_test_client(server: &MockServer) -> GitHubClient {
+        let octocrab = Octocrab::builder()
+            .base_uri(server.uri())
+            .unwrap()
+            .personal_token("test-token".to_string())
+            .build()
+            .unwrap();
+
+        GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo")
+    }
+
+    #[tokio::test]
+    async fn test_list_open_prs_by_head_indexes_prs() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
+                    "id": 11,
+                    "number": 11,
+                    "head": { "ref": "feature-a", "sha": "aaaa" },
+                    "base": { "ref": "main", "sha": "bbbb" },
+                    "draft": false
+                },
+                {
+                    "url": "https://api.github.com/repos/test-owner/test-repo/pulls/12",
+                    "id": 12,
+                    "number": 12,
+                    "head": { "ref": "feature-b", "sha": "cccc" },
+                    "base": { "ref": "main", "sha": "dddd" },
+                    "draft": true
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let prs = client.list_open_prs_by_head().await.unwrap();
+
+        let pr_a = prs.get("feature-a").expect("missing feature-a");
+        assert_eq!(pr_a.number, 11);
+        assert_eq!(pr_a.base, "main");
+        assert!(!pr_a.is_draft);
+
+        let pr_b = prs.get("feature-b").expect("missing feature-b");
+        assert_eq!(pr_b.number, 12);
+        assert!(pr_b.is_draft);
+        assert_eq!(prs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_with_head_returns_head_and_info() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/11"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
+                "id": 11,
+                "number": 11,
+                "head": { "ref": "feature-a", "sha": "aaaa" },
+                "base": { "ref": "main", "sha": "bbbb" },
+                "draft": false
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let pr = client.get_pr_with_head(11).await.unwrap();
+
+        assert_eq!(pr.head, "feature-a");
+        assert_eq!(pr.info.number, 11);
+        assert_eq!(pr.info.base, "main");
+        assert!(!pr.info.is_draft);
     }
 
     // Note: The find_pr function now validates that the returned PR's head branch
