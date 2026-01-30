@@ -76,6 +76,7 @@ pub struct PrInfo {
 pub struct PrInfoWithHead {
     pub info: PrInfo,
     pub head: String,
+    pub head_label: Option<String>,
 }
 
 /// Merge method for PRs
@@ -324,7 +325,7 @@ impl GitHubClient {
     }
 
     /// List all open PRs and index them by head branch name
-    pub async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfo>> {
+    pub async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfoWithHead>> {
         let mut page = 1u32;
         const PER_PAGE: u8 = 100;
         let mut prs_by_head = HashMap::new();
@@ -350,15 +351,19 @@ impl GitHubClient {
 
                 prs_by_head.insert(
                     head,
-                    PrInfo {
-                        number: pr.number,
-                        state: pr
-                            .state
-                            .as_ref()
-                            .map(|s| format!("{:?}", s))
-                            .unwrap_or_default(),
-                        is_draft: pr.draft.unwrap_or(false),
-                        base: pr.base.ref_field.clone(),
+                    PrInfoWithHead {
+                        head_label: pr.head.label.clone(),
+                        info: PrInfo {
+                            number: pr.number,
+                            state: pr
+                                .state
+                                .as_ref()
+                                .map(|s| format!("{:?}", s))
+                                .unwrap_or_default(),
+                            is_draft: pr.draft.unwrap_or(false),
+                            base: pr.base.ref_field.clone(),
+                        },
+                        head: pr.head.ref_field.clone(),
                     },
                 );
             }
@@ -436,6 +441,7 @@ impl GitHubClient {
 
         Ok(PrInfoWithHead {
             head: pr.head.ref_field.clone(),
+            head_label: pr.head.label.clone(),
             info: PrInfo {
                 number: pr.number,
                 state: pr
@@ -1304,7 +1310,7 @@ mod tests {
                     "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
                     "id": 11,
                     "number": 11,
-                    "head": { "ref": "feature-a", "sha": "aaaa" },
+                    "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
                     "base": { "ref": "main", "sha": "bbbb" },
                     "draft": false
                 },
@@ -1312,7 +1318,7 @@ mod tests {
                     "url": "https://api.github.com/repos/test-owner/test-repo/pulls/12",
                     "id": 12,
                     "number": 12,
-                    "head": { "ref": "feature-b", "sha": "cccc" },
+                    "head": { "ref": "feature-b", "sha": "cccc", "label": "test-owner:feature-b" },
                     "base": { "ref": "main", "sha": "dddd" },
                     "draft": true
                 }
@@ -1324,13 +1330,15 @@ mod tests {
         let prs = client.list_open_prs_by_head().await.unwrap();
 
         let pr_a = prs.get("feature-a").expect("missing feature-a");
-        assert_eq!(pr_a.number, 11);
-        assert_eq!(pr_a.base, "main");
-        assert!(!pr_a.is_draft);
+        assert_eq!(pr_a.info.number, 11);
+        assert_eq!(pr_a.info.base, "main");
+        assert!(!pr_a.info.is_draft);
+        assert_eq!(pr_a.head_label.as_deref(), Some("test-owner:feature-a"));
 
         let pr_b = prs.get("feature-b").expect("missing feature-b");
-        assert_eq!(pr_b.number, 12);
-        assert!(pr_b.is_draft);
+        assert_eq!(pr_b.info.number, 12);
+        assert!(pr_b.info.is_draft);
+        assert_eq!(pr_b.head_label.as_deref(), Some("test-owner:feature-b"));
         assert_eq!(prs.len(), 2);
     }
 
@@ -1344,7 +1352,7 @@ mod tests {
                 "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
                 "id": 11,
                 "number": 11,
-                "head": { "ref": "feature-a", "sha": "aaaa" },
+                "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
                 "base": { "ref": "main", "sha": "bbbb" },
                 "draft": false
             })))
@@ -1355,6 +1363,7 @@ mod tests {
         let pr = client.get_pr_with_head(11).await.unwrap();
 
         assert_eq!(pr.head, "feature-a");
+        assert_eq!(pr.head_label.as_deref(), Some("test-owner:feature-a"));
         assert_eq!(pr.info.number, 11);
         assert_eq!(pr.info.base, "main");
         assert!(!pr.info.is_draft);

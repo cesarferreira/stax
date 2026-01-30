@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
-use crate::github::pr::{generate_stack_comment, PrInfo as RemotePrInfo, StackPrInfo};
+use crate::github::pr::{generate_stack_comment, PrInfoWithHead, StackPrInfo};
 use crate::github::pr_template::{discover_pr_templates, select_template_interactive};
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
@@ -182,7 +182,7 @@ pub fn run(
     })?;
 
     let mut plans: Vec<PrPlan> = Vec::new();
-    let mut open_prs_by_head: Option<HashMap<String, RemotePrInfo>> = None;
+    let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
 
     for branch in &branches_to_submit {
         let meta = BranchMetadata::read(repo.inner(), branch)?
@@ -191,7 +191,7 @@ pub fn run(
         let is_empty = empty_set.contains(branch);
 
         // Check if PR exists (skip for empty branches)
-        let mut existing_pr: Option<RemotePrInfo> = None;
+        let mut existing_pr: Option<PrInfoWithHead> = None;
         if !is_empty {
             if verbose && !quiet {
                 println!("    Checking PR for {}", branch.cyan());
@@ -205,7 +205,7 @@ pub fn run(
                 match rt.block_on(async { client.get_pr_with_head(pr_info.number).await }) {
                     Ok(pr) => {
                         if pr.head == *branch && pr.info.state == "Open" {
-                            existing_pr = Some(pr.info);
+                            existing_pr = Some(pr);
                         } else if verbose && !quiet {
                             println!(
                                 "      PR #{} head '{}' does not match '{}', falling back",
@@ -239,7 +239,7 @@ pub fn run(
                     existing_pr = map.get(branch).cloned();
                     if verbose && !quiet {
                         if let Some(found) = &existing_pr {
-                            println!("      Found open PR #{} in list", found.number);
+                            println!("      Found open PR #{} in list", found.info.number);
                         } else {
                             println!("      No open PR found in list");
                         }
@@ -249,32 +249,47 @@ pub fn run(
         } else if verbose && !quiet {
             println!("    Empty branch {}, skipping PR lookup", branch.cyan());
         }
-        let pr_number = existing_pr.as_ref().map(|p| p.number);
+        let pr_number = existing_pr.as_ref().map(|p| p.info.number);
 
         if let Some(pr) = &existing_pr {
+            let owner_matches = pr
+                .head_label
+                .as_ref()
+                .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
+                .map(|owner| owner == remote_info.owner())
+                .unwrap_or(false);
+
             let needs_meta_update = meta
                 .pr_info
                 .as_ref()
                 .map(|info| {
-                    info.number != pr.number
-                        || info.state != pr.state
-                        || info.is_draft.unwrap_or(false) != pr.is_draft
+                    info.number != pr.info.number
+                        || info.state != pr.info.state
+                        || info.is_draft.unwrap_or(false) != pr.info.is_draft
                 })
                 .unwrap_or(true);
 
-            if needs_meta_update {
+            if needs_meta_update && owner_matches {
                 let updated_meta = BranchMetadata {
                     pr_info: Some(crate::engine::metadata::PrInfo {
-                        number: pr.number,
-                        state: pr.state.clone(),
-                        is_draft: Some(pr.is_draft),
+                        number: pr.info.number,
+                        state: pr.info.state.clone(),
+                        is_draft: Some(pr.info.is_draft),
                     }),
                     ..meta.clone()
                 };
                 updated_meta.write(repo.inner(), branch)?;
                 if verbose && !quiet {
-                    println!("      Cached PR #{} in metadata", pr.number);
+                    println!(
+                        "      Cached PR #{} in metadata",
+                        pr.info.number
+                    );
                 }
+            } else if needs_meta_update && verbose && !quiet {
+                println!(
+                    "      Skipped caching PR #{} (fork or unknown owner)",
+                    pr.info.number
+                );
             }
         }
 
@@ -288,7 +303,7 @@ pub fn run(
         let needs_pr_update = if is_empty {
             false
         } else if let Some(pr) = &existing_pr {
-            pr.base != base || needs_push
+            pr.info.base != base || needs_push
         } else {
             true // New PR always needs creation
         };

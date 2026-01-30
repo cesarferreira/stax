@@ -3535,7 +3535,7 @@ mod github_mock_tests {
                     "number": 42,
                     "state": "open",
                     "draft": false,
-                    "head": { "ref": "feature-branch", "sha": "aaaa" },
+                    "head": { "ref": "feature-branch", "sha": "aaaa", "label": "test:feature-branch" },
                     "base": { "ref": "main", "sha": "bbbb" }
                 }
             ])))
@@ -3592,6 +3592,80 @@ mod github_mock_tests {
         assert!(
             metadata.contains("\"number\":42"),
             "Expected PR number in metadata, got: {}",
+            metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submit_does_not_persist_pr_info_for_fork() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/99",
+                    "id": 99,
+                    "number": 99,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-branch", "sha": "aaaa", "label": "fork:feature-branch" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let repo = TestRepo::new();
+        repo.git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/test/repo.git",
+        ]);
+
+        let home = TempDir::new().expect("Failed to create temp home");
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "feature-branch"]);
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+
+        repo.create_file("feature.txt", "content");
+        repo.commit("Feature commit");
+
+        let main_sha = repo.get_commit_sha("main");
+        repo.git(&["update-ref", "refs/remotes/origin/main", &main_sha]);
+
+        let branch = repo.current_branch();
+        let branch_sha = repo.head_sha();
+        repo.git(&[
+            "update-ref",
+            &format!("refs/remotes/origin/{}", branch),
+            &branch_sha,
+        ]);
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--no-pr", "--yes"]);
+        assert!(
+            output.status.success(),
+            "Submit failed: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let metadata_ref = format!("refs/branch-metadata/{}", branch);
+        let output = repo.git(&["show", &metadata_ref]);
+        assert!(
+            output.status.success(),
+            "Failed to read metadata: {}",
+            TestRepo::stderr(&output)
+        );
+        let metadata = TestRepo::stdout(&output);
+        assert!(
+            !metadata.contains("\"number\":99"),
+            "Expected PR number not to be persisted for fork, got: {}",
             metadata
         );
     }
