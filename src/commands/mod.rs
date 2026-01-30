@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod branch;
+pub mod cascade;
 pub mod changelog;
 pub mod checkout;
 pub mod ci;

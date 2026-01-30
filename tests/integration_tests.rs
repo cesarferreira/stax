@@ -1124,6 +1124,25 @@ fn test_restack_all_flag() {
 }
 
 // =============================================================================
+// Cascade Tests
+// =============================================================================
+
+#[test]
+fn test_cascade_no_submit_keeps_original_branch() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-1"]);
+    repo.run_stax(&["bc", "feature-2"]);
+    let original = repo.current_branch();
+
+    let output = repo.run_stax(&["cascade", "--no-submit"]);
+    assert!(output.status.success());
+
+    let after = repo.current_branch();
+    assert_eq!(after, original, "cascade should restore original branch");
+}
+
+// =============================================================================
 // Rename Tests
 // =============================================================================
 
