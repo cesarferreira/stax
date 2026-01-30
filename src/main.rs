@@ -196,6 +196,16 @@ enum Commands {
         quiet: bool,
     },
 
+    /// Restack from the bottom and submit updates
+    Cascade {
+        /// Skip submit step (restack only)
+        #[arg(long)]
+        no_submit: bool,
+        /// Only push, don't create/update PRs
+        #[arg(long)]
+        no_pr: bool,
+    },
+
     /// Checkout a branch in the stack
     #[command(visible_aliases = ["co", "bco"])]
     Checkout {
@@ -731,6 +741,7 @@ fn main() -> Result<()> {
             r#continue,
             quiet,
         } => commands::restack::run(all, r#continue, quiet),
+        Commands::Cascade { no_submit, no_pr } => commands::cascade::run(no_submit, no_pr),
         Commands::Checkout {
             branch,
             trunk,
