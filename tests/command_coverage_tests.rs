@@ -408,6 +408,7 @@ fn test_submit_help() {
     let output = repo.run_stax(&["submit", "--help"]);
     output.assert_success();
     output.assert_stdout_contains("Submit");
+    output.assert_stdout_contains("verbose");
 }
 
 #[test]

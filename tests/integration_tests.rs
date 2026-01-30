@@ -3439,6 +3439,105 @@ mod github_mock_tests {
     use super::*;
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    use tempfile::TempDir;
+    use std::fs;
+    use std::path::Path;
+
+    fn write_test_config(home: &Path, api_base_url: &str) {
+        let config_dir = home.join(".config").join("stax");
+        std::fs::create_dir_all(&config_dir).expect("Failed to create config dir");
+        let config_path = config_dir.join("config.toml");
+        let config = format!(
+            "[remote]\napi_base_url = \"{}\"\n",
+            api_base_url
+        );
+        fs::write(&config_path, config).expect("Failed to write config");
+    }
+
+    fn ensure_empty_gitconfig(home: &Path) -> std::path::PathBuf {
+        let path = home.join("gitconfig");
+        if !path.exists() {
+            fs::write(&path, "").expect("Failed to write empty gitconfig");
+        }
+        path
+    }
+
+    fn git_with_env(repo: &TestRepo, home: &Path, args: &[&str]) -> Output {
+        let gitconfig = ensure_empty_gitconfig(home);
+        Command::new("git")
+            .args(args)
+            .current_dir(repo.path())
+            .env("HOME", home)
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env("GIT_CONFIG_SYSTEM", &gitconfig)
+            .output()
+            .expect("Failed to run git command")
+    }
+
+    fn setup_fake_github_remote(repo: &TestRepo, home: &Path) -> TempDir {
+        let remote_root = TempDir::new().expect("Failed to create temp remote root");
+        let remote_repo = remote_root.path().join("test").join("repo.git");
+        if let Some(parent) = remote_repo.parent() {
+            std::fs::create_dir_all(parent).expect("Failed to create remote parent dirs");
+        }
+        std::fs::create_dir_all(&remote_repo).expect("Failed to create remote repo dir");
+
+        Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(&remote_repo)
+            .output()
+            .expect("Failed to init bare remote repo");
+
+        let add_remote = git_with_env(
+            repo,
+            home,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/test/repo.git",
+            ],
+        );
+        assert!(
+            add_remote.status.success(),
+            "Failed to add origin: {}",
+            TestRepo::stderr(&add_remote)
+        );
+
+        let file_base = format!("file://{}/", remote_root.path().display());
+        let set_instead_of = git_with_env(
+            repo,
+            home,
+            &["config", &format!("url.{}.insteadOf", file_base), "https://github.com/"],
+        );
+        assert!(
+            set_instead_of.status.success(),
+            "Failed to set insteadOf: {}",
+            TestRepo::stderr(&set_instead_of)
+        );
+
+        let push = git_with_env(repo, home, &["push", "-u", "origin", "main"]);
+        assert!(
+            push.status.success(),
+            "Failed to push to fake remote: {}",
+            TestRepo::stderr(&push)
+        );
+
+        remote_root
+    }
+
+    fn run_stax_with_env(repo: &TestRepo, home: &Path, args: &[&str]) -> Output {
+        let gitconfig = ensure_empty_gitconfig(home);
+        Command::new(stax_bin())
+            .args(args)
+            .current_dir(repo.path())
+            .env("HOME", home)
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env("GIT_CONFIG_SYSTEM", &gitconfig)
+            .env("STAX_GITHUB_TOKEN", "mock-token")
+            .output()
+            .expect("Failed to execute stax")
+    }
 
     /// Create a test repo configured to use a mock GitHub API
     async fn setup_mock_github() -> (TestRepo, MockServer) {
@@ -3495,6 +3594,124 @@ mod github_mock_tests {
         assert!(
             mock_server.received_requests().await.is_none()
                 || mock_server.received_requests().await.unwrap().is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submit_persists_pr_info_for_existing_pr() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/42",
+                    "id": 42,
+                    "number": 42,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-branch", "sha": "aaaa", "label": "test:feature-branch" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let home = TempDir::new().expect("Failed to create temp home");
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "feature-branch"]);
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+
+        repo.create_file("feature.txt", "content");
+        repo.commit("Feature commit");
+
+        let branch = repo.current_branch();
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--no-pr", "--yes"]);
+        assert!(
+            output.status.success(),
+            "Submit failed: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let metadata_ref = format!("refs/branch-metadata/{}", branch);
+        let output = repo.git(&["show", &metadata_ref]);
+        assert!(
+            output.status.success(),
+            "Failed to read metadata: {}",
+            TestRepo::stderr(&output)
+        );
+        let metadata = TestRepo::stdout(&output);
+        assert!(
+            metadata.contains("\"number\":42"),
+            "Expected PR number in metadata, got: {}",
+            metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submit_does_not_persist_pr_info_for_fork() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/99",
+                    "id": 99,
+                    "number": 99,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-branch", "sha": "aaaa", "label": "fork:feature-branch" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let home = TempDir::new().expect("Failed to create temp home");
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "feature-branch"]);
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+
+        repo.create_file("feature.txt", "content");
+        repo.commit("Feature commit");
+
+        let branch = repo.current_branch();
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--no-pr", "--yes"]);
+        assert!(
+            output.status.success(),
+            "Submit failed: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let metadata_ref = format!("refs/branch-metadata/{}", branch);
+        let output = repo.git(&["show", &metadata_ref]);
+        assert!(
+            output.status.success(),
+            "Failed to read metadata: {}",
+            TestRepo::stderr(&output)
+        );
+        let metadata = TestRepo::stdout(&output);
+        assert!(
+            !metadata.contains("\"number\":99"),
+            "Expected PR number not to be persisted for fork, got: {}",
+            metadata
         );
     }
 
