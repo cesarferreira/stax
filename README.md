@@ -196,6 +196,7 @@ Split uses the transaction system, so you can `stax undo` if needed.
 | `stax merge` | Merge PRs from bottom of stack up to current branch |
 | `stax rs` | Repo sync - pull trunk, clean up merged branches |
 | `stax rs --restack` | Sync and rebase all branches onto updated trunk |
+| `stax cascade` | Restack from bottom, upstack restack, and submit updates |
 | `stax co` | Interactive branch checkout with fuzzy search |
 | `stax u` / `stax d` | Move up/down the stack |
 | `stax m` | Modify - stage all changes and amend current commit |
