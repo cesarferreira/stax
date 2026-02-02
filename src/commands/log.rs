@@ -450,10 +450,7 @@ pub fn run(
         println!();
         // Always show the legend when there are tracked branches
         if has_tracked {
-            println!(
-                "{}",
-                "↑ ahead   ↓ behind   ⇅ needs restack".dimmed()
-            );
+            println!("{}", "↑ ahead   ↓ behind   ⇅ needs restack".dimmed());
         }
 
         if !needs_restack.is_empty() {

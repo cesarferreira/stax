@@ -83,7 +83,12 @@ pub fn save_check_history(repo: &GitRepo, history: &CiCheckHistory) -> Result<()
 }
 
 /// Add a completed run to history (keeps only last MAX_HISTORY_RUNS)
-pub fn add_completion(repo: &GitRepo, check_name: &str, duration_secs: u64, completed_at: String) -> Result<()> {
+pub fn add_completion(
+    repo: &GitRepo,
+    check_name: &str,
+    duration_secs: u64,
+    completed_at: String,
+) -> Result<()> {
     let mut history = load_check_history(repo, check_name)?;
 
     // Add new run
@@ -94,7 +99,9 @@ pub fn add_completion(repo: &GitRepo, check_name: &str, duration_secs: u64, comp
 
     // Keep only last MAX_HISTORY_RUNS (FIFO queue)
     if history.runs.len() > MAX_HISTORY_RUNS {
-        history.runs.drain(0..(history.runs.len() - MAX_HISTORY_RUNS));
+        history
+            .runs
+            .drain(0..(history.runs.len() - MAX_HISTORY_RUNS));
     }
 
     save_check_history(repo, &history)?;

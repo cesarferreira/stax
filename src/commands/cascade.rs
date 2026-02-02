@@ -24,18 +24,19 @@ pub fn run(no_submit: bool, no_pr: bool) -> Result<()> {
 
     if !no_submit {
         commands::submit::run(
-            false,
-            no_pr,
-            false,
-            true,
-            true,
-            vec![],
-            vec![],
-            vec![],
-            false,
-            None,
-            false,
-            false,
+            false,      // draft
+            no_pr,      // no_pr
+            false,      // _force
+            true,       // yes
+            true,       // no_prompt
+            vec![],     // reviewers
+            vec![],     // labels
+            vec![],     // assignees
+            false,      // quiet
+            false,      // verbose
+            None,       // template
+            false,      // no_template
+            false,      // edit
         )?;
     }
 

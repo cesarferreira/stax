@@ -64,15 +64,19 @@ struct CheckRunDetail {
 /// Response from the commit statuses API
 #[derive(Debug, Deserialize)]
 struct CommitStatus {
-    context: String,  // This is like the "name" for statuses
-    state: String,    // success, pending, failure, error
+    context: String, // This is like the "name" for statuses
+    state: String,   // success, pending, failure, error
     target_url: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
 
 /// Calculate overall timing for the entire branch CI run
-fn calculate_branch_timing(repo: &GitRepo, branch_name: &str, checks: &[CheckRunInfo]) -> Option<String> {
+fn calculate_branch_timing(
+    repo: &GitRepo,
+    branch_name: &str,
+    checks: &[CheckRunInfo],
+) -> Option<String> {
     if checks.is_empty() {
         return None;
     }
@@ -117,7 +121,11 @@ fn calculate_branch_timing(repo: &GitRepo, branch_name: &str, checks: &[CheckRun
     if let Some(avg) = average_secs {
         if is_complete {
             // Completed with history: elapsed | avg
-            Some(format!("Build time: {} | avg: {}", elapsed_str, format_duration(avg)))
+            Some(format!(
+                "Build time: {} | avg: {}",
+                elapsed_str,
+                format_duration(avg)
+            ))
         } else {
             // In progress with history: elapsed | avg, ETA, percentage
             let (eta_str, pct) = if elapsed_secs >= avg {
@@ -189,7 +197,16 @@ pub fn run(all: bool, json: bool, _refresh: bool, watch: bool, interval: u64) ->
 
     // Watch mode: loop until all CI checks complete
     if watch {
-        return run_watch_mode(&repo, &rt, &client, &stack, &branches_to_check, &current, interval, json);
+        return run_watch_mode(
+            &repo,
+            &rt,
+            &client,
+            &stack,
+            &branches_to_check,
+            &current,
+            interval,
+            json,
+        );
     }
 
     // Single run mode (original behavior)
@@ -226,9 +243,7 @@ pub fn fetch_ci_statuses(
         let pr_number = stack.branches.get(branch).and_then(|b| b.pr_number);
 
         // Fetch both check runs and commit statuses
-        let check_runs_result = rt.block_on(async {
-            fetch_all_checks(repo, client, &sha).await
-        });
+        let check_runs_result = rt.block_on(async { fetch_all_checks(repo, client, &sha).await });
 
         let (overall_status, check_runs) = match check_runs_result {
             Ok((status, runs)) => (status, runs),
@@ -442,9 +457,9 @@ pub fn record_ci_history(repo: &GitRepo, statuses: &[BranchCiStatus]) {
 
 /// Check if all CI checks are complete (not pending)
 fn all_checks_complete(statuses: &[BranchCiStatus]) -> bool {
-    statuses.iter().all(|s| {
-        s.overall_status.as_deref() != Some("pending") && !s.check_runs.is_empty()
-    })
+    statuses
+        .iter()
+        .all(|s| s.overall_status.as_deref() != Some("pending") && !s.check_runs.is_empty())
 }
 
 /// Run watch mode - poll CI status until all checks complete
@@ -556,8 +571,12 @@ async fn fetch_all_checks(
 
     // Combine overall statuses (failure > pending > success)
     let combined_overall = match (check_runs_overall, statuses_overall) {
-        (Some(ref a), Some(ref b)) if a == "failure" || b == "failure" => Some("failure".to_string()),
-        (Some(ref a), Some(ref b)) if a == "pending" || b == "pending" => Some("pending".to_string()),
+        (Some(ref a), Some(ref b)) if a == "failure" || b == "failure" => {
+            Some("failure".to_string())
+        }
+        (Some(ref a), Some(ref b)) if a == "pending" || b == "pending" => {
+            Some("pending".to_string())
+        }
         (Some(a), Some(_)) => Some(a),
         (Some(a), None) => Some(a),
         (None, Some(b)) => Some(b),
@@ -594,7 +613,9 @@ async fn fetch_commit_statuses(
         // Commit statuses don't have detailed timing, so we estimate based on created/updated
         let (status_str, conclusion, elapsed_secs) = match status.state.as_str() {
             "success" => {
-                let elapsed = if let (Some(created), Some(updated)) = (&status.created_at, &status.updated_at) {
+                let elapsed = if let (Some(created), Some(updated)) =
+                    (&status.created_at, &status.updated_at)
+                {
                     if let (Ok(created_time), Ok(updated_time)) = (
                         created.parse::<DateTime<Utc>>(),
                         updated.parse::<DateTime<Utc>>(),
@@ -607,8 +628,12 @@ async fn fetch_commit_statuses(
                 } else {
                     None
                 };
-                ("completed".to_string(), Some("success".to_string()), elapsed)
-            },
+                (
+                    "completed".to_string(),
+                    Some("success".to_string()),
+                    elapsed,
+                )
+            }
             "failure" | "error" => ("completed".to_string(), Some("failure".to_string()), None),
             "pending" => ("in_progress".to_string(), None, None),
             _ => ("queued".to_string(), None, None),
@@ -714,7 +739,9 @@ async fn fetch_check_runs(
         let (elapsed_secs, completed_at_str) = if let Some(completed) = &r.completed_at {
             // Check is completed
             if let (Some(started), Ok(completed_time)) = (
-                r.started_at.as_ref().and_then(|s| s.parse::<DateTime<Utc>>().ok()),
+                r.started_at
+                    .as_ref()
+                    .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
                 completed.parse::<DateTime<Utc>>(),
             ) {
                 let duration = completed_time.signed_duration_since(started);
@@ -796,9 +823,9 @@ async fn fetch_check_runs(
                         false // Keep existing if we can't parse
                     }
                 }
-                (Some(_), None) => true,  // New has timestamp, existing doesn't
+                (Some(_), None) => true, // New has timestamp, existing doesn't
                 (None, Some(_)) => false, // Existing has timestamp, new doesn't
-                (None, None) => true,     // Neither has timestamp, keep new one
+                (None, None) => true,    // Neither has timestamp, keep new one
             }
         } else {
             true // No existing check with this name
@@ -983,10 +1010,7 @@ mod tests {
         assert_eq!(detail.status, "queued");
         assert_eq!(detail.conclusion, None);
         assert_eq!(detail.html_url, Some("https://example.com".to_string()));
-        assert_eq!(
-            detail.started_at,
-            Some("2026-01-16T12:00:00Z".to_string())
-        );
+        assert_eq!(detail.started_at, Some("2026-01-16T12:00:00Z".to_string()));
     }
 
     #[test]

@@ -10,10 +10,10 @@ use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Editor, Input, Select};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::collections::HashMap;
 
 struct PrPlan {
     branch: String,
@@ -280,10 +280,7 @@ pub fn run(
                 };
                 updated_meta.write(repo.inner(), branch)?;
                 if verbose && !quiet {
-                    println!(
-                        "      Cached PR #{} in metadata",
-                        pr.info.number
-                    );
+                    println!("      Cached PR #{} in metadata", pr.info.number);
                 }
             } else if needs_meta_update && verbose && !quiet {
                 println!(

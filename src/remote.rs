@@ -213,8 +213,8 @@ fn split_namespace_repo(path: &str) -> Result<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::process::Command;
+    use tempfile::TempDir;
 
     #[test]
     fn test_parse_ssh_git_url() {
@@ -284,14 +284,23 @@ mod tests {
             .expect("Failed to init git repo");
 
         Command::new("git")
-            .args(["remote", "add", "origin", "https://github.com/test/repo.git"])
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/test/repo.git",
+            ])
             .current_dir(path)
             .output()
             .expect("Failed to add remote");
 
         let base = format!("file://{}/", path.display());
         Command::new("git")
-            .args(["config", &format!("url.{}.insteadOf", base), "https://github.com/"])
+            .args([
+                "config",
+                &format!("url.{}.insteadOf", base),
+                "https://github.com/",
+            ])
             .current_dir(path)
             .output()
             .expect("Failed to set insteadOf");

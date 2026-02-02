@@ -35,19 +35,19 @@ pub fn run(from: String, to: String, path: Option<String>, json: bool) -> Result
     let resolved_path = if let Some(p) = path.as_ref() {
         let current_dir = env::current_dir().context("Failed to get current directory")?;
         let path_buf = PathBuf::from(p);
-        
+
         // Make path absolute if it's relative
         let abs_path = if path_buf.is_absolute() {
             path_buf
         } else {
             current_dir.join(path_buf)
         };
-        
+
         // Make it relative to the repo root
         let rel_path = abs_path
             .strip_prefix(workdir)
             .context("Path is outside repository")?;
-        
+
         Some(rel_path.to_string_lossy().to_string())
     } else {
         None
@@ -143,12 +143,23 @@ fn parse_commits(output: &str) -> Result<Vec<CommitEntry>> {
 
 /// Print a pretty, colorful changelog
 fn print_changelog(from: &str, to: &str, path: &Option<String>, commits: &[CommitEntry]) {
-    let commit_word = if commits.len() == 1 { "commit" } else { "commits" };
+    let commit_word = if commits.len() == 1 {
+        "commit"
+    } else {
+        "commits"
+    };
 
     // Header
     println!(
         "{}",
-        format!("Changelog: {} → {} ({} {})", from, to, commits.len(), commit_word).bold()
+        format!(
+            "Changelog: {} → {} ({} {})",
+            from,
+            to,
+            commits.len(),
+            commit_word
+        )
+        .bold()
     );
 
     // Path filter indicator
@@ -179,7 +190,7 @@ fn print_changelog(from: &str, to: &str, path: &Option<String>, commits: &[Commi
             .pr_number
             .map(|n| format!("#{}", n))
             .unwrap_or_else(|| "     ".to_string()); // Empty space if no PR
-        
+
         // Clean message (remove PR number suffix for cleaner display)
         let clean_message = remove_pr_suffix(&commit.message);
 
@@ -215,7 +226,8 @@ mod tests {
     fn test_parse_commits_basic() {
         // Uses NULL byte as delimiter (matches git log --format=%H%x00%s%x00%aN)
         // %aN gives author name from git config (user.name)
-        let output = "abc1234567890\0feat: add feature\0John Doe\ndef9876543210\0fix: bug fix\0Jane Smith";
+        let output =
+            "abc1234567890\0feat: add feature\0John Doe\ndef9876543210\0fix: bug fix\0Jane Smith";
         let commits = parse_commits(output).unwrap();
 
         assert_eq!(commits.len(), 2);
@@ -253,10 +265,16 @@ mod tests {
 
     #[test]
     fn test_remove_pr_suffix() {
-        assert_eq!(remove_pr_suffix("feat: add thing (#123)"), "feat: add thing");
+        assert_eq!(
+            remove_pr_suffix("feat: add thing (#123)"),
+            "feat: add thing"
+        );
         assert_eq!(remove_pr_suffix("fix: bug (#42)  "), "fix: bug");
         assert_eq!(remove_pr_suffix("no pr here"), "no pr here");
-        assert_eq!(remove_pr_suffix("mentions #42 but not at end"), "mentions #42 but not at end");
+        assert_eq!(
+            remove_pr_suffix("mentions #42 but not at end"),
+            "mentions #42 but not at end"
+        );
     }
 
     #[test]

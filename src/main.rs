@@ -771,7 +771,13 @@ fn main() -> Result<()> {
         Commands::Pr => commands::pr::run(),
         Commands::Open => commands::open::run(),
         Commands::Comments { plain } => commands::comments::run(plain),
-        Commands::Ci { all, json, refresh, watch, interval } => commands::ci::run(all, json, refresh, watch, interval),
+        Commands::Ci {
+            all,
+            json,
+            refresh,
+            watch,
+            interval,
+        } => commands::ci::run(all, json, refresh, watch, interval),
         Commands::Split => commands::split::run(),
         Commands::Copy { pr } => {
             let target = if pr {
@@ -782,7 +788,12 @@ fn main() -> Result<()> {
             commands::copy::run(target)
         }
         Commands::Standup { json, all, hours } => commands::standup::run(json, all, hours),
-        Commands::Changelog { from, to, path, json } => commands::changelog::run(from, to, path, json),
+        Commands::Changelog {
+            from,
+            to,
+            path,
+            json,
+        } => commands::changelog::run(from, to, path, json),
         Commands::Rename {
             name,
             edit,

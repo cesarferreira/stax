@@ -3456,20 +3456,17 @@ fn test_merge_combined_flags() {
 
 mod github_mock_tests {
     use super::*;
-    use wiremock::matchers::{method, path, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-    use tempfile::TempDir;
     use std::fs;
     use std::path::Path;
+    use tempfile::TempDir;
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn write_test_config(home: &Path, api_base_url: &str) {
         let config_dir = home.join(".config").join("stax");
         std::fs::create_dir_all(&config_dir).expect("Failed to create config dir");
         let config_path = config_dir.join("config.toml");
-        let config = format!(
-            "[remote]\napi_base_url = \"{}\"\n",
-            api_base_url
-        );
+        let config = format!("[remote]\napi_base_url = \"{}\"\n", api_base_url);
         fs::write(&config_path, config).expect("Failed to write config");
     }
 
@@ -3527,7 +3524,11 @@ mod github_mock_tests {
         let set_instead_of = git_with_env(
             repo,
             home,
-            &["config", &format!("url.{}.insteadOf", file_base), "https://github.com/"],
+            &[
+                "config",
+                &format!("url.{}.insteadOf", file_base),
+                "https://github.com/",
+            ],
         );
         assert!(
             set_instead_of.status.success(),
