@@ -1,17 +1,30 @@
+use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::{refs, GitRepo};
+use crate::remote;
 use anyhow::Result;
+use colored::{Color, Colorize};
+use console::truncate_str;
 use crossterm::terminal;
 use dialoguer::{theme::ColorfulTheme, FuzzySelect};
+use std::collections::HashSet;
 
-struct RowData {
-    branch: String,
-    depth: usize,
-    stack_root: String,
-    delta: Option<(usize, usize)>,
-    pr_number: Option<u64>,
-    needs_restack: bool,
-    is_current: bool,
+// Colors for different columns (matching status.rs)
+const COLUMN_COLORS: &[Color] = &[
+    Color::Cyan,
+    Color::Green,
+    Color::Magenta,
+    Color::Blue,
+    Color::BrightCyan,
+    Color::BrightGreen,
+    Color::BrightMagenta,
+    Color::BrightBlue,
+];
+
+/// Represents a branch in the display with its column position
+struct DisplayBranch {
+    name: String,
+    column: usize,
 }
 
 struct CheckoutRow {
@@ -77,10 +90,7 @@ pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usiz
                     return Ok(());
                 }
 
-                let rows = build_checkout_row_data(&stack, &current, |parent, branch| {
-                    repo.commits_ahead_behind(parent, branch).ok()
-                });
-                let rows = format_checkout_rows(&rows);
+                let rows = build_checkout_rows(&stack, &repo, &current)?;
 
                 if rows.is_empty() {
                     println!("No branches found.");
@@ -90,10 +100,35 @@ pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usiz
                 let items: Vec<String> = rows.iter().map(|r| r.display.clone()).collect();
                 let branch_names: Vec<String> = rows.iter().map(|r| r.branch.clone()).collect();
 
-                let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+                let mut theme = ColorfulTheme::default();
+                theme.active_item_style = console::Style::new()
+                    .for_stderr()
+                    .black()
+                    .on_white()
+                    .bold();
+                theme.active_item_prefix = console::style("▶".to_string())
+                    .for_stderr()
+                    .black()
+                    .on_white()
+                    .bold();
+                theme.inactive_item_prefix =
+                    console::style(" ".to_string()).for_stderr();
+
+                let term = console::Term::stderr();
+                if term.is_term() {
+                    let _ = term.clear_screen();
+                    let _ = term.move_cursor_to(0, 0);
+                }
+
+                let default_index = branch_names
+                    .iter()
+                    .position(|name| name == &current)
+                    .unwrap_or(0);
+
+                let selection = FuzzySelect::with_theme(&theme)
                     .with_prompt("Checkout a branch (autocomplete or arrow keys)")
                     .items(&items)
-                    .default(0)
+                    .default(default_index)
                     .highlight_matches(false) // Disabled - conflicts with ANSI colors
                     .interact()?;
 
@@ -116,233 +151,191 @@ pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usiz
     Ok(())
 }
 
-fn branch_prefix(depth: usize, is_current: bool) -> String {
-    let mut prefix = String::new();
-    if depth > 0 {
-        for _ in 0..depth {
-            prefix.push_str("│ ");
-        }
-    }
-    let glyph = if is_current {
-        "●"
-    } else if depth == 0 {
-        "•"
-    } else {
-        "○"
-    };
-    prefix.push_str(glyph);
-    prefix.push(' ');
-    prefix
-}
+fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<Vec<CheckoutRow>> {
+    let workdir = repo.workdir()?;
+    let config = Config::load()?;
+    let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<HashSet<_>>();
 
-fn build_checkout_row_data<F>(stack: &Stack, current: &str, ahead_behind: F) -> Vec<RowData>
-where
-    F: Fn(&str, &str) -> Option<(usize, usize)>,
-{
-    let mut rows = Vec::new();
-    let trunk = stack.trunk.as_str();
-
-    let trunk_children = stack
-        .branches
-        .get(trunk)
+    let trunk_info = stack.branches.get(&stack.trunk);
+    let trunk_children: Vec<String> = trunk_info
         .map(|b| b.children.clone())
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
 
     if trunk_children.is_empty() {
-        return rows;
+        return Ok(Vec::new());
     }
 
-    let mut roots = trunk_children;
-    roots.sort();
+    let mut display_branches: Vec<DisplayBranch> = Vec::new();
+    let mut max_column = 0;
+    let mut sorted_trunk_children = trunk_children;
+    sorted_trunk_children.sort();
 
-    if let Some(current_root) = stack_root_for(stack, current) {
-        if let Some(pos) = roots.iter().position(|r| r == &current_root) {
-            let root = roots.remove(pos);
-            roots.insert(0, root);
-        }
-    }
-
-    for root in roots {
-        collect_stack_rows(
+    for (i, root) in sorted_trunk_children.iter().enumerate() {
+        collect_display_branches_with_nesting(
             stack,
-            &root,
-            0,
-            current,
-            &root,
-            &ahead_behind,
-            &mut rows,
+            root,
+            i,
+            &mut display_branches,
+            &mut max_column,
         );
     }
 
-    if stack.branches.contains_key(trunk) {
-        rows.push(RowData {
-            branch: trunk.to_string(),
-            depth: 0,
-            stack_root: "trunk".to_string(),
-            delta: None,
-            pr_number: None,
-            needs_restack: false,
-            is_current: current == trunk,
+    let tree_target_width = (max_column + 1) * 2;
+    let max_width = terminal_width().saturating_sub(1);
+    let mut rows = Vec::new();
+
+    for (i, db) in display_branches.iter().enumerate() {
+        let branch = &db.name;
+        let is_current = branch == current;
+        let entry = stack.branches.get(branch);
+        let parent = entry.and_then(|b| b.parent.as_deref());
+        let (ahead, behind) = parent
+            .and_then(|p| repo.commits_ahead_behind(p, branch).ok())
+            .unwrap_or((0, 0));
+        let needs_restack = entry.map(|b| b.needs_restack).unwrap_or(false);
+        let has_pr = entry.and_then(|b| b.pr_number).is_some();
+        let has_remote = remote_branches.contains(branch) || has_pr;
+
+        let prev_branch_col = if i > 0 {
+            Some(display_branches[i - 1].column)
+        } else {
+            None
+        };
+        let needs_corner = prev_branch_col.is_some_and(|pc| pc > db.column);
+
+        let mut tree = String::new();
+        let mut visual_width = 0;
+        for col in 0..=db.column {
+            let col_color = COLUMN_COLORS[col % COLUMN_COLORS.len()];
+            if col == db.column {
+                let circle = if is_current { "◉" } else { "○" };
+                tree.push_str(&format!("{}", circle.color(col_color)));
+                visual_width += 1;
+                if needs_corner {
+                    tree.push_str(&format!("{}", "─┘".color(col_color)));
+                    visual_width += 2;
+                }
+            } else {
+                tree.push_str(&format!("{} ", "│".color(col_color)));
+                visual_width += 2;
+            }
+        }
+
+        while visual_width < tree_target_width {
+            tree.push(' ');
+            visual_width += 1;
+        }
+
+        let mut info_str = String::new();
+        info_str.push(' ');
+        if has_remote {
+            info_str.push_str(&format!("{} ", "☁️".bright_blue()));
+        } else {
+            info_str.push_str("   ");
+        }
+
+        let branch_color = COLUMN_COLORS[db.column % COLUMN_COLORS.len()];
+        if is_current {
+            info_str.push_str(&format!("{}", branch.color(branch_color).bold()));
+        } else {
+            info_str.push_str(&format!("{}", branch.color(branch_color)));
+        }
+
+        if ahead > 0 || behind > 0 {
+            if behind > 0 {
+                info_str.push_str(&format!(" {}", format!("{} behind", behind).red()));
+            }
+            if ahead > 0 {
+                info_str.push_str(&format!(" {}", format!("{} ahead", ahead).green()));
+            }
+        }
+        if needs_restack {
+            info_str.push_str(&format!(" {}", "(needs restack)".bright_yellow()));
+        }
+
+        let display = truncate_display(&format!("{}{}", tree, info_str), max_width);
+        rows.push(CheckoutRow {
+            branch: branch.clone(),
+            display,
         });
     }
 
-    rows
-}
-
-fn stack_root_for(stack: &Stack, branch: &str) -> Option<String> {
-    if branch == stack.trunk {
-        return None;
-    }
-
-    let mut current = branch.to_string();
-    loop {
-        let info = stack.branches.get(&current)?;
-        match info.parent.as_deref() {
-            Some(parent) if parent == stack.trunk => return Some(current),
-            Some(parent) => {
-                if !stack.branches.contains_key(parent) {
-                    return Some(current);
-                }
-                current = parent.to_string();
-            }
-            None => return None,
-        }
-    }
-}
-
-fn collect_stack_rows<F>(
-    stack: &Stack,
-    branch: &str,
-    depth: usize,
-    current: &str,
-    stack_root: &str,
-    ahead_behind: &F,
-    rows: &mut Vec<RowData>,
-) where
-    F: Fn(&str, &str) -> Option<(usize, usize)>,
-{
-    let Some(info) = stack.branches.get(branch) else {
-        return;
+    // Render trunk row (matches status.rs)
+    let is_trunk_current = stack.trunk == current;
+    let trunk_child_max_col = if sorted_trunk_children.is_empty() {
+        0
+    } else {
+        sorted_trunk_children.len() - 1
     };
 
-    let delta = info
-        .parent
-        .as_deref()
-        .and_then(|parent| ahead_behind(parent, branch));
+    let mut trunk_tree = String::new();
+    let mut trunk_visual_width = 0;
+    let trunk_circle = if is_trunk_current { "◉" } else { "○" };
+    let trunk_color = COLUMN_COLORS[0];
+    trunk_tree.push_str(&format!("{}", trunk_circle.color(trunk_color)));
+    trunk_visual_width += 1;
 
-    rows.push(RowData {
-        branch: info.name.clone(),
-        depth,
-        stack_root: stack_root.to_string(),
-        delta,
-        pr_number: info.pr_number,
-        needs_restack: info.needs_restack,
-        is_current: branch == current,
+    if trunk_child_max_col >= 1 {
+        for col in 1..=trunk_child_max_col {
+            let col_color = COLUMN_COLORS[col % COLUMN_COLORS.len()];
+            if col < trunk_child_max_col {
+                trunk_tree.push_str(&format!("{}", "─┴".color(col_color)));
+            } else {
+                trunk_tree.push_str(&format!("{}", "─┘".color(col_color)));
+            }
+            trunk_visual_width += 2;
+        }
+    }
+
+    while trunk_visual_width < tree_target_width {
+        trunk_tree.push(' ');
+        trunk_visual_width += 1;
+    }
+
+    let mut trunk_info = String::new();
+    trunk_info.push(' ');
+    if remote_branches.contains(&stack.trunk) {
+        trunk_info.push_str(&format!("{} ", "☁️".bright_blue()));
+    } else {
+        trunk_info.push_str("   ");
+    }
+    if is_trunk_current {
+        trunk_info.push_str(&format!("{}", stack.trunk.color(trunk_color).bold()));
+    } else {
+        trunk_info.push_str(&format!("{}", stack.trunk.color(trunk_color)));
+    }
+
+    let (ahead, behind) = repo
+        .commits_ahead_behind(&format!("{}/{}", config.remote_name(), stack.trunk), &stack.trunk)
+        .unwrap_or((0, 0));
+    if ahead > 0 || behind > 0 {
+        if behind > 0 {
+            trunk_info.push_str(&format!(" {}", format!("{} behind", behind).red()));
+        }
+        if ahead > 0 {
+            trunk_info.push_str(&format!(" {}", format!("{} ahead", ahead).green()));
+        }
+    }
+
+    let trunk_display = truncate_display(&format!("{}{}", trunk_tree, trunk_info), max_width);
+    rows.push(CheckoutRow {
+        branch: stack.trunk.clone(),
+        display: trunk_display,
     });
 
-    let mut children = info.children.clone();
-    children.sort();
-    for child in children {
-        collect_stack_rows(
-            stack,
-            &child,
-            depth + 1,
-            current,
-            stack_root,
-            ahead_behind,
-            rows,
-        );
-    }
-}
-
-fn format_checkout_rows(rows: &[RowData]) -> Vec<CheckoutRow> {
-    let mut branch_width = 0;
-    let mut stack_width = 0;
-    let mut delta_width = 0;
-    let mut pr_width = 0;
-    let max_width = terminal_width().saturating_sub(1);
-    let mut columns: Vec<(String, String, String, String, String)> = Vec::new();
-
-    for row in rows {
-        let branch_text = format!("{}{}", branch_prefix(row.depth, row.is_current), row.branch);
-        let stack_text = row.stack_root.clone();
-        let delta_text = match row.delta {
-            Some((ahead, behind)) => format!("+{}/-{}", ahead, behind),
-            None => "—".to_string(),
-        };
-
-        let mut pr_text = match row.pr_number {
-            Some(number) => format!("#{}", number),
-            None => "—".to_string(),
-        };
-        if row.needs_restack {
-            pr_text.push_str(" ⟳");
-        }
-
-        branch_width = branch_width.max(display_width(&branch_text));
-        stack_width = stack_width.max(display_width(&stack_text));
-        delta_width = delta_width.max(display_width(&delta_text));
-        pr_width = pr_width.max(display_width(&pr_text));
-
-        columns.push((branch_text, stack_text, delta_text, pr_text, row.branch.clone()));
-    }
-
-    columns
-        .into_iter()
-        .map(|(branch_text, stack_text, delta_text, pr_text, branch_name)| {
-            let display = format!(
-                "{}  {}  {}  {}",
-                pad_to_width(&branch_text, branch_width),
-                pad_to_width(&stack_text, stack_width),
-                pad_to_width(&delta_text, delta_width),
-                pad_to_width(&pr_text, pr_width),
-            );
-            let display = truncate_display(&display, max_width);
-            CheckoutRow {
-                branch: branch_name,
-                display,
-            }
-        })
-        .collect()
-}
-
-fn pad_to_width(text: &str, width: usize) -> String {
-    let mut padded = text.to_string();
-    let padding = width.saturating_sub(display_width(text));
-    if padding > 0 {
-        padded.push_str(&" ".repeat(padding));
-    }
-    padded
-}
-
-fn display_width(s: &str) -> usize {
-    s.chars().map(char_width).sum()
+    Ok(rows)
 }
 
 fn truncate_display(text: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
     }
-    if display_width(text) <= max_width {
-        return text.to_string();
-    }
-    if max_width <= 3 {
-        return ".".repeat(max_width);
-    }
-
-    let mut out = String::new();
-    let mut used = 0;
-    let limit = max_width - 3;
-    for ch in text.chars() {
-        let w = char_width(ch);
-        if used + w > limit {
-            break;
-        }
-        out.push(ch);
-        used += w;
-    }
-    out.push_str("...");
-    out
+    truncate_str(text, max_width, "...").into_owned()
 }
 
 fn terminal_width() -> usize {
@@ -352,14 +345,42 @@ fn terminal_width() -> usize {
         .max(20)
 }
 
-fn char_width(c: char) -> usize {
-    match c {
-        '\x00'..='\x1f' | '\x7f' => 0,
-        '\x20'..='\x7e' => 1,
-        '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╭' | '╮' | '╯'
-        | '╰' | '║' | '═' | '•' | '○' | '●' | '⟳' => 1,
-        _ => 2,
+/// Collect branches with proper nesting for branches that have multiple children
+/// fp-style: children sorted alphabetically, each child gets column + index
+fn collect_display_branches_with_nesting(
+    stack: &Stack,
+    branch: &str,
+    base_column: usize,
+    result: &mut Vec<DisplayBranch>,
+    max_column: &mut usize,
+) {
+    collect_recursive(stack, branch, base_column, result, max_column);
+}
+
+fn collect_recursive(
+    stack: &Stack,
+    branch: &str,
+    column: usize,
+    result: &mut Vec<DisplayBranch>,
+    max_column: &mut usize,
+) {
+    *max_column = (*max_column).max(column);
+
+    if let Some(info) = stack.branches.get(branch) {
+        let mut children: Vec<&String> = info.children.iter().collect();
+
+        if !children.is_empty() {
+            children.sort();
+            for (i, child) in children.iter().enumerate() {
+                collect_recursive(stack, child, column + i, result, max_column);
+            }
+        }
     }
+
+    result.push(DisplayBranch {
+        name: branch.to_string(),
+        column,
+    });
 }
 
 #[cfg(test)]
@@ -448,26 +469,30 @@ mod tests {
     }
 
     #[test]
-    fn test_branch_prefix_depths() {
-        assert_eq!(branch_prefix(0, false), "• ");
-        assert_eq!(branch_prefix(1, false), "│ ○ ");
-        assert_eq!(branch_prefix(2, false), "│ │ ○ ");
-        assert_eq!(branch_prefix(1, true), "│ ● ");
-    }
-
-    #[test]
-    fn test_checkout_row_order_current_stack_first() {
+    fn test_display_branch_order() {
         let stack = test_stack();
-        let rows = build_checkout_row_data(&stack, "auth-ui", |_p, _b| Some((0, 0)));
-        let names: Vec<_> = rows.iter().map(|r| r.branch.as_str()).collect();
-        assert_eq!(names, vec!["auth", "auth-api", "auth-ui", "hotfix", "main"]);
+        let mut display_branches = Vec::new();
+        let mut max_column = 0;
+        let mut roots = vec!["auth".to_string(), "hotfix".to_string()];
+        roots.sort();
+        for (i, root) in roots.iter().enumerate() {
+            collect_display_branches_with_nesting(
+                &stack,
+                root,
+                i,
+                &mut display_branches,
+                &mut max_column,
+            );
+        }
+        let names: Vec<_> = display_branches.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, vec!["auth-ui", "auth-api", "auth", "hotfix"]);
     }
 
     #[test]
     fn test_truncate_display_caps_width() {
         let text = "• very-very-long-branch-name  stack  +12/-3  #123 ⟳";
         let truncated = truncate_display(text, 16);
-        assert!(display_width(&truncated) <= 16);
+        assert!(console::measure_text_width(&truncated) <= 16);
         assert!(truncated.ends_with("..."));
     }
 }
