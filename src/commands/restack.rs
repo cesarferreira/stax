@@ -6,7 +6,7 @@ use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 
-pub fn run(all: bool, r#continue: bool, quiet: bool) -> Result<()> {
+pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -112,11 +112,8 @@ pub fn run(all: bool, r#continue: bool, quiet: bool) -> Result<()> {
             );
         }
 
-        // Checkout the branch
-        repo.checkout(branch)?;
-
-        // Rebase onto parent
-        match repo.rebase(&meta.parent_branch_name)? {
+        // Rebase onto parent in the branch's own worktree when needed.
+        match repo.rebase_branch_onto(branch, &meta.parent_branch_name, auto_stash_pop)? {
             RebaseResult::Success => {
                 // Update metadata with new parent revision
                 let new_parent_rev = repo.branch_commit(&meta.parent_branch_name)?;

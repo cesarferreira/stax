@@ -6,7 +6,7 @@ use crate::ops::tx::{self, Transaction};
 use anyhow::Result;
 use colored::Colorize;
 
-pub fn run() -> Result<()> {
+pub fn run(auto_stash_pop: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -89,9 +89,7 @@ pub fn run() -> Result<()> {
             meta.parent_branch_name.blue()
         );
 
-        repo.checkout(branch)?;
-
-        match repo.rebase(&meta.parent_branch_name)? {
+        match repo.rebase_branch_onto(branch, &meta.parent_branch_name, auto_stash_pop)? {
             RebaseResult::Success => {
                 let new_parent_rev = repo.branch_commit(&meta.parent_branch_name)?;
                 let updated_meta = BranchMetadata {

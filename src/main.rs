@@ -181,6 +181,9 @@ enum Commands {
         /// Show detailed output including git errors
         #[arg(short, long)]
         verbose: bool,
+        /// Auto-stash and auto-pop dirty target worktrees during restack operations
+        #[arg(long)]
+        auto_stash_pop: bool,
     },
 
     /// Restack (rebase) the current branch onto its parent
@@ -194,6 +197,9 @@ enum Commands {
         /// Suppress extra output
         #[arg(long)]
         quiet: bool,
+        /// Auto-stash and auto-pop dirty target worktrees during restack operations
+        #[arg(long)]
+        auto_stash_pop: bool,
     },
 
     /// Restack from the bottom and submit updates
@@ -607,7 +613,11 @@ enum BranchCommands {
 #[derive(Subcommand)]
 enum UpstackCommands {
     /// Restack all branches above current
-    Restack,
+    Restack {
+        /// Auto-stash and auto-pop dirty target worktrees during restack operations
+        #[arg(long)]
+        auto_stash_pop: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -742,12 +752,23 @@ fn main() -> Result<()> {
             r#continue,
             quiet,
             verbose,
-        } => commands::sync::run(restack, !no_delete, force, safe, r#continue, quiet, verbose),
+            auto_stash_pop,
+        } => commands::sync::run(
+            restack,
+            !no_delete,
+            force,
+            safe,
+            r#continue,
+            quiet,
+            verbose,
+            auto_stash_pop,
+        ),
         Commands::Restack {
             all,
             r#continue,
             quiet,
-        } => commands::restack::run(all, r#continue, quiet),
+            auto_stash_pop,
+        } => commands::restack::run(all, r#continue, quiet, auto_stash_pop),
         Commands::Cascade { no_submit, no_pr } => commands::cascade::run(no_submit, no_pr),
         Commands::Checkout {
             branch,
@@ -857,7 +878,9 @@ fn main() -> Result<()> {
             BranchCommands::Bottom => commands::navigate::bottom(),
         },
         Commands::Upstack(cmd) => match cmd {
-            UpstackCommands::Restack => commands::upstack::restack::run(),
+            UpstackCommands::Restack { auto_stash_pop } => {
+                commands::upstack::restack::run(auto_stash_pop)
+            }
         },
         Commands::Downstack(cmd) => match cmd {
             DownstackCommands::Get => {

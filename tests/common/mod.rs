@@ -7,6 +7,7 @@
 
 use serde_json::Value;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -264,6 +265,15 @@ impl TestRepo {
             .expect("Failed to execute stax")
     }
 
+    /// Run a stax command in a specific directory
+    pub fn run_stax_in(&self, cwd: &Path, args: &[&str]) -> Output {
+        Command::new(stax_bin())
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("Failed to execute stax")
+    }
+
     /// Get stdout as string from output
     pub fn stdout(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout).to_string()
@@ -344,6 +354,15 @@ impl TestRepo {
         Command::new("git")
             .args(args)
             .current_dir(self.path())
+            .output()
+            .expect("Failed to run git command")
+    }
+
+    /// Run a raw git command in a specific directory
+    pub fn git_in(&self, cwd: &Path, args: &[&str]) -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(cwd)
             .output()
             .expect("Failed to run git command")
     }

@@ -10,13 +10,13 @@ pub fn run(no_submit: bool, no_pr: bool) -> Result<()> {
     println!("{}", "Cascading stack...".bold());
 
     commands::navigate::bottom()?;
-    commands::restack::run(false, false, true)?;
+    commands::restack::run(false, false, true, false)?;
 
     if repo.rebase_in_progress()? {
         return Ok(());
     }
 
-    commands::upstack::restack::run()?;
+    commands::upstack::restack::run(false)?;
 
     if repo.rebase_in_progress()? {
         return Ok(());

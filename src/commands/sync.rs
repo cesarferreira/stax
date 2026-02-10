@@ -22,6 +22,7 @@ pub fn run(
     r#continue: bool,
     quiet: bool,
     verbose: bool,
+    auto_stash_pop: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let stack = Stack::load(&repo)?;
@@ -177,32 +178,83 @@ pub fn run(
             }
         }
     } else {
-        // Not on trunk - try to update via refspec fetch (may fail, that's ok)
-        // We'll update trunk properly later if we end up on it after branch deletions
         if !quiet {
             print!("  Updating {}... ", stack.trunk.cyan());
             let _ = std::io::stdout().flush();
         }
 
-        let output = Command::new("git")
-            .args([
-                "fetch",
-                &remote_name,
-                &format!("{}:{}", stack.trunk, stack.trunk),
-            ])
-            .current_dir(workdir)
-            .output()
-            .context("Failed to update trunk")?;
+        if let Some(trunk_worktree_path) = repo.branch_worktree_path(&stack.trunk)? {
+            let output = Command::new("git")
+                .args(["pull", "--ff-only", &remote_name, &stack.trunk])
+                .current_dir(&trunk_worktree_path)
+                .output()
+                .context("Failed to pull trunk in its worktree")?;
 
-        if output.status.success() {
-            if !quiet {
-                println!("{}", "done".green());
+            if output.status.success() {
+                if !quiet {
+                    println!("{}", "done".green());
+                }
+            } else if safe {
+                if !quiet {
+                    println!("{}", "failed (safe mode, no reset)".yellow());
+                    if verbose {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if !stderr.trim().is_empty() {
+                            for line in stderr.lines() {
+                                println!("    {}", line.dimmed());
+                            }
+                        }
+                    }
+                }
+            } else {
+                let reset_output = Command::new("git")
+                    .args([
+                        "reset",
+                        "--hard",
+                        &format!("{}/{}", remote_name, stack.trunk),
+                    ])
+                    .current_dir(&trunk_worktree_path)
+                    .output()
+                    .context("Failed to reset trunk in its worktree")?;
+
+                if !quiet {
+                    if reset_output.status.success() {
+                        println!("{}", "reset to remote".yellow());
+                    } else {
+                        println!("{}", "failed".red());
+                        if verbose {
+                            let stderr = String::from_utf8_lossy(&reset_output.stderr);
+                            if !stderr.trim().is_empty() {
+                                for line in stderr.lines() {
+                                    println!("    {}", line.dimmed());
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } else {
-            // Defer trunk update - we'll retry after branch deletions if we end up on trunk
-            trunk_update_deferred = true;
-            if !quiet {
-                println!("{}", "deferred".dimmed());
+            // Trunk isn't checked out in any worktree; update via refspec fetch.
+            let output = Command::new("git")
+                .args([
+                    "fetch",
+                    &remote_name,
+                    &format!("{}:{}", stack.trunk, stack.trunk),
+                ])
+                .current_dir(workdir)
+                .output()
+                .context("Failed to update trunk")?;
+
+            if output.status.success() {
+                if !quiet {
+                    println!("{}", "done".green());
+                }
+            } else {
+                // Defer trunk update - we'll retry after branch deletions if we end up on trunk
+                trunk_update_deferred = true;
+                if !quiet {
+                    println!("{}", "deferred".dimmed());
+                }
             }
         }
     }
@@ -389,14 +441,18 @@ pub fn run(
                     }
 
                     // Delete local branch (force delete since we confirmed)
-                    let local_status = Command::new("git")
+                    let local_output = Command::new("git")
                         .args(["branch", "-D", branch])
                         .current_dir(workdir)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status();
+                        .output();
 
-                    let local_deleted = local_status.map(|s| s.success()).unwrap_or(false);
+                    let (local_deleted, local_worktree_blocked) = match local_output {
+                        Ok(out) => {
+                            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                            (out.status.success(), stderr.contains("used by worktree"))
+                        }
+                        Err(_) => (false, false),
+                    };
 
                     // Delete remote branch
                     let remote_status = Command::new("git")
@@ -408,8 +464,21 @@ pub fn run(
 
                     let remote_deleted = remote_status.map(|s| s.success()).unwrap_or(false);
 
-                    // Delete metadata
-                    let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+                    // Only delete metadata if branch no longer exists locally.
+                    let local_ref = format!("refs/heads/{}", branch);
+                    let local_still_exists = Command::new("git")
+                        .args(["show-ref", "--verify", "--quiet", &local_ref])
+                        .current_dir(workdir)
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(true);
+
+                    let metadata_deleted = if !local_still_exists {
+                        let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+                        true
+                    } else {
+                        false
+                    };
 
                     if !quiet {
                         if local_deleted && remote_deleted {
@@ -430,13 +499,31 @@ pub fn run(
                                 branch.bright_black(),
                                 "deleted (remote only)".green()
                             );
+                            if !metadata_deleted {
+                                println!(
+                                    "    {} {}",
+                                    "↷".yellow(),
+                                    "local branch still exists, metadata kept".dimmed()
+                                );
+                            }
                         } else {
-                            // Branch was already deleted (orphaned), just cleaned up metadata
-                            println!(
-                                "    {} {}",
-                                branch.bright_black(),
-                                "cleaned up (already deleted)".green()
-                            );
+                            if local_worktree_blocked {
+                                println!(
+                                    "    {} {}",
+                                    branch.bright_black(),
+                                    "not deleted locally (checked out in another worktree)"
+                                        .yellow()
+                                );
+                            } else {
+                                println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+                            }
+                            if !metadata_deleted {
+                                println!(
+                                    "    {} {}",
+                                    "↷".yellow(),
+                                    "metadata kept because local branch still exists".dimmed()
+                                );
+                            }
                         }
                     }
                 } else if !quiet {
@@ -560,14 +647,12 @@ pub fn run(
                     print!("  Restacking {}... ", branch.cyan());
                 }
 
-                repo.checkout(branch)?;
-
                 let meta = match BranchMetadata::read(repo.inner(), branch)? {
                     Some(meta) => meta,
                     None => continue,
                 };
 
-                match repo.rebase(&meta.parent_branch_name)? {
+                match repo.rebase_branch_onto(branch, &meta.parent_branch_name, auto_stash_pop)? {
                     RebaseResult::Success => {
                         let parent_commit = repo.branch_commit(&meta.parent_branch_name)?;
                         let updated_meta = BranchMetadata {

@@ -1,11 +1,17 @@
 use anyhow::{Context, Result};
 use git2::{BranchType, Repository};
 use serde::Deserialize;
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 pub struct GitRepo {
     repo: Repository,
+}
+
+#[derive(Debug, Clone)]
+struct WorktreeInfo {
+    path: PathBuf,
+    branch: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -31,6 +37,156 @@ impl GitRepo {
     /// Get the .git directory path
     pub fn git_dir(&self) -> Result<&Path> {
         Ok(self.repo.path())
+    }
+
+    fn run_git(&self, cwd: &Path, args: &[&str]) -> Result<Output> {
+        Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .with_context(|| format!("Failed to run git {}", args.join(" ")))
+    }
+
+    fn normalize_path(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    fn current_branch_in_path(&self, cwd: &Path) -> Result<String> {
+        let output = self.run_git(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git rev-parse --abbrev-ref HEAD failed in '{}': {}",
+                cwd.display(),
+                stderr
+            );
+        }
+
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if branch.is_empty() || branch == "HEAD" {
+            anyhow::bail!(
+                "HEAD is detached in '{}'. Please checkout a branch first.",
+                cwd.display()
+            );
+        }
+        Ok(branch)
+    }
+
+    fn git_dir_in_path(&self, cwd: &Path) -> Result<PathBuf> {
+        let output = self.run_git(cwd, &["rev-parse", "--git-dir"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git rev-parse --git-dir failed in '{}': {}",
+                cwd.display(),
+                stderr
+            );
+        }
+
+        let git_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if git_dir.is_empty() {
+            anyhow::bail!("git rev-parse --git-dir returned empty output");
+        }
+
+        let path = PathBuf::from(git_dir);
+        if path.is_absolute() {
+            Ok(path)
+        } else {
+            Ok(cwd.join(path))
+        }
+    }
+
+    fn rebase_in_progress_at(&self, cwd: &Path) -> Result<bool> {
+        let git_dir = self.git_dir_in_path(cwd)?;
+        Ok(git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists())
+    }
+
+    fn is_dirty_at(&self, cwd: &Path) -> Result<bool> {
+        let output = self.run_git(cwd, &["status", "--porcelain"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git status failed in '{}': {}", cwd.display(), stderr);
+        }
+        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    }
+
+    fn stash_push_at(&self, cwd: &Path) -> Result<bool> {
+        let output = self.run_git(cwd, &["stash", "push", "-u", "-m", "stax auto-stash"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git stash failed in '{}': {}", cwd.display(), stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.contains("No local changes") {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn stash_pop_at(&self, cwd: &Path) -> Result<()> {
+        let output = self.run_git(cwd, &["stash", "pop"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git stash pop failed in '{}': {}", cwd.display(), stderr);
+        }
+        Ok(())
+    }
+
+    fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+        let output = self.run_git(self.workdir()?, &["worktree", "list", "--porcelain"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git worktree list failed: {}", stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut worktrees = Vec::new();
+        let mut current_path: Option<PathBuf> = None;
+        let mut current_branch: Option<String> = None;
+
+        let mut flush_entry = |path: &mut Option<PathBuf>, branch: &mut Option<String>| {
+            if let Some(p) = path.take() {
+                worktrees.push(WorktreeInfo {
+                    path: Self::normalize_path(&p),
+                    branch: branch.take(),
+                });
+            }
+        };
+
+        for line in stdout.lines() {
+            if line.is_empty() {
+                flush_entry(&mut current_path, &mut current_branch);
+                continue;
+            }
+
+            if let Some(path) = line.strip_prefix("worktree ") {
+                flush_entry(&mut current_path, &mut current_branch);
+                current_path = Some(PathBuf::from(path.trim()));
+                continue;
+            }
+
+            if let Some(branch) = line.strip_prefix("branch ") {
+                let branch = branch
+                    .trim()
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(branch.trim())
+                    .to_string();
+                current_branch = Some(branch);
+            }
+        }
+
+        flush_entry(&mut current_path, &mut current_branch);
+        Ok(worktrees)
+    }
+
+    pub fn branch_worktree_path(&self, branch: &str) -> Result<Option<PathBuf>> {
+        for worktree in self.list_worktrees()? {
+            if worktree.branch.as_deref() == Some(branch) {
+                return Ok(Some(worktree.path));
+            }
+        }
+        Ok(None)
     }
 
     /// Get the current branch name
@@ -157,52 +313,17 @@ impl GitRepo {
 
     /// Check if working tree has uncommitted changes
     pub fn is_dirty(&self) -> Result<bool> {
-        let output = Command::new("git")
-            .args(["status", "--porcelain"])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to check git status")?;
-
-        if !output.status.success() {
-            anyhow::bail!("git status failed");
-        }
-
-        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+        self.is_dirty_at(self.workdir()?)
     }
 
     /// Stash local changes (including untracked)
     pub fn stash_push(&self) -> Result<bool> {
-        let output = Command::new("git")
-            .args(["stash", "push", "-u", "-m", "stax auto-stash"])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to stash changes")?;
-
-        if !output.status.success() {
-            anyhow::bail!("git stash failed");
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.contains("No local changes") {
-            return Ok(false);
-        }
-
-        Ok(true)
+        self.stash_push_at(self.workdir()?)
     }
 
     /// Pop the most recent stash
     pub fn stash_pop(&self) -> Result<()> {
-        let status = Command::new("git")
-            .args(["stash", "pop"])
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to pop stash")?;
-
-        if !status.success() {
-            anyhow::bail!("git stash pop failed");
-        }
-
-        Ok(())
+        self.stash_pop_at(self.workdir()?)
     }
 
     /// Set the trunk branch
@@ -212,35 +333,115 @@ impl GitRepo {
 
     /// Checkout a branch
     pub fn checkout(&self, branch: &str) -> Result<()> {
-        let status = Command::new("git")
-            .args(["checkout", branch])
-            .current_dir(self.workdir()?)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .context("Failed to run git checkout")?;
-
-        if !status.success() {
-            anyhow::bail!("git checkout failed");
+        let output = self.run_git(self.workdir()?, &["checkout", branch])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git checkout {} failed: {}", branch, stderr);
         }
         Ok(())
     }
 
-    /// Rebase current branch onto target
-    pub fn rebase(&self, onto: &str) -> Result<RebaseResult> {
-        let status = Command::new("git")
-            .args(["rebase", onto])
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to run git rebase")?;
-
-        if status.success() {
-            Ok(RebaseResult::Success)
-        } else if self.rebase_in_progress()? {
-            Ok(RebaseResult::Conflict)
-        } else {
-            anyhow::bail!("git rebase failed unexpectedly")
+    fn rebase_in_path(&self, cwd: &Path, onto: &str) -> Result<RebaseResult> {
+        let output = self.run_git(cwd, &["rebase", onto])?;
+        if output.status.success() {
+            return Ok(RebaseResult::Success);
         }
+
+        if self.rebase_in_progress_at(cwd)? {
+            return Ok(RebaseResult::Conflict);
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!(
+            "git rebase {} failed in '{}': {}",
+            onto,
+            cwd.display(),
+            stderr
+        );
+    }
+
+    /// Rebase current branch onto target
+    #[allow(dead_code)] // Kept for compatibility with existing APIs and future command flows
+    pub fn rebase(&self, onto: &str) -> Result<RebaseResult> {
+        self.rebase_in_path(self.workdir()?, onto)
+    }
+
+    /// Rebase the target branch onto another branch, using the branch's owning worktree.
+    /// If the target branch is not checked out in any worktree, it falls back to current workdir.
+    pub fn rebase_branch_onto(
+        &self,
+        branch: &str,
+        onto: &str,
+        auto_stash_pop: bool,
+    ) -> Result<RebaseResult> {
+        let current_workdir = Self::normalize_path(self.workdir()?);
+        let target_workdir = self
+            .branch_worktree_path(branch)?
+            .unwrap_or_else(|| current_workdir.clone());
+        let target_workdir = Self::normalize_path(&target_workdir);
+
+        // If rebasing in the current worktree and we're not already on target, checkout first.
+        if target_workdir == current_workdir {
+            if self.current_branch()? != branch {
+                self.checkout(branch)?;
+            }
+        } else {
+            // Validate that the expected branch is actually checked out in that worktree.
+            let current_in_target = self.current_branch_in_path(&target_workdir)?;
+            if current_in_target != branch {
+                anyhow::bail!(
+                    "Expected '{}' in '{}', found '{}' instead.",
+                    branch,
+                    target_workdir.display(),
+                    current_in_target
+                );
+            }
+        }
+
+        let mut stashed = false;
+        if self.is_dirty_at(&target_workdir)? {
+            if !auto_stash_pop {
+                anyhow::bail!(
+                    "Cannot restack '{}': worktree '{}' has uncommitted changes. \
+Use --auto-stash-pop or stash/commit changes first.",
+                    branch,
+                    target_workdir.display()
+                );
+            }
+            stashed = self.stash_push_at(&target_workdir)?;
+        }
+
+        let result = match self.rebase_in_path(&target_workdir, onto).with_context(|| {
+            format!(
+                "Failed to rebase '{}' onto '{}' in '{}'",
+                branch,
+                onto,
+                target_workdir.display()
+            )
+        }) {
+            Ok(result) => result,
+            Err(err) => {
+                if stashed {
+                    return Err(err.context(format!(
+                        "Auto-stash was kept in '{}' due to rebase failure.",
+                        target_workdir.display()
+                    )));
+                }
+                return Err(err);
+            }
+        };
+
+        if stashed && result == RebaseResult::Success {
+            self.stash_pop_at(&target_workdir).with_context(|| {
+                format!(
+                    "Rebased '{}' successfully, but failed to auto-pop stash in '{}'",
+                    branch,
+                    target_workdir.display()
+                )
+            })?;
+        }
+
+        Ok(result)
     }
 
     /// Continue a rebase after resolving conflicts
@@ -263,8 +464,7 @@ impl GitRepo {
 
     /// Check if a rebase is in progress
     pub fn rebase_in_progress(&self) -> Result<bool> {
-        let git_dir = self.repo.path();
-        Ok(git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists())
+        self.rebase_in_progress_at(self.workdir()?)
     }
 
     /// Create a new branch at HEAD

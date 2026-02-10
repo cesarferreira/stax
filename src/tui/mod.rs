@@ -515,18 +515,7 @@ fn apply_reorder_changes(app: &mut App) -> Result<()> {
     let current_branch = app.repo.current_branch()?;
 
     for (branch, new_parent) in &reparent_ops {
-        // Checkout and rebase
-        if let Err(e) = app.repo.checkout(branch) {
-            tx.finish_err(
-                &format!("Failed to checkout {}: {}", branch, e),
-                Some("restack"),
-                Some(branch),
-            )?;
-            app.set_status(format!("✗ Failed to checkout {}", branch));
-            return Ok(());
-        }
-
-        match app.repo.rebase(new_parent) {
+        match app.repo.rebase_branch_onto(branch, new_parent, false) {
             Ok(RebaseResult::Success) => {
                 // Update metadata with new parent revision
                 if let Some(mut meta) = BranchMetadata::read(app.repo.inner(), branch)? {
