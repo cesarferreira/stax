@@ -100,6 +100,28 @@ fn handle_action(app: &mut App, action: KeyAction) -> Result<()> {
 /// Handle actions in normal mode
 fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
     match action {
+        KeyAction::Char(c) => {
+            let mapped = match c {
+                'k' => Some(KeyAction::Up),
+                'j' => Some(KeyAction::Down),
+                'r' => Some(KeyAction::Restack),
+                'R' => Some(KeyAction::RestackAll),
+                's' => Some(KeyAction::Submit),
+                'p' => Some(KeyAction::OpenPr),
+                'n' => Some(KeyAction::NewBranch),
+                'd' => Some(KeyAction::Delete),
+                'e' => Some(KeyAction::Rename),
+                '/' => Some(KeyAction::Search),
+                '?' => Some(KeyAction::Help),
+                'q' => Some(KeyAction::Quit),
+                'o' => Some(KeyAction::ReorderMode),
+                _ => None,
+            };
+
+            if let Some(mapped_action) = mapped {
+                return handle_normal_action(app, mapped_action);
+            }
+        }
         KeyAction::Tab => {
             app.focused_pane = match app.focused_pane {
                 FocusedPane::Stack => FocusedPane::Diff,

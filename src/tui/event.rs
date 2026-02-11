@@ -79,26 +79,10 @@ impl KeyAction {
             }
         }
 
-        // In text entry contexts, prioritize literal input over normal-mode shortcuts.
-        if matches!(context, KeyContext::Input | KeyContext::Search) {
-            return match key.code {
-                KeyCode::Up => KeyAction::Up,
-                KeyCode::Down => KeyAction::Down,
-                KeyCode::Left => KeyAction::Left,
-                KeyCode::Right => KeyAction::Right,
-                KeyCode::Enter => KeyAction::Enter,
-                KeyCode::Esc => KeyAction::Escape,
-                KeyCode::Home => KeyAction::Home,
-                KeyCode::End => KeyAction::End,
-                KeyCode::Tab => KeyAction::Tab,
-                KeyCode::Backspace => KeyAction::Backspace,
-                KeyCode::Char(c) => KeyAction::Char(c),
-                _ => KeyAction::None,
-            };
-        }
-
         // Handle Shift modifiers
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
+        if key.modifiers.contains(KeyModifiers::SHIFT)
+            && !matches!(context, KeyContext::Input | KeyContext::Search)
+        {
             match key.code {
                 KeyCode::Char('R') | KeyCode::Char('r') => return KeyAction::RestackAll,
                 KeyCode::Char('K') | KeyCode::Char('k') => return KeyAction::MoveUp,
@@ -121,25 +105,7 @@ impl KeyAction {
             KeyCode::End => KeyAction::End,
             KeyCode::Tab => KeyAction::Tab,
 
-            // Vim navigation
-            KeyCode::Char('k') => KeyAction::Up,
-            KeyCode::Char('j') => KeyAction::Down,
-
-            // Actions
-            KeyCode::Char('r') => KeyAction::Restack,
-            KeyCode::Char('s') => KeyAction::Submit,
-            KeyCode::Char('p') => KeyAction::OpenPr,
-            KeyCode::Char('n') => KeyAction::NewBranch,
-            KeyCode::Char('d') => KeyAction::Delete,
-            KeyCode::Char('e') => KeyAction::Rename,
-
-            // Modes
-            KeyCode::Char('/') => KeyAction::Search,
-            KeyCode::Char('?') => KeyAction::Help,
-            KeyCode::Char('q') => KeyAction::Quit,
-            KeyCode::Char('o') => KeyAction::ReorderMode,
-
-            // Text input (for search mode)
+            // Text input (and mode-specific shortcuts handled by each mode handler)
             KeyCode::Char(c) => KeyAction::Char(c),
             KeyCode::Backspace => KeyAction::Backspace,
 
@@ -159,7 +125,7 @@ mod tests {
             KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
             KeyContext::Normal,
         );
-        assert_eq!(action, KeyAction::NewBranch);
+        assert_eq!(action, KeyAction::Char('n'));
     }
 
     #[test]
