@@ -58,6 +58,8 @@ brew tap cesarferreira/tap && brew install stax
 cargo binstall stax
 ```
 
+Both `stax` and `st` (short alias) are installed automatically. All examples below use `stax`, but `st` works identically.
+
 ## Quick Start
 
 ```bash
@@ -588,6 +590,19 @@ provider = "github"    # github, gitlab, gitea
 [ui]
 tips = true            # Show contextual suggestions (default: true)
 ```
+
+### Branch Name Format
+
+Use `format` to template branch names with `{user}`, `{date}`, and `{message}` placeholders:
+
+```toml
+[branch]
+format = "{user}/{date}/{message}"   # "cesar/02-11/add-login"
+user = "cesar"                        # Optional: defaults to git config user.name
+date_format = "%m-%d"                 # Optional: chrono strftime (default: "%m-%d")
+```
+
+Empty placeholders are cleaned up automatically. The legacy `prefix` field still works if `format` is not set.
 
 ### GitHub Authentication
 

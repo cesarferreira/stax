@@ -17,14 +17,30 @@ pub struct Config {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BranchConfig {
     /// Prefix for new branches (e.g., "cesar/")
+    /// DEPRECATED: Use `format` instead. Kept for backward compatibility.
     #[serde(default)]
     pub prefix: Option<String>,
     /// Whether to add date to branch names
+    /// DEPRECATED: Use `format` instead. Kept for backward compatibility.
     #[serde(default)]
     pub date: bool,
+    /// Date format string (default: "%m-%d", e.g., "01-19")
+    /// Use chrono strftime format: %Y=year, %m=month, %d=day
+    #[serde(default = "default_date_format")]
+    pub date_format: String,
     /// Character to replace spaces and special chars (default: "-")
     #[serde(default = "default_replacement")]
     pub replacement: String,
+    /// Branch name format template. Placeholders:
+    /// - {user}: Git username (from config.branch.user or git user.name)
+    /// - {date}: Current date (formatted by date_format)
+    /// - {message}: The branch name/message input
+    /// Examples: "{message}", "{user}/{message}", "{user}/{date}/{message}"
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Username for branch naming. If not set, uses git config user.name
+    #[serde(default)]
+    pub user: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -52,9 +68,16 @@ impl Default for BranchConfig {
         Self {
             prefix: None,
             date: false,
+            date_format: default_date_format(),
             replacement: default_replacement(),
+            format: None,
+            user: None,
         }
     }
+}
+
+fn default_date_format() -> String {
+    "%m-%d".to_string()
 }
 
 impl Default for RemoteConfig {
@@ -201,27 +224,25 @@ impl Config {
         name: &str,
         prefix_override: Option<&str>,
     ) -> String {
-        let mut result = name.to_string();
+        // Sanitize the message/name first
+        let sanitized_name = self.sanitize_branch_segment(name);
 
-        // Replace spaces and special characters
-        let replacement = &self.branch.replacement;
-        result = result
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' || c == '/' {
-                    c
-                } else {
-                    replacement.chars().next().unwrap_or('-')
-                }
-            })
-            .collect();
-
-        // Replace multiple consecutive replacements with single one
-        while result.contains(&format!("{}{}", replacement, replacement)) {
-            result = result.replace(&format!("{}{}", replacement, replacement), replacement);
+        // If format template is set, use it (new behavior)
+        if let Some(ref format_template) = self.branch.format {
+            if !format_template.contains("{message}") {
+                eprintln!(
+                    "Warning: branch.format template is missing {{message}} placeholder. \
+                     The branch name input will not appear in the generated name."
+                );
+            }
+            return self.apply_format_template(format_template, &sanitized_name, prefix_override);
         }
 
-        // Add date if enabled
+        // Legacy behavior: use prefix/date fields for backward compatibility
+        let replacement = &self.branch.replacement;
+        let mut result = sanitized_name;
+
+        // Add date if enabled (legacy, preserves original %Y-%m-%d format)
         if self.branch.date {
             let date = chrono::Local::now().format("%Y-%m-%d").to_string();
             result = format!("{}{}{}", date, replacement, result);
@@ -247,6 +268,110 @@ impl Config {
         result
     }
 
+    /// Apply the format template to create a branch name
+    fn apply_format_template(
+        &self,
+        template: &str,
+        message: &str,
+        prefix_override: Option<&str>,
+    ) -> String {
+        let mut result = template.to_string();
+
+        // Replace {message} placeholder
+        result = result.replace("{message}", message);
+
+        // Replace {date} placeholder if present
+        if result.contains("{date}") {
+            let date = chrono::Local::now()
+                .format(&self.branch.date_format)
+                .to_string();
+            result = result.replace("{date}", &date);
+        }
+
+        // Replace {user} placeholder if present
+        if result.contains("{user}") {
+            let user = self.get_user_for_branch();
+            result = result.replace("{user}", &user);
+        }
+
+        // Clean up empty segments: collapse repeated separators and trim leading/trailing ones
+        // This handles cases where {user} resolves to "" (e.g., "/02-11/msg" -> "02-11/msg")
+        while result.contains("//") {
+            result = result.replace("//", "/");
+        }
+        result = result.trim_matches('/').to_string();
+
+        // Handle prefix override (for -p flag compatibility)
+        if let Some(override_prefix) = prefix_override {
+            let trimmed = override_prefix.trim();
+            if !trimmed.is_empty() {
+                let normalized = Self::normalize_prefix_override(trimmed);
+                if !result.starts_with(&normalized) {
+                    result = format!("{}{}", normalized, result);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Sanitize a segment of the branch name (replace special chars, collapse duplicates)
+    fn sanitize_branch_segment(&self, segment: &str) -> String {
+        let replacement = &self.branch.replacement;
+
+        let mut result: String = segment
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' || c == '/' {
+                    c
+                } else {
+                    replacement.chars().next().unwrap_or('-')
+                }
+            })
+            .collect();
+
+        // Replace multiple consecutive replacements with single one
+        while result.contains(&format!("{}{}", replacement, replacement)) {
+            result = result.replace(&format!("{}{}", replacement, replacement), replacement);
+        }
+
+        // Trim leading/trailing replacement chars
+        let replacement_char = replacement.chars().next().unwrap_or('-');
+        result = result
+            .trim_start_matches(replacement_char)
+            .trim_end_matches(replacement_char)
+            .to_string();
+
+        result
+    }
+
+    /// Get the username for branch naming
+    /// Priority: 1. config.branch.user, 2. git config user.name, 3. empty string
+    fn get_user_for_branch(&self) -> String {
+        // First check config
+        if let Some(ref user) = self.branch.user {
+            if !user.is_empty() {
+                return self.sanitize_branch_segment(user);
+            }
+        }
+
+        // Then try git config user.name
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["config", "user.name"])
+            .output()
+        {
+            if output.status.success() {
+                let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !name.is_empty() {
+                    return self.sanitize_branch_segment(&name);
+                }
+            }
+        }
+
+        // Fallback to empty
+        String::new()
+    }
+
     fn normalize_prefix_override(prefix: &str) -> String {
         if prefix.ends_with('/') || prefix.ends_with('-') || prefix.ends_with('_') {
             prefix.to_string()
@@ -265,401 +390,4 @@ impl Config {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::env;
-
-    #[test]
-    fn test_default_config() {
-        let config = Config::default();
-        assert!(config.branch.prefix.is_none());
-        assert!(!config.branch.date);
-        assert_eq!(config.branch.replacement, "-");
-        assert_eq!(config.remote.name, "origin");
-        assert_eq!(config.remote.base_url, "https://github.com");
-        assert!(config.ui.tips);
-    }
-
-    #[test]
-    fn test_format_branch_name_no_prefix() {
-        let config = Config::default();
-        assert_eq!(config.format_branch_name("my-feature"), "my-feature");
-    }
-
-    #[test]
-    fn test_format_branch_name_with_prefix() {
-        let mut config = Config::default();
-        config.branch.prefix = Some("cesar/".to_string());
-        assert_eq!(config.format_branch_name("my-feature"), "cesar/my-feature");
-    }
-
-    #[test]
-    fn test_format_branch_name_prefix_not_duplicated() {
-        let mut config = Config::default();
-        config.branch.prefix = Some("cesar/".to_string());
-        // If name already has prefix, don't add it again
-        assert_eq!(
-            config.format_branch_name("cesar/my-feature"),
-            "cesar/my-feature"
-        );
-    }
-
-    #[test]
-    fn test_format_branch_name_prefix_override() {
-        let mut config = Config::default();
-        config.branch.prefix = Some("cesar/".to_string());
-        assert_eq!(
-            config.format_branch_name_with_prefix_override("auth", Some("feature")),
-            "feature/auth"
-        );
-    }
-
-    #[test]
-    fn test_format_branch_name_prefix_override_empty_disables() {
-        let mut config = Config::default();
-        config.branch.prefix = Some("cesar/".to_string());
-        assert_eq!(
-            config.format_branch_name_with_prefix_override("auth", Some("")),
-            "auth"
-        );
-    }
-
-    #[test]
-    fn test_format_branch_name_spaces_replaced() {
-        let config = Config::default();
-        assert_eq!(
-            config.format_branch_name("my cool feature"),
-            "my-cool-feature"
-        );
-    }
-
-    #[test]
-    fn test_format_branch_name_special_chars_replaced() {
-        let config = Config::default();
-        assert_eq!(
-            config.format_branch_name("feat: add stuff!"),
-            "feat-add-stuff-"
-        );
-    }
-
-    #[test]
-    fn test_format_branch_name_custom_replacement() {
-        let mut config = Config::default();
-        config.branch.replacement = "_".to_string();
-        assert_eq!(
-            config.format_branch_name("my cool feature"),
-            "my_cool_feature"
-        );
-    }
-
-    #[test]
-    fn test_format_branch_name_consecutive_replacements_collapsed() {
-        let config = Config::default();
-        // Multiple spaces should become single dash
-        assert_eq!(config.format_branch_name("my   feature"), "my-feature");
-    }
-
-    #[test]
-    fn test_token_priority_stax_env_first() {
-        // Save original values
-        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
-        let orig_github = env::var("GITHUB_TOKEN").ok();
-
-        // Set both env vars
-        env::set_var("STAX_GITHUB_TOKEN", "stax-token");
-        env::set_var("GITHUB_TOKEN", "github-token");
-
-        // STAX_GITHUB_TOKEN should take priority
-        let token = Config::github_token();
-        assert_eq!(token, Some("stax-token".to_string()));
-
-        // Restore original values
-        match orig_stax {
-            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-            None => env::remove_var("STAX_GITHUB_TOKEN"),
-        }
-        match orig_github {
-            Some(v) => env::set_var("GITHUB_TOKEN", v),
-            None => env::remove_var("GITHUB_TOKEN"),
-        }
-    }
-
-    #[test]
-    fn test_token_fallback_to_github_token() {
-        // Save original values
-        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
-        let orig_github = env::var("GITHUB_TOKEN").ok();
-
-        // Only set GITHUB_TOKEN
-        env::remove_var("STAX_GITHUB_TOKEN");
-        env::set_var("GITHUB_TOKEN", "github-token");
-
-        let token = Config::github_token();
-        assert_eq!(token, Some("github-token".to_string()));
-
-        // Restore original values
-        match orig_stax {
-            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-            None => env::remove_var("STAX_GITHUB_TOKEN"),
-        }
-        match orig_github {
-            Some(v) => env::set_var("GITHUB_TOKEN", v),
-            None => env::remove_var("GITHUB_TOKEN"),
-        }
-    }
-
-    #[test]
-    fn test_token_empty_string_ignored() {
-        // Save original values
-        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
-        let orig_github = env::var("GITHUB_TOKEN").ok();
-
-        // Set empty STAX token, valid GITHUB token
-        env::set_var("STAX_GITHUB_TOKEN", "");
-        env::set_var("GITHUB_TOKEN", "github-token");
-
-        let token = Config::github_token();
-        assert_eq!(token, Some("github-token".to_string()));
-
-        // Restore original values
-        match orig_stax {
-            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-            None => env::remove_var("STAX_GITHUB_TOKEN"),
-        }
-        match orig_github {
-            Some(v) => env::set_var("GITHUB_TOKEN", v),
-            None => env::remove_var("GITHUB_TOKEN"),
-        }
-    }
-
-    #[test]
-    fn test_default_ui_config() {
-        let ui_config = UiConfig::default();
-        assert!(ui_config.tips);
-    }
-
-    #[test]
-    fn test_ui_tips_serialization() {
-        // Test that tips=true serializes correctly
-        let config = Config::default();
-        let toml_str = toml::to_string(&config).unwrap();
-        assert!(toml_str.contains("[ui]"));
-        assert!(toml_str.contains("tips = true"));
-
-        // Test that tips=false deserializes correctly
-        let toml_with_tips_false = r#"
-[ui]
-tips = false
-"#;
-        let parsed: Config = toml::from_str(toml_with_tips_false).unwrap();
-        assert!(!parsed.ui.tips);
-
-        // Test that missing [ui] section defaults tips to true
-        let toml_without_ui = r#"
-[branch]
-prefix = "test/"
-"#;
-        let parsed: Config = toml::from_str(toml_without_ui).unwrap();
-        assert!(parsed.ui.tips);
-    }
-
-    #[test]
-    fn test_set_github_token_writes_to_file() {
-        // Save original HOME
-        let orig_home = env::var("HOME").ok();
-
-        // Create temp directory
-        let temp_dir = std::env::temp_dir().join(format!("stax-test-{}", std::process::id()));
-        fs::create_dir_all(&temp_dir).unwrap();
-
-        // Override HOME to use temp directory
-        env::set_var("HOME", &temp_dir);
-
-        // Write token
-        let test_token = "ghp_test_token_12345";
-        let result = Config::set_github_token(test_token);
-        assert!(result.is_ok(), "set_github_token should succeed");
-
-        // Verify file was created with correct content
-        let creds_path = temp_dir.join(".config").join("stax").join(".credentials");
-        assert!(creds_path.exists(), "Credentials file should exist");
-
-        let contents = fs::read_to_string(&creds_path).unwrap();
-        assert_eq!(contents, test_token);
-
-        // Verify permissions on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = fs::metadata(&creds_path).unwrap().permissions();
-            assert_eq!(
-                perms.mode() & 0o777,
-                0o600,
-                "File should have 600 permissions"
-            );
-        }
-
-        // Cleanup
-        let _ = fs::remove_dir_all(&temp_dir);
-        match orig_home {
-            Some(v) => env::set_var("HOME", v),
-            None => env::remove_var("HOME"),
-        }
-    }
-
-    #[test]
-    fn test_github_token_reads_from_credentials_file() {
-        // Save original values
-        let orig_home = env::var("HOME").ok();
-        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
-        let orig_github = env::var("GITHUB_TOKEN").ok();
-
-        // Create temp directory with credentials file
-        let temp_dir = std::env::temp_dir().join(format!("stax-test-read-{}", std::process::id()));
-        let config_dir = temp_dir.join(".config").join("stax");
-        fs::create_dir_all(&config_dir).unwrap();
-
-        let test_token = "ghp_file_token_67890";
-        fs::write(config_dir.join(".credentials"), test_token).unwrap();
-
-        // Override HOME and clear env vars
-        env::set_var("HOME", &temp_dir);
-        env::remove_var("STAX_GITHUB_TOKEN");
-        env::remove_var("GITHUB_TOKEN");
-
-        // Read token - should come from file
-        let token = Config::github_token();
-        assert_eq!(token, Some(test_token.to_string()));
-
-        // Cleanup
-        let _ = fs::remove_dir_all(&temp_dir);
-        match orig_home {
-            Some(v) => env::set_var("HOME", v),
-            None => env::remove_var("HOME"),
-        }
-        match orig_stax {
-            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-            None => env::remove_var("STAX_GITHUB_TOKEN"),
-        }
-        match orig_github {
-            Some(v) => env::set_var("GITHUB_TOKEN", v),
-            None => env::remove_var("GITHUB_TOKEN"),
-        }
-    }
-
-    #[test]
-    fn test_github_token_roundtrip() {
-        // Save original HOME
-        let orig_home = env::var("HOME").ok();
-
-        // Create temp directory with unique name including thread id
-        let thread_id = std::thread::current().id();
-        let temp_dir = std::env::temp_dir().join(format!(
-            "stax-test-roundtrip-{}-{:?}",
-            std::process::id(),
-            thread_id
-        ));
-        fs::create_dir_all(&temp_dir).unwrap();
-
-        // Override HOME
-        env::set_var("HOME", &temp_dir);
-
-        // Write token
-        let test_token = "ghp_roundtrip_token_abcdef";
-        Config::set_github_token(test_token).unwrap();
-
-        // Verify by reading file directly (avoids env var race conditions)
-        let creds_path = temp_dir.join(".config").join("stax").join(".credentials");
-        let contents = fs::read_to_string(&creds_path).unwrap();
-        assert_eq!(contents, test_token);
-
-        // Cleanup
-        let _ = fs::remove_dir_all(&temp_dir);
-        match orig_home {
-            Some(v) => env::set_var("HOME", v),
-            None => env::remove_var("HOME"),
-        }
-    }
-
-    #[test]
-    fn test_github_token_env_takes_priority_over_file() {
-        // Save original values
-        let orig_home = env::var("HOME").ok();
-        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
-        let orig_github = env::var("GITHUB_TOKEN").ok();
-
-        // Create temp directory with credentials file
-        let temp_dir =
-            std::env::temp_dir().join(format!("stax-test-priority-{}", std::process::id()));
-        let config_dir = temp_dir.join(".config").join("stax");
-        fs::create_dir_all(&config_dir).unwrap();
-
-        let file_token = "ghp_from_file";
-        let env_token = "ghp_from_env";
-        fs::write(config_dir.join(".credentials"), file_token).unwrap();
-
-        // Set HOME and env var
-        env::set_var("HOME", &temp_dir);
-        env::remove_var("STAX_GITHUB_TOKEN");
-        env::set_var("GITHUB_TOKEN", env_token);
-
-        // Env var should take priority over file
-        let token = Config::github_token();
-        assert_eq!(token, Some(env_token.to_string()));
-
-        // Cleanup
-        let _ = fs::remove_dir_all(&temp_dir);
-        match orig_home {
-            Some(v) => env::set_var("HOME", v),
-            None => env::remove_var("HOME"),
-        }
-        match orig_stax {
-            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-            None => env::remove_var("STAX_GITHUB_TOKEN"),
-        }
-        match orig_github {
-            Some(v) => env::set_var("GITHUB_TOKEN", v),
-            None => env::remove_var("GITHUB_TOKEN"),
-        }
-    }
-
-    #[test]
-    fn test_github_token_trims_whitespace_from_file() {
-        // Save original values
-        let orig_home = env::var("HOME").ok();
-        let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
-        let orig_github = env::var("GITHUB_TOKEN").ok();
-
-        // Create temp directory with credentials file containing whitespace
-        let temp_dir = std::env::temp_dir().join(format!("stax-test-trim-{}", std::process::id()));
-        let config_dir = temp_dir.join(".config").join("stax");
-        fs::create_dir_all(&config_dir).unwrap();
-
-        let token_with_whitespace = "  ghp_token_with_spaces  \n";
-        fs::write(config_dir.join(".credentials"), token_with_whitespace).unwrap();
-
-        // Override HOME and clear env vars
-        env::set_var("HOME", &temp_dir);
-        env::remove_var("STAX_GITHUB_TOKEN");
-        env::remove_var("GITHUB_TOKEN");
-
-        // Token should be trimmed
-        let token = Config::github_token();
-        assert_eq!(token, Some("ghp_token_with_spaces".to_string()));
-
-        // Cleanup
-        let _ = fs::remove_dir_all(&temp_dir);
-        match orig_home {
-            Some(v) => env::set_var("HOME", v),
-            None => env::remove_var("HOME"),
-        }
-        match orig_stax {
-            Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-            None => env::remove_var("STAX_GITHUB_TOKEN"),
-        }
-        match orig_github {
-            Some(v) => env::set_var("GITHUB_TOKEN", v),
-            None => env::remove_var("GITHUB_TOKEN"),
-        }
-    }
-}
+mod tests;
