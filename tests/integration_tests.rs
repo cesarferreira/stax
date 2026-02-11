@@ -346,6 +346,40 @@ impl TestRepo {
     }
 }
 
+fn configure_submit_remote(repo: &TestRepo) {
+    let remote_path = repo
+        .remote_path()
+        .expect("Expected remote path for repository with origin");
+    let remote_path_str = remote_path.to_string_lossy().to_string();
+
+    // Use a GitHub-like fetch URL (required by submit remote parsing) but keep local push URL.
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/test-owner/test-repo.git",
+    ]);
+    repo.git(&["remote", "set-url", "--push", "origin", &remote_path_str]);
+}
+
+fn list_remote_heads(repo: &TestRepo) -> Vec<String> {
+    let remote_path = repo
+        .remote_path()
+        .expect("Expected remote path for repository with origin");
+
+    let output = Command::new("git")
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+        .current_dir(remote_path)
+        .output()
+        .expect("Failed to read bare remote refs");
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 // =============================================================================
 // Test Infrastructure Tests
 // =============================================================================
@@ -1442,7 +1476,7 @@ fn test_repo_with_remote_setup() {
     );
 
     // main should exist on remote
-    let remote_branches = repo.list_remote_branches();
+    let remote_branches = list_remote_heads(&repo);
     assert!(remote_branches.contains(&"main".to_string()));
 }
 
@@ -1465,7 +1499,7 @@ fn test_push_branch_to_remote() {
     );
 
     // Branch should exist on remote
-    let remote_branches = repo.list_remote_branches();
+    let remote_branches = list_remote_heads(&repo);
     assert!(
         remote_branches.iter().any(|b| b.contains("feature-push")),
         "Expected feature-push on remote, got: {:?}",
@@ -1492,7 +1526,7 @@ fn test_push_multiple_branches_to_remote() {
     repo.git(&["push", "-u", "origin", &branch1]);
     repo.git(&["push", "-u", "origin", &branch2]);
 
-    let remote_branches = repo.list_remote_branches();
+    let remote_branches = list_remote_heads(&repo);
     assert!(
         remote_branches.iter().any(|b| b.contains("feature-1")),
         "Expected feature-1 on remote"
@@ -1675,6 +1709,262 @@ fn test_submit_without_remote_fails_gracefully() {
     // Submit should fail since there's no remote
     let output = repo.run_stax(&["submit", "--no-pr", "--yes"]);
     assert!(!output.status.success());
+}
+
+#[test]
+fn test_branch_submit_no_pr_pushes_only_current_branch() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+
+    repo.run_stax(&["bc", "scope-a"]);
+    let branch_a = repo.current_branch();
+    repo.create_file("a.txt", "a");
+    repo.commit("A commit");
+
+    repo.run_stax(&["t"]);
+    repo.run_stax(&["bc", "scope-b"]);
+    repo.create_file("b.txt", "b");
+    repo.commit("B commit");
+
+    repo.run_stax(&["checkout", &branch_a]);
+
+    let output = repo.run_stax(&["branch", "submit", "--no-pr", "--yes"]);
+    assert!(
+        output.status.success(),
+        "branch submit failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let remote_branches = list_remote_heads(&repo);
+    assert!(
+        remote_branches
+            .iter()
+            .any(|b| b == &branch_a || b.contains("scope-a")),
+        "Expected scope-a branch on remote: {:?}",
+        remote_branches
+    );
+    assert!(
+        !remote_branches.iter().any(|b| b.contains("scope-b")),
+        "scope-b should not be submitted by branch submit"
+    );
+}
+
+#[test]
+fn test_downstack_submit_no_pr_pushes_ancestors_and_current() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+
+    repo.run_stax(&["bc", "ds-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent");
+    repo.commit("Parent commit");
+
+    repo.run_stax(&["bc", "ds-middle"]);
+    let middle = repo.current_branch();
+    repo.create_file("middle.txt", "middle");
+    repo.commit("Middle commit");
+
+    repo.run_stax(&["bc", "ds-leaf"]);
+    let leaf = repo.current_branch();
+    repo.create_file("leaf.txt", "leaf");
+    repo.commit("Leaf commit");
+
+    repo.run_stax(&["checkout", &middle]);
+    let output = repo.run_stax(&["downstack", "submit", "--no-pr", "--yes"]);
+    assert!(
+        output.status.success(),
+        "downstack submit failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let remote_branches = list_remote_heads(&repo);
+    assert!(
+        remote_branches
+            .iter()
+            .any(|b| b == &parent || b.contains("ds-parent")),
+        "Expected parent on remote: {:?}",
+        remote_branches
+    );
+    assert!(
+        remote_branches
+            .iter()
+            .any(|b| b == &middle || b.contains("ds-middle")),
+        "Expected middle on remote: {:?}",
+        remote_branches
+    );
+    assert!(
+        !remote_branches
+            .iter()
+            .any(|b| b == &leaf || b.contains("ds-leaf")),
+        "Leaf should not be submitted by downstack submit from middle"
+    );
+}
+
+#[test]
+fn test_upstack_submit_no_pr_pushes_current_and_descendants() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+
+    repo.run_stax(&["bc", "us-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent");
+    repo.commit("Parent commit");
+    repo.git(&["push", "-u", "origin", &parent]);
+
+    repo.run_stax(&["bc", "us-middle"]);
+    let middle = repo.current_branch();
+    repo.create_file("middle.txt", "middle");
+    repo.commit("Middle commit");
+
+    repo.run_stax(&["bc", "us-leaf"]);
+    let leaf = repo.current_branch();
+    repo.create_file("leaf.txt", "leaf");
+    repo.commit("Leaf commit");
+
+    repo.run_stax(&["checkout", &middle]);
+    let output = repo.run_stax(&["upstack", "submit", "--no-pr", "--yes"]);
+    assert!(
+        output.status.success(),
+        "upstack submit failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let remote_branches = list_remote_heads(&repo);
+    assert!(
+        remote_branches
+            .iter()
+            .any(|b| b == &middle || b.contains("us-middle")),
+        "Expected middle on remote: {:?}",
+        remote_branches
+    );
+    assert!(
+        remote_branches
+            .iter()
+            .any(|b| b == &leaf || b.contains("us-leaf")),
+        "Expected leaf on remote: {:?}",
+        remote_branches
+    );
+    assert!(
+        remote_branches
+            .iter()
+            .any(|b| b == &parent || b.contains("us-parent")),
+        "Expected parent branch to remain on remote after pre-push: {:?}",
+        remote_branches
+    );
+}
+
+#[test]
+fn test_submit_no_pr_still_pushes_full_current_stack() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+
+    repo.run_stax(&["bc", "stack-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent");
+    repo.commit("Parent commit");
+
+    repo.run_stax(&["bc", "stack-middle"]);
+    let middle = repo.current_branch();
+    repo.create_file("middle.txt", "middle");
+    repo.commit("Middle commit");
+
+    repo.run_stax(&["bc", "stack-leaf"]);
+    let leaf = repo.current_branch();
+    repo.create_file("leaf.txt", "leaf");
+    repo.commit("Leaf commit");
+
+    repo.run_stax(&["checkout", &middle]);
+    let output = repo.run_stax(&["submit", "--no-pr", "--yes"]);
+    assert!(
+        output.status.success(),
+        "submit failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let remote_branches = list_remote_heads(&repo);
+    assert!(
+        remote_branches
+            .iter()
+            .any(|b| b == &parent || b.contains("stack-parent")),
+        "Expected parent on remote: {:?}",
+        remote_branches
+    );
+    assert!(
+        remote_branches
+            .iter()
+            .any(|b| b == &middle || b.contains("stack-middle")),
+        "Expected middle on remote: {:?}",
+        remote_branches
+    );
+    assert!(
+        remote_branches
+            .iter()
+            .any(|b| b == &leaf || b.contains("stack-leaf")),
+        "Expected leaf on remote: {:?}",
+        remote_branches
+    );
+}
+
+#[test]
+fn test_branch_submit_on_trunk_fails_with_actionable_message() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+
+    let output = repo.run_stax(&["branch", "submit", "--no-pr", "--yes"]);
+    assert!(
+        !output.status.success(),
+        "branch submit on trunk should fail"
+    );
+
+    let combined = format!(
+        "{}\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        combined.contains("Cannot submit trunk") && combined.contains("stax submit"),
+        "Expected actionable trunk failure message, got: {}",
+        combined
+    );
+}
+
+#[test]
+fn test_branch_submit_fails_when_parent_not_synced() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+
+    repo.run_stax(&["bc", "sync-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent");
+    repo.commit("Parent commit");
+    repo.git(&["push", "-u", "origin", &parent]);
+
+    repo.run_stax(&["bc", "sync-child"]);
+    let child = repo.current_branch();
+    repo.create_file("child.txt", "child");
+    repo.commit("Child commit");
+
+    repo.run_stax(&["checkout", &parent]);
+    repo.create_file("parent-local-only.txt", "local only");
+    repo.commit("Parent local-only commit");
+
+    repo.run_stax(&["checkout", &child]);
+    let output = repo.run_stax(&["branch", "submit", "--no-pr", "--yes"]);
+    assert!(
+        !output.status.success(),
+        "Expected scoped submit safety failure"
+    );
+
+    let combined = format!(
+        "{}\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        combined.contains("downstack submit") || combined.contains("stax submit"),
+        "Expected actionable message with ancestor scope suggestion, got: {}",
+        combined
+    );
 }
 
 #[test]

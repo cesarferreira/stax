@@ -10,10 +10,29 @@ use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Editor, Input, Select};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitScope {
+    Branch,
+    Downstack,
+    Upstack,
+    Stack,
+}
+
+impl SubmitScope {
+    fn label(self) -> &'static str {
+        match self {
+            SubmitScope::Branch => "branch",
+            SubmitScope::Downstack => "downstack",
+            SubmitScope::Upstack => "upstack",
+            SubmitScope::Stack => "stack",
+        }
+    }
+}
 
 struct PrPlan {
     branch: String,
@@ -32,6 +51,7 @@ struct PrPlan {
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
+    scope: SubmitScope,
     draft: bool,
     no_pr: bool,
     _force: bool, // kept for CLI compatibility
@@ -55,14 +75,16 @@ pub fn run(
     // Track if --draft was explicitly passed (we'll ask interactively if not)
     let draft_flag_set = draft;
 
-    // Get branches in current stack (excluding trunk)
-    let stack_branches: Vec<String> = stack
-        .current_stack(&current)
-        .into_iter()
-        .filter(|b| b != &stack.trunk)
-        .collect();
+    if matches!(scope, SubmitScope::Branch) && current == stack.trunk {
+        anyhow::bail!(
+            "Cannot submit trunk '{}' as a single branch.\n\
+             Checkout a tracked branch and run `stax branch submit`, or run `stax submit` for the whole stack.",
+            stack.trunk
+        );
+    }
 
-    if stack_branches.is_empty() {
+    let branches_to_submit = resolve_branches_for_scope(&stack, &current, scope);
+    if branches_to_submit.is_empty() {
         if !quiet {
             println!("{}", "No tracked branches to submit.".yellow());
         }
@@ -71,11 +93,11 @@ pub fn run(
 
     // Validation phase
     if !quiet {
-        println!("{}", "Submitting stack...".bold());
+        println!("{} {}...", "Submitting".bold(), scope.label().bold());
     }
 
     // Check for needs restack - show warning but continue (like fp)
-    let needs_restack: Vec<_> = stack_branches
+    let needs_restack: Vec<_> = branches_to_submit
         .iter()
         .filter(|b| {
             stack
@@ -93,7 +115,7 @@ pub fn run(
     }
 
     // Check for branches with no changes (empty branches)
-    let empty_branches: Vec<_> = stack_branches
+    let empty_branches: Vec<_> = branches_to_submit
         .iter()
         .filter(|b| {
             if let Some(branch_info) = stack.branches.get(*b) {
@@ -110,23 +132,13 @@ pub fn run(
         .collect();
 
     // Empty branches will be pushed but won't get PRs created
-    let empty_set: std::collections::HashSet<_> = empty_branches.iter().cloned().collect();
+    let empty_set: HashSet<_> = empty_branches.iter().cloned().collect();
 
     if !empty_branches.is_empty() && !quiet {
         println!("  {} Empty branches (will push, skip PR):", "!".yellow());
         for b in &empty_branches {
             println!("    {}", b.dimmed());
         }
-    }
-
-    // Submit all branches in the stack
-    let branches_to_submit = stack_branches.clone();
-
-    if branches_to_submit.is_empty() {
-        if !quiet {
-            println!("{}", "No branches to submit.".yellow());
-        }
-        return Ok(());
     }
 
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
@@ -170,153 +182,261 @@ pub fn run(
         );
     }
 
+    if matches!(scope, SubmitScope::Branch | SubmitScope::Upstack) {
+        validate_narrow_scope_submit(
+            scope,
+            &repo,
+            &stack,
+            &current,
+            &remote_info.name,
+            &branches_to_submit,
+        )?;
+    }
+
     // Build plan - determine which PRs need create vs update
     if !quiet {
         print!("  Planning PR operations... ");
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
 
-    let rt = tokio::runtime::Runtime::new()?;
-    let client = rt.block_on(async {
-        GitHubClient::new(&owner, &repo_name, remote_info.api_base_url.clone())
-    })?;
-
     let mut plans: Vec<PrPlan> = Vec::new();
-    let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
+    let mut rt: Option<tokio::runtime::Runtime> = None;
+    let mut client: Option<GitHubClient> = None;
 
-    for branch in &branches_to_submit {
-        let meta = BranchMetadata::read(repo.inner(), branch)?
-            .context(format!("No metadata for branch {}", branch))?;
-
-        let is_empty = empty_set.contains(branch);
-
-        // Check if PR exists (skip for empty branches)
-        let mut existing_pr: Option<PrInfoWithHead> = None;
-        if !is_empty {
-            if verbose && !quiet {
-                println!("    Checking PR for {}", branch.cyan());
-            }
-
-            if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
-                if verbose && !quiet {
-                    println!("      Using metadata PR #{}", pr_info.number);
-                }
-
-                match rt.block_on(async { client.get_pr_with_head(pr_info.number).await }) {
-                    Ok(pr) => {
-                        if pr.head == *branch && pr.info.state == "Open" {
-                            existing_pr = Some(pr);
-                        } else if verbose && !quiet {
-                            println!(
-                                "      PR #{} head '{}' does not match '{}', falling back",
-                                pr_info.number, pr.head, branch
-                            );
-                        }
-                    }
-                    Err(_) => {
-                        if verbose && !quiet {
-                            println!(
-                                "      Failed to fetch PR #{} from metadata, falling back",
-                                pr_info.number
-                            );
-                        }
-                    }
-                }
-            }
-
-            if existing_pr.is_none() {
-                if open_prs_by_head.is_none() {
-                    if verbose && !quiet {
-                        println!("      Listing open PRs...");
-                    }
-                    let prs = rt.block_on(async { client.list_open_prs_by_head().await })?;
-                    if verbose && !quiet {
-                        println!("      Cached {} open PRs", prs.len());
-                    }
-                    open_prs_by_head = Some(prs);
-                }
-                if let Some(map) = &open_prs_by_head {
-                    existing_pr = map.get(branch).cloned();
-                    if verbose && !quiet {
-                        if let Some(found) = &existing_pr {
-                            println!("      Found open PR #{} in list", found.info.number);
-                        } else {
-                            println!("      No open PR found in list");
-                        }
-                    }
-                }
-            }
-        } else if verbose && !quiet {
-            println!("    Empty branch {}, skipping PR lookup", branch.cyan());
-        }
-        let pr_number = existing_pr.as_ref().map(|p| p.info.number);
-
-        if let Some(pr) = &existing_pr {
-            let owner_matches = pr
-                .head_label
-                .as_ref()
-                .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
-                .map(|owner| owner == remote_info.owner())
-                .unwrap_or(false);
-
-            let needs_meta_update = meta
-                .pr_info
-                .as_ref()
-                .map(|info| {
-                    info.number != pr.info.number
-                        || info.state != pr.info.state
-                        || info.is_draft.unwrap_or(false) != pr.info.is_draft
+    if no_pr {
+        let runtime = tokio::runtime::Runtime::new().ok();
+        let gh_client = runtime.as_ref().and_then(|runtime| {
+            runtime
+                .block_on(async {
+                    GitHubClient::new(&owner, &repo_name, remote_info.api_base_url.clone())
                 })
-                .unwrap_or(true);
+                .ok()
+        });
+        let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
 
-            if needs_meta_update && owner_matches {
-                let updated_meta = BranchMetadata {
-                    pr_info: Some(crate::engine::metadata::PrInfo {
-                        number: pr.info.number,
-                        state: pr.info.state.clone(),
-                        is_draft: Some(pr.info.is_draft),
-                    }),
-                    ..meta.clone()
-                };
-                updated_meta.write(repo.inner(), branch)?;
-                if verbose && !quiet {
-                    println!("      Cached PR #{} in metadata", pr.info.number);
+        for branch in &branches_to_submit {
+            let mut meta = BranchMetadata::read(repo.inner(), branch)?
+                .context(format!("No metadata for branch {}", branch))?;
+            let is_empty = empty_set.contains(branch);
+            let needs_push = branch_needs_push(repo.workdir()?, &remote_info.name, branch);
+            let mut existing_pr = None;
+
+            // Best-effort metadata refresh when no-pr is used.
+            if !is_empty {
+                if let (Some(runtime), Some(gh_client)) = (runtime.as_ref(), gh_client.as_ref()) {
+                    let mut found_pr: Option<PrInfoWithHead> = None;
+
+                    if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+                        found_pr = runtime
+                            .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
+                            .ok();
+                    }
+
+                    if found_pr.is_none() {
+                        if open_prs_by_head.is_none() {
+                            open_prs_by_head = runtime
+                                .block_on(async { gh_client.list_open_prs_by_head().await })
+                                .ok();
+                        }
+                        if let Some(map) = &open_prs_by_head {
+                            found_pr = map.get(branch).cloned();
+                        }
+                    }
+
+                    if let Some(pr) = found_pr {
+                        existing_pr = Some(pr.info.number);
+                        let owner_matches = pr
+                            .head_label
+                            .as_ref()
+                            .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
+                            .map(|owner| owner == remote_info.owner())
+                            .unwrap_or(false);
+
+                        let needs_meta_update = meta
+                            .pr_info
+                            .as_ref()
+                            .map(|info| {
+                                info.number != pr.info.number
+                                    || info.state != pr.info.state
+                                    || info.is_draft.unwrap_or(false) != pr.info.is_draft
+                            })
+                            .unwrap_or(true);
+
+                        if needs_meta_update && owner_matches {
+                            meta = BranchMetadata {
+                                pr_info: Some(crate::engine::metadata::PrInfo {
+                                    number: pr.info.number,
+                                    state: pr.info.state.clone(),
+                                    is_draft: Some(pr.info.is_draft),
+                                }),
+                                ..meta
+                            };
+                            meta.write(repo.inner(), branch)?;
+                        }
+                    }
                 }
-            } else if needs_meta_update && verbose && !quiet {
-                println!(
-                    "      Skipped caching PR #{} (fork or unknown owner)",
-                    pr.info.number
-                );
             }
+
+            plans.push(PrPlan {
+                branch: branch.clone(),
+                parent: meta.parent_branch_name,
+                existing_pr,
+                title: None,
+                body: None,
+                is_draft: None,
+                needs_push,
+                needs_pr_update: false,
+                is_empty,
+            });
+        }
+    } else {
+        let runtime = tokio::runtime::Runtime::new()?;
+        let gh_client = runtime.block_on(async {
+            GitHubClient::new(&owner, &repo_name, remote_info.api_base_url.clone())
+        })?;
+        let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
+
+        for branch in &branches_to_submit {
+            let meta = BranchMetadata::read(repo.inner(), branch)?
+                .context(format!("No metadata for branch {}", branch))?;
+
+            let is_empty = empty_set.contains(branch);
+
+            // Check if PR exists (skip for empty branches)
+            let mut existing_pr: Option<PrInfoWithHead> = None;
+            if !is_empty {
+                if verbose && !quiet {
+                    println!("    Checking PR for {}", branch.cyan());
+                }
+
+                if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+                    if verbose && !quiet {
+                        println!("      Using metadata PR #{}", pr_info.number);
+                    }
+
+                    match runtime
+                        .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
+                    {
+                        Ok(pr) => {
+                            if pr.head == *branch && pr.info.state == "Open" {
+                                existing_pr = Some(pr);
+                            } else if verbose && !quiet {
+                                println!(
+                                    "      PR #{} head '{}' does not match '{}', falling back",
+                                    pr_info.number, pr.head, branch
+                                );
+                            }
+                        }
+                        Err(_) => {
+                            if verbose && !quiet {
+                                println!(
+                                    "      Failed to fetch PR #{} from metadata, falling back",
+                                    pr_info.number
+                                );
+                            }
+                        }
+                    }
+                }
+
+                if existing_pr.is_none() {
+                    if open_prs_by_head.is_none() {
+                        if verbose && !quiet {
+                            println!("      Listing open PRs...");
+                        }
+                        let prs =
+                            runtime.block_on(async { gh_client.list_open_prs_by_head().await })?;
+                        if verbose && !quiet {
+                            println!("      Cached {} open PRs", prs.len());
+                        }
+                        open_prs_by_head = Some(prs);
+                    }
+                    if let Some(map) = &open_prs_by_head {
+                        existing_pr = map.get(branch).cloned();
+                        if verbose && !quiet {
+                            if let Some(found) = &existing_pr {
+                                println!("      Found open PR #{} in list", found.info.number);
+                            } else {
+                                println!("      No open PR found in list");
+                            }
+                        }
+                    }
+                }
+            } else if verbose && !quiet {
+                println!("    Empty branch {}, skipping PR lookup", branch.cyan());
+            }
+            let pr_number = existing_pr.as_ref().map(|p| p.info.number);
+
+            if let Some(pr) = &existing_pr {
+                let owner_matches = pr
+                    .head_label
+                    .as_ref()
+                    .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
+                    .map(|owner| owner == remote_info.owner())
+                    .unwrap_or(false);
+
+                let needs_meta_update = meta
+                    .pr_info
+                    .as_ref()
+                    .map(|info| {
+                        info.number != pr.info.number
+                            || info.state != pr.info.state
+                            || info.is_draft.unwrap_or(false) != pr.info.is_draft
+                    })
+                    .unwrap_or(true);
+
+                if needs_meta_update && owner_matches {
+                    let updated_meta = BranchMetadata {
+                        pr_info: Some(crate::engine::metadata::PrInfo {
+                            number: pr.info.number,
+                            state: pr.info.state.clone(),
+                            is_draft: Some(pr.info.is_draft),
+                        }),
+                        ..meta.clone()
+                    };
+                    updated_meta.write(repo.inner(), branch)?;
+                    if verbose && !quiet {
+                        println!("      Cached PR #{} in metadata", pr.info.number);
+                    }
+                } else if needs_meta_update && verbose && !quiet {
+                    println!(
+                        "      Skipped caching PR #{} (fork or unknown owner)",
+                        pr.info.number
+                    );
+                }
+            }
+
+            // Determine the base branch for PR
+            let base = meta.parent_branch_name.clone();
+
+            // Check if we actually need to push
+            let needs_push = branch_needs_push(repo.workdir()?, &remote_info.name, branch);
+
+            // Check if PR base needs updating (not for empty branches)
+            let needs_pr_update = if is_empty {
+                false
+            } else if let Some(pr) = &existing_pr {
+                pr.info.base != base || needs_push
+            } else {
+                true // New PR always needs creation
+            };
+
+            plans.push(PrPlan {
+                branch: branch.clone(),
+                parent: base,
+                existing_pr: pr_number,
+                title: None,
+                body: None,
+                is_draft: None,
+                needs_push,
+                needs_pr_update,
+                is_empty,
+            });
         }
 
-        // Determine the base branch for PR
-        let base = meta.parent_branch_name.clone();
-
-        // Check if we actually need to push
-        let needs_push = branch_needs_push(repo.workdir()?, &remote_info.name, branch);
-
-        // Check if PR base needs updating (not for empty branches)
-        let needs_pr_update = if is_empty {
-            false
-        } else if let Some(pr) = &existing_pr {
-            pr.info.base != base || needs_push
-        } else {
-            true // New PR always needs creation
-        };
-
-        plans.push(PrPlan {
-            branch: branch.clone(),
-            parent: base,
-            existing_pr: pr_number,
-            title: None,
-            body: None,
-            is_draft: None,
-            needs_push,
-            needs_pr_update,
-            is_empty,
-        });
+        rt = Some(runtime);
+        client = Some(gh_client);
     }
+
     if !quiet {
         println!("{}", "done".green());
     }
@@ -597,6 +717,9 @@ pub fn run(
         println!("{}", "Processing PRs...".bold());
     }
 
+    let rt = rt.context("Internal error: missing runtime for PR submission")?;
+    let client = client.context("Internal error: missing GitHub client for PR submission")?;
+
     rt.block_on(async {
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();
 
@@ -761,6 +884,94 @@ fn push_branch(workdir: &std::path::Path, remote: &str, branch: &str) -> Result<
     Ok(())
 }
 
+fn resolve_branches_for_scope(stack: &Stack, current: &str, scope: SubmitScope) -> Vec<String> {
+    let branches = match scope {
+        SubmitScope::Stack => stack.current_stack(current),
+        SubmitScope::Downstack => {
+            let mut ancestors = stack.ancestors(current);
+            ancestors.reverse();
+            ancestors.push(current.to_string());
+            ancestors
+        }
+        SubmitScope::Upstack => {
+            let mut upstack = vec![current.to_string()];
+            upstack.extend(stack.descendants(current));
+            upstack
+        }
+        SubmitScope::Branch => vec![current.to_string()],
+    };
+
+    branches
+        .into_iter()
+        .filter(|branch| branch != &stack.trunk)
+        .collect()
+}
+
+fn validate_narrow_scope_submit(
+    scope: SubmitScope,
+    repo: &GitRepo,
+    stack: &Stack,
+    current: &str,
+    remote_name: &str,
+    branches_to_submit: &[String],
+) -> Result<()> {
+    if matches!(scope, SubmitScope::Branch) && current == stack.trunk {
+        anyhow::bail!(
+            "Cannot submit trunk '{}' as a single branch.\n\
+             Checkout a tracked branch and run `stax branch submit`, or run `stax submit` for the whole stack.",
+            stack.trunk
+        );
+    }
+
+    let current_meta = BranchMetadata::read(repo.inner(), current)?;
+    if current != stack.trunk && current_meta.is_none() {
+        anyhow::bail!(
+            "Branch '{}' is not tracked by stax.\n\
+             Use `stax branch track --parent <branch>` (or `stax branch reparent`) and retry.",
+            current
+        );
+    }
+
+    let submitted: HashSet<&str> = branches_to_submit.iter().map(String::as_str).collect();
+
+    for branch in branches_to_submit {
+        let meta = BranchMetadata::read(repo.inner(), branch)?
+            .context(format!("No metadata for branch {}", branch))?;
+        let parent = meta.parent_branch_name;
+
+        if parent == stack.trunk || submitted.contains(parent.as_str()) {
+            continue;
+        }
+
+        let needs_restack = stack
+            .branches
+            .get(branch)
+            .map(|b| b.needs_restack)
+            .unwrap_or(false);
+        if needs_restack {
+            anyhow::bail!(
+                "Branch '{}' needs restack before scoped submit.\n\
+                 Run `stax restack` or submit with ancestor scope: `stax downstack submit` / `stax submit`.",
+                branch
+            );
+        }
+
+        if !branch_matches_remote(repo.workdir()?, remote_name, &parent) {
+            anyhow::bail!(
+                "Parent branch '{}' is not in sync with '{}/{}'.\n\
+                 Narrow scope submit for '{}' is unsafe because its parent is excluded.\n\
+                 Run `stax downstack submit` or `stax submit` to include ancestors first.",
+                parent,
+                remote_name,
+                parent,
+                branch
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Check if a branch needs to be pushed (local differs from remote)
 fn branch_needs_push(workdir: &Path, remote: &str, branch: &str) -> bool {
     // Get local commit
@@ -786,6 +997,30 @@ fn branch_needs_push(workdir: &Path, remote: &str, branch: &str) -> bool {
         (Some(l), Some(r)) => l != r, // Need push if different
         (Some(_), None) => true,      // Branch not on remote yet
         _ => true,                    // Default to push if unsure
+    }
+}
+
+fn branch_matches_remote(workdir: &Path, remote: &str, branch: &str) -> bool {
+    let local = Command::new("git")
+        .args(["rev-parse", branch])
+        .current_dir(workdir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+    let remote_ref = format!("{}/{}", remote, branch);
+    let remote_commit = Command::new("git")
+        .args(["rev-parse", &remote_ref])
+        .current_dir(workdir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+    match (local, remote_commit) {
+        (Some(l), Some(r)) => l == r,
+        _ => false,
     }
 }
 

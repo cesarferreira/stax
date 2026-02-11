@@ -11,7 +11,7 @@ mod tui;
 mod update;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use config::Config;
 
 #[derive(Parser)]
@@ -21,6 +21,49 @@ use config::Config;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+#[derive(Args, Clone)]
+struct SubmitOptions {
+    /// Create PRs as drafts
+    #[arg(short, long)]
+    draft: bool,
+    /// Only push, don't create/update PRs
+    #[arg(long)]
+    no_pr: bool,
+    /// Skip restack check and submit anyway
+    #[arg(short, long)]
+    force: bool,
+    /// Auto-approve prompts
+    #[arg(long)]
+    yes: bool,
+    /// Disable interactive prompts (use defaults)
+    #[arg(long)]
+    no_prompt: bool,
+    /// Assign reviewers (comma-separated or repeat)
+    #[arg(long, value_delimiter = ',')]
+    reviewers: Vec<String>,
+    /// Add labels (comma-separated or repeat)
+    #[arg(long, value_delimiter = ',')]
+    labels: Vec<String>,
+    /// Assign users (comma-separated or repeat)
+    #[arg(long, value_delimiter = ',')]
+    assignees: Vec<String>,
+    /// Suppress extra output
+    #[arg(long)]
+    quiet: bool,
+    /// Show detailed output
+    #[arg(short, long)]
+    verbose: bool,
+    /// Specify template by name (skip picker)
+    #[arg(long)]
+    template: Option<String>,
+    /// Skip template selection (no template)
+    #[arg(long)]
+    no_template: bool,
+    /// Always open editor for PR body
+    #[arg(long)]
+    edit: bool,
 }
 
 #[derive(Subcommand)]
@@ -88,45 +131,8 @@ enum Commands {
     /// Submit stack - push branches and create/update PRs
     #[command(visible_alias = "ss")]
     Submit {
-        /// Create PRs as drafts
-        #[arg(short, long)]
-        draft: bool,
-        /// Only push, don't create/update PRs
-        #[arg(long)]
-        no_pr: bool,
-        /// Skip restack check and submit anyway
-        #[arg(short, long)]
-        force: bool,
-        /// Auto-approve prompts
-        #[arg(long)]
-        yes: bool,
-        /// Disable interactive prompts (use defaults)
-        #[arg(long)]
-        no_prompt: bool,
-        /// Assign reviewers (comma-separated or repeat)
-        #[arg(long, value_delimiter = ',')]
-        reviewers: Vec<String>,
-        /// Add labels (comma-separated or repeat)
-        #[arg(long, value_delimiter = ',')]
-        labels: Vec<String>,
-        /// Assign users (comma-separated or repeat)
-        #[arg(long, value_delimiter = ',')]
-        assignees: Vec<String>,
-        /// Suppress extra output
-        #[arg(long)]
-        quiet: bool,
-        /// Show detailed output
-        #[arg(short, long)]
-        verbose: bool,
-        /// Specify template by name (skip picker)
-        #[arg(long)]
-        template: Option<String>,
-        /// Skip template selection (no template)
-        #[arg(long)]
-        no_template: bool,
-        /// Always open editor for PR body
-        #[arg(long)]
-        edit: bool,
+        #[command(flatten)]
+        submit: SubmitOptions,
     },
 
     /// Merge PRs from bottom of stack up to current branch
@@ -602,18 +608,55 @@ enum BranchCommands {
 
     /// Move to the bottom of the stack (first branch above trunk)
     Bottom,
+
+    /// Submit the current branch only
+    Submit {
+        #[command(flatten)]
+        submit: SubmitOptions,
+    },
 }
 
 #[derive(Subcommand)]
 enum UpstackCommands {
     /// Restack all branches above current
     Restack,
+
+    /// Submit current branch and descendants
+    Submit {
+        #[command(flatten)]
+        submit: SubmitOptions,
+    },
 }
 
 #[derive(Subcommand)]
 enum DownstackCommands {
     /// Show branches below current
     Get,
+
+    /// Submit ancestors and current branch
+    Submit {
+        #[command(flatten)]
+        submit: SubmitOptions,
+    },
+}
+
+fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Result<()> {
+    commands::submit::run(
+        scope,
+        submit.draft,
+        submit.no_pr,
+        submit.force,
+        submit.yes,
+        submit.no_prompt,
+        submit.reviewers,
+        submit.labels,
+        submit.assignees,
+        submit.quiet,
+        submit.verbose,
+        submit.template,
+        submit.no_template,
+        submit.edit,
+    )
 }
 
 fn main() -> Result<()> {
@@ -683,35 +726,7 @@ fn main() -> Result<()> {
             compact,
             quiet,
         } => commands::log::run(json, stack, current, compact, quiet),
-        Commands::Submit {
-            draft,
-            no_pr,
-            force,
-            yes,
-            no_prompt,
-            reviewers,
-            labels,
-            assignees,
-            quiet,
-            verbose,
-            template,
-            no_template,
-            edit,
-        } => commands::submit::run(
-            draft,
-            no_pr,
-            force,
-            yes,
-            no_prompt,
-            reviewers,
-            labels,
-            assignees,
-            quiet,
-            verbose,
-            template,
-            no_template,
-            edit,
-        ),
+        Commands::Submit { submit } => run_submit(submit, commands::submit::SubmitScope::Stack),
         Commands::Merge {
             all,
             dry_run,
@@ -855,13 +870,22 @@ fn main() -> Result<()> {
             BranchCommands::Down { count } => commands::navigate::down(count),
             BranchCommands::Top => commands::navigate::top(),
             BranchCommands::Bottom => commands::navigate::bottom(),
+            BranchCommands::Submit { submit } => {
+                run_submit(submit, commands::submit::SubmitScope::Branch)
+            }
         },
         Commands::Upstack(cmd) => match cmd {
             UpstackCommands::Restack => commands::upstack::restack::run(),
+            UpstackCommands::Submit { submit } => {
+                run_submit(submit, commands::submit::SubmitScope::Upstack)
+            }
         },
         Commands::Downstack(cmd) => match cmd {
             DownstackCommands::Get => {
                 commands::status::run(false, None, false, false, false, false)
+            }
+            DownstackCommands::Submit { submit } => {
+                run_submit(submit, commands::submit::SubmitScope::Downstack)
             }
         },
         // Hidden shortcuts

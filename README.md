@@ -631,6 +631,9 @@ stax uses the same metadata format as freephite and supports similar commands:
 | freephite | stax | graphite | stax |
 |-----------|------|----------|------|
 | `fp ss` | `stax ss` | `gt submit` | `stax submit` |
+| `fp bs` | `stax branch submit` | `gt branch submit` | `stax branch submit` |
+| `fp us submit` | `stax upstack submit` | `gt upstack submit` | `stax upstack submit` |
+| `fp ds submit` | `stax downstack submit` | `gt downstack submit` | `stax downstack submit` |
 | `fp rs` | `stax rs` | `gt sync` | `stax sync` |
 | `fp bc` | `stax bc` | `gt create` | `stax create` |
 | `fp bco` | `stax bco` | `gt checkout` | `stax co` |
@@ -695,7 +698,7 @@ stax submit --edit             # Force editor open
 |---------|-------|-------------|
 | `stax status` | `s`, `ls` | Show stack (simple view) |
 | `stax log` | `l` | Show stack with commits and PR info |
-| `stax submit` | `ss` | Push and create/update PRs |
+| `stax submit` | `ss` | Submit full current stack (ancestors + current + descendants) |
 | `stax merge` | | Merge PRs from bottom of stack to current |
 | `stax sync` | `rs` | Pull trunk, delete merged branches |
 | `stax restack` | | Rebase current branch onto parent |
@@ -713,9 +716,12 @@ stax submit --edit             # Force editor open
 | `stax branch track --all-prs` | | Track all your open PRs |
 | `stax branch untrack` | `ut` | Remove stax metadata for a branch (keep git branch) |
 | `stax branch reparent` | | Change parent of a branch |
+| `stax branch submit` | | Submit only current branch |
 | `stax branch delete` | | Delete a branch |
 | `stax branch fold` | | Fold branch into parent |
 | `stax branch squash` | | Squash commits on branch |
+| `stax upstack submit` | | Submit current branch + descendants |
+| `stax downstack submit` | | Submit ancestors + current branch |
 
 ### Navigation
 | Command | Alias | Description |
@@ -771,6 +777,9 @@ stax submit --edit             # Force editor open
 - `stax rename new-name` - Rename current branch
 - `stax rename -e` - Rename and edit commit message
 - `stax submit --draft` - Create PRs as drafts
+- `stax branch submit` - Submit current branch only
+- `stax upstack submit` - Submit current branch and descendants
+- `stax downstack submit` - Submit ancestors and current branch
 - `stax submit --yes` - Auto-approve prompts
 - `stax submit --no-prompt` - Use defaults, skip interactive prompts
 - `stax submit --template <name>` - Use specific template by name (skip picker)

@@ -48,6 +48,9 @@ stax co <branch>      # Checkout specific branch
 ```bash
 stax ss               # Submit stack - push and create/update PRs
 stax submit           # Same as ss
+stax branch submit    # Submit only current branch
+stax upstack submit   # Submit current branch + descendants
+stax downstack submit # Submit ancestors + current branch
 stax ss --draft       # Create PRs as drafts
 stax ss --reviewers alice,bob    # Add reviewers
 stax ss --labels bug,urgent      # Add labels

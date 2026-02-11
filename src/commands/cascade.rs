@@ -24,6 +24,7 @@ pub fn run(no_submit: bool, no_pr: bool) -> Result<()> {
 
     if !no_submit {
         commands::submit::run(
+            commands::submit::SubmitScope::Stack,
             false,  // draft
             no_pr,  // no_pr
             false,  // _force
