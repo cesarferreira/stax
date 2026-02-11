@@ -49,6 +49,7 @@ stax co <branch>      # Checkout specific branch
 stax ss               # Submit stack - push and create/update PRs
 stax submit           # Same as ss
 stax branch submit    # Submit only current branch
+stax bs               # Alias for branch submit
 stax upstack submit   # Submit current branch + descendants
 stax downstack submit # Submit ancestors + current branch
 stax ss --draft       # Create PRs as drafts

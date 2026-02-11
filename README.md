@@ -716,7 +716,7 @@ stax submit --edit             # Force editor open
 | `stax branch track --all-prs` | | Track all your open PRs |
 | `stax branch untrack` | `ut` | Remove stax metadata for a branch (keep git branch) |
 | `stax branch reparent` | | Change parent of a branch |
-| `stax branch submit` | | Submit only current branch |
+| `stax branch submit` | `bs` | Submit only current branch |
 | `stax branch delete` | | Delete a branch |
 | `stax branch fold` | | Fold branch into parent |
 | `stax branch squash` | | Squash commits on branch |
@@ -777,7 +777,7 @@ stax submit --edit             # Force editor open
 - `stax rename new-name` - Rename current branch
 - `stax rename -e` - Rename and edit commit message
 - `stax submit --draft` - Create PRs as drafts
-- `stax branch submit` - Submit current branch only
+- `stax branch submit` / `stax bs` - Submit current branch only
 - `stax upstack submit` - Submit current branch and descendants
 - `stax downstack submit` - Submit ancestors and current branch
 - `stax submit --yes` - Auto-approve prompts

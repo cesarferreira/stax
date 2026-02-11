@@ -476,6 +476,11 @@ enum Commands {
         /// Number of branches to move down
         count: Option<usize>,
     },
+    #[command(hide = true)]
+    Bs {
+        #[command(flatten)]
+        submit: SubmitOptions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -898,6 +903,7 @@ fn main() -> Result<()> {
         } => commands::branch::create::run(name, message, from, prefix, all),
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
+        Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
     };
 
     // Show update notification (from cache, instant) and spawn background check for next run

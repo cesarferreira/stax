@@ -240,6 +240,16 @@ fn fp_parity_ss_submit_stack() {
 }
 
 #[test]
+fn fp_parity_bs_branch_submit() {
+    // fp bs -> stax bs (branch submit)
+    let output = stax(&["bs", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--no-pr"));
+    assert!(stdout.contains("--no-prompt"));
+}
+
+#[test]
 fn fp_parity_rs_repo_sync() {
     // fp rs -> stax rs (repo sync)
     let output = stax(&["rs", "--help"]);
