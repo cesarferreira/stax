@@ -19,6 +19,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::io::Write;
 use std::process::Command;
 use std::time::Duration;
 
@@ -58,6 +59,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
 
         // Handle events
         if let Some(Event::Key(key)) = poll_event(Duration::from_millis(100))? {
+            log_key_event(app, &key);
             match &app.mode {
                 Mode::Input(input_action) => {
                     let input_action = input_action.clone();
@@ -523,6 +525,35 @@ fn handle_input_key(app: &mut App, key: KeyEvent, input_action: &InputAction) ->
 
 fn is_ctrl_c(key: &KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c'))
+}
+
+fn log_key_event(app: &App, key: &KeyEvent) {
+    let Ok(path) = std::env::var("STAX_TUI_KEYLOG") else {
+        return;
+    };
+
+    let mode = match &app.mode {
+        Mode::Normal => "normal",
+        Mode::Search => "search",
+        Mode::Help => "help",
+        Mode::Confirm(_) => "confirm",
+        Mode::Input(_) => "input",
+        Mode::Reorder => "reorder",
+    };
+
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+
+    let _ = writeln!(
+        file,
+        "mode={} code={:?} mods={:?} kind={:?} state={:?}",
+        mode, key.code, key.modifiers, key.kind, key.state
+    );
 }
 
 /// Checkout a branch
