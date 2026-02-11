@@ -5,7 +5,7 @@ mod ui;
 mod widgets;
 
 use app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
-use event::{poll_event, KeyAction};
+use event::{poll_event, KeyAction, KeyContext};
 
 use crate::engine::BranchMetadata;
 use crate::git::RebaseResult;
@@ -58,7 +58,15 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
 
         // Handle events
         if let Some(Event::Key(key)) = poll_event(Duration::from_millis(100))? {
-            let action = KeyAction::from(key);
+            let context = match app.mode {
+                Mode::Normal => KeyContext::Normal,
+                Mode::Search => KeyContext::Search,
+                Mode::Help => KeyContext::Help,
+                Mode::Confirm(_) => KeyContext::Confirm,
+                Mode::Input(_) => KeyContext::Input,
+                Mode::Reorder => KeyContext::Reorder,
+            };
+            let action = KeyAction::from_key(key, context);
             handle_action(app, action)?;
         }
 
