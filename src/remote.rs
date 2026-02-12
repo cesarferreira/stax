@@ -48,6 +48,44 @@ impl RemoteInfo {
         })
     }
 
+    /// Build RemoteInfo for the upstream remote (for fork workflows).
+    /// Returns None if no upstream is configured.
+    pub fn upstream_from_repo(repo: &GitRepo, config: &Config) -> Result<Option<Self>> {
+        let upstream_name = match config.upstream_remote_name() {
+            Some(name) => name.to_string(),
+            None => return Ok(None),
+        };
+
+        let url = get_remote_url(repo.workdir()?, &upstream_name)?;
+        let (host, path) = parse_remote_url(&url)?;
+        let (namespace, repo_name) = split_namespace_repo(&path)?;
+
+        let configured_base = config.remote_base_url().trim_end_matches('/');
+        let base_url = if configured_base.is_empty()
+            || (configured_base == "https://github.com" && host != "github.com")
+        {
+            format!("https://{}", host)
+        } else {
+            configured_base.to_string()
+        };
+
+        let api_base_url = if let Some(api) = &config.remote.api_base_url {
+            Some(api.clone())
+        } else if base_url == "https://github.com" {
+            Some("https://api.github.com".to_string())
+        } else {
+            Some(format!("{}/api/v3", base_url))
+        };
+
+        Ok(Some(Self {
+            name: upstream_name,
+            namespace,
+            repo: repo_name,
+            base_url,
+            api_base_url,
+        }))
+    }
+
     pub fn owner(&self) -> &str {
         self.namespace.as_str()
     }
@@ -416,5 +454,128 @@ mod tests {
         let (host, path) = parse_http_remote("github.com/owner/repo.git").unwrap();
         assert_eq!(host, "github.com");
         assert_eq!(path, "owner/repo");
+    }
+
+    #[test]
+    fn test_upstream_from_repo_no_upstream_configured() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let path = dir.path();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to init git repo");
+
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/fork-owner/repo.git",
+            ])
+            .current_dir(path)
+            .output()
+            .expect("Failed to add remote");
+
+        let repo = GitRepo::open_at(path).unwrap();
+        let config = Config::default(); // no upstream
+
+        let result = RemoteInfo::upstream_from_repo(&repo, &config).unwrap();
+        assert!(result.is_none(), "Should return None when no upstream configured");
+    }
+
+    #[test]
+    fn test_upstream_from_repo_with_upstream() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let path = dir.path();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to init git repo");
+
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/fork-owner/repo.git",
+            ])
+            .current_dir(path)
+            .output()
+            .expect("Failed to add remote");
+
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "upstream",
+                "https://github.com/upstream-owner/repo.git",
+            ])
+            .current_dir(path)
+            .output()
+            .expect("Failed to add upstream remote");
+
+        let repo = GitRepo::open_at(path).unwrap();
+        let mut config = Config::default();
+        config.remote.upstream = Some("upstream".to_string());
+
+        let result = RemoteInfo::upstream_from_repo(&repo, &config).unwrap();
+        assert!(result.is_some(), "Should return Some when upstream configured");
+
+        let upstream_info = result.unwrap();
+        assert_eq!(upstream_info.name, "upstream");
+        assert_eq!(upstream_info.owner(), "upstream-owner");
+        assert_eq!(upstream_info.repo, "repo");
+    }
+
+    #[test]
+    fn test_upstream_from_repo_ssh_url() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let path = dir.path();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to init git repo");
+
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:myuser/stax.git",
+            ])
+            .current_dir(path)
+            .output()
+            .expect("Failed to add remote");
+
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "upstream",
+                "git@github.com:cesarferreira/stax.git",
+            ])
+            .current_dir(path)
+            .output()
+            .expect("Failed to add upstream remote");
+
+        let repo = GitRepo::open_at(path).unwrap();
+        let mut config = Config::default();
+        config.remote.upstream = Some("upstream".to_string());
+
+        let upstream_info = RemoteInfo::upstream_from_repo(&repo, &config)
+            .unwrap()
+            .unwrap();
+        assert_eq!(upstream_info.owner(), "cesarferreira");
+        assert_eq!(upstream_info.repo, "stax");
+
+        let origin_info = RemoteInfo::from_repo(&repo, &config).unwrap();
+        assert_eq!(origin_info.owner(), "myuser");
+        assert_eq!(origin_info.repo, "stax");
     }
 }

@@ -48,6 +48,10 @@ pub struct RemoteConfig {
     /// Git remote name (default: "origin")
     #[serde(default = "default_remote_name")]
     pub name: String,
+    /// Upstream remote name for fork workflows (e.g., "upstream")
+    /// When set, sync fetches trunk from this remote and PRs target this repo.
+    #[serde(default)]
+    pub upstream: Option<String>,
     /// Base web URL for GitHub (e.g., https://github.com or GitHub Enterprise URL)
     #[serde(default = "default_remote_base_url")]
     pub base_url: String,
@@ -84,6 +88,7 @@ impl Default for RemoteConfig {
     fn default() -> Self {
         Self {
             name: default_remote_name(),
+            upstream: None,
             base_url: default_remote_base_url(),
             api_base_url: None,
         }
@@ -386,6 +391,11 @@ impl Config {
 
     pub fn remote_base_url(&self) -> &str {
         self.remote.base_url.as_str()
+    }
+
+    /// Get the upstream remote name, if configured (for fork workflows)
+    pub fn upstream_remote_name(&self) -> Option<&str> {
+        self.remote.upstream.as_deref()
     }
 }
 

@@ -585,7 +585,7 @@ prefix = "cesar/"      # Auto-prefix branches: "auth" → "cesar/auth"
 
 [remote]
 name = "origin"
-provider = "github"    # github, gitlab, gitea
+upstream = "upstream"  # Optional: for fork workflows (PRs target upstream)
 
 [ui]
 tips = true            # Show contextual suggestions (default: true)
@@ -603,6 +603,25 @@ date_format = "%m-%d"                 # Optional: chrono strftime (default: "%m-
 ```
 
 Empty placeholders are cleaned up automatically. The legacy `prefix` field still works if `format` is not set.
+
+### Fork Workflow (Upstream PRs)
+
+If you contribute via a fork, set `upstream` so stax syncs trunk from the source repo and opens PRs against it:
+
+```toml
+[remote]
+name = "origin"          # your fork
+upstream = "upstream"     # the source repo
+```
+
+```bash
+# One-time setup
+git remote add upstream https://github.com/original-owner/repo.git
+
+# Then use stax normally
+st rs          # syncs trunk from upstream, fetches origin
+st bs          # pushes to your fork, opens PR against upstream
+```
 
 ### GitHub Authentication
 
