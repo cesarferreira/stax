@@ -89,14 +89,22 @@ pub fn run(
         if !quiet {
             if output.status.success() {
                 println!("{}", "done".green());
+                if verbose {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
+                        }
+                    }
+                }
             } else {
                 println!("{}", "done (with warnings)".yellow());
-            }
-            if verbose {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if !stderr.trim().is_empty() {
-                    for line in stderr.lines() {
-                        println!("    {}", line.dimmed());
+                if verbose {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
+                        }
                     }
                 }
             }

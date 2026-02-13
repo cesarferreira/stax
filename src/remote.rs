@@ -17,7 +17,21 @@ pub struct RemoteInfo {
 impl RemoteInfo {
     pub fn from_repo(repo: &GitRepo, config: &Config) -> Result<Self> {
         let name = config.remote_name().to_string();
-        let url = get_remote_url(repo.workdir()?, &name)?;
+        Self::build(repo, config, &name)
+    }
+
+    /// Build RemoteInfo for the upstream remote (for fork workflows).
+    /// Returns None if no upstream is configured.
+    pub fn upstream_from_repo(repo: &GitRepo, config: &Config) -> Result<Option<Self>> {
+        match config.upstream_remote_name() {
+            Some(name) => Self::build(repo, config, name).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Shared builder: resolve URL, host, namespace, base/api URLs for any remote name.
+    fn build(repo: &GitRepo, config: &Config, remote_name: &str) -> Result<Self> {
+        let url = get_remote_url(repo.workdir()?, remote_name)?;
         let (host, path) = parse_remote_url(&url)?;
         let (namespace, repo_name) = split_namespace_repo(&path)?;
 
@@ -40,50 +54,12 @@ impl RemoteInfo {
         };
 
         Ok(Self {
-            name,
+            name: remote_name.to_string(),
             namespace,
             repo: repo_name,
             base_url,
             api_base_url,
         })
-    }
-
-    /// Build RemoteInfo for the upstream remote (for fork workflows).
-    /// Returns None if no upstream is configured.
-    pub fn upstream_from_repo(repo: &GitRepo, config: &Config) -> Result<Option<Self>> {
-        let upstream_name = match config.upstream_remote_name() {
-            Some(name) => name.to_string(),
-            None => return Ok(None),
-        };
-
-        let url = get_remote_url(repo.workdir()?, &upstream_name)?;
-        let (host, path) = parse_remote_url(&url)?;
-        let (namespace, repo_name) = split_namespace_repo(&path)?;
-
-        let configured_base = config.remote_base_url().trim_end_matches('/');
-        let base_url = if configured_base.is_empty()
-            || (configured_base == "https://github.com" && host != "github.com")
-        {
-            format!("https://{}", host)
-        } else {
-            configured_base.to_string()
-        };
-
-        let api_base_url = if let Some(api) = &config.remote.api_base_url {
-            Some(api.clone())
-        } else if base_url == "https://github.com" {
-            Some("https://api.github.com".to_string())
-        } else {
-            Some(format!("{}/api/v3", base_url))
-        };
-
-        Ok(Some(Self {
-            name: upstream_name,
-            namespace,
-            repo: repo_name,
-            base_url,
-            api_base_url,
-        }))
     }
 
     pub fn owner(&self) -> &str {

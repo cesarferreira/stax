@@ -378,9 +378,10 @@ impl GitHubClient {
         Ok(prs_by_head)
     }
 
-    /// Create a new PR
-    /// For cross-fork PRs, pass `head_owner` (the fork owner) so the head ref
-    /// becomes "fork_owner:branch" as required by the GitHub API.
+    /// Create a new PR.
+    /// For cross-fork PRs, pass `head_owner` (the owner of the repository that
+    /// contains the head branch, i.e. your fork's owner) so the head ref becomes
+    /// "fork_owner:branch" as required by the GitHub API.
     pub async fn create_pr(
         &self,
         branch: &str,

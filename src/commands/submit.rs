@@ -144,7 +144,8 @@ pub fn run(
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
 
     // For fork workflows: PRs are created against the upstream repo, not origin
-    let upstream_info = RemoteInfo::upstream_from_repo(&repo, &config)?;
+    let upstream_info = RemoteInfo::upstream_from_repo(&repo, &config)
+        .context("Failed to resolve upstream remote. Check [remote] upstream in your stax config.")?;
     let pr_remote = upstream_info.as_ref().unwrap_or(&remote_info);
     let fork_owner: Option<String> = if upstream_info.is_some() {
         // Cross-fork PR: head ref needs "fork_owner:branch"
