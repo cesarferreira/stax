@@ -4,6 +4,7 @@ use crate::engine::Stack;
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::time::Instant;
 
 /// A line in a diff with its type
@@ -28,6 +29,12 @@ pub struct DiffStatLine {
     pub file: String,
     pub additions: usize,
     pub deletions: usize,
+}
+
+#[derive(Debug, Clone)]
+struct CachedDiff {
+    stat: Vec<DiffStatLine>,
+    lines: Vec<DiffLine>,
 }
 
 /// Branch display information for the TUI
@@ -145,6 +152,7 @@ pub struct App {
     pub should_quit: bool,
     pub needs_refresh: bool,
     pub reorder_state: Option<ReorderState>,
+    diff_cache: HashMap<String, CachedDiff>,
 }
 
 impl App {
@@ -179,6 +187,7 @@ impl App {
             should_quit: false,
             needs_refresh: true,
             reorder_state: None,
+            diff_cache: HashMap::new(),
         };
 
         app.refresh_branches()?;
@@ -193,6 +202,7 @@ impl App {
         self.stack = Stack::load(&self.repo)?;
         self.current_branch = self.repo.current_branch()?;
         self.branches = self.build_branch_list()?;
+        self.diff_cache.clear();
         self.needs_refresh = false;
         self.update_diff();
         Ok(())
@@ -379,50 +389,66 @@ impl App {
         self.diff_stat.clear();
         self.diff_scroll = 0;
 
-        if let Some(branch) = self.selected_branch() {
-            if let Some(parent) = &branch.parent {
-                let branch_name = branch.name.clone();
-                let parent_name = parent.clone();
+        let (branch_name, parent_name) = match self.selected_branch() {
+            Some(branch) => match &branch.parent {
+                Some(parent) => (branch.name.clone(), parent.clone()),
+                None => return,
+            },
+            None => return,
+        };
 
-                // Get diff stat
-                if let Ok(stats) = self.repo.diff_stat(&branch_name, &parent_name) {
-                    self.diff_stat = stats
-                        .into_iter()
-                        .map(|(file, additions, deletions)| DiffStatLine {
-                            file,
-                            additions,
-                            deletions,
-                        })
-                        .collect();
-                }
-
-                // Get full diff
-                if let Ok(lines) = self.repo.diff_against_parent(&branch_name, &parent_name) {
-                    self.selected_diff = lines
-                        .into_iter()
-                        .map(|line| {
-                            let line_type = if line.starts_with("+++") || line.starts_with("---") {
-                                DiffLineType::Header
-                            } else if line.starts_with('+') {
-                                DiffLineType::Addition
-                            } else if line.starts_with('-') {
-                                DiffLineType::Deletion
-                            } else if line.starts_with("@@") {
-                                DiffLineType::Hunk
-                            } else if line.starts_with("diff ") || line.starts_with("index ") {
-                                DiffLineType::Header
-                            } else {
-                                DiffLineType::Context
-                            };
-                            DiffLine {
-                                content: line,
-                                line_type,
-                            }
-                        })
-                        .collect();
-                }
-            }
+        let cache_key = format!("{}...{}", parent_name, branch_name);
+        if let Some(cached) = self.diff_cache.get(&cache_key) {
+            self.diff_stat = cached.stat.clone();
+            self.selected_diff = cached.lines.clone();
+            return;
         }
+
+        // Get diff stat
+        if let Ok(stats) = self.repo.diff_stat(&branch_name, &parent_name) {
+            self.diff_stat = stats
+                .into_iter()
+                .map(|(file, additions, deletions)| DiffStatLine {
+                    file,
+                    additions,
+                    deletions,
+                })
+                .collect();
+        }
+
+        // Get full diff
+        if let Ok(lines) = self.repo.diff_against_parent(&branch_name, &parent_name) {
+            self.selected_diff = lines
+                .into_iter()
+                .map(|line| {
+                    let line_type = if line.starts_with("+++") || line.starts_with("---") {
+                        DiffLineType::Header
+                    } else if line.starts_with('+') {
+                        DiffLineType::Addition
+                    } else if line.starts_with('-') {
+                        DiffLineType::Deletion
+                    } else if line.starts_with("@@") {
+                        DiffLineType::Hunk
+                    } else if line.starts_with("diff ") || line.starts_with("index ") {
+                        DiffLineType::Header
+                    } else {
+                        DiffLineType::Context
+                    };
+                    DiffLine {
+                        content: line,
+                        line_type,
+                    }
+                })
+                .collect();
+        }
+
+        self.diff_cache.insert(
+            cache_key,
+            CachedDiff {
+                stat: self.diff_stat.clone(),
+                lines: self.selected_diff.clone(),
+            },
+        );
     }
 
     /// Calculate total scrollable lines in diff view (stats header + diff content)

@@ -494,8 +494,11 @@ impl GitRepo {
 
     /// Get diff between a branch and its parent
     pub fn diff_against_parent(&self, branch: &str, parent: &str) -> Result<Vec<String>> {
+        // Use merge-base diff (A...B) to match PR semantics and avoid showing unrelated
+        // parent-side changes when the parent branch has advanced.
+        let range = format!("{}...{}", parent, branch);
         let output = Command::new("git")
-            .args(["diff", "--color=never", parent, branch])
+            .args(["diff", "--color=never", &range])
             .current_dir(self.workdir()?)
             .output()
             .context("Failed to get diff")?;
@@ -510,8 +513,9 @@ impl GitRepo {
 
     /// Get diff stat (numstat) between a branch and its parent
     pub fn diff_stat(&self, branch: &str, parent: &str) -> Result<Vec<(String, usize, usize)>> {
+        let range = format!("{}...{}", parent, branch);
         let output = Command::new("git")
-            .args(["diff", "--numstat", parent, branch])
+            .args(["diff", "--numstat", &range])
             .current_dir(self.workdir()?)
             .output()
             .context("Failed to get diff stat")?;
