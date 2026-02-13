@@ -397,6 +397,78 @@ fn test_github_token_trims_whitespace_from_file() {
     }
 }
 
+// ========== Upstream config tests ==========
+
+#[test]
+fn test_default_config_no_upstream() {
+    let config = Config::default();
+    assert!(config.remote.upstream.is_none());
+    assert!(config.upstream_remote_name().is_none());
+}
+
+#[test]
+fn test_upstream_remote_name() {
+    let mut config = Config::default();
+    config.remote.upstream = Some("upstream".to_string());
+    assert_eq!(config.upstream_remote_name(), Some("upstream"));
+}
+
+#[test]
+fn test_upstream_deserialization() {
+    let toml_str = r#"
+[remote]
+name = "origin"
+upstream = "upstream"
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.remote.name, "origin");
+    assert_eq!(config.remote.upstream, Some("upstream".to_string()));
+    assert_eq!(config.upstream_remote_name(), Some("upstream"));
+}
+
+#[test]
+fn test_upstream_missing_from_config() {
+    // Old configs without upstream should still parse fine
+    let toml_str = r#"
+[remote]
+name = "origin"
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert!(config.remote.upstream.is_none());
+    assert!(config.upstream_remote_name().is_none());
+}
+
+#[test]
+fn test_upstream_serialization() {
+    let mut config = Config::default();
+    config.remote.upstream = Some("upstream".to_string());
+
+    let toml_str = toml::to_string(&config).unwrap();
+    assert!(toml_str.contains("upstream = \"upstream\""));
+}
+
+#[test]
+fn test_upstream_backward_compat_full_config() {
+    // A full old-style config without upstream should parse without error
+    let toml_str = r#"
+[branch]
+prefix = "cesar/"
+date = false
+replacement = "-"
+
+[remote]
+name = "origin"
+base_url = "https://github.com"
+
+[ui]
+tips = true
+"#;
+    let config: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.remote.name, "origin");
+    assert!(config.remote.upstream.is_none());
+    assert_eq!(config.remote.base_url, "https://github.com");
+}
+
 // ========== Format template tests ==========
 
 #[test]

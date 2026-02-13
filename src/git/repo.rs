@@ -21,6 +21,13 @@ impl GitRepo {
         Ok(Self { repo })
     }
 
+    /// Open the repository at a specific path (used by tests)
+    #[cfg(test)]
+    pub fn open_at(path: &Path) -> Result<Self> {
+        let repo = Repository::discover(path).context("Not in a git repository")?;
+        Ok(Self { repo })
+    }
+
     /// Get the repository root path
     pub fn workdir(&self) -> Result<&Path> {
         self.repo

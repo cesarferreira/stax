@@ -143,8 +143,19 @@ pub fn run(
 
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
 
-    let owner = remote_info.owner().to_string();
-    let repo_name = remote_info.repo.clone();
+    // For fork workflows: PRs are created against the upstream repo, not origin
+    let upstream_info = RemoteInfo::upstream_from_repo(&repo, &config)
+        .context("Failed to resolve upstream remote. Check [remote] upstream in your stax config.")?;
+    let pr_remote = upstream_info.as_ref().unwrap_or(&remote_info);
+    let fork_owner: Option<String> = if upstream_info.is_some() {
+        // Cross-fork PR: head ref needs "fork_owner:branch"
+        Some(remote_info.owner().to_string())
+    } else {
+        None
+    };
+
+    let owner = pr_remote.owner().to_string();
+    let repo_name = pr_remote.repo.clone();
 
     // Fetch to ensure we have latest remote refs (non-fatal if it fails)
     if !quiet {
@@ -208,7 +219,7 @@ pub fn run(
         let gh_client = runtime.as_ref().and_then(|runtime| {
             runtime
                 .block_on(async {
-                    GitHubClient::new(&owner, &repo_name, remote_info.api_base_url.clone())
+                    GitHubClient::new(&owner, &repo_name, pr_remote.api_base_url.clone())
                 })
                 .ok()
         });
@@ -292,7 +303,7 @@ pub fn run(
     } else {
         let runtime = tokio::runtime::Runtime::new()?;
         let gh_client = runtime.block_on(async {
-            GitHubClient::new(&owner, &repo_name, remote_info.api_base_url.clone())
+            GitHubClient::new(&owner, &repo_name, pr_remote.api_base_url.clone())
         })?;
         let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
 
@@ -744,7 +755,14 @@ pub fn run(
                 }
 
                 let pr = client
-                    .create_pr(&plan.branch, &plan.parent, title, body, is_draft)
+                    .create_pr(
+                        &plan.branch,
+                        &plan.parent,
+                        title,
+                        body,
+                        is_draft,
+                        fork_owner.as_deref(),
+                    )
                     .await
                     .context(format!(
                         "Failed to create PR for '{}' with base '{}'\n\
@@ -835,7 +853,7 @@ pub fn run(
                 std::io::Write::flush(&mut std::io::stdout()).ok();
             }
             let stack_comment =
-                generate_stack_comment(&pr_infos, *pr_number, &remote_info, &stack.trunk);
+                generate_stack_comment(&pr_infos, *pr_number, pr_remote, &stack.trunk);
             client
                 .update_stack_comment(*pr_number, &stack_comment)
                 .await?;
@@ -852,7 +870,7 @@ pub fn run(
             if !pr_infos.is_empty() {
                 for pr_info in &pr_infos {
                     if let Some(num) = pr_info.pr_number {
-                        println!("  {} {}", "✓".green(), remote_info.pr_url(num));
+                        println!("  {} {}", "✓".green(), pr_remote.pr_url(num));
                     }
                 }
             }

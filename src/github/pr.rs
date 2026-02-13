@@ -378,7 +378,10 @@ impl GitHubClient {
         Ok(prs_by_head)
     }
 
-    /// Create a new PR
+    /// Create a new PR.
+    /// For cross-fork PRs, pass `head_owner` (the owner of the repository that
+    /// contains the head branch, i.e. your fork's owner) so the head ref becomes
+    /// "fork_owner:branch" as required by the GitHub API.
     pub async fn create_pr(
         &self,
         branch: &str,
@@ -386,11 +389,18 @@ impl GitHubClient {
         title: &str,
         body: &str,
         draft: bool,
+        head_owner: Option<&str>,
     ) -> Result<PrInfo> {
+        // For cross-fork PRs, GitHub requires head = "fork_owner:branch"
+        let head = match head_owner {
+            Some(owner) => format!("{}:{}", owner, branch),
+            None => branch.to_string(),
+        };
+
         let pr = self
             .octocrab
             .pulls(&self.owner, &self.repo)
-            .create(title, branch, base)
+            .create(title, &head, base)
             .body(body)
             .draft(Some(draft))
             .send()

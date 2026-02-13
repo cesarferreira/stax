@@ -68,7 +68,49 @@ pub fn run(
         println!("{}", "Syncing repository...".bold());
     }
 
-    // 1. Fetch from remote
+    // Determine the upstream remote for trunk updates (fork workflow support)
+    let upstream_name = config.upstream_remote_name().map(|s| s.to_string());
+    let trunk_remote = upstream_name.as_deref().unwrap_or(&remote_name);
+
+    // 1. Fetch from remote(s)
+    // When upstream is configured, fetch from both upstream (for trunk) and origin (for branches)
+    if let Some(ref upstream) = upstream_name {
+        if !quiet {
+            print!("  Fetching from {}... ", upstream);
+            let _ = std::io::stdout().flush();
+        }
+
+        let output = Command::new("git")
+            .args(["fetch", upstream])
+            .current_dir(workdir)
+            .output()
+            .context("Failed to fetch upstream")?;
+
+        if !quiet {
+            if output.status.success() {
+                println!("{}", "done".green());
+                if verbose {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
+                        }
+                    }
+                }
+            } else {
+                println!("{}", "done (with warnings)".yellow());
+                if verbose {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if !quiet {
         print!("  Fetching from {}... ", remote_name);
         let _ = std::io::stdout().flush();
@@ -108,18 +150,23 @@ pub fn run(
     // 2. Update trunk branch (before merged branch detection, so detection works correctly)
     // Note: If we're not on trunk, we use a refspec fetch which may fail if local trunk
     // has diverged. This is fine - we'll retry after branch deletions if we end up on trunk.
+    // When upstream is configured, trunk is updated from upstream instead of origin.
     let was_on_trunk = current == stack.trunk;
     let mut trunk_update_deferred = false;
 
     if was_on_trunk {
         // We're on trunk - pull directly
         if !quiet {
-            print!("  Updating {}... ", stack.trunk.cyan());
+            print!(
+                "  Updating {} from {}... ",
+                stack.trunk.cyan(),
+                trunk_remote
+            );
             let _ = std::io::stdout().flush();
         }
 
         let output = Command::new("git")
-            .args(["pull", "--ff-only", &remote_name, &stack.trunk])
+            .args(["pull", "--ff-only", trunk_remote, &stack.trunk])
             .current_dir(workdir)
             .output()
             .context("Failed to pull trunk")?;
@@ -154,7 +201,7 @@ pub fn run(
                 .args([
                     "reset",
                     "--hard",
-                    &format!("{}/{}", remote_name, stack.trunk),
+                    &format!("{}/{}", trunk_remote, stack.trunk),
                 ])
                 .current_dir(workdir)
                 .output()
@@ -180,14 +227,18 @@ pub fn run(
         // Not on trunk - try to update via refspec fetch (may fail, that's ok)
         // We'll update trunk properly later if we end up on it after branch deletions
         if !quiet {
-            print!("  Updating {}... ", stack.trunk.cyan());
+            print!(
+                "  Updating {} from {}... ",
+                stack.trunk.cyan(),
+                trunk_remote
+            );
             let _ = std::io::stdout().flush();
         }
 
         let output = Command::new("git")
             .args([
                 "fetch",
-                &remote_name,
+                trunk_remote,
                 &format!("{}:{}", stack.trunk, stack.trunk),
             ])
             .current_dir(workdir)
@@ -455,12 +506,16 @@ pub fn run(
     // now on trunk after branch deletions, retry with git pull which is more reliable
     if trunk_update_deferred && current_after_deletions == stack.trunk {
         if !quiet {
-            print!("  Updating {}... ", stack.trunk.cyan());
+            print!(
+                "  Updating {} from {}... ",
+                stack.trunk.cyan(),
+                trunk_remote
+            );
             let _ = std::io::stdout().flush();
         }
 
         let output = Command::new("git")
-            .args(["pull", "--ff-only", &remote_name, &stack.trunk])
+            .args(["pull", "--ff-only", trunk_remote, &stack.trunk])
             .current_dir(workdir)
             .output()
             .context("Failed to pull trunk")?;
@@ -495,7 +550,7 @@ pub fn run(
                 .args([
                     "reset",
                     "--hard",
-                    &format!("{}/{}", remote_name, stack.trunk),
+                    &format!("{}/{}", trunk_remote, stack.trunk),
                 ])
                 .current_dir(workdir)
                 .output()
