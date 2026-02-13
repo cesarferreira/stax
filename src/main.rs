@@ -210,6 +210,9 @@ enum Commands {
         /// Only push, don't create/update PRs
         #[arg(long)]
         no_pr: bool,
+        /// Skip PR submission entirely (alias for --no-submit)
+        #[arg(long)]
+        no_prs: bool,
     },
 
     /// Checkout a branch in the stack
@@ -769,7 +772,7 @@ fn main() -> Result<()> {
             quiet,
             auto_stash_pop,
         } => commands::restack::run(all, r#continue, quiet, auto_stash_pop),
-        Commands::Cascade { no_submit, no_pr } => commands::cascade::run(no_submit, no_pr),
+        Commands::Cascade { no_submit, no_pr, no_prs } => commands::cascade::run(no_submit, no_pr, no_prs),
         Commands::Checkout {
             branch,
             trunk,
