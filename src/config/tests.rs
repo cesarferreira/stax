@@ -323,8 +323,7 @@ fn test_github_token_env_takes_priority_over_file() {
     let orig_github = env::var("GITHUB_TOKEN").ok();
 
     // Create temp directory with credentials file
-    let temp_dir =
-        std::env::temp_dir().join(format!("stax-test-priority-{}", std::process::id()));
+    let temp_dir = std::env::temp_dir().join(format!("stax-test-priority-{}", std::process::id()));
     let config_dir = temp_dir.join(".config").join("stax");
     fs::create_dir_all(&config_dir).unwrap();
 

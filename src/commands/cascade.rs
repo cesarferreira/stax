@@ -38,6 +38,7 @@ pub fn run(no_submit: bool, no_pr: bool) -> Result<()> {
             None,   // template
             false,  // no_template
             false,  // edit
+            false,  // ai_body
         )?;
     }
 

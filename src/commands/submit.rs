@@ -65,6 +65,7 @@ pub fn run(
     template: Option<String>,
     no_template: bool,
     edit: bool,
+    ai_body: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
@@ -556,7 +557,37 @@ pub fn run(
                     .interact_text()?
             };
 
-            let body = if no_prompt {
+            let body = if ai_body {
+                // --ai-body flag: generate body using AI agent
+                if !quiet {
+                    println!("    {}", "Generating PR body with AI...".dimmed());
+                }
+                let ai_body_result = generate_ai_body(
+                    repo.workdir()?,
+                    &plan.parent,
+                    &plan.branch,
+                    template_content,
+                );
+                match ai_body_result {
+                    Ok(generated) => {
+                        if edit {
+                            Editor::new().edit(&generated)?.unwrap_or(generated)
+                        } else {
+                            generated
+                        }
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            eprintln!(
+                                "    {} AI generation failed: {}. Falling back to default.",
+                                "⚠".yellow(),
+                                e
+                            );
+                        }
+                        default_body
+                    }
+                }
+            } else if no_prompt {
                 default_body
             } else if edit {
                 // --edit flag: always open editor
@@ -1155,4 +1186,36 @@ async fn apply_pr_metadata(
     }
 
     Ok(())
+}
+
+/// Generate a PR body using an AI agent (for --ai-body flag).
+/// Loads agent/model from config, collects diff and commits, invokes the AI CLI.
+fn generate_ai_body(
+    workdir: &Path,
+    parent: &str,
+    branch: &str,
+    template: Option<&str>,
+) -> Result<String> {
+    use super::generate;
+
+    let config = Config::load()?;
+    let agent = config
+        .ai
+        .agent
+        .as_deref()
+        .filter(|a| !a.is_empty())
+        .context(
+            "No AI agent configured. Run `stax generate --pr-body` first to set up, \
+             or add [ai] agent = \"claude\" to ~/.config/stax/config.toml",
+        )?
+        .to_string();
+
+    let model = config.ai.model.clone();
+
+    let diff_stat = generate::get_diff_stat(workdir, parent, branch);
+    let diff = generate::get_full_diff(workdir, parent, branch);
+    let commits = collect_commit_messages(workdir, parent, branch);
+    let prompt = generate::build_ai_prompt(&diff_stat, &diff, &commits, template);
+
+    generate::invoke_ai_agent(&agent, model.as_deref(), &prompt)
 }

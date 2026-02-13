@@ -10,6 +10,7 @@ pub mod continue_cmd;
 pub mod copy;
 pub mod diff;
 pub mod doctor;
+pub mod generate;
 pub mod init;
 pub mod log;
 pub mod merge;

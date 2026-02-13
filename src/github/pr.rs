@@ -467,6 +467,18 @@ impl GitHubClient {
         Ok(())
     }
 
+    /// Update PR body text
+    pub async fn update_pr_body(&self, pr_number: u64, body: &str) -> Result<()> {
+        self.octocrab
+            .pulls(&self.owner, &self.repo)
+            .update(pr_number)
+            .body(body)
+            .send()
+            .await
+            .context("Failed to update PR body")?;
+        Ok(())
+    }
+
     /// Add or update the stack comment on a PR
     pub async fn update_stack_comment(&self, pr_number: u64, stack_comment: &str) -> Result<()> {
         let comments = self

@@ -528,11 +528,12 @@ pub fn run(
 
         // Scope restacking to the stack we started on, even if sync switched branches
         // (for example, if the current branch was deleted after merge).
-        let scope_order: Vec<String> = if current != stack.trunk && stack.branches.contains_key(&current) {
-            stack.current_stack(&current)
-        } else {
-            Vec::new()
-        };
+        let scope_order: Vec<String> =
+            if current != stack.trunk && stack.branches.contains_key(&current) {
+                stack.current_stack(&current)
+            } else {
+                Vec::new()
+            };
         // Reload stack to use fresh metadata after sync/deletion steps.
         let restack_stack = Stack::load(&repo)?;
         let branches_to_restack: Vec<String> = scope_order

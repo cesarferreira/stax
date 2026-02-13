@@ -12,6 +12,8 @@ pub struct Config {
     pub remote: RemoteConfig,
     #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
+    pub ai: AiConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -35,6 +37,7 @@ pub struct BranchConfig {
     /// - {user}: Git username (from config.branch.user or git user.name)
     /// - {date}: Current date (formatted by date_format)
     /// - {message}: The branch name/message input
+    ///
     /// Examples: "{message}", "{user}/{message}", "{user}/{date}/{message}"
     #[serde(default)]
     pub format: Option<String>,
@@ -61,6 +64,16 @@ pub struct UiConfig {
     /// Whether to show contextual tips/suggestions (default: true)
     #[serde(default = "default_tips")]
     pub tips: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct AiConfig {
+    /// AI agent to use: "claude" or "codex" (default: auto-detect)
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// Model to use with the AI agent (default: agent's own default)
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 impl Default for BranchConfig {

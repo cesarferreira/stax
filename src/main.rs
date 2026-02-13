@@ -64,6 +64,9 @@ struct SubmitOptions {
     /// Always open editor for PR body
     #[arg(long)]
     edit: bool,
+    /// Generate PR body using AI (claude or codex)
+    #[arg(long)]
+    ai_body: bool,
 }
 
 #[derive(Subcommand)]
@@ -390,6 +393,22 @@ enum Commands {
         hours: i64,
     },
 
+    /// Generate content using AI
+    Generate {
+        /// Generate PR body from diff and update the PR
+        #[arg(long)]
+        pr_body: bool,
+        /// Open editor to review before updating
+        #[arg(long)]
+        edit: bool,
+        /// AI agent to use (claude, codex). Defaults to config or auto-detect
+        #[arg(long)]
+        agent: Option<String>,
+        /// Model to use with the AI agent. Defaults to config or agent's default
+        #[arg(long)]
+        model: Option<String>,
+    },
+
     /// Generate changelog between two refs
     Changelog {
         /// Starting ref (tag, branch, or commit)
@@ -661,6 +680,7 @@ fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Re
         submit.template,
         submit.no_template,
         submit.edit,
+        submit.ai_body,
     )
 }
 
@@ -815,6 +835,17 @@ fn main() -> Result<()> {
             commands::copy::run(target)
         }
         Commands::Standup { json, all, hours } => commands::standup::run(json, all, hours),
+        Commands::Generate {
+            pr_body,
+            edit,
+            agent,
+            model,
+        } => {
+            if !pr_body {
+                anyhow::bail!("Please specify what to generate. Usage: stax generate --pr-body");
+            }
+            commands::generate::run(edit, agent, model)
+        }
         Commands::Changelog {
             from,
             to,
