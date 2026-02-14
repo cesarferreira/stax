@@ -7,7 +7,7 @@ use colored::Colorize;
 use std::io::Write;
 use std::process::Command;
 
-pub fn run(no_submit: bool, no_pr: bool, no_prs: bool) -> Result<()> {
+pub fn run(no_submit: bool, no_pr: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let original = repo.current_branch()?;
 
@@ -31,10 +31,7 @@ pub fn run(no_submit: bool, no_pr: bool, no_prs: bool) -> Result<()> {
         return Ok(());
     }
 
-    // no_prs is an alias for no_submit
-    let skip_submit = no_submit || no_prs;
-
-    if !skip_submit {
+    if !no_submit {
         commands::submit::run(
             false,  // draft
             no_pr,  // no_pr
@@ -50,8 +47,6 @@ pub fn run(no_submit: bool, no_pr: bool, no_prs: bool) -> Result<()> {
             false,  // no_template
             false,  // edit
         )?;
-    } else if no_prs {
-        println!("{}", "Skipping PR submission (--no-prs flag)".dimmed());
     }
 
     if !repo.rebase_in_progress()? && repo.current_branch()? != original {
