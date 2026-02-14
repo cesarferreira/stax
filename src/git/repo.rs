@@ -101,7 +101,7 @@ impl GitRepo {
         Ok(git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists())
     }
 
-    fn is_dirty_at(&self, cwd: &Path) -> Result<bool> {
+    pub(crate) fn is_dirty_at(&self, cwd: &Path) -> Result<bool> {
         let output = self.run_git(cwd, &["status", "--porcelain"])?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -110,7 +110,7 @@ impl GitRepo {
         Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
     }
 
-    fn stash_push_at(&self, cwd: &Path) -> Result<bool> {
+    pub(crate) fn stash_push_at(&self, cwd: &Path) -> Result<bool> {
         let output = self.run_git(cwd, &["stash", "push", "-u", "-m", "stax auto-stash"])?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -124,7 +124,7 @@ impl GitRepo {
         Ok(true)
     }
 
-    fn stash_pop_at(&self, cwd: &Path) -> Result<()> {
+    pub(crate) fn stash_pop_at(&self, cwd: &Path) -> Result<()> {
         let output = self.run_git(cwd, &["stash", "pop"])?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -259,6 +259,13 @@ impl GitRepo {
         }
 
         Ok(commits)
+    }
+
+    /// Resolve any ref (local branch, remote branch, SHA) to a commit SHA string.
+    /// Useful for resolving refs like "origin/main" to their current commit.
+    pub fn resolve_ref(&self, refspec: &str) -> Result<String> {
+        let oid = self.resolve_to_oid(refspec)?;
+        Ok(oid.to_string())
     }
 
     /// Resolve a branch name or ref to an OID

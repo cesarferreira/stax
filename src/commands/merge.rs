@@ -404,9 +404,13 @@ pub fn run(
                 println!("{}", "done".green());
             }
 
-            // Update local metadata
+            // Update local metadata with the remote trunk commit (not local trunk,
+            // which may be stale). The rebase above used origin/<trunk>, so the
+            // metadata must match that actual rebase target.
             if let Some(meta) = BranchMetadata::read(repo.inner(), &next_branch.branch)? {
-                let trunk_commit = repo.branch_commit(&scope.trunk)?;
+                let remote_trunk_ref = format!("{}/{}", remote_info.name, scope.trunk);
+                let trunk_commit = repo.resolve_ref(&remote_trunk_ref)
+                    .unwrap_or_else(|_| repo.branch_commit(&scope.trunk).unwrap_or_default());
                 let updated_meta = BranchMetadata {
                     parent_branch_name: scope.trunk.clone(),
                     parent_branch_revision: trunk_commit,
@@ -445,9 +449,12 @@ pub fn run(
                             .block_on(async { client.update_pr_base(pr_num, &scope.trunk).await });
                     }
 
-                    // Update metadata
+                    // Update metadata with the remote trunk commit (not local trunk,
+                    // which may be stale). The rebase above used origin/<trunk>.
                     if let Some(meta) = BranchMetadata::read(repo.inner(), &remaining.branch)? {
-                        let trunk_commit = repo.branch_commit(&scope.trunk)?;
+                        let remote_trunk_ref = format!("{}/{}", remote_info.name, scope.trunk);
+                        let trunk_commit = repo.resolve_ref(&remote_trunk_ref)
+                            .unwrap_or_else(|_| repo.branch_commit(&scope.trunk).unwrap_or_default());
                         let updated_meta = BranchMetadata {
                             parent_branch_name: scope.trunk.clone(),
                             parent_branch_revision: trunk_commit,
