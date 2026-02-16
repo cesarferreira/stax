@@ -751,7 +751,7 @@ fn main() -> Result<()> {
             r#continue,
             quiet,
         } => commands::restack::run(all, r#continue, quiet),
-        Commands::Cascade { no_submit, no_pr, no_prs } => commands::cascade::run(no_submit, no_pr, no_prs)
+        Commands::Cascade { no_submit, no_pr, no_prs } => commands::cascade::run(no_submit, no_pr, no_prs),
         Commands::Checkout {
             branch,
             trunk,
