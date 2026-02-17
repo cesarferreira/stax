@@ -198,6 +198,7 @@ Split uses the transaction system, so you can `stax undo` if needed.
 | `stax merge` | Merge PRs from bottom of stack up to current branch |
 | `stax rs` | Repo sync - pull trunk, clean up merged branches |
 | `stax rs --restack` | Sync and rebase all branches onto updated trunk |
+| `stax restack --auto-stash-pop` | Restack even when target worktrees are dirty (auto-stash/pop) |
 | `stax cascade` | Restack from bottom, upstack restack, push, and create/update PRs |
 | `stax cascade --push-only` | Restack and push (skip PR creation/updates) |
 | `stax cascade --no-push` | Restack only (no remote interaction) |
@@ -808,6 +809,7 @@ stax generate --pr-body --edit                               # Review in editor 
 | `stax branch delete` | | Delete a branch |
 | `stax branch fold` | | Fold branch into parent |
 | `stax branch squash` | | Squash commits on branch |
+| `stax upstack restack` | | Restack current branch + descendants |
 | `stax upstack submit` | | Submit current branch + descendants |
 | `stax downstack submit` | | Submit ancestors + current branch |
 
@@ -882,6 +884,9 @@ stax generate --pr-body --edit                               # Review in editor 
 - `stax merge --method squash` - Choose merge method (squash/merge/rebase)
 - `stax merge --dry-run` - Preview merge without executing
 - `stax merge --no-wait` - Don't wait for CI, fail if not ready
+- `stax restack --auto-stash-pop` - Auto-stash/pop dirty target worktrees during restack
+- `stax upstack restack --auto-stash-pop` - Auto-stash/pop when restacking descendants
+- `stax sync --restack --auto-stash-pop` - Auto-stash/pop while syncing + restacking
 - `stax cascade --push-only` - Restack and push branches (skip PR creation/updates)
 - `stax cascade --no-push` - Restack only (no remote interaction)
 - Recommended workflow: run `stax rs --restack` before `stax cascade` to sync trunk and rebase all branches first
