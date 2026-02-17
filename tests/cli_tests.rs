@@ -79,6 +79,7 @@ fn test_branch_subcommands() {
     assert!(stdout.contains("squash"));
     assert!(stdout.contains("up"));
     assert!(stdout.contains("down"));
+    assert!(stdout.contains("submit"));
 }
 
 #[test]
@@ -101,6 +102,36 @@ fn test_upstack_commands() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("restack"));
+    assert!(stdout.contains("submit"));
+}
+
+#[test]
+fn test_downstack_commands() {
+    let output = stax(&["downstack", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("get"));
+    assert!(stdout.contains("submit"));
+}
+
+#[test]
+fn test_scoped_submit_subcommand_help_flags() {
+    for args in [
+        ["branch", "submit", "--help"],
+        ["upstack", "submit", "--help"],
+        ["downstack", "submit", "--help"],
+    ] {
+        let output = stax(&args);
+        assert!(output.status.success(), "{:?}", args);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("--no-pr"), "Expected --no-pr in {:?}", args);
+        assert!(stdout.contains("--yes"), "Expected --yes in {:?}", args);
+        assert!(
+            stdout.contains("--no-prompt"),
+            "Expected --no-prompt in {:?}",
+            args
+        );
+    }
 }
 
 #[test]
@@ -206,6 +237,16 @@ fn fp_parity_ss_submit_stack() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Submit stack"));
+}
+
+#[test]
+fn fp_parity_bs_branch_submit() {
+    // fp bs -> stax bs (branch submit)
+    let output = stax(&["bs", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--no-pr"));
+    assert!(stdout.contains("--no-prompt"));
 }
 
 #[test]

@@ -613,23 +613,43 @@ pub fn run(
             println!("{}", "Restacking...".bold());
         }
 
-        let needs_restack = stack.needs_restack();
+        // Scope restacking to the stack we started on, even if sync switched branches
+        // (for example, if the current branch was deleted after merge).
+        let scope_order: Vec<String> =
+            if current != stack.trunk && stack.branches.contains_key(&current) {
+                stack.current_stack(&current)
+            } else {
+                Vec::new()
+            };
+        // Reload stack to use fresh metadata after sync/deletion steps.
+        let restack_stack = Stack::load(&repo)?;
+        let branches_to_restack: Vec<String> = scope_order
+            .into_iter()
+            .filter(|branch| {
+                restack_stack
+                    .branches
+                    .get(branch)
+                    .map(|br| br.needs_restack)
+                    .unwrap_or(false)
+            })
+            .collect();
 
-        if needs_restack.is_empty() {
+        if branches_to_restack.is_empty() {
             if !quiet {
                 println!("  {}", "All branches up to date.".dimmed());
             }
         } else {
             // Begin transaction for restack phase
             let mut tx = Transaction::begin(OpKind::SyncRestack, &repo, quiet)?;
-            tx.plan_branches(&repo, &needs_restack)?;
+            tx.plan_branches(&repo, &branches_to_restack)?;
+            let restack_count = branches_to_restack.len();
             let summary = PlanSummary {
-                branches_to_rebase: needs_restack.len(),
+                branches_to_rebase: restack_count,
                 branches_to_push: 0,
                 description: vec![format!(
                     "Sync restack {} {}",
-                    needs_restack.len(),
-                    if needs_restack.len() == 1 {
+                    restack_count,
+                    if restack_count == 1 {
                         "branch"
                     } else {
                         "branches"
@@ -642,7 +662,7 @@ pub fn run(
 
             let mut summary: Vec<(String, String)> = Vec::new();
 
-            for branch in &needs_restack {
+            for branch in &branches_to_restack {
                 if !quiet {
                     print!("  Restacking {}... ", branch.cyan());
                 }
@@ -732,6 +752,7 @@ fn find_merged_branches(
     remote_name: &str,
 ) -> Result<Vec<String>> {
     let mut merged = Vec::new();
+    let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
 
     // Method 1: git branch --merged (finds local branches merged into trunk)
     let output = Command::new("git")
@@ -756,6 +777,30 @@ fn find_merged_branches(
         }
     }
 
+    // Method 1b: git branch --merged origin/trunk (handles stale/diverged local trunk)
+    let output = Command::new("git")
+        .args(["branch", "--merged", &remote_trunk_ref])
+        .current_dir(workdir)
+        .output();
+
+    if let Ok(output) = output {
+        let merged_output = String::from_utf8_lossy(&output.stdout);
+
+        for line in merged_output.lines() {
+            let branch = line.trim().trim_start_matches("* ");
+
+            // Skip trunk itself and any non-tracked branches
+            if branch == stack.trunk || branch.is_empty() {
+                continue;
+            }
+
+            // Only include branches we're tracking (and avoid duplicates)
+            if stack.branches.contains_key(branch) && !merged.iter().any(|b| b == branch) {
+                merged.push(branch.to_string());
+            }
+        }
+    }
+
     // Method 2: Check PR state from metadata - if PR is merged, branch should be deleted
     for (branch, info) in &stack.branches {
         // Skip trunk
@@ -768,8 +813,11 @@ fn find_merged_branches(
             continue;
         }
 
-        // Check if PR state is "merged"
-        if info.pr_state.as_deref() == Some("merged") {
+        // Check if PR state is "merged" (case-insensitive)
+        if matches!(
+            info.pr_state.as_deref(),
+            Some(state) if state.eq_ignore_ascii_case("merged")
+        ) {
             merged.push(branch.clone());
         }
     }
@@ -815,6 +863,36 @@ fn find_merged_branches(
         if let Ok(status) = diff_output {
             if status.success() {
                 // No diff = branch is effectively merged
+                merged.push(branch.clone());
+            }
+        }
+    }
+
+    // Method 3b: Empty diff against origin/trunk (handles stale/diverged local trunk)
+    for branch in stack.branches.keys() {
+        // Skip trunk
+        if branch == &stack.trunk {
+            continue;
+        }
+
+        // Skip if already in merged list
+        if merged.contains(branch) {
+            continue;
+        }
+
+        // Skip if branch doesn't exist locally (will be caught by orphan check)
+        if !local_branches.contains(branch) {
+            continue;
+        }
+
+        let diff_output = Command::new("git")
+            .args(["diff", "--quiet", &remote_trunk_ref, branch])
+            .current_dir(workdir)
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        if let Ok(status) = diff_output {
+            if status.success() {
                 merged.push(branch.clone());
             }
         }

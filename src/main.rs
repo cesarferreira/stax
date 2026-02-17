@@ -11,7 +11,7 @@ mod tui;
 mod update;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use config::Config;
 
 #[derive(Parser)]
@@ -21,6 +21,52 @@ use config::Config;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+#[derive(Args, Clone)]
+struct SubmitOptions {
+    /// Create PRs as drafts
+    #[arg(short, long)]
+    draft: bool,
+    /// Only push, don't create/update PRs
+    #[arg(long)]
+    no_pr: bool,
+    /// Skip restack check and submit anyway
+    #[arg(short, long)]
+    force: bool,
+    /// Auto-approve prompts
+    #[arg(long)]
+    yes: bool,
+    /// Disable interactive prompts (use defaults)
+    #[arg(long)]
+    no_prompt: bool,
+    /// Assign reviewers (comma-separated or repeat)
+    #[arg(long, value_delimiter = ',')]
+    reviewers: Vec<String>,
+    /// Add labels (comma-separated or repeat)
+    #[arg(long, value_delimiter = ',')]
+    labels: Vec<String>,
+    /// Assign users (comma-separated or repeat)
+    #[arg(long, value_delimiter = ',')]
+    assignees: Vec<String>,
+    /// Suppress extra output
+    #[arg(long)]
+    quiet: bool,
+    /// Show detailed output
+    #[arg(short, long)]
+    verbose: bool,
+    /// Specify template by name (skip picker)
+    #[arg(long)]
+    template: Option<String>,
+    /// Skip template selection (no template)
+    #[arg(long)]
+    no_template: bool,
+    /// Always open editor for PR body
+    #[arg(long)]
+    edit: bool,
+    /// Generate PR body using AI (claude or codex)
+    #[arg(long)]
+    ai_body: bool,
 }
 
 #[derive(Subcommand)]
@@ -88,45 +134,8 @@ enum Commands {
     /// Submit stack - push branches and create/update PRs
     #[command(visible_alias = "ss")]
     Submit {
-        /// Create PRs as drafts
-        #[arg(short, long)]
-        draft: bool,
-        /// Only push, don't create/update PRs
-        #[arg(long)]
-        no_pr: bool,
-        /// Skip restack check and submit anyway
-        #[arg(short, long)]
-        force: bool,
-        /// Auto-approve prompts
-        #[arg(long)]
-        yes: bool,
-        /// Disable interactive prompts (use defaults)
-        #[arg(long)]
-        no_prompt: bool,
-        /// Assign reviewers (comma-separated or repeat)
-        #[arg(long, value_delimiter = ',')]
-        reviewers: Vec<String>,
-        /// Add labels (comma-separated or repeat)
-        #[arg(long, value_delimiter = ',')]
-        labels: Vec<String>,
-        /// Assign users (comma-separated or repeat)
-        #[arg(long, value_delimiter = ',')]
-        assignees: Vec<String>,
-        /// Suppress extra output
-        #[arg(long)]
-        quiet: bool,
-        /// Show detailed output
-        #[arg(short, long)]
-        verbose: bool,
-        /// Specify template by name (skip picker)
-        #[arg(long)]
-        template: Option<String>,
-        /// Skip template selection (no template)
-        #[arg(long)]
-        no_template: bool,
-        /// Always open editor for PR body
-        #[arg(long)]
-        edit: bool,
+        #[command(flatten)]
+        submit: SubmitOptions,
     },
 
     /// Merge PRs from bottom of stack up to current branch
@@ -204,12 +213,12 @@ enum Commands {
 
     /// Restack from the bottom and submit updates
     Cascade {
-        /// Skip submit step (restack only)
+        /// Push branches but skip PR creation/updates
         #[arg(long)]
-        no_submit: bool,
-        /// Only push, don't create/update PRs
+        push_only: bool,
+        /// Skip pushing to remote (restack locally only)
         #[arg(long)]
-        no_pr: bool,
+        no_push: bool,
     },
 
     /// Checkout a branch in the stack
@@ -390,6 +399,22 @@ enum Commands {
         hours: i64,
     },
 
+    /// Generate content using AI
+    Generate {
+        /// Generate PR body from diff and update the PR
+        #[arg(long)]
+        pr_body: bool,
+        /// Open editor to review before updating
+        #[arg(long)]
+        edit: bool,
+        /// AI agent to use (claude, codex). Defaults to config or auto-detect
+        #[arg(long)]
+        agent: Option<String>,
+        /// Model to use with the AI agent. Defaults to config or agent's default
+        #[arg(long)]
+        model: Option<String>,
+    },
+
     /// Generate changelog between two refs
     Changelog {
         /// Starting ref (tag, branch, or commit)
@@ -475,6 +500,11 @@ enum Commands {
     Bd {
         /// Number of branches to move down
         count: Option<usize>,
+    },
+    #[command(hide = true)]
+    Bs {
+        #[command(flatten)]
+        submit: SubmitOptions,
     },
 }
 
@@ -608,6 +638,12 @@ enum BranchCommands {
 
     /// Move to the bottom of the stack (first branch above trunk)
     Bottom,
+
+    /// Submit the current branch only
+    Submit {
+        #[command(flatten)]
+        submit: SubmitOptions,
+    },
 }
 
 #[derive(Subcommand)]
@@ -618,12 +654,44 @@ enum UpstackCommands {
         #[arg(long)]
         auto_stash_pop: bool,
     },
+
+    /// Submit current branch and descendants
+    Submit {
+        #[command(flatten)]
+        submit: SubmitOptions,
+    },
 }
 
 #[derive(Subcommand)]
 enum DownstackCommands {
     /// Show branches below current
     Get,
+
+    /// Submit ancestors and current branch
+    Submit {
+        #[command(flatten)]
+        submit: SubmitOptions,
+    },
+}
+
+fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Result<()> {
+    commands::submit::run(
+        scope,
+        submit.draft,
+        submit.no_pr,
+        submit.force,
+        submit.yes,
+        submit.no_prompt,
+        submit.reviewers,
+        submit.labels,
+        submit.assignees,
+        submit.quiet,
+        submit.verbose,
+        submit.template,
+        submit.no_template,
+        submit.edit,
+        submit.ai_body,
+    )
 }
 
 fn main() -> Result<()> {
@@ -693,35 +761,7 @@ fn main() -> Result<()> {
             compact,
             quiet,
         } => commands::log::run(json, stack, current, compact, quiet),
-        Commands::Submit {
-            draft,
-            no_pr,
-            force,
-            yes,
-            no_prompt,
-            reviewers,
-            labels,
-            assignees,
-            quiet,
-            verbose,
-            template,
-            no_template,
-            edit,
-        } => commands::submit::run(
-            draft,
-            no_pr,
-            force,
-            yes,
-            no_prompt,
-            reviewers,
-            labels,
-            assignees,
-            quiet,
-            verbose,
-            template,
-            no_template,
-            edit,
-        ),
+        Commands::Submit { submit } => run_submit(submit, commands::submit::SubmitScope::Stack),
         Commands::Merge {
             all,
             dry_run,
@@ -769,7 +809,7 @@ fn main() -> Result<()> {
             quiet,
             auto_stash_pop,
         } => commands::restack::run(all, r#continue, quiet, auto_stash_pop),
-        Commands::Cascade { no_submit, no_pr } => commands::cascade::run(no_submit, no_pr),
+        Commands::Cascade { push_only, no_push } => commands::cascade::run(push_only, no_push),
         Commands::Checkout {
             branch,
             trunk,
@@ -816,6 +856,17 @@ fn main() -> Result<()> {
             commands::copy::run(target)
         }
         Commands::Standup { json, all, hours } => commands::standup::run(json, all, hours),
+        Commands::Generate {
+            pr_body,
+            edit,
+            agent,
+            model,
+        } => {
+            if !pr_body {
+                anyhow::bail!("Please specify what to generate. Usage: stax generate --pr-body");
+            }
+            commands::generate::run(edit, agent, model)
+        }
         Commands::Changelog {
             from,
             to,
@@ -876,15 +927,24 @@ fn main() -> Result<()> {
             BranchCommands::Down { count } => commands::navigate::down(count),
             BranchCommands::Top => commands::navigate::top(),
             BranchCommands::Bottom => commands::navigate::bottom(),
+            BranchCommands::Submit { submit } => {
+                run_submit(submit, commands::submit::SubmitScope::Branch)
+            }
         },
         Commands::Upstack(cmd) => match cmd {
             UpstackCommands::Restack { auto_stash_pop } => {
                 commands::upstack::restack::run(auto_stash_pop)
             }
+            UpstackCommands::Submit { submit } => {
+                run_submit(submit, commands::submit::SubmitScope::Upstack)
+            }
         },
         Commands::Downstack(cmd) => match cmd {
             DownstackCommands::Get => {
                 commands::status::run(false, None, false, false, false, false)
+            }
+            DownstackCommands::Submit { submit } => {
+                run_submit(submit, commands::submit::SubmitScope::Downstack)
             }
         },
         // Hidden shortcuts
@@ -897,6 +957,7 @@ fn main() -> Result<()> {
         } => commands::branch::create::run(name, message, from, prefix, all),
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
+        Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
     };
 
     // Show update notification (from cache, instant) and spawn background check for next run

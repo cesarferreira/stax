@@ -1,6 +1,6 @@
 [package]
 name = "stax"
-version = "0.11.0"
+version = "0.14.0"
 edition = "2021"
 description = "Fast stacked Git branches and PRs"
 license = "MIT"
@@ -13,6 +13,10 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "stax"
+path = "src/main.rs"
+
+[[bin]]
+name = "st"
 path = "src/main.rs"
 
 [dependencies]

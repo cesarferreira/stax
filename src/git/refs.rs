@@ -46,11 +46,15 @@ pub fn write_metadata(repo: &Repository, branch: &str, json: &str) -> Result<()>
 
     // Update the ref to point to the blob
     let ref_name = format!("{}{}", METADATA_REF_PREFIX, branch);
-    Command::new("git")
+    let status = Command::new("git")
         .args(["update-ref", &ref_name, &hash])
         .current_dir(workdir)
         .status()
         .context("Failed to update ref")?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to update ref {}", ref_name);
+    }
 
     Ok(())
 }
@@ -62,11 +66,15 @@ pub fn delete_metadata(repo: &Repository, branch: &str) -> Result<()> {
         .workdir()
         .context("Repository has no working directory")?;
 
-    Command::new("git")
+    let status = Command::new("git")
         .args(["update-ref", "-d", &ref_name])
         .current_dir(workdir)
         .status()
         .context("Failed to delete ref")?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to delete ref {}", ref_name);
+    }
 
     Ok(())
 }

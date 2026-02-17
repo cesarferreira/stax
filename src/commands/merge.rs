@@ -409,7 +409,8 @@ pub fn run(
             // metadata must match that actual rebase target.
             if let Some(meta) = BranchMetadata::read(repo.inner(), &next_branch.branch)? {
                 let remote_trunk_ref = format!("{}/{}", remote_info.name, scope.trunk);
-                let trunk_commit = repo.resolve_ref(&remote_trunk_ref)
+                let trunk_commit = repo
+                    .resolve_ref(&remote_trunk_ref)
                     .unwrap_or_else(|_| repo.branch_commit(&scope.trunk).unwrap_or_default());
                 let updated_meta = BranchMetadata {
                     parent_branch_name: scope.trunk.clone(),
@@ -453,8 +454,10 @@ pub fn run(
                     // which may be stale). The rebase above used origin/<trunk>.
                     if let Some(meta) = BranchMetadata::read(repo.inner(), &remaining.branch)? {
                         let remote_trunk_ref = format!("{}/{}", remote_info.name, scope.trunk);
-                        let trunk_commit = repo.resolve_ref(&remote_trunk_ref)
-                            .unwrap_or_else(|_| repo.branch_commit(&scope.trunk).unwrap_or_default());
+                        let trunk_commit =
+                            repo.resolve_ref(&remote_trunk_ref).unwrap_or_else(|_| {
+                                repo.branch_commit(&scope.trunk).unwrap_or_default()
+                            });
                         let updated_meta = BranchMetadata {
                             parent_branch_name: scope.trunk.clone(),
                             parent_branch_revision: trunk_commit,

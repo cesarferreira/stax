@@ -1,14 +1,14 @@
 # Plan
-- [x] Add `branch untrack` command wiring in CLI (`BranchCommands`, dispatch, and module exports).
-- [x] Implement `/Users/cesarferreira/code/github/stax/src/commands/branch/untrack.rs` to remove only stax metadata for target branch (default: current).
-- [x] Add/upgrade tests to verify untrack removes metadata while keeping the Git branch.
-- [x] Run targeted tests for untrack and branch help/coverage.
-- [x] Document review summary.
+- [x] Make stack loading ignore/prune metadata entries for branches that no longer exist locally.
+- [x] Make metadata ref deletion/writes fail on git errors (so stale metadata cannot silently survive).
+- [x] Switch TUI diff/stat generation to PR-style merge-base diffs instead of direct parent-vs-branch tree diffs.
+- [x] Add TUI diff caching so up/down navigation doesn’t recompute expensive diffs on every keypress.
+- [x] Run focused tests and document review results.
 
 # Review
-- [x] Added new CLI subcommand `stax branch untrack [branch]` (alias: `ut`) and wired dispatch in `/Users/cesarferreira/code/github/stax/src/main.rs`.
-- [x] Added command module export in `/Users/cesarferreira/code/github/stax/src/commands/branch/mod.rs` and new implementation in `/Users/cesarferreira/code/github/stax/src/commands/branch/untrack.rs`.
-- [x] Upgraded `/Users/cesarferreira/code/github/stax/tests/additional_coverage_tests.rs` `test_branch_untrack` to assert metadata deletion and branch retention.
-- [x] Updated help/coverage checks in `/Users/cesarferreira/code/github/stax/tests/cli_tests.rs` and `/Users/cesarferreira/code/github/stax/tests/command_coverage_tests.rs`.
-- [x] Updated docs references in `/Users/cesarferreira/code/github/stax/README.md` and `/Users/cesarferreira/code/github/stax/skills.md`.
-- [x] Validation commands run: `cargo fmt`; `cargo test test_branch_untrack -- --nocapture`; `cargo test test_branch_subcommands -- --nocapture`; `cargo test test_branch_untrack_help -- --nocapture`; `cargo test fp_parity_b_branch -- --nocapture`.
+- [x] `Stack::load` now skips metadata entries whose local branch no longer exists and best-effort deletes those stale metadata refs (`/Users/cesarferreira/code/github/stax/src/engine/stack.rs`).
+- [x] Metadata git-ref operations now fail loudly on non-zero `git update-ref` exit status (`/Users/cesarferreira/code/github/stax/src/git/refs.rs`).
+- [x] TUI diff/stat now uses merge-base diff range (`parent...branch`) to match PR semantics and avoid pulling in unrelated parent-side changes (`/Users/cesarferreira/code/github/stax/src/git/repo.rs`).
+- [x] Added in-memory diff cache keyed by `parent...branch`, and clear cache on refresh so navigation reuses previously loaded diffs (`/Users/cesarferreira/code/github/stax/src/tui/app.rs`).
+- [x] Verification: `cargo test --test tui_commands_tests` passed; focused suites `cargo test engine::stack::tests::` and `cargo test git::repo::tests::` passed.
+- [x] Note: `cargo test --lib` has pre-existing unrelated failures in config tests (`test_github_token_roundtrip`, `test_github_token_trims_whitespace_from_file`, `test_format_template_empty_user_message_only_format`).

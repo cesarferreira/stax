@@ -58,6 +58,8 @@ brew tap cesarferreira/tap && brew install stax
 cargo binstall stax
 ```
 
+Both `stax` and `st` (short alias) are installed automatically. All examples below use `stax`, but `st` works identically.
+
 ## Quick Start
 
 ```bash
@@ -196,7 +198,9 @@ Split uses the transaction system, so you can `stax undo` if needed.
 | `stax merge` | Merge PRs from bottom of stack up to current branch |
 | `stax rs` | Repo sync - pull trunk, clean up merged branches |
 | `stax rs --restack` | Sync and rebase all branches onto updated trunk |
-| `stax cascade` | Restack from bottom, upstack restack, and submit updates |
+| `stax cascade` | Restack from bottom, upstack restack, push, and create/update PRs |
+| `stax cascade --push-only` | Restack and push (skip PR creation/updates) |
+| `stax cascade --no-push` | Restack only (no remote interaction) |
 | `stax co` | Interactive branch checkout with fuzzy search |
 | `stax u` / `stax d` | Move up/down the stack |
 | `stax m` | Modify - stage all changes and amend current commit |
@@ -578,16 +582,60 @@ stax config  # Show config path and current settings
 Config at `~/.config/stax/config.toml`:
 
 ```toml
+# ~/.config/stax/config.toml — full reference with defaults
+
 [branch]
-prefix = "cesar/"      # Auto-prefix branches: "auth" → "cesar/auth"
+# DEPRECATED: Use `format` instead. Auto-prefix for branches.
+# prefix = "cesar/"
+
+# Branch name format template. Placeholders: {user}, {date}, {message}
+# format = "{user}/{date}/{message}"
+
+# Username for branch naming (default: git config user.name)
+# user = "cesar"
+
+# Date format for {date} placeholder (default: "%m-%d")
+# Uses chrono strftime: %Y=year, %m=month, %d=day
+# date_format = "%m-%d"
+
+# Character to replace spaces and special chars (default: "-")
+# replacement = "-"
 
 [remote]
-name = "origin"
-provider = "github"    # github, gitlab, gitea
+# Git remote name (default: "origin")
+# name = "origin"
+
+# Base web URL for GitHub (default: "https://github.com")
+# base_url = "https://github.com"
+
+# API base URL for GitHub Enterprise
+# api_base_url = "https://github.company.com/api/v3"
 
 [ui]
-tips = true            # Show contextual suggestions (default: true)
+# Show contextual tips/suggestions (default: true)
+# tips = true
+
+[ai]
+# AI agent for PR body generation: "claude" or "codex"
+# If not set, stax auto-detects installed agents and prompts on first use
+# agent = "claude"
+
+# Model to use with the AI agent (default: agent's own default)
+# model = "claude-sonnet-4-5-20250929"
 ```
+
+### Branch Name Format
+
+Use `format` to template branch names with `{user}`, `{date}`, and `{message}` placeholders:
+
+```toml
+[branch]
+format = "{user}/{date}/{message}"   # "cesar/02-11/add-login"
+user = "cesar"                        # Optional: defaults to git config user.name
+date_format = "%m-%d"                 # Optional: chrono strftime (default: "%m-%d")
+```
+
+Empty placeholders are cleaned up automatically. The legacy `prefix` field still works if `format` is not set.
 
 ### GitHub Authentication
 
@@ -631,6 +679,9 @@ stax uses the same metadata format as freephite and supports similar commands:
 | freephite | stax | graphite | stax |
 |-----------|------|----------|------|
 | `fp ss` | `stax ss` | `gt submit` | `stax submit` |
+| `fp bs` | `stax branch submit` | `gt branch submit` | `stax branch submit` |
+| `fp us submit` | `stax upstack submit` | `gt upstack submit` | `stax upstack submit` |
+| `fp ds submit` | `stax downstack submit` | `gt downstack submit` | `stax downstack submit` |
 | `fp rs` | `stax rs` | `gt sync` | `stax sync` |
 | `fp bc` | `stax bc` | `gt create` | `stax create` |
 | `fp bco` | `stax bco` | `gt checkout` | `stax co` |
@@ -685,6 +736,46 @@ stax submit --no-template      # Empty body
 stax submit --edit             # Force editor open
 ```
 
+## AI-Powered PR Body Generation
+
+Generate a PR description using AI, based on your diff, commit messages, and the repo's PR template:
+
+```bash
+stax generate --pr-body
+```
+
+stax collects the diff, commit messages, and PR template for the current branch, sends them to an AI agent (Claude or Codex CLI), and updates the PR body on GitHub.
+
+### First Run
+
+If no AI agent is configured, stax auto-detects what's installed and walks you through setup:
+
+```
+? Select AI agent:
+> claude (default)
+  codex
+
+? Select model for claude:
+> claude-sonnet-4-5-20250929 — Sonnet 4.5 (default, balanced)
+  claude-haiku-4-5-20251001 — Haiku 4.5 (fastest, cheapest)
+  claude-opus-4-6 — Opus 4.6 (most capable)
+
+? Save choices to config? (Y/n): Y
+✓ Saved ai.agent = "claude", ai.model = "claude-sonnet-4-5-20250929"
+```
+
+### Options
+
+- `--agent <name>`: Override the configured agent for this invocation
+- `--model <name>`: Override the model (e.g., `claude-haiku-4-5-20251001`, `gpt-4.1-mini`)
+- `--edit`: Open $EDITOR to review/tweak the generated body before updating the PR
+
+```bash
+stax generate --pr-body --agent codex                        # Use codex this time
+stax generate --pr-body --model claude-haiku-4-5-20251001    # Use a specific model
+stax generate --pr-body --edit                               # Review in editor first
+```
+
 ## All Commands
 
 <details>
@@ -695,7 +786,7 @@ stax submit --edit             # Force editor open
 |---------|-------|-------------|
 | `stax status` | `s`, `ls` | Show stack (simple view) |
 | `stax log` | `l` | Show stack with commits and PR info |
-| `stax submit` | `ss` | Push and create/update PRs |
+| `stax submit` | `ss` | Submit full current stack (ancestors + current + descendants) |
 | `stax merge` | | Merge PRs from bottom of stack to current |
 | `stax sync` | `rs` | Pull trunk, delete merged branches |
 | `stax restack` | | Rebase current branch onto parent |
@@ -713,9 +804,12 @@ stax submit --edit             # Force editor open
 | `stax branch track --all-prs` | | Track all your open PRs |
 | `stax branch untrack` | `ut` | Remove stax metadata for a branch (keep git branch) |
 | `stax branch reparent` | | Change parent of a branch |
+| `stax branch submit` | `bs` | Submit only current branch |
 | `stax branch delete` | | Delete a branch |
 | `stax branch fold` | | Fold branch into parent |
 | `stax branch squash` | | Squash commits on branch |
+| `stax upstack submit` | | Submit current branch + descendants |
+| `stax downstack submit` | | Submit ancestors + current branch |
 
 ### Navigation
 | Command | Alias | Description |
@@ -763,6 +857,8 @@ stax submit --edit             # Force editor open
 | `stax changelog <from> [to]` | Generate changelog between two refs |
 | `stax changelog v1.0 --path src/` | Changelog filtered by path (monorepo) |
 | `stax changelog v1.0 --json` | Output changelog as JSON |
+| `stax generate --pr-body` | Generate PR body with AI and update the PR |
+| `stax generate --pr-body --edit` | Generate and review in editor before updating |
 
 ### Common Flags
 - `stax create -m "msg"` - Create branch with commit message
@@ -771,6 +867,9 @@ stax submit --edit             # Force editor open
 - `stax rename new-name` - Rename current branch
 - `stax rename -e` - Rename and edit commit message
 - `stax submit --draft` - Create PRs as drafts
+- `stax branch submit` / `stax bs` - Submit current branch only
+- `stax upstack submit` - Submit current branch and descendants
+- `stax downstack submit` - Submit ancestors and current branch
 - `stax submit --yes` - Auto-approve prompts
 - `stax submit --no-prompt` - Use defaults, skip interactive prompts
 - `stax submit --template <name>` - Use specific template by name (skip picker)
@@ -783,10 +882,16 @@ stax submit --edit             # Force editor open
 - `stax merge --method squash` - Choose merge method (squash/merge/rebase)
 - `stax merge --dry-run` - Preview merge without executing
 - `stax merge --no-wait` - Don't wait for CI, fail if not ready
+- `stax cascade --push-only` - Restack and push branches (skip PR creation/updates)
+- `stax cascade --no-push` - Restack only (no remote interaction)
+- Recommended workflow: run `stax rs --restack` before `stax cascade` to sync trunk and rebase all branches first
 - `stax sync --restack` - Sync and rebase all branches
 - `stax status --json` - Output as JSON
 - `stax undo --yes` - Undo without prompts
 - `stax undo --no-push` - Undo locally only, skip remote
+- `stax generate --pr-body --edit` - Generate and review in editor
+- `stax generate --pr-body --agent codex` - Use specific AI agent
+- `stax generate --pr-body --model claude-haiku-4-5-20251001` - Use specific model
 
 **CI/Automation example:**
 ```bash
