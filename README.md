@@ -286,6 +286,38 @@ stax changelog v1.0.0 --json
 
 PR numbers are automatically extracted from commit messages (GitHub's squash merge format: `(#123)`).
 
+## Multi-Worktree Support
+
+stax is worktree-aware. When you have branches checked out across multiple worktrees, restack, sync, and cascade all work correctly without requiring you to switch worktrees manually.
+
+### How it works
+
+- **Restack / upstack restack / sync `--restack`**: When a branch to be rebased is checked out in another worktree, stax runs `git rebase` inside that worktree instead of checking it out in the current one.
+- **Cascade**: Before restacking, stax fetches from remote and fast-forwards your local trunk — even if trunk is checked out in a different worktree. This prevents rebasing onto a stale local trunk, which would cause PRs to include commits already merged to remote.
+- **Sync trunk update**: If trunk is checked out in another worktree, stax pulls it there directly.
+
+### Dirty worktrees
+
+By default, stax fails fast if a target worktree has uncommitted changes, showing you the branch name and worktree path.
+
+Use `--auto-stash-pop` to let stax stash changes automatically before rebasing and restore them afterward:
+
+```bash
+stax restack --auto-stash-pop
+stax upstack restack --auto-stash-pop
+stax sync --restack --auto-stash-pop
+```
+
+If the rebase results in a conflict, the stash is kept intact so your changes are not lost. Run `git stash list` to find them.
+
+### Cascade flags
+
+```bash
+stax cascade                # sync trunk + restack + push + create/update PRs
+stax cascade --push-only    # sync trunk + restack + push (skip PR creation/updates)
+stax cascade --no-push      # sync trunk + restack only (no remote interaction)
+```
+
 ## Safe History Rewriting with Undo
 
 Stax makes rebasing and force-pushing **safe** with automatic backups and one-command recovery:
@@ -889,7 +921,6 @@ stax generate --pr-body --edit                               # Review in editor 
 - `stax sync --restack --auto-stash-pop` - Auto-stash/pop while syncing + restacking
 - `stax cascade --push-only` - Restack and push branches (skip PR creation/updates)
 - `stax cascade --no-push` - Restack only (no remote interaction)
-- Recommended workflow: run `stax rs --restack` before `stax cascade` to sync trunk and rebase all branches first
 - `stax sync --restack` - Sync and rebase all branches
 - `stax status --json` - Output as JSON
 - `stax undo --yes` - Undo without prompts
