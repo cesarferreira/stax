@@ -20,41 +20,58 @@ pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Re
 
     let mut stashed = false;
     if repo.is_dirty()? {
-        if quiet {
-            anyhow::bail!("Working tree is dirty. Please stash or commit changes first.");
-        }
-
-        let stash = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Working tree has uncommitted changes. Stash them before restack?")
-            .default(true)
-            .interact()?;
-
-        if stash {
+        if auto_stash_pop {
             stashed = repo.stash_push()?;
-            println!("{}", "✓ Stashed working tree changes.".green());
+            if stashed && !quiet {
+                println!("{}", "✓ Stashed working tree changes.".green());
+            }
+        } else if quiet {
+            anyhow::bail!("Working tree is dirty. Please stash or commit changes first.");
         } else {
-            println!("{}", "Aborted.".red());
-            return Ok(());
+            let stash = Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Working tree has uncommitted changes. Stash them before restack?")
+                .default(true)
+                .interact()?;
+
+            if stash {
+                stashed = repo.stash_push()?;
+                println!("{}", "✓ Stashed working tree changes.".green());
+            } else {
+                println!("{}", "Aborted.".red());
+                return Ok(());
+            }
         }
     }
 
-    // Determine which branches to restack
-    let branches_to_restack: Vec<String> = if all {
-        stack.needs_restack()
+    // Determine the operation scope once, then evaluate restack status live per branch.
+    let mut scope_branches: Vec<String> = if all {
+        stack
+            .branches
+            .keys()
+            .filter(|b| *b != &stack.trunk)
+            .cloned()
+            .collect()
     } else {
-        // Just the current branch's stack
+        // Current stack: ancestors + current + descendants, excluding trunk.
         stack
             .current_stack(&current)
             .into_iter()
-            .filter(|b| {
-                stack
-                    .branches
-                    .get(b)
-                    .map(|br| br.needs_restack)
-                    .unwrap_or(false)
-            })
+            .filter(|b| b != &stack.trunk)
             .collect()
     };
+
+    if all {
+        // Parent-first ordering minimizes repeated rebases across unrelated stacks.
+        scope_branches.sort_by(|a, b| {
+            stack
+                .ancestors(a)
+                .len()
+                .cmp(&stack.ancestors(b).len())
+                .then_with(|| a.cmp(b))
+        });
+    }
+
+    let branches_to_restack = branches_needing_restack(&stack, &scope_branches);
 
     if branches_to_restack.is_empty() {
         if !quiet {
@@ -66,28 +83,28 @@ pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Re
         return Ok(());
     }
 
-    let branch_word = if branches_to_restack.len() == 1 {
+    let branch_word = if scope_branches.len() == 1 {
         "branch"
     } else {
         "branches"
     };
     if !quiet {
         println!(
-            "Restacking {} {}...",
-            branches_to_restack.len().to_string().cyan(),
+            "Restacking up to {} {}...",
+            scope_branches.len().to_string().cyan(),
             branch_word
         );
     }
 
     // Begin transaction
     let mut tx = Transaction::begin(OpKind::Restack, &repo, quiet)?;
-    tx.plan_branches(&repo, &branches_to_restack)?;
+    tx.plan_branches(&repo, &scope_branches)?;
     let summary = PlanSummary {
-        branches_to_rebase: branches_to_restack.len(),
+        branches_to_rebase: scope_branches.len(),
         branches_to_push: 0,
         description: vec![format!(
-            "Restack {} {}",
-            branches_to_restack.len(),
+            "Restack up to {} {}",
+            scope_branches.len(),
             branch_word
         )],
     };
@@ -97,7 +114,17 @@ pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Re
 
     let mut summary: Vec<(String, String)> = Vec::new();
 
-    for branch in &branches_to_restack {
+    for branch in &scope_branches {
+        let live_stack = Stack::load(&repo)?;
+        let needs_restack = live_stack
+            .branches
+            .get(branch)
+            .map(|br| br.needs_restack)
+            .unwrap_or(false);
+        if !needs_restack {
+            continue;
+        }
+
         // Get metadata
         let meta = match BranchMetadata::read(repo.inner(), branch)? {
             Some(m) => m,
@@ -183,6 +210,20 @@ pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Re
     }
 
     Ok(())
+}
+
+fn branches_needing_restack(stack: &Stack, scope: &[String]) -> Vec<String> {
+    scope
+        .iter()
+        .filter(|branch| {
+            stack
+                .branches
+                .get(*branch)
+                .map(|b| b.needs_restack)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
 }
 
 /// Check for merged branches and prompt to delete each one

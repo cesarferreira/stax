@@ -230,6 +230,7 @@ Split uses the transaction system, so you can `stax undo` if needed.
 | `stax merge` | Merge PRs from bottom of stack up to current branch |
 | `stax rs` | Repo sync - pull trunk, clean up merged branches |
 | `stax rs --restack` | Sync and rebase all branches onto updated trunk |
+| `stax restack` | Restack current stack (ancestors + current + descendants) |
 | `stax restack --auto-stash-pop` | Restack even when target worktrees are dirty (auto-stash/pop) |
 | `stax rs --restack --auto-stash-pop` | Sync, restack, auto-stash/pop dirty worktrees |
 | `stax cascade` | Restack from bottom, push, and create/update PRs |
@@ -941,7 +942,7 @@ stax generate --pr-body --edit                               # Review in editor 
 | `stax submit` | `ss` | Submit full current stack (ancestors + current + descendants) |
 | `stax merge` | | Merge PRs from bottom of stack to current |
 | `stax sync` | `rs` | Pull trunk, delete merged branches |
-| `stax restack` | | Rebase current branch onto parent |
+| `stax restack` | | Restack current stack (ancestors + current + descendants) |
 | `stax diff` | | Show diffs for each branch vs parent |
 | `stax range-diff` | | Show range-diff for branches needing restack |
 
