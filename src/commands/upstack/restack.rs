@@ -11,20 +11,13 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
 
-    // Get current branch + descendants that need restacking
+    // Scope is current branch + descendants (excluding trunk); evaluate
+    // restack status live per branch while walking this order.
     let mut upstack = vec![current.clone()];
     upstack.extend(stack.descendants(&current));
+    upstack.retain(|b| b != &stack.trunk);
 
-    let branches_to_restack: Vec<String> = upstack
-        .into_iter()
-        .filter(|b| {
-            stack
-                .branches
-                .get(b)
-                .map(|br| br.needs_restack)
-                .unwrap_or(false)
-        })
-        .collect();
+    let branches_to_restack = branches_needing_restack(&stack, &upstack);
 
     if branches_to_restack.is_empty() {
         // Check if the current branch itself needs restacking
@@ -50,26 +43,26 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
         return Ok(());
     }
 
-    let branch_word = if branches_to_restack.len() == 1 {
+    let branch_word = if upstack.len() == 1 {
         "branch"
     } else {
         "branches"
     };
     println!(
-        "Restacking {} {}...",
-        branches_to_restack.len().to_string().cyan(),
+        "Restacking up to {} {}...",
+        upstack.len().to_string().cyan(),
         branch_word
     );
 
     // Begin transaction
     let mut tx = Transaction::begin(OpKind::UpstackRestack, &repo, false)?;
-    tx.plan_branches(&repo, &branches_to_restack)?;
+    tx.plan_branches(&repo, &upstack)?;
     let summary = PlanSummary {
-        branches_to_rebase: branches_to_restack.len(),
+        branches_to_rebase: upstack.len(),
         branches_to_push: 0,
         description: vec![format!(
-            "Upstack restack {} {}",
-            branches_to_restack.len(),
+            "Upstack restack up to {} {}",
+            upstack.len(),
             branch_word
         )],
     };
@@ -77,7 +70,17 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
     tx.set_plan_summary(summary);
     tx.snapshot()?;
 
-    for branch in &branches_to_restack {
+    for branch in &upstack {
+        let live_stack = Stack::load(&repo)?;
+        let needs_restack = live_stack
+            .branches
+            .get(branch)
+            .map(|br| br.needs_restack)
+            .unwrap_or(false);
+        if !needs_restack {
+            continue;
+        }
+
         let meta = match BranchMetadata::read(repo.inner(), branch)? {
             Some(m) => m,
             None => continue,
@@ -127,4 +130,18 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
     println!("{}", "✓ Upstack restacked successfully!".green());
 
     Ok(())
+}
+
+fn branches_needing_restack(stack: &Stack, scope: &[String]) -> Vec<String> {
+    scope
+        .iter()
+        .filter(|branch| {
+            stack
+                .branches
+                .get(*branch)
+                .map(|b| b.needs_restack)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
 }
