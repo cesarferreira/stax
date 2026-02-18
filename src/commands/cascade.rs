@@ -7,7 +7,7 @@ use colored::Colorize;
 use std::io::Write;
 use std::process::Command;
 
-pub fn run(push_only: bool, no_push: bool) -> Result<()> {
+pub fn run(no_pr: bool, no_submit: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let original = repo.current_branch()?;
 
@@ -31,25 +31,25 @@ pub fn run(push_only: bool, no_push: bool) -> Result<()> {
         return Ok(());
     }
 
-    if no_push {
-        println!("{}", "Skipping push and PRs (--no-push flag)".dimmed());
+    if no_submit {
+        println!("{}", "Skipping push and PRs (--no-submit)".dimmed());
     } else {
         commands::submit::run(
             commands::submit::SubmitScope::Stack,
-            false,     // draft
-            push_only, // no_pr (push but skip PR creation)
-            false,     // force
-            true,      // yes
-            true,      // no_prompt
-            vec![],    // reviewers
-            vec![],    // labels
-            vec![],    // assignees
-            false,     // quiet
-            false,     // verbose
-            None,      // template
-            false,     // no_template
-            false,     // edit
-            false,     // ai_body
+            false,  // draft
+            no_pr,  // no_pr (push but skip PR creation/updates)
+            false,  // force
+            true,   // yes
+            true,   // no_prompt
+            vec![], // reviewers
+            vec![], // labels
+            vec![], // assignees
+            false,  // quiet
+            false,  // verbose
+            None,   // template
+            false,  // no_template
+            false,  // edit
+            false,  // ai_body
         )?;
     }
 

@@ -213,12 +213,12 @@ enum Commands {
 
     /// Restack from the bottom and submit updates
     Cascade {
-        /// Push branches but skip PR creation/updates
+        /// Push branches to remote but skip PR creation/updates
         #[arg(long)]
-        push_only: bool,
-        /// Skip pushing to remote (restack locally only)
+        no_pr: bool,
+        /// Skip all remote interaction (restack locally only)
         #[arg(long)]
-        no_push: bool,
+        no_submit: bool,
     },
 
     /// Checkout a branch in the stack
@@ -809,7 +809,7 @@ fn main() -> Result<()> {
             quiet,
             auto_stash_pop,
         } => commands::restack::run(all, r#continue, quiet, auto_stash_pop),
-        Commands::Cascade { push_only, no_push } => commands::cascade::run(push_only, no_push),
+        Commands::Cascade { no_pr, no_submit } => commands::cascade::run(no_pr, no_submit),
         Commands::Checkout {
             branch,
             trunk,
