@@ -258,8 +258,11 @@ enum Commands {
     /// Authenticate with GitHub
     Auth {
         /// GitHub personal access token
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "from_gh")]
         token: Option<String>,
+        /// Import token from GitHub CLI (`gh auth token`)
+        #[arg(long)]
+        from_gh: bool,
     },
 
     /// Show config file path and contents
@@ -718,8 +721,8 @@ fn main() -> Result<()> {
 
     // Commands that don't need repo initialization
     match &command {
-        Commands::Auth { token } => {
-            let result = commands::auth::run(token.clone());
+        Commands::Auth { token, from_gh } => {
+            let result = commands::auth::run(token.clone(), *from_gh);
             update::show_update_notification();
             update::check_in_background();
             return result;
@@ -812,7 +815,11 @@ fn main() -> Result<()> {
             quiet,
             auto_stash_pop,
         } => commands::restack::run(all, r#continue, quiet, auto_stash_pop),
-        Commands::Cascade { no_pr, no_submit, auto_stash_pop } => commands::cascade::run(no_pr, no_submit, auto_stash_pop),
+        Commands::Cascade {
+            no_pr,
+            no_submit,
+            auto_stash_pop,
+        } => commands::cascade::run(no_pr, no_submit, auto_stash_pop),
         Commands::Checkout {
             branch,
             trunk,

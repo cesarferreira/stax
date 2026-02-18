@@ -54,12 +54,12 @@ pub fn run() -> Result<()> {
     }
 
     if Config::github_token().is_some() {
-        println!("{} {}", "✓".green(), "GitHub token set".dimmed());
+        println!("{} {}", "✓".green(), "GitHub auth available".dimmed());
     } else {
         println!(
             "{} {}",
             "⚠".yellow(),
-            "GitHub token missing (PR creation disabled)".yellow()
+            "GitHub auth missing (PR creation disabled)".yellow()
         );
     }
 

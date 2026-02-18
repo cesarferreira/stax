@@ -98,8 +98,10 @@ struct SearchIssue {
 impl GitHubClient {
     /// Create a new GitHub client from config
     pub fn new(owner: &str, repo: &str, api_base_url: Option<String>) -> Result<Self> {
-        let token = Config::github_token()
-            .context("GitHub token not set. Run `stax auth` or set GITHUB_TOKEN env var.")?;
+        let token = Config::github_token().context(
+            "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, \
+             `gh auth login`, or set `STAX_GITHUB_TOKEN`.",
+        )?;
 
         let mut builder = Octocrab::builder().personal_token(token.to_string());
         if let Some(api_base) = api_base_url {

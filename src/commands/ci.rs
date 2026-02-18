@@ -181,7 +181,9 @@ pub fn run(all: bool, json: bool, _refresh: bool, watch: bool, interval: u64) ->
 
     // Check for GitHub token
     if Config::github_token().is_none() {
-        anyhow::bail!("GitHub token not set. Run `stax auth` or set GITHUB_TOKEN env var.");
+        anyhow::bail!(
+            "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, `gh auth login`, or set `STAX_GITHUB_TOKEN`."
+        );
     }
 
     let Some(remote) = remote_info else {

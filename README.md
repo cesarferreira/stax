@@ -651,6 +651,16 @@ Config at `~/.config/stax/config.toml`:
 # API base URL for GitHub Enterprise
 # api_base_url = "https://github.company.com/api/v3"
 
+[auth]
+# Use `gh auth token` as a fallback auth source (default: true)
+# use_gh_cli = true
+
+# Allow ambient GITHUB_TOKEN env var (default: false)
+# allow_github_token_env = false
+
+# Optional hostname for gh auth token (GitHub Enterprise)
+# gh_hostname = "github.company.com"
+
 [ui]
 # Show contextual tips/suggestions (default: true)
 # tips = true
@@ -682,18 +692,30 @@ Empty placeholders are cleaned up automatically. The legacy `prefix` field still
 stax looks for a GitHub token in the following order (first found wins):
 
 1. `STAX_GITHUB_TOKEN` environment variable
-2. `GITHUB_TOKEN` environment variable
-3. Credentials file (`~/.config/stax/.credentials`)
+2. Credentials file (`~/.config/stax/.credentials`)
+3. `gh auth token` (when `auth.use_gh_cli = true`, default)
+4. `GITHUB_TOKEN` environment variable (only when `auth.allow_github_token_env = true`)
 
 ```bash
 # Option 1: stax-specific env var (highest priority)
 export STAX_GITHUB_TOKEN="ghp_xxxx"
 
-# Option 2: Standard GitHub env var (works with other tools too)
-export GITHUB_TOKEN="ghp_xxxx"
-
-# Option 3: Interactive setup (saves to credentials file)
+# Option 2: Interactive setup (saves to credentials file)
 stax auth
+
+# Option 3: Import from GitHub CLI auth (saves to credentials file)
+stax auth --from-gh
+```
+
+To use `GITHUB_TOKEN` as a fallback, opt in explicitly:
+
+```toml
+[auth]
+allow_github_token_env = true
+```
+
+```bash
+export GITHUB_TOKEN="ghp_xxxx"
 ```
 
 The credentials file is created with `600` permissions (read/write for owner only).
@@ -878,7 +900,7 @@ stax generate --pr-body --edit                               # Review in editor 
 ### Utilities
 | Command | Description |
 |---------|-------------|
-| `stax auth` | Set GitHub token |
+| `stax auth` | Set GitHub token (`--from-gh` supported) |
 | `stax config` | Show configuration |
 | `stax doctor` | Check repo health |
 | `stax continue` | Continue after resolving conflicts |
