@@ -219,6 +219,9 @@ enum Commands {
         /// Skip all remote interaction (restack locally only)
         #[arg(long)]
         no_submit: bool,
+        /// Auto-stash and auto-pop dirty target worktrees during restack
+        #[arg(long)]
+        auto_stash_pop: bool,
     },
 
     /// Checkout a branch in the stack
@@ -809,7 +812,7 @@ fn main() -> Result<()> {
             quiet,
             auto_stash_pop,
         } => commands::restack::run(all, r#continue, quiet, auto_stash_pop),
-        Commands::Cascade { no_pr, no_submit } => commands::cascade::run(no_pr, no_submit),
+        Commands::Cascade { no_pr, no_submit, auto_stash_pop } => commands::cascade::run(no_pr, no_submit, auto_stash_pop),
         Commands::Checkout {
             branch,
             trunk,

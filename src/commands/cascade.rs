@@ -6,7 +6,7 @@ use anyhow::Result;
 use colored::Colorize;
 use std::process::Command;
 
-pub fn run(no_pr: bool, no_submit: bool) -> Result<()> {
+pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let original = repo.current_branch()?;
 
@@ -18,13 +18,13 @@ pub fn run(no_pr: bool, no_submit: bool) -> Result<()> {
     warn_if_trunk_stale(&repo);
 
     commands::navigate::bottom()?;
-    commands::restack::run(false, false, true, false)?;
+    commands::restack::run(false, false, true, auto_stash_pop)?;
 
     if repo.rebase_in_progress()? {
         return Ok(());
     }
 
-    commands::upstack::restack::run(false)?;
+    commands::upstack::restack::run(auto_stash_pop)?;
 
     if repo.rebase_in_progress()? {
         return Ok(());
