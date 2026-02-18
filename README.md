@@ -199,6 +199,7 @@ Split uses the transaction system, so you can `stax undo` if needed.
 | `stax rs` | Repo sync - pull trunk, clean up merged branches |
 | `stax rs --restack` | Sync and rebase all branches onto updated trunk |
 | `stax restack --auto-stash-pop` | Restack even when target worktrees are dirty (auto-stash/pop) |
+| `stax rs --restack --auto-stash-pop` | Sync, restack, auto-stash/pop dirty worktrees |
 | `stax cascade` | Restack from bottom, push, and create/update PRs |
 | `stax cascade --no-pr` | Restack and push (skip PR creation/updates) |
 | `stax cascade --no-submit` | Restack only (no remote interaction) |
@@ -318,7 +319,7 @@ If the rebase results in a conflict, the stash is kept intact so your changes ar
 | `stax cascade --no-pr` | restack → push (skip PR creation/updates) |
 | `stax cascade --no-submit` | restack only (no remote interaction) |
 
-Use `--no-pr` when you want branches pushed to remote but aren't ready to open or update PRs yet. Use `--no-submit` for a pure local restack with no network activity.
+Use `--no-pr` when your remote branches should be updated (pushed) but you aren't ready to open or update PRs yet — e.g. branches still in progress. Use `--no-submit` for a pure local restack with no network activity at all.
 
 > **Tip:** run `stax rs` before `stax cascade` to pull the latest trunk and avoid rebasing onto stale commits. If your local trunk is behind remote, `stax cascade` will warn you.
 
@@ -922,9 +923,9 @@ stax generate --pr-body --edit                               # Review in editor 
 - `stax merge --no-wait` - Don't wait for CI, fail if not ready
 - `stax restack --auto-stash-pop` - Auto-stash/pop dirty target worktrees during restack
 - `stax upstack restack --auto-stash-pop` - Auto-stash/pop when restacking descendants
-- `stax sync --restack --auto-stash-pop` - Auto-stash/pop while syncing + restacking
-- `stax cascade --no-pr` - Restack and push (skip PR creation/updates)
-- `stax cascade --no-submit` - Restack only (no remote interaction)
+- `stax rs --restack --auto-stash-pop` - Sync, restack, auto-stash/pop dirty worktrees (`rs` = sync alias)
+- `stax cascade --no-pr` - Restack and push branches; skip PR creation/updates
+- `stax cascade --no-submit` - Restack only, no remote interaction
 - `stax sync --restack` - Sync and rebase all branches
 - `stax status --json` - Output as JSON
 - `stax undo --yes` - Undo without prompts
