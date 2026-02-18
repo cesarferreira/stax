@@ -30,3 +30,22 @@ fn test_auth_token_conflicts_with_from_gh() {
         stderr
     );
 }
+
+#[test]
+fn test_auth_status_command() {
+    let repo = TestRepo::new();
+    let output = repo.run_stax(&["auth", "status"]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("GitHub Auth Status"),
+        "Expected auth status header, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Resolution order"),
+        "Expected resolution order in status output, got: {}",
+        stdout
+    );
+}

@@ -92,6 +92,37 @@ pub struct AuthConfig {
     pub gh_hostname: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitHubAuthSource {
+    StaxGithubTokenEnv,
+    CredentialsFile,
+    GhCli,
+    GithubTokenEnv,
+}
+
+impl GitHubAuthSource {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::StaxGithubTokenEnv => "STAX_GITHUB_TOKEN",
+            Self::CredentialsFile => "credentials file (~/.config/stax/.credentials)",
+            Self::GhCli => "gh auth token",
+            Self::GithubTokenEnv => "GITHUB_TOKEN",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GitHubAuthStatus {
+    pub active_source: Option<GitHubAuthSource>,
+    pub stax_env_available: bool,
+    pub credentials_file_available: bool,
+    pub gh_cli_available: bool,
+    pub github_env_available: bool,
+    pub use_gh_cli: bool,
+    pub allow_github_token_env: bool,
+    pub gh_hostname: Option<String>,
+}
+
 impl Default for BranchConfig {
     fn default() -> Self {
         Self {
@@ -220,28 +251,46 @@ impl Config {
     /// 4. GITHUB_TOKEN (if auth.allow_github_token_env = true)
     pub fn github_token() -> Option<String> {
         let auth_config = Self::load().map(|c| c.auth).unwrap_or_default();
+        Self::resolve_github_auth_with_config(&auth_config).map(|(_, token)| token)
+    }
 
-        if let Some(token) = Self::read_env_token("STAX_GITHUB_TOKEN") {
-            return Some(token);
+    pub fn github_auth_status() -> GitHubAuthStatus {
+        let auth_config = Self::load().map(|c| c.auth).unwrap_or_default();
+
+        let stax_env_available = Self::read_env_token("STAX_GITHUB_TOKEN").is_some();
+        let credentials_file_available = Self::token_from_credentials_file().is_some();
+        let gh_cli_available = if auth_config.use_gh_cli {
+            Self::token_from_gh_cli(auth_config.gh_hostname.as_deref())
+                .ok()
+                .flatten()
+                .is_some()
+        } else {
+            false
+        };
+        let github_env_available = Self::read_env_token("GITHUB_TOKEN").is_some();
+
+        let active_source = if stax_env_available {
+            Some(GitHubAuthSource::StaxGithubTokenEnv)
+        } else if credentials_file_available {
+            Some(GitHubAuthSource::CredentialsFile)
+        } else if auth_config.use_gh_cli && gh_cli_available {
+            Some(GitHubAuthSource::GhCli)
+        } else if auth_config.allow_github_token_env && github_env_available {
+            Some(GitHubAuthSource::GithubTokenEnv)
+        } else {
+            None
+        };
+
+        GitHubAuthStatus {
+            active_source,
+            stax_env_available,
+            credentials_file_available,
+            gh_cli_available,
+            github_env_available,
+            use_gh_cli: auth_config.use_gh_cli,
+            allow_github_token_env: auth_config.allow_github_token_env,
+            gh_hostname: auth_config.gh_hostname,
         }
-
-        if let Some(token) = Self::token_from_credentials_file() {
-            return Some(token);
-        }
-
-        if auth_config.use_gh_cli {
-            if let Ok(Some(token)) = Self::token_from_gh_cli(auth_config.gh_hostname.as_deref()) {
-                return Some(token);
-            }
-        }
-
-        if auth_config.allow_github_token_env {
-            if let Some(token) = Self::read_env_token("GITHUB_TOKEN") {
-                return Some(token);
-            }
-        }
-
-        None
     }
 
     /// Set GitHub token (to credentials file)
@@ -313,6 +362,32 @@ impl Config {
         } else {
             Some(trimmed.to_string())
         }
+    }
+
+    fn resolve_github_auth_with_config(
+        auth_config: &AuthConfig,
+    ) -> Option<(GitHubAuthSource, String)> {
+        if let Some(token) = Self::read_env_token("STAX_GITHUB_TOKEN") {
+            return Some((GitHubAuthSource::StaxGithubTokenEnv, token));
+        }
+
+        if let Some(token) = Self::token_from_credentials_file() {
+            return Some((GitHubAuthSource::CredentialsFile, token));
+        }
+
+        if auth_config.use_gh_cli {
+            if let Ok(Some(token)) = Self::token_from_gh_cli(auth_config.gh_hostname.as_deref()) {
+                return Some((GitHubAuthSource::GhCli, token));
+            }
+        }
+
+        if auth_config.allow_github_token_env {
+            if let Some(token) = Self::read_env_token("GITHUB_TOKEN") {
+                return Some((GitHubAuthSource::GithubTokenEnv, token));
+            }
+        }
+
+        None
     }
 
     /// Format a branch name according to config settings

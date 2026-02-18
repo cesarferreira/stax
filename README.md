@@ -733,6 +733,12 @@ export GITHUB_TOKEN="ghp_xxxx"
 
 The credentials file is created with `600` permissions (read/write for owner only).
 
+Check which source stax is actively using:
+
+```bash
+stax auth status
+```
+
 ## Claude Code Integration
 
 Teach Claude Code how to use stax by installing the skills file:
@@ -914,6 +920,7 @@ stax generate --pr-body --edit                               # Review in editor 
 | Command | Description |
 |---------|-------------|
 | `stax auth` | Set GitHub token (`--from-gh` supported) |
+| `stax auth status` | Show active GitHub auth source and resolution order |
 | `stax config` | Show configuration |
 | `stax doctor` | Check repo health |
 | `stax continue` | Continue after resolving conflicts |

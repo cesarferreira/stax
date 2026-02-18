@@ -2,6 +2,7 @@
 name = "stax"
 version = "0.15.0"
 edition = "2021"
+default-run = "stax"
 description = "Fast stacked Git branches and PRs"
 license = "MIT"
 authors = ["Cesar Ferreira"]
