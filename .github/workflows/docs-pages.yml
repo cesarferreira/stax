@@ -28,16 +28,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install docs dependencies
-        run: pip install -r docs/requirements.txt
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
 
       - name: Build docs
-        run: mkdocs build --strict
+        run: uv run --with-requirements docs/requirements.txt zensical build --clean
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

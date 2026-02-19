@@ -65,3 +65,18 @@
 - [x] Verification: `ruby -e 'require \"yaml\"; YAML.load_file(\".github/workflows/docs-pages.yml\")'` succeeded (valid YAML).
 - [x] Verification: `source .venv/bin/activate && mkdocs build --strict` passed after workflow changes.
 - [x] Build note: existing informational \"not in nav\" entries remain for `/Users/cesarferreira/code/github/stax/docs/plans/*`.
+
+## Docs engine migration (MkDocs -> Zensical)
+
+# Plan
+- [x] Switch docs dependencies from MkDocs to Zensical.
+- [x] Update GitHub Pages workflow to build docs with Zensical via `uv`.
+- [x] Revert README to the long-form version and add a full-docs link.
+- [x] Validate workflow YAML and run a local Zensical build.
+
+# Review
+- [x] Replaced docs build dependency with `zensical` in `/Users/cesarferreira/code/github/stax/docs/requirements.txt`.
+- [x] Updated `/Users/cesarferreira/code/github/stax/.github/workflows/docs-pages.yml` to use `astral-sh/setup-uv@v6` and build via `uv run --with-requirements docs/requirements.txt zensical build --clean`.
+- [x] Restored long-form README from pre-doc-split commit state and added a dedicated docs link section at `/Users/cesarferreira/code/github/stax/README.md`.
+- [x] Verification: `ruby -e 'require \"yaml\"; YAML.load_file(\".github/workflows/docs-pages.yml\")'` succeeded.
+- [x] Verification: `uv run --with-requirements docs/requirements.txt zensical build --clean` succeeded.
