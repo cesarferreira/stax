@@ -65,6 +65,12 @@ Both `stax` and `st` (short alias) are installed automatically. All examples bel
 - Live docs: https://cesarferreira.github.io/stax/
 - Source docs index: [docs/index.md](docs/index.md)
 
+Run docs locally with `uv`:
+
+```bash
+uv run --with-requirements docs/requirements.txt zensical serve
+```
+
 ## Quick Start
 
 Set up GitHub auth first (required for PR creation, CI checks, and review metadata):
