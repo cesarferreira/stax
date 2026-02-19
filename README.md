@@ -764,6 +764,20 @@ curl -o ~/.claude/skills/stax.md https://raw.githubusercontent.com/cesarferreira
 
 This enables Claude Code to help you with stax workflows, create stacked branches, submit PRs, and more.
 
+## Codex Integration
+
+Teach Codex how to use stax by installing the skill file into your Codex skills directory:
+
+```bash
+# Create skills directory if it doesn't exist
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/stax"
+
+# Download the stax skill file
+curl -o "${CODEX_HOME:-$HOME/.codex}/skills/stax/SKILL.md" https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
+```
+
+This enables Codex to help you with stax workflows, create stacked branches, submit PRs, and more.
+
 ## Freephite/Graphite Compatibility
 
 stax uses the same metadata format as freephite and supports similar commands:
