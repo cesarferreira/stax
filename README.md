@@ -52,7 +52,7 @@ stax is a modern stacked-branch workflow that keeps PRs small, rebases safe, and
 
 ```bash
 # Homebrew (macOS/Linux)
-brew tap cesarferreira/tap && brew install stax
+brew install cesarferreira/tap/stax
 
 # Or with cargo binstall
 cargo binstall stax

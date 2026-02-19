@@ -2,7 +2,7 @@
 
 ```bash
 # Homebrew (macOS/Linux)
-brew tap cesarferreira/tap && brew install stax
+brew install cesarferreira/tap/stax
 
 # Or with cargo binstall
 cargo binstall stax
