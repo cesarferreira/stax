@@ -33,3 +33,35 @@
 - [x] Added/updated tests for auth precedence and CLI flags; stabilized env-mutating config tests with a mutex (`/Users/cesarferreira/code/github/stax/src/config/tests.rs`, `/Users/cesarferreira/code/github/stax/tests/auth_tests.rs`, `/Users/cesarferreira/code/github/stax/tests/ci_tests.rs`).
 - [x] Verification: `cargo test config::tests`, `cargo test --test auth_tests`, `cargo test --test ci_tests --test track_all_prs_tests` all passed.
 - [x] Full suite note: `cargo test` still has one pre-existing unrelated failure in `/Users/cesarferreira/code/github/stax/src/config/tests.rs` (`test_format_template_empty_user_message_only_format`).
+
+## Docs migration (README -> MkDocs Material)
+
+# Plan
+- [x] Add MkDocs Material config with structured navigation.
+- [x] Split README topics into focused pages under `docs/`.
+- [x] Keep README concise and link to docs sections.
+- [x] Run docs sanity checks (file/link consistency) and capture results.
+
+# Review
+- [x] Added MkDocs Material config and nav in `/Users/cesarferreira/code/github/stax/mkdocs.yml`.
+- [x] Added split docs sections under `/Users/cesarferreira/code/github/stax/docs/` (getting started, concepts, interface, commands, workflows, safety, configuration, integrations, compatibility, benchmarks).
+- [x] Added docs assets + styling (`/Users/cesarferreira/code/github/stax/docs/assets/`, `/Users/cesarferreira/code/github/stax/docs/stylesheets/extra.css`).
+- [x] Replaced large README with concise landing + links to docs and local docs run instructions (`/Users/cesarferreira/code/github/stax/README.md`).
+- [x] Added docs dependency pinning for MkDocs Material workflow (`/Users/cesarferreira/code/github/stax/docs/requirements.txt`).
+- [x] Added generated docs artifacts ignores (`/Users/cesarferreira/code/github/stax/.gitignore`).
+- [x] Verification: `python3 -m venv .venv && source .venv/bin/activate && pip install -q -r docs/requirements.txt && mkdocs build --strict` passed.
+- [x] Build note: MkDocs reported informational \"not in nav\" entries for existing `/Users/cesarferreira/code/github/stax/docs/plans/*` files.
+
+## Docs deployment (GitHub Pages)
+
+# Plan
+- [x] Add GitHub Actions workflow to build and deploy MkDocs docs to GitHub Pages.
+- [x] Set docs site URL in MkDocs config to GitHub Pages URL.
+- [x] Validate workflow YAML and document verification results.
+
+# Review
+- [x] Added `/Users/cesarferreira/code/github/stax/.github/workflows/docs-pages.yml` with official Pages flow (`upload-pages-artifact` + `deploy-pages`), `pages/id-token` permissions, and push triggers on docs/config changes.
+- [x] Updated MkDocs canonical site URL to `/Users/cesarferreira/code/github/stax/mkdocs.yml` -> `https://cesarferreira.github.io/stax/`.
+- [x] Verification: `ruby -e 'require \"yaml\"; YAML.load_file(\".github/workflows/docs-pages.yml\")'` succeeded (valid YAML).
+- [x] Verification: `source .venv/bin/activate && mkdocs build --strict` passed after workflow changes.
+- [x] Build note: existing informational \"not in nav\" entries remain for `/Users/cesarferreira/code/github/stax/docs/plans/*`.
