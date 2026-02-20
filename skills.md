@@ -1,6 +1,14 @@
-# Stax Skills for Claude Code
+# Stax Skills for AI Coding Agents
 
-This document teaches Claude Code how to use `stax` - a CLI for managing stacked Git branches and PRs.
+This document teaches AI coding agents (Claude Code, Codex, Gemini CLI) how to use `stax` - a CLI for managing stacked Git branches and PRs.
+
+## Use with Gemini CLI
+
+Gemini CLI reads project instructions from `GEMINI.md`. To use this guidance with Gemini in a repo:
+
+```bash
+curl -o GEMINI.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
+```
 
 ## What is Stax?
 

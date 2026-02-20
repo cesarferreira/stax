@@ -31,7 +31,12 @@ const CODEX_MODELS: &[(&str, &str)] = &[
     ("gpt-4.1-mini", "GPT-4.1 Mini"),
 ];
 
-const SUPPORTED_AGENTS: &[&str] = &["claude", "codex"];
+const GEMINI_MODELS: &[(&str, &str)] = &[
+    ("gemini-2.5-pro", "Gemini 2.5 Pro (default)"),
+    ("gemini-2.5-flash", "Gemini 2.5 Flash (faster, cheaper)"),
+];
+
+const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini"];
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -186,6 +191,7 @@ fn resolve_agent(cli_flag: Option<&str>, config: &mut Config) -> Result<String> 
                  Install one of:\n    \
                  - claude (https://docs.anthropic.com)\n    \
                  - codex  (https://github.com/openai/codex)\n  \
+                 - gemini (https://github.com/google-gemini/gemini-cli)\n  \
                  Or set manually in ~/.config/stax/config.toml:\n    \
                  [ai]\n    \
                  agent = \"claude\""
@@ -357,6 +363,7 @@ fn known_models_for(agent: &str) -> &'static [(&'static str, &'static str)] {
     match agent {
         "claude" => CLAUDE_MODELS,
         "codex" => CODEX_MODELS,
+        "gemini" => GEMINI_MODELS,
         _ => &[],
     }
 }
@@ -504,6 +511,11 @@ pub fn invoke_ai_agent(agent: &str, model: Option<&str>, prompt: &str) -> Result
                 args.extend(["--model".into(), m.into()]);
             }
         }
+        "gemini" => {
+            if let Some(m) = model {
+                args.extend(["-m".into(), m.into()]);
+            }
+        }
         _ => bail!("Unsupported agent: {}", agent),
     }
 
@@ -542,4 +554,21 @@ pub fn invoke_ai_agent(agent: &str, model: Option<&str>, prompt: &str) -> Result
 
     let body = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_agent_name_accepts_gemini() {
+        assert!(validate_agent_name("gemini").is_ok());
+    }
+
+    #[test]
+    fn known_models_include_gemini_defaults() {
+        let models = known_models_for("gemini");
+        assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-pro"));
+        assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-flash"));
+    }
 }

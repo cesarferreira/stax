@@ -9,4 +9,4 @@ curl -o "${CODEX_HOME:-$HOME/.codex}/skills/stax/SKILL.md" https://raw.githubuse
 
 This enables Codex to help with stacked branch creation, submit flows, and related operations.
 
-For Claude Code setup, see [Claude Code Integration](claude-code.md).
+For Claude Code setup, see [Claude Code Integration](claude-code.md). For Gemini setup, see [Gemini CLI Integration](gemini-cli.md).

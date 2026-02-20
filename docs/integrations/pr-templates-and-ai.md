@@ -53,6 +53,7 @@ stax generate --pr-body
 - `--agent <name>` override configured agent for one run
 - `--model <name>` override model for one run
 - `--edit` review/edit generated body before update
+- Supported agents: `claude`, `codex`, `gemini`
 
 You can also generate during submit:
 
@@ -63,5 +64,6 @@ stax submit --ai-body
 ```bash
 stax generate --pr-body --agent codex
 stax generate --pr-body --model claude-haiku-4-5-20251001
+stax generate --pr-body --agent gemini --model gemini-2.5-flash
 stax generate --pr-body --edit
 ```

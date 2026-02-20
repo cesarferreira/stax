@@ -64,7 +64,7 @@ struct SubmitOptions {
     /// Always open editor for PR body
     #[arg(long)]
     edit: bool,
-    /// Generate PR body using AI (claude or codex)
+    /// Generate PR body using AI (claude, codex, or gemini)
     #[arg(long)]
     ai_body: bool,
 }
@@ -415,7 +415,7 @@ enum Commands {
         /// Open editor to review before updating
         #[arg(long)]
         edit: bool,
-        /// AI agent to use (claude, codex). Defaults to config or auto-detect
+        /// AI agent to use (claude, codex, gemini). Defaults to config or auto-detect
         #[arg(long)]
         agent: Option<String>,
         /// Model to use with the AI agent. Defaults to config or agent's default

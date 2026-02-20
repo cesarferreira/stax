@@ -699,7 +699,7 @@ Config at `~/.config/stax/config.toml`:
 # tips = true
 
 [ai]
-# AI agent for PR body generation: "claude" or "codex"
+# AI agent for PR body generation: "claude", "codex", or "gemini"
 # If not set, stax auto-detects installed agents and prompts on first use
 # agent = "claude"
 
@@ -787,6 +787,17 @@ curl -o "${CODEX_HOME:-$HOME/.codex}/skills/stax/SKILL.md" https://raw.githubuse
 
 This enables Codex to help you with stax workflows, create stacked branches, submit PRs, and more.
 
+## Gemini CLI Integration
+
+Teach Gemini CLI how to use stax by installing this repo's skill content as `GEMINI.md` in your project:
+
+```bash
+# From the stax repo root
+curl -o GEMINI.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
+```
+
+Gemini CLI loads project instructions from `GEMINI.md`, so this gives it stack-aware workflow guidance for branch creation, submit flows, and related operations.
+
 ## Freephite/Graphite Compatibility
 
 stax uses the same metadata format as freephite and supports similar commands:
@@ -859,7 +870,7 @@ Generate a PR description using AI, based on your diff, commit messages, and the
 stax generate --pr-body
 ```
 
-stax collects the diff, commit messages, and PR template for the current branch, sends them to an AI agent (Claude or Codex CLI), and updates the PR body on GitHub.
+stax collects the diff, commit messages, and PR template for the current branch, sends them to an AI agent (Claude, Codex, or Gemini CLI), and updates the PR body on GitHub.
 
 Prerequisites:
 - Current branch must be tracked by stax
@@ -879,6 +890,7 @@ If no AI agent is configured, stax auto-detects what's installed and walks you t
 ? Select AI agent:
 > claude (default)
   codex
+  gemini
 
 ? Select model for claude:
 > claude-sonnet-4-5-20250929 — Sonnet 4.5 (default, balanced)
@@ -891,13 +903,14 @@ If no AI agent is configured, stax auto-detects what's installed and walks you t
 
 ### Options
 
-- `--agent <name>`: Override the configured agent for this invocation
-- `--model <name>`: Override the model (e.g., `claude-haiku-4-5-20251001`, `gpt-4.1-mini`)
+- `--agent <name>`: Override the configured agent for this invocation (`claude`, `codex`, `gemini`)
+- `--model <name>`: Override the model (e.g., `claude-haiku-4-5-20251001`, `gpt-4.1-mini`, `gemini-2.5-flash`)
 - `--edit`: Open $EDITOR to review/tweak the generated body before updating the PR
 
 ```bash
 stax generate --pr-body --agent codex                        # Use codex this time
 stax generate --pr-body --model claude-haiku-4-5-20251001    # Use a specific model
+stax generate --pr-body --agent gemini --model gemini-2.5-flash
 stax generate --pr-body --edit                               # Review in editor first
 ```
 
@@ -1056,6 +1069,7 @@ stax generate --pr-body --edit                               # Review in editor 
 - `stax auth --token <token>` - Set GitHub token directly
 - `stax generate --pr-body --edit` - Generate and review in editor
 - `stax generate --pr-body --agent codex` - Use specific AI agent
+- `stax generate --pr-body --agent gemini` - Use Gemini CLI as the agent
 - `stax generate --pr-body --model claude-haiku-4-5-20251001` - Use specific model
 
 **CI/Automation example:**

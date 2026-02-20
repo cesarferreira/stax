@@ -29,7 +29,7 @@ Main config path: `~/.config/stax/config.toml`
 # tips = true
 
 [ai]
-# agent = "claude"
+# agent = "claude" # or "codex" / "gemini"
 # model = "claude-sonnet-4-5-20250929"
 ```
 

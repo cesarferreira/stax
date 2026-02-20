@@ -76,6 +76,7 @@ nav:
       - PR Templates and AI: integrations/pr-templates-and-ai.md
       - Claude Code: integrations/claude-code.md
       - Codex: integrations/codex.md
+      - Gemini CLI: integrations/gemini-cli.md
   - Compatibility:
       - Freephite and Graphite: compatibility/freephite-graphite.md
   - Benchmarks: reference/benchmarks.md
