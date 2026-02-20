@@ -318,6 +318,20 @@ fn resolve_model(cli_flag: Option<&str>, config: &Config, agent: &str) -> Result
     // 2. Config value
     if let Some(ref model) = config.ai.model {
         if !model.is_empty() {
+            // If config model is a known model for a different agent, ignore it and
+            // fall back to the selected agent default.
+            if let Some(model_agent) = known_agent_for_model(model) {
+                if model_agent != agent {
+                    eprintln!(
+                        "  {} Configured model '{}' is for agent '{}', but current agent is '{}'. Using agent default.",
+                        "⚠".yellow(),
+                        model.yellow(),
+                        model_agent,
+                        agent
+                    );
+                    return Ok(None);
+                }
+            }
             validate_model_soft(agent, model);
             return Ok(Some(model.clone()));
         }
@@ -366,6 +380,12 @@ fn known_models_for(agent: &str) -> &'static [(&'static str, &'static str)] {
         "gemini" => GEMINI_MODELS,
         _ => &[],
     }
+}
+
+fn known_agent_for_model(model: &str) -> Option<&'static str> {
+    ["claude", "codex", "gemini"]
+        .into_iter()
+        .find(|agent| known_models_for(agent).iter().any(|(id, _)| *id == model))
 }
 
 // ---------------------------------------------------------------------------
@@ -570,5 +590,23 @@ mod tests {
         let models = known_models_for("gemini");
         assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-pro"));
         assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-flash"));
+    }
+
+    #[test]
+    fn resolve_model_ignores_known_model_from_other_agent() {
+        let mut config = Config::default();
+        config.ai.model = Some("gpt-5.3-codex".to_string());
+
+        let resolved = resolve_model(None, &config, "gemini").unwrap();
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn resolve_model_keeps_unknown_custom_model() {
+        let mut config = Config::default();
+        config.ai.model = Some("my-custom-model".to_string());
+
+        let resolved = resolve_model(None, &config, "gemini").unwrap();
+        assert_eq!(resolved, Some("my-custom-model".to_string()));
     }
 }
