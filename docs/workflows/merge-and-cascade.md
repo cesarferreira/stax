@@ -37,6 +37,8 @@ stax merge
 
 This merges up to `auth-api` and leaves upper branches to merge later.
 
+When merged branches are removed from the middle of a stack, follow-up restacks use a provenance-aware `rebase --onto` boundary so descendants replay only their novel commits (works for merge, rebase, and common squash-merge flows).
+
 ## `stax cascade`
 
 `stax cascade` combines restack + push + PR create/update in one flow.
