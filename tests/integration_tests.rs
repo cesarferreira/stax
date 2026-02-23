@@ -3383,6 +3383,86 @@ fn test_sync_detects_merged_branch_when_local_trunk_diverged() {
     );
 }
 
+#[test]
+fn test_sync_restack_handles_squash_merged_middle_branch() {
+    let repo = TestRepo::new_with_remote();
+
+    // Build stack: main -> parent -> child
+    repo.run_stax(&["bc", "middle-squash-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent 1\n");
+    repo.commit("Parent commit 1");
+    repo.create_file("parent.txt", "parent 1\nparent 2\n");
+    repo.commit("Parent commit 2");
+    repo.git(&["push", "-u", "origin", &parent]);
+
+    repo.run_stax(&["bc", "middle-squash-child"]);
+    let child = repo.current_branch();
+    repo.create_file("child.txt", "child change\n");
+    repo.commit("Child commit");
+    repo.git(&["push", "-u", "origin", &child]);
+
+    // Squash-merge parent branch on remote and delete it.
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let clone_dir = TempDir::new().expect("Failed to create clone dir");
+    let run_remote_git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to run git in remote clone");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_remote_git(&["clone", remote_path.to_str().unwrap(), "."]);
+    run_remote_git(&["checkout", "-B", "main", "origin/main"]);
+    run_remote_git(&["config", "user.email", "merger@test.com"]);
+    run_remote_git(&["config", "user.name", "Merger"]);
+    run_remote_git(&["fetch", "origin", &parent]);
+    run_remote_git(&["merge", "--squash", &format!("origin/{}", parent)]);
+    run_remote_git(&["commit", "-m", "Squash merge parent"]);
+    run_remote_git(&["push", "origin", "main"]);
+    run_remote_git(&["push", "origin", "--delete", &parent]);
+
+    repo.run_stax(&["checkout", &child]);
+
+    let output = repo.run_stax(&["sync", "--restack", "--force"]);
+    assert!(
+        output.status.success(),
+        "sync --restack failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        !TestRepo::stdout(&output).contains("conflict"),
+        "Expected provenance-aware restack to avoid conflict for child-only commit.\nstdout: {}",
+        TestRepo::stdout(&output)
+    );
+
+    // Parent branch should be cleaned up after sync.
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|b| b == &parent),
+        "Expected merged parent branch to be deleted"
+    );
+
+    // Child should contain only its own commit relative to main.
+    let count_output = repo.git(&["rev-list", "--count", &format!("main..{}", child)]);
+    assert!(count_output.status.success());
+    let unique_commits = String::from_utf8_lossy(&count_output.stdout)
+        .trim()
+        .to_string();
+    assert_eq!(
+        unique_commits, "1",
+        "Expected child to keep only novel commits after provenance-aware restack"
+    );
+}
+
 // =============================================================================
 // Merge Command Tests
 // =============================================================================

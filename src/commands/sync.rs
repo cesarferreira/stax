@@ -387,13 +387,19 @@ pub fn run(
                         .filter(|(_, info)| info.parent.as_deref() == Some(branch))
                         .map(|(name, _)| name.clone())
                         .collect();
+                    let merged_branch_tip = repo.branch_commit(branch).ok();
 
                     for child in &children {
                         if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
-                            // Set parent_branch_revision to empty to force needs_restack
+                            // Preserve the old-parent boundary so restack can run
+                            // `git rebase --onto <new> <old>` precisely.
+                            let old_parent_boundary = merged_branch_tip
+                                .clone()
+                                .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
+
                             let updated_meta = BranchMetadata {
                                 parent_branch_name: parent_branch.clone(),
-                                parent_branch_revision: String::new(), // Forces needs_restack
+                                parent_branch_revision: old_parent_boundary,
                                 ..child_meta.clone()
                             };
                             updated_meta.write(repo.inner(), child)?;
@@ -672,7 +678,12 @@ pub fn run(
                     None => continue,
                 };
 
-                match repo.rebase_branch_onto(branch, &meta.parent_branch_name, auto_stash_pop)? {
+                match repo.rebase_branch_onto_with_provenance(
+                    branch,
+                    &meta.parent_branch_name,
+                    &meta.parent_branch_revision,
+                    auto_stash_pop,
+                )? {
                     RebaseResult::Success => {
                         let parent_commit = repo.branch_commit(&meta.parent_branch_name)?;
                         let updated_meta = BranchMetadata {

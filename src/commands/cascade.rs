@@ -72,7 +72,11 @@ fn warn_if_trunk_stale(repo: &GitRepo) {
     // Count commits on remote that aren't in local trunk.
     // git rev-list --count <local>..<remote> — uses only local git objects.
     let output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", stack.trunk, remote_ref)])
+        .args([
+            "rev-list",
+            "--count",
+            &format!("{}..{}", stack.trunk, remote_ref),
+        ])
         .current_dir(workdir)
         .output();
 

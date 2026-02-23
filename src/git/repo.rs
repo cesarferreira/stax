@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use git2::{BranchType, Repository};
 use serde::Deserialize;
+use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -348,8 +350,8 @@ impl GitRepo {
         Ok(())
     }
 
-    fn rebase_in_path(&self, cwd: &Path, onto: &str) -> Result<RebaseResult> {
-        let output = self.run_git(cwd, &["rebase", onto])?;
+    fn rebase_with_args_in_path(&self, cwd: &Path, args: &[&str]) -> Result<RebaseResult> {
+        let output = self.run_git(cwd, args)?;
         if output.status.success() {
             return Ok(RebaseResult::Success);
         }
@@ -360,40 +362,38 @@ impl GitRepo {
 
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         anyhow::bail!(
-            "git rebase {} failed in '{}': {}",
-            onto,
+            "git {} failed in '{}': {}",
+            args.join(" "),
             cwd.display(),
             stderr
         );
     }
 
-    /// Rebase current branch onto target
-    #[allow(dead_code)] // Kept for compatibility with existing APIs and future command flows
-    pub fn rebase(&self, onto: &str) -> Result<RebaseResult> {
-        self.rebase_in_path(self.workdir()?, onto)
+    fn rebase_in_path(&self, cwd: &Path, onto: &str) -> Result<RebaseResult> {
+        self.rebase_with_args_in_path(cwd, &["rebase", onto])
     }
 
-    /// Rebase the target branch onto another branch, using the branch's owning worktree.
-    /// If the target branch is not checked out in any worktree, it falls back to current workdir.
-    pub fn rebase_branch_onto(
+    fn rebase_onto_upstream_in_path(
         &self,
-        branch: &str,
+        cwd: &Path,
         onto: &str,
-        auto_stash_pop: bool,
+        upstream: &str,
     ) -> Result<RebaseResult> {
+        self.rebase_with_args_in_path(cwd, &["rebase", "--onto", onto, upstream])
+    }
+
+    fn prepare_branch_rebase_context(&self, branch: &str) -> Result<(PathBuf, PathBuf)> {
         let current_workdir = Self::normalize_path(self.workdir()?);
         let target_workdir = self
             .branch_worktree_path(branch)?
             .unwrap_or_else(|| current_workdir.clone());
         let target_workdir = Self::normalize_path(&target_workdir);
 
-        // If rebasing in the current worktree and we're not already on target, checkout first.
         if target_workdir == current_workdir {
             if self.current_branch()? != branch {
                 self.checkout(branch)?;
             }
         } else {
-            // Validate that the expected branch is actually checked out in that worktree.
             let current_in_target = self.current_branch_in_path(&target_workdir)?;
             if current_in_target != branch {
                 anyhow::bail!(
@@ -404,6 +404,175 @@ impl GitRepo {
                 );
             }
         }
+
+        Ok((current_workdir, target_workdir))
+    }
+
+    fn run_patch_id_from_input(&self, cwd: &Path, input: &[u8]) -> Result<Vec<String>> {
+        let mut patch_id = Command::new("git")
+            .args(["patch-id", "--stable"])
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("Failed to run git patch-id --stable")?;
+
+        if let Some(stdin) = patch_id.stdin.as_mut() {
+            stdin
+                .write_all(input)
+                .context("Failed to stream diff to git patch-id")?;
+        }
+
+        let output = patch_id
+            .wait_with_output()
+            .context("Failed to read git patch-id output")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git patch-id --stable failed: {}", stderr);
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .map(ToString::to_string)
+            .collect())
+    }
+
+    fn rev_list_reverse_range(&self, cwd: &Path, range: &str) -> Result<Vec<String>> {
+        let output = self.run_git(cwd, &["rev-list", "--reverse", "--no-merges", range])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git rev-list --reverse --no-merges {} failed: {}",
+                range,
+                stderr
+            );
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToString::to_string)
+            .collect())
+    }
+
+    fn patch_ids_for_range(&self, cwd: &Path, range: &str) -> Result<HashSet<String>> {
+        let output = self.run_git(cwd, &["log", "--format=%H", "-p", "--no-merges", range])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git log --format=%H -p --no-merges {} failed: {}",
+                range,
+                stderr
+            );
+        }
+
+        Ok(self
+            .run_patch_id_from_input(cwd, &output.stdout)?
+            .into_iter()
+            .collect())
+    }
+
+    fn patch_id_for_commit(&self, cwd: &Path, commit: &str) -> Result<Option<String>> {
+        let output = self.run_git(
+            cwd,
+            &[
+                "show",
+                "--no-color",
+                "--pretty=format:",
+                "--no-ext-diff",
+                commit,
+            ],
+        )?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git show {} failed: {}", commit, stderr);
+        }
+
+        Ok(self
+            .run_patch_id_from_input(cwd, &output.stdout)?
+            .into_iter()
+            .next())
+    }
+
+    fn infer_patch_id_upstream(
+        &self,
+        cwd: &Path,
+        branch: &str,
+        onto: &str,
+        fallback_upstream: &str,
+    ) -> Result<Option<String>> {
+        if fallback_upstream.trim().is_empty() {
+            return Ok(None);
+        }
+
+        if !self.is_ancestor(fallback_upstream, branch)? {
+            return Ok(None);
+        }
+
+        let branch_range = format!("{}..{}", fallback_upstream, branch);
+        let branch_commits = self.rev_list_reverse_range(cwd, &branch_range)?;
+        if branch_commits.len() < 2 {
+            return Ok(None);
+        }
+
+        let merge_base = match self.merge_base_refs(onto, branch) {
+            Ok(base) => base,
+            Err(_) => return Ok(None),
+        };
+        let onto_range = format!("{}..{}", merge_base, onto);
+        let onto_patch_ids = self.patch_ids_for_range(cwd, &onto_range)?;
+        if onto_patch_ids.is_empty() {
+            return Ok(None);
+        }
+
+        let mut integrated_prefix = 0usize;
+        for commit in &branch_commits {
+            let Some(patch_id) = self.patch_id_for_commit(cwd, commit)? else {
+                break;
+            };
+            if onto_patch_ids.contains(&patch_id) {
+                integrated_prefix += 1;
+            } else {
+                break;
+            }
+        }
+
+        if integrated_prefix == 0 || integrated_prefix >= branch_commits.len() {
+            return Ok(None);
+        }
+
+        Ok(Some(branch_commits[integrated_prefix - 1].clone()))
+    }
+
+    /// Infer a precise upstream marker for `git rebase --onto` based on patch-id provenance.
+    #[allow(dead_code)] // Exposed for tests and future diagnostics surfaces.
+    pub fn infer_rebase_upstream_by_patch_id(
+        &self,
+        branch: &str,
+        onto: &str,
+        fallback_upstream: &str,
+    ) -> Result<String> {
+        let workdir = self.workdir()?;
+        Ok(self
+            .infer_patch_id_upstream(workdir, branch, onto, fallback_upstream)?
+            .unwrap_or_else(|| fallback_upstream.to_string()))
+    }
+
+    /// Rebase a branch onto `onto` while preserving provenance from `fallback_upstream`.
+    ///
+    /// If patch-id analysis identifies a prefix already integrated into `onto`, this uses
+    /// `git rebase --onto <onto> <adjusted-upstream>` to replay only novel commits.
+    pub fn rebase_branch_onto_with_provenance(
+        &self,
+        branch: &str,
+        onto: &str,
+        fallback_upstream: &str,
+        auto_stash_pop: bool,
+    ) -> Result<RebaseResult> {
+        let (_current_workdir, target_workdir) = self.prepare_branch_rebase_context(branch)?;
 
         let mut stashed = false;
         if self.is_dirty_at(&target_workdir)? {
@@ -418,14 +587,40 @@ Use --auto-stash-pop or stash/commit changes first.",
             stashed = self.stash_push_at(&target_workdir)?;
         }
 
-        let result = match self.rebase_in_path(&target_workdir, onto).with_context(|| {
-            format!(
-                "Failed to rebase '{}' onto '{}' in '{}'",
-                branch,
-                onto,
-                target_workdir.display()
-            )
-        }) {
+        let can_use_fallback_upstream = !fallback_upstream.trim().is_empty()
+            && self.is_ancestor(fallback_upstream, branch).unwrap_or(false);
+        let inferred_upstream = self
+            .infer_patch_id_upstream(&target_workdir, branch, onto, fallback_upstream)
+            .unwrap_or(None);
+        let upstream_for_rebase = if can_use_fallback_upstream {
+            Some(inferred_upstream.unwrap_or_else(|| fallback_upstream.to_string()))
+        } else {
+            None
+        };
+
+        let rebase_result = if let Some(upstream) = upstream_for_rebase.as_deref() {
+            self.rebase_onto_upstream_in_path(&target_workdir, onto, upstream)
+                .with_context(|| {
+                    format!(
+                        "Failed to rebase '{}' onto '{}' with upstream '{}' in '{}'",
+                        branch,
+                        onto,
+                        upstream,
+                        target_workdir.display()
+                    )
+                })
+        } else {
+            self.rebase_in_path(&target_workdir, onto).with_context(|| {
+                format!(
+                    "Failed to rebase '{}' onto '{}' in '{}'",
+                    branch,
+                    onto,
+                    target_workdir.display()
+                )
+            })
+        };
+
+        let result = match rebase_result {
             Ok(result) => result,
             Err(err) => {
                 if stashed {
@@ -449,6 +644,23 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
 
         Ok(result)
+    }
+
+    /// Rebase current branch onto target
+    #[allow(dead_code)] // Kept for compatibility with existing APIs and future command flows
+    pub fn rebase(&self, onto: &str) -> Result<RebaseResult> {
+        self.rebase_in_path(self.workdir()?, onto)
+    }
+
+    /// Rebase the target branch onto another branch, using the branch's owning worktree.
+    /// If the target branch is not checked out in any worktree, it falls back to current workdir.
+    pub fn rebase_branch_onto(
+        &self,
+        branch: &str,
+        onto: &str,
+        auto_stash_pop: bool,
+    ) -> Result<RebaseResult> {
+        self.rebase_branch_onto_with_provenance(branch, onto, "", auto_stash_pop)
     }
 
     /// Continue a rebase after resolving conflicts
@@ -520,6 +732,25 @@ Use --auto-stash-pop or stash/commit changes first.",
 
         let base = self.repo.merge_base(left_commit.id(), right_commit.id())?;
         Ok(base.to_string())
+    }
+
+    /// Find merge-base commit between any two refs (branch names, remote refs, or SHAs).
+    pub fn merge_base_refs(&self, left: &str, right: &str) -> Result<String> {
+        let left_oid = self.resolve_to_oid(left)?;
+        let right_oid = self.resolve_to_oid(right)?;
+        Ok(self.repo.merge_base(left_oid, right_oid)?.to_string())
+    }
+
+    /// Check whether `ancestor` is an ancestor of `descendant`.
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
+        let ancestor_oid = self.resolve_to_oid(ancestor)?;
+        let descendant_oid = self.resolve_to_oid(descendant)?;
+        if ancestor_oid == descendant_oid {
+            return Ok(true);
+        }
+        Ok(self
+            .repo
+            .graph_descendant_of(descendant_oid, ancestor_oid)?)
     }
 
     /// Delete a branch
@@ -1009,6 +1240,22 @@ mod tests {
         );
     }
 
+    fn run_git_stdout(path: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("failed to run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     #[test]
     fn test_format_duration_just_now() {
         assert_eq!(format_duration(0), "just now");
@@ -1075,6 +1322,52 @@ mod tests {
         let debug_str = format!("{:?}", commit);
         assert!(debug_str.contains("abc123"));
         assert!(debug_str.contains("Test commit"));
+    }
+
+    #[test]
+    fn test_rebase_branch_onto_with_provenance_replays_only_novel_commits() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        let base_sha = run_git_stdout(path, &["rev-parse", "HEAD"]);
+
+        run_git(path, &["checkout", "-b", "feature"]);
+        fs::write(path.join("a1.txt"), "A1\n").expect("write a1");
+        run_git(path, &["add", "a1.txt"]);
+        run_git(path, &["commit", "-m", "A1"]);
+        let a1_sha = run_git_stdout(path, &["rev-parse", "HEAD"]);
+
+        fs::write(path.join("a2.txt"), "A2\n").expect("write a2");
+        run_git(path, &["add", "a2.txt"]);
+        run_git(path, &["commit", "-m", "A2"]);
+        let a2_sha = run_git_stdout(path, &["rev-parse", "HEAD"]);
+
+        fs::write(path.join("b.txt"), "B\n").expect("write b");
+        run_git(path, &["add", "b.txt"]);
+        run_git(path, &["commit", "-m", "B"]);
+
+        run_git(path, &["checkout", "main"]);
+        run_git(path, &["cherry-pick", &a1_sha]);
+        run_git(path, &["cherry-pick", &a2_sha]);
+
+        let repo = GitRepo {
+            repo: Repository::open(path).expect("open repo"),
+        };
+
+        let result = repo
+            .rebase_branch_onto_with_provenance("feature", "main", &base_sha, false)
+            .expect("rebase with provenance");
+        assert_eq!(result, RebaseResult::Success);
+
+        let unique_count = run_git_stdout(path, &["rev-list", "--count", "main..feature"]);
+        assert_eq!(unique_count, "1");
     }
 
     #[test]

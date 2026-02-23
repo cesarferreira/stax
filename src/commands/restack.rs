@@ -139,8 +139,14 @@ pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Re
             );
         }
 
-        // Rebase onto parent in the branch's own worktree when needed.
-        match repo.rebase_branch_onto(branch, &meta.parent_branch_name, auto_stash_pop)? {
+        // Rebase using provenance-aware upstream inference to avoid replaying
+        // already-integrated commits after squash/cherry-pick merges.
+        match repo.rebase_branch_onto_with_provenance(
+            branch,
+            &meta.parent_branch_name,
+            &meta.parent_branch_revision,
+            auto_stash_pop,
+        )? {
             RebaseResult::Success => {
                 // Update metadata with new parent revision
                 let new_parent_rev = repo.branch_commit(&meta.parent_branch_name)?;

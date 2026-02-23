@@ -92,7 +92,12 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
             meta.parent_branch_name.blue()
         );
 
-        match repo.rebase_branch_onto(branch, &meta.parent_branch_name, auto_stash_pop)? {
+        match repo.rebase_branch_onto_with_provenance(
+            branch,
+            &meta.parent_branch_name,
+            &meta.parent_branch_revision,
+            auto_stash_pop,
+        )? {
             RebaseResult::Success => {
                 let new_parent_rev = repo.branch_commit(&meta.parent_branch_name)?;
                 let updated_meta = BranchMetadata {
