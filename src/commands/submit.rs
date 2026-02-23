@@ -1206,7 +1206,7 @@ fn generate_ai_body(
         .filter(|a| !a.is_empty())
         .context(
             "No AI agent configured. Run `stax generate --pr-body` first to set up, \
-             or add [ai] agent = \"claude\" (or \"codex\" / \"gemini\") to ~/.config/stax/config.toml",
+             or add [ai] agent = \"claude\" (or \"codex\" / \"gemini\" / \"opencode\") to ~/.config/stax/config.toml",
         )?
         .to_string();
 

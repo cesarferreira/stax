@@ -36,7 +36,12 @@ const GEMINI_MODELS: &[(&str, &str)] = &[
     ("gemini-2.5-flash", "Gemini 2.5 Flash (faster, cheaper)"),
 ];
 
-const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini"];
+const OPENCODE_MODELS: &[(&str, &str)] = &[(
+    "opencode/gpt-5.1-codex",
+    "GPT-5.1 Codex via OpenCode (default)",
+)];
+
+const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -192,6 +197,7 @@ fn resolve_agent(cli_flag: Option<&str>, config: &mut Config) -> Result<String> 
                  - claude (https://docs.anthropic.com)\n    \
                  - codex  (https://github.com/openai/codex)\n  \
                  - gemini (https://github.com/google-gemini/gemini-cli)\n  \
+                 - opencode (https://opencode.ai)\n  \
                  Or set manually in ~/.config/stax/config.toml:\n    \
                  [ai]\n    \
                  agent = \"claude\""
@@ -378,12 +384,13 @@ fn known_models_for(agent: &str) -> &'static [(&'static str, &'static str)] {
         "claude" => CLAUDE_MODELS,
         "codex" => CODEX_MODELS,
         "gemini" => GEMINI_MODELS,
+        "opencode" => OPENCODE_MODELS,
         _ => &[],
     }
 }
 
 fn known_agent_for_model(model: &str) -> Option<&'static str> {
-    ["claude", "codex", "gemini"]
+    ["claude", "codex", "gemini", "opencode"]
         .into_iter()
         .find(|agent| known_models_for(agent).iter().any(|(id, _)| *id == model))
 }
@@ -517,6 +524,7 @@ fn format_bytes(bytes: usize) -> String {
 
 pub fn invoke_ai_agent(agent: &str, model: Option<&str>, prompt: &str) -> Result<String> {
     let mut args: Vec<String> = Vec::new();
+    let mut write_prompt_to_stdin = true;
 
     match agent {
         "claude" => {
@@ -536,12 +544,25 @@ pub fn invoke_ai_agent(agent: &str, model: Option<&str>, prompt: &str) -> Result
                 args.extend(["-m".into(), m.into()]);
             }
         }
+        "opencode" => {
+            args.push("run".into());
+            if let Some(m) = model {
+                args.extend(["--model".into(), m.into()]);
+            }
+            args.extend(["--format".into(), "default".into()]);
+            args.push(prompt.to_string());
+            write_prompt_to_stdin = false;
+        }
         _ => bail!("Unsupported agent: {}", agent),
     }
 
     let mut child = Command::new(agent)
         .args(&args)
-        .stdin(Stdio::piped())
+        .stdin(if write_prompt_to_stdin {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -550,12 +571,14 @@ pub fn invoke_ai_agent(agent: &str, model: Option<&str>, prompt: &str) -> Result
             agent
         ))?;
 
-    // Write prompt to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(prompt.as_bytes())
-            .context("Failed to write prompt to AI agent stdin")?;
-        // stdin is dropped here, closing the pipe
+    if write_prompt_to_stdin {
+        // Write prompt to stdin
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(prompt.as_bytes())
+                .context("Failed to write prompt to AI agent stdin")?;
+            // stdin is dropped here, closing the pipe
+        }
     }
 
     let output = child
@@ -586,10 +609,21 @@ mod tests {
     }
 
     #[test]
+    fn validate_agent_name_accepts_opencode() {
+        assert!(validate_agent_name("opencode").is_ok());
+    }
+
+    #[test]
     fn known_models_include_gemini_defaults() {
         let models = known_models_for("gemini");
         assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-pro"));
         assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-flash"));
+    }
+
+    #[test]
+    fn known_models_include_opencode_defaults() {
+        let models = known_models_for("opencode");
+        assert!(models.iter().any(|(id, _)| *id == "opencode/gpt-5.1-codex"));
     }
 
     #[test]
@@ -608,5 +642,14 @@ mod tests {
 
         let resolved = resolve_model(None, &config, "gemini").unwrap();
         assert_eq!(resolved, Some("my-custom-model".to_string()));
+    }
+
+    #[test]
+    fn resolve_model_ignores_opencode_model_for_other_agent() {
+        let mut config = Config::default();
+        config.ai.model = Some("opencode/gpt-5.1-codex".to_string());
+
+        let resolved = resolve_model(None, &config, "claude").unwrap();
+        assert_eq!(resolved, None);
     }
 }

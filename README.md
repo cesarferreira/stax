@@ -699,7 +699,7 @@ Config at `~/.config/stax/config.toml`:
 # tips = true
 
 [ai]
-# AI agent for PR body generation: "claude", "codex", or "gemini"
+# AI agent for PR body generation: "claude", "codex", "gemini", or "opencode"
 # If not set, stax auto-detects installed agents and prompts on first use
 # agent = "claude"
 
@@ -798,6 +798,17 @@ curl -o GEMINI.md https://raw.githubusercontent.com/cesarferreira/stax/main/skil
 
 Gemini CLI loads project instructions from `GEMINI.md`, so this gives it stack-aware workflow guidance for branch creation, submit flows, and related operations.
 
+## OpenCode Integration
+
+Teach OpenCode how to use stax by installing the skill file in OpenCode's skills directory:
+
+```bash
+mkdir -p ~/.config/opencode/skills/stax
+curl -o ~/.config/opencode/skills/stax/SKILL.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
+```
+
+This enables OpenCode to help with stax workflows, stack operations, and PR generation.
+
 ## Freephite/Graphite Compatibility
 
 stax uses the same metadata format as freephite and supports similar commands:
@@ -870,7 +881,7 @@ Generate a PR description using AI, based on your diff, commit messages, and the
 stax generate --pr-body
 ```
 
-stax collects the diff, commit messages, and PR template for the current branch, sends them to an AI agent (Claude, Codex, or Gemini CLI), and updates the PR body on GitHub.
+stax collects the diff, commit messages, and PR template for the current branch, sends them to an AI agent (Claude, Codex, Gemini CLI, or OpenCode), and updates the PR body on GitHub.
 
 Prerequisites:
 - Current branch must be tracked by stax
@@ -891,6 +902,7 @@ If no AI agent is configured, stax auto-detects what's installed and walks you t
 > claude (default)
   codex
   gemini
+  opencode
 
 ? Select model for claude:
 > claude-sonnet-4-5-20250929 — Sonnet 4.5 (default, balanced)
@@ -903,7 +915,7 @@ If no AI agent is configured, stax auto-detects what's installed and walks you t
 
 ### Options
 
-- `--agent <name>`: Override the configured agent for this invocation (`claude`, `codex`, `gemini`)
+- `--agent <name>`: Override the configured agent for this invocation (`claude`, `codex`, `gemini`, `opencode`)
 - `--model <name>`: Override the model (e.g., `claude-haiku-4-5-20251001`, `gpt-4.1-mini`, `gemini-2.5-flash`)
 - `--edit`: Open $EDITOR to review/tweak the generated body before updating the PR
 
@@ -911,6 +923,7 @@ If no AI agent is configured, stax auto-detects what's installed and walks you t
 stax generate --pr-body --agent codex                        # Use codex this time
 stax generate --pr-body --model claude-haiku-4-5-20251001    # Use a specific model
 stax generate --pr-body --agent gemini --model gemini-2.5-flash
+stax generate --pr-body --agent opencode
 stax generate --pr-body --edit                               # Review in editor first
 ```
 
@@ -1070,6 +1083,7 @@ stax generate --pr-body --edit                               # Review in editor 
 - `stax generate --pr-body --edit` - Generate and review in editor
 - `stax generate --pr-body --agent codex` - Use specific AI agent
 - `stax generate --pr-body --agent gemini` - Use Gemini CLI as the agent
+- `stax generate --pr-body --agent opencode` - Use OpenCode as the agent
 - `stax generate --pr-body --model claude-haiku-4-5-20251001` - Use specific model
 
 **CI/Automation example:**

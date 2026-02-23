@@ -25,4 +25,4 @@ stax generate --pr-body --agent gemini
 stax generate --pr-body --agent gemini --model gemini-2.5-flash
 ```
 
-For Claude setup, see [Claude Code Integration](claude-code.md). For Codex setup, see [Codex Integration](codex.md).
+For Claude setup, see [Claude Code Integration](claude-code.md). For Codex setup, see [Codex Integration](codex.md). For OpenCode setup, see [OpenCode Integration](opencode.md).

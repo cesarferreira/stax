@@ -1,6 +1,6 @@
 # Stax Skills for AI Coding Agents
 
-This document teaches AI coding agents (Claude Code, Codex, Gemini CLI) how to use `stax` - a CLI for managing stacked Git branches and PRs.
+This document teaches AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode) how to use `stax` - a CLI for managing stacked Git branches and PRs.
 
 ## Use with Gemini CLI
 
@@ -8,6 +8,15 @@ Gemini CLI reads project instructions from `GEMINI.md`. To use this guidance wit
 
 ```bash
 curl -o GEMINI.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
+```
+
+## Use with OpenCode
+
+OpenCode loads skills from `~/.config/opencode/skills/<name>/SKILL.md`. To install this guidance:
+
+```bash
+mkdir -p ~/.config/opencode/skills/stax
+curl -o ~/.config/opencode/skills/stax/SKILL.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
 ```
 
 ## What is Stax?

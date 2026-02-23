@@ -77,6 +77,7 @@ nav:
       - Claude Code: integrations/claude-code.md
       - Codex: integrations/codex.md
       - Gemini CLI: integrations/gemini-cli.md
+      - OpenCode: integrations/opencode.md
   - Compatibility:
       - Freephite and Graphite: compatibility/freephite-graphite.md
   - Benchmarks: reference/benchmarks.md

@@ -71,7 +71,7 @@ pub struct UiConfig {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AiConfig {
-    /// AI agent to use: "claude", "codex", or "gemini" (default: auto-detect)
+    /// AI agent to use: "claude", "codex", "gemini", or "opencode" (default: auto-detect)
     #[serde(default)]
     pub agent: Option<String>,
     /// Model to use with the AI agent (default: agent's own default)

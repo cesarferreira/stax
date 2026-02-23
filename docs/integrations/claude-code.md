@@ -9,4 +9,4 @@ curl -o ~/.claude/skills/stax.md https://raw.githubusercontent.com/cesarferreira
 
 This enables workflow assistance for stacked branch creation, submit flows, and related operations.
 
-For Codex setup, see [Codex Integration](codex.md). For Gemini setup, see [Gemini CLI Integration](gemini-cli.md).
+For Codex setup, see [Codex Integration](codex.md). For Gemini setup, see [Gemini CLI Integration](gemini-cli.md). For OpenCode setup, see [OpenCode Integration](opencode.md).

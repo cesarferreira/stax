@@ -415,7 +415,7 @@ enum Commands {
         /// Open editor to review before updating
         #[arg(long)]
         edit: bool,
-        /// AI agent to use (claude, codex, gemini). Defaults to config or auto-detect
+        /// AI agent to use (claude, codex, gemini, opencode). Defaults to config or auto-detect
         #[arg(long)]
         agent: Option<String>,
         /// Model to use with the AI agent. Defaults to config or agent's default
