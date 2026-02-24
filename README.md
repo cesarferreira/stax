@@ -329,6 +329,7 @@ stax is worktree-aware. When you have branches checked out across multiple workt
 ### How it works
 
 - **Restack / upstack restack / sync `--restack`**: When a branch to be rebased is checked out in another worktree, stax runs `git rebase` inside that worktree instead of checking it out in the current one.
+- **Merged middle branches (including squash merges)**: When sync reparents children off a merged branch, stax preserves the old-base boundary and uses `git rebase --onto` so child branches replay only novel commits instead of replaying already-integrated parent history.
 - **Cascade**: Before restacking, stax fetches from remote and fast-forwards your local trunk — even if trunk is checked out in a different worktree. This prevents rebasing onto a stale local trunk, which would cause PRs to include commits already merged to remote.
 - **Sync trunk update**: If trunk is checked out in another worktree, stax pulls it there directly.
 

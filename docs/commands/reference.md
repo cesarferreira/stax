@@ -9,8 +9,8 @@
 | `stax log` | `l` | Show stack with commits and PR info |
 | `stax submit` | `ss` | Submit full current stack |
 | `stax merge` | | Merge PRs bottom -> current |
-| `stax sync` | `rs` | Pull trunk, delete merged branches |
-| `stax restack` | | Rebase current branch onto parent |
+| `stax sync` | `rs` | Pull trunk, delete merged branches, preserve child provenance for restack |
+| `stax restack` | | Rebase current branch onto parent (provenance-aware `--onto` when possible) |
 | `stax cascade` | | Restack from bottom and submit updates |
 | `stax diff` | | Show per-branch diffs vs parent |
 | `stax range-diff` | | Show range-diff for branches needing restack |
