@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitScope {
@@ -38,6 +39,7 @@ struct PrPlan {
     branch: String,
     parent: String,
     existing_pr: Option<u64>,
+    optimistic_create: bool,
     // For new PRs, we'll collect these upfront
     title: Option<String>,
     body: Option<String>,
@@ -47,6 +49,14 @@ struct PrPlan {
     needs_pr_update: bool,
     // Empty branches get pushed but no PR created
     is_empty: bool,
+}
+
+#[derive(Default, Clone)]
+struct SubmitPhaseTimings {
+    planning: Duration,
+    open_pr_discovery: Duration,
+    pr_create_update: Duration,
+    stack_comment: Duration,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -230,6 +240,9 @@ pub fn run(
         print!("  Planning PR operations... ");
         std::io::Write::flush(&mut std::io::stdout()).ok();
     }
+    let planning_started_at = Instant::now();
+    let mut timings = SubmitPhaseTimings::default();
+    let mut full_scan_fallbacks = 0usize;
 
     let mut plans: Vec<PrPlan> = Vec::new();
     let mut rt: Option<tokio::runtime::Runtime> = None;
@@ -253,6 +266,7 @@ pub fn run(
             let is_empty = empty_set.contains(branch);
             let needs_push = branch_needs_push(repo.workdir()?, &remote_info.name, branch);
             let mut existing_pr = None;
+            let had_metadata_pr = meta.pr_info.as_ref().filter(|p| p.number > 0).is_some();
 
             // Best-effort metadata refresh when no-pr is used.
             if !is_empty {
@@ -260,16 +274,45 @@ pub fn run(
                     let mut found_pr: Option<PrInfoWithHead> = None;
 
                     if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+                        let lookup_started_at = Instant::now();
                         found_pr = runtime
                             .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
                             .ok();
+                        timings.open_pr_discovery += lookup_started_at.elapsed();
                     }
 
                     if found_pr.is_none() {
+                        let lookup_started_at = Instant::now();
+                        found_pr = runtime
+                            .block_on(async {
+                                gh_client
+                                    .find_open_pr_by_head(remote_info.owner(), branch)
+                                    .await
+                            })
+                            .ok()
+                            .flatten();
+                        timings.open_pr_discovery += lookup_started_at.elapsed();
+                    }
+
+                    if found_pr.is_none() && had_metadata_pr {
+                        full_scan_fallbacks += 1;
+                        if verbose && !quiet {
+                            println!(
+                                "    Falling back to full open PR scan for {} (metadata mismatch)",
+                                branch.cyan()
+                            );
+                        }
                         if open_prs_by_head.is_none() {
+                            let lookup_started_at = Instant::now();
                             open_prs_by_head = runtime
                                 .block_on(async { gh_client.list_open_prs_by_head().await })
                                 .ok();
+                            timings.open_pr_discovery += lookup_started_at.elapsed();
+                            if verbose && !quiet {
+                                if let Some(map) = &open_prs_by_head {
+                                    println!("      Cached {} open PRs", map.len());
+                                }
+                            }
                         }
                         if let Some(map) = &open_prs_by_head {
                             found_pr = map.get(branch).cloned();
@@ -314,6 +357,7 @@ pub fn run(
                 branch: branch.clone(),
                 parent: meta.parent_branch_name,
                 existing_pr,
+                optimistic_create: false,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -334,62 +378,104 @@ pub fn run(
                 .context(format!("No metadata for branch {}", branch))?;
 
             let is_empty = empty_set.contains(branch);
+            let had_metadata_pr = meta.pr_info.as_ref().filter(|p| p.number > 0).is_some();
 
             // Check if PR exists (skip for empty branches)
             let mut existing_pr: Option<PrInfoWithHead> = None;
+            let mut optimistic_create = false;
             if !is_empty {
                 if verbose && !quiet {
                     println!("    Checking PR for {}", branch.cyan());
                 }
 
-                if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+                let can_optimistic_create = matches!(scope, SubmitScope::Branch)
+                    && branches_to_submit.len() == 1
+                    && !had_metadata_pr;
+                if can_optimistic_create {
+                    optimistic_create = true;
                     if verbose && !quiet {
-                        println!("      Using metadata PR #{}", pr_info.number);
+                        println!(
+                            "      Using optimistic create (skip pre-lookup, recover on conflict)"
+                        );
                     }
+                } else {
+                    if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+                        if verbose && !quiet {
+                            println!("      Using metadata PR #{}", pr_info.number);
+                        }
 
-                    match runtime
-                        .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
-                    {
-                        Ok(pr) => {
-                            if pr.head == *branch && pr.info.state == "Open" {
-                                existing_pr = Some(pr);
-                            } else if verbose && !quiet {
-                                println!(
-                                    "      PR #{} head '{}' does not match '{}', falling back",
-                                    pr_info.number, pr.head, branch
-                                );
+                        let lookup_started_at = Instant::now();
+                        match runtime
+                            .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
+                        {
+                            Ok(pr) => {
+                                if pr.head == *branch && pr.info.state == "Open" {
+                                    existing_pr = Some(pr);
+                                } else if verbose && !quiet {
+                                    println!(
+                                        "      PR #{} head '{}' does not match '{}', trying head lookup",
+                                        pr_info.number, pr.head, branch
+                                    );
+                                }
+                            }
+                            Err(_) => {
+                                if verbose && !quiet {
+                                    println!(
+                                        "      Failed to fetch PR #{} from metadata, trying head lookup",
+                                        pr_info.number
+                                    );
+                                }
                             }
                         }
-                        Err(_) => {
-                            if verbose && !quiet {
-                                println!(
-                                    "      Failed to fetch PR #{} from metadata, falling back",
-                                    pr_info.number
-                                );
-                            }
-                        }
+                        timings.open_pr_discovery += lookup_started_at.elapsed();
                     }
-                }
 
-                if existing_pr.is_none() {
-                    if open_prs_by_head.is_none() {
-                        if verbose && !quiet {
-                            println!("      Listing open PRs...");
-                        }
-                        let prs =
-                            runtime.block_on(async { gh_client.list_open_prs_by_head().await })?;
-                        if verbose && !quiet {
-                            println!("      Cached {} open PRs", prs.len());
-                        }
-                        open_prs_by_head = Some(prs);
-                    }
-                    if let Some(map) = &open_prs_by_head {
-                        existing_pr = map.get(branch).cloned();
+                    if existing_pr.is_none() {
+                        let lookup_started_at = Instant::now();
+                        existing_pr = runtime.block_on(async {
+                            gh_client
+                                .find_open_pr_by_head(remote_info.owner(), branch)
+                                .await
+                        })?;
+                        timings.open_pr_discovery += lookup_started_at.elapsed();
                         if verbose && !quiet {
                             if let Some(found) = &existing_pr {
-                                println!("      Found open PR #{} in list", found.info.number);
+                                println!(
+                                    "      Found open PR #{} via head lookup",
+                                    found.info.number
+                                );
                             } else {
-                                println!("      No open PR found in list");
+                                println!("      No open PR found via head lookup");
+                            }
+                        }
+                    }
+
+                    if existing_pr.is_none() && had_metadata_pr {
+                        full_scan_fallbacks += 1;
+                        if verbose && !quiet {
+                            println!("      Falling back to full open PR scan (metadata mismatch)");
+                        }
+                        if open_prs_by_head.is_none() {
+                            let lookup_started_at = Instant::now();
+                            let prs = runtime
+                                .block_on(async { gh_client.list_open_prs_by_head().await })?;
+                            timings.open_pr_discovery += lookup_started_at.elapsed();
+                            if verbose && !quiet {
+                                println!("      Cached {} open PRs", prs.len());
+                            }
+                            open_prs_by_head = Some(prs);
+                        }
+                        if let Some(map) = &open_prs_by_head {
+                            existing_pr = map.get(branch).cloned();
+                            if verbose && !quiet {
+                                if let Some(found) = &existing_pr {
+                                    println!(
+                                        "      Found open PR #{} in fallback list",
+                                        found.info.number
+                                    );
+                                } else {
+                                    println!("      No open PR found in fallback list");
+                                }
                             }
                         }
                     }
@@ -457,6 +543,7 @@ pub fn run(
                 branch: branch.clone(),
                 parent: base,
                 existing_pr: pr_number,
+                optimistic_create,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -469,6 +556,7 @@ pub fn run(
         rt = Some(runtime);
         client = Some(gh_client);
     }
+    timings.planning = planning_started_at.elapsed();
 
     if !quiet {
         println!("{}", "done".green());
@@ -758,9 +846,13 @@ pub fn run(
             println!();
             println!("{}", "✓ Branches pushed successfully!".green().bold());
             if verbose {
-                if let Some(client) = client.as_ref() {
-                    print_verbose_network_summary(client, &remote_info.name, &fetch_summary);
-                }
+                print_verbose_network_summary(
+                    client.as_ref(),
+                    &remote_info.name,
+                    &fetch_summary,
+                    &timings,
+                    full_scan_fallbacks,
+                );
             }
         }
         return Ok(());
@@ -775,6 +867,15 @@ pub fn run(
         if !quiet {
             println!();
             println!("{}", "✓ Stack already up to date!".green().bold());
+            if verbose {
+                print_verbose_network_summary(
+                    client.as_ref(),
+                    &remote_info.name,
+                    &fetch_summary,
+                    &timings,
+                    full_scan_fallbacks,
+                );
+            }
         }
         return Ok(());
     }
@@ -788,9 +889,14 @@ pub fn run(
     let rt = rt.context("Internal error: missing runtime for PR submission")?;
     let client = client.context("Internal error: missing GitHub client for PR submission")?;
 
-    let open_pr_url = rt.block_on(async {
+    let (open_pr_url, async_timings, async_full_scan_fallbacks) = rt.block_on(async {
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();
+        let mut created_pr_numbers: HashSet<u64> = HashSet::new();
+        let mut fallback_open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
+        let mut async_timings = SubmitPhaseTimings::default();
+        let mut async_full_scan_fallbacks = 0usize;
 
+        let create_update_started_at = Instant::now();
         for plan in &plans {
             // Skip empty branches for PR operations
             if plan.is_empty {
@@ -811,17 +917,105 @@ pub fn run(
                     std::io::Write::flush(&mut std::io::stdout()).ok();
                 }
 
-                let pr = client
+                let pr = match client
                     .create_pr(&plan.branch, &plan.parent, title, body, is_draft)
                     .await
-                    .context(format!(
-                        "Failed to create PR for '{}' with base '{}'\n\
-                         This may happen if:\n  \
-                         - The base branch '{}' doesn't exist on GitHub\n  \
-                         - The branch has no commits different from base\n  \
-                         Try: git log {}..{} to see the commits",
-                        plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
-                    ))?;
+                {
+                    Ok(pr) => {
+                        created_pr_numbers.insert(pr.number);
+                        pr
+                    }
+                    Err(create_err) => {
+                        if plan.optimistic_create && is_pr_already_exists_error(&create_err) {
+                            if !quiet {
+                                println!(
+                                    "{} {}",
+                                    "exists".yellow(),
+                                    "(create conflicted; resolving existing PR)".dimmed()
+                                );
+                            }
+
+                            let lookup_started_at = Instant::now();
+                            let mut found_pr = client
+                                .find_open_pr_by_head(remote_info.owner(), &plan.branch)
+                                .await?;
+                            async_timings.open_pr_discovery += lookup_started_at.elapsed();
+
+                            if found_pr.is_none() {
+                                async_full_scan_fallbacks += 1;
+                                if verbose && !quiet {
+                                    println!(
+                                        "    Falling back to full open PR scan after create conflict for {}",
+                                        plan.branch.cyan()
+                                    );
+                                }
+                                if fallback_open_prs_by_head.is_none() {
+                                    let scan_started_at = Instant::now();
+                                    let prs = client.list_open_prs_by_head().await?;
+                                    async_timings.open_pr_discovery += scan_started_at.elapsed();
+                                    if verbose && !quiet {
+                                        println!("      Cached {} open PRs", prs.len());
+                                    }
+                                    fallback_open_prs_by_head = Some(prs);
+                                }
+                                if let Some(map) = &fallback_open_prs_by_head {
+                                    found_pr = map.get(&plan.branch).cloned();
+                                }
+                            }
+
+                            let existing_pr = found_pr
+                                .context(format!(
+                                    "PR creation for '{}' reported existing PR, but lookup couldn't find it",
+                                    plan.branch
+                                ))?;
+
+                            if !quiet {
+                                print!("  Updating {} #{}... ", plan.branch, existing_pr.info.number);
+                                std::io::Write::flush(&mut std::io::stdout()).ok();
+                            }
+                            client
+                                .update_pr_base(existing_pr.info.number, &plan.parent)
+                                .await?;
+                            apply_pr_metadata(
+                                &client,
+                                existing_pr.info.number,
+                                &reviewers,
+                                &labels,
+                                &assignees,
+                            )
+                            .await?;
+
+                            let pr = client.get_pr(existing_pr.info.number).await?;
+                            if !quiet {
+                                println!("{}", "done".green());
+                            }
+                            let updated_meta = BranchMetadata {
+                                pr_info: Some(crate::engine::metadata::PrInfo {
+                                    number: pr.number,
+                                    state: pr.state.clone(),
+                                    is_draft: Some(pr.is_draft),
+                                }),
+                                ..meta
+                            };
+                            updated_meta.write(repo.inner(), &plan.branch)?;
+
+                            pr_infos.push(StackPrInfo {
+                                branch: plan.branch.clone(),
+                                pr_number: Some(pr.number),
+                            });
+                            continue;
+                        }
+
+                        return Err(create_err).context(format!(
+                            "Failed to create PR for '{}' with base '{}'\n\
+                             This may happen if:\n  \
+                             - The base branch '{}' doesn't exist on GitHub\n  \
+                             - The branch has no commits different from base\n  \
+                             Try: git log {}..{} to see the commits",
+                            plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
+                        ));
+                    }
+                };
 
                 if !quiet {
                     println!(
@@ -890,6 +1084,7 @@ pub fn run(
                 });
             }
         }
+        async_timings.pr_create_update = create_update_started_at.elapsed();
 
         // Update stack comment on ALL PRs in the stack
         let prs_with_numbers: Vec<_> = pr_infos
@@ -897,6 +1092,7 @@ pub fn run(
             .filter_map(|p| p.pr_number.map(|num| (num, p.branch.clone())))
             .collect();
 
+        let stack_comment_started_at = Instant::now();
         for (pr_number, _branch) in &prs_with_numbers {
             if !quiet {
                 print!("  Updating stack comment on #{}... ", pr_number);
@@ -904,13 +1100,18 @@ pub fn run(
             }
             let stack_comment =
                 generate_stack_comment(&pr_infos, *pr_number, &remote_info, &stack.trunk);
-            client
-                .update_stack_comment(*pr_number, &stack_comment)
-                .await?;
+            if created_pr_numbers.contains(pr_number) {
+                client.create_stack_comment(*pr_number, &stack_comment).await?;
+            } else {
+                client
+                    .update_stack_comment(*pr_number, &stack_comment)
+                    .await?;
+            }
             if !quiet {
                 println!("{}", "done".green());
             }
         }
+        async_timings.stack_comment = stack_comment_started_at.elapsed();
 
         if !quiet {
             println!();
@@ -936,8 +1137,16 @@ pub fn run(
             None
         };
 
-        Ok::<Option<String>, anyhow::Error>(open_pr_url)
+        Ok::<(Option<String>, SubmitPhaseTimings, usize), anyhow::Error>((
+            open_pr_url,
+            async_timings,
+            async_full_scan_fallbacks,
+        ))
     })?;
+    timings.open_pr_discovery += async_timings.open_pr_discovery;
+    timings.pr_create_update += async_timings.pr_create_update;
+    timings.stack_comment += async_timings.stack_comment;
+    full_scan_fallbacks += async_full_scan_fallbacks;
 
     if let Some(pr_url) = open_pr_url {
         if !quiet {
@@ -958,7 +1167,13 @@ pub fn run(
     }
 
     if verbose && !quiet {
-        print_verbose_network_summary(&client, &remote_info.name, &fetch_summary);
+        print_verbose_network_summary(
+            Some(&client),
+            &remote_info.name,
+            &fetch_summary,
+            &timings,
+            full_scan_fallbacks,
+        );
     }
 
     Ok(())
@@ -1284,8 +1499,13 @@ async fn apply_pr_metadata(
     Ok(())
 }
 
-fn print_verbose_network_summary(client: &GitHubClient, remote_name: &str, fetch_summary: &str) {
-    let stats = client.api_call_stats();
+fn print_verbose_network_summary(
+    client: Option<&GitHubClient>,
+    remote_name: &str,
+    fetch_summary: &str,
+    timings: &SubmitPhaseTimings,
+    full_scan_fallbacks: usize,
+) {
     println!();
     println!("{}", "Verbose network summary:".bold());
     println!(
@@ -1293,18 +1513,62 @@ fn print_verbose_network_summary(client: &GitHubClient, remote_name: &str, fetch
         format!("git fetch {}", remote_name),
         fetch_summary
     );
+
+    if let Some(client) = client {
+        let stats = client.api_call_stats();
+        println!(
+            "  {:<28} {}",
+            "github.api.total",
+            stats.total_requests.to_string().cyan()
+        );
+        if stats.by_operation.is_empty() {
+            println!("  {}", "No GitHub API requests recorded".dimmed());
+        } else {
+            for (operation, count) in stats.by_operation {
+                println!("    {:<28} {}", operation, count);
+            }
+        }
+    } else {
+        println!("  {:<28} {}", "github.api.total", "0".cyan());
+        println!("  {}", "No GitHub client available".dimmed());
+    }
+
+    println!();
+    println!("{}", "Phase timings:".bold());
+    println!("  {:<28} {}", "planning", format_duration(timings.planning));
     println!(
         "  {:<28} {}",
-        "github.api.total",
-        stats.total_requests.to_string().cyan()
+        "open PR discovery",
+        format_duration(timings.open_pr_discovery)
     );
-    if stats.by_operation.is_empty() {
-        println!("  {}", "No GitHub API requests recorded".dimmed());
-        return;
+    println!(
+        "  {:<28} {}",
+        "create/update PRs",
+        format_duration(timings.pr_create_update)
+    );
+    println!(
+        "  {:<28} {}",
+        "stack comments",
+        format_duration(timings.stack_comment)
+    );
+    println!(
+        "  {:<28} {}",
+        "full-scan fallbacks",
+        full_scan_fallbacks.to_string().cyan()
+    );
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration.as_secs_f64() < 0.001 {
+        "0.000s".to_string()
+    } else {
+        format!("{:.3}s", duration.as_secs_f64())
     }
-    for (operation, count) in stats.by_operation {
-        println!("    {:<28} {}", operation, count);
-    }
+}
+
+fn is_pr_already_exists_error(err: &anyhow::Error) -> bool {
+    let msg = err.to_string().to_lowercase();
+    msg.contains("pull request already exists") || msg.contains("already exists")
 }
 
 /// Generate a PR body using an AI agent (for --ai-body flag).

@@ -269,60 +269,76 @@ struct ReviewNode {
 }
 
 impl GitHubClient {
+    /// Find existing open PR for a branch owned by `head_owner`.
+    ///
+    /// Uses GitHub's `head` filter first (single request) and validates the
+    /// result matches the exact branch name.
+    pub async fn find_open_pr_by_head(
+        &self,
+        head_owner: &str,
+        branch: &str,
+    ) -> Result<Option<PrInfoWithHead>> {
+        self.record_api_call("pulls.list.head");
+        let prs = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .list()
+            .state(State::Open)
+            .head(format!("{}:{}", head_owner, branch))
+            .per_page(100u8)
+            .sort(Sort::Created)
+            .send()
+            .await
+            .context("Failed to list PRs by head")?;
+
+        for pr in &prs.items {
+            if pr.head.ref_field != branch {
+                continue;
+            }
+            let owner_matches = pr
+                .head
+                .label
+                .as_ref()
+                .and_then(|label| label.split_once(':').map(|(owner, _)| owner == head_owner))
+                .unwrap_or(true);
+            if !owner_matches {
+                continue;
+            }
+
+            return Ok(Some(PrInfoWithHead {
+                head_label: pr.head.label.clone(),
+                info: PrInfo {
+                    number: pr.number,
+                    state: pr
+                        .state
+                        .as_ref()
+                        .map(|s| format!("{:?}", s))
+                        .unwrap_or_default(),
+                    is_draft: pr.draft.unwrap_or(false),
+                    base: pr.base.ref_field.clone(),
+                },
+                head: pr.head.ref_field.clone(),
+            }));
+        }
+
+        Ok(None)
+    }
+
     /// Find existing open PR for a branch
     ///
     /// Only returns a PR if:
     /// 1. The PR is in OPEN state (not closed or merged)
     /// 2. The PR's head branch exactly matches the requested branch name
     ///
-    /// Note: We don't use the GitHub API's `head` filter because it's unreliable
-    /// with long branch names or special characters. Instead, we list open PRs
-    /// and filter manually, with pagination support for repos with many PRs.
+    /// Uses the `head` filter first (fast path), then falls back to scanning
+    /// open PRs if needed.
     pub async fn find_pr(&self, branch: &str) -> Result<Option<PrInfo>> {
-        // List open PRs without using the unreliable `head` filter
-        // Use pagination to handle repos with many open PRs efficiently
-        let mut page = 1u32;
-        const PER_PAGE: u8 = 100;
-
-        loop {
-            self.record_api_call("pulls.list.open.page");
-            let prs = self
-                .octocrab
-                .pulls(&self.owner, &self.repo)
-                .list()
-                .state(State::Open)
-                .per_page(PER_PAGE)
-                .page(page)
-                .sort(Sort::Created)
-                .send()
-                .await
-                .context("Failed to list PRs")?;
-
-            // Find the PR with matching head branch in this page
-            for pr in &prs.items {
-                if pr.head.ref_field == branch {
-                    return Ok(Some(PrInfo {
-                        number: pr.number,
-                        state: pr
-                            .state
-                            .as_ref()
-                            .map(|s| format!("{:?}", s))
-                            .unwrap_or_default(),
-                        is_draft: pr.draft.unwrap_or(false),
-                        base: pr.base.ref_field.clone(),
-                    }));
-                }
-            }
-
-            // If we got fewer items than requested, we've reached the last page
-            if (prs.items.len() as u8) < PER_PAGE {
-                break;
-            }
-
-            page += 1;
+        if let Some(pr) = self.find_open_pr_by_head(&self.owner, branch).await? {
+            return Ok(Some(pr.info));
         }
 
-        Ok(None) // No matching open PR found
+        let prs_by_head = self.list_open_prs_by_head().await?;
+        Ok(prs_by_head.get(branch).cloned().map(|pr| pr.info))
     }
 
     /// List all open PRs and index them by head branch name
@@ -519,8 +535,14 @@ impl GitHubClient {
             }
         }
 
-        // Create new comment
+        self.create_stack_comment(pr_number, stack_comment).await
+    }
+
+    /// Create a stax stack comment on a PR without listing existing comments.
+    pub async fn create_stack_comment(&self, pr_number: u64, stack_comment: &str) -> Result<()> {
         self.record_api_call("issues.comments.create");
+        let marker = "<!-- stax-stack-comment -->";
+        let full_comment = format!("{}\n{}", marker, stack_comment);
         self.octocrab
             .issues(&self.owner, &self.repo)
             .create_comment(pr_number, &full_comment)
@@ -862,7 +884,7 @@ pub fn generate_stack_comment(
 mod tests {
     use super::*;
     use octocrab::Octocrab;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -1368,6 +1390,94 @@ mod tests {
 
         let stats = client.api_call_stats();
         assert_eq!(stats.total_requests, 1);
+        assert!(stats
+            .by_operation
+            .iter()
+            .any(|(op, count)| op == "pulls.list.open.page" && *count == 1));
+    }
+
+    #[tokio::test]
+    async fn test_find_open_pr_by_head_uses_head_filter() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .and(query_param("state", "open"))
+            .and(query_param("head", "test-owner:feature-a"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
+                    "id": 11,
+                    "number": 11,
+                    "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
+                    "base": { "ref": "main", "sha": "bbbb" },
+                    "draft": false
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let pr = client
+            .find_open_pr_by_head("test-owner", "feature-a")
+            .await
+            .unwrap()
+            .expect("expected matching PR");
+
+        assert_eq!(pr.info.number, 11);
+        assert_eq!(pr.head, "feature-a");
+
+        let stats = client.api_call_stats();
+        assert_eq!(stats.total_requests, 1);
+        assert!(stats
+            .by_operation
+            .iter()
+            .any(|(op, count)| op == "pulls.list.head" && *count == 1));
+    }
+
+    #[tokio::test]
+    async fn test_find_pr_falls_back_to_scan_when_head_lookup_misses() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .and(query_param("state", "open"))
+            .and(query_param("head", "test-owner:feature-a"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
+                    "id": 11,
+                    "number": 11,
+                    "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
+                    "base": { "ref": "main", "sha": "bbbb" },
+                    "draft": false
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let pr = client
+            .find_pr("feature-a")
+            .await
+            .unwrap()
+            .expect("expected PR");
+
+        assert_eq!(pr.number, 11);
+
+        let stats = client.api_call_stats();
+        assert_eq!(stats.total_requests, 2);
+        assert!(stats
+            .by_operation
+            .iter()
+            .any(|(op, count)| op == "pulls.list.head" && *count == 1));
         assert!(stats
             .by_operation
             .iter()
