@@ -178,6 +178,9 @@ enum Commands {
         /// Also restack branches after syncing
         #[arg(short, long)]
         restack: bool,
+        /// Prune stale remote-tracking refs during fetch
+        #[arg(long)]
+        prune: bool,
         /// Don't delete merged branches
         #[arg(long)]
         no_delete: bool,
@@ -818,6 +821,7 @@ fn main() -> Result<()> {
         }
         Commands::Sync {
             restack,
+            prune,
             no_delete,
             force,
             safe,
@@ -827,6 +831,7 @@ fn main() -> Result<()> {
             auto_stash_pop,
         } => commands::sync::run(
             restack,
+            prune,
             !no_delete,
             force,
             safe,

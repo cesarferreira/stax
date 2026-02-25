@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 /// Sync repo: pull trunk from remote, delete merged branches, optionally restack
 pub fn run(
     restack: bool,
+    prune: bool,
     delete_merged: bool,
     force: bool,
     safe: bool,
@@ -83,8 +84,13 @@ pub fn run(
     }
 
     let fetch_started_at = Instant::now();
+    let fetch_args: Vec<&str> = if prune {
+        vec!["fetch", "--prune", "--no-tags", &remote_name]
+    } else {
+        vec!["fetch", "--no-tags", &remote_name]
+    };
     let output = Command::new("git")
-        .args(["fetch", "--prune", "--no-tags", &remote_name])
+        .args(&fetch_args)
         .current_dir(workdir)
         .output()
         .context("Failed to fetch")?;
