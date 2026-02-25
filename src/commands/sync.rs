@@ -12,6 +12,7 @@ use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use std::io::Write;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// Sync repo: pull trunk from remote, delete merged branches, optionally restack
 pub fn run(
@@ -24,6 +25,9 @@ pub fn run(
     verbose: bool,
     auto_stash_pop: bool,
 ) -> Result<()> {
+    let sync_started_at = Instant::now();
+    let mut step_timings: Vec<(String, Duration)> = Vec::new();
+
     let repo = GitRepo::open()?;
     let stack = Stack::load(&repo)?;
     let current = repo.current_branch()?;
@@ -55,7 +59,9 @@ pub fn run(
         };
 
         if stash {
+            let stash_started_at = Instant::now();
             stashed = repo.stash_push()?;
+            step_timings.push(("stash working tree".to_string(), stash_started_at.elapsed()));
             if !quiet {
                 println!("{}", "✓ Stashed working tree changes.".green());
             }
@@ -75,11 +81,13 @@ pub fn run(
         let _ = std::io::stdout().flush();
     }
 
+    let fetch_started_at = Instant::now();
     let output = Command::new("git")
         .args(["fetch", &remote_name])
         .current_dir(workdir)
         .output()
         .context("Failed to fetch")?;
+    step_timings.push((format!("fetch {}", remote_name), fetch_started_at.elapsed()));
 
     if !quiet {
         if output.status.success() {
@@ -111,6 +119,7 @@ pub fn run(
     // has diverged. This is fine - we'll retry after branch deletions if we end up on trunk.
     let was_on_trunk = current == stack.trunk;
     let mut trunk_update_deferred = false;
+    let update_trunk_started_at = Instant::now();
 
     if was_on_trunk {
         // We're on trunk - pull directly
@@ -258,10 +267,21 @@ pub fn run(
             }
         }
     }
+    step_timings.push((
+        format!("update {}", stack.trunk),
+        update_trunk_started_at.elapsed(),
+    ));
 
     // 3. Delete merged branches
     if delete_merged {
+        let detect_merged_started_at = Instant::now();
         let merged = find_merged_branches(workdir, &stack, &remote_name)?;
+        step_timings.push((
+            "detect merged branches".to_string(),
+            detect_merged_started_at.elapsed(),
+        ));
+
+        let delete_merged_started_at = Instant::now();
 
         // Lazy-initialize GitHub client for updating PR bases (only if needed)
         let github_client: Option<(tokio::runtime::Runtime, GitHubClient)> = {
@@ -539,6 +559,11 @@ pub fn run(
         } else if !quiet {
             println!("  {}", "No merged branches to delete.".dimmed());
         }
+
+        step_timings.push((
+            "delete merged branches".to_string(),
+            delete_merged_started_at.elapsed(),
+        ));
     }
 
     // Re-check current branch since it may have changed during branch deletion
@@ -547,6 +572,7 @@ pub fn run(
     // If we deferred trunk update (refspec fetch failed while not on trunk) and we're
     // now on trunk after branch deletions, retry with git pull which is more reliable
     if trunk_update_deferred && current_after_deletions == stack.trunk {
+        let deferred_update_started_at = Instant::now();
         if !quiet {
             print!("  Updating {}... ", stack.trunk.cyan());
             let _ = std::io::stdout().flush();
@@ -610,10 +636,16 @@ pub fn run(
                 }
             }
         }
+
+        step_timings.push((
+            format!("retry update {}", stack.trunk),
+            deferred_update_started_at.elapsed(),
+        ));
     }
 
     // 4. Optionally restack
     if restack {
+        let restack_started_at = Instant::now();
         if !quiet {
             println!();
             println!("{}", "Restacking...".bold());
@@ -734,10 +766,14 @@ pub fn run(
                 }
             }
         }
+
+        step_timings.push(("restack".to_string(), restack_started_at.elapsed()));
     }
 
     if stashed {
+        let stash_pop_started_at = Instant::now();
         repo.stash_pop()?;
+        step_timings.push(("restore stash".to_string(), stash_pop_started_at.elapsed()));
         if !quiet {
             println!("{}", "✓ Restored stashed changes.".green());
         }
@@ -746,7 +782,25 @@ pub fn run(
     // Refresh CI cache in background (non-blocking for user experience)
     let git_dir = repo.git_dir()?;
     let branches: Vec<String> = stack.branches.keys().cloned().collect();
+    let refresh_ci_started_at = Instant::now();
     refresh_ci_cache(&repo, &config, &stack, &branches, git_dir);
+    step_timings.push((
+        "refresh ci cache".to_string(),
+        refresh_ci_started_at.elapsed(),
+    ));
+
+    if verbose && !quiet {
+        println!();
+        println!("{}", "Sync timing summary:".bold());
+        for (step, duration) in &step_timings {
+            println!("  {:<30} {}", step, format_duration(*duration));
+        }
+        println!(
+            "  {:<30} {}",
+            "total",
+            format_duration(sync_started_at.elapsed()).cyan()
+        );
+    }
 
     if !quiet {
         println!();
@@ -1079,4 +1133,8 @@ fn record_ci_history_for_merged(
             }
         }
     }
+}
+
+fn format_duration(duration: Duration) -> String {
+    format!("{:.3}s", duration.as_secs_f64())
 }

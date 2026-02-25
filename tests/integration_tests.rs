@@ -1591,6 +1591,35 @@ fn test_sync_with_feature_branch() {
 }
 
 #[test]
+fn test_sync_verbose_shows_step_timing_summary() {
+    let repo = TestRepo::new_with_remote();
+
+    let output = repo.run_stax(&["sync", "--force", "--verbose"]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Sync timing summary:"),
+        "Expected timing summary in verbose sync output, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("fetch origin"),
+        "Expected fetch step timing in verbose sync output, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("total"),
+        "Expected total timing in verbose sync output, got: {}",
+        stdout
+    );
+}
+
+#[test]
 fn test_sync_with_restack_flag() {
     let repo = TestRepo::new_with_remote();
 
