@@ -285,6 +285,7 @@ impl GitHubClient {
         const PER_PAGE: u8 = 100;
 
         loop {
+            self.record_api_call("pulls.list.open.page");
             let prs = self
                 .octocrab
                 .pulls(&self.owner, &self.repo)
@@ -331,6 +332,7 @@ impl GitHubClient {
         let mut prs_by_head = HashMap::new();
 
         loop {
+            self.record_api_call("pulls.list.open.page");
             let prs = self
                 .octocrab
                 .pulls(&self.owner, &self.repo)
@@ -387,6 +389,7 @@ impl GitHubClient {
         body: &str,
         draft: bool,
     ) -> Result<PrInfo> {
+        self.record_api_call("pulls.create");
         let pr = self
             .octocrab
             .pulls(&self.owner, &self.repo)
@@ -411,6 +414,7 @@ impl GitHubClient {
 
     /// Get a PR by number
     pub async fn get_pr(&self, pr_number: u64) -> Result<PrInfo> {
+        self.record_api_call("pulls.get");
         let pr = self
             .octocrab
             .pulls(&self.owner, &self.repo)
@@ -432,6 +436,7 @@ impl GitHubClient {
 
     /// Get a PR by number, including head branch name
     pub async fn get_pr_with_head(&self, pr_number: u64) -> Result<PrInfoWithHead> {
+        self.record_api_call("pulls.get");
         let pr = self
             .octocrab
             .pulls(&self.owner, &self.repo)
@@ -457,6 +462,7 @@ impl GitHubClient {
 
     /// Update PR base branch
     pub async fn update_pr_base(&self, pr_number: u64, new_base: &str) -> Result<()> {
+        self.record_api_call("pulls.update.base");
         self.octocrab
             .pulls(&self.owner, &self.repo)
             .update(pr_number)
@@ -469,6 +475,7 @@ impl GitHubClient {
 
     /// Update PR body text
     pub async fn update_pr_body(&self, pr_number: u64, body: &str) -> Result<()> {
+        self.record_api_call("pulls.update.body");
         self.octocrab
             .pulls(&self.owner, &self.repo)
             .update(pr_number)
@@ -481,6 +488,7 @@ impl GitHubClient {
 
     /// Add or update the stack comment on a PR
     pub async fn update_stack_comment(&self, pr_number: u64, stack_comment: &str) -> Result<()> {
+        self.record_api_call("issues.comments.list");
         let comments = self
             .octocrab
             .issues(&self.owner, &self.repo)
@@ -501,6 +509,7 @@ impl GitHubClient {
                 .unwrap_or(false)
             {
                 // Update existing comment
+                self.record_api_call("issues.comments.update");
                 self.octocrab
                     .issues(&self.owner, &self.repo)
                     .update_comment(comment.id, &full_comment)
@@ -511,6 +520,7 @@ impl GitHubClient {
         }
 
         // Create new comment
+        self.record_api_call("issues.comments.create");
         self.octocrab
             .issues(&self.owner, &self.repo)
             .create_comment(pr_number, &full_comment)
@@ -525,6 +535,7 @@ impl GitHubClient {
             return Ok(());
         }
 
+        self.record_api_call("pulls.request_reviewers");
         self.octocrab
             .pulls(&self.owner, &self.repo)
             .request_reviews(pr_number, reviewers.to_vec(), Vec::<String>::new())
@@ -539,6 +550,7 @@ impl GitHubClient {
             return Ok(());
         }
 
+        self.record_api_call("issues.add_labels");
         self.octocrab
             .issues(&self.owner, &self.repo)
             .add_labels(pr_number, labels)
@@ -554,6 +566,7 @@ impl GitHubClient {
         }
 
         let assignees_refs: Vec<&str> = assignees.iter().map(|s| s.as_str()).collect();
+        self.record_api_call("issues.add_assignees");
         self.octocrab
             .issues(&self.owner, &self.repo)
             .add_assignees(pr_number, &assignees_refs)
@@ -1352,6 +1365,13 @@ mod tests {
         assert!(pr_b.info.is_draft);
         assert_eq!(pr_b.head_label.as_deref(), Some("test-owner:feature-b"));
         assert_eq!(prs.len(), 2);
+
+        let stats = client.api_call_stats();
+        assert_eq!(stats.total_requests, 1);
+        assert!(stats
+            .by_operation
+            .iter()
+            .any(|(op, count)| op == "pulls.list.open.page" && *count == 1));
     }
 
     #[tokio::test]
@@ -1379,6 +1399,13 @@ mod tests {
         assert_eq!(pr.info.number, 11);
         assert_eq!(pr.info.base, "main");
         assert!(!pr.info.is_draft);
+
+        let stats = client.api_call_stats();
+        assert_eq!(stats.total_requests, 1);
+        assert!(stats
+            .by_operation
+            .iter()
+            .any(|(op, count)| op == "pulls.get" && *count == 1));
     }
 
     // Note: The find_pr function now validates that the returned PR's head branch

@@ -54,6 +54,7 @@ pub fn run(
     scope: SubmitScope,
     draft: bool,
     no_pr: bool,
+    no_fetch: bool,
     _force: bool, // kept for CLI compatibility
     yes: bool,
     no_prompt: bool,
@@ -149,39 +150,67 @@ pub fn run(
     let repo_name = remote_info.repo.clone();
 
     // Fetch to ensure we have latest remote refs (non-fatal if it fails)
-    if !quiet {
-        print!("  Fetching from {}... ", remote_info.name);
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-    }
-    match remote::fetch_remote(repo.workdir()?, &remote_info.name) {
-        Ok(()) => {
-            if !quiet {
-                println!("{}", "done".green());
+    let fetch_summary = if no_fetch {
+        if !quiet {
+            println!(
+                "  {} {}",
+                "Skipping fetch".yellow(),
+                "(--no-fetch)".dimmed()
+            );
+        }
+        "skipped (--no-fetch)".to_string()
+    } else {
+        if !quiet {
+            print!("  Fetching from {}... ", remote_info.name);
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+        }
+        match remote::fetch_remote(repo.workdir()?, &remote_info.name) {
+            Ok(()) => {
+                if !quiet {
+                    println!("{}", "done".green());
+                }
+                "ok".to_string()
+            }
+            Err(_) => {
+                if !quiet {
+                    println!("{} (continuing with local refs)", "skipped".yellow());
+                }
+                "failed (continued with cached refs)".to_string()
             }
         }
-        Err(_) => {
-            if !quiet {
-                println!("{} (continuing with local refs)", "skipped".yellow());
-            }
-        }
-    }
+    };
 
     // Check which branches exist on remote
     let remote_branches = remote::get_remote_branches(repo.workdir()?, &remote_info.name)?;
 
     // Verify trunk exists on remote
     if !remote_branches.contains(&stack.trunk) {
-        anyhow::bail!(
-            "Base branch '{}' does not exist on the remote.\n\n\
-             This can happen if:\n  \
-             - This is a new repository that hasn't been pushed yet\n  \
-             - The default branch has a different name on GitHub\n\n\
-             To fix this, push your base branch first:\n  \
-             git push -u {} {}",
-            stack.trunk,
-            remote_info.name,
-            stack.trunk
-        );
+        if no_fetch {
+            anyhow::bail!(
+                "Base branch '{}' was not found in cached ref '{}/{}'.\n\
+                 You used --no-fetch, so stax did not refresh remote refs.\n\n\
+                 Try one of:\n  \
+                 - Run without --no-fetch\n  \
+                 - git fetch {} {}\n",
+                stack.trunk,
+                remote_info.name,
+                stack.trunk,
+                remote_info.name,
+                stack.trunk
+            );
+        } else {
+            anyhow::bail!(
+                "Base branch '{}' does not exist on the remote.\n\n\
+                 This can happen if:\n  \
+                 - This is a new repository that hasn't been pushed yet\n  \
+                 - The default branch has a different name on GitHub\n\n\
+                 To fix this, push your base branch first:\n  \
+                 git push -u {} {}",
+                stack.trunk,
+                remote_info.name,
+                stack.trunk
+            );
+        }
     }
 
     if matches!(scope, SubmitScope::Branch | SubmitScope::Upstack) {
@@ -192,6 +221,7 @@ pub fn run(
             &current,
             &remote_info.name,
             &branches_to_submit,
+            no_fetch,
         )?;
     }
 
@@ -203,7 +233,7 @@ pub fn run(
 
     let mut plans: Vec<PrPlan> = Vec::new();
     let mut rt: Option<tokio::runtime::Runtime> = None;
-    let mut client: Option<GitHubClient> = None;
+    let client: Option<GitHubClient>;
 
     if no_pr {
         let runtime = tokio::runtime::Runtime::new().ok();
@@ -214,6 +244,7 @@ pub fn run(
                 })
                 .ok()
         });
+        client = gh_client.clone();
         let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
 
         for branch in &branches_to_submit {
@@ -726,6 +757,11 @@ pub fn run(
         if !quiet {
             println!();
             println!("{}", "✓ Branches pushed successfully!".green().bold());
+            if verbose {
+                if let Some(client) = client.as_ref() {
+                    print_verbose_network_summary(client, &remote_info.name, &fetch_summary);
+                }
+            }
         }
         return Ok(());
     }
@@ -921,6 +957,10 @@ pub fn run(
         tx.finish_ok()?;
     }
 
+    if verbose && !quiet {
+        print_verbose_network_summary(&client, &remote_info.name, &fetch_summary);
+    }
+
     Ok(())
 }
 
@@ -986,6 +1026,7 @@ fn validate_narrow_scope_submit(
     current: &str,
     remote_name: &str,
     branches_to_submit: &[String],
+    no_fetch: bool,
 ) -> Result<()> {
     if matches!(scope, SubmitScope::Branch) && current == stack.trunk {
         anyhow::bail!(
@@ -1029,15 +1070,29 @@ fn validate_narrow_scope_submit(
         }
 
         if !branch_matches_remote(repo.workdir()?, remote_name, &parent) {
-            anyhow::bail!(
-                "Parent branch '{}' is not in sync with '{}/{}'.\n\
-                 Narrow scope submit for '{}' is unsafe because its parent is excluded.\n\
-                 Run `stax downstack submit` or `stax submit` to include ancestors first.",
-                parent,
-                remote_name,
-                parent,
-                branch
-            );
+            if no_fetch {
+                anyhow::bail!(
+                    "Parent branch '{}' is not in sync with cached '{}/{}'.\n\
+                     You used --no-fetch, so cached refs may be stale.\n\
+                     Try rerunning without --no-fetch, or run `git fetch {}` first.\n\
+                     Narrow scope submit for '{}' is unsafe while parent appears out-of-sync.",
+                    parent,
+                    remote_name,
+                    parent,
+                    remote_name,
+                    branch
+                );
+            } else {
+                anyhow::bail!(
+                    "Parent branch '{}' is not in sync with '{}/{}'.\n\
+                     Narrow scope submit for '{}' is unsafe because its parent is excluded.\n\
+                     Run `stax downstack submit` or `stax submit` to include ancestors first.",
+                    parent,
+                    remote_name,
+                    parent,
+                    branch
+                );
+            }
         }
     }
 
@@ -1227,6 +1282,29 @@ async fn apply_pr_metadata(
     }
 
     Ok(())
+}
+
+fn print_verbose_network_summary(client: &GitHubClient, remote_name: &str, fetch_summary: &str) {
+    let stats = client.api_call_stats();
+    println!();
+    println!("{}", "Verbose network summary:".bold());
+    println!(
+        "  {:<28} {}",
+        format!("git fetch {}", remote_name),
+        fetch_summary
+    );
+    println!(
+        "  {:<28} {}",
+        "github.api.total",
+        stats.total_requests.to_string().cyan()
+    );
+    if stats.by_operation.is_empty() {
+        println!("  {}", "No GitHub API requests recorded".dimmed());
+        return;
+    }
+    for (operation, count) in stats.by_operation {
+        println!("    {:<28} {}", operation, count);
+    }
 }
 
 /// Generate a PR body using an AI agent (for --ai-body flag).

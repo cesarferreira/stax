@@ -126,6 +126,11 @@ fn test_scoped_submit_subcommand_help_flags() {
         assert!(output.status.success(), "{:?}", args);
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("--no-pr"), "Expected --no-pr in {:?}", args);
+        assert!(
+            stdout.contains("--no-fetch"),
+            "Expected --no-fetch in {:?}",
+            args
+        );
         assert!(stdout.contains("--open"), "Expected --open in {:?}", args);
         assert!(stdout.contains("--yes"), "Expected --yes in {:?}", args);
         assert!(
@@ -248,6 +253,7 @@ fn fp_parity_bs_branch_submit() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--no-pr"));
+    assert!(stdout.contains("--no-fetch"));
     assert!(stdout.contains("--open"));
     assert!(stdout.contains("--no-prompt"));
 }

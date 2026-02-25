@@ -94,6 +94,7 @@
 - `stax log --stack <branch> --current --compact --json --quiet`
 - `stax submit --draft --yes --no-prompt`
 - `stax submit --no-pr`
+- `stax submit --no-fetch`
 - `stax submit --open`
 - `stax submit --force`
 - `stax submit --reviewers alice,bob --labels bug,urgent --assignees alice`

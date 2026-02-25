@@ -1035,6 +1035,7 @@ stax generate --pr-body --edit                               # Review in editor 
 - `stax downstack submit` - Submit ancestors and current branch
 - `stax submit --yes` - Auto-approve prompts
 - `stax submit --no-pr` - Push branches only, skip PR creation/updates
+- `stax submit --no-fetch` - Skip `git fetch`; use cached remote-tracking refs
 - `stax submit --open` - Open the current branch PR in browser after submit (`stax ss --open` / `stax bs --open`)
 - `stax submit --force` - Submit even when restack check fails
 - `stax submit --no-prompt` - Use defaults, skip interactive prompts
@@ -1046,7 +1047,7 @@ stax generate --pr-body --edit                               # Review in editor 
 - `stax submit --labels bug,urgent` - Add labels
 - `stax submit --assignees alice` - Assign users
 - `stax submit --quiet` - Minimize submit output
-- `stax submit --verbose` - Show detailed submit output
+- `stax submit --verbose` - Show detailed submit output, including GitHub API request counts
 - `stax merge --all` - Merge entire stack
 - `stax merge --method squash` - Choose merge method (squash/merge/rebase)
 - `stax merge --dry-run` - Preview merge without executing

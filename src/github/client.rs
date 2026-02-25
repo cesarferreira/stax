@@ -3,6 +3,9 @@ use chrono::{DateTime, Utc};
 use octocrab::params::repos::Reference;
 use octocrab::Octocrab;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::config::Config;
 
@@ -10,6 +13,7 @@ pub struct GitHubClient {
     pub octocrab: Octocrab,
     pub owner: String,
     pub repo: String,
+    api_call_tracker: Arc<ApiCallTracker>,
 }
 
 impl Clone for GitHubClient {
@@ -20,6 +24,46 @@ impl Clone for GitHubClient {
             octocrab: self.octocrab.clone(),
             owner: self.owner.clone(),
             repo: self.repo.clone(),
+            api_call_tracker: self.api_call_tracker.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ApiCallStats {
+    pub total_requests: usize,
+    pub by_operation: Vec<(String, usize)>,
+}
+
+#[derive(Default)]
+struct ApiCallTracker {
+    total_requests: AtomicUsize,
+    by_operation: Mutex<BTreeMap<String, usize>>,
+}
+
+impl ApiCallTracker {
+    fn record(&self, operation: &'static str, count: usize) {
+        if count == 0 {
+            return;
+        }
+
+        self.total_requests.fetch_add(count, Ordering::Relaxed);
+        let mut by_operation = self.by_operation.lock().unwrap_or_else(|e| e.into_inner());
+        *by_operation.entry(operation.to_string()).or_insert(0) += count;
+    }
+
+    fn snapshot(&self) -> ApiCallStats {
+        let by_operation = self
+            .by_operation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(operation, count)| (operation.clone(), *count))
+            .collect();
+
+        ApiCallStats {
+            total_requests: self.total_requests.load(Ordering::Relaxed),
+            by_operation,
         }
     }
 }
@@ -116,6 +160,7 @@ impl GitHubClient {
             octocrab,
             owner: owner.to_string(),
             repo: repo.to_string(),
+            api_call_tracker: Arc::new(ApiCallTracker::default()),
         })
     }
 
@@ -126,7 +171,16 @@ impl GitHubClient {
             octocrab,
             owner: owner.to_string(),
             repo: repo.to_string(),
+            api_call_tracker: Arc::new(ApiCallTracker::default()),
         }
+    }
+
+    pub fn api_call_stats(&self) -> ApiCallStats {
+        self.api_call_tracker.snapshot()
+    }
+
+    pub(crate) fn record_api_call(&self, operation: &'static str) {
+        self.api_call_tracker.record(operation, 1);
     }
 
     /// Get combined CI status from both commit statuses AND check runs (GitHub Actions)

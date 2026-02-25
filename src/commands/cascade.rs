@@ -37,6 +37,7 @@ pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
             commands::submit::SubmitScope::Stack,
             false,  // draft
             no_pr,  // no_pr (push but skip PR creation/updates)
+            false,  // no_fetch
             false,  // force
             true,   // yes
             true,   // no_prompt

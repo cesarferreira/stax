@@ -31,6 +31,9 @@ struct SubmitOptions {
     /// Only push, don't create/update PRs
     #[arg(long)]
     no_pr: bool,
+    /// Skip git fetch and use cached remote-tracking refs
+    #[arg(long = "no-fetch", action = clap::ArgAction::SetTrue)]
+    no_fetch: bool,
     /// Skip restack check and submit anyway
     #[arg(short, long)]
     force: bool,
@@ -696,6 +699,7 @@ fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Re
         scope,
         submit.draft,
         submit.no_pr,
+        submit.no_fetch,
         submit.force,
         submit.yes,
         submit.no_prompt,
