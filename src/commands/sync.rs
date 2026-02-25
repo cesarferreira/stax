@@ -34,6 +34,7 @@ pub fn run(
     let workdir = repo.workdir()?;
     let config = Config::load()?;
     let remote_name = config.remote_name().to_string();
+    let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
 
     if r#continue {
         crate::commands::continue_cmd::run()?;
@@ -83,7 +84,7 @@ pub fn run(
 
     let fetch_started_at = Instant::now();
     let output = Command::new("git")
-        .args(["fetch", &remote_name])
+        .args(["fetch", "--prune", "--no-tags", &remote_name])
         .current_dir(workdir)
         .output()
         .context("Failed to fetch")?;
@@ -129,10 +130,10 @@ pub fn run(
         }
 
         let output = Command::new("git")
-            .args(["pull", "--ff-only", &remote_name, &stack.trunk])
+            .args(["merge", "--ff-only", &remote_trunk_ref])
             .current_dir(workdir)
             .output()
-            .context("Failed to pull trunk")?;
+            .context("Failed to fast-forward trunk")?;
 
         if output.status.success() {
             if !quiet {
@@ -161,11 +162,7 @@ pub fn run(
         } else {
             // Try reset to remote
             let reset_output = Command::new("git")
-                .args([
-                    "reset",
-                    "--hard",
-                    &format!("{}/{}", remote_name, stack.trunk),
-                ])
+                .args(["reset", "--hard", &remote_trunk_ref])
                 .current_dir(workdir)
                 .output()
                 .context("Failed to reset trunk")?;
@@ -194,10 +191,10 @@ pub fn run(
 
         if let Some(trunk_worktree_path) = repo.branch_worktree_path(&stack.trunk)? {
             let output = Command::new("git")
-                .args(["pull", "--ff-only", &remote_name, &stack.trunk])
+                .args(["merge", "--ff-only", &remote_trunk_ref])
                 .current_dir(&trunk_worktree_path)
                 .output()
-                .context("Failed to pull trunk in its worktree")?;
+                .context("Failed to fast-forward trunk in its worktree")?;
 
             if output.status.success() {
                 if !quiet {
@@ -217,11 +214,7 @@ pub fn run(
                 }
             } else {
                 let reset_output = Command::new("git")
-                    .args([
-                        "reset",
-                        "--hard",
-                        &format!("{}/{}", remote_name, stack.trunk),
-                    ])
+                    .args(["reset", "--hard", &remote_trunk_ref])
                     .current_dir(&trunk_worktree_path)
                     .output()
                     .context("Failed to reset trunk in its worktree")?;
@@ -243,20 +236,40 @@ pub fn run(
                 }
             }
         } else {
-            // Trunk isn't checked out in any worktree; update via refspec fetch.
-            let output = Command::new("git")
+            // Trunk isn't checked out in any worktree; fast-forward local trunk ref
+            // directly from the already-fetched remote-tracking branch.
+            let ff_possible = Command::new("git")
                 .args([
-                    "fetch",
-                    &remote_name,
-                    &format!("{}:{}", stack.trunk, stack.trunk),
+                    "merge-base",
+                    "--is-ancestor",
+                    &stack.trunk,
+                    &remote_trunk_ref,
                 ])
                 .current_dir(workdir)
-                .output()
-                .context("Failed to update trunk")?;
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
 
-            if output.status.success() {
-                if !quiet {
-                    println!("{}", "done".green());
+            if ff_possible {
+                let output = Command::new("git")
+                    .args([
+                        "update-ref",
+                        &format!("refs/heads/{}", stack.trunk),
+                        &format!("refs/remotes/{}/{}", remote_name, stack.trunk),
+                    ])
+                    .current_dir(workdir)
+                    .output()
+                    .context("Failed to fast-forward local trunk ref")?;
+
+                if output.status.success() {
+                    if !quiet {
+                        println!("{}", "done".green());
+                    }
+                } else {
+                    trunk_update_deferred = true;
+                    if !quiet {
+                        println!("{}", "deferred".dimmed());
+                    }
                 }
             } else {
                 // Defer trunk update - we'll retry after branch deletions if we end up on trunk
@@ -579,10 +592,10 @@ pub fn run(
         }
 
         let output = Command::new("git")
-            .args(["pull", "--ff-only", &remote_name, &stack.trunk])
+            .args(["merge", "--ff-only", &remote_trunk_ref])
             .current_dir(workdir)
             .output()
-            .context("Failed to pull trunk")?;
+            .context("Failed to fast-forward trunk")?;
 
         if output.status.success() {
             if !quiet {
@@ -611,11 +624,7 @@ pub fn run(
         } else {
             // Try reset to remote
             let reset_output = Command::new("git")
-                .args([
-                    "reset",
-                    "--hard",
-                    &format!("{}/{}", remote_name, stack.trunk),
-                ])
+                .args(["reset", "--hard", &remote_trunk_ref])
                 .current_dir(workdir)
                 .output()
                 .context("Failed to reset trunk")?;
@@ -887,7 +896,8 @@ fn find_merged_branches(
         }
     }
 
-    // Method 3: Check if branch has empty diff against trunk (catches squash/rebase merges)
+    // Method 3: Check if branch has empty diff against origin/trunk
+    // (catches squash/rebase merges and avoids local-trunk drift issues).
     // First get list of local branches to avoid diffing non-existent branches
     let local_output = Command::new("git")
         .args(["branch", "--format=%(refname:short)"])
@@ -901,39 +911,6 @@ fn find_merged_branches(
             .map(|s| s.trim().to_string())
             .collect();
 
-    for branch in stack.branches.keys() {
-        // Skip trunk
-        if branch == &stack.trunk {
-            continue;
-        }
-
-        // Skip if already in merged list
-        if merged.contains(branch) {
-            continue;
-        }
-
-        // Skip if branch doesn't exist locally (will be caught by orphan check)
-        if !local_branches.contains(branch) {
-            continue;
-        }
-
-        // Check if branch has any changes vs trunk
-        let diff_output = Command::new("git")
-            .args(["diff", "--quiet", &stack.trunk, branch])
-            .current_dir(workdir)
-            .stderr(std::process::Stdio::null())
-            .status();
-
-        // --quiet returns 0 if no diff, 1 if there are differences
-        if let Ok(status) = diff_output {
-            if status.success() {
-                // No diff = branch is effectively merged
-                merged.push(branch.clone());
-            }
-        }
-    }
-
-    // Method 3b: Empty diff against origin/trunk (handles stale/diverged local trunk)
     for branch in stack.branches.keys() {
         // Skip trunk
         if branch == &stack.trunk {
