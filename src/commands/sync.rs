@@ -917,31 +917,62 @@ fn find_merged_branches(
             .map(|s| s.trim().to_string())
             .collect();
 
-    for branch in stack.branches.keys() {
-        // Skip trunk
-        if branch == &stack.trunk {
-            continue;
+    let diff_candidates: Vec<String> = stack
+        .branches
+        .keys()
+        .filter(|branch| {
+            *branch != &stack.trunk && !merged.contains(*branch) && local_branches.contains(*branch)
+        })
+        .cloned()
+        .collect();
+
+    let worker_count = std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(1);
+
+    if worker_count <= 1 || diff_candidates.len() < 2 {
+        for branch in diff_candidates {
+            let diff_output = Command::new("git")
+                .args(["diff", "--quiet", &remote_trunk_ref, &branch])
+                .current_dir(workdir)
+                .stderr(std::process::Stdio::null())
+                .status();
+
+            if diff_output.map(|s| s.success()).unwrap_or(false) {
+                merged.push(branch);
+            }
+        }
+    } else {
+        let chunk_size = (diff_candidates.len() + worker_count - 1) / worker_count;
+        let mut handles = Vec::new();
+
+        for chunk in diff_candidates.chunks(chunk_size) {
+            let chunk_branches = chunk.to_vec();
+            let workdir = workdir.to_path_buf();
+            let remote_trunk_ref = remote_trunk_ref.clone();
+
+            handles.push(std::thread::spawn(move || {
+                let mut chunk_merged = Vec::new();
+
+                for branch in chunk_branches {
+                    let diff_output = Command::new("git")
+                        .args(["diff", "--quiet", &remote_trunk_ref, &branch])
+                        .current_dir(&workdir)
+                        .stderr(std::process::Stdio::null())
+                        .status();
+
+                    if diff_output.map(|s| s.success()).unwrap_or(false) {
+                        chunk_merged.push(branch);
+                    }
+                }
+
+                chunk_merged
+            }));
         }
 
-        // Skip if already in merged list
-        if merged.contains(branch) {
-            continue;
-        }
-
-        // Skip if branch doesn't exist locally (will be caught by orphan check)
-        if !local_branches.contains(branch) {
-            continue;
-        }
-
-        let diff_output = Command::new("git")
-            .args(["diff", "--quiet", &remote_trunk_ref, branch])
-            .current_dir(workdir)
-            .stderr(std::process::Stdio::null())
-            .status();
-
-        if let Ok(status) = diff_output {
-            if status.success() {
-                merged.push(branch.clone());
+        for handle in handles {
+            if let Ok(chunk_merged) = handle.join() {
+                merged.extend(chunk_merged);
             }
         }
     }
@@ -1045,6 +1076,7 @@ fn refresh_ci_cache(
     };
 
     let mut cache = CiCache::load(git_dir);
+    let mut branch_shas: Vec<(String, String)> = Vec::new();
 
     for branch in branches {
         let has_pr = stack
@@ -1062,12 +1094,44 @@ fn refresh_ci_cache(
             Err(_) => continue,
         };
 
-        let state = rt
-            .block_on(async { client.combined_status_state(&sha).await })
-            .ok()
-            .flatten();
+        branch_shas.push((branch.clone(), sha));
+    }
 
-        cache.update(branch, state, None);
+    const MAX_CI_FETCH_CONCURRENCY: usize = 6;
+    let branch_states = rt.block_on(async {
+        let mut pending = branch_shas.into_iter();
+        let mut in_flight = tokio::task::JoinSet::new();
+        let mut results: Vec<(String, Option<String>)> = Vec::new();
+
+        for _ in 0..MAX_CI_FETCH_CONCURRENCY {
+            if let Some((branch, sha)) = pending.next() {
+                let client = client.clone();
+                in_flight.spawn(async move {
+                    let state = client.combined_status_state(&sha).await.ok().flatten();
+                    (branch, state)
+                });
+            }
+        }
+
+        while let Some(join_result) = in_flight.join_next().await {
+            if let Ok((branch, state)) = join_result {
+                results.push((branch, state));
+            }
+
+            if let Some((branch, sha)) = pending.next() {
+                let client = client.clone();
+                in_flight.spawn(async move {
+                    let state = client.combined_status_state(&sha).await.ok().flatten();
+                    (branch, state)
+                });
+            }
+        }
+
+        results
+    });
+
+    for (branch, state) in branch_states {
+        cache.update(&branch, state, None);
     }
 
     cache.mark_refreshed();
