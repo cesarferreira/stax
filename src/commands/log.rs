@@ -2,7 +2,6 @@ use crate::cache::CiCache;
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
-use crate::github::GitHubClient;
 use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
 use colored::{Color, Colorize};
@@ -141,17 +140,8 @@ pub fn run(
         display_branches.iter().map(|b| b.name.clone()).collect();
     ordered_branches.push(stack.trunk.clone());
 
-    // Load CI cache and refresh if stale (TTL expired)
-    let mut cache = CiCache::load(git_dir);
-    if cache.is_stale() {
-        let fresh_states = fetch_ci_states(&repo, remote_info.as_ref(), &stack, &ordered_branches);
-        for (branch, state) in fresh_states {
-            cache.update(&branch, Some(state), None);
-        }
-        cache.mark_refreshed();
-        cache.cleanup(&ordered_branches);
-        let _ = cache.save(git_dir);
-    }
+    // Load CI cache (refresh happens in `stax ci`)
+    let cache = CiCache::load(git_dir);
 
     // Build CI states from cache
     let ci_states: HashMap<String, String> = ordered_branches
@@ -572,60 +562,4 @@ fn count_chain_size(stack: &Stack, root: &str, allowed: Option<&HashSet<String>>
         }
     }
     count
-}
-
-fn fetch_ci_states(
-    repo: &GitRepo,
-    remote_info: Option<&RemoteInfo>,
-    stack: &Stack,
-    branches: &[String],
-) -> HashMap<String, String> {
-    let Some(remote) = remote_info else {
-        return HashMap::new();
-    };
-
-    if Config::github_token().is_none() {
-        return HashMap::new();
-    }
-
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(_) => return HashMap::new(),
-    };
-
-    let client = match rt.block_on(async {
-        GitHubClient::new(remote.owner(), &remote.repo, remote.api_base_url.clone())
-    }) {
-        Ok(client) => client,
-        Err(_) => return HashMap::new(),
-    };
-
-    let mut results = HashMap::new();
-    for branch in branches {
-        let has_pr = stack
-            .branches
-            .get(branch)
-            .and_then(|b| b.pr_number)
-            .is_some();
-
-        if !has_pr {
-            continue;
-        }
-
-        let sha = match repo.branch_commit(branch) {
-            Ok(sha) => sha,
-            Err(_) => continue,
-        };
-
-        let state = rt
-            .block_on(async { client.combined_status_state(&sha).await })
-            .ok()
-            .flatten();
-
-        if let Some(state) = state {
-            results.insert(branch.clone(), state);
-        }
-    }
-
-    results
 }

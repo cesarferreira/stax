@@ -1,4 +1,3 @@
-use crate::cache::CiCache;
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
@@ -794,16 +793,6 @@ pub fn run(
         }
     }
 
-    // Refresh CI cache in background (non-blocking for user experience)
-    let git_dir = repo.git_dir()?;
-    let branches: Vec<String> = stack.branches.keys().cloned().collect();
-    let refresh_ci_started_at = Instant::now();
-    refresh_ci_cache(&repo, &config, &stack, &branches, git_dir);
-    step_timings.push((
-        "refresh ci cache".to_string(),
-        refresh_ci_started_at.elapsed(),
-    ));
-
     if verbose && !quiet {
         println!();
         println!("{}", "Sync timing summary:".bold());
@@ -1040,103 +1029,6 @@ fn find_merged_branches(
     }
 
     Ok(merged)
-}
-
-/// Refresh CI cache by fetching latest CI states from GitHub
-fn refresh_ci_cache(
-    repo: &GitRepo,
-    config: &Config,
-    stack: &Stack,
-    branches: &[String],
-    git_dir: &std::path::Path,
-) {
-    let remote_info = match RemoteInfo::from_repo(repo, config) {
-        Ok(info) => info,
-        Err(_) => return,
-    };
-
-    if Config::github_token().is_none() {
-        return;
-    }
-
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(_) => return,
-    };
-
-    let client = match rt.block_on(async {
-        GitHubClient::new(
-            remote_info.owner(),
-            &remote_info.repo,
-            remote_info.api_base_url.clone(),
-        )
-    }) {
-        Ok(client) => client,
-        Err(_) => return,
-    };
-
-    let mut cache = CiCache::load(git_dir);
-    let mut branch_shas: Vec<(String, String)> = Vec::new();
-
-    for branch in branches {
-        let has_pr = stack
-            .branches
-            .get(branch)
-            .and_then(|b| b.pr_number)
-            .is_some();
-
-        if !has_pr {
-            continue;
-        }
-
-        let sha = match repo.branch_commit(branch) {
-            Ok(sha) => sha,
-            Err(_) => continue,
-        };
-
-        branch_shas.push((branch.clone(), sha));
-    }
-
-    const MAX_CI_FETCH_CONCURRENCY: usize = 6;
-    let branch_states = rt.block_on(async {
-        let mut pending = branch_shas.into_iter();
-        let mut in_flight = tokio::task::JoinSet::new();
-        let mut results: Vec<(String, Option<String>)> = Vec::new();
-
-        for _ in 0..MAX_CI_FETCH_CONCURRENCY {
-            if let Some((branch, sha)) = pending.next() {
-                let client = client.clone();
-                in_flight.spawn(async move {
-                    let state = client.combined_status_state(&sha).await.ok().flatten();
-                    (branch, state)
-                });
-            }
-        }
-
-        while let Some(join_result) = in_flight.join_next().await {
-            if let Ok((branch, state)) = join_result {
-                results.push((branch, state));
-            }
-
-            if let Some((branch, sha)) = pending.next() {
-                let client = client.clone();
-                in_flight.spawn(async move {
-                    let state = client.combined_status_state(&sha).await.ok().flatten();
-                    (branch, state)
-                });
-            }
-        }
-
-        results
-    });
-
-    for (branch, state) in branch_states {
-        cache.update(&branch, state, None);
-    }
-
-    cache.mark_refreshed();
-    cache.cleanup(branches);
-    let _ = cache.save(git_dir);
 }
 
 /// Record CI history for merged branches before they are deleted

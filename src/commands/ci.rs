@@ -1,3 +1,4 @@
+use crate::cache::CiCache;
 use crate::ci::history;
 use crate::config::Config;
 use crate::engine::Stack;
@@ -213,6 +214,7 @@ pub fn run(all: bool, json: bool, _refresh: bool, watch: bool, interval: u64) ->
 
     // Single run mode (original behavior)
     let statuses = fetch_ci_statuses(&repo, &rt, &client, &stack, &branches_to_check)?;
+    update_ci_cache(&repo, &stack, &statuses);
 
     if json {
         println!("{}", serde_json::to_string_pretty(&statuses)?);
@@ -487,6 +489,7 @@ fn run_watch_mode(
 
         // Fetch current CI statuses
         let statuses = fetch_ci_statuses(repo, rt, client, stack, branches_to_check)?;
+        update_ci_cache(repo, stack, &statuses);
 
         // Clear screen for clean output (except first iteration)
         if iteration > 1 {
@@ -554,6 +557,23 @@ fn format_duration(secs: u64) -> String {
             }
         }
     }
+}
+
+fn update_ci_cache(repo: &GitRepo, stack: &Stack, statuses: &[BranchCiStatus]) {
+    let git_dir = match repo.git_dir() {
+        Ok(path) => path,
+        Err(_) => return,
+    };
+
+    let mut cache = CiCache::load(git_dir);
+    for status in statuses {
+        cache.update(&status.branch, status.overall_status.clone(), None);
+    }
+
+    let valid_branches: Vec<String> = stack.branches.keys().cloned().collect();
+    cache.cleanup(&valid_branches);
+    cache.mark_refreshed();
+    let _ = cache.save(git_dir);
 }
 
 /// Fetch all checks (both check runs and commit statuses)

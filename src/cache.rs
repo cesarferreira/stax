@@ -5,8 +5,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CACHE_TTL_SECS: u64 = 300; // 5 minutes
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BranchCacheEntry {
     pub ci_state: Option<String>,
@@ -71,17 +69,6 @@ impl CiCache {
                 updated_at: now,
             },
         );
-    }
-
-    /// Check if cache is stale (older than TTL)
-    pub fn is_stale(&self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        // Check if last refresh was more than TTL seconds ago
-        now.saturating_sub(self.last_refresh) > CACHE_TTL_SECS
     }
 
     /// Mark cache as refreshed
@@ -171,18 +158,9 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_is_stale() {
-        let cache = CiCache::default();
-        // Default cache with last_refresh = 0 should be stale
-        assert!(cache.is_stale());
-    }
-
-    #[test]
     fn test_cache_mark_refreshed() {
         let mut cache = CiCache::default();
         cache.mark_refreshed();
-        // After marking refreshed, should not be stale (within TTL)
-        assert!(!cache.is_stale());
         assert!(cache.last_refresh > 0);
     }
 
