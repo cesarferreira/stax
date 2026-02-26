@@ -871,7 +871,6 @@ fn run_watch_mode(
         let complete = all_checks_complete(&statuses);
 
         if complete {
-            // Final completion banner
             let has_failure = statuses
                 .iter()
                 .any(|s| s.overall_status.as_deref() == Some("failure"));
@@ -885,14 +884,27 @@ fn run_watch_mode(
                     .map(|s| s.branch.as_str())
                     .unwrap_or("a branch");
                 println!("{}", line.red());
-                println!(
-                    "{}",
-                    format!(" ✗  CI failed on {}", failed_branch).red().bold()
-                );
+                if iteration == 1 {
+                    println!(
+                        "{}",
+                        format!(" ✗  CI already finished — failed on {}", failed_branch)
+                            .red()
+                            .bold()
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        format!(" ✗  CI failed on {}", failed_branch).red().bold()
+                    );
+                }
                 println!("{}", line.red());
             } else {
                 println!("{}", line.green());
-                println!("{}", " ✓  All CI checks passed".green().bold());
+                if iteration == 1 {
+                    println!("{}", " ✓  CI already finished — all checks passed".green().bold());
+                } else {
+                    println!("{}", " ✓  All CI checks passed".green().bold());
+                }
                 println!("{}", line.green());
             }
 
