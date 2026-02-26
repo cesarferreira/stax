@@ -1114,31 +1114,31 @@ stax merge --yes --method squash
 
 | Command | [stax](https://github.com/cesarferreira/stax) | [freephite](https://github.com/bradymadden97/freephite) | [graphite](https://github.com/withgraphite/graphite-cli) |
 |---------|------|-----------|----------|
-| `ls` (10-branch stack) | 22.8ms | 369.5ms | 209.1ms |
+| `ls` (10-branch stack) | 46.8ms | 1374.0ms | 506.0ms |
 
 Raw [`hyperfine`](https://github.com/sharkdp/hyperfine) results:
 
 ```
-➜ hyperfine 'stax ls' 'fp ls' 'gt ls' --warmup 3
+➜ hyperfine 'stax ls' 'fp ls' 'gt ls' --warmup 5
 Benchmark 1: stax ls
-  Time (mean ± σ):      22.8 ms ±   1.0 ms    [User: 9.0 ms, System: 11.3 ms]
-  Range (min … max):    21.1 ms …  26.9 ms    112 runs
+  Time (mean ± σ):      46.8 ms ±   0.5 ms    [User: 7.9 ms, System: 8.8 ms]
+  Range (min … max):    45.7 ms …  48.6 ms    57 runs
 
 Benchmark 2: fp ls
-  Time (mean ± σ):     369.5 ms ±   7.0 ms    [User: 268.8 ms, System: 184.2 ms]
-  Range (min … max):   360.7 ms … 380.4 ms    10 runs
+  Time (mean ± σ):      1.374 s ±  0.011 s    [User: 0.417 s, System: 0.274 s]
+  Range (min … max):    1.361 s …  1.394 s    10 runs
 
 Benchmark 3: gt ls
-  Time (mean ± σ):     209.1 ms ±   2.8 ms    [User: 152.5 ms, System: 52.6 ms]
-  Range (min … max):   205.9 ms … 215.7 ms    13 runs
+  Time (mean ± σ):     506.0 ms ±  18.0 ms    [User: 220.9 ms, System: 69.2 ms]
+  Range (min … max):   489.8 ms … 536.3 ms    10 runs
 
 Summary
   stax ls ran
-   9.18 ± 0.43 times faster than gt ls
-   16.23 ± 0.79 times faster than fp ls
+   10.81 ± 0.40 times faster than gt ls
+   29.35 ± 0.41 times faster than fp ls
 ```
 
-![ls benchmark](https://quickchart.io/chart?c=%7B%22type%22%3A%22bar%22%2C%22data%22%3A%7B%22labels%22%3A%5B%22freephite%22%2C%22graphite%22%2C%22stax%22%5D%2C%22datasets%22%3A%5B%7B%22label%22%3A%22Time%20(ms)%22%2C%22data%22%3A%5B369.5%2C209.1%2C22.8%5D%2C%22backgroundColor%22%3A%5B%22%23ff0000%22%2C%22%23008000%22%2C%22%230000ff%22%5D%7D%5D%7D%2C%22options%22%3A%7B%22plugins%22%3A%7B%22datalabels%22%3A%7B%22display%22%3Atrue%2C%22color%22%3A%22white%22%2C%22align%22%3A%22center%22%2C%22anchor%22%3A%22center%22%7D%7D%2C%22title%22%3A%7B%22display%22%3Atrue%2C%22text%22%3A%22ls%20benchmark%20(lower%20is%20better)%22%7D%2C%22scales%22%3A%7B%22y%22%3A%7B%22beginAtZero%22%3Atrue%2C%22max%22%3A400%7D%7D%7D%7D)
+![ls benchmark](https://quickchart.io/chart?c=%7B%22type%22%3A%22bar%22%2C%22data%22%3A%7B%22labels%22%3A%5B%22freephite%22%2C%22graphite%22%2C%22stax%22%5D%2C%22datasets%22%3A%5B%7B%22label%22%3A%22Time%20(ms)%22%2C%22data%22%3A%5B1374.0%2C506.0%2C46.8%5D%2C%22backgroundColor%22%3A%5B%22%23ff0000%22%2C%22%23008000%22%2C%22%230000ff%22%5D%7D%5D%7D%2C%22options%22%3A%7B%22plugins%22%3A%7B%22datalabels%22%3A%7B%22display%22%3Atrue%2C%22color%22%3A%22white%22%2C%22align%22%3A%22center%22%2C%22anchor%22%3A%22center%22%7D%7D%2C%22title%22%3A%7B%22display%22%3Atrue%2C%22text%22%3A%22ls%20benchmark%20(lower%20is%20better)%22%7D%2C%22scales%22%3A%7B%22y%22%3A%7B%22beginAtZero%22%3Atrue%2C%22max%22%3A1500%7D%7D%7D%7D)
 
 ## License
 
