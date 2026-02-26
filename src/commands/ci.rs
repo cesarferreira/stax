@@ -204,9 +204,9 @@ fn format_timing_footer(timing: &BranchTiming, overall_status: Option<&str>) -> 
             .map(|avg| format!("  (avg: {})", format_duration(avg)))
             .unwrap_or_default();
         match overall_status {
-            Some("success") => format!("{}  {}{}", "passed".green().bold(), elapsed_str, avg_str),
-            Some("failure") => format!("{}  {}{}", "failed".red().bold(), elapsed_str, avg_str),
-            _ => format!("done  {}{}", elapsed_str, avg_str),
+            Some("success") => format!("{}  ⏱ {}{}", "passed".green().bold(), elapsed_str, avg_str),
+            Some("failure") => format!("{}  ⏱ {}{}", "failed".red().bold(), elapsed_str, avg_str),
+            _ => format!("done  ⏱ {}{}", elapsed_str, avg_str),
         }
     } else {
         match (timing.average_secs, timing.pct) {
@@ -218,7 +218,7 @@ fn format_timing_footer(timing: &BranchTiming, overall_status: Option<&str>) -> 
                     format!("~{} left", format_duration(avg - timing.elapsed_secs))
                 };
                 format!(
-                    "{}  {}  {}%  {}  elapsed  {}",
+                    "{}  {}  {}%  ⏱ {}  elapsed  {}",
                     "running".yellow().bold(),
                     bar,
                     pct,
@@ -226,7 +226,7 @@ fn format_timing_footer(timing: &BranchTiming, overall_status: Option<&str>) -> 
                     eta
                 )
             }
-            _ => format!("{}  {} elapsed", "running".yellow().bold(), elapsed_str),
+            _ => format!("{}  ⏱ {} elapsed", "running".yellow().bold(), elapsed_str),
         }
     }
 }
