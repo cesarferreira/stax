@@ -77,7 +77,7 @@ pub fn run(
     }
 
     // 1. Fetch from remote
-    let fetch_timer = LiveTimer::maybe_new(!quiet, &format!("fetch {}", remote_name));
+    let fetch_timer = LiveTimer::maybe_new(!quiet, &format!("Fetch {}", remote_name));
 
     let fetch_started_at = Instant::now();
     let fetch_args: Vec<&str> = if prune {
@@ -125,7 +125,7 @@ pub fn run(
     if was_on_trunk {
         // We're on trunk - pull directly
         let update_timer =
-            LiveTimer::maybe_new(!quiet, &format!("update {}", stack.trunk));
+            LiveTimer::maybe_new(!quiet, &format!("Update {}", stack.trunk));
 
         let output = Command::new("git")
             .args(["merge", "--ff-only", &remote_trunk_ref])
@@ -177,7 +177,7 @@ pub fn run(
         }
     } else {
         let update_timer =
-            LiveTimer::maybe_new(!quiet, &format!("update {}", stack.trunk));
+            LiveTimer::maybe_new(!quiet, &format!("Update {}", stack.trunk));
 
         if let Some(trunk_worktree_path) = repo.branch_worktree_path(&stack.trunk)? {
             let output = Command::new("git")
@@ -266,7 +266,7 @@ pub fn run(
     // 3. Delete merged branches
     if delete_merged {
         let detect_merged_started_at = Instant::now();
-        let detect_timer = LiveTimer::maybe_new(!quiet, "detect merged branches");
+        let detect_timer = LiveTimer::maybe_new(!quiet, "Detect merged branches");
         let merged = find_merged_branches(workdir, &stack, &remote_name)?;
         step_timings.push((
             "detect merged branches".to_string(),
@@ -307,12 +307,12 @@ pub fn run(
                     "branches"
                 };
                 println!(
-                    "  Found {} merged {}:",
+                    "    Found {} merged {}:",
                     merged.len().to_string().cyan(),
                     branch_word
                 );
                 for branch in &merged {
-                    println!("    {} {}", "▸".bright_black(), branch);
+                    println!("      {} {}", "▸".bright_black(), branch);
                 }
                 println!();
             }
@@ -550,7 +550,7 @@ pub fn run(
                 }
             }
         } else if !quiet {
-            println!("  {}", "No merged branches to delete.".dimmed());
+            println!("    {}", "No merged branches to delete.".dimmed());
         }
 
         let delete_elapsed = delete_merged_started_at.elapsed();
@@ -572,7 +572,7 @@ pub fn run(
     if trunk_update_deferred && current_after_deletions == stack.trunk {
         let deferred_update_started_at = Instant::now();
         let deferred_timer =
-            LiveTimer::maybe_new(!quiet, &format!("update {}", stack.trunk));
+            LiveTimer::maybe_new(!quiet, &format!("Update {}", stack.trunk));
 
         let output = Command::new("git")
             .args(["merge", "--ff-only", &remote_trunk_ref])
@@ -688,7 +688,7 @@ pub fn run(
 
             for branch in &branches_to_restack {
                 let restack_timer =
-                    LiveTimer::maybe_new(!quiet, &format!("restack {}", branch));
+                    LiveTimer::maybe_new(!quiet, &format!("Restack {}", branch));
 
                 let meta = match BranchMetadata::read(repo.inner(), branch)? {
                     Some(meta) => meta,
@@ -1024,7 +1024,7 @@ fn record_ci_history_for_merged(
         return;
     }
 
-    let ci_timer = LiveTimer::maybe_new(!quiet, "record CI history");
+    let ci_timer = LiveTimer::maybe_new(!quiet, "Record CI history");
 
     // Fetch CI statuses for merged branches
     match fetch_ci_statuses(repo, rt, client, stack, &branches_to_check) {
