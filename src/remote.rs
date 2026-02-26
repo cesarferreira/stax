@@ -48,8 +48,14 @@ impl RemoteInfo {
         })
     }
 
+    /// Returns the GitHub API owner (first path component only).
+    /// For repos like `wayve/frontends/robot-android`, namespace is `wayve/frontends`
+    /// but the GitHub API owner is just `wayve`.
     pub fn owner(&self) -> &str {
-        self.namespace.as_str()
+        self.namespace
+            .split('/')
+            .next()
+            .unwrap_or(&self.namespace)
     }
 
     pub fn repo_url(&self) -> String {
@@ -107,15 +113,16 @@ pub fn get_remote_url(workdir: &Path, remote: &str) -> Result<String> {
 
 pub fn get_remote_branches(workdir: &Path, remote: &str) -> Result<Vec<String>> {
     let output = Command::new("git")
-        .args(["branch", "-r", "--format=%(refname:short)"])
+        .args(["branch", "-r", "--format=%(refname)"])
         .current_dir(workdir)
         .output()
         .context("Failed to list remote branches")?;
 
-    let prefix = format!("{}/", remote);
+    let prefix = format!("refs/remotes/{}/", remote);
     let branches: Vec<String> = String::from_utf8(output.stdout)?
         .lines()
-        .map(|s| s.trim().strip_prefix(&prefix).unwrap_or(s).to_string())
+        .filter_map(|s| s.trim().strip_prefix(&prefix))
+        .map(|s| s.to_string())
         .collect();
 
     Ok(branches)

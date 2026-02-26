@@ -40,7 +40,6 @@ struct PrPlan {
     branch: String,
     parent: String,
     existing_pr: Option<u64>,
-    optimistic_create: bool,
     // For new PRs, we'll collect these upfront
     title: Option<String>,
     body: Option<String>,
@@ -350,7 +349,6 @@ pub fn run(
                 branch: branch.clone(),
                 parent: meta.parent_branch_name,
                 existing_pr,
-                optimistic_create: false,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -375,103 +373,89 @@ pub fn run(
 
             // Check if PR exists (skip for empty branches)
             let mut existing_pr: Option<PrInfoWithHead> = None;
-            let mut optimistic_create = false;
             if !is_empty {
                 if verbose && !quiet {
                     println!("    Checking PR for {}", branch.cyan());
                 }
 
-                let can_optimistic_create = matches!(scope, SubmitScope::Branch)
-                    && branches_to_submit.len() == 1
-                    && !had_metadata_pr
-                    && !remote_branches.contains(branch);
-                if can_optimistic_create {
-                    optimistic_create = true;
+                if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
                     if verbose && !quiet {
-                        println!(
-                            "      Using optimistic create (skip pre-lookup, recover on conflict)"
-                        );
+                        println!("      Using metadata PR #{}", pr_info.number);
                     }
-                } else {
-                    if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+
+                    let lookup_started_at = Instant::now();
+                    match runtime
+                        .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
+                    {
+                        Ok(pr) => {
+                            if pr.head == *branch && pr.info.state == "Open" {
+                                existing_pr = Some(pr);
+                            } else if verbose && !quiet {
+                                println!(
+                                    "      PR #{} head '{}' does not match '{}', trying head lookup",
+                                    pr_info.number, pr.head, branch
+                                );
+                            }
+                        }
+                        Err(_) => {
+                            if verbose && !quiet {
+                                println!(
+                                    "      Failed to fetch PR #{} from metadata, trying head lookup",
+                                    pr_info.number
+                                );
+                            }
+                        }
+                    }
+                    timings.open_pr_discovery += lookup_started_at.elapsed();
+                }
+
+                if existing_pr.is_none() {
+                    let lookup_started_at = Instant::now();
+                    existing_pr = runtime.block_on(async {
+                        gh_client
+                            .find_open_pr_by_head(remote_info.owner(), branch)
+                            .await
+                    })?;
+                    timings.open_pr_discovery += lookup_started_at.elapsed();
+                    if verbose && !quiet {
+                        if let Some(found) = &existing_pr {
+                            println!(
+                                "      Found open PR #{} via head lookup",
+                                found.info.number
+                            );
+                        } else {
+                            println!("      No open PR found via head lookup");
+                        }
+                    }
+                }
+
+                if existing_pr.is_none()
+                    && (had_metadata_pr || remote_branches.contains(branch))
+                {
+                    full_scan_fallbacks += 1;
+                    if verbose && !quiet {
+                        println!("      Falling back to full open PR scan (metadata mismatch)");
+                    }
+                    if open_prs_by_head.is_none() {
+                        let lookup_started_at = Instant::now();
+                        let prs = runtime
+                            .block_on(async { gh_client.list_open_prs_by_head().await })?;
+                        timings.open_pr_discovery += lookup_started_at.elapsed();
                         if verbose && !quiet {
-                            println!("      Using metadata PR #{}", pr_info.number);
+                            println!("      Cached {} open PRs", prs.len());
                         }
-
-                        let lookup_started_at = Instant::now();
-                        match runtime
-                            .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
-                        {
-                            Ok(pr) => {
-                                if pr.head == *branch && pr.info.state == "Open" {
-                                    existing_pr = Some(pr);
-                                } else if verbose && !quiet {
-                                    println!(
-                                        "      PR #{} head '{}' does not match '{}', trying head lookup",
-                                        pr_info.number, pr.head, branch
-                                    );
-                                }
-                            }
-                            Err(_) => {
-                                if verbose && !quiet {
-                                    println!(
-                                        "      Failed to fetch PR #{} from metadata, trying head lookup",
-                                        pr_info.number
-                                    );
-                                }
-                            }
-                        }
-                        timings.open_pr_discovery += lookup_started_at.elapsed();
+                        open_prs_by_head = Some(prs);
                     }
-
-                    if existing_pr.is_none() {
-                        let lookup_started_at = Instant::now();
-                        existing_pr = runtime.block_on(async {
-                            gh_client
-                                .find_open_pr_by_head(remote_info.owner(), branch)
-                                .await
-                        })?;
-                        timings.open_pr_discovery += lookup_started_at.elapsed();
+                    if let Some(map) = &open_prs_by_head {
+                        existing_pr = map.get(branch).cloned();
                         if verbose && !quiet {
                             if let Some(found) = &existing_pr {
                                 println!(
-                                    "      Found open PR #{} via head lookup",
+                                    "      Found open PR #{} in fallback list",
                                     found.info.number
                                 );
                             } else {
-                                println!("      No open PR found via head lookup");
-                            }
-                        }
-                    }
-
-                    if existing_pr.is_none()
-                        && (had_metadata_pr || remote_branches.contains(branch))
-                    {
-                        full_scan_fallbacks += 1;
-                        if verbose && !quiet {
-                            println!("      Falling back to full open PR scan (metadata mismatch)");
-                        }
-                        if open_prs_by_head.is_none() {
-                            let lookup_started_at = Instant::now();
-                            let prs = runtime
-                                .block_on(async { gh_client.list_open_prs_by_head().await })?;
-                            timings.open_pr_discovery += lookup_started_at.elapsed();
-                            if verbose && !quiet {
-                                println!("      Cached {} open PRs", prs.len());
-                            }
-                            open_prs_by_head = Some(prs);
-                        }
-                        if let Some(map) = &open_prs_by_head {
-                            existing_pr = map.get(branch).cloned();
-                            if verbose && !quiet {
-                                if let Some(found) = &existing_pr {
-                                    println!(
-                                        "      Found open PR #{} in fallback list",
-                                        found.info.number
-                                    );
-                                } else {
-                                    println!("      No open PR found in fallback list");
-                                }
+                                println!("      No open PR found in fallback list");
                             }
                         }
                     }
@@ -539,7 +523,6 @@ pub fn run(
                 branch: branch.clone(),
                 parent: base,
                 existing_pr: pr_number,
-                optimistic_create,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -881,9 +864,8 @@ pub fn run(
     let (open_pr_url, async_timings, async_full_scan_fallbacks) = rt.block_on(async {
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();
         let mut created_pr_numbers: HashSet<u64> = HashSet::new();
-        let mut fallback_open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
         let mut async_timings = SubmitPhaseTimings::default();
-        let mut async_full_scan_fallbacks = 0usize;
+        let async_full_scan_fallbacks = 0usize;
 
         let create_update_started_at = Instant::now();
         for plan in &plans {
@@ -895,7 +877,46 @@ pub fn run(
             let meta = BranchMetadata::read(repo.inner(), &plan.branch)?
                 .context(format!("No metadata for branch {}", plan.branch))?;
 
-            if plan.existing_pr.is_none() {
+            if let Some(existing_pr_number) = plan.existing_pr {
+                if plan.needs_pr_update {
+                    // Update existing PR (only if needed)
+                    let update_timer = LiveTimer::maybe_new(
+                        !quiet,
+                        &format!("Updating {} #{}...", plan.branch, existing_pr_number),
+                    );
+
+                    // Update base if needed
+                    client.update_pr_base(existing_pr_number, &plan.parent).await?;
+
+                    apply_pr_metadata(&client, existing_pr_number, &reviewers, &labels, &assignees).await?;
+
+                    LiveTimer::maybe_finish_ok(update_timer, "done");
+
+                    // Get current PR state
+                    let pr = client.get_pr(existing_pr_number).await?;
+
+                    let updated_meta = BranchMetadata {
+                        pr_info: Some(crate::engine::metadata::PrInfo {
+                            number: pr.number,
+                            state: pr.state.clone(),
+                            is_draft: Some(pr.is_draft),
+                        }),
+                        ..meta
+                    };
+                    updated_meta.write(repo.inner(), &plan.branch)?;
+
+                    pr_infos.push(StackPrInfo {
+                        branch: plan.branch.clone(),
+                        pr_number: Some(pr.number),
+                    });
+                } else {
+                    // No-op - just add to pr_infos for summary
+                    pr_infos.push(StackPrInfo {
+                        branch: plan.branch.clone(),
+                        pr_number: Some(existing_pr_number),
+                    });
+                }
+            } else {
                 // Create new PR
                 let title = plan.title.as_ref().unwrap();
                 let body = plan.body.as_ref().unwrap();
@@ -904,100 +925,18 @@ pub fn run(
                 let create_timer =
                     LiveTimer::maybe_new(!quiet, &format!("Creating {}...", plan.branch));
 
-                let pr = match client
+                let pr = client
                     .create_pr(&plan.branch, &plan.parent, title, body, is_draft)
                     .await
-                {
-                    Ok(pr) => {
-                        created_pr_numbers.insert(pr.number);
-                        pr
-                    }
-                    Err(create_err) => {
-                        if plan.optimistic_create && is_pr_already_exists_error(&create_err) {
-                            LiveTimer::maybe_finish_warn(
-                                create_timer,
-                                "exists (create conflicted; resolving existing PR)",
-                            );
-
-                            let lookup_started_at = Instant::now();
-                            let mut found_pr = client
-                                .find_open_pr_by_head(remote_info.owner(), &plan.branch)
-                                .await?;
-                            async_timings.open_pr_discovery += lookup_started_at.elapsed();
-
-                            if found_pr.is_none() {
-                                async_full_scan_fallbacks += 1;
-                                if verbose && !quiet {
-                                    println!(
-                                        "    Falling back to full open PR scan after create conflict for {}",
-                                        plan.branch.cyan()
-                                    );
-                                }
-                                if fallback_open_prs_by_head.is_none() {
-                                    let scan_started_at = Instant::now();
-                                    let prs = client.list_open_prs_by_head().await?;
-                                    async_timings.open_pr_discovery += scan_started_at.elapsed();
-                                    if verbose && !quiet {
-                                        println!("      Cached {} open PRs", prs.len());
-                                    }
-                                    fallback_open_prs_by_head = Some(prs);
-                                }
-                                if let Some(map) = &fallback_open_prs_by_head {
-                                    found_pr = map.get(&plan.branch).cloned();
-                                }
-                            }
-
-                            let existing_pr = found_pr
-                                .context(format!(
-                                    "PR creation for '{}' reported existing PR, but lookup couldn't find it",
-                                    plan.branch
-                                ))?;
-
-                            let update_timer = LiveTimer::maybe_new(
-                                !quiet,
-                                &format!("Updating {} #{}...", plan.branch, existing_pr.info.number),
-                            );
-                            client
-                                .update_pr_base(existing_pr.info.number, &plan.parent)
-                                .await?;
-                            apply_pr_metadata(
-                                &client,
-                                existing_pr.info.number,
-                                &reviewers,
-                                &labels,
-                                &assignees,
-                            )
-                            .await?;
-
-                            let pr = client.get_pr(existing_pr.info.number).await?;
-                            LiveTimer::maybe_finish_ok(update_timer, "done");
-                            let updated_meta = BranchMetadata {
-                                pr_info: Some(crate::engine::metadata::PrInfo {
-                                    number: pr.number,
-                                    state: pr.state.clone(),
-                                    is_draft: Some(pr.is_draft),
-                                }),
-                                ..meta
-                            };
-                            updated_meta.write(repo.inner(), &plan.branch)?;
-
-                            pr_infos.push(StackPrInfo {
-                                branch: plan.branch.clone(),
-                                pr_number: Some(pr.number),
-                            });
-                            continue;
-                        }
-
-                        return Err(create_err).context(format!(
-                            "Failed to create PR for '{}' with base '{}'\n\
-                             This may happen if:\n  \
-                             - The base branch '{}' doesn't exist on GitHub\n  \
-                             - The branch has no commits different from base\n  \
-                             Try: git log {}..{} to see the commits",
-                            plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
-                        ));
-                    }
-                };
+                    .context(format!(
+                        "Failed to create PR for '{}' with base '{}'\n\
+                         This may happen if:\n  \
+                         - The base branch '{}' doesn't exist on GitHub\n  \
+                         - The branch has no commits different from base\n  \
+                         Try: git log {}..{} to see the commits",
+                        plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
+                    ))?;
+                created_pr_numbers.insert(pr.number);
 
                 LiveTimer::maybe_finish_ok(
                     create_timer,
@@ -1020,44 +959,6 @@ pub fn run(
                 pr_infos.push(StackPrInfo {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
-                });
-            } else if plan.needs_pr_update {
-                // Update existing PR (only if needed)
-                let pr_number = plan.existing_pr.unwrap();
-                let update_timer = LiveTimer::maybe_new(
-                    !quiet,
-                    &format!("Updating {} #{}...", plan.branch, pr_number),
-                );
-
-                // Update base if needed
-                client.update_pr_base(pr_number, &plan.parent).await?;
-
-                apply_pr_metadata(&client, pr_number, &reviewers, &labels, &assignees).await?;
-
-                LiveTimer::maybe_finish_ok(update_timer, "done");
-
-                // Get current PR state
-                let pr = client.get_pr(pr_number).await?;
-
-                let updated_meta = BranchMetadata {
-                    pr_info: Some(crate::engine::metadata::PrInfo {
-                        number: pr.number,
-                        state: pr.state.clone(),
-                        is_draft: Some(pr.is_draft),
-                    }),
-                    ..meta
-                };
-                updated_meta.write(repo.inner(), &plan.branch)?;
-
-                pr_infos.push(StackPrInfo {
-                    branch: plan.branch.clone(),
-                    pr_number: Some(pr.number),
-                });
-            } else {
-                // No-op - just add to pr_infos for summary
-                pr_infos.push(StackPrInfo {
-                    branch: plan.branch.clone(),
-                    pr_number: plan.existing_pr,
                 });
             }
         }
@@ -1537,11 +1438,6 @@ fn format_duration(duration: Duration) -> String {
     } else {
         format!("{:.3}s", duration.as_secs_f64())
     }
-}
-
-fn is_pr_already_exists_error(err: &anyhow::Error) -> bool {
-    let msg = err.to_string().to_lowercase();
-    msg.contains("pull request already exists") || msg.contains("already exists")
 }
 
 /// Generate a PR body using an AI agent (for --ai-body flag).
