@@ -249,12 +249,12 @@ pub fn run(
                     LiveTimer::maybe_finish_timed(update_timer);
                 } else {
                     trunk_update_deferred = true;
-                    LiveTimer::maybe_finish_warn(update_timer, "deferred");
+                    LiveTimer::maybe_finish_skipped(update_timer, "skipped (not on trunk, will retry)");
                 }
             } else {
                 // Defer trunk update - we'll retry after branch deletions if we end up on trunk
                 trunk_update_deferred = true;
-                LiveTimer::maybe_finish_warn(update_timer, "deferred");
+                LiveTimer::maybe_finish_skipped(update_timer, "skipped (not on trunk, will retry)");
             }
         }
     }

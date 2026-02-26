@@ -63,10 +63,27 @@ impl LiveTimer {
         );
     }
 
+    /// Finish as skipped/deferred — tabular row with a `○` icon and dimmed reason.
+    /// `  ○ Step label                       reason`
+    pub fn finish_skipped(self, reason: &str) {
+        self.bar.finish_and_clear();
+        println!(
+            "  {} {:<35} {}",
+            "○".dimmed(),
+            self.message,
+            reason.dimmed()
+        );
+    }
+
     /// Finish with a yellow suffix (partial success / warning).
     pub fn finish_warn(self, suffix: &str) {
         self.bar.finish_and_clear();
-        println!("  {} {}", self.message, suffix.yellow());
+        println!(
+            "  {} {:<35} {}",
+            "⚠".yellow(),
+            self.message,
+            suffix.yellow()
+        );
     }
 
     /// Finish with a red suffix (failure).
@@ -86,6 +103,12 @@ impl LiveTimer {
     pub fn maybe_finish_timed(timer: Option<Self>) {
         if let Some(t) = timer {
             t.finish_timed();
+        }
+    }
+
+    pub fn maybe_finish_skipped(timer: Option<Self>, reason: &str) {
+        if let Some(t) = timer {
+            t.finish_skipped(reason);
         }
     }
 
