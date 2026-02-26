@@ -249,12 +249,13 @@ pub fn run(
                     LiveTimer::maybe_finish_timed(update_timer);
                 } else {
                     trunk_update_deferred = true;
-                    LiveTimer::maybe_finish_skipped(update_timer, "skipped (not on trunk, will retry)");
+                    LiveTimer::maybe_finish_skipped(update_timer, "diverged — checkout main to sync");
                 }
             } else {
-                // Defer trunk update - we'll retry after branch deletions if we end up on trunk
+                // Trunk has diverged from remote; can't fast-forward in background.
+                // Will retry if sync ends up checking out trunk (e.g. after branch deletion).
                 trunk_update_deferred = true;
-                LiveTimer::maybe_finish_skipped(update_timer, "skipped (not on trunk, will retry)");
+                LiveTimer::maybe_finish_skipped(update_timer, "diverged — checkout main to sync");
             }
         }
     }
