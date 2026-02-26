@@ -381,7 +381,8 @@ pub fn run(
 
                 let can_optimistic_create = matches!(scope, SubmitScope::Branch)
                     && branches_to_submit.len() == 1
-                    && !had_metadata_pr;
+                    && !had_metadata_pr
+                    && !remote_branches.contains(branch);
                 if can_optimistic_create {
                     optimistic_create = true;
                     if verbose && !quiet {
