@@ -5,11 +5,11 @@ use crate::git::{GitRepo, RebaseResult};
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
+use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
-use std::io::Write;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -77,10 +77,7 @@ pub fn run(
     }
 
     // 1. Fetch from remote
-    if !quiet {
-        print!("  Fetching from {}... ", remote_name);
-        let _ = std::io::stdout().flush();
-    }
+    let fetch_timer = LiveTimer::maybe_new(!quiet, &format!("fetch {}", remote_name));
 
     let fetch_started_at = Instant::now();
     let fetch_args: Vec<&str> = if prune {
@@ -95,26 +92,24 @@ pub fn run(
         .context("Failed to fetch")?;
     step_timings.push((format!("fetch {}", remote_name), fetch_started_at.elapsed()));
 
-    if !quiet {
-        if output.status.success() {
-            println!("{}", "done".green());
-            if verbose {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if !stderr.trim().is_empty() {
-                    for line in stderr.lines() {
-                        println!("    {}", line.dimmed());
-                    }
+    if output.status.success() {
+        LiveTimer::maybe_finish_timed(fetch_timer);
+        if !quiet && verbose {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.trim().is_empty() {
+                for line in stderr.lines() {
+                    println!("    {}", line.dimmed());
                 }
             }
-        } else {
-            // Fetch may fail partially (lock files, etc.) but still update most refs
-            println!("{}", "done (with warnings)".yellow());
-            if verbose {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if !stderr.trim().is_empty() {
-                    for line in stderr.lines() {
-                        println!("    {}", line.dimmed());
-                    }
+        }
+    } else {
+        // Fetch may fail partially (lock files, etc.) but still update most refs
+        LiveTimer::maybe_finish_warn(fetch_timer, "done (with warnings)");
+        if !quiet && verbose {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.trim().is_empty() {
+                for line in stderr.lines() {
+                    println!("    {}", line.dimmed());
                 }
             }
         }
@@ -129,10 +124,8 @@ pub fn run(
 
     if was_on_trunk {
         // We're on trunk - pull directly
-        if !quiet {
-            print!("  Updating {}... ", stack.trunk.cyan());
-            let _ = std::io::stdout().flush();
-        }
+        let update_timer =
+            LiveTimer::maybe_new(!quiet, &format!("update {}", stack.trunk));
 
         let output = Command::new("git")
             .args(["merge", "--ff-only", &remote_trunk_ref])
@@ -141,26 +134,22 @@ pub fn run(
             .context("Failed to fast-forward trunk")?;
 
         if output.status.success() {
-            if !quiet {
-                println!("{}", "done".green());
-                if verbose {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    if !stdout.trim().is_empty() {
-                        for line in stdout.lines() {
-                            println!("    {}", line.dimmed());
-                        }
+            LiveTimer::maybe_finish_timed(update_timer);
+            if !quiet && verbose {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !stdout.trim().is_empty() {
+                    for line in stdout.lines() {
+                        println!("    {}", line.dimmed());
                     }
                 }
             }
         } else if safe {
-            if !quiet {
-                println!("{}", "failed (safe mode, no reset)".yellow());
-                if verbose {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stderr.trim().is_empty() {
-                        for line in stderr.lines() {
-                            println!("    {}", line.dimmed());
-                        }
+            LiveTimer::maybe_finish_warn(update_timer, "failed (safe mode, no reset)");
+            if !quiet && verbose {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.trim().is_empty() {
+                    for line in stderr.lines() {
+                        println!("    {}", line.dimmed());
                     }
                 }
             }
@@ -172,27 +161,23 @@ pub fn run(
                 .output()
                 .context("Failed to reset trunk")?;
 
-            if !quiet {
-                if reset_output.status.success() {
-                    println!("{}", "reset to remote".yellow());
-                } else {
-                    println!("{}", "failed".red());
-                    if verbose {
-                        let stderr = String::from_utf8_lossy(&reset_output.stderr);
-                        if !stderr.trim().is_empty() {
-                            for line in stderr.lines() {
-                                println!("    {}", line.dimmed());
-                            }
+            if reset_output.status.success() {
+                LiveTimer::maybe_finish_warn(update_timer, "reset to remote");
+            } else {
+                LiveTimer::maybe_finish_err(update_timer, "failed");
+                if !quiet && verbose {
+                    let stderr = String::from_utf8_lossy(&reset_output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
                         }
                     }
                 }
             }
         }
     } else {
-        if !quiet {
-            print!("  Updating {}... ", stack.trunk.cyan());
-            let _ = std::io::stdout().flush();
-        }
+        let update_timer =
+            LiveTimer::maybe_new(!quiet, &format!("update {}", stack.trunk));
 
         if let Some(trunk_worktree_path) = repo.branch_worktree_path(&stack.trunk)? {
             let output = Command::new("git")
@@ -202,18 +187,14 @@ pub fn run(
                 .context("Failed to fast-forward trunk in its worktree")?;
 
             if output.status.success() {
-                if !quiet {
-                    println!("{}", "done".green());
-                }
+                LiveTimer::maybe_finish_timed(update_timer);
             } else if safe {
-                if !quiet {
-                    println!("{}", "failed (safe mode, no reset)".yellow());
-                    if verbose {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        if !stderr.trim().is_empty() {
-                            for line in stderr.lines() {
-                                println!("    {}", line.dimmed());
-                            }
+                LiveTimer::maybe_finish_warn(update_timer, "failed (safe mode, no reset)");
+                if !quiet && verbose {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
                         }
                     }
                 }
@@ -224,17 +205,15 @@ pub fn run(
                     .output()
                     .context("Failed to reset trunk in its worktree")?;
 
-                if !quiet {
-                    if reset_output.status.success() {
-                        println!("{}", "reset to remote".yellow());
-                    } else {
-                        println!("{}", "failed".red());
-                        if verbose {
-                            let stderr = String::from_utf8_lossy(&reset_output.stderr);
-                            if !stderr.trim().is_empty() {
-                                for line in stderr.lines() {
-                                    println!("    {}", line.dimmed());
-                                }
+                if reset_output.status.success() {
+                    LiveTimer::maybe_finish_warn(update_timer, "reset to remote");
+                } else {
+                    LiveTimer::maybe_finish_err(update_timer, "failed");
+                    if !quiet && verbose {
+                        let stderr = String::from_utf8_lossy(&reset_output.stderr);
+                        if !stderr.trim().is_empty() {
+                            for line in stderr.lines() {
+                                println!("    {}", line.dimmed());
                             }
                         }
                     }
@@ -267,21 +246,15 @@ pub fn run(
                     .context("Failed to fast-forward local trunk ref")?;
 
                 if output.status.success() {
-                    if !quiet {
-                        println!("{}", "done".green());
-                    }
+                    LiveTimer::maybe_finish_timed(update_timer);
                 } else {
                     trunk_update_deferred = true;
-                    if !quiet {
-                        println!("{}", "deferred".dimmed());
-                    }
+                    LiveTimer::maybe_finish_warn(update_timer, "deferred");
                 }
             } else {
                 // Defer trunk update - we'll retry after branch deletions if we end up on trunk
                 trunk_update_deferred = true;
-                if !quiet {
-                    println!("{}", "deferred".dimmed());
-                }
+                LiveTimer::maybe_finish_warn(update_timer, "deferred");
             }
         }
     }
@@ -293,11 +266,13 @@ pub fn run(
     // 3. Delete merged branches
     if delete_merged {
         let detect_merged_started_at = Instant::now();
+        let detect_timer = LiveTimer::maybe_new(!quiet, "detect merged branches");
         let merged = find_merged_branches(workdir, &stack, &remote_name)?;
         step_timings.push((
             "detect merged branches".to_string(),
             detect_merged_started_at.elapsed(),
         ));
+        LiveTimer::maybe_finish_timed(detect_timer);
 
         let delete_merged_started_at = Instant::now();
 
@@ -578,10 +553,15 @@ pub fn run(
             println!("  {}", "No merged branches to delete.".dimmed());
         }
 
-        step_timings.push((
-            "delete merged branches".to_string(),
-            delete_merged_started_at.elapsed(),
-        ));
+        let delete_elapsed = delete_merged_started_at.elapsed();
+        step_timings.push(("delete merged branches".to_string(), delete_elapsed));
+        if !quiet && !merged.is_empty() {
+            println!(
+                "  {:<35} {}",
+                "delete merged branches",
+                format!("{:.3}s", delete_elapsed.as_secs_f64()).dimmed()
+            );
+        }
     }
 
     // Re-check current branch since it may have changed during branch deletion
@@ -591,10 +571,8 @@ pub fn run(
     // now on trunk after branch deletions, retry with git pull which is more reliable
     if trunk_update_deferred && current_after_deletions == stack.trunk {
         let deferred_update_started_at = Instant::now();
-        if !quiet {
-            print!("  Updating {}... ", stack.trunk.cyan());
-            let _ = std::io::stdout().flush();
-        }
+        let deferred_timer =
+            LiveTimer::maybe_new(!quiet, &format!("update {}", stack.trunk));
 
         let output = Command::new("git")
             .args(["merge", "--ff-only", &remote_trunk_ref])
@@ -603,26 +581,22 @@ pub fn run(
             .context("Failed to fast-forward trunk")?;
 
         if output.status.success() {
-            if !quiet {
-                println!("{}", "done".green());
-                if verbose {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    if !stdout.trim().is_empty() {
-                        for line in stdout.lines() {
-                            println!("    {}", line.dimmed());
-                        }
+            LiveTimer::maybe_finish_timed(deferred_timer);
+            if !quiet && verbose {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !stdout.trim().is_empty() {
+                    for line in stdout.lines() {
+                        println!("    {}", line.dimmed());
                     }
                 }
             }
         } else if safe {
-            if !quiet {
-                println!("{}", "failed (safe mode, no reset)".yellow());
-                if verbose {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stderr.trim().is_empty() {
-                        for line in stderr.lines() {
-                            println!("    {}", line.dimmed());
-                        }
+            LiveTimer::maybe_finish_warn(deferred_timer, "failed (safe mode, no reset)");
+            if !quiet && verbose {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.trim().is_empty() {
+                    for line in stderr.lines() {
+                        println!("    {}", line.dimmed());
                     }
                 }
             }
@@ -634,17 +608,15 @@ pub fn run(
                 .output()
                 .context("Failed to reset trunk")?;
 
-            if !quiet {
-                if reset_output.status.success() {
-                    println!("{}", "reset to remote".yellow());
-                } else {
-                    println!("{}", "failed".red());
-                    if verbose {
-                        let stderr = String::from_utf8_lossy(&reset_output.stderr);
-                        if !stderr.trim().is_empty() {
-                            for line in stderr.lines() {
-                                println!("    {}", line.dimmed());
-                            }
+            if reset_output.status.success() {
+                LiveTimer::maybe_finish_warn(deferred_timer, "reset to remote");
+            } else {
+                LiveTimer::maybe_finish_err(deferred_timer, "failed");
+                if !quiet && verbose {
+                    let stderr = String::from_utf8_lossy(&reset_output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
                         }
                     }
                 }
@@ -715,9 +687,8 @@ pub fn run(
             let mut summary: Vec<(String, String)> = Vec::new();
 
             for branch in &branches_to_restack {
-                if !quiet {
-                    print!("  Restacking {}... ", branch.cyan());
-                }
+                let restack_timer =
+                    LiveTimer::maybe_new(!quiet, &format!("restack {}", branch));
 
                 let meta = match BranchMetadata::read(repo.inner(), branch)? {
                     Some(meta) => meta,
@@ -741,14 +712,12 @@ pub fn run(
                         // Record after-OID
                         tx.record_after(&repo, branch)?;
 
-                        if !quiet {
-                            println!("{}", "done".green());
-                        }
+                        LiveTimer::maybe_finish_timed(restack_timer);
                         summary.push((branch.clone(), "ok".to_string()));
                     }
                     RebaseResult::Conflict => {
+                        LiveTimer::maybe_finish_warn(restack_timer, "conflict");
                         if !quiet {
-                            println!("{}", "conflict".yellow());
                             println!("  {}", "Resolve conflicts and run:".yellow());
                             println!("    {}", "stax continue".cyan());
                             println!("    {}", "stax sync --continue".cyan());
@@ -797,10 +766,14 @@ pub fn run(
         println!();
         println!("{}", "Sync timing summary:".bold());
         for (step, duration) in &step_timings {
-            println!("  {:<30} {}", step, format_duration(*duration));
+            println!(
+                "  {:<35} {}",
+                step,
+                format_duration(*duration).dimmed()
+            );
         }
         println!(
-            "  {:<30} {}",
+            "  {:<35} {}",
             "total",
             format_duration(sync_started_at.elapsed()).cyan()
         );
@@ -1051,25 +1024,16 @@ fn record_ci_history_for_merged(
         return;
     }
 
-    if !quiet {
-        print!("  Recording CI history for merged branches... ");
-        let _ = std::io::stdout().flush();
-    }
+    let ci_timer = LiveTimer::maybe_new(!quiet, "record CI history");
 
     // Fetch CI statuses for merged branches
     match fetch_ci_statuses(repo, rt, client, stack, &branches_to_check) {
         Ok(statuses) => {
-            // Record the CI history
             record_ci_history(repo, &statuses);
-
-            if !quiet {
-                println!("{}", "done".green());
-            }
+            LiveTimer::maybe_finish_timed(ci_timer);
         }
         Err(_) => {
-            if !quiet {
-                println!("{}", "skipped (couldn't fetch)".dimmed());
-            }
+            LiveTimer::maybe_finish_warn(ci_timer, "skipped (couldn't fetch)");
         }
     }
 }

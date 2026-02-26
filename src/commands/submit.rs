@@ -6,6 +6,7 @@ use crate::github::pr_template::{discover_pr_templates, select_template_interact
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
+use crate::progress::LiveTimer;
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -170,21 +171,14 @@ pub fn run(
         }
         "skipped (--no-fetch)".to_string()
     } else {
-        if !quiet {
-            print!("  Fetching from {}... ", remote_info.name);
-            std::io::Write::flush(&mut std::io::stdout()).ok();
-        }
+        let fetch_timer = LiveTimer::maybe_new(!quiet, &format!("Fetching from {}...", remote_info.name));
         match remote::fetch_remote(repo.workdir()?, &remote_info.name) {
             Ok(()) => {
-                if !quiet {
-                    println!("{}", "done".green());
-                }
+                LiveTimer::maybe_finish_ok(fetch_timer, "done");
                 "ok".to_string()
             }
             Err(_) => {
-                if !quiet {
-                    println!("{} (continuing with local refs)", "skipped".yellow());
-                }
+                LiveTimer::maybe_finish_warn(fetch_timer, "skipped (continuing with local refs)");
                 "failed (continued with cached refs)".to_string()
             }
         }
@@ -236,10 +230,7 @@ pub fn run(
     }
 
     // Build plan - determine which PRs need create vs update
-    if !quiet {
-        print!("  Planning PR operations... ");
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-    }
+    let planning_timer = LiveTimer::maybe_new(!quiet, "Planning PR operations...");
     let planning_started_at = Instant::now();
     let mut timings = SubmitPhaseTimings::default();
     let mut full_scan_fallbacks = 0usize;
@@ -557,10 +548,7 @@ pub fn run(
         client = Some(gh_client);
     }
     timings.planning = planning_started_at.elapsed();
-
-    if !quiet {
-        println!("{}", "done".green());
-    }
+    LiveTimer::maybe_finish_ok(planning_timer, "done");
 
     // Show plan summary (exclude empty branches from PR counts)
     let creates: Vec<_> = plans
@@ -802,10 +790,7 @@ pub fn run(
         }
 
         for plan in &branches_needing_push {
-            if !quiet {
-                print!("  {}... ", plan.branch);
-                std::io::Write::flush(&mut std::io::stdout()).ok();
-            }
+            let push_timer = LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", plan.branch));
 
             // Get local OID before push (this is what we're pushing)
             let local_oid = repo.branch_commit(&plan.branch).ok();
@@ -819,11 +804,10 @@ pub fn run(
                             tx.record_remote_after(&remote_info.name, &plan.branch, oid);
                         }
                     }
-                    if !quiet {
-                        println!("{}", "done".green());
-                    }
+                    LiveTimer::maybe_finish_ok(push_timer, "done");
                 }
                 Err(e) => {
+                    LiveTimer::maybe_finish_err(push_timer, "failed");
                     if let Some(tx) = tx {
                         tx.finish_err(
                             &format!("Push failed: {}", e),
@@ -912,10 +896,8 @@ pub fn run(
                 let body = plan.body.as_ref().unwrap();
                 let is_draft = plan.is_draft.unwrap_or(draft);
 
-                if !quiet {
-                    print!("  Creating {}... ", plan.branch);
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                }
+                let create_timer =
+                    LiveTimer::maybe_new(!quiet, &format!("Creating {}...", plan.branch));
 
                 let pr = match client
                     .create_pr(&plan.branch, &plan.parent, title, body, is_draft)
@@ -927,13 +909,10 @@ pub fn run(
                     }
                     Err(create_err) => {
                         if plan.optimistic_create && is_pr_already_exists_error(&create_err) {
-                            if !quiet {
-                                println!(
-                                    "{} {}",
-                                    "exists".yellow(),
-                                    "(create conflicted; resolving existing PR)".dimmed()
-                                );
-                            }
+                            LiveTimer::maybe_finish_warn(
+                                create_timer,
+                                "exists (create conflicted; resolving existing PR)",
+                            );
 
                             let lookup_started_at = Instant::now();
                             let mut found_pr = client
@@ -969,10 +948,10 @@ pub fn run(
                                     plan.branch
                                 ))?;
 
-                            if !quiet {
-                                print!("  Updating {} #{}... ", plan.branch, existing_pr.info.number);
-                                std::io::Write::flush(&mut std::io::stdout()).ok();
-                            }
+                            let update_timer = LiveTimer::maybe_new(
+                                !quiet,
+                                &format!("Updating {} #{}...", plan.branch, existing_pr.info.number),
+                            );
                             client
                                 .update_pr_base(existing_pr.info.number, &plan.parent)
                                 .await?;
@@ -986,9 +965,7 @@ pub fn run(
                             .await?;
 
                             let pr = client.get_pr(existing_pr.info.number).await?;
-                            if !quiet {
-                                println!("{}", "done".green());
-                            }
+                            LiveTimer::maybe_finish_ok(update_timer, "done");
                             let updated_meta = BranchMetadata {
                                 pr_info: Some(crate::engine::metadata::PrInfo {
                                     number: pr.number,
@@ -1017,13 +994,10 @@ pub fn run(
                     }
                 };
 
-                if !quiet {
-                    println!(
-                        "{} {}",
-                        "created".green(),
-                        format!("#{}", pr.number).dimmed()
-                    );
-                }
+                LiveTimer::maybe_finish_ok(
+                    create_timer,
+                    &format!("created {}", format!("#{}", pr.number).dimmed()),
+                );
 
                 // Update metadata with PR info
                 let updated_meta = BranchMetadata {
@@ -1045,19 +1019,17 @@ pub fn run(
             } else if plan.needs_pr_update {
                 // Update existing PR (only if needed)
                 let pr_number = plan.existing_pr.unwrap();
-                if !quiet {
-                    print!("  Updating {} #{}... ", plan.branch, pr_number);
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                }
+                let update_timer = LiveTimer::maybe_new(
+                    !quiet,
+                    &format!("Updating {} #{}...", plan.branch, pr_number),
+                );
 
                 // Update base if needed
                 client.update_pr_base(pr_number, &plan.parent).await?;
 
                 apply_pr_metadata(&client, pr_number, &reviewers, &labels, &assignees).await?;
 
-                if !quiet {
-                    println!("{}", "done".green());
-                }
+                LiveTimer::maybe_finish_ok(update_timer, "done");
 
                 // Get current PR state
                 let pr = client.get_pr(pr_number).await?;
@@ -1094,10 +1066,8 @@ pub fn run(
 
         let stack_comment_started_at = Instant::now();
         for (pr_number, _branch) in &prs_with_numbers {
-            if !quiet {
-                print!("  Updating stack comment on #{}... ", pr_number);
-                std::io::Write::flush(&mut std::io::stdout()).ok();
-            }
+            let comment_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Updating stack comment on #{}...", pr_number));
             let stack_comment =
                 generate_stack_comment(&pr_infos, *pr_number, &remote_info, &stack.trunk);
             if created_pr_numbers.contains(pr_number) {
@@ -1107,9 +1077,7 @@ pub fn run(
                     .update_stack_comment(*pr_number, &stack_comment)
                     .await?;
             }
-            if !quiet {
-                println!("{}", "done".green());
-            }
+            LiveTimer::maybe_finish_ok(comment_timer, "done");
         }
         async_timings.stack_comment = stack_comment_started_at.elapsed();
 
