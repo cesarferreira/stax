@@ -49,13 +49,18 @@ impl LiveTimer {
         println!("  {} {}", self.message, suffix.green());
     }
 
-    /// Finish by printing the step label and its elapsed time as a timed table row:
-    /// `  step label                        1.234s`
+    /// Finish by printing a check mark, the step label, and its elapsed time as a timed table row:
+    /// `  ✓ step label                      1.234s`
     pub fn finish_timed(self) {
         let elapsed = self.bar.elapsed();
         self.bar.finish_and_clear();
         let time_str = format!("{:.3}s", elapsed.as_secs_f64());
-        println!("  {:<35} {}", self.message, time_str.dimmed());
+        println!(
+            "  {} {:<35} {}",
+            "✓".green(),
+            self.message,
+            time_str.dimmed()
+        );
     }
 
     /// Finish with a yellow suffix (partial success / warning).
