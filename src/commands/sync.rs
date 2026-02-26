@@ -220,42 +220,74 @@ pub fn run(
                 }
             }
         } else {
-            // Trunk isn't checked out in any worktree; fast-forward local trunk ref
-            // directly from the already-fetched remote-tracking branch.
-            let ff_possible = Command::new("git")
-                .args([
-                    "merge-base",
-                    "--is-ancestor",
-                    &stack.trunk,
-                    &remote_trunk_ref,
-                ])
+            // Trunk isn't checked out in any worktree.
+            // Resolve the two SHAs so we can give an accurate status message.
+            let local_sha = Command::new("git")
+                .args(["rev-parse", &stack.trunk])
                 .current_dir(workdir)
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false);
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
 
-            if ff_possible {
-                let output = Command::new("git")
-                    .args([
-                        "update-ref",
-                        &format!("refs/heads/{}", stack.trunk),
-                        &format!("refs/remotes/{}/{}", remote_name, stack.trunk),
-                    ])
-                    .current_dir(workdir)
-                    .output()
-                    .context("Failed to fast-forward local trunk ref")?;
+            let remote_sha = Command::new("git")
+                .args(["rev-parse", &remote_trunk_ref])
+                .current_dir(workdir)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
 
-                if output.status.success() {
+            match (local_sha, remote_sha) {
+                (Some(ref local), Some(ref remote)) if local == remote => {
+                    // Already up to date — nothing to do.
                     LiveTimer::maybe_finish_timed(update_timer);
-                } else {
-                    trunk_update_deferred = true;
-                    LiveTimer::maybe_finish_skipped(update_timer, "diverged — checkout main to sync");
                 }
-            } else {
-                // Trunk has diverged from remote; can't fast-forward in background.
-                // Will retry if sync ends up checking out trunk (e.g. after branch deletion).
-                trunk_update_deferred = true;
-                LiveTimer::maybe_finish_skipped(update_timer, "diverged — checkout main to sync");
+                (Some(_), Some(_)) => {
+                    // Check if a fast-forward is safe (local trunk is an ancestor of remote).
+                    let ff_possible = Command::new("git")
+                        .args([
+                            "merge-base",
+                            "--is-ancestor",
+                            &stack.trunk,
+                            &remote_trunk_ref,
+                        ])
+                        .current_dir(workdir)
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+
+                    if ff_possible {
+                        let output = Command::new("git")
+                            .args([
+                                "update-ref",
+                                &format!("refs/heads/{}", stack.trunk),
+                                &format!("refs/remotes/{}/{}", remote_name, stack.trunk),
+                            ])
+                            .current_dir(workdir)
+                            .output()
+                            .context("Failed to fast-forward local trunk ref")?;
+
+                        if output.status.success() {
+                            LiveTimer::maybe_finish_timed(update_timer);
+                        } else {
+                            trunk_update_deferred = true;
+                            LiveTimer::maybe_finish_skipped(update_timer, "couldn't update — run 'stax trunk' to pull");
+                        }
+                    } else {
+                        // Local trunk has commits not on the remote — can't fast-forward.
+                        trunk_update_deferred = true;
+                        LiveTimer::maybe_finish_skipped(
+                            update_timer,
+                            &format!("local {} has unpushed commits — run 'stax trunk' to sync", stack.trunk),
+                        );
+                    }
+                }
+                _ => {
+                    // Couldn't resolve one or both refs (shouldn't happen after a successful fetch).
+                    trunk_update_deferred = true;
+                    LiveTimer::maybe_finish_skipped(update_timer, "couldn't resolve ref — run 'stax trunk' to pull");
+                }
             }
         }
     }
