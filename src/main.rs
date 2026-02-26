@@ -173,6 +173,28 @@ enum Commands {
         quiet: bool,
     },
 
+    /// Auto-land: merge PRs bottom-up, waiting for CI and approval
+    Land {
+        /// Merge method: squash, merge, rebase
+        #[arg(long, default_value = "squash")]
+        method: String,
+        /// Max wait time per PR in minutes (default: 30)
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+        /// Polling interval in seconds (default: 15)
+        #[arg(long, default_value = "15")]
+        interval: u64,
+        /// Keep branches after merge (don't delete)
+        #[arg(long)]
+        no_delete: bool,
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+        /// Minimal output
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
     /// Sync repo - pull trunk, delete merged branches
     #[command(visible_alias = "rs")]
     Sync {
@@ -831,6 +853,17 @@ fn main() -> Result<()> {
                 yes,
                 quiet,
             )
+        }
+        Commands::Land {
+            method,
+            timeout,
+            interval,
+            no_delete,
+            yes,
+            quiet,
+        } => {
+            let merge_method = method.parse().unwrap_or_default();
+            commands::land::run(merge_method, timeout, interval, no_delete, yes, quiet)
         }
         Commands::Sync {
             restack,

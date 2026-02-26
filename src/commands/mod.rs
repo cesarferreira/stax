@@ -12,6 +12,7 @@ pub mod diff;
 pub mod doctor;
 pub mod generate;
 pub mod init;
+pub mod land;
 pub mod log;
 pub mod merge;
 pub mod modify;

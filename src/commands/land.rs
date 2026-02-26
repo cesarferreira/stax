@@ -1,0 +1,782 @@
+use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
+use crate::config::Config;
+use crate::engine::{BranchMetadata, Stack};
+use crate::git::GitRepo;
+use crate::github::pr::{MergeMethod, PrMergeStatus};
+use crate::github::GitHubClient;
+use crate::ops::receipt::{OpKind, PlanSummary};
+use crate::ops::tx::{self, Transaction};
+use crate::progress::LiveTimer;
+use crate::remote::RemoteInfo;
+use anyhow::{Context, Result};
+use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Confirm};
+use std::io::Write;
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+/// Information about a branch in the land scope
+#[derive(Debug, Clone)]
+struct LandBranchInfo {
+    branch: String,
+    pr_number: u64,
+    status: LandStatus,
+}
+
+/// Status of a branch during the land process
+#[derive(Debug, Clone, PartialEq)]
+enum LandStatus {
+    Pending,
+    WaitingForCi,
+    Merging,
+    Merged,
+    Failed(String),
+}
+
+impl LandStatus {
+    fn symbol(&self) -> String {
+        match self {
+            LandStatus::Pending => "○".dimmed().to_string(),
+            LandStatus::WaitingForCi => "⏳".yellow().to_string(),
+            LandStatus::Merging => "⏳".cyan().to_string(),
+            LandStatus::Merged => "✓".green().to_string(),
+            LandStatus::Failed(_) => "✗".red().to_string(),
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            LandStatus::Pending => "pending".dimmed().to_string(),
+            LandStatus::WaitingForCi => "waiting for CI...".yellow().to_string(),
+            LandStatus::Merging => "merging...".cyan().to_string(),
+            LandStatus::Merged => "merged".green().to_string(),
+            LandStatus::Failed(reason) => format!("failed: {}", reason).red().to_string(),
+        }
+    }
+}
+
+/// Result of waiting for a PR to be ready
+enum WaitResult {
+    Ready,
+    Failed(String),
+    Timeout,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    method: MergeMethod,
+    timeout_mins: u64,
+    interval_secs: u64,
+    no_delete: bool,
+    yes: bool,
+    quiet: bool,
+) -> Result<()> {
+    let repo = GitRepo::open()?;
+    let current = repo.current_branch()?;
+    let stack = Stack::load(&repo)?;
+    let config = Config::load()?;
+
+    // Validate: not on trunk
+    if current == stack.trunk {
+        if !quiet {
+            println!(
+                "{}",
+                "You are on trunk. Checkout a branch in a stack to land.".yellow()
+            );
+        }
+        return Ok(());
+    }
+
+    // Validate: branch is tracked
+    if !stack.branches.contains_key(&current) {
+        if !quiet {
+            println!(
+                "{}",
+                format!(
+                    "Branch '{}' is not tracked. Run 'stax branch track' first.",
+                    current
+                )
+                .yellow()
+            );
+        }
+        return Ok(());
+    }
+
+    // Calculate scope: ancestors (reversed, trunk-adjacent first) + current
+    let mut ancestors = stack.ancestors(&current);
+    ancestors.reverse();
+    ancestors.retain(|b| b != &stack.trunk);
+    ancestors.push(current.clone());
+
+    // Build branch info list
+    let mut branches: Vec<LandBranchInfo> = Vec::new();
+
+    // Set up GitHub client
+    let remote_info = RemoteInfo::from_repo(&repo, &config)?;
+    let rt = tokio::runtime::Runtime::new()?;
+
+    let client = rt
+        .block_on(async {
+            GitHubClient::new(
+                remote_info.owner(),
+                &remote_info.repo,
+                remote_info.api_base_url.clone(),
+            )
+        })
+        .context("Failed to connect to GitHub. Check your token and remote configuration.")?;
+
+    // Resolve PR numbers for each branch
+    let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching PR info...");
+
+    for branch_name in &ancestors {
+        let branch_info = stack.branches.get(branch_name);
+        let mut pr_number = branch_info.and_then(|b| b.pr_number);
+
+        // If no PR in metadata, try looking it up on GitHub
+        if pr_number.is_none() {
+            if let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await }) {
+                pr_number = Some(pr_info.number);
+            }
+        }
+
+        match pr_number {
+            Some(num) => branches.push(LandBranchInfo {
+                branch: branch_name.clone(),
+                pr_number: num,
+                status: LandStatus::Pending,
+            }),
+            None => {
+                LiveTimer::maybe_finish_err(fetch_timer, "missing PR");
+                anyhow::bail!(
+                    "Branch '{}' has no PR. Run 'stax submit' first to create PRs.",
+                    branch_name
+                );
+            }
+        }
+    }
+
+    LiveTimer::maybe_finish_ok(fetch_timer, "done");
+
+    if branches.is_empty() {
+        if !quiet {
+            println!("{}", "No branches to land.".yellow());
+        }
+        return Ok(());
+    }
+
+    // Show preview
+    if !quiet {
+        println!();
+        print_land_preview(&branches, &stack.trunk, &method);
+    }
+
+    // Confirm
+    if !yes {
+        let confirm = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Proceed with landing?")
+            .default(false)
+            .interact()?;
+
+        if !confirm {
+            println!("{}", "Aborted.".dimmed());
+            return Ok(());
+        }
+    }
+
+    // Begin transaction
+    if !quiet {
+        println!();
+        print_header("Landing Stack");
+    }
+
+    let branch_names: Vec<String> = branches.iter().map(|b| b.branch.clone()).collect();
+    let mut tx = Transaction::begin(OpKind::Land, &repo, quiet)?;
+    tx.plan_branches(&repo, &branch_names)?;
+    let summary = PlanSummary {
+        branches_to_rebase: branches.len(),
+        branches_to_push: 0,
+        description: vec![format!(
+            "Land {} {} bottom-up via {}",
+            branches.len(),
+            if branches.len() == 1 { "PR" } else { "PRs" },
+            method.as_str()
+        )],
+    };
+    tx::print_plan(tx.kind(), &summary, quiet);
+    tx.set_plan_summary(summary);
+    tx.snapshot()?;
+
+    let timeout = Duration::from_secs(timeout_mins * 60);
+    let poll_interval = Duration::from_secs(interval_secs);
+    let total = branches.len();
+    let mut merged_prs: Vec<(String, u64)> = Vec::new();
+    let mut failed_pr: Option<(String, u64, String)> = None;
+
+    for idx in 0..total {
+        let pr_number = branches[idx].pr_number;
+        let branch_name = branches[idx].branch.clone();
+
+        if !quiet {
+            println!();
+            println!(
+                "[{}/{}] {} (#{})",
+                (idx + 1).to_string().cyan(),
+                total,
+                branch_name.bold(),
+                pr_number
+            );
+        }
+
+        // Check if already merged
+        let is_merged = rt.block_on(async { client.is_pr_merged(pr_number).await })?;
+        if is_merged {
+            branches[idx].status = LandStatus::Merged;
+            if !quiet {
+                println!("      {} Already merged", "✓".green());
+            }
+            merged_prs.push((branch_name.clone(), pr_number));
+            continue;
+        }
+
+        // Wait for CI and approval
+        branches[idx].status = LandStatus::WaitingForCi;
+        if !quiet {
+            print_dashboard(&branches, quiet);
+        }
+
+        match wait_for_pr_ready(&rt, &client, pr_number, timeout, poll_interval, quiet)? {
+            WaitResult::Ready => {}
+            WaitResult::Failed(reason) => {
+                branches[idx].status = LandStatus::Failed(reason.clone());
+                failed_pr = Some((branch_name, pr_number, reason));
+                break;
+            }
+            WaitResult::Timeout => {
+                let reason = "Timeout waiting for CI".to_string();
+                branches[idx].status = LandStatus::Failed(reason.clone());
+                failed_pr = Some((branch_name, pr_number, reason));
+                break;
+            }
+        }
+
+        // Merge the PR
+        branches[idx].status = LandStatus::Merging;
+        let merge_timer =
+            LiveTimer::maybe_new(!quiet, &format!("Merging ({})...", method.as_str()));
+
+        match rt.block_on(async { client.merge_pr(pr_number, method, None, None).await }) {
+            Ok(()) => {
+                LiveTimer::maybe_finish_ok(merge_timer, "done");
+                branches[idx].status = LandStatus::Merged;
+                merged_prs.push((branch_name.clone(), pr_number));
+
+                // Record CI history
+                record_ci_history_for_branch(&repo, &rt, &client, &stack, &branch_name);
+            }
+            Err(e) => {
+                LiveTimer::maybe_finish_err(merge_timer, "failed");
+                let reason = e.to_string();
+                branches[idx].status = LandStatus::Failed(reason.clone());
+                failed_pr = Some((branch_name, pr_number, reason));
+                break;
+            }
+        }
+
+        // If there are more PRs, rebase and update the next one
+        if idx + 1 < total {
+            let next_branch = branches[idx + 1].branch.clone();
+            let next_pr = branches[idx + 1].pr_number;
+
+            // Fetch latest from remote
+            let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching latest...");
+            let fetch_output = Command::new("git")
+                .args(["fetch", &remote_info.name])
+                .current_dir(repo.workdir()?)
+                .output()
+                .context("Failed to fetch")?;
+
+            if !fetch_output.status.success() {
+                LiveTimer::maybe_finish_warn(fetch_timer, "warning");
+            } else {
+                LiveTimer::maybe_finish_ok(fetch_timer, "done");
+            }
+
+            // Rebase next branch onto trunk
+            let rebase_timer = LiveTimer::maybe_new(
+                !quiet,
+                &format!("Rebasing {} onto {}...", next_branch, stack.trunk),
+            );
+
+            repo.checkout(&next_branch)?;
+
+            let rebase_status = Command::new("git")
+                .args(["rebase", &format!("{}/{}", remote_info.name, stack.trunk)])
+                .current_dir(repo.workdir()?)
+                .output()
+                .context("Failed to rebase")?;
+
+            if !rebase_status.status.success() {
+                // Abort rebase on failure
+                let _ = Command::new("git")
+                    .args(["rebase", "--abort"])
+                    .current_dir(repo.workdir()?)
+                    .output();
+
+                LiveTimer::maybe_finish_err(rebase_timer, "conflict");
+                let reason = "Rebase conflict".to_string();
+                branches[idx + 1].status = LandStatus::Failed(reason.clone());
+                failed_pr = Some((next_branch, next_pr, reason));
+                break;
+            }
+
+            LiveTimer::maybe_finish_ok(rebase_timer, "done");
+
+            // Update PR base to trunk
+            let update_base_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Updating PR base to {}...", stack.trunk));
+
+            match rt.block_on(async { client.update_pr_base(next_pr, &stack.trunk).await }) {
+                Ok(()) => {
+                    LiveTimer::maybe_finish_ok(update_base_timer, "done");
+                }
+                Err(e) => {
+                    LiveTimer::maybe_finish_warn(update_base_timer, &format!("warning: {}", e));
+                }
+            }
+
+            // Force push the rebased branch
+            let push_timer = LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", next_branch));
+
+            let push_status = Command::new("git")
+                .args(["push", "-f", &remote_info.name, &next_branch])
+                .current_dir(repo.workdir()?)
+                .output()
+                .context("Failed to push")?;
+
+            if !push_status.status.success() {
+                LiveTimer::maybe_finish_err(push_timer, "failed");
+                let reason = "Failed to push rebased branch".to_string();
+                branches[idx + 1].status = LandStatus::Failed(reason.clone());
+                failed_pr = Some((next_branch, next_pr, reason));
+                break;
+            }
+
+            LiveTimer::maybe_finish_ok(push_timer, "done");
+
+            // Update metadata: parent → trunk
+            if let Some(meta) = BranchMetadata::read(repo.inner(), &next_branch)? {
+                let remote_trunk_ref = format!("{}/{}", remote_info.name, stack.trunk);
+                let trunk_commit = repo
+                    .resolve_ref(&remote_trunk_ref)
+                    .unwrap_or_else(|_| repo.branch_commit(&stack.trunk).unwrap_or_default());
+                let updated_meta = BranchMetadata {
+                    parent_branch_name: stack.trunk.clone(),
+                    parent_branch_revision: trunk_commit,
+                    ..meta
+                };
+                updated_meta.write(repo.inner(), &next_branch)?;
+            }
+        }
+    }
+
+    // Cleanup merged branches
+    if !no_delete && !merged_prs.is_empty() {
+        if !quiet {
+            println!();
+            println!("{}", "Cleaning up merged branches...".dimmed());
+        }
+
+        for (branch, _pr) in &merged_prs {
+            let local_deleted = Command::new("git")
+                .args(["branch", "-D", branch])
+                .current_dir(repo.workdir()?)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            let remote_deleted = Command::new("git")
+                .args(["push", &remote_info.name, "--delete", branch])
+                .current_dir(repo.workdir()?)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+
+            if !quiet {
+                if local_deleted && remote_deleted {
+                    println!("  {} {} deleted", "✓".green(), branch.dimmed());
+                } else if local_deleted {
+                    println!("  {} {} deleted (local only)", "✓".green(), branch.dimmed());
+                }
+            }
+        }
+
+        // Checkout trunk after cleanup
+        let _ = repo.checkout(&stack.trunk);
+    }
+
+    // Finish transaction
+    if failed_pr.is_some() {
+        tx.finish_err("Land stopped", Some("land"), None)?;
+    } else {
+        tx.finish_ok()?;
+    }
+
+    // Print summary
+    println!();
+
+    if let Some((branch, pr, reason)) = &failed_pr {
+        print_header_error("Land Stopped");
+        println!();
+        println!("Progress:");
+        for (merged_branch, merged_pr) in &merged_prs {
+            println!(
+                "  {} #{} {} → merged",
+                "✓".green(),
+                merged_pr,
+                merged_branch
+            );
+        }
+        println!("  {} #{} {} → {}", "✗".red(), pr, branch, reason);
+        println!();
+        println!("{}", "Already merged PRs remain merged.".dimmed());
+        println!(
+            "{}",
+            "Fix the issue and run 'stax land' to continue.".dimmed()
+        );
+    } else {
+        print_header_success("Stack Landed!");
+        println!();
+        println!(
+            "Merged {} {} into {}:",
+            merged_prs.len(),
+            if merged_prs.len() == 1 { "PR" } else { "PRs" },
+            stack.trunk.cyan()
+        );
+        for (branch, pr) in &merged_prs {
+            println!("  {} #{} {}", "✓".green(), pr, branch);
+        }
+
+        if !no_delete && !merged_prs.is_empty() {
+            println!();
+            println!("Cleanup:");
+            println!(
+                "  • Deleted {} local {}",
+                merged_prs.len(),
+                if merged_prs.len() == 1 {
+                    "branch"
+                } else {
+                    "branches"
+                }
+            );
+            println!("  • Switched to: {}", stack.trunk.cyan());
+        }
+
+        // Send macOS notification
+        send_notification(
+            "stax land",
+            &format!(
+                "Landed {} {} into {}",
+                merged_prs.len(),
+                if merged_prs.len() == 1 { "PR" } else { "PRs" },
+                stack.trunk
+            ),
+        );
+    }
+
+    Ok(())
+}
+
+/// Print the land preview
+fn print_land_preview(branches: &[LandBranchInfo], trunk: &str, method: &MergeMethod) {
+    print_header("Stack Land");
+    println!();
+
+    let pr_word = if branches.len() == 1 { "PR" } else { "PRs" };
+    println!(
+        "Will land {} {} bottom-up into {}:",
+        branches.len().to_string().bold(),
+        pr_word,
+        trunk.cyan()
+    );
+    println!();
+
+    for (idx, branch) in branches.iter().enumerate() {
+        println!(
+            "  {}. {} (#{}) {}",
+            (idx + 1).to_string().bold(),
+            branch.branch.bold(),
+            branch.pr_number,
+            branch.status.label()
+        );
+    }
+
+    println!();
+    println!(
+        "Merge method: {} {}",
+        method.as_str().cyan(),
+        "(change with --method)".dimmed()
+    );
+    println!(
+        "{}",
+        "Each PR will be polled for CI + approval before merging.".dimmed()
+    );
+}
+
+/// Print a dashboard of branch statuses during polling
+fn print_dashboard(branches: &[LandBranchInfo], quiet: bool) {
+    if quiet {
+        return;
+    }
+    for (idx, branch) in branches.iter().enumerate() {
+        let status_str = format!(
+            "      [{}] {} (#{})\t{}",
+            idx + 1,
+            branch.branch,
+            branch.pr_number,
+            branch.status.label()
+        );
+        // Only print non-pending branches for concise output
+        if branch.status != LandStatus::Pending {
+            println!("      {} {}", branch.status.symbol(), status_str.dimmed());
+        }
+    }
+}
+
+/// Wait for a PR to be ready to merge (CI passed, approved)
+fn wait_for_pr_ready(
+    rt: &tokio::runtime::Runtime,
+    client: &GitHubClient,
+    pr_number: u64,
+    timeout: Duration,
+    poll_interval: Duration,
+    quiet: bool,
+) -> Result<WaitResult> {
+    let start = Instant::now();
+    let mut last_status: Option<String> = None;
+
+    loop {
+        let status: PrMergeStatus =
+            rt.block_on(async { client.get_pr_merge_status(pr_number).await })?;
+
+        if status.is_ready() {
+            if !quiet && last_status.is_some() {
+                println!();
+            }
+            return Ok(WaitResult::Ready);
+        }
+
+        if status.is_blocked() {
+            if !quiet && last_status.is_some() {
+                println!();
+            }
+            return Ok(WaitResult::Failed(status.status_text().to_string()));
+        }
+
+        if start.elapsed() > timeout {
+            if !quiet && last_status.is_some() {
+                println!();
+            }
+            return Ok(WaitResult::Timeout);
+        }
+
+        // Show waiting status
+        if !quiet {
+            let elapsed = start.elapsed().as_secs();
+            let status_text = format!(
+                "      {} Waiting for {}... ({}s)",
+                "⏳".yellow(),
+                status.status_text().to_lowercase(),
+                elapsed
+            );
+
+            if last_status.is_some() {
+                print!("\r{}\r", " ".repeat(80));
+            }
+            print!("{}", status_text);
+            std::io::stdout().flush().ok();
+            last_status = Some(status_text);
+        }
+
+        std::thread::sleep(poll_interval);
+    }
+}
+
+/// Record CI history for a single branch after it's merged
+fn record_ci_history_for_branch(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &GitHubClient,
+    stack: &Stack,
+    branch: &str,
+) {
+    if repo.branch_commit(branch).is_err() {
+        return;
+    }
+
+    let branches = vec![branch.to_string()];
+    if let Ok(statuses) = fetch_ci_statuses(repo, rt, client, stack, &branches) {
+        record_ci_history(repo, &statuses);
+    }
+}
+
+/// Send a macOS desktop notification
+fn send_notification(title: &str, message: &str) {
+    if cfg!(target_os = "macos") {
+        let script = format!(
+            r#"display notification "{}" with title "{}""#,
+            message.replace('"', "\\\""),
+            title.replace('"', "\\\""),
+        );
+        let _ = Command::new("osascript").args(["-e", &script]).output();
+    }
+}
+
+/// Strip ANSI codes for length calculation
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_escape = false;
+
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+            continue;
+        }
+        if in_escape {
+            if c == 'm' {
+                in_escape = false;
+            }
+            continue;
+        }
+        result.push(c);
+    }
+
+    result
+}
+
+fn display_width(s: &str) -> usize {
+    let stripped = strip_ansi(s);
+    stripped
+        .chars()
+        .map(|c| match c {
+            '\x00'..='\x1f' | '\x7f' => 0,
+            '\x20'..='\x7e' => 1,
+            '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╭' | '╮' | '╯'
+            | '╰' | '║' | '═' => 1,
+            '←' | '→' | '↑' | '↓' => 1,
+            '✓' | '✗' | '✔' | '✘' => 1,
+            _ => 2,
+        })
+        .sum()
+}
+
+fn print_header(title: &str) {
+    let width: usize = 56;
+    let title_width = display_width(title);
+    let padding = width.saturating_sub(title_width) / 2;
+    println!("╭{}╮", "─".repeat(width));
+    println!(
+        "│{}{}{}│",
+        " ".repeat(padding),
+        title.bold(),
+        " ".repeat(width.saturating_sub(padding + title_width))
+    );
+    println!("╰{}╯", "─".repeat(width));
+}
+
+fn print_header_success(title: &str) {
+    let width: usize = 56;
+    let full_title = format!("✓ {}", title);
+    let title_width = display_width(&full_title);
+    let padding = width.saturating_sub(title_width) / 2;
+    println!("╭{}╮", "─".repeat(width));
+    println!(
+        "│{}{}{}│",
+        " ".repeat(padding),
+        full_title.green().bold(),
+        " ".repeat(width.saturating_sub(padding + title_width))
+    );
+    println!("╰{}╯", "─".repeat(width));
+}
+
+fn print_header_error(title: &str) {
+    let width: usize = 56;
+    let full_title = format!("✗ {}", title);
+    let title_width = display_width(&full_title);
+    let padding = width.saturating_sub(title_width) / 2;
+    println!("╭{}╮", "─".repeat(width));
+    println!(
+        "│{}{}{}│",
+        " ".repeat(padding),
+        full_title.red().bold(),
+        " ".repeat(width.saturating_sub(padding + title_width))
+    );
+    println!("╰{}╯", "─".repeat(width));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_land_status_symbols() {
+        // Just verify we can create each status variant
+        let _ = LandStatus::Pending.symbol();
+        let _ = LandStatus::WaitingForCi.symbol();
+        let _ = LandStatus::Merging.symbol();
+        let _ = LandStatus::Merged.symbol();
+        let _ = LandStatus::Failed("test".to_string()).symbol();
+    }
+
+    #[test]
+    fn test_land_status_labels() {
+        let _ = LandStatus::Pending.label();
+        let _ = LandStatus::WaitingForCi.label();
+        let _ = LandStatus::Merging.label();
+        let _ = LandStatus::Merged.label();
+        let _ = LandStatus::Failed("test error".to_string()).label();
+    }
+
+    #[test]
+    fn test_land_status_equality() {
+        assert_eq!(LandStatus::Pending, LandStatus::Pending);
+        assert_eq!(LandStatus::Merged, LandStatus::Merged);
+        assert_ne!(LandStatus::Pending, LandStatus::Merged);
+        assert_eq!(
+            LandStatus::Failed("a".to_string()),
+            LandStatus::Failed("a".to_string())
+        );
+        assert_ne!(
+            LandStatus::Failed("a".to_string()),
+            LandStatus::Failed("b".to_string())
+        );
+    }
+
+    #[test]
+    fn test_land_branch_info_creation() {
+        let info = LandBranchInfo {
+            branch: "feature-test".to_string(),
+            pr_number: 42,
+            status: LandStatus::Pending,
+        };
+
+        assert_eq!(info.branch, "feature-test");
+        assert_eq!(info.pr_number, 42);
+        assert_eq!(info.status, LandStatus::Pending);
+    }
+
+    #[test]
+    fn test_strip_ansi() {
+        assert_eq!(strip_ansi(""), "");
+        assert_eq!(strip_ansi("hello"), "hello");
+        assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
+    }
+
+    #[test]
+    fn test_display_width() {
+        assert_eq!(display_width("hello"), 5);
+        assert_eq!(display_width("✓"), 1);
+        assert_eq!(display_width("\x1b[32m✓\x1b[0m passed"), 8);
+    }
+}
