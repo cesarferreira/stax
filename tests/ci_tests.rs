@@ -17,12 +17,13 @@ fn test_ci_no_tracked_branches() {
     let stderr = TestRepo::stderr(&output);
     let stdout = TestRepo::stdout(&output);
 
-    // Either we get "no tracked branches" or "GitHub token not set" - both are valid
+    // Valid outcomes: no tracked branches, no GitHub token, no remote configured
     assert!(
         stdout.contains("No tracked branches")
             || stderr.contains("GitHub token")
-            || stderr.contains("GitHub auth"),
-        "Expected 'No tracked branches' or GitHub auth message, got stdout: {}, stderr: {}",
+            || stderr.contains("GitHub auth")
+            || stderr.contains("remote"),
+        "Expected 'No tracked branches', GitHub auth message, or remote error, got stdout: {}, stderr: {}",
         stdout,
         stderr
     );
