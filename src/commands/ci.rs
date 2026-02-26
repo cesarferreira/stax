@@ -814,9 +814,10 @@ pub fn record_ci_history(repo: &GitRepo, statuses: &[BranchCiStatus]) {
 
 /// Check if all CI checks are complete (not pending)
 fn all_checks_complete(statuses: &[BranchCiStatus]) -> bool {
-    statuses
-        .iter()
-        .all(|s| s.overall_status.as_deref() != Some("pending") && !s.check_runs.is_empty())
+    statuses.iter().all(|s| {
+        // Branches with no CI configured are considered "done" (nothing to wait for)
+        s.check_runs.is_empty() || s.overall_status.as_deref() != Some("pending")
+    })
 }
 
 /// Run watch mode - poll CI status until all checks complete
@@ -839,6 +840,11 @@ fn run_watch_mode(
     println!();
 
     loop {
+        // Safety valve: if there are no branches to watch, exit immediately
+        if branches_to_check.is_empty() {
+            println!("{}", "No tracked branches to watch.".dimmed());
+            return Ok(());
+        }
         iteration += 1;
 
         let statuses = fetch_ci_statuses(repo, rt, client, stack, branches_to_check)?;

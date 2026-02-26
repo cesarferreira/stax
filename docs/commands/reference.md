@@ -73,7 +73,13 @@
 | `stax continue` | Continue after conflicts |
 | `stax pr` | Open current branch PR |
 | `stax open` | Open repository in browser |
-| `stax ci` | Show CI status |
+| `stax ci` | Show CI status for current branch (full per-check table with ETA) |
+| `stax ci --stack` | Show CI status for all branches in current stack |
+| `stax ci --all` | Show CI status for all tracked branches |
+| `stax ci --watch` | Watch CI until completion, polls every 15s |
+| `stax ci --watch --interval 30` | Watch with custom polling interval (seconds) |
+| `stax ci --verbose` | Compact summary cards instead of full table |
+| `stax ci --json` | Output CI status as JSON |
 | `stax comments` | Show PR comments |
 | `stax copy` | Copy branch name |
 | `stax copy --pr` | Copy PR URL |
@@ -118,7 +124,7 @@
 - `stax checkout --trunk`
 - `stax checkout --parent`
 - `stax checkout --child 1`
-- `stax ci --refresh --watch --interval 30 --json --all`
+- `stax ci --stack --watch --interval 30 --json`
 - `stax standup --all --hours 48 --json`
 - `stax auth --from-gh`
 - `stax auth --token <token>`

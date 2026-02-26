@@ -1010,10 +1010,12 @@ stax generate --pr-body --edit                               # Review in editor 
 | `stax continue` | Continue after resolving conflicts |
 | `stax pr` | Open PR in browser |
 | `stax open` | Open repository in browser |
-| `stax ci` | Show CI status for branches in current stack |
+| `stax ci` | Show CI status for current branch (full table with ETA) |
+| `stax ci --stack` | Show CI status for all branches in current stack |
 | `stax ci --all` | Show CI status for all tracked branches |
 | `stax ci --watch` | Watch CI until completion (polls every 15s, records history) |
 | `stax ci --watch --interval 30` | Watch with custom polling interval in seconds |
+| `stax ci --verbose` | Compact summary cards instead of full per-check table |
 | `stax ci --json` | Output CI status as JSON |
 | `stax copy` | Copy branch name to clipboard |
 | `stax copy --pr` | Copy PR URL to clipboard |
