@@ -135,11 +135,14 @@ fn calculate_branch_timing(
             checks.iter().filter_map(|c| c.elapsed_secs).max()
         })?;
 
+    // Try branch-level history first (most accurate: wall-clock from first to last check)
     let history_key = format!("branch-overall:{}", branch_name);
     let average_secs = match history::load_check_history(repo, &history_key) {
         Ok(hist) => history::calculate_average(&hist),
         Err(_) => None,
-    };
+    }
+    // Fall back to max(individual check averages) -- the slowest check is the critical path
+    .or_else(|| checks.iter().filter_map(|c| c.average_secs).max());
 
     let pct = if !is_complete {
         average_secs.map(|avg| {
