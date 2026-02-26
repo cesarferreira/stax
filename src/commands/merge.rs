@@ -331,10 +331,8 @@ pub fn run(
             LiveTimer::maybe_finish_ok(rebase_timer, "done");
 
             // Update PR base to trunk
-            let update_base_timer = LiveTimer::maybe_new(
-                !quiet,
-                &format!("Updating PR base to {}...", scope.trunk),
-            );
+            let update_base_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Updating PR base to {}...", scope.trunk));
 
             match rt.block_on(async { client.update_pr_base(next_pr, &scope.trunk).await }) {
                 Ok(()) => {
@@ -346,10 +344,8 @@ pub fn run(
             }
 
             // Force push the rebased branch
-            let push_timer = LiveTimer::maybe_new(
-                !quiet,
-                &format!("Pushing {}...", next_branch.branch),
-            );
+            let push_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", next_branch.branch));
 
             let push_status = Command::new("git")
                 .args(["push", "-f", &remote_info.name, &next_branch.branch])

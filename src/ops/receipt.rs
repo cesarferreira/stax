@@ -25,6 +25,7 @@ pub enum OpKind {
     Submit,
     Reorder,
     Split,
+    Land,
 }
 
 impl OpKind {
@@ -36,6 +37,7 @@ impl OpKind {
             OpKind::Submit => "submit",
             OpKind::Reorder => "reorder",
             OpKind::Split => "split",
+            OpKind::Land => "land",
         }
     }
 }

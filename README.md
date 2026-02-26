@@ -19,6 +19,7 @@
 
 - [`stax merge`](#cascade-stack-merge) - Cascade-merge your stack from bottom -> current with CI/rebase-aware safety checks.
 - [`stax generate --pr-body`](#ai-powered-pr-body-generation) - Generate polished PR descriptions with AI from your branch diff and context.
+- [`AI skill integrations`](#claude-code-integration) - Embed `skills.md` into Claude Code, Codex, Gemini CLI, or OpenCode so your AI can create and stack PRs.
 - [`stax standup`](#standup-summary) - Get a quick summary of recent PRs, pushes, and activity for daily standups.
 - [`stax ss`](#core-commands) - Submit or update the full PR stack with correct parent/child base relationships.
 - [`stax rs --restack`](#core-commands) - Sync trunk and restack descendants so your branch tree stays clean and current.

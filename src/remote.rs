@@ -52,10 +52,7 @@ impl RemoteInfo {
     /// For repos like `wayve/frontends/robot-android`, namespace is `wayve/frontends`
     /// but the GitHub API owner is just `wayve`.
     pub fn owner(&self) -> &str {
-        self.namespace
-            .split('/')
-            .next()
-            .unwrap_or(&self.namespace)
+        self.namespace.split('/').next().unwrap_or(&self.namespace)
     }
 
     pub fn repo_url(&self) -> String {
