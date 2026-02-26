@@ -13,7 +13,7 @@ release:
 
 # Install to ~/.cargo/bin
 install:
-	cargo install --path . --locked --bins --debug
+	cargo install --path . --bin stax --bin st --force
 
 # Clean build artifacts
 clean:
