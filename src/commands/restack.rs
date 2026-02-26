@@ -7,7 +7,14 @@ use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 
-pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Result<()> {
+pub fn run(
+    all: bool,
+    r#continue: bool,
+    dry_run: bool,
+    yes: bool,
+    quiet: bool,
+    auto_stash_pop: bool,
+) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -82,6 +89,63 @@ pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Re
             repo.stash_pop()?;
         }
         return Ok(());
+    }
+
+    // Predict conflicts before proceeding
+    if !r#continue {
+        let timer = LiveTimer::maybe_new(!quiet, "Checking for conflicts...");
+        let branch_parent_pairs: Vec<(String, String)> = branches_to_restack
+            .iter()
+            .filter_map(|b| {
+                BranchMetadata::read(repo.inner(), b)
+                    .ok()
+                    .flatten()
+                    .map(|m| (b.clone(), m.parent_branch_name.clone()))
+            })
+            .collect();
+        let predictions = repo.predict_restack_conflicts(&branch_parent_pairs);
+
+        if predictions.is_empty() {
+            LiveTimer::maybe_finish_ok(timer, "no conflicts predicted");
+        } else {
+            LiveTimer::maybe_finish_warn(
+                timer,
+                &format!("{} branch(es) with conflicts", predictions.len()),
+            );
+            println!();
+            for p in &predictions {
+                println!(
+                    "  {} {} → {}",
+                    "✗".red(),
+                    p.branch.yellow().bold(),
+                    p.onto.dimmed()
+                );
+                for file in &p.conflicting_files {
+                    println!("    {} {}", "│".dimmed(), file.red());
+                }
+            }
+            println!();
+        }
+
+        if dry_run {
+            if stashed {
+                repo.stash_pop()?;
+            }
+            return Ok(());
+        }
+
+        if !predictions.is_empty() && !yes {
+            let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Conflicts predicted. Continue with restack?")
+                .default(true)
+                .interact()?;
+            if !confirm {
+                if stashed {
+                    repo.stash_pop()?;
+                }
+                return Ok(());
+            }
+        }
     }
 
     let branch_word = if scope_branches.len() == 1 {

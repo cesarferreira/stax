@@ -213,6 +213,12 @@ enum Commands {
         /// Continue after resolving conflicts
         #[arg(long)]
         r#continue: bool,
+        /// Preview predicted conflicts without rebasing
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip conflict confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
         /// Suppress extra output
         #[arg(long)]
         quiet: bool,
@@ -850,9 +856,11 @@ fn main() -> Result<()> {
         Commands::Restack {
             all,
             r#continue,
+            dry_run,
+            yes,
             quiet,
             auto_stash_pop,
-        } => commands::restack::run(all, r#continue, quiet, auto_stash_pop),
+        } => commands::restack::run(all, r#continue, dry_run, yes, quiet, auto_stash_pop),
         Commands::Cascade {
             no_pr,
             no_submit,
