@@ -6,6 +6,7 @@ mod engine;
 mod git;
 mod github;
 mod ops;
+mod progress;
 mod remote;
 mod tui;
 mod update;

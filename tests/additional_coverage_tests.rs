@@ -293,13 +293,13 @@ fn test_checkout_nonexistent_branch() {
 #[test]
 fn test_checkout_with_stack() {
     let repo = TestRepo::new();
-    repo.create_stack(&["a", "b", "c"]);
+    let branches = repo.create_stack(&["a", "b", "c"]);
 
-    // Checkout middle branch
-    let output = repo.run_stax(&["checkout", "b"]);
+    // Checkout middle branch using the actual branch name (may include configured prefix)
+    let output = repo.run_stax(&["checkout", &branches[1]]);
     output.assert_success();
 
-    assert_eq!(repo.current_branch(), "b");
+    assert_eq!(repo.current_branch(), branches[1]);
 }
 
 // =============================================================================
@@ -556,10 +556,10 @@ fn test_branch_fold_in_stack() {
     let repo = TestRepo::new();
     repo.create_stack(&["a", "b"]);
 
-    // Go to parent and fold
-    repo.run_stax(&["checkout", "a"]);
-    let output = repo.run_stax(&["branch", "fold"]);
-    // Should fold successfully
+    // After create_stack we're on the leaf branch (b / cesar/b).
+    // Fold it into its parent using --yes to skip the interactive confirmation
+    // prompt (which requires a TTY that tests don't have).
+    let output = repo.run_stax(&["branch", "fold", "--yes"]);
     output.assert_success();
 }
 

@@ -3264,9 +3264,9 @@ fn test_sync_updates_trunk_after_branch_deletion_checkout() {
         stdout
     );
 
-    // Should show trunk update succeeded
+    // Should show trunk update succeeded ("✓ Update main" in the sync output)
     assert!(
-        stdout.contains("Updating main"),
+        stdout.contains("Update main"),
         "Expected trunk update message. Got:\n{}",
         stdout
     );
@@ -3684,7 +3684,7 @@ fn test_merge_scope_stacked_branches() {
 fn test_merge_from_middle_of_stack() {
     let repo = TestRepo::new_with_remote();
 
-    // Create a stack of 3 branches
+    // Create a stack of 3 branches, capturing the actual names (may include configured prefix)
     repo.run_stax(&["bc", "stack-a"]);
     repo.create_file("a.txt", "content a");
     repo.commit("Feature A");
@@ -3692,13 +3692,14 @@ fn test_merge_from_middle_of_stack() {
     repo.run_stax(&["bc", "stack-b"]);
     repo.create_file("b.txt", "content b");
     repo.commit("Feature B");
+    let branch_b = repo.current_branch();
 
     repo.run_stax(&["bc", "stack-c"]);
     repo.create_file("c.txt", "content c");
     repo.commit("Feature C");
 
-    // Go to the middle branch
-    repo.run_stax(&["checkout", "stack-b"]);
+    // Go to the middle branch using its actual name
+    repo.run_stax(&["checkout", &branch_b]);
     assert!(repo.current_branch().contains("stack-b"));
 
     // Merge dry-run should only show stack-a and stack-b (not stack-c)

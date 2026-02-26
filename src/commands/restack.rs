@@ -2,6 +2,7 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
+use crate::progress::LiveTimer;
 use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -131,13 +132,10 @@ pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Re
             None => continue,
         };
 
-        if !quiet {
-            println!(
-                "  {} onto {}",
-                branch.white(),
-                meta.parent_branch_name.blue()
-            );
-        }
+        let restack_timer = LiveTimer::maybe_new(
+            !quiet,
+            &format!("{} onto {}", branch, meta.parent_branch_name),
+        );
 
         // Rebase using provenance-aware upstream inference to avoid replaying
         // already-integrated commits after squash/cherry-pick merges.
@@ -159,14 +157,12 @@ pub fn run(all: bool, r#continue: bool, quiet: bool, auto_stash_pop: bool) -> Re
                 // Record the after-OID for this branch
                 tx.record_after(&repo, branch)?;
 
-                if !quiet {
-                    println!("    {}", "✓ done".green());
-                }
+                LiveTimer::maybe_finish_ok(restack_timer, "done");
                 summary.push((branch.clone(), "ok".to_string()));
             }
             RebaseResult::Conflict => {
+                LiveTimer::maybe_finish_err(restack_timer, "conflict");
                 if !quiet {
-                    println!("    {}", "✗ conflict".red());
                     println!();
                     println!("{}", "Resolve conflicts and run:".yellow());
                     println!("  {}", "stax continue".cyan());

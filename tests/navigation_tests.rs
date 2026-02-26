@@ -427,8 +427,8 @@ fn test_navigation_roundtrip() {
 fn test_navigation_with_multiple_stacks() {
     let repo = TestRepo::new();
 
-    // Create first stack
-    repo.create_stack(&["stack1-a", "stack1-b"]);
+    // Create first stack, capturing actual branch names (may include configured prefix)
+    let stack1_branches = repo.create_stack(&["stack1-a", "stack1-b"]);
 
     // Go back to main and create second independent stack
     repo.run_stax(&["t"]);
@@ -445,8 +445,8 @@ fn test_navigation_with_multiple_stacks() {
     repo.navigate_to_top();
     assert!(repo.current_branch_contains("stack2-b"));
 
-    // Switch to stack1
-    repo.run_stax(&["checkout", "stack1-b"]);
+    // Switch to stack1 using the actual branch name
+    repo.run_stax(&["checkout", &stack1_branches[1]]);
     assert!(repo.current_branch_contains("stack1-b"));
 
     // bottom in this stack should be stack1-a

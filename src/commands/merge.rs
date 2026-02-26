@@ -4,6 +4,7 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::github::pr::{CiStatus, MergeMethod, PrMergeStatus};
 use crate::github::GitHubClient;
+use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -129,10 +130,7 @@ pub fn run(
         anyhow::anyhow!("Failed to connect to GitHub. Check your token and remote configuration.")
     })?;
 
-    if !quiet {
-        print!("Fetching PR status... ");
-        std::io::stdout().flush().ok();
-    }
+    let fetch_status_timer = LiveTimer::maybe_new(!quiet, "Fetching PR status...");
 
     // Fetch status for branches to merge
     for branch_info in &mut scope.to_merge {
@@ -151,8 +149,8 @@ pub fn run(
         }
     }
 
+    LiveTimer::maybe_finish_ok(fetch_status_timer, "done");
     if !quiet {
-        println!("{}", "done".green());
         println!();
     }
 
@@ -263,25 +261,19 @@ pub fn run(
         }
 
         // Merge the PR
-        if !quiet {
-            print!("      {} Merging ({})... ", "↻".cyan(), method.as_str());
-            std::io::stdout().flush().ok();
-        }
+        let merge_timer =
+            LiveTimer::maybe_new(!quiet, &format!("Merging ({})...", method.as_str()));
 
         match rt.block_on(async { client.merge_pr(pr_number, method, None, None).await }) {
             Ok(()) => {
-                if !quiet {
-                    println!("{}", "done".green());
-                }
+                LiveTimer::maybe_finish_ok(merge_timer, "done");
                 merged_prs.push((branch_info.branch.clone(), pr_number));
 
                 // Record CI history for the merged branch
                 record_ci_history_for_branch(&repo, &rt, &client, &stack, &branch_info.branch);
             }
             Err(e) => {
-                if !quiet {
-                    println!("{}", "failed".red());
-                }
+                LiveTimer::maybe_finish_err(merge_timer, "failed");
                 failed_pr = Some((branch_info.branch.clone(), pr_number, e.to_string()));
                 break;
             }
@@ -293,11 +285,7 @@ pub fn run(
             let next_pr = next_branch.pr_number.unwrap();
 
             // Fetch latest from remote
-            if !quiet {
-                print!("      {} Fetching latest... ", "↻".cyan());
-                std::io::stdout().flush().ok();
-            }
-
+            let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching latest...");
             let fetch_output = Command::new("git")
                 .args(["fetch", &remote_info.name])
                 .current_dir(repo.workdir()?)
@@ -305,23 +293,16 @@ pub fn run(
                 .context("Failed to fetch")?;
 
             if !fetch_output.status.success() {
-                if !quiet {
-                    println!("{}", "warning".yellow());
-                }
-            } else if !quiet {
-                println!("{}", "done".green());
+                LiveTimer::maybe_finish_warn(fetch_timer, "warning");
+            } else {
+                LiveTimer::maybe_finish_ok(fetch_timer, "done");
             }
 
             // Rebase next branch onto trunk
-            if !quiet {
-                print!(
-                    "      {} Rebasing {} onto {}... ",
-                    "↻".cyan(),
-                    next_branch.branch,
-                    scope.trunk
-                );
-                std::io::stdout().flush().ok();
-            }
+            let rebase_timer = LiveTimer::maybe_new(
+                !quiet,
+                &format!("Rebasing {} onto {}...", next_branch.branch, scope.trunk),
+            );
 
             repo.checkout(&next_branch.branch)?;
 
@@ -338,9 +319,7 @@ pub fn run(
                     .current_dir(repo.workdir()?)
                     .output();
 
-                if !quiet {
-                    println!("{}", "conflict".red());
-                }
+                LiveTimer::maybe_finish_err(rebase_timer, "conflict");
                 failed_pr = Some((
                     next_branch.branch.clone(),
                     next_pr,
@@ -349,38 +328,28 @@ pub fn run(
                 break;
             }
 
-            if !quiet {
-                println!("{}", "done".green());
-            }
+            LiveTimer::maybe_finish_ok(rebase_timer, "done");
 
             // Update PR base to trunk
-            if !quiet {
-                print!(
-                    "      {} Updating PR base to {}... ",
-                    "↻".cyan(),
-                    scope.trunk
-                );
-                std::io::stdout().flush().ok();
-            }
+            let update_base_timer = LiveTimer::maybe_new(
+                !quiet,
+                &format!("Updating PR base to {}...", scope.trunk),
+            );
 
             match rt.block_on(async { client.update_pr_base(next_pr, &scope.trunk).await }) {
                 Ok(()) => {
-                    if !quiet {
-                        println!("{}", "done".green());
-                    }
+                    LiveTimer::maybe_finish_ok(update_base_timer, "done");
                 }
                 Err(e) => {
-                    if !quiet {
-                        println!("{} {}", "warning:".yellow(), e);
-                    }
+                    LiveTimer::maybe_finish_warn(update_base_timer, &format!("warning: {}", e));
                 }
             }
 
             // Force push the rebased branch
-            if !quiet {
-                print!("      {} Pushing... ", "↻".cyan());
-                std::io::stdout().flush().ok();
-            }
+            let push_timer = LiveTimer::maybe_new(
+                !quiet,
+                &format!("Pushing {}...", next_branch.branch),
+            );
 
             let push_status = Command::new("git")
                 .args(["push", "-f", &remote_info.name, &next_branch.branch])
@@ -389,9 +358,7 @@ pub fn run(
                 .context("Failed to push")?;
 
             if !push_status.status.success() {
-                if !quiet {
-                    println!("{}", "failed".red());
-                }
+                LiveTimer::maybe_finish_err(push_timer, "failed");
                 failed_pr = Some((
                     next_branch.branch.clone(),
                     next_pr,
@@ -400,9 +367,7 @@ pub fn run(
                 break;
             }
 
-            if !quiet {
-                println!("{}", "done".green());
-            }
+            LiveTimer::maybe_finish_ok(push_timer, "done");
 
             // Update local metadata with the remote trunk commit (not local trunk,
             // which may be stale). The rebase above used origin/<trunk>, so the
@@ -430,10 +395,8 @@ pub fn run(
         }
 
         for remaining in &scope.remaining {
-            if !quiet {
-                print!("  {} {}... ", "↻".cyan(), remaining.branch);
-                std::io::stdout().flush().ok();
-            }
+            let remaining_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Rebasing {}...", remaining.branch));
 
             repo.checkout(&remaining.branch)?;
 
@@ -472,20 +435,16 @@ pub fn run(
                         .current_dir(repo.workdir()?)
                         .output();
 
-                    if !quiet {
-                        println!("{}", "done".green());
-                    }
+                    LiveTimer::maybe_finish_ok(remaining_timer, "done");
                 } else {
                     let _ = Command::new("git")
                         .args(["rebase", "--abort"])
                         .current_dir(repo.workdir()?)
                         .output();
-                    if !quiet {
-                        println!("{}", "conflict (skipped)".yellow());
-                    }
+                    LiveTimer::maybe_finish_warn(remaining_timer, "conflict (skipped)");
                 }
-            } else if !quiet {
-                println!("{}", "failed".red());
+            } else {
+                LiveTimer::maybe_finish_err(remaining_timer, "failed");
             }
         }
     }
