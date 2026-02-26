@@ -1053,6 +1053,27 @@ Use --auto-stash-pop or stash/commit changes first.",
         Ok(Vec::new())
     }
 
+    /// Predict conflicts for multiple branches before restacking.
+    /// Returns only branches that would have conflicts.
+    pub fn predict_restack_conflicts(
+        &self,
+        branches_with_parents: &[(String, String)],
+    ) -> Vec<ConflictPrediction> {
+        branches_with_parents
+            .iter()
+            .filter_map(|(branch, parent)| {
+                match self.check_rebase_conflicts(branch, parent) {
+                    Ok(files) if !files.is_empty() => Some(ConflictPrediction {
+                        branch: branch.clone(),
+                        onto: parent.clone(),
+                        conflicting_files: files,
+                    }),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     /// Get files modified in a branch compared to its parent
     #[allow(dead_code)] // Reserved for future conflict detection improvements
     pub fn files_modified(&self, branch: &str, parent: &str) -> Result<Vec<String>> {
@@ -1200,6 +1221,14 @@ pub enum RebaseResult {
 pub struct CommitInfo {
     pub short_hash: String,
     pub message: String,
+}
+
+/// Predicted conflict for a single branch rebase
+#[derive(Debug, Clone)]
+pub struct ConflictPrediction {
+    pub branch: String,
+    pub onto: String,
+    pub conflicting_files: Vec<String>,
 }
 
 fn format_duration(seconds: i64) -> String {
