@@ -23,6 +23,23 @@ struct LandBranchInfo {
     status: LandStatus,
 }
 
+/// Information about branches above the current merge scope that still need to be rebased
+#[derive(Debug, Clone)]
+struct RemainingBranchInfo {
+    branch: String,
+    pr_number: Option<u64>,
+}
+
+/// Result of the merge scope calculation
+struct MergeWhenReadyScope {
+    /// Branches to merge (bottom to current, or full stack with --all)
+    to_merge: Vec<String>,
+    /// Descendants above current not included in merge (unless --all)
+    remaining: Vec<String>,
+    /// Trunk branch name
+    trunk: String,
+}
+
 /// Status of a branch during the land process
 #[derive(Debug, Clone, PartialEq)]
 enum LandStatus {
@@ -103,16 +120,9 @@ pub fn run(
         return Ok(());
     }
 
-    // Calculate scope: ancestors (trunk-adjacent first) + current + optionally descendants
-    let mut scope = stack.ancestors(&current);
-    scope.reverse();
-    scope.retain(|b| b != &stack.trunk);
-    scope.push(current.clone());
-
-    // If --all, also include descendants
-    if all {
-        scope.extend(stack.descendants(&current));
-    }
+    // Calculate scope: bottom->current are merged; descendants are either merged (--all)
+    // or rebased after merges so their PR bases stay valid.
+    let scope = calculate_merge_scope(&stack, &current, all);
 
     // Build branch info list
     let mut branches: Vec<LandBranchInfo> = Vec::new();
@@ -131,10 +141,10 @@ pub fn run(
         })
         .context("Failed to connect to GitHub. Check your token and remote configuration.")?;
 
-    // Resolve PR numbers for each branch
+    // Resolve PR numbers for merge scope and optional PR numbers for remaining scope.
     let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching PR info...");
 
-    for branch_name in &scope {
+    for branch_name in &scope.to_merge {
         let branch_info = stack.branches.get(branch_name);
         let mut pr_number = branch_info.and_then(|b| b.pr_number);
 
@@ -161,6 +171,23 @@ pub fn run(
         }
     }
 
+    let mut remaining_branches: Vec<RemainingBranchInfo> = Vec::new();
+    for branch_name in &scope.remaining {
+        let branch_info = stack.branches.get(branch_name);
+        let mut pr_number = branch_info.and_then(|b| b.pr_number);
+
+        if pr_number.is_none() {
+            if let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await }) {
+                pr_number = Some(pr_info.number);
+            }
+        }
+
+        remaining_branches.push(RemainingBranchInfo {
+            branch: branch_name.clone(),
+            pr_number,
+        });
+    }
+
     LiveTimer::maybe_finish_ok(fetch_timer, "done");
 
     if branches.is_empty() {
@@ -173,7 +200,7 @@ pub fn run(
     // Show preview
     if !quiet {
         println!();
-        print_land_preview(&branches, &stack.trunk, &method);
+        print_land_preview(&branches, &scope.trunk, &method);
     }
 
     // Confirm
@@ -195,7 +222,8 @@ pub fn run(
         print_header("Merge When Ready");
     }
 
-    let branch_names: Vec<String> = branches.iter().map(|b| b.branch.clone()).collect();
+    let mut branch_names: Vec<String> = branches.iter().map(|b| b.branch.clone()).collect();
+    branch_names.extend(remaining_branches.iter().map(|b| b.branch.clone()));
     let mut tx = Transaction::begin(OpKind::MergeWhenReady, &repo, quiet)?;
     tx.plan_branches(&repo, &branch_names)?;
     let summary = PlanSummary {
@@ -310,13 +338,13 @@ pub fn run(
             // Rebase next branch onto trunk
             let rebase_timer = LiveTimer::maybe_new(
                 !quiet,
-                &format!("Rebasing {} onto {}...", next_branch, stack.trunk),
+                &format!("Rebasing {} onto {}...", next_branch, scope.trunk),
             );
 
             repo.checkout(&next_branch)?;
 
             let rebase_status = Command::new("git")
-                .args(["rebase", &format!("{}/{}", remote_info.name, stack.trunk)])
+                .args(["rebase", &format!("{}/{}", remote_info.name, scope.trunk)])
                 .current_dir(repo.workdir()?)
                 .output()
                 .context("Failed to rebase")?;
@@ -339,9 +367,9 @@ pub fn run(
 
             // Update PR base to trunk
             let update_base_timer =
-                LiveTimer::maybe_new(!quiet, &format!("Updating PR base to {}...", stack.trunk));
+                LiveTimer::maybe_new(!quiet, &format!("Updating PR base to {}...", scope.trunk));
 
-            match rt.block_on(async { client.update_pr_base(next_pr, &stack.trunk).await }) {
+            match rt.block_on(async { client.update_pr_base(next_pr, &scope.trunk).await }) {
                 Ok(()) => {
                     LiveTimer::maybe_finish_ok(update_base_timer, "done");
                 }
@@ -371,16 +399,74 @@ pub fn run(
 
             // Update metadata: parent → trunk
             if let Some(meta) = BranchMetadata::read(repo.inner(), &next_branch)? {
-                let remote_trunk_ref = format!("{}/{}", remote_info.name, stack.trunk);
+                let remote_trunk_ref = format!("{}/{}", remote_info.name, scope.trunk);
                 let trunk_commit = repo
                     .resolve_ref(&remote_trunk_ref)
-                    .unwrap_or_else(|_| repo.branch_commit(&stack.trunk).unwrap_or_default());
+                    .unwrap_or_else(|_| repo.branch_commit(&scope.trunk).unwrap_or_default());
                 let updated_meta = BranchMetadata {
-                    parent_branch_name: stack.trunk.clone(),
+                    parent_branch_name: scope.trunk.clone(),
                     parent_branch_revision: trunk_commit,
                     ..meta
                 };
                 updated_meta.write(repo.inner(), &next_branch)?;
+            }
+        }
+    }
+
+    // Rebase branches above the merge scope to keep descendant PRs open and correctly based.
+    if !merged_prs.is_empty() && !remaining_branches.is_empty() && failed_pr.is_none() {
+        if !quiet {
+            println!();
+            println!("{}", "Rebasing remaining stack branches...".dimmed());
+        }
+
+        for remaining in &remaining_branches {
+            let remaining_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Rebasing {}...", remaining.branch));
+
+            repo.checkout(&remaining.branch)?;
+
+            let rebase_result = Command::new("git")
+                .args(["rebase", &format!("{}/{}", remote_info.name, scope.trunk)])
+                .current_dir(repo.workdir()?)
+                .output();
+
+            if let Ok(output) = rebase_result {
+                if output.status.success() {
+                    if let Some(pr_num) = remaining.pr_number {
+                        let _ = rt
+                            .block_on(async { client.update_pr_base(pr_num, &scope.trunk).await });
+                    }
+
+                    if let Some(meta) = BranchMetadata::read(repo.inner(), &remaining.branch)? {
+                        let remote_trunk_ref = format!("{}/{}", remote_info.name, scope.trunk);
+                        let trunk_commit =
+                            repo.resolve_ref(&remote_trunk_ref).unwrap_or_else(|_| {
+                                repo.branch_commit(&scope.trunk).unwrap_or_default()
+                            });
+                        let updated_meta = BranchMetadata {
+                            parent_branch_name: scope.trunk.clone(),
+                            parent_branch_revision: trunk_commit,
+                            ..meta
+                        };
+                        updated_meta.write(repo.inner(), &remaining.branch)?;
+                    }
+
+                    let _ = Command::new("git")
+                        .args(["push", "-f", &remote_info.name, &remaining.branch])
+                        .current_dir(repo.workdir()?)
+                        .output();
+
+                    LiveTimer::maybe_finish_ok(remaining_timer, "done");
+                } else {
+                    let _ = Command::new("git")
+                        .args(["rebase", "--abort"])
+                        .current_dir(repo.workdir()?)
+                        .output();
+                    LiveTimer::maybe_finish_warn(remaining_timer, "conflict (skipped)");
+                }
+            } else {
+                LiveTimer::maybe_finish_err(remaining_timer, "failed");
             }
         }
     }
@@ -419,7 +505,7 @@ pub fn run(
         }
 
         // Checkout trunk after cleanup
-        let _ = repo.checkout(&stack.trunk);
+        let _ = repo.checkout(&scope.trunk);
     }
 
     // Finish transaction
@@ -458,10 +544,22 @@ pub fn run(
             "Merged {} {} into {}:",
             merged_prs.len(),
             if merged_prs.len() == 1 { "PR" } else { "PRs" },
-            stack.trunk.cyan()
+            scope.trunk.cyan()
         );
         for (branch, pr) in &merged_prs {
             println!("  {} #{} {}", "✓".green(), pr, branch);
+        }
+
+        if !remaining_branches.is_empty() {
+            println!();
+            println!("Remaining in stack (rebased onto {}):", scope.trunk.cyan());
+            for remaining in &remaining_branches {
+                if let Some(pr) = remaining.pr_number {
+                    println!("  {} #{} {}", "○".dimmed(), pr, remaining.branch);
+                } else {
+                    println!("  {} {}", "○".dimmed(), remaining.branch);
+                }
+            }
         }
 
         if !no_delete && !merged_prs.is_empty() {
@@ -476,7 +574,7 @@ pub fn run(
                     "branches"
                 }
             );
-            println!("  • Switched to: {}", stack.trunk.cyan());
+            println!("  • Switched to: {}", scope.trunk.cyan());
         }
 
         // Send macOS notification
@@ -486,12 +584,33 @@ pub fn run(
                 "Merged {} {} into {}",
                 merged_prs.len(),
                 if merged_prs.len() == 1 { "PR" } else { "PRs" },
-                stack.trunk
+                scope.trunk
             ),
         );
     }
 
     Ok(())
+}
+
+/// Calculate which branches to merge and which descendants remain to be rebased.
+fn calculate_merge_scope(stack: &Stack, current: &str, all: bool) -> MergeWhenReadyScope {
+    let mut to_merge = stack.ancestors(current);
+    to_merge.reverse();
+    to_merge.retain(|b| b != &stack.trunk);
+    to_merge.push(current.to_string());
+
+    let mut remaining = stack.descendants(current);
+
+    if all && !remaining.is_empty() {
+        to_merge.extend(remaining);
+        remaining = Vec::new();
+    }
+
+    MergeWhenReadyScope {
+        to_merge,
+        remaining,
+        trunk: stack.trunk.clone(),
+    }
 }
 
 /// Print the merge-when-ready preview
@@ -724,6 +843,69 @@ fn print_header_error(title: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::stack::StackBranch;
+    use std::collections::HashMap;
+
+    fn create_test_stack() -> Stack {
+        let mut branches = HashMap::new();
+
+        branches.insert(
+            "main".to_string(),
+            StackBranch {
+                name: "main".to_string(),
+                parent: None,
+                children: vec!["feature-a".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+
+        branches.insert(
+            "feature-a".to_string(),
+            StackBranch {
+                name: "feature-a".to_string(),
+                parent: Some("main".to_string()),
+                children: vec!["feature-b".to_string()],
+                needs_restack: false,
+                pr_number: Some(1),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        branches.insert(
+            "feature-b".to_string(),
+            StackBranch {
+                name: "feature-b".to_string(),
+                parent: Some("feature-a".to_string()),
+                children: vec!["feature-c".to_string()],
+                needs_restack: false,
+                pr_number: Some(2),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        branches.insert(
+            "feature-c".to_string(),
+            StackBranch {
+                name: "feature-c".to_string(),
+                parent: Some("feature-b".to_string()),
+                children: vec![],
+                needs_restack: false,
+                pr_number: Some(3),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
 
     #[test]
     fn test_land_status_symbols() {
@@ -784,5 +966,26 @@ mod tests {
         assert_eq!(display_width("hello"), 5);
         assert_eq!(display_width("✓"), 1);
         assert_eq!(display_width("\x1b[32m✓\x1b[0m passed"), 8);
+    }
+
+    #[test]
+    fn test_calculate_merge_scope_from_middle_without_all_keeps_descendants_remaining() {
+        let stack = create_test_stack();
+
+        let scope = calculate_merge_scope(&stack, "feature-b", false);
+
+        assert_eq!(scope.to_merge, vec!["feature-a", "feature-b"]);
+        assert_eq!(scope.remaining, vec!["feature-c"]);
+        assert_eq!(scope.trunk, "main");
+    }
+
+    #[test]
+    fn test_calculate_merge_scope_with_all_includes_descendants() {
+        let stack = create_test_stack();
+
+        let scope = calculate_merge_scope(&stack, "feature-b", true);
+
+        assert_eq!(scope.to_merge, vec!["feature-a", "feature-b", "feature-c"]);
+        assert!(scope.remaining.is_empty());
     }
 }
