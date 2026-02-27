@@ -1,4 +1,4 @@
-.PHONY: build release install clean test test-local-fast test-unit test-integration check fmt lint all
+.PHONY: build release install clean test test-local-fast test-docker test-unit test-integration check fmt lint all
 
 # Default target
 all: check build test
@@ -26,7 +26,19 @@ test:
 # Run tests with macOS-friendly defaults (custom temp root + lower concurrency)
 test-local-fast:
 	mkdir -p .test-tmp
-	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS=4 cargo nextest run
+	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" cargo nextest run
+
+# Run tests in Linux Docker (fast path on macOS)
+test-docker:
+	mkdir -p .docker-cache/cargo .docker-cache/target
+	docker run --rm -t \
+		-u "$$(id -u):$$(id -g)" \
+		-v "$$(pwd):/work" \
+		-w /work \
+		-e CARGO_HOME=/work/.docker-cache/cargo \
+		-v "$$(pwd)/.docker-cache/target:/work/target" \
+		rust:1.93 \
+		bash -lc 'export PATH="$$CARGO_HOME/bin:/usr/local/cargo/bin:$$PATH"; if ! command -v cargo-nextest >/dev/null 2>&1; then cargo install cargo-nextest --locked; fi && cargo nextest run'
 
 # Run fast unit tests only
 test-unit:

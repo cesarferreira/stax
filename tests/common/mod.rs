@@ -32,10 +32,22 @@ fn test_tempdir() -> TempDir {
 
 fn sanitized_stax_command() -> Command {
     let mut cmd = Command::new(stax_bin());
+    let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
     // Keep tests hermetic and avoid accidentally hitting real GitHub APIs.
     cmd.env_remove("GITHUB_TOKEN")
         .env_remove("STAX_GITHUB_TOKEN")
-        .env_remove("GH_TOKEN");
+        .env_remove("GH_TOKEN")
+        .env("GIT_CONFIG_GLOBAL", null_path)
+        .env("GIT_CONFIG_SYSTEM", null_path)
+        .env("STAX_DISABLE_UPDATE_CHECK", "1");
+    cmd
+}
+
+fn hermetic_git_command() -> Command {
+    let mut cmd = Command::new("git");
+    let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    cmd.env("GIT_CONFIG_GLOBAL", null_path)
+        .env("GIT_CONFIG_SYSTEM", null_path);
     cmd
 }
 
@@ -55,20 +67,20 @@ impl TestRepo {
         let path = dir.path();
 
         // Initialize git repo
-        Command::new("git")
+        hermetic_git_command()
             .args(["init", "-b", "main"])
             .current_dir(path)
             .output()
             .expect("Failed to init git repo");
 
         // Configure git user for commits
-        Command::new("git")
+        hermetic_git_command()
             .args(["config", "user.email", "test@test.com"])
             .current_dir(path)
             .output()
             .expect("Failed to set git email");
 
-        Command::new("git")
+        hermetic_git_command()
             .args(["config", "user.name", "Test User"])
             .current_dir(path)
             .output()
@@ -78,13 +90,13 @@ impl TestRepo {
         let readme = path.join("README.md");
         fs::write(&readme, "# Test Repo\n").expect("Failed to write README");
 
-        Command::new("git")
+        hermetic_git_command()
             .args(["add", "-A"])
             .current_dir(path)
             .output()
             .expect("Failed to stage files");
 
-        Command::new("git")
+        hermetic_git_command()
             .args(["commit", "-m", "Initial commit"])
             .current_dir(path)
             .output()
@@ -102,14 +114,14 @@ impl TestRepo {
 
         // Create a bare repo to act as "origin"
         let remote_dir = test_tempdir();
-        Command::new("git")
+        hermetic_git_command()
             .args(["init", "--bare"])
             .current_dir(remote_dir.path())
             .output()
             .expect("Failed to init bare repo");
 
         // Add it as origin
-        Command::new("git")
+        hermetic_git_command()
             .args([
                 "remote",
                 "add",
@@ -121,7 +133,7 @@ impl TestRepo {
             .expect("Failed to add remote");
 
         // Push main to origin
-        Command::new("git")
+        hermetic_git_command()
             .args(["push", "-u", "origin", "main"])
             .current_dir(repo.path())
             .output()
@@ -143,26 +155,26 @@ impl TestRepo {
 
         // Create a temp clone
         let clone_dir = test_tempdir();
-        Command::new("git")
+        hermetic_git_command()
             .args(["clone", remote_path.to_str().unwrap(), "."])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to clone remote");
 
         // Ensure we have a local main branch even if remote HEAD isn't set
-        Command::new("git")
+        hermetic_git_command()
             .args(["checkout", "-B", "main", "origin/main"])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to checkout main");
 
         // Configure git user
-        Command::new("git")
+        hermetic_git_command()
             .args(["config", "user.email", "other@test.com"])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to set git email");
-        Command::new("git")
+        hermetic_git_command()
             .args(["config", "user.name", "Other User"])
             .current_dir(clone_dir.path())
             .output()
@@ -170,19 +182,19 @@ impl TestRepo {
 
         // Create file and commit
         fs::write(clone_dir.path().join(filename), content).expect("Failed to write file");
-        Command::new("git")
+        hermetic_git_command()
             .args(["add", "-A"])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to stage");
-        Command::new("git")
+        hermetic_git_command()
             .args(["commit", "-m", message])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to commit");
 
         // Push back to origin
-        Command::new("git")
+        hermetic_git_command()
             .args(["push", "origin", "main"])
             .current_dir(clone_dir.path())
             .output()
@@ -195,39 +207,39 @@ impl TestRepo {
 
         // Create a temp clone
         let clone_dir = test_tempdir();
-        Command::new("git")
+        hermetic_git_command()
             .args(["clone", remote_path.to_str().unwrap(), "."])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to clone remote");
 
         // Ensure we have a local main branch even if remote HEAD isn't set
-        Command::new("git")
+        hermetic_git_command()
             .args(["checkout", "-B", "main", "origin/main"])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to checkout main");
 
         // Configure git user
-        Command::new("git")
+        hermetic_git_command()
             .args(["config", "user.email", "merger@test.com"])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to set git email");
-        Command::new("git")
+        hermetic_git_command()
             .args(["config", "user.name", "Merger"])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to set git name");
 
         // Fetch the branch and merge
-        Command::new("git")
+        hermetic_git_command()
             .args(["fetch", "origin", branch])
             .current_dir(clone_dir.path())
             .output()
             .expect("Failed to fetch branch");
 
-        Command::new("git")
+        hermetic_git_command()
             .args([
                 "merge",
                 &format!("origin/{}", branch),
@@ -240,7 +252,7 @@ impl TestRepo {
             .expect("Failed to merge branch");
 
         // Push to origin
-        Command::new("git")
+        hermetic_git_command()
             .args(["push", "origin", "main"])
             .current_dir(clone_dir.path())
             .output()
@@ -249,7 +261,7 @@ impl TestRepo {
 
     /// List remote branches
     pub fn list_remote_branches(&self) -> Vec<String> {
-        let output = Command::new("git")
+        let output = hermetic_git_command()
             .args(["ls-remote", "--heads", "origin"])
             .current_dir(self.path())
             .output()
@@ -317,13 +329,13 @@ impl TestRepo {
 
     /// Create a commit with all staged changes
     pub fn commit(&self, message: &str) {
-        Command::new("git")
+        hermetic_git_command()
             .args(["add", "-A"])
             .current_dir(self.path())
             .output()
             .expect("Failed to stage files");
 
-        Command::new("git")
+        hermetic_git_command()
             .args(["commit", "-m", message])
             .current_dir(self.path())
             .output()
@@ -332,7 +344,7 @@ impl TestRepo {
 
     /// Get the current branch name
     pub fn current_branch(&self) -> String {
-        let output = Command::new("git")
+        let output = hermetic_git_command()
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(self.path())
             .output()
@@ -343,7 +355,7 @@ impl TestRepo {
 
     /// Get list of all branches
     pub fn list_branches(&self) -> Vec<String> {
-        let output = Command::new("git")
+        let output = hermetic_git_command()
             .args(["branch", "--format=%(refname:short)"])
             .current_dir(self.path())
             .output()
@@ -357,7 +369,7 @@ impl TestRepo {
 
     /// Get the commit SHA for a branch (or HEAD if branch is empty)
     pub fn get_commit_sha(&self, reference: &str) -> String {
-        let output = Command::new("git")
+        let output = hermetic_git_command()
             .args(["rev-parse", reference])
             .current_dir(self.path())
             .output()
@@ -373,7 +385,7 @@ impl TestRepo {
 
     /// Run a raw git command
     pub fn git(&self, args: &[&str]) -> Output {
-        Command::new("git")
+        hermetic_git_command()
             .args(args)
             .current_dir(self.path())
             .output()
@@ -382,7 +394,7 @@ impl TestRepo {
 
     /// Run a raw git command in a specific directory
     pub fn git_in(&self, cwd: &Path, args: &[&str]) -> Output {
-        Command::new("git")
+        hermetic_git_command()
             .args(args)
             .current_dir(cwd)
             .output()

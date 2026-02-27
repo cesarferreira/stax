@@ -4,3 +4,4 @@
 - If interactive lists scroll the terminal on navigation, clear and position the cursor before invoking the dialog to avoid rendering into the lower viewport.
 - When adding or changing CLI commands/flags, update both `README.md` and `docs/` command references in the same change and verify parity against `stax --help` before marking docs complete.
 - When sync reparents children off merged branches, never clear `parent_branch_revision`; preserve the old-base boundary (or merged parent tip) so restack can run `git rebase --onto <new> <old>` and avoid replaying already-integrated commits.
+- Integration tests that shell out to `git`/`stax` must be hermetic: strip GitHub token env and force `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to null so contributor-specific git config (URL rewrites, filters, hooks) cannot change behavior or add large runtime overhead.

@@ -6,6 +6,16 @@ use update_informer::{registry, Check};
 const PKG_NAME: &str = env!("CARGO_PKG_NAME");
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+fn update_checks_disabled() -> bool {
+    std::env::var("STAX_DISABLE_UPDATE_CHECK")
+        .ok()
+        .map(|v| {
+            let value = v.trim().to_ascii_lowercase();
+            matches!(value.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
 /// Detect how stax was installed based on binary path
 fn detect_install_method() -> InstallMethod {
     match std::env::current_exe() {
@@ -34,6 +44,10 @@ impl InstallMethod {
 /// This is non-blocking and won't affect CLI performance.
 /// Results are cached by update-informer for 24 hours.
 pub fn check_in_background() {
+    if update_checks_disabled() {
+        return;
+    }
+
     thread::spawn(|| {
         let informer = update_informer::new(registry::Crates, PKG_NAME, PKG_VERSION)
             .timeout(Duration::from_secs(3))
@@ -48,6 +62,10 @@ pub fn check_in_background() {
 /// Check for cached update info and display if a new version is available.
 /// This reads from cache only - it won't make network requests or block.
 pub fn show_update_notification() {
+    if update_checks_disabled() {
+        return;
+    }
+
     // Use a very short timeout so this never blocks
     // If there's no cached result, this returns quickly
     let informer = update_informer::new(registry::Crates, PKG_NAME, PKG_VERSION)
