@@ -1,4 +1,4 @@
-.PHONY: build release install clean test check fmt lint all
+.PHONY: build release install clean test test-unit test-integration check fmt lint all
 
 # Default target
 all: check build test
@@ -19,9 +19,17 @@ install:
 clean:
 	cargo clean
 
-# Run tests
+# Run all tests
 test:
 	cargo nextest run
+
+# Run fast unit tests only
+test-unit:
+	cargo nextest run --lib --bins
+
+# Run integration tests only
+test-integration:
+	cargo nextest run --tests
 
 # Run clippy and check
 check:

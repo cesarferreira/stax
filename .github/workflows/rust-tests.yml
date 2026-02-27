@@ -6,7 +6,8 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  unit-tests:
+    name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -17,5 +18,20 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: cargo nextest run
+      - name: Run unit tests
+        run: cargo nextest run --lib --bins
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+      - name: Run integration tests
+        run: cargo nextest run --tests

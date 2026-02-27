@@ -17,9 +17,17 @@ install:
 clean:
     cargo clean
 
-# Run tests
+# Run all tests
 test:
     cargo nextest run
+
+# Run fast unit tests only
+test-unit:
+    cargo nextest run --lib --bins
+
+# Run integration tests only
+test-integration:
+    cargo nextest run --tests
 
 # Run a single test
 test-one name:
