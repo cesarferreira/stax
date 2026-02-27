@@ -26,7 +26,7 @@ clean:
 # Run all tests
 test:
 	@if [ "$$(uname)" = "Darwin" ] && command -v docker >/dev/null 2>&1; then \
-		$$(MAKE) test-docker; \
+		$(MAKE) test-docker; \
 	else \
 		cargo nextest run; \
 	fi
