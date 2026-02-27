@@ -173,8 +173,12 @@ enum Commands {
         quiet: bool,
     },
 
-    /// Auto-land: merge PRs bottom-up, waiting for CI and approval
-    Land {
+    /// Merge PRs bottom-up, waiting for CI and approval
+    #[command(name = "merge-when-ready", visible_alias = "mwr")]
+    MergeWhenReady {
+        /// Merge entire stack (include descendants above current)
+        #[arg(long)]
+        all: bool,
         /// Merge method: squash, merge, rebase
         #[arg(long, default_value = "squash")]
         method: String,
@@ -854,7 +858,8 @@ fn main() -> Result<()> {
                 quiet,
             )
         }
-        Commands::Land {
+        Commands::MergeWhenReady {
+            all,
             method,
             timeout,
             interval,
@@ -863,7 +868,15 @@ fn main() -> Result<()> {
             quiet,
         } => {
             let merge_method = method.parse().unwrap_or_default();
-            commands::land::run(merge_method, timeout, interval, no_delete, yes, quiet)
+            commands::merge_when_ready::run(
+                all,
+                merge_method,
+                timeout,
+                interval,
+                no_delete,
+                yes,
+                quiet,
+            )
         }
         Commands::Sync {
             restack,

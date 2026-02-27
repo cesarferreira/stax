@@ -64,6 +64,7 @@ enum WaitResult {
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
+    all: bool,
     method: MergeMethod,
     timeout_mins: u64,
     interval_secs: u64,
@@ -81,7 +82,7 @@ pub fn run(
         if !quiet {
             println!(
                 "{}",
-                "You are on trunk. Checkout a branch in a stack to land.".yellow()
+                "You are on trunk. Checkout a branch in a stack to merge.".yellow()
             );
         }
         return Ok(());
@@ -102,11 +103,16 @@ pub fn run(
         return Ok(());
     }
 
-    // Calculate scope: ancestors (reversed, trunk-adjacent first) + current
-    let mut ancestors = stack.ancestors(&current);
-    ancestors.reverse();
-    ancestors.retain(|b| b != &stack.trunk);
-    ancestors.push(current.clone());
+    // Calculate scope: ancestors (trunk-adjacent first) + current + optionally descendants
+    let mut scope = stack.ancestors(&current);
+    scope.reverse();
+    scope.retain(|b| b != &stack.trunk);
+    scope.push(current.clone());
+
+    // If --all, also include descendants
+    if all {
+        scope.extend(stack.descendants(&current));
+    }
 
     // Build branch info list
     let mut branches: Vec<LandBranchInfo> = Vec::new();
@@ -128,7 +134,7 @@ pub fn run(
     // Resolve PR numbers for each branch
     let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching PR info...");
 
-    for branch_name in &ancestors {
+    for branch_name in &scope {
         let branch_info = stack.branches.get(branch_name);
         let mut pr_number = branch_info.and_then(|b| b.pr_number);
 
@@ -159,7 +165,7 @@ pub fn run(
 
     if branches.is_empty() {
         if !quiet {
-            println!("{}", "No branches to land.".yellow());
+            println!("{}", "No branches to merge.".yellow());
         }
         return Ok(());
     }
@@ -173,7 +179,7 @@ pub fn run(
     // Confirm
     if !yes {
         let confirm = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Proceed with landing?")
+            .with_prompt("Proceed with merge-when-ready?")
             .default(false)
             .interact()?;
 
@@ -186,17 +192,17 @@ pub fn run(
     // Begin transaction
     if !quiet {
         println!();
-        print_header("Landing Stack");
+        print_header("Merge When Ready");
     }
 
     let branch_names: Vec<String> = branches.iter().map(|b| b.branch.clone()).collect();
-    let mut tx = Transaction::begin(OpKind::Land, &repo, quiet)?;
+    let mut tx = Transaction::begin(OpKind::MergeWhenReady, &repo, quiet)?;
     tx.plan_branches(&repo, &branch_names)?;
     let summary = PlanSummary {
         branches_to_rebase: branches.len(),
         branches_to_push: 0,
         description: vec![format!(
-            "Land {} {} bottom-up via {}",
+            "Merge {} {} bottom-up via {}",
             branches.len(),
             if branches.len() == 1 { "PR" } else { "PRs" },
             method.as_str()
@@ -418,7 +424,7 @@ pub fn run(
 
     // Finish transaction
     if failed_pr.is_some() {
-        tx.finish_err("Land stopped", Some("land"), None)?;
+        tx.finish_err("Merge stopped", Some("merge-when-ready"), None)?;
     } else {
         tx.finish_ok()?;
     }
@@ -427,7 +433,7 @@ pub fn run(
     println!();
 
     if let Some((branch, pr, reason)) = &failed_pr {
-        print_header_error("Land Stopped");
+        print_header_error("Merge Stopped");
         println!();
         println!("Progress:");
         for (merged_branch, merged_pr) in &merged_prs {
@@ -443,10 +449,10 @@ pub fn run(
         println!("{}", "Already merged PRs remain merged.".dimmed());
         println!(
             "{}",
-            "Fix the issue and run 'stax land' to continue.".dimmed()
+            "Fix the issue and run 'stax merge-when-ready' to continue.".dimmed()
         );
     } else {
-        print_header_success("Stack Landed!");
+        print_header_success("Stack Merged!");
         println!();
         println!(
             "Merged {} {} into {}:",
@@ -475,9 +481,9 @@ pub fn run(
 
         // Send macOS notification
         send_notification(
-            "stax land",
+            "stax merge-when-ready",
             &format!(
-                "Landed {} {} into {}",
+                "Merged {} {} into {}",
                 merged_prs.len(),
                 if merged_prs.len() == 1 { "PR" } else { "PRs" },
                 stack.trunk
@@ -488,14 +494,14 @@ pub fn run(
     Ok(())
 }
 
-/// Print the land preview
+/// Print the merge-when-ready preview
 fn print_land_preview(branches: &[LandBranchInfo], trunk: &str, method: &MergeMethod) {
-    print_header("Stack Land");
+    print_header("Merge When Ready");
     println!();
 
     let pr_word = if branches.len() == 1 { "PR" } else { "PRs" };
     println!(
-        "Will land {} {} bottom-up into {}:",
+        "Will merge {} {} bottom-up into {}:",
         branches.len().to_string().bold(),
         pr_word,
         trunk.cyan()
