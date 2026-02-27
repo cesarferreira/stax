@@ -29,7 +29,7 @@
 
 ## Testing
 
-- [ ] `cargo test` (or `cargo nextest run`)
+- [ ] `make test` (or `just test`) for full-suite validation
 - [ ] `cargo check`
 - [ ] `cargo clippy -- -D warnings`
 - [ ] `cargo fmt -- --check`

@@ -1,6 +1,8 @@
 # Default target
 default: check build test
 
+MAC_LOCAL_TEST_THREADS := "8"
+
 # Build debug version
 build:
     cargo build
@@ -27,12 +29,23 @@ test:
 
 # Run all tests natively on host
 test-native:
-    cargo nextest run
+    if [ "$(uname)" = "Darwin" ]; then \
+      just test-local-fast; \
+    else \
+      cargo nextest run; \
+    fi
 
-# Run tests with macOS-friendly defaults (custom temp root + lower concurrency)
+# Run tests with macOS-friendly defaults (custom temp root + capped concurrency)
 test-local-fast:
     mkdir -p .test-tmp
-    env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$(pwd)/.test-tmp" TMPDIR="$(pwd)/.test-tmp" cargo nextest run
+    threads="${NEXTEST_TEST_THREADS:-}"; \
+    if [ -z "$threads" ] && [ "$(uname)" = "Darwin" ]; then \
+      threads="{{MAC_LOCAL_TEST_THREADS}}"; \
+    fi; \
+    if [ -z "$threads" ]; then \
+      threads="num-cpus"; \
+    fi; \
+    env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$(pwd)/.test-tmp" TMPDIR="$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$threads" cargo nextest run
 
 # Create a RAM disk for fast local test temp dirs (macOS only)
 ramdisk-up RAMDISK_NAME="STAXRAM" RAMDISK_SIZE_MB="2048":
@@ -68,7 +81,14 @@ ramdisk-down RAMDISK_NAME="STAXRAM":
 # Run tests with temp repos on RAM disk (macOS only)
 test-local-ramdisk RAMDISK_NAME="STAXRAM" RAMDISK_SIZE_MB="2048":
     just ramdisk-up {{RAMDISK_NAME}} {{RAMDISK_SIZE_MB}}
-    env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="/Volumes/{{RAMDISK_NAME}}/tmp" TMPDIR="/Volumes/{{RAMDISK_NAME}}/tmp" cargo nextest run
+    threads="${NEXTEST_TEST_THREADS:-}"; \
+    if [ -z "$threads" ] && [ "$(uname)" = "Darwin" ]; then \
+      threads="{{MAC_LOCAL_TEST_THREADS}}"; \
+    fi; \
+    if [ -z "$threads" ]; then \
+      threads="num-cpus"; \
+    fi; \
+    env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="/Volumes/{{RAMDISK_NAME}}/tmp" TMPDIR="/Volumes/{{RAMDISK_NAME}}/tmp" NEXTEST_TEST_THREADS="$threads" cargo nextest run
 
 # Run tests in Linux Docker (fast path on macOS)
 test-docker:
