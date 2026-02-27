@@ -18,7 +18,7 @@ pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
     warn_if_trunk_stale(&repo);
 
     commands::navigate::bottom()?;
-    commands::restack::run(false, false, true, auto_stash_pop)?;
+    commands::restack::run(false, false, true, true, false, auto_stash_pop)?;
 
     if repo.rebase_in_progress()? {
         return Ok(());
