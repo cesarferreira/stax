@@ -128,12 +128,11 @@ fn calculate_branch_timing(
     let is_complete = checks.iter().all(|c| c.status == "completed");
 
     // Try to derive elapsed from real timestamps first (most accurate)
-    let elapsed_secs = try_elapsed_from_timestamps(checks, is_complete)
-        .or_else(|| {
-            // Fallback: use the max elapsed_secs across all checks as a proxy
-            // for how long the slowest check has been running
-            checks.iter().filter_map(|c| c.elapsed_secs).max()
-        })?;
+    let elapsed_secs = try_elapsed_from_timestamps(checks, is_complete).or_else(|| {
+        // Fallback: use the max elapsed_secs across all checks as a proxy
+        // for how long the slowest check has been running
+        checks.iter().filter_map(|c| c.elapsed_secs).max()
+    })?;
 
     // Try branch-level history first (most accurate: wall-clock from first to last check)
     let history_key = format!("branch-overall:{}", branch_name);
@@ -416,7 +415,10 @@ fn display_branch_compact(repo: &GitRepo, status: &BranchCiStatus, is_current: b
         "{}  {}{}  ({})",
         overall_icon_plain(status),
         status.branch,
-        status.pr_number.map(|n| format!("  PR #{}", n)).unwrap_or_default(),
+        status
+            .pr_number
+            .map(|n| format!("  PR #{}", n))
+            .unwrap_or_default(),
         status.sha_short
     ));
     let separator = "━".repeat(visible_len.min(72));
@@ -452,10 +454,7 @@ fn display_branch_compact(repo: &GitRepo, status: &BranchCiStatus, is_current: b
     let passed: Vec<&CheckRunInfo> = status
         .check_runs
         .iter()
-        .filter(|c| {
-            c.status == "completed"
-                && matches!(c.conclusion.as_deref(), Some("success"))
-        })
+        .filter(|c| c.status == "completed" && matches!(c.conclusion.as_deref(), Some("success")))
         .collect();
 
     let skipped: Vec<&CheckRunInfo> = status
@@ -481,11 +480,7 @@ fn display_branch_compact(repo: &GitRepo, status: &BranchCiStatus, is_current: b
     // Print running checks (comma-separated)
     if !running.is_empty() {
         let names: Vec<String> = running.iter().map(|c| c.name.clone()).collect();
-        println!(
-            "  {} {}",
-            "●".yellow().bold(),
-            names.join(", ").yellow()
-        );
+        println!("  {} {}", "●".yellow().bold(), names.join(", ").yellow());
         println!();
     }
 
@@ -533,7 +528,10 @@ fn display_branch_compact(repo: &GitRepo, status: &BranchCiStatus, is_current: b
     // Timing / ETA footer
     if let Some(timing) = calculate_branch_timing(repo, &status.branch, &status.check_runs) {
         println!();
-        println!("  {}", format_timing_footer(&timing, status.overall_status.as_deref()));
+        println!(
+            "  {}",
+            format_timing_footer(&timing, status.overall_status.as_deref())
+        );
     }
 
     println!();
@@ -584,7 +582,10 @@ fn display_branch_verbose(repo: &GitRepo, status: &BranchCiStatus, is_current: b
         "{}  {}{}  ({})",
         overall_icon_plain(status),
         status.branch,
-        status.pr_number.map(|n| format!("  PR #{}", n)).unwrap_or_default(),
+        status
+            .pr_number
+            .map(|n| format!("  PR #{}", n))
+            .unwrap_or_default(),
         status.sha_short
     ));
     let separator = "━".repeat(visible_len.min(72));
@@ -679,19 +680,17 @@ fn display_branch_verbose(repo: &GitRepo, status: &BranchCiStatus, is_current: b
     // Timing / ETA footer
     if let Some(timing) = calculate_branch_timing(repo, &status.branch, &status.check_runs) {
         println!();
-        println!("  {}", format_timing_footer(&timing, status.overall_status.as_deref()));
+        println!(
+            "  {}",
+            format_timing_footer(&timing, status.overall_status.as_deref())
+        );
     }
 
     println!();
 }
 
 /// Compact display for one or more branches
-fn display_ci_compact(
-    repo: &GitRepo,
-    statuses: &[BranchCiStatus],
-    current: &str,
-    multi: bool,
-) {
+fn display_ci_compact(repo: &GitRepo, statuses: &[BranchCiStatus], current: &str, multi: bool) {
     if multi {
         print_multi_branch_header(statuses);
         println!();
@@ -704,12 +703,7 @@ fn display_ci_compact(
 }
 
 /// Verbose display for one or more branches
-fn display_ci_verbose(
-    repo: &GitRepo,
-    statuses: &[BranchCiStatus],
-    current: &str,
-    multi: bool,
-) {
+fn display_ci_verbose(repo: &GitRepo, statuses: &[BranchCiStatus], current: &str, multi: bool) {
     if multi {
         print_multi_branch_header(statuses);
         println!();
@@ -736,21 +730,27 @@ fn print_multi_branch_header(statuses: &[BranchCiStatus]) {
         .iter()
         .filter(|s| s.overall_status.as_deref() == Some("pending"))
         .count();
-    let no_ci = statuses
-        .iter()
-        .filter(|s| s.check_runs.is_empty())
-        .count();
+    let no_ci = statuses.iter().filter(|s| s.check_runs.is_empty()).count();
 
     let mut parts: Vec<String> = Vec::new();
     parts.push(format!("{} branches", total).bold().to_string());
     if success > 0 {
-        parts.push(format!("{} {}", "✓".green(), format!("{} passing", success).green()).to_string());
+        parts.push(
+            format!("{} {}", "✓".green(), format!("{} passing", success).green()).to_string(),
+        );
     }
     if failure > 0 {
         parts.push(format!("{} {}", "✗".red(), format!("{} failing", failure).red()).to_string());
     }
     if pending > 0 {
-        parts.push(format!("{} {}", "●".yellow(), format!("{} running", pending).yellow()).to_string());
+        parts.push(
+            format!(
+                "{} {}",
+                "●".yellow(),
+                format!("{} running", pending).yellow()
+            )
+            .to_string(),
+        );
     }
     if no_ci > 0 {
         parts.push(format!("○ {} no CI", no_ci).dimmed().to_string());
@@ -763,18 +763,12 @@ fn print_multi_branch_header(statuses: &[BranchCiStatus]) {
 pub fn record_ci_history(repo: &GitRepo, statuses: &[BranchCiStatus]) {
     for status in statuses {
         for check in &status.check_runs {
-            if check.status == "completed"
-                && check.conclusion.as_deref() == Some("success")
-            {
+            if check.status == "completed" && check.conclusion.as_deref() == Some("success") {
                 if let (Some(elapsed), Some(completed_at)) =
                     (check.elapsed_secs, check.completed_at.as_ref())
                 {
-                    let _ = history::add_completion(
-                        repo,
-                        &check.name,
-                        elapsed,
-                        completed_at.clone(),
-                    );
+                    let _ =
+                        history::add_completion(repo, &check.name, elapsed, completed_at.clone());
                 }
             }
         }
@@ -901,7 +895,10 @@ fn run_watch_mode(
             } else {
                 println!("{}", line.green());
                 if iteration == 1 {
-                    println!("{}", " ✓  CI already finished — all checks passed".green().bold());
+                    println!(
+                        "{}",
+                        " ✓  CI already finished — all checks passed".green().bold()
+                    );
                 } else {
                     println!("{}", " ✓  All CI checks passed".green().bold());
                 }
@@ -1294,12 +1291,18 @@ fn check_icon_label(check: &CheckRunInfo) -> (String, String) {
     match check.status.as_str() {
         "completed" => match check.conclusion.as_deref() {
             Some("success") => ("✓".green().to_string(), "passed".green().to_string()),
-            Some("failure") => ("✗".red().bold().to_string(), "failed".red().bold().to_string()),
+            Some("failure") => (
+                "✗".red().bold().to_string(),
+                "failed".red().bold().to_string(),
+            ),
             Some("skipped") => ("⊘".dimmed().to_string(), "skipped".dimmed().to_string()),
             Some("neutral") => ("○".dimmed().to_string(), "neutral".dimmed().to_string()),
             Some("cancelled") => ("⊘".yellow().to_string(), "cancelled".yellow().to_string()),
             Some("timed_out") => ("⏱".red().to_string(), "timed out".red().to_string()),
-            Some("action_required") => ("!".yellow().to_string(), "action required".yellow().to_string()),
+            Some("action_required") => (
+                "!".yellow().to_string(),
+                "action required".yellow().to_string(),
+            ),
             Some(other) => ("?".dimmed().to_string(), other.dimmed().to_string()),
             None => ("?".dimmed().to_string(), "unknown".dimmed().to_string()),
         },
@@ -1596,22 +1599,34 @@ mod tests {
             name: "a".to_string(),
             status: "completed".to_string(),
             conclusion: Some("failure".to_string()),
-            url: None, started_at: None, completed_at: None,
-            elapsed_secs: None, average_secs: None, completion_percent: None,
+            url: None,
+            started_at: None,
+            completed_at: None,
+            elapsed_secs: None,
+            average_secs: None,
+            completion_percent: None,
         };
         let running = CheckRunInfo {
             name: "b".to_string(),
             status: "in_progress".to_string(),
             conclusion: None,
-            url: None, started_at: None, completed_at: None,
-            elapsed_secs: None, average_secs: None, completion_percent: None,
+            url: None,
+            started_at: None,
+            completed_at: None,
+            elapsed_secs: None,
+            average_secs: None,
+            completion_percent: None,
         };
         let passed = CheckRunInfo {
             name: "c".to_string(),
             status: "completed".to_string(),
             conclusion: Some("success".to_string()),
-            url: None, started_at: None, completed_at: None,
-            elapsed_secs: None, average_secs: None, completion_percent: None,
+            url: None,
+            started_at: None,
+            completed_at: None,
+            elapsed_secs: None,
+            average_secs: None,
+            completion_percent: None,
         };
 
         assert!(check_sort_key(&failed) < check_sort_key(&running));

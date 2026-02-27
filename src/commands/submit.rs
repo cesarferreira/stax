@@ -170,7 +170,8 @@ pub fn run(
         }
         "skipped (--no-fetch)".to_string()
     } else {
-        let fetch_timer = LiveTimer::maybe_new(!quiet, &format!("Fetching from {}...", remote_info.name));
+        let fetch_timer =
+            LiveTimer::maybe_new(!quiet, &format!("Fetching from {}...", remote_info.name));
         match remote::fetch_remote(repo.workdir()?, &remote_info.name) {
             Ok(()) => {
                 LiveTimer::maybe_finish_ok(fetch_timer, "done");
@@ -284,9 +285,7 @@ pub fn run(
                         timings.open_pr_discovery += lookup_started_at.elapsed();
                     }
 
-                    if found_pr.is_none()
-                        && (had_metadata_pr || remote_branches.contains(branch))
-                    {
+                    if found_pr.is_none() && (had_metadata_pr || remote_branches.contains(branch)) {
                         full_scan_fallbacks += 1;
                         if verbose && !quiet {
                             println!(
@@ -419,27 +418,22 @@ pub fn run(
                     timings.open_pr_discovery += lookup_started_at.elapsed();
                     if verbose && !quiet {
                         if let Some(found) = &existing_pr {
-                            println!(
-                                "      Found open PR #{} via head lookup",
-                                found.info.number
-                            );
+                            println!("      Found open PR #{} via head lookup", found.info.number);
                         } else {
                             println!("      No open PR found via head lookup");
                         }
                     }
                 }
 
-                if existing_pr.is_none()
-                    && (had_metadata_pr || remote_branches.contains(branch))
-                {
+                if existing_pr.is_none() && (had_metadata_pr || remote_branches.contains(branch)) {
                     full_scan_fallbacks += 1;
                     if verbose && !quiet {
                         println!("      Falling back to full open PR scan (metadata mismatch)");
                     }
                     if open_prs_by_head.is_none() {
                         let lookup_started_at = Instant::now();
-                        let prs = runtime
-                            .block_on(async { gh_client.list_open_prs_by_head().await })?;
+                        let prs =
+                            runtime.block_on(async { gh_client.list_open_prs_by_head().await })?;
                         timings.open_pr_discovery += lookup_started_at.elapsed();
                         if verbose && !quiet {
                             println!("      Cached {} open PRs", prs.len());
@@ -886,9 +880,12 @@ pub fn run(
                     );
 
                     // Update base if needed
-                    client.update_pr_base(existing_pr_number, &plan.parent).await?;
+                    client
+                        .update_pr_base(existing_pr_number, &plan.parent)
+                        .await?;
 
-                    apply_pr_metadata(&client, existing_pr_number, &reviewers, &labels, &assignees).await?;
+                    apply_pr_metadata(&client, existing_pr_number, &reviewers, &labels, &assignees)
+                        .await?;
 
                     LiveTimer::maybe_finish_ok(update_timer, "done");
 
@@ -972,12 +969,16 @@ pub fn run(
 
         let stack_comment_started_at = Instant::now();
         for (pr_number, _branch) in &prs_with_numbers {
-            let comment_timer =
-                LiveTimer::maybe_new(!quiet, &format!("Updating stack comment on #{}...", pr_number));
+            let comment_timer = LiveTimer::maybe_new(
+                !quiet,
+                &format!("Updating stack comment on #{}...", pr_number),
+            );
             let stack_comment =
                 generate_stack_comment(&pr_infos, *pr_number, &remote_info, &stack.trunk);
             if created_pr_numbers.contains(pr_number) {
-                client.create_stack_comment(*pr_number, &stack_comment).await?;
+                client
+                    .create_stack_comment(*pr_number, &stack_comment)
+                    .await?;
             } else {
                 client
                     .update_stack_comment(*pr_number, &stack_comment)

@@ -124,8 +124,7 @@ pub fn run(
 
     if was_on_trunk {
         // We're on trunk - pull directly
-        let update_timer =
-            LiveTimer::maybe_new(!quiet, &format!("Update {}", stack.trunk));
+        let update_timer = LiveTimer::maybe_new(!quiet, &format!("Update {}", stack.trunk));
 
         let output = Command::new("git")
             .args(["merge", "--ff-only", &remote_trunk_ref])
@@ -176,8 +175,7 @@ pub fn run(
             }
         }
     } else {
-        let update_timer =
-            LiveTimer::maybe_new(!quiet, &format!("Update {}", stack.trunk));
+        let update_timer = LiveTimer::maybe_new(!quiet, &format!("Update {}", stack.trunk));
 
         if let Some(trunk_worktree_path) = repo.branch_worktree_path(&stack.trunk)? {
             let output = Command::new("git")
@@ -272,21 +270,30 @@ pub fn run(
                             LiveTimer::maybe_finish_timed(update_timer);
                         } else {
                             trunk_update_deferred = true;
-                            LiveTimer::maybe_finish_skipped(update_timer, "couldn't update — run 'stax trunk' to pull");
+                            LiveTimer::maybe_finish_skipped(
+                                update_timer,
+                                "couldn't update — run 'stax trunk' to pull",
+                            );
                         }
                     } else {
                         // Local trunk has commits not on the remote — can't fast-forward.
                         trunk_update_deferred = true;
                         LiveTimer::maybe_finish_skipped(
                             update_timer,
-                            &format!("local {} has unpushed commits — run 'stax trunk' to sync", stack.trunk),
+                            &format!(
+                                "local {} has unpushed commits — run 'stax trunk' to sync",
+                                stack.trunk
+                            ),
                         );
                     }
                 }
                 _ => {
                     // Couldn't resolve one or both refs (shouldn't happen after a successful fetch).
                     trunk_update_deferred = true;
-                    LiveTimer::maybe_finish_skipped(update_timer, "couldn't resolve ref — run 'stax trunk' to pull");
+                    LiveTimer::maybe_finish_skipped(
+                        update_timer,
+                        "couldn't resolve ref — run 'stax trunk' to pull",
+                    );
                 }
             }
         }
@@ -604,8 +611,7 @@ pub fn run(
     // now on trunk after branch deletions, retry with git pull which is more reliable
     if trunk_update_deferred && current_after_deletions == stack.trunk {
         let deferred_update_started_at = Instant::now();
-        let deferred_timer =
-            LiveTimer::maybe_new(!quiet, &format!("Update {}", stack.trunk));
+        let deferred_timer = LiveTimer::maybe_new(!quiet, &format!("Update {}", stack.trunk));
 
         let output = Command::new("git")
             .args(["merge", "--ff-only", &remote_trunk_ref])
@@ -720,8 +726,7 @@ pub fn run(
             let mut summary: Vec<(String, String)> = Vec::new();
 
             for branch in &branches_to_restack {
-                let restack_timer =
-                    LiveTimer::maybe_new(!quiet, &format!("Restack {}", branch));
+                let restack_timer = LiveTimer::maybe_new(!quiet, &format!("Restack {}", branch));
 
                 let meta = match BranchMetadata::read(repo.inner(), branch)? {
                     Some(meta) => meta,
@@ -799,11 +804,7 @@ pub fn run(
         println!();
         println!("{}", "Sync timing summary:".bold());
         for (step, duration) in &step_timings {
-            println!(
-                "  {:<35} {}",
-                step,
-                format_duration(*duration).dimmed()
-            );
+            println!("  {:<35} {}", step, format_duration(*duration).dimmed());
         }
         println!(
             "  {:<35} {}",
