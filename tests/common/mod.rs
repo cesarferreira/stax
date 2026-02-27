@@ -17,6 +17,28 @@ pub fn stax_bin() -> &'static str {
     env!("CARGO_BIN_EXE_stax")
 }
 
+/// Create temporary directories in STAX_TEST_TMPDIR when set.
+///
+/// This keeps test repos off slower default temp paths on some macOS setups.
+fn test_tempdir() -> TempDir {
+    if let Ok(root) = std::env::var("STAX_TEST_TMPDIR") {
+        let root_path = Path::new(&root);
+        fs::create_dir_all(root_path).expect("Failed to create STAX_TEST_TMPDIR");
+        TempDir::new_in(root_path).expect("Failed to create temp dir in STAX_TEST_TMPDIR")
+    } else {
+        TempDir::new().expect("Failed to create temp dir")
+    }
+}
+
+fn sanitized_stax_command() -> Command {
+    let mut cmd = Command::new(stax_bin());
+    // Keep tests hermetic and avoid accidentally hitting real GitHub APIs.
+    cmd.env_remove("GITHUB_TOKEN")
+        .env_remove("STAX_GITHUB_TOKEN")
+        .env_remove("GH_TOKEN");
+    cmd
+}
+
 /// A test repository that creates a temporary git repo with proper initialization
 pub struct TestRepo {
     dir: TempDir,
@@ -29,7 +51,7 @@ pub struct TestRepo {
 impl TestRepo {
     /// Create a new test repository with git init and an initial commit on main
     pub fn new() -> Self {
-        let dir = TempDir::new().expect("Failed to create temp dir");
+        let dir = test_tempdir();
         let path = dir.path();
 
         // Initialize git repo
@@ -79,7 +101,7 @@ impl TestRepo {
         let mut repo = Self::new();
 
         // Create a bare repo to act as "origin"
-        let remote_dir = TempDir::new().expect("Failed to create remote dir");
+        let remote_dir = test_tempdir();
         Command::new("git")
             .args(["init", "--bare"])
             .current_dir(remote_dir.path())
@@ -120,7 +142,7 @@ impl TestRepo {
         let remote_path = self.remote_path().expect("No remote configured");
 
         // Create a temp clone
-        let clone_dir = TempDir::new().expect("Failed to create clone dir");
+        let clone_dir = test_tempdir();
         Command::new("git")
             .args(["clone", remote_path.to_str().unwrap(), "."])
             .current_dir(clone_dir.path())
@@ -172,7 +194,7 @@ impl TestRepo {
         let remote_path = self.remote_path().expect("No remote configured");
 
         // Create a temp clone
-        let clone_dir = TempDir::new().expect("Failed to create clone dir");
+        let clone_dir = test_tempdir();
         Command::new("git")
             .args(["clone", remote_path.to_str().unwrap(), "."])
             .current_dir(clone_dir.path())
@@ -258,7 +280,7 @@ impl TestRepo {
 
     /// Run a stax command in this repository
     pub fn run_stax(&self, args: &[&str]) -> Output {
-        Command::new(stax_bin())
+        sanitized_stax_command()
             .args(args)
             .current_dir(self.path())
             .output()
@@ -267,7 +289,7 @@ impl TestRepo {
 
     /// Run a stax command in a specific directory
     pub fn run_stax_in(&self, cwd: &Path, args: &[&str]) -> Output {
-        Command::new(stax_bin())
+        sanitized_stax_command()
             .args(args)
             .current_dir(cwd)
             .output()

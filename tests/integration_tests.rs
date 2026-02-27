@@ -5,13 +5,35 @@
 
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tempfile::TempDir;
 
 /// Get path to compiled binary (built by cargo test)
 fn stax_bin() -> &'static str {
     env!("CARGO_BIN_EXE_stax")
+}
+
+/// Create temporary directories in STAX_TEST_TMPDIR when set.
+///
+/// This keeps test repos off slower default temp paths on some macOS setups.
+fn test_tempdir() -> TempDir {
+    if let Ok(root) = std::env::var("STAX_TEST_TMPDIR") {
+        let root_path = Path::new(&root);
+        fs::create_dir_all(root_path).expect("Failed to create STAX_TEST_TMPDIR");
+        TempDir::new_in(root_path).expect("Failed to create temp dir in STAX_TEST_TMPDIR")
+    } else {
+        TempDir::new().expect("Failed to create temp dir")
+    }
+}
+
+fn sanitized_stax_command() -> Command {
+    let mut cmd = Command::new(stax_bin());
+    // Keep tests hermetic and avoid accidentally hitting real GitHub APIs.
+    cmd.env_remove("GITHUB_TOKEN")
+        .env_remove("STAX_GITHUB_TOKEN")
+        .env_remove("GH_TOKEN");
+    cmd
 }
 
 /// A test repository that creates a temporary git repo with proper initialization
@@ -25,7 +47,7 @@ struct TestRepo {
 impl TestRepo {
     /// Create a new test repository with git init and an initial commit on main
     fn new() -> Self {
-        let dir = TempDir::new().expect("Failed to create temp dir");
+        let dir = test_tempdir();
         let path = dir.path();
 
         // Initialize git repo
@@ -75,7 +97,7 @@ impl TestRepo {
         let mut repo = Self::new();
 
         // Create a bare repo to act as "origin"
-        let remote_dir = TempDir::new().expect("Failed to create remote dir");
+        let remote_dir = test_tempdir();
         Command::new("git")
             .args(["init", "--bare"])
             .current_dir(remote_dir.path())
@@ -116,7 +138,7 @@ impl TestRepo {
         let remote_path = self.remote_path().expect("No remote configured");
 
         // Create a temp clone
-        let clone_dir = TempDir::new().expect("Failed to create clone dir");
+        let clone_dir = test_tempdir();
         Command::new("git")
             .args(["clone", remote_path.to_str().unwrap(), "."])
             .current_dir(clone_dir.path())
@@ -168,7 +190,7 @@ impl TestRepo {
         let remote_path = self.remote_path().expect("No remote configured");
 
         // Create a temp clone
-        let clone_dir = TempDir::new().expect("Failed to create clone dir");
+        let clone_dir = test_tempdir();
         Command::new("git")
             .args(["clone", remote_path.to_str().unwrap(), "."])
             .current_dir(clone_dir.path())
@@ -254,7 +276,7 @@ impl TestRepo {
 
     /// Run a stax command in this repository
     fn run_stax(&self, args: &[&str]) -> Output {
-        Command::new(stax_bin())
+        sanitized_stax_command()
             .args(args)
             .current_dir(self.path())
             .output()
@@ -1304,9 +1326,9 @@ fn test_config_command() {
 
 #[test]
 fn test_status_outside_git_repo() {
-    let dir = TempDir::new().expect("Failed to create temp dir");
+    let dir = test_tempdir();
 
-    let output = Command::new(stax_bin())
+    let output = sanitized_stax_command()
         .args(["status"])
         .current_dir(dir.path())
         .output()
@@ -3433,7 +3455,7 @@ fn test_sync_restack_handles_squash_merged_middle_branch() {
 
     // Squash-merge parent branch on remote and delete it.
     let remote_path = repo.remote_path().expect("No remote configured");
-    let clone_dir = TempDir::new().expect("Failed to create clone dir");
+    let clone_dir = test_tempdir();
     let run_remote_git = |args: &[&str]| {
         let output = Command::new("git")
             .args(args)
@@ -4002,7 +4024,7 @@ mod github_mock_tests {
     }
 
     fn setup_fake_github_remote(repo: &TestRepo, home: &Path) -> TempDir {
-        let remote_root = TempDir::new().expect("Failed to create temp remote root");
+        let remote_root = super::test_tempdir();
         let remote_repo = remote_root.path().join("test").join("repo.git");
         if let Some(parent) = remote_repo.parent() {
             std::fs::create_dir_all(parent).expect("Failed to create remote parent dirs");
@@ -4148,7 +4170,7 @@ mod github_mock_tests {
             .mount(&mock_server)
             .await;
 
-        let home = TempDir::new().expect("Failed to create temp home");
+        let home = super::test_tempdir();
         let repo = TestRepo::new();
         let _remote_root = setup_fake_github_remote(&repo, home.path());
         write_test_config(home.path(), &mock_server.uri());
@@ -4207,7 +4229,7 @@ mod github_mock_tests {
             .mount(&mock_server)
             .await;
 
-        let home = TempDir::new().expect("Failed to create temp home");
+        let home = super::test_tempdir();
         let repo = TestRepo::new();
         let _remote_root = setup_fake_github_remote(&repo, home.path());
         write_test_config(home.path(), &mock_server.uri());

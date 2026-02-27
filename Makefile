@@ -1,4 +1,4 @@
-.PHONY: build release install clean test test-unit test-integration check fmt lint all
+.PHONY: build release install clean test test-local-fast test-unit test-integration check fmt lint all
 
 # Default target
 all: check build test
@@ -22,6 +22,11 @@ clean:
 # Run all tests
 test:
 	cargo nextest run
+
+# Run tests with macOS-friendly defaults (custom temp root + lower concurrency)
+test-local-fast:
+	mkdir -p .test-tmp
+	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS=4 cargo nextest run
 
 # Run fast unit tests only
 test-unit:
