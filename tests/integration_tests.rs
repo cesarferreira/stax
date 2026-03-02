@@ -4645,7 +4645,8 @@ mod github_mock_tests {
             &repo,
             home.path(),
             &[
-                "merge-when-ready",
+                "merge",
+                "--when-ready",
                 "--yes",
                 "--no-delete",
                 "--timeout",

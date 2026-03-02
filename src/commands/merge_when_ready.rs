@@ -206,7 +206,7 @@ pub fn run(
     // Confirm
     if !yes {
         let confirm = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Proceed with merge-when-ready?")
+            .with_prompt("Proceed with merge --when-ready?")
             .default(false)
             .interact()?;
 
@@ -534,7 +534,7 @@ pub fn run(
         println!("{}", "Already merged PRs remain merged.".dimmed());
         println!(
             "{}",
-            "Fix the issue and run 'stax merge-when-ready' to continue.".dimmed()
+            "Fix the issue and run 'stax merge --when-ready' to continue.".dimmed()
         );
     } else {
         print_header_success("Stack Merged!");
@@ -578,7 +578,7 @@ pub fn run(
 
         // Send macOS notification
         send_notification(
-            "stax merge-when-ready",
+            "stax merge --when-ready",
             &format!(
                 "Merged {} {} into {}",
                 merged_prs.len(),

@@ -165,6 +165,12 @@ enum Commands {
         /// Max wait time for CI per PR in minutes
         #[arg(long, default_value = "30")]
         timeout: u64,
+        /// Wait for each PR to be ready (CI + approval) before merging
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait"])]
+        when_ready: bool,
+        /// Polling interval in seconds for --when-ready mode
+        #[arg(long, default_value = "15", requires = "when_ready")]
+        interval: u64,
         /// Skip confirmation prompt
         #[arg(short, long)]
         yes: bool,
@@ -173,8 +179,8 @@ enum Commands {
         quiet: bool,
     },
 
-    /// Merge PRs bottom-up, waiting for CI and approval
-    #[command(name = "merge-when-ready", visible_alias = "mwr")]
+    /// Deprecated: use `stax merge --when-ready`
+    #[command(name = "merge-when-ready", visible_alias = "mwr", hide = true)]
     MergeWhenReady {
         /// Merge entire stack (include descendants above current)
         #[arg(long)]
@@ -843,20 +849,34 @@ fn main() -> Result<()> {
             no_delete,
             no_wait,
             timeout,
+            when_ready,
+            interval,
             yes,
             quiet,
         } => {
             let merge_method = method.parse().unwrap_or_default();
-            commands::merge::run(
-                all,
-                dry_run,
-                merge_method,
-                no_delete,
-                no_wait,
-                timeout,
-                yes,
-                quiet,
-            )
+            if when_ready {
+                commands::merge_when_ready::run(
+                    all,
+                    merge_method,
+                    timeout,
+                    interval,
+                    no_delete,
+                    yes,
+                    quiet,
+                )
+            } else {
+                commands::merge::run(
+                    all,
+                    dry_run,
+                    merge_method,
+                    no_delete,
+                    no_wait,
+                    timeout,
+                    yes,
+                    quiet,
+                )
+            }
         }
         Commands::MergeWhenReady {
             all,

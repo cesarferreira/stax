@@ -8,6 +8,7 @@
 | `stax create <name>` | Create branch stacked on current |
 | `stax ss` | Submit stack and create/update PRs |
 | `stax merge` | Merge PRs from stack bottom to current |
+| `stax merge --when-ready` | Merge in explicit wait-for-ready mode (legacy alias: `stax merge-when-ready`) |
 | `stax rs` | Pull trunk and clean merged branches |
 | `stax rs --restack` | Sync and rebase full stack |
 | `stax cascade` | Restack, push, and create/update PRs |

@@ -18,6 +18,7 @@
 ## Feature Highlights
 
 - [`stax merge`](#cascade-stack-merge) - Cascade-merge your stack from bottom -> current with CI/rebase-aware safety checks.
+- [`stax merge --when-ready`](#cascade-stack-merge) - Merge in explicit wait-for-ready mode with configurable polling.
 - [`stax generate --pr-body`](#ai-powered-pr-body-generation) - Generate polished PR descriptions with AI from your branch diff and context.
 - [`AI skill integrations`](#claude-code-integration) - Embed `skills.md` into Claude Code, Codex, Gemini CLI, or OpenCode so your AI can create and stack PRs.
 - [`stax standup`](#standup-summary) - Get a quick summary of recent PRs, pushes, and activity for daily standups.
@@ -130,6 +131,7 @@ stax rs --restack
 | `stax create <name>` | Create a new branch stacked on current |
 | `stax ss` | Submit stack - push all branches and create/update PRs |
 | `stax merge` | Merge PRs from bottom of stack up to current branch |
+| `stax merge --when-ready` | Merge with explicit wait-for-ready mode and configurable polling interval |
 | `stax rs` | Repo sync - pull trunk, clean up merged branches |
 | `stax rs --restack` | Sync and rebase all branches onto updated trunk |
 | `stax restack` | Restack current stack (ancestors + current + descendants) |
@@ -171,6 +173,14 @@ $ stax create
 
 ✓ Created cesar/auth-validation
   → Stacked on feature/auth
+```
+
+Use a one-liner when the branch name and commit message come from the same text:
+
+```bash
+stax create -am "migrate checkout webhooks to v2"
+# Creates a branch name from the message (using your branch format),
+# stages all changes, and commits with the same message.
 ```
 
 ## AI-Powered PR Body Generation
@@ -522,6 +532,9 @@ stax rs --restack
 
 Merge your entire stack with one command! `stax merge` intelligently merges PRs from the bottom of your stack up to your current branch, handling rebases and PR updates automatically.
 
+Need strict "merge when ready" behavior with configurable polling? Use `stax merge --when-ready`.
+The legacy command `stax merge-when-ready` (alias: `stax mwr`) remains available as a compatibility alias.
+
 ### How It Works
 
 ```
@@ -591,14 +604,14 @@ Merge method: squash (change with --method)
 
 For each PR in the stack (bottom to top):
 
-1. **Wait for CI** - Polls until CI passes (or use `--no-wait` to skip)
+1. **Wait for readiness** - Polls until CI passes and approvals/mergeability are ready (or use `--no-wait` to fail fast)
 2. **Merge** - Merges the PR using your chosen method (squash/merge/rebase)
 3. **Rebase next** - Rebases the next PR onto updated main
 4. **Update PR base** - Changes the next PR's target from the merged branch to main
 5. **Push** - Force-pushes the rebased branch
 6. **Repeat** - Continues until all PRs are merged
 
-If anything fails (CI, conflicts, permissions), the merge stops safely. Already-merged PRs remain merged, and you can fix the issue and run `stax merge` again to continue.
+If anything fails (CI, conflicts, permissions), the merge stops safely. Already-merged PRs remain merged, and you can fix the issue and run `stax merge` again to continue (or `stax merge --when-ready` if you were using that mode).
 
 ### Merge Options
 
@@ -614,6 +627,12 @@ stax merge --method squash    # (default) Squash and merge
 stax merge --method merge     # Create merge commit
 stax merge --method rebase    # Rebase and merge
 
+# Use explicit wait-for-ready mode (replacement for merge-when-ready)
+stax merge --when-ready
+
+# Set custom polling interval for --when-ready mode (default: 15s)
+stax merge --when-ready --interval 10
+
 # Skip CI polling (fail if not ready)
 stax merge --no-wait
 
@@ -626,6 +645,8 @@ stax merge --timeout 60
 # Skip confirmation prompt
 stax merge --yes
 ```
+
+`--when-ready` cannot be combined with `--dry-run` or `--no-wait`.
 
 ### Partial Stack Merge
 
@@ -935,6 +956,7 @@ stax submit --edit             # Force editor open
 | `stax log` | `l` | Show stack with commits and PR info |
 | `stax submit` | `ss` | Submit full current stack (ancestors + current + descendants) |
 | `stax merge` | | Merge PRs from bottom of stack to current |
+| `stax merge --when-ready` | | Merge with explicit wait-for-ready mode (legacy alias: `stax merge-when-ready`) |
 | `stax sync` | `rs` | Pull trunk, delete merged branches |
 | `stax restack` | | Restack current stack (ancestors + current + descendants) |
 | `stax diff` | | Show diffs for each branch vs parent |
@@ -1016,7 +1038,7 @@ stax submit --edit             # Force editor open
 ### Common Flags
 - `stax create -m "msg"` - Create branch with commit message
 - `stax create -a` - Stage all changes
-- `stax create -am "msg"` - Stage all and commit
+- `stax create -am "migrate checkout webhooks to v2"` - Create branch from message, stage all changes, and commit
 - `stax branch create --message "msg" --prefix feature/` - Create with explicit message and prefix
 - `stax branch reparent --branch feature-a --parent main` - Reparent a specific branch
 - `stax rename new-name` - Rename current branch
@@ -1046,6 +1068,8 @@ stax submit --edit             # Force editor open
 - `stax merge --all` - Merge entire stack
 - `stax merge --method squash` - Choose merge method (squash/merge/rebase)
 - `stax merge --dry-run` - Preview merge without executing
+- `stax merge --when-ready` - Use explicit wait-for-ready mode (legacy: `stax merge-when-ready`)
+- `stax merge --when-ready --interval 10` - Use custom poll interval in seconds
 - `stax merge --no-wait` - Don't wait for CI, fail if not ready
 - `stax merge --no-delete` - Keep branches after merge
 - `stax merge --timeout 60` - Wait up to 60 minutes for CI per PR

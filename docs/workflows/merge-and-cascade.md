@@ -3,10 +3,11 @@
 ## `stax merge`
 
 `stax merge` merges PRs from the bottom of your stack up to your current branch.
+Use `stax merge --when-ready` for the explicit wait-for-ready mode (legacy alias: `stax merge-when-ready` / `stax mwr`).
 
 ### What happens
 
-1. Wait for CI (unless `--no-wait`)
+1. Wait for PR readiness (CI + approvals + mergeability) unless `--no-wait`
 2. Merge PR with selected strategy
 3. Rebase next branch onto updated trunk
 4. Update next PR base
@@ -21,11 +22,15 @@ stax merge --all
 stax merge --method squash
 stax merge --method merge
 stax merge --method rebase
+stax merge --when-ready
+stax merge --when-ready --interval 10
 stax merge --no-wait
 stax merge --no-delete
 stax merge --timeout 60
 stax merge --yes
 ```
+
+`--when-ready` cannot be combined with `--dry-run` or `--no-wait`.
 
 ### Partial stack merge
 

@@ -9,9 +9,9 @@ theme:
   name: material
   features:
     - navigation.instant
-    - navigation.tabs
     - navigation.sections
     - navigation.top
+    - toc.integrate
     - content.code.copy
     - search.highlight
   palette:

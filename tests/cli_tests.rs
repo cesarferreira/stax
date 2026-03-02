@@ -58,6 +58,21 @@ fn test_sync_alias_rs() {
 }
 
 #[test]
+fn test_merge_help_flags_include_when_ready_mode() {
+    let output = stax(&["merge", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--when-ready"));
+    assert!(stdout.contains("--interval"));
+}
+
+#[test]
+fn test_merge_when_ready_hidden_alias_still_works() {
+    let output = stax(&["merge-when-ready", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
 fn test_checkout_aliases() {
     // co and bco should both work
     let output1 = stax(&["co", "--help"]);
