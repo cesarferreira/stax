@@ -8,7 +8,7 @@
 | `stax ll` | | Show stack with PR URLs and full details |
 | `stax log` | `l` | Show stack with commits and PR info |
 | `stax submit` | `ss` | Submit full current stack |
-| `stax merge` | | Merge PRs bottom -> current (`--when-ready` mode available) |
+| `stax merge` | | Merge PRs bottom -> current, then sync local repo (`--no-sync` to skip) |
 | `stax merge-when-ready` | `mwr` | Backward-compatible alias for `stax merge --when-ready` |
 | `stax sync` | `rs` | Pull trunk, delete merged branches, preserve child provenance for restack |
 | `stax restack` | | Rebase current branch onto parent (provenance-aware `--onto` when possible) |
@@ -116,6 +116,7 @@
 - `stax merge --when-ready`
 - `stax merge --when-ready --interval 10`
 - `stax merge --no-wait`
+- `stax merge --no-sync`
 - `stax merge --timeout 60 --no-delete --quiet`
 - `stax rs --restack --auto-stash-pop`
 - `stax sync --force --safe --continue`

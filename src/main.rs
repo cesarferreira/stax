@@ -188,6 +188,9 @@ enum Commands {
         /// Polling interval in seconds for --when-ready mode
         #[arg(long, default_value = "15", requires = "when_ready")]
         interval: u64,
+        /// Skip post-merge sync (`stax rs`)
+        #[arg(long)]
+        no_sync: bool,
         /// Skip confirmation prompt
         #[arg(short, long)]
         yes: bool,
@@ -214,6 +217,9 @@ enum Commands {
         /// Keep branches after merge (don't delete)
         #[arg(long)]
         no_delete: bool,
+        /// Skip post-merge sync (`stax rs`)
+        #[arg(long)]
+        no_sync: bool,
         /// Skip confirmation prompt
         #[arg(short, long)]
         yes: bool,
@@ -871,6 +877,7 @@ fn main() -> Result<()> {
             timeout,
             when_ready,
             interval,
+            no_sync,
             yes,
             quiet,
         } => {
@@ -882,6 +889,7 @@ fn main() -> Result<()> {
                     timeout,
                     interval,
                     no_delete,
+                    no_sync,
                     yes,
                     quiet,
                 )
@@ -893,6 +901,7 @@ fn main() -> Result<()> {
                     no_delete,
                     no_wait,
                     timeout,
+                    no_sync,
                     yes,
                     quiet,
                 )
@@ -904,6 +913,7 @@ fn main() -> Result<()> {
             timeout,
             interval,
             no_delete,
+            no_sync,
             yes,
             quiet,
         } => {
@@ -914,6 +924,7 @@ fn main() -> Result<()> {
                 timeout,
                 interval,
                 no_delete,
+                no_sync,
                 yes,
                 quiet,
             )

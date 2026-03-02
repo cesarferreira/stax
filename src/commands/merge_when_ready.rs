@@ -86,6 +86,7 @@ pub fn run(
     timeout_mins: u64,
     interval_secs: u64,
     no_delete: bool,
+    no_sync: bool,
     yes: bool,
     quiet: bool,
 ) -> Result<()> {
@@ -586,6 +587,42 @@ pub fn run(
                 scope.trunk
             ),
         );
+
+        if !no_sync {
+            if !quiet {
+                println!();
+                println!("{}", "Running post-merge sync...".dimmed());
+            }
+
+            // Release merge-side handles before sync opens a fresh repo view.
+            drop(rt);
+            drop(client);
+            drop(repo);
+
+            if let Err(err) = crate::commands::sync::run(
+                false,      // restack
+                false,      // prune
+                !no_delete, // delete merged branches unless explicitly kept
+                true,       // force
+                false,      // safe
+                false,      // continue
+                quiet, false, // verbose
+                false, // auto_stash_pop
+            ) {
+                if !quiet {
+                    println!();
+                    println!(
+                        "{} {}",
+                        "warning:".yellow().bold(),
+                        format!("post-merge sync failed: {}", err).yellow()
+                    );
+                    println!(
+                        "{}",
+                        "Run 'stax rs --force' manually to sync local state.".dimmed()
+                    );
+                }
+            }
+        }
     }
 
     Ok(())

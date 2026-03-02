@@ -610,6 +610,7 @@ For each PR in the stack (bottom to top):
 4. **Update PR base** - Changes the next PR's target from the merged branch to main
 5. **Push** - Force-pushes the rebased branch
 6. **Repeat** - Continues until all PRs are merged
+7. **Sync local repo** - Runs `stax rs --force` to fast-forward trunk and finalize local cleanup (use `--no-sync` to skip)
 
 If anything fails (CI, conflicts, permissions), the merge stops safely. Already-merged PRs remain merged, and you can fix the issue and run `stax merge` again to continue (or `stax merge --when-ready` if you were using that mode).
 
@@ -638,6 +639,9 @@ stax merge --no-wait
 
 # Keep branches after merge (don't delete)
 stax merge --no-delete
+
+# Skip post-merge sync
+stax merge --no-sync
 
 # Set custom CI timeout (default: 30 minutes)
 stax merge --timeout 60
@@ -1072,6 +1076,7 @@ stax submit --edit             # Force editor open
 - `stax merge --when-ready --interval 10` - Use custom poll interval in seconds
 - `stax merge --no-wait` - Don't wait for CI, fail if not ready
 - `stax merge --no-delete` - Keep branches after merge
+- `stax merge --no-sync` - Skip the automatic post-merge `stax rs --force`
 - `stax merge --timeout 60` - Wait up to 60 minutes for CI per PR
 - `stax merge --quiet` - Minimize merge output
 - `stax restack --auto-stash-pop` - Auto-stash/pop dirty target worktrees during restack

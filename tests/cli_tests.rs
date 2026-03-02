@@ -64,6 +64,7 @@ fn test_merge_help_flags_include_when_ready_mode() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--when-ready"));
     assert!(stdout.contains("--interval"));
+    assert!(stdout.contains("--no-sync"));
 }
 
 #[test]

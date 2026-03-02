@@ -13,6 +13,7 @@ Use `stax merge --when-ready` for the explicit wait-for-ready mode (legacy alias
 4. Update next PR base
 5. Force-push updated branch
 6. Repeat until done
+7. Run post-merge sync (`stax rs --force`) unless `--no-sync`
 
 ### Common options
 
@@ -26,6 +27,7 @@ stax merge --when-ready
 stax merge --when-ready --interval 10
 stax merge --no-wait
 stax merge --no-delete
+stax merge --no-sync
 stax merge --timeout 60
 stax merge --yes
 ```

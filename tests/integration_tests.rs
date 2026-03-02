@@ -3619,6 +3619,10 @@ fn test_merge_help() {
         "Expected --no-delete flag in help"
     );
     assert!(
+        stdout.contains("--no-sync"),
+        "Expected --no-sync flag in help"
+    );
+    assert!(
         stdout.contains("--no-wait"),
         "Expected --no-wait flag in help"
     );
@@ -4050,6 +4054,7 @@ fn test_merge_combined_flags() {
         "--method",
         "squash",
         "--no-delete",
+        "--no-sync",
         "--no-wait",
         "--timeout",
         "10",
