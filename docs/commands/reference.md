@@ -122,6 +122,7 @@
 - `stax sync --quiet`
 - `stax sync --verbose`
 - `stax restack --all --continue --quiet`
+- `stax restack --submit-after ask|yes|no`
 - `stax cascade --no-pr`
 - `stax cascade --no-submit`
 - `stax checkout --trunk`
