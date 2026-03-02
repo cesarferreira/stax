@@ -6,6 +6,14 @@ use crate::progress::LiveTimer;
 use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
+use std::io::IsTerminal;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitAfterRestack {
+    Ask,
+    Yes,
+    No,
+}
 
 pub fn run(
     all: bool,
@@ -14,6 +22,7 @@ pub fn run(
     yes: bool,
     quiet: bool,
     auto_stash_pop: bool,
+    submit_after: SubmitAfterRestack,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
@@ -275,6 +284,15 @@ pub fn run(
         }
     }
 
+    let should_submit = should_submit_after_restack(&summary, quiet, submit_after)?;
+
+    // Release libgit2 handles from restack before opening a fresh repo in submit.
+    drop(repo);
+
+    if should_submit {
+        submit_after_restack(quiet)?;
+    }
+
     Ok(())
 }
 
@@ -345,6 +363,64 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool) -> Result<()> {
             );
         }
     }
+
+    Ok(())
+}
+
+fn should_submit_after_restack(
+    summary: &[(String, String)],
+    quiet: bool,
+    submit_after: SubmitAfterRestack,
+) -> Result<bool> {
+    // Offer submit only if at least one branch was successfully rebased.
+    if !summary.iter().any(|(_, status)| status == "ok") {
+        return Ok(false);
+    }
+
+    let should_submit = match submit_after {
+        SubmitAfterRestack::Yes => true,
+        SubmitAfterRestack::No => false,
+        SubmitAfterRestack::Ask => {
+            if quiet || !std::io::stdin().is_terminal() {
+                return Ok(false);
+            }
+
+            println!();
+            Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Submit stack now (`stax ss`)?")
+                .default(true)
+                .interact()?
+        }
+    };
+
+    Ok(should_submit)
+}
+
+fn submit_after_restack(quiet: bool) -> Result<()> {
+    if !quiet {
+        println!();
+        println!("{}", "Submitting stack...".bold());
+    }
+
+    crate::commands::submit::run(
+        crate::commands::submit::SubmitScope::Stack,
+        false,  // draft
+        false,  // no_pr
+        false,  // no_fetch
+        false,  // force
+        true,   // yes
+        true,   // no_prompt
+        vec![], // reviewers
+        vec![], // labels
+        vec![], // assignees
+        quiet,
+        false, // open
+        false, // verbose
+        None,  // template
+        false, // no_template
+        false, // edit
+        false, // ai_body
+    )?;
 
     Ok(())
 }

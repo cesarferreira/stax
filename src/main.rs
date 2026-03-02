@@ -12,7 +12,7 @@ mod tui;
 mod update;
 
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use config::Config;
 
 #[derive(Parser)]
@@ -74,6 +74,23 @@ struct SubmitOptions {
     /// Generate PR body using AI (claude, codex, or gemini)
     #[arg(long)]
     ai_body: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum RestackSubmitAfter {
+    Ask,
+    Yes,
+    No,
+}
+
+impl From<RestackSubmitAfter> for commands::restack::SubmitAfterRestack {
+    fn from(value: RestackSubmitAfter) -> Self {
+        match value {
+            RestackSubmitAfter::Ask => commands::restack::SubmitAfterRestack::Ask,
+            RestackSubmitAfter::Yes => commands::restack::SubmitAfterRestack::Yes,
+            RestackSubmitAfter::No => commands::restack::SubmitAfterRestack::No,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -257,6 +274,9 @@ enum Commands {
         /// Auto-stash and auto-pop dirty target worktrees during restack operations
         #[arg(long)]
         auto_stash_pop: bool,
+        /// After restack, submit stack updates (`ask`, `yes`, `no`)
+        #[arg(long, value_enum, default_value_t = RestackSubmitAfter::Ask)]
+        submit_after: RestackSubmitAfter,
     },
 
     /// Restack from the bottom and submit updates
@@ -926,7 +946,16 @@ fn main() -> Result<()> {
             yes,
             quiet,
             auto_stash_pop,
-        } => commands::restack::run(all, r#continue, dry_run, yes, quiet, auto_stash_pop),
+            submit_after,
+        } => commands::restack::run(
+            all,
+            r#continue,
+            dry_run,
+            yes,
+            quiet,
+            auto_stash_pop,
+            submit_after.into(),
+        ),
         Commands::Cascade {
             no_pr,
             no_submit,

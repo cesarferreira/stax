@@ -1077,6 +1077,7 @@ stax submit --edit             # Force editor open
 - `stax restack --auto-stash-pop` - Auto-stash/pop dirty target worktrees during restack
 - `stax restack --all` - Restack all branches in current stack
 - `stax restack --continue` - Continue after resolving restack conflicts
+- `stax restack --submit-after ask|yes|no` - After restack, ask/auto-submit/skip `stax ss`
 - `stax restack --quiet` - Minimize restack output
 - `stax upstack restack --auto-stash-pop` - Auto-stash/pop when restacking descendants
 - `stax rs --restack --auto-stash-pop` - Sync, restack, auto-stash/pop dirty worktrees (`rs` = sync alias)
