@@ -1,13 +1,20 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use octocrab::params::repos::Reference;
+use octocrab::service::middleware::retry::RetryConfig;
 use octocrab::Octocrab;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::config::Config;
+
+const GITHUB_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const GITHUB_API_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const GITHUB_API_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+const GITHUB_API_RETRY_COUNT: usize = 1;
 
 pub struct GitHubClient {
     pub octocrab: Octocrab,
@@ -147,7 +154,12 @@ impl GitHubClient {
              `gh auth login`, or set `STAX_GITHUB_TOKEN`.",
         )?;
 
-        let mut builder = Octocrab::builder().personal_token(token.to_string());
+        let mut builder = Octocrab::builder()
+            .personal_token(token.to_string())
+            .add_retry_config(RetryConfig::Simple(GITHUB_API_RETRY_COUNT))
+            .set_connect_timeout(Some(GITHUB_API_CONNECT_TIMEOUT))
+            .set_read_timeout(Some(GITHUB_API_READ_TIMEOUT))
+            .set_write_timeout(Some(GITHUB_API_WRITE_TIMEOUT));
         if let Some(api_base) = api_base_url {
             builder = builder
                 .base_uri(api_base)

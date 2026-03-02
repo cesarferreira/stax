@@ -946,6 +946,7 @@ pub fn run(
                          This may happen if:\n  \
                          - The base branch '{}' doesn't exist on GitHub\n  \
                          - The branch has no commits different from base\n  \
+                         - GitHub API request timed out (check network/VPN and retry)\n  \
                          Try: git log {}..{} to see the commits",
                         plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
                     ))?;
