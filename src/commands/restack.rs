@@ -399,7 +399,6 @@ fn should_submit_after_restack(
 fn submit_after_restack(quiet: bool) -> Result<()> {
     if !quiet {
         println!();
-        println!("{}", "Submitting stack...".bold());
     }
 
     crate::commands::submit::run(
