@@ -2,7 +2,7 @@ use crate::engine::Stack;
 use crate::git::{refs, GitRepo};
 use anyhow::{bail, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 
 /// Move up the stack (to child branches)
 /// If count > 1, moves up multiple branches
@@ -41,7 +41,7 @@ pub fn up(count: Option<usize>) -> Result<()> {
             children[0].clone()
         } else {
             // Multiple children - let user choose
-            let selection = Select::with_theme(&ColorfulTheme::default())
+            let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
                 .with_prompt("Multiple child branches - select one")
                 .items(&children)
                 .default(0)
@@ -125,7 +125,7 @@ pub fn top() -> Result<()> {
             children[0].clone()
         } else {
             // Multiple children - let user choose
-            let selection = Select::with_theme(&ColorfulTheme::default())
+            let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
                 .with_prompt("Multiple child branches - select one")
                 .items(&children)
                 .default(0)

@@ -1,7 +1,7 @@
 use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect};
 use std::io::IsTerminal;
 
 /// Run initialization if needed, returns true if initialized (or already was)
@@ -76,7 +76,7 @@ fn run_init(repo: &GitRepo) -> Result<bool> {
 
         let default_idx = branches.iter().position(|b| b == detected).unwrap_or(0);
 
-        let selection = Select::with_theme(&ColorfulTheme::default())
+        let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
             .with_prompt(&prompt)
             .items(&branches)
             .default(default_idx)
@@ -85,7 +85,7 @@ fn run_init(repo: &GitRepo) -> Result<bool> {
         branches[selection].clone()
     } else {
         // No auto-detection, must select
-        let selection = Select::with_theme(&ColorfulTheme::default())
+        let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
             .with_prompt("Select trunk branch (PRs target this)")
             .items(&branches)
             .interact()?;

@@ -3,7 +3,7 @@ use crate::git::GitRepo;
 use crate::remote;
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 
 /// Update the parent of a tracked branch
 pub fn run(branch: Option<String>, parent: Option<String>) -> Result<()> {
@@ -55,7 +55,7 @@ pub fn run(branch: Option<String>, parent: Option<String>) -> Result<()> {
                 })
                 .collect();
 
-            let selection = Select::with_theme(&ColorfulTheme::default())
+            let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!("Select new parent branch for '{}'", target))
                 .items(&items)
                 .default(0)

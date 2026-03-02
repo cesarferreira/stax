@@ -5,7 +5,7 @@ use crate::github::client::GitHubClient;
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 use std::process::Command;
 
 pub fn run(parent: Option<String>, all_prs: bool) -> Result<()> {
@@ -75,7 +75,7 @@ pub fn run(parent: Option<String>, all_prs: bool) -> Result<()> {
                 })
                 .collect();
 
-            let selection = Select::with_theme(&ColorfulTheme::default())
+            let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!("Select parent branch for '{}'", current))
                 .items(&items)
                 .default(0)
