@@ -60,6 +60,7 @@ stax is a modern stacked-branch workflow that keeps PRs small, rebases safe, and
 - **Ship stacks, not mega-PRs** - Submit/update a whole stack of PRs with correct bases in one command
 - **Safe history rewriting** - Transactional restacks + automatic backups + `st undo` / `st redo`
 - **Merge the stack for you** - Cascade merge bottom → current, with rebase/PR-base updates along the way
+- **Parallel AI agents** - Isolated worktrees for Codex, Claude Code, Cursor, and others — each on its own branch, restacked together with one command
 - **Drop-in compatible** - Uses freephite metadata format—existing stacks migrate instantly
 
 ## Install
@@ -1146,6 +1147,160 @@ st merge --yes --method squash
 ```
 
 </details>
+
+## Agent Worktrees
+
+`stax agent` lets you spin up isolated Git worktrees for parallel AI agents (Cursor, Codex, Aider, etc.) while keeping everything visible and manageable inside stax.
+
+Each agent gets its own directory and branch. The main repo stays clean. Stax metadata, restack, undo, and the TUI all work across agent worktrees automatically.
+
+### Quick start
+
+```bash
+# Create a worktree + stacked branch and open it in Cursor
+stax agent create "Add dark mode" --open-cursor
+
+# Reattach to a closed agent session
+stax agent open add-dark-mode
+
+# See all registered worktrees
+stax agent list
+
+# Restack all agent branches at once
+stax agent sync
+
+# Remove a finished worktree (optionally delete the branch too)
+stax agent remove add-dark-mode --delete-branch
+
+# Clean up dead entries
+stax agent prune
+```
+
+### Real-world example: running 3 agents in parallel
+
+Say you have a feature branch and want Codex, Claude Code, and OpenCode each tackling a different sub-task simultaneously — without them touching each other's files.
+
+**Step 1 — spin up three isolated worktrees (one command each):**
+
+```bash
+stax agent create "Add dark mode" --open-codex
+stax agent create "Fix auth token refresh" --open-cursor
+stax agent create "Write API integration tests"
+```
+
+Each command creates an isolated directory under `.stax/trees/` with its own branch, stacks it on your current branch, and optionally opens it in the specified editor. Your main checkout is untouched.
+
+```
+main
+ └── feature/my-feature                    ← your main checkout
+      ├── add-dark-mode                     ← Codex working here
+      ├── fix-auth-token-refresh            ← Cursor / Claude Code working here
+      └── write-api-integration-tests       ← OpenCode / terminal working here
+```
+
+**Step 2 — point each agent at its directory:**
+
+- Codex opened automatically via `--open-codex`
+- For Claude Code: run `claude` inside `.stax/trees/fix-auth-token-refresh`
+- For OpenCode: run `opencode` inside `.stax/trees/write-api-integration-tests`
+
+Each agent sees only its own branch. They cannot conflict with each other.
+
+**Step 3 — check on things while agents run:**
+
+```bash
+stax agent list   # all three worktrees, their branches, existence status
+stax status       # all three branches appear in the stack tree as normal
+```
+
+**Step 4 — come back later and reattach to a session:**
+
+```bash
+stax agent open                     # fuzzy picker to choose
+stax agent open fix-auth-token-refresh   # or by name
+```
+
+**Step 5 — trunk moved while agents were running:**
+
+```bash
+git pull
+stax agent sync   # restacks all three branches at once — no manual rebasing
+```
+
+**Step 6 — review and submit each branch normally:**
+
+```bash
+stax checkout add-dark-mode
+stax submit
+```
+
+**Step 7 — clean up when done:**
+
+```bash
+stax agent remove add-dark-mode --delete-branch
+stax agent remove fix-auth-token-refresh --delete-branch
+stax agent remove write-api-integration-tests --delete-branch
+```
+
+> **What stax does not do:** it doesn't talk to the agents or tell them what to work on — that's still you. What it solves is directory isolation, branch tracking, restack-after-trunk-moves, and the "where did I leave that session" problem that makes running parallel agents messy in practice.
+
+### How it works
+
+```
+stax agent create "Add dark mode" --open-cursor
+  │
+  ├─ slugifies title → "add-dark-mode"
+  ├─ creates branch (respects your branch.format config)
+  ├─ git worktree add .stax/trees/add-dark-mode <branch>
+  ├─ writes stax metadata (parent branch, revision)
+  ├─ registers in .git/stax/agent-worktrees.json
+  ├─ adds .stax/trees/ to .gitignore
+  └─ opens cursor -n .stax/trees/add-dark-mode
+```
+
+### All subcommands
+
+| Command | Description |
+|---------|-------------|
+| `stax agent create <title>` | Create worktree + branch |
+| `stax agent open [name]` | Reopen in editor (fuzzy picker if no name) |
+| `stax agent list` | Show all registered worktrees |
+| `stax agent register` | Register current dir as an agent worktree |
+| `stax agent remove <name>` | Remove worktree (add `--delete-branch` to also delete the branch) |
+| `stax agent prune` | Remove dead registry entries + run `git worktree prune` |
+| `stax agent sync` | Restack all registered worktrees |
+
+### Config
+
+Add to `~/.config/stax/config.toml` to customize:
+
+```toml
+[agent]
+worktrees_dir = ".stax/trees"    # relative to repo root
+default_editor = "auto"          # "auto" | "cursor" | "codex" | "code"
+post_create_hook = "npm install" # optional shell command run in new worktree
+```
+
+### Flags for `create`
+
+```
+--base <branch>       Base branch (defaults to current)
+--stack-on <branch>   Same as --base
+--open                Open in default editor after creation
+--open-cursor         Open in Cursor
+--open-codex          Open in Codex
+--no-hook             Skip post_create_hook for this run
+```
+
+### Editor slash-command recipes
+
+Ready-to-import slash command recipes live in `examples/`:
+
+| File | Editor | Command |
+|------|--------|---------|
+| [`examples/cursor/stax-new-agent.md`](examples/cursor/stax-new-agent.md) | Cursor | `stax agent create "{{input}}" --open-cursor` |
+| [`examples/codex/stax-new-agent.md`](examples/codex/stax-new-agent.md) | Codex | `stax agent create "{{input}}" --open-codex` |
+| [`examples/generic/stax-new-agent.md`](examples/generic/stax-new-agent.md) | Any (auto-detect) | `stax agent create "{{input}}" --open` |
 
 ## Benchmarks
 

@@ -103,6 +103,18 @@
 | `stax generate --pr-body` | Generate PR body with AI |
 | `stax demo` | Interactive tutorial (no auth/repo needed) |
 
+## Agent worktrees
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `stax agent create <title>` | `ag create` | Create worktree + stacked branch |
+| `stax agent open [name]` | `ag attach` | Reopen in editor (fuzzy picker if no name) |
+| `stax agent list` | `ag ls` | Show all registered worktrees |
+| `stax agent register` | | Register current dir as an agent worktree |
+| `stax agent remove [name]` | | Remove worktree (+ `--delete-branch` to delete branch) |
+| `stax agent prune` | | Remove dead registry entries + `git worktree prune` |
+| `stax agent sync` | | Restack all registered worktrees |
+
 ## Common flags
 
 - `stax create -am "msg"`
