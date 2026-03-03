@@ -6,30 +6,30 @@ stax uses the same metadata format as freephite (`refs/branch-metadata/<branch>`
 
 | freephite | graphite | stax |
 |-----------|----------|------|
-| `fp ss` | `gt submit` | `stax submit` / `stax ss` |
-| `fp bs` | `gt branch submit` | `stax branch submit` / `stax bs` |
-| `fp us submit` | `gt upstack submit` | `stax upstack submit` |
-| `fp ds submit` | `gt downstack submit` | `stax downstack submit` |
-| `fp rs` | `gt sync` | `stax sync` / `stax rs` |
-| `fp bc` | `gt create` | `stax create` / `stax bc` |
-| `fp bco` | `gt checkout` | `stax checkout` / `stax co` |
-| `fp bu` | `gt up` | `stax up` / `stax bu` |
-| `fp bd` | `gt down` | `stax down` / `stax bd` |
-| `fp ls` | `gt log` | `stax status` / `stax ls` |
-| `fp restack` | `gt restack` | `stax restack` |
-| — | `gt restack --upstack` | `stax upstack restack` |
-| — | `gt merge` | `stax merge` |
-| — | — | `stax cascade` |
-| — | — | `stax undo` / `stax redo` |
+| `fp ss` | `gt submit` | `st submit` / `st ss` |
+| `fp bs` | `gt branch submit` | `st branch submit` / `st bs` |
+| `fp us submit` | `gt upstack submit` | `st upstack submit` |
+| `fp ds submit` | `gt downstack submit` | `st downstack submit` |
+| `fp rs` | `gt sync` | `st sync` / `st rs` |
+| `fp bc` | `gt create` | `st create` / `st bc` |
+| `fp bco` | `gt checkout` | `st checkout` / `st co` |
+| `fp bu` | `gt up` | `st up` / `st bu` |
+| `fp bd` | `gt down` | `st down` / `st bd` |
+| `fp ls` | `gt log` | `st status` / `st ls` |
+| `fp restack` | `gt restack` | `st restack` |
+| — | `gt restack --upstack` | `st upstack restack` |
+| — | `gt merge` | `st merge` |
+| — | — | `st cascade` |
+| — | — | `st undo` / `st redo` |
 
 ## Short alias: `st`
 
 stax also installs as `st` — a shorter alias for the same binary:
 
 ```bash
-st ss       # same as stax submit
-st rs       # same as stax sync
-st ls       # same as stax status
+st ss       # same as st submit
+st rs       # same as st sync
+st ls       # same as st status
 ```
 
 ## Migration is instant
@@ -40,5 +40,5 @@ Install stax and your existing freephite or graphite stacks work immediately. Th
 cargo install stax
 # or: brew install cesarferreira/tap/stax
 
-stax status   # your existing stack appears immediately
+st status   # your existing stack appears immediately
 ```

@@ -4,25 +4,25 @@
 
 | Command | What it does |
 |---|---|
-| `stax u` | Move up to child branch |
-| `stax d` | Move down to parent branch |
-| `stax u 3` | Move up 3 branches |
-| `stax d 2` | Move down 2 branches |
-| `stax top` | Jump to stack tip |
-| `stax bottom` | Jump to stack base |
-| `stax trunk` / `stax t` | Jump to trunk |
-| `stax prev` | Toggle to previous branch |
-| `stax co` | Interactive branch picker |
+| `st u` | Move up to child branch |
+| `st d` | Move down to parent branch |
+| `st u 3` | Move up 3 branches |
+| `st d 2` | Move down 2 branches |
+| `st top` | Jump to stack tip |
+| `st bottom` | Jump to stack base |
+| `st trunk` / `st t` | Jump to trunk |
+| `st prev` | Toggle to previous branch |
+| `st co` | Interactive branch picker |
 
 ## Checkout shortcuts
 
-Use `stax checkout` (or `stax co`) with navigation flags:
+Use `st checkout` (or `st co`) with navigation flags:
 
-- `stax checkout --trunk` jump directly to trunk
-- `stax checkout --parent` jump to parent of current branch
-- `stax checkout --child 1` jump to first child branch
+- `st checkout --trunk` jump directly to trunk
+- `st checkout --parent` jump to parent of current branch
+- `st checkout --child 1` jump to first child branch
 
-## Reading `stax ls`
+## Reading `st ls`
 
 ```text
 ○        feature/validation 1↑

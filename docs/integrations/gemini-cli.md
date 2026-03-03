@@ -21,8 +21,8 @@ Gemini CLI loads hierarchical instructions from `GEMINI.md`, so this gives it st
 ## 3) Use Gemini with AI PR body generation
 
 ```bash
-stax generate --pr-body --agent gemini
-stax generate --pr-body --agent gemini --model gemini-2.5-flash
+st generate --pr-body --agent gemini
+st generate --pr-body --agent gemini --model gemini-2.5-flash
 ```
 
 For Claude setup, see [Claude Code Integration](claude-code.md). For Codex setup, see [Codex Integration](codex.md). For OpenCode setup, see [OpenCode Integration](opencode.md).

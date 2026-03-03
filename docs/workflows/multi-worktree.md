@@ -15,15 +15,15 @@ By default, stax fails fast when target worktrees contain uncommitted changes.
 Use `--auto-stash-pop` to stash before rebase and restore afterward:
 
 ```bash
-stax restack --auto-stash-pop
-stax upstack restack --auto-stash-pop
-stax sync --restack --auto-stash-pop
+st restack --auto-stash-pop
+st upstack restack --auto-stash-pop
+st sync --restack --auto-stash-pop
 ```
 
 If conflicts occur, stax preserves the stash entry so changes are not lost.
 
 ## Agent worktrees
 
-For running multiple AI agents (Cursor, Codex, Aider) in parallel, `stax agent` automates the full worktree lifecycle: create, open/reattach, sync, and remove.
+For running multiple AI agents (Cursor, Codex, Aider) in parallel, `st agent` automates the full worktree lifecycle: create, open/reattach, sync, and remove.
 
 See [Agent Worktrees](agent-worktrees.md) for details.

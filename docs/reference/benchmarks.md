@@ -7,7 +7,7 @@
 Raw `hyperfine` sample:
 
 ```text
-Benchmark 1: stax ls
+Benchmark 1: st ls
   Time (mean ± σ):      22.8 ms ±   1.0 ms
 
 Benchmark 2: fp ls
@@ -19,5 +19,5 @@ Benchmark 3: gt ls
 
 Summary from the sample run:
 
-- `stax ls` was ~9.18x faster than `gt ls`
-- `stax ls` was ~16.23x faster than `fp ls`
+- `st ls` was ~9.18x faster than `gt ls`
+- `st ls` was ~16.23x faster than `fp ls`

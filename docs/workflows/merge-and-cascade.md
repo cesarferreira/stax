@@ -1,9 +1,9 @@
 # Merge and Cascade
 
-## `stax merge`
+## `st merge`
 
-`stax merge` merges PRs from the bottom of your stack up to your current branch.
-Use `stax merge --when-ready` for the explicit wait-for-ready mode (legacy alias: `stax merge-when-ready` / `stax mwr`).
+`st merge` merges PRs from the bottom of your stack up to your current branch.
+Use `st merge --when-ready` for the explicit wait-for-ready mode (legacy alias: `st merge-when-ready` / `st mwr`).
 
 ### What happens
 
@@ -13,23 +13,23 @@ Use `stax merge --when-ready` for the explicit wait-for-ready mode (legacy alias
 4. Update next PR base
 5. Force-push updated branch
 6. Repeat until done
-7. Run post-merge sync (`stax rs --force`) unless `--no-sync`
+7. Run post-merge sync (`st rs --force`) unless `--no-sync`
 
 ### Common options
 
 ```bash
-stax merge --dry-run
-stax merge --all
-stax merge --method squash
-stax merge --method merge
-stax merge --method rebase
-stax merge --when-ready
-stax merge --when-ready --interval 10
-stax merge --no-wait
-stax merge --no-delete
-stax merge --no-sync
-stax merge --timeout 60
-stax merge --yes
+st merge --dry-run
+st merge --all
+st merge --method squash
+st merge --method merge
+st merge --method rebase
+st merge --when-ready
+st merge --when-ready --interval 10
+st merge --no-wait
+st merge --no-delete
+st merge --no-sync
+st merge --timeout 60
+st merge --yes
 ```
 
 `--when-ready` cannot be combined with `--dry-run` or `--no-wait`.
@@ -38,21 +38,21 @@ stax merge --yes
 
 ```bash
 # Stack: main <- auth <- auth-api <- auth-ui <- auth-tests
-stax checkout auth-api
-stax merge
+st checkout auth-api
+st merge
 ```
 
 This merges up to `auth-api` and leaves upper branches to merge later.
 
 During merge flows, descendant branches are rebased with provenance-aware boundaries so already-integrated parent commits are not replayed after squash merges. Follow-up restacks also auto-normalize missing/merged-equivalent parents and keep old boundaries so descendants replay only novel commits.
 
-## `stax cascade`
+## `st cascade`
 
-`stax cascade` combines restack + push + PR create/update in one flow.
+`st cascade` combines restack + push + PR create/update in one flow.
 
 | Command | Behavior |
 |---|---|
-| `stax cascade` | restack -> push -> create/update PRs |
-| `stax cascade --no-pr` | restack -> push |
-| `stax cascade --no-submit` | restack only |
-| `stax cascade --auto-stash-pop` | auto stash/pop dirty worktrees |
+| `st cascade` | restack -> push -> create/update PRs |
+| `st cascade --no-pr` | restack -> push |
+| `st cascade --no-submit` | restack only |
+| `st cascade --auto-stash-pop` | auto stash/pop dirty worktrees |

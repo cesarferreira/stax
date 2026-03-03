@@ -20,7 +20,7 @@ Use `.github/PULL_REQUEST_TEMPLATE/` with one file per template.
     docs.md
 ```
 
-`stax submit` shows a fuzzy template picker.
+`st submit` shows a fuzzy template picker.
 
 ### Template flags
 
@@ -33,19 +33,19 @@ Use `.github/PULL_REQUEST_TEMPLATE/` with one file per template.
 Generate and update PR body based on diff, commits, and template:
 
 ```bash
-stax generate --pr-body
+st generate --pr-body
 ```
 
 ### Prerequisites
 
 - Current branch must be tracked by stax
-- Current branch must already have a PR (for example created via `stax submit` / `stax ss`)
+- Current branch must already have a PR (for example created via `st submit` / `st ss`)
 
 If no PR exists yet, submit first:
 
 ```bash
-stax ss
-stax generate --pr-body
+st ss
+st generate --pr-body
 ```
 
 ### Options
@@ -58,13 +58,13 @@ stax generate --pr-body
 You can also generate during submit:
 
 ```bash
-stax submit --ai-body
+st submit --ai-body
 ```
 
 ```bash
-stax generate --pr-body --agent codex
-stax generate --pr-body --model claude-haiku-4-5-20251001
-stax generate --pr-body --agent gemini --model gemini-2.5-flash
-stax generate --pr-body --agent opencode
-stax generate --pr-body --edit
+st generate --pr-body --agent codex
+st generate --pr-body --model claude-haiku-4-5-20251001
+st generate --pr-body --agent gemini --model gemini-2.5-flash
+st generate --pr-body --agent opencode
+st generate --pr-body --edit
 ```

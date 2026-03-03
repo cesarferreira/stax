@@ -8,7 +8,7 @@ brew install cesarferreira/tap/stax
 cargo binstall stax
 ```
 
-Both `stax` and `st` (short alias) are installed automatically.
+Both `st` and `st` (short alias) are installed automatically.
 
 ## Verify
 

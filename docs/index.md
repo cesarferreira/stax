@@ -6,10 +6,10 @@ A modern CLI for stacked Git branches and PRs.
 
 ## Why stax?
 
-- Blazing fast Rust binary (~22ms `stax ls` on a 10-branch stack)
+- Blazing fast Rust binary (~22ms `st ls` on a 10-branch stack)
 - Interactive TUI with tree view, PR status, diffs, reorder mode, and split mode
 - Submit/update complete stacks with correct PR bases in one command
-- Transactional history operations with `stax undo` and `stax redo`
+- Transactional history operations with `st undo` and `st redo`
 - Freephite-compatible metadata, so existing stacks can be used immediately
 
 ## Start Here

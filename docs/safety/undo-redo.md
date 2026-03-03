@@ -3,9 +3,9 @@
 stax makes history rewriting safer with transactional operations and built-in recovery.
 
 ```bash
-stax restack
+st restack
 # ... conflict or bad outcome
-stax undo
+st undo
 ```
 
 ## Transaction model
@@ -17,15 +17,15 @@ For potentially destructive operations (`restack`, `submit`, `sync --restack`, T
 3. Executes operation
 4. Writes operation receipt to `.git/stax/ops/<op-id>.json`
 
-If needed, `stax undo` restores branches to exact pre-operation commits.
+If needed, `st undo` restores branches to exact pre-operation commits.
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `stax undo` | Undo the last operation |
-| `stax undo <op-id>` | Undo a specific operation |
-| `stax redo` | Re-apply the last undone operation |
+| `st undo` | Undo the last operation |
+| `st undo <op-id>` | Undo a specific operation |
+| `st redo` | Re-apply the last undone operation |
 
 ## Useful flags
 

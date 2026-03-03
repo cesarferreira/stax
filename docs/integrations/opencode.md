@@ -20,8 +20,8 @@ OpenCode loads skills from `~/.config/opencode/skills/<name>/SKILL.md`, so this 
 ## 3) Use OpenCode with AI PR body generation
 
 ```bash
-stax generate --pr-body --agent opencode
-stax generate --pr-body --agent opencode --model opencode/gpt-5.1-codex
+st generate --pr-body --agent opencode
+st generate --pr-body --agent opencode --model opencode/gpt-5.1-codex
 ```
 
 For Claude setup, see [Claude Code Integration](claude-code.md). For Codex setup, see [Codex Integration](codex.md). For Gemini setup, see [Gemini CLI Integration](gemini-cli.md).

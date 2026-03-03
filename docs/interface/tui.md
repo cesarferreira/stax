@@ -1,6 +1,6 @@
 # Interactive TUI
 
-Run `stax` with no arguments to open the terminal UI.
+Run `st` with no arguments to open the terminal UI.
 
 ```bash
 stax
@@ -48,7 +48,7 @@ stax
 Split a branch with many commits into multiple stacked branches.
 
 ```bash
-stax split
+st split
 ```
 
 | Key | Action |
@@ -61,4 +61,4 @@ stax split
 | `?` | Toggle help |
 | `q`/`Esc` | Cancel |
 
-Split operations are transactional and recoverable with `stax undo`.
+Split operations are transactional and recoverable with `st undo`.

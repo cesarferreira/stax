@@ -23,22 +23,22 @@ Each branch is a focused PR. Reviewers see smaller diffs, and your stack keeps m
 
 ```bash
 # Start the foundation
-stax create payments-models
+st create payments-models
 
 # Stack the API layer
-stax create payments-api
+st create payments-api
 
 # Stack the UI layer
-stax create payments-ui
+st create payments-ui
 
 # Submit as separate PRs
-stax ss
+st ss
 ```
 
 After the bottom PR merges:
 
 ```bash
-stax rs --restack
+st rs --restack
 ```
 
 stax rebases the rest of the stack and updates PR bases.

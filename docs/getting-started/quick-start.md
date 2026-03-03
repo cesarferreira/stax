@@ -5,10 +5,10 @@ Set up GitHub auth first (required for PR creation, CI checks, and review metada
 ```bash
 # Option A (recommended): use GitHub CLI auth
 gh auth login
-stax auth --from-gh
+st auth --from-gh
 
 # Option B: enter a personal access token manually
-stax auth
+st auth
 
 # Option C: provide a stax-specific env var
 export STAX_GITHUB_TOKEN="ghp_xxxx"
@@ -18,20 +18,20 @@ By default, stax does not use ambient `GITHUB_TOKEN` unless you opt in with `aut
 
 ```bash
 # 1. Create stacked branches
-stax create auth-api
-stax create auth-ui
+st create auth-api
+st create auth-ui
 
 # 2. View your stack
-stax ls
+st ls
 # ◉  auth-ui 1↑
 # ○  auth-api 1↑
 # ○  main
 
 # 3. Submit PRs for the whole stack
-stax ss
+st ss
 
 # 4. Sync and rebase after merges
-stax rs --restack
+st rs --restack
 ```
 
 ## Next

@@ -2,12 +2,12 @@
 
 Stax provides commands to validate, repair, and test your stack metadata.
 
-## `stax validate`
+## `st validate`
 
 Check that all branch metadata is consistent and healthy.
 
 ```bash
-stax validate
+st validate
 ```
 
 Runs these checks:
@@ -19,14 +19,14 @@ Runs these checks:
 
 Exit code `0` if healthy, `1` if issues found.
 
-## `stax fix`
+## `st fix`
 
 Auto-repair broken metadata.
 
 ```bash
-stax fix           # Interactive repair
-stax fix --yes     # Auto-approve all fixes
-stax fix --dry-run # Preview without changing anything
+st fix           # Interactive repair
+st fix --yes     # Auto-approve all fixes
+st fix --dry-run # Preview without changing anything
 ```
 
 Repairs:
@@ -35,17 +35,17 @@ Repairs:
 - Deletes invalid metadata (unparseable JSON)
 - Reports branches that need restack
 
-Wrapped in a transaction for undo support (`stax undo`).
+Wrapped in a transaction for undo support (`st undo`).
 
-## `stax test <cmd>`
+## `st test <cmd>`
 
 Run a shell command on each branch in the stack.
 
 ```bash
-stax test "cargo test"          # Run tests on each branch
-stax test "make lint"           # Run linting on each branch
-stax test --fail-fast "cargo check"  # Stop on first failure
-stax test --all "true"          # Run on all tracked branches
+st test "cargo test"          # Run tests on each branch
+st test "make lint"           # Run linting on each branch
+st test --fail-fast "cargo check"  # Stop on first failure
+st test --all "true"          # Run on all tracked branches
 ```
 
 | Flag | Description |

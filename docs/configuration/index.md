@@ -1,7 +1,7 @@
 # Configuration
 
 ```bash
-stax config
+st config
 ```
 
 Main config path: `~/.config/stax/config.toml`
@@ -57,7 +57,7 @@ The legacy `prefix` field still works when `format` is not set.
 4. `GITHUB_TOKEN` (only if `auth.allow_github_token_env = true`)
 
 ```bash
-stax auth status
+st auth status
 ```
 
 The credentials file is written with `600` permissions.

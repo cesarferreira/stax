@@ -4,16 +4,16 @@ You can keep multiple independent stacks in the same repository.
 
 ```bash
 # Stack A
-stax create auth
-stax create auth-login
-stax create auth-validation
+st create auth
+st create auth-login
+st create auth-validation
 
 # Stack B (hotfix)
-stax co main
-stax create hotfix-payment
+st co main
+st create hotfix-payment
 
 # View all stacks
-stax ls
+st ls
 ```
 
 Example output:
