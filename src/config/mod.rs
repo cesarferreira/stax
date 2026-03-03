@@ -17,6 +17,8 @@ pub struct Config {
     pub ai: AiConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub agent: AgentConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -90,6 +92,29 @@ pub struct AuthConfig {
     /// Optional GitHub hostname for `gh auth token --hostname` (enterprise)
     #[serde(default)]
     pub gh_hostname: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AgentConfig {
+    /// Directory for agent worktrees, relative to repo root (default: .stax/trees)
+    #[serde(default = "default_worktrees_dir")]
+    pub worktrees_dir: String,
+    /// Default editor: "auto" | "cursor" | "codex" (default: auto)
+    #[serde(default = "default_agent_editor")]
+    pub default_editor: String,
+    /// Optional shell command to run after creating a worktree (e.g. "npm install")
+    #[serde(default)]
+    pub post_create_hook: Option<String>,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            worktrees_dir: default_worktrees_dir(),
+            default_editor: default_agent_editor(),
+            post_create_hook: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +195,14 @@ impl Default for AuthConfig {
 
 fn default_replacement() -> String {
     "-".to_string()
+}
+
+fn default_worktrees_dir() -> String {
+    ".stax/trees".to_string()
+}
+
+fn default_agent_editor() -> String {
+    "auto".to_string()
 }
 
 fn default_remote_name() -> String {

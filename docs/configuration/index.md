@@ -31,6 +31,11 @@ Main config path: `~/.config/stax/config.toml`
 [ai]
 # agent = "claude" # or "codex" / "gemini" / "opencode"
 # model = "claude-sonnet-4-5-20250929"
+
+[agent]
+# worktrees_dir = ".stax/trees"
+# default_editor = "auto"   # "auto" | "cursor" | "codex" | "code"
+# post_create_hook = ""     # shell command run inside new worktree after creation
 ```
 
 ## Branch naming format

@@ -1147,6 +1147,90 @@ st merge --yes --method squash
 
 </details>
 
+## Agent Worktrees
+
+`stax agent` lets you spin up isolated Git worktrees for parallel AI agents (Cursor, Codex, Aider, etc.) while keeping everything visible and manageable inside stax.
+
+Each agent gets its own directory and branch. The main repo stays clean. Stax metadata, restack, undo, and the TUI all work across agent worktrees automatically.
+
+### Quick start
+
+```bash
+# Create a worktree + stacked branch and open it in Cursor
+stax agent create "Add dark mode" --open-cursor
+
+# Reattach to a closed agent session
+stax agent open add-dark-mode
+
+# See all registered worktrees
+stax agent list
+
+# Restack all agent branches at once
+stax agent sync
+
+# Remove a finished worktree (optionally delete the branch too)
+stax agent remove add-dark-mode --delete-branch
+
+# Clean up dead entries
+stax agent prune
+```
+
+### How it works
+
+```
+stax agent create "Add dark mode" --open-cursor
+  │
+  ├─ slugifies title → "add-dark-mode"
+  ├─ creates branch (respects your branch.format config)
+  ├─ git worktree add .stax/trees/add-dark-mode <branch>
+  ├─ writes stax metadata (parent branch, revision)
+  ├─ registers in .git/stax/agent-worktrees.json
+  ├─ adds .stax/trees/ to .gitignore
+  └─ opens cursor -n .stax/trees/add-dark-mode
+```
+
+### All subcommands
+
+| Command | Description |
+|---------|-------------|
+| `stax agent create <title>` | Create worktree + branch |
+| `stax agent open [name]` | Reopen in editor (fuzzy picker if no name) |
+| `stax agent list` | Show all registered worktrees |
+| `stax agent register` | Register current dir as an agent worktree |
+| `stax agent remove <name>` | Remove worktree (add `--delete-branch` to also delete the branch) |
+| `stax agent prune` | Remove dead registry entries + run `git worktree prune` |
+| `stax agent sync` | Restack all registered worktrees |
+
+### Config
+
+Add to `~/.config/stax/config.toml` to customize:
+
+```toml
+[agent]
+worktrees_dir = ".stax/trees"    # relative to repo root
+default_editor = "auto"          # "auto" | "cursor" | "codex" | "code"
+post_create_hook = "npm install" # optional shell command run in new worktree
+```
+
+### Flags for `create`
+
+```
+--base <branch>       Base branch (defaults to current)
+--stack-on <branch>   Same as --base
+--open                Open in default editor after creation
+--open-cursor         Open in Cursor
+--open-codex          Open in Codex
+--no-hook             Skip post_create_hook for this run
+```
+
+### Cursor integration
+
+The file [`examples/cursor/stax-new-agent.md`](examples/cursor/stax-new-agent.md) is a ready-to-use Cursor slash command recipe:
+
+```
+stax agent create "{{input}}" --open-cursor
+```
+
 ## Benchmarks
 
 | Command | [stax](https://github.com/cesarferreira/stax) | [freephite](https://github.com/bradymadden97/freephite) | [graphite](https://github.com/withgraphite/graphite-cli) |

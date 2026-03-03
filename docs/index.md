@@ -23,6 +23,7 @@ A modern CLI for stacked Git branches and PRs.
 - Learn stacked-branch flow: [Stacked Branches](concepts/stacked-branches.md)
 - Work interactively in terminal: [Interactive TUI](interface/tui.md)
 - Merge an entire stack safely: [Merge and Cascade](workflows/merge-and-cascade.md)
+- Run parallel AI agents: [Agent Worktrees](workflows/agent-worktrees.md)
 - Recover from risky rewrites: [Undo and Redo](safety/undo-redo.md)
 - Configure auth and naming: [Config Reference](configuration/index.md)
 - Validate and repair stack health: [Stack Health](commands/stack-health.md)

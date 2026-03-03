@@ -614,6 +614,10 @@ enum Commands {
         quiet: bool,
     },
 
+    /// Manage parallel AI agent worktrees
+    #[command(subcommand, visible_alias = "ag")]
+    Agent(AgentCommands),
+
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
     Bc {
@@ -817,6 +821,65 @@ enum DownstackCommands {
         #[command(flatten)]
         submit: SubmitOptions,
     },
+}
+
+#[derive(Subcommand)]
+enum AgentCommands {
+    /// Create a new agent worktree + stacked branch
+    Create {
+        /// Human title — slugified into branch name and folder (e.g. "Add dark mode")
+        title: String,
+        /// Base branch to create from (defaults to current)
+        #[arg(long)]
+        base: Option<String>,
+        /// Stack on this branch (alias for --base)
+        #[arg(long)]
+        stack_on: Option<String>,
+        /// Open the worktree in the default editor after creation
+        #[arg(long)]
+        open: bool,
+        /// Open in Cursor after creation
+        #[arg(long)]
+        open_cursor: bool,
+        /// Open in Codex after creation
+        #[arg(long)]
+        open_codex: bool,
+        /// Skip post-create hook even if configured
+        #[arg(long)]
+        no_hook: bool,
+    },
+
+    /// Open (reattach to) an agent worktree in the editor
+    #[command(visible_alias = "attach")]
+    Open {
+        /// Name or slug of the worktree (interactive picker if omitted)
+        name: Option<String>,
+    },
+
+    /// List all registered agent worktrees
+    #[command(visible_aliases = ["ls"])]
+    List,
+
+    /// Register the current directory as a managed agent worktree
+    Register,
+
+    /// Remove an agent worktree (and optionally its branch)
+    Remove {
+        /// Name or slug of the worktree (interactive picker if omitted)
+        name: Option<String>,
+        /// Force removal even if the worktree has uncommitted changes
+        #[arg(short, long)]
+        force: bool,
+        /// Also delete the branch and its stax metadata
+        #[arg(long)]
+        delete_branch: bool,
+    },
+
+    /// Remove stale registry entries and run git worktree prune
+    Prune,
+
+    /// Restack all registered agent worktrees
+    Sync,
 }
 
 fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Result<()> {
@@ -1191,6 +1254,29 @@ fn main() -> Result<()> {
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
         Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
+        Commands::Agent(cmd) => match cmd {
+            AgentCommands::Create {
+                title,
+                base,
+                stack_on,
+                open,
+                open_cursor,
+                open_codex,
+                no_hook,
+            } => commands::agent::create::run(
+                title, base, stack_on, open, open_cursor, open_codex, no_hook,
+            ),
+            AgentCommands::Open { name } => commands::agent::open::run(name),
+            AgentCommands::List => commands::agent::list::run(),
+            AgentCommands::Register => commands::agent::register::run(),
+            AgentCommands::Remove {
+                name,
+                force,
+                delete_branch,
+            } => commands::agent::remove::run(name, force, delete_branch),
+            AgentCommands::Prune => commands::agent::prune::run(),
+            AgentCommands::Sync => commands::agent::sync::run(),
+        },
     };
 
     // Show update notification (from cache, instant) and spawn background check for next run

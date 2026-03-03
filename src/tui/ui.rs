@@ -1,5 +1,7 @@
 use crate::tui::app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
-use crate::tui::widgets::{render_details, render_diff, render_reorder_preview, render_stack_tree};
+use crate::tui::widgets::{
+    render_agent_worktrees, render_details, render_diff, render_reorder_preview, render_stack_tree,
+};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -24,14 +26,29 @@ pub fn render(f: &mut Frame, app: &App) {
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(chunks[0]);
 
-    // Left panel: stack tree (top) + details (bottom)
-    let left_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(main_chunks[0]);
+    // Left panel: stack tree + details (+ agents section when worktrees are registered)
+    if app.agent_worktrees.is_empty() {
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .split(main_chunks[0]);
 
-    render_stack_tree(f, app, left_chunks[0]);
-    render_details(f, app, left_chunks[1]);
+        render_stack_tree(f, app, left_chunks[0]);
+        render_details(f, app, left_chunks[1]);
+    } else {
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(50), // stack tree
+                Constraint::Percentage(30), // branch details
+                Constraint::Percentage(20), // active agents
+            ])
+            .split(main_chunks[0]);
+
+        render_stack_tree(f, app, left_chunks[0]);
+        render_details(f, app, left_chunks[1]);
+        render_agent_worktrees(f, app, left_chunks[2]);
+    }
 
     // Show reorder preview panel in reorder mode, otherwise show diff
     if matches!(app.mode, Mode::Reorder)
