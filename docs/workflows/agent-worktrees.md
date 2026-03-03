@@ -107,15 +107,17 @@ default_editor = "auto"          # "auto" | "cursor" | "codex" | "code"
 post_create_hook = "npm install" # optional: run in new worktree after creation
 ```
 
-## Cursor slash-command recipe
+## Editor slash-command recipes
 
-The file [`examples/cursor/stax-new-agent.md`](../../examples/cursor/stax-new-agent.md) is a ready-to-import Cursor slash command:
+Ready-to-import slash command recipes live in `examples/`:
 
-```
-stax agent create "{{input}}" --open-cursor
-```
+| File | Editor | Command |
+|------|--------|---------|
+| [`examples/cursor/stax-new-agent.md`](../../examples/cursor/stax-new-agent.md) | Cursor | `stax agent create "{{input}}" --open-cursor` |
+| [`examples/codex/stax-new-agent.md`](../../examples/codex/stax-new-agent.md) | Codex | `stax agent create "{{input}}" --open-codex` |
+| [`examples/generic/stax-new-agent.md`](../../examples/generic/stax-new-agent.md) | Any (auto-detect) | `stax agent create "{{input}}" --open` |
 
-This creates a stacked branch + worktree and opens it in a new Cursor window in one step.
+Each creates a stacked branch + worktree and opens it in the target editor in one step.
 
 ## Relationship to `stax undo`
 
