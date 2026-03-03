@@ -1,15 +1,44 @@
 # Freephite and Graphite Compatibility
 
-stax uses freephite-compatible metadata and offers matching command paths for common operations.
+stax uses the same metadata format as freephite (`refs/branch-metadata/<branch>`) so your existing stacks work immediately after install — no migration needed.
 
-| freephite | stax | graphite | stax |
-|---|---|---|---|
-| `fp ss` | `stax ss` | `gt submit` | `stax submit` |
-| `fp rs` | `stax rs` | `gt sync` | `stax sync` |
-| `fp bc` | `stax bc` | `gt create` | `stax create` |
-| `fp bco` | `stax bco` | `gt checkout` | `stax co` |
-| `fp bu` | `stax bu` | `gt up` | `stax u` |
-| `fp bd` | `stax bd` | `gt down` | `stax d` |
-| `fp ls` | `stax ls` | `gt log` | `stax log` |
+## Command mapping
 
-Migration is immediate for most repositories: install stax and continue with your existing stack metadata.
+| freephite | graphite | stax |
+|-----------|----------|------|
+| `fp ss` | `gt submit` | `stax submit` / `stax ss` |
+| `fp bs` | `gt branch submit` | `stax branch submit` / `stax bs` |
+| `fp us submit` | `gt upstack submit` | `stax upstack submit` |
+| `fp ds submit` | `gt downstack submit` | `stax downstack submit` |
+| `fp rs` | `gt sync` | `stax sync` / `stax rs` |
+| `fp bc` | `gt create` | `stax create` / `stax bc` |
+| `fp bco` | `gt checkout` | `stax checkout` / `stax co` |
+| `fp bu` | `gt up` | `stax up` / `stax bu` |
+| `fp bd` | `gt down` | `stax down` / `stax bd` |
+| `fp ls` | `gt log` | `stax status` / `stax ls` |
+| `fp restack` | `gt restack` | `stax restack` |
+| — | `gt restack --upstack` | `stax upstack restack` |
+| — | `gt merge` | `stax merge` |
+| — | — | `stax cascade` |
+| — | — | `stax undo` / `stax redo` |
+
+## Short alias: `st`
+
+stax also installs as `st` — a shorter alias for the same binary:
+
+```bash
+st ss       # same as stax submit
+st rs       # same as stax sync
+st ls       # same as stax status
+```
+
+## Migration is instant
+
+Install stax and your existing freephite or graphite stacks work immediately. The metadata format is identical.
+
+```bash
+cargo install stax
+# or: brew install cesarferreira/tap/stax
+
+stax status   # your existing stack appears immediately
+```
