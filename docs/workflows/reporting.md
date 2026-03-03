@@ -38,11 +38,12 @@ The summary is word-wrapped and displayed in a card that fits your terminal widt
 
   ╭──────────────────────────────────────────────────────────────────╮
   │                                                                  │
-  │  Yesterday I shipped the Android UI release bump and wrapped     │
-  │  up the robot-android agents guidance. I also opened two PRs     │
-  │  for the robotaxi UI improvements and a faster mock-server,      │
-  │  and those are now out for review. Today I'm focused on          │
-  │  review follow-ups and have some branch cleanup to do.           │
+  │  Yesterday I finished the billing webhook retry fix and split    │
+  │  the reporting dashboard cleanup into two PRs so review stays    │
+  │  small. I also opened a third PR to speed up integration tests   │
+  │  by caching seed data, and all three are now in review. Today    │
+  │  I'm handling review feedback and preparing the next analytics   │
+  │  task.                                                           │
   │                                                                  │
   ╰──────────────────────────────────────────────────────────────────╯
 ```
