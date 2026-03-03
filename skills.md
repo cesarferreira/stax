@@ -83,6 +83,14 @@ stax validate                  # Validate stack metadata
 stax fix                       # Auto-repair metadata
 stax test <cmd...>             # Run command on each branch
 stax demo                      # Interactive tutorial
+
+stax agent create <title>      # Create isolated worktree + stacked branch for an AI agent
+stax agent open [name]         # Reopen a worktree in the editor (fuzzy picker if no name)
+stax agent list|ls             # List all registered agent worktrees
+stax agent register            # Register current dir as an agent worktree
+stax agent remove [name]       # Remove worktree (+ --delete-branch to also delete branch)
+stax agent prune               # Remove dead registry entries + git worktree prune
+stax agent sync                # Restack all registered agent worktrees at once
 ```
 
 ## High-Value Commands and Flags
@@ -229,6 +237,28 @@ stax generate --pr-body --edit     # Open editor before update
 stax generate --pr-body --agent codex --model gpt-5
 ```
 
+### Agent Worktrees (parallel AI agents)
+
+```bash
+stax agent create "Add dark mode" --open-codex    # Create worktree + branch, open in Codex
+stax agent create "Fix auth bug" --open-cursor    # Open in Cursor
+stax agent create "Write tests"                   # Create without opening
+stax agent create "Feature X" --stack-on main     # Explicit base branch
+stax agent create "Feature X" --no-hook           # Skip post_create_hook
+
+stax agent open                                   # Fuzzy picker to reattach to any session
+stax agent open add-dark-mode                     # Reattach by name
+
+stax agent list                                   # Table: name, branch, exists, open command
+stax agent register                               # Register current dir/branch in the registry
+
+stax agent sync                                   # Restack ALL agent worktrees after trunk moves
+stax agent remove add-dark-mode                   # Remove worktree, keep branch
+stax agent remove add-dark-mode --delete-branch   # Remove worktree + delete branch + metadata
+stax agent remove add-dark-mode --force           # Force remove dirty worktree
+stax agent prune                                  # Clean dead entries + git worktree prune
+```
+
 ### Maintenance, Safety, and Setup
 
 ```bash
@@ -311,6 +341,40 @@ stax fix --dry-run
 stax fix --yes
 ```
 
+### Run Multiple AI Agents in Parallel
+
+Each agent gets its own isolated worktree and branch. They cannot conflict.
+
+```bash
+# 1. Create one worktree per task
+stax agent create "Add dark mode" --open-codex
+stax agent create "Fix auth refresh" --open-cursor
+stax agent create "Write integration tests"
+
+# Point Claude Code or OpenCode at the third worktree manually:
+#   claude     (inside .stax/trees/write-integration-tests)
+#   opencode   (inside .stax/trees/write-integration-tests)
+
+# 2. Check status while agents run
+stax agent list      # see all three + existence status
+stax status          # all three branches appear in normal stack tree
+
+# 3. Reattach to a session later
+stax agent open      # fuzzy picker
+stax agent open fix-auth-refresh
+
+# 4. Trunk moved — restack everything at once
+git pull
+stax agent sync
+
+# 5. Review and submit each branch normally
+stax checkout add-dark-mode
+stax submit
+
+# 6. Clean up
+stax agent remove add-dark-mode --delete-branch
+```
+
 ## Reading Stack Output
 
 ```
@@ -338,6 +402,8 @@ Symbols:
 4. Prefer amend flow (`stax m`) to keep one commit per branch.
 5. Validate and repair metadata (`stax validate`, `stax fix`) before deep stack surgery.
 6. Check stack shape (`stax ls` / `stax ll`) before submit or merge.
+7. Use `stax agent create` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
+8. After trunk moves, run `stax agent sync` once instead of rebasing each agent worktree manually.
 
 ## Tips
 
@@ -346,3 +412,4 @@ Symbols:
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`.
 - Use `--yes` for non-interactive scripting.
 - Use `--json` on supported commands for machine-readable output.
+- Use `stax agent open` with no arguments for a fuzzy picker over all registered agent sessions — useful when you forget where a session lives.

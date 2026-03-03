@@ -60,6 +60,7 @@ stax is a modern stacked-branch workflow that keeps PRs small, rebases safe, and
 - **Ship stacks, not mega-PRs** - Submit/update a whole stack of PRs with correct bases in one command
 - **Safe history rewriting** - Transactional restacks + automatic backups + `st undo` / `st redo`
 - **Merge the stack for you** - Cascade merge bottom → current, with rebase/PR-base updates along the way
+- **Parallel AI agents** - Isolated worktrees for Codex, Claude Code, Cursor, and others — each on its own branch, restacked together with one command
 - **Drop-in compatible** - Uses freephite metadata format—existing stacks migrate instantly
 
 ## Install
