@@ -1,11 +1,14 @@
+use crate::commands::generate;
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
 use crate::github::{GitHubClient, PrActivity, ReviewActivity};
+use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
+use regex::Regex;
 use serde::Serialize;
 
 /// JSON output structure for standup
@@ -54,14 +57,26 @@ struct NeedsAttention {
     prs_with_requested_changes: Vec<String>,
 }
 
-pub fn run(json: bool, all: bool, hours: i64) -> Result<()> {
+/// All collected standup activity in one place.
+struct StandupData {
+    hours: i64,
+    current_branch: String,
+    trunk: String,
+    merged_prs: Vec<PrActivity>,
+    opened_prs: Vec<PrActivity>,
+    reviews_received: Vec<ReviewActivity>,
+    reviews_given: Vec<ReviewActivity>,
+    recent_pushes: Vec<PushActivity>,
+    needs_attention: NeedsAttention,
+}
+
+fn collect_standup_data(all: bool, hours: i64) -> Result<StandupData> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
     let config = Config::load()?;
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
 
-    // Get branches to check for activity
     let branches_to_show: Vec<String> = if all {
         stack
             .branches
@@ -77,22 +92,70 @@ pub fn run(json: bool, all: bool, hours: i64) -> Result<()> {
             .collect()
     };
 
-    // Fetch GitHub activity
     let (merged_prs, opened_prs, reviews_received, reviews_given) =
         fetch_github_activity(&remote_info, hours);
 
-    // Get recent push activity from git
     let recent_pushes = get_recent_pushes(&repo, &branches_to_show, hours);
-
-    // Build needs attention section
     let needs_attention =
         build_needs_attention(&repo, &stack, &branches_to_show, &reviews_received);
+
+    Ok(StandupData {
+        hours,
+        current_branch: current,
+        trunk: stack.trunk,
+        merged_prs,
+        opened_prs,
+        reviews_received,
+        reviews_given,
+        recent_pushes,
+        needs_attention,
+    })
+}
+
+pub fn run(json: bool, all: bool, hours: i64, summary: bool, agent_flag: Option<String>, plain_text: bool) -> Result<()> {
+    if plain_text && !summary {
+        bail!("--plain-text only applies when used with --summary");
+    }
+
+    let data = collect_standup_data(all, hours)?;
+
+    if summary {
+        // --summary --json → {"summary": "..."}
+        if json {
+            let raw = generate_summary(&data, agent_flag.as_deref(), true)?;
+            let out = serde_json::json!({ "summary": raw.trim() });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+            return Ok(());
+        }
+        // --summary --plain-text → raw text, no spinner, no colors
+        if plain_text {
+            let raw = generate_summary(&data, agent_flag.as_deref(), true)?;
+            println!("{}", raw.trim());
+            return Ok(());
+        }
+        // --summary alone → spinner + colored output
+        let summary_text = generate_summary(&data, agent_flag.as_deref(), false)?;
+        println!("{}", summary_text.trim());
+        return Ok(());
+    }
+
+    let StandupData {
+        hours,
+        current_branch,
+        trunk,
+        merged_prs,
+        opened_prs,
+        reviews_received,
+        reviews_given,
+        recent_pushes,
+        needs_attention,
+    } = data;
 
     if json {
         let output = StandupJson {
             period_hours: hours,
-            current_branch: current.clone(),
-            trunk: stack.trunk.clone(),
+            current_branch: current_branch.clone(),
+            trunk: trunk.clone(),
             merged_prs: merged_prs
                 .iter()
                 .map(|pr| PrActivityJson {
@@ -274,6 +337,147 @@ pub fn run(json: bool, all: bool, hours: i64) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn build_standup_prompt(data: &StandupData) -> String {
+    let period = if data.hours == 24 {
+        "last 24 hours".to_string()
+    } else {
+        format!("last {} hours", data.hours)
+    };
+
+    let mut prompt = String::new();
+    prompt.push_str(
+        "You are writing a standup update that will be spoken out loud in a team meeting. \
+        Write 2-3 short, natural sentences in first person. \
+        Focus on WHAT was worked on, not git mechanics. \
+        Do NOT mention PR numbers, branch names, or commit counts — those are noise. \
+        Do NOT list items — write flowing sentences like a human would say them. \
+        If there are branches needing restack or cleanup, just say something vague like \
+        \"I also have some branch cleanup to do\" — don't enumerate them. \
+        Past tense for finished work, present/future for what's next.\n\n",
+    );
+    prompt.push_str(&format!("Activity from the {}:\n\n", period));
+
+    if !data.merged_prs.is_empty() {
+        prompt.push_str("Shipped/merged:\n");
+        for pr in &data.merged_prs {
+            prompt.push_str(&format!("- {}\n", pr.title));
+        }
+        prompt.push('\n');
+    }
+
+    if !data.opened_prs.is_empty() {
+        prompt.push_str("Opened for review:\n");
+        for pr in &data.opened_prs {
+            prompt.push_str(&format!("- {}\n", pr.title));
+        }
+        prompt.push('\n');
+    }
+
+    // Deduplicate reviews by PR number so the same PR doesn't appear multiple times
+    let mut seen_review_prs = std::collections::HashSet::new();
+    let unique_reviews_given: Vec<_> = data
+        .reviews_given
+        .iter()
+        .filter(|r| seen_review_prs.insert(r.pr_number))
+        .collect();
+
+    if !unique_reviews_given.is_empty() {
+        let count = unique_reviews_given.len();
+        prompt.push_str(&format!("Reviewed {} PR(s) from teammates.\n\n", count));
+    }
+
+    let has_attention = !data.needs_attention.branches_needing_restack.is_empty()
+        || !data.needs_attention.ci_failing.is_empty()
+        || !data.needs_attention.prs_with_requested_changes.is_empty();
+
+    if !data.needs_attention.prs_with_requested_changes.is_empty() {
+        prompt.push_str("Blockers: has PRs with requested changes that need addressing.\n\n");
+    } else if has_attention {
+        prompt.push_str("Has some branch/stack cleanup to do today.\n\n");
+    }
+
+    prompt.push_str("Write only the standup update — no preamble, no labels, just the sentences.");
+    prompt
+}
+
+fn generate_summary(data: &StandupData, agent_flag: Option<&str>, quiet: bool) -> Result<String> {
+    let config = Config::load()?;
+
+    let agent = if let Some(a) = agent_flag {
+        a.to_string()
+    } else {
+        config
+            .ai
+            .agent
+            .as_deref()
+            .filter(|a| !a.is_empty())
+            .context(
+                "No AI agent configured. Add [ai] agent = \"claude\" (or \"codex\" / \"gemini\" / \"opencode\") \
+                 to ~/.config/stax/config.toml, or pass --agent <name>",
+            )?
+            .to_string()
+    };
+
+    let model = config.ai.model.clone();
+    let prompt = build_standup_prompt(data);
+
+    if quiet {
+        let raw = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt)?;
+        return Ok(raw);
+    }
+
+    let timer = LiveTimer::new(&format!("Generating standup summary with {}", agent));
+    let result = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt);
+    timer.finish_timed();
+    Ok(colorize_summary(&result?))
+}
+
+/// Apply terminal colors to key phrases in the AI-generated standup text.
+fn colorize_summary(text: &str) -> String {
+    // Patterns and their colorizers, applied in order (word-boundary aware where needed).
+    // Each entry: (regex pattern, replacement closure).
+    // We process word by word isn't practical with `colored`, so we use regex replace
+    // with ANSI escape codes directly via the `colored` crate on captured groups.
+
+    let rules: &[(&str, &dyn Fn(&str) -> String)] = &[
+        // Shipped / completed work → green
+        (
+            r"(?i)\b(shipped|merged|landed|released|finished|completed|closed|deployed)\b",
+            &|m: &str| m.green().bold().to_string(),
+        ),
+        // Active / in-progress work → cyan
+        (
+            r"(?i)\b(opened|submitted|created|started|pushed|added|wrote|built)\b",
+            &|m: &str| m.cyan().to_string(),
+        ),
+        // Reviewing / collaboration → blue
+        (
+            r"(?i)\b(reviewed|approved|commented|feedback)\b",
+            &|m: &str| m.blue().to_string(),
+        ),
+        // Blockers / upcoming tasks → yellow
+        (
+            r"(?i)\b(today|next|cleanup|restack|rebas\w*|unblock\w*|fix\w*|need\w*|working on|going to|plan\w*|also have)\b",
+            &|m: &str| m.yellow().to_string(),
+        ),
+        // "some branch cleanup" type phrases → yellow (multi-word)
+        (
+            r"(?i)(some\s+\w+\s+cleanup|some cleanup)",
+            &|m: &str| m.yellow().to_string(),
+        ),
+    ];
+
+    let mut result = text.to_string();
+    for (pattern, colorize) in rules {
+        let re = Regex::new(pattern).expect("invalid regex");
+        // regex::Regex::replace_all with a closure that applies color
+        result = re
+            .replace_all(&result, |caps: &regex::Captures| colorize(&caps[0]))
+            .to_string();
+    }
+    result
 }
 
 fn fetch_github_activity(

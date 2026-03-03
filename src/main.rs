@@ -527,7 +527,7 @@ enum Commands {
 
     /// Generate standup summary of recent activity
     Standup {
-        /// Output JSON for scripting
+        /// Output raw JSON (standup data, or summary JSON when combined with --summary)
         #[arg(long)]
         json: bool,
         /// Show all stacks (not just current)
@@ -536,6 +536,15 @@ enum Commands {
         /// Time window in hours (default: 24)
         #[arg(long, default_value = "24")]
         hours: i64,
+        /// Summarize standup using AI agent
+        #[arg(long)]
+        summary: bool,
+        /// AI agent to use (claude, codex, gemini, opencode). Defaults to config or auto-detect
+        #[arg(long)]
+        agent: Option<String>,
+        /// Output plain text with no colors or spinner (useful for piping)
+        #[arg(long)]
+        plain_text: bool,
     },
 
     /// Generate content using AI
@@ -1151,7 +1160,14 @@ fn main() -> Result<()> {
             fail_fast,
         } => commands::stack_cmd::run_test(cmd, all, fail_fast),
         Commands::Demo => unreachable!(), // Handled above
-        Commands::Standup { json, all, hours } => commands::standup::run(json, all, hours),
+        Commands::Standup {
+            json,
+            all,
+            hours,
+            summary,
+            agent,
+            plain_text,
+        } => commands::standup::run(json, all, hours, summary, agent, plain_text),
         Commands::Generate {
             pr_body,
             edit,
