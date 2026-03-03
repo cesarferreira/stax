@@ -74,6 +74,9 @@ struct SubmitOptions {
     /// Generate PR body using AI (claude, codex, or gemini)
     #[arg(long)]
     ai_body: bool,
+    /// Re-request review from existing reviewers when updating PRs
+    #[arg(long)]
+    rerequest_review: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -318,6 +321,9 @@ enum Commands {
     #[command(visible_alias = "cont")]
     Continue,
 
+    /// Abort an in-progress rebase/conflict resolution
+    Abort,
+
     /// Stage all changes and amend them to the current commit
     #[command(visible_alias = "m")]
     Modify {
@@ -473,6 +479,51 @@ enum Commands {
         #[arg(long)]
         pr: bool,
     },
+
+    /// Remove a branch from its stack (reparent children to parent)
+    Detach {
+        /// Branch to detach (defaults to current)
+        branch: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Interactively reorder branches within a stack
+    Reorder {
+        /// Skip confirmation prompts
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Validate stack metadata health
+    Validate,
+
+    /// Auto-repair broken metadata
+    Fix {
+        /// Show what would be fixed without changing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Auto-approve prompts
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Run a command on each branch in the stack
+    Test {
+        /// Command to run
+        #[arg(trailing_var_arg = true, required = true)]
+        cmd: Vec<String>,
+        /// Run on all tracked branches (not just current stack)
+        #[arg(long)]
+        all: bool,
+        /// Stop after first failure
+        #[arg(long)]
+        fail_fast: bool,
+    },
+
+    /// Interactive tutorial (no auth or repo needed)
+    Demo,
 
     /// Generate standup summary of recent activity
     Standup {
@@ -787,6 +838,7 @@ fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Re
         submit.no_template,
         submit.edit,
         submit.ai_body,
+        submit.rerequest_review,
     )
 }
 
@@ -835,6 +887,12 @@ fn main() -> Result<()> {
         }
         Commands::Doctor => {
             let result = commands::doctor::run();
+            update::show_update_notification();
+            update::check_in_background();
+            return result;
+        }
+        Commands::Demo => {
+            let result = commands::demo::run();
             update::show_update_notification();
             update::check_in_background();
             return result;
@@ -979,6 +1037,7 @@ fn main() -> Result<()> {
             child,
         } => commands::checkout::run(branch, trunk, parent, child),
         Commands::Continue => commands::continue_cmd::run(),
+        Commands::Abort => commands::abort::run(),
         Commands::Modify { message, quiet } => commands::modify::run(message, quiet),
         Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Config => unreachable!(),      // Handled above
@@ -1019,6 +1078,16 @@ fn main() -> Result<()> {
             };
             commands::copy::run(target)
         }
+        Commands::Detach { branch, yes } => commands::detach::run(branch, yes),
+        Commands::Reorder { yes } => commands::reorder::run(yes),
+        Commands::Validate => commands::stack_cmd::run_validate(),
+        Commands::Fix { dry_run, yes } => commands::stack_cmd::run_fix(dry_run, yes),
+        Commands::Test {
+            cmd,
+            all,
+            fail_fast,
+        } => commands::stack_cmd::run_test(cmd, all, fail_fast),
+        Commands::Demo => unreachable!(), // Handled above
         Commands::Standup { json, all, hours } => commands::standup::run(json, all, hours),
         Commands::Generate {
             pr_body,

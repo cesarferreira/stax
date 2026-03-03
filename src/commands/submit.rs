@@ -95,6 +95,7 @@ pub fn run(
     no_template: bool,
     edit: bool,
     ai_body: bool,
+    rerequest_review: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
@@ -902,6 +903,17 @@ pub fn run(
 
                     apply_pr_metadata(&client, existing_pr_number, &reviewers, &labels, &assignees)
                         .await?;
+
+                    // Re-request review from existing reviewers if flag is set
+                    if rerequest_review {
+                        let existing_reviewers =
+                            client.get_requested_reviewers(existing_pr_number).await.unwrap_or_default();
+                        if !existing_reviewers.is_empty() {
+                            client
+                                .request_reviewers(existing_pr_number, &existing_reviewers)
+                                .await?;
+                        }
+                    }
 
                     LiveTimer::maybe_finish_ok(update_timer, "done");
 
