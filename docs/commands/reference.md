@@ -11,6 +11,7 @@
 | `stax merge` | | Merge PRs bottom -> current with provenance-aware descendant rebases, then sync local repo (`--no-sync` to skip) |
 | `stax merge-when-ready` | `mwr` | Backward-compatible alias for `stax merge --when-ready` |
 | `stax sync` | `rs` | Pull trunk, delete merged branches, preserve child provenance for restack |
+| `stax sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
 | `stax restack` | | Rebase current branch onto parent; auto-normalize missing/merged-equivalent parents and use provenance-aware `--onto` when possible |
 | `stax cascade` | | Restack from bottom and submit updates |
 | `stax diff` | | Show per-branch diffs vs parent |
@@ -150,6 +151,7 @@
 - `stax merge --no-sync`
 - `stax merge --timeout 60 --no-delete --quiet`
 - `stax rs --restack --auto-stash-pop`
+- `stax sync --delete-upstream-gone`
 - `stax sync --force --safe --continue`
 - `stax sync --quiet`
 - `stax sync --verbose`

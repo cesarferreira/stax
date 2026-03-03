@@ -137,6 +137,7 @@ st rs --restack
 | `st merge --when-ready` | Merge with explicit wait-for-ready mode and configurable polling interval |
 | `st rs` | Repo sync - pull trunk, clean up merged branches |
 | `st rs --restack` | Sync and rebase all branches onto updated trunk |
+| `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
 | `st restack` | Restack current stack (ancestors + current + descendants) |
 | `st restack --auto-stash-pop` | Restack even when target worktrees are dirty (auto-stash/pop) |
 | `st rs --restack --auto-stash-pop` | Sync, restack, auto-stash/pop dirty worktrees |
@@ -1167,6 +1168,7 @@ st submit --edit             # Force editor open
 - `st sync --force` - Force sync without prompts
 - `st sync --safe` - Avoid hard reset when updating trunk
 - `st sync --continue` - Continue after resolving sync/restack conflicts
+- `st sync --delete-upstream-gone` - Also delete local branches whose upstream is gone
 - `st sync --quiet` - Minimize sync output
 - `st sync --verbose` - Show detailed sync output
 - `st cascade --no-pr` - Restack and push branches; skip PR creation/updates

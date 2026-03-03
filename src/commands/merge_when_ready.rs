@@ -586,6 +586,7 @@ pub fn run(
                 false,      // restack
                 false,      // prune
                 !no_delete, // delete merged branches unless explicitly kept
+                false,      // delete upstream-gone branches
                 true,       // force
                 false,      // safe
                 false,      // continue

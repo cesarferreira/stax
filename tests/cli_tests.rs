@@ -54,6 +54,7 @@ fn test_sync_alias_rs() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("restack")); // --restack option
     assert!(stdout.contains("delete")); // --no-delete option
+    assert!(stdout.contains("delete-upstream-gone"));
     assert!(stdout.contains("safe"));
     assert!(stdout.contains("continue"));
 }

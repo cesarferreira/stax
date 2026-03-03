@@ -18,6 +18,7 @@ pub fn run(
     restack: bool,
     prune: bool,
     delete_merged: bool,
+    delete_upstream_gone: bool,
     force: bool,
     safe: bool,
     r#continue: bool,
@@ -636,7 +637,167 @@ pub fn run(
     }
 
     // Re-check current branch since it may have changed during branch deletion
-    let current_after_deletions = repo.current_branch()?;
+    let mut current_after_deletions = repo.current_branch()?;
+
+    // 3b. Optionally delete local branches whose upstream is gone
+    if delete_upstream_gone {
+        let detect_gone_started_at = Instant::now();
+        let detect_timer = LiveTimer::maybe_new(!quiet, "Detect upstream-gone branches");
+        let gone = find_upstream_gone_branches(workdir, &stack.trunk)?;
+        step_timings.push((
+            "detect upstream-gone branches".to_string(),
+            detect_gone_started_at.elapsed(),
+        ));
+        LiveTimer::maybe_finish_timed(detect_timer);
+
+        let delete_gone_started_at = Instant::now();
+
+        if !gone.is_empty() {
+            if !quiet {
+                let branch_word = if gone.len() == 1 {
+                    "branch"
+                } else {
+                    "branches"
+                };
+                println!(
+                    "    Found {} upstream-gone {}:",
+                    gone.len().to_string().cyan(),
+                    branch_word
+                );
+                for branch in &gone {
+                    println!("      {} {}", "▸".bright_black(), branch);
+                }
+                println!();
+            }
+
+            for branch in &gone {
+                if !local_branch_exists(workdir, branch) {
+                    continue;
+                }
+
+                let is_current_branch = branch == &current_after_deletions;
+                let fallback_parent = &stack.trunk;
+                let prompt = if is_current_branch {
+                    format!(
+                        "Delete '{}' (upstream gone) and checkout '{}'?",
+                        branch, fallback_parent
+                    )
+                } else {
+                    format!("Delete '{}' (upstream gone)?", branch)
+                };
+
+                let confirm = if auto_confirm {
+                    true
+                } else if quiet {
+                    false
+                } else {
+                    Confirm::with_theme(&ColorfulTheme::default())
+                        .with_prompt(prompt)
+                        .default(true)
+                        .interact()?
+                };
+
+                if !confirm {
+                    if !quiet {
+                        println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+                    }
+                    continue;
+                }
+
+                if is_current_branch {
+                    let checkout_status = Command::new("git")
+                        .args(["checkout", fallback_parent])
+                        .current_dir(workdir)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+
+                    if checkout_status.map(|s| s.success()).unwrap_or(false) {
+                        current_after_deletions = fallback_parent.clone();
+                        if !quiet {
+                            println!("    {} checked out {}", "→".cyan(), fallback_parent.cyan());
+                        }
+                    } else {
+                        if !quiet {
+                            println!(
+                                "    {} {}",
+                                branch.bright_black(),
+                                format!("failed to checkout '{}', skipping", fallback_parent).red()
+                            );
+                        }
+                        continue;
+                    }
+                }
+
+                let local_output = Command::new("git")
+                    .args(["branch", "-D", branch])
+                    .current_dir(workdir)
+                    .output();
+
+                let (local_deleted, local_worktree_blocked) = match local_output {
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                        (out.status.success(), stderr.contains("used by worktree"))
+                    }
+                    Err(_) => (false, false),
+                };
+
+                // Only delete metadata if branch no longer exists locally.
+                let local_ref = format!("refs/heads/{}", branch);
+                let local_still_exists = Command::new("git")
+                    .args(["show-ref", "--verify", "--quiet", &local_ref])
+                    .current_dir(workdir)
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(true);
+
+                let metadata_deleted = if !local_still_exists {
+                    let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+                    true
+                } else {
+                    false
+                };
+
+                if !quiet {
+                    if local_deleted {
+                        println!(
+                            "    {} {}",
+                            branch.bright_black(),
+                            "deleted (local only)".green()
+                        );
+                    } else if local_worktree_blocked {
+                        println!(
+                            "    {} {}",
+                            branch.bright_black(),
+                            "not deleted locally (checked out in another worktree)".yellow()
+                        );
+                    } else {
+                        println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+                    }
+
+                    if !metadata_deleted && local_still_exists {
+                        println!(
+                            "    {} {}",
+                            "↷".yellow(),
+                            "metadata kept because local branch still exists".dimmed()
+                        );
+                    }
+                }
+            }
+        } else if !quiet {
+            println!("    {}", "No upstream-gone branches to delete.".dimmed());
+        }
+
+        let delete_elapsed = delete_gone_started_at.elapsed();
+        step_timings.push(("delete upstream-gone branches".to_string(), delete_elapsed));
+        if !quiet && !gone.is_empty() {
+            println!(
+                "  {:<35} {}",
+                "delete upstream-gone branches",
+                format!("{:.3}s", delete_elapsed.as_secs_f64()).dimmed()
+            );
+        }
+    }
 
     // If we deferred trunk update (refspec fetch failed while not on trunk) and we're
     // now on trunk after branch deletions, retry with git pull which is more reliable
@@ -1068,6 +1229,38 @@ fn find_merged_branches(
     }
 
     Ok(merged)
+}
+
+fn find_upstream_gone_branches(workdir: &std::path::Path, trunk: &str) -> Result<Vec<String>> {
+    let output = Command::new("git")
+        .args([
+            "for-each-ref",
+            "--format=%(refname:short)%00%(upstream:short)%00%(upstream:track)",
+            "refs/heads",
+        ])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to list local branches with upstream tracking info")?;
+
+    let mut branches = std::collections::BTreeSet::new();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for line in stdout.lines() {
+        let mut fields = line.split('\0');
+        let branch = fields.next().unwrap_or("").trim();
+        let _upstream = fields.next().unwrap_or("").trim();
+        let tracking = fields.next().unwrap_or("").trim();
+
+        if branch.is_empty() || branch == trunk {
+            continue;
+        }
+
+        if tracking.contains("[gone]") {
+            branches.insert(branch.to_string());
+        }
+    }
+
+    Ok(branches.into_iter().collect())
 }
 
 fn local_branch_exists(workdir: &std::path::Path, branch: &str) -> bool {

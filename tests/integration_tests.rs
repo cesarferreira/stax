@@ -3309,6 +3309,59 @@ fn test_sync_detects_branch_with_deleted_remote() {
 }
 
 #[test]
+fn test_sync_does_not_delete_untracked_upstream_gone_by_default() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create an untracked branch (no stax metadata), push, then delete remote.
+    repo.git(&["checkout", "-b", "manual-upstream-gone"]);
+    repo.create_file("manual.txt", "manual branch content");
+    repo.commit("Manual branch commit");
+    repo.git(&["push", "-u", "origin", "manual-upstream-gone"]);
+    repo.git(&["checkout", "main"]);
+    repo.git(&["push", "origin", "--delete", "manual-upstream-gone"]);
+
+    // Default sync behavior should not touch untracked local branches.
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == "manual-upstream-gone"),
+        "Expected untracked upstream-gone branch to remain without --delete-upstream-gone"
+    );
+}
+
+#[test]
+fn test_sync_delete_upstream_gone_deletes_untracked_local_branch() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create an untracked branch (no stax metadata), push, then delete remote.
+    repo.git(&["checkout", "-b", "manual-upstream-gone"]);
+    repo.create_file("manual.txt", "manual branch content");
+    repo.commit("Manual branch commit");
+    repo.git(&["push", "-u", "origin", "manual-upstream-gone"]);
+    repo.git(&["checkout", "main"]);
+    repo.git(&["push", "origin", "--delete", "manual-upstream-gone"]);
+
+    let output = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|b| b == "manual-upstream-gone"),
+        "Expected --delete-upstream-gone to delete the stale local branch"
+    );
+}
+
+#[test]
 fn test_sync_detects_branch_with_empty_diff_against_trunk() {
     let repo = TestRepo::new_with_remote();
 

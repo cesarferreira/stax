@@ -230,6 +230,9 @@ enum Commands {
         /// Don't delete merged branches
         #[arg(long)]
         no_delete: bool,
+        /// Also delete local branches whose upstream is gone
+        #[arg(long)]
+        delete_upstream_gone: bool,
         /// Force sync without prompts
         #[arg(short, long)]
         force: bool,
@@ -1066,6 +1069,7 @@ pub fn run() -> Result<()> {
             restack,
             prune,
             no_delete,
+            delete_upstream_gone,
             force,
             safe,
             r#continue,
@@ -1076,6 +1080,7 @@ pub fn run() -> Result<()> {
             restack,
             prune,
             !no_delete,
+            delete_upstream_gone,
             force,
             safe,
             r#continue,
