@@ -133,9 +133,9 @@ pub fn run(json: bool, all: bool, hours: i64, summary: bool, agent_flag: Option<
             println!("{}", raw.trim());
             return Ok(());
         }
-        // --summary alone → spinner + colored output
-        let summary_text = generate_summary(&data, agent_flag.as_deref(), false)?;
-        println!("{}", summary_text.trim());
+        // --summary alone → spinner + card with colors
+        let raw = generate_summary(&data, agent_flag.as_deref(), false)?;
+        print_summary_card(raw.trim());
         return Ok(());
     }
 
@@ -431,7 +431,64 @@ fn generate_summary(data: &StandupData, agent_flag: Option<&str>, quiet: bool) -
     let timer = LiveTimer::new(&format!("Generating standup summary with {}", agent));
     let result = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt);
     timer.finish_timed();
-    Ok(colorize_summary(&result?))
+    result
+}
+
+/// Word-wrap plain text to `width` columns. Returns one string per line.
+fn word_wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        let mut line_len: usize = 0;
+        for word in paragraph.split_whitespace() {
+            let word_len = word.chars().count();
+            if line_len == 0 {
+                line.push_str(word);
+                line_len = word_len;
+            } else if line_len + 1 + word_len <= width {
+                line.push(' ');
+                line.push_str(word);
+                line_len += 1 + word_len;
+            } else {
+                lines.push(line);
+                line = word.to_string();
+                line_len = word_len;
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+/// Render the AI summary inside a padded card, word-wrapped to fit the terminal.
+fn print_summary_card(text: &str) {
+    let term_width = console::Term::stdout().size().1 as usize;
+    // Content width: terminal minus indent (2) + borders (2) + inner padding (4)
+    let content_width = term_width.saturating_sub(10).clamp(40, 76);
+    let inner_width = content_width + 4; // 2 spaces padding each side
+
+    let lines = word_wrap(text, content_width);
+
+    println!();
+    println!("  {}{}{}", "╭".dimmed(), "─".repeat(inner_width).dimmed(), "╮".dimmed());
+    println!("  {}{}{}", "│".dimmed(), " ".repeat(inner_width), "│".dimmed());
+    for line in &lines {
+        let visible_len = line.chars().count();
+        let pad_right = content_width.saturating_sub(visible_len);
+        let colored = colorize_summary(line);
+        println!(
+            "  {}  {}{}  {}",
+            "│".dimmed(),
+            colored,
+            " ".repeat(pad_right),
+            "│".dimmed()
+        );
+    }
+    println!("  {}{}{}", "│".dimmed(), " ".repeat(inner_width), "│".dimmed());
+    println!("  {}{}{}", "╰".dimmed(), "─".repeat(inner_width).dimmed(), "╯".dimmed());
+    println!();
 }
 
 /// Apply terminal colors to key phrases in the AI-generated standup text.

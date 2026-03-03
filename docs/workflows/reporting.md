@@ -26,11 +26,29 @@ stax standup --summary --agent gemini
 
 Uses the AI agent configured under `[ai]` in `~/.config/stax/config.toml` (same agent as `stax generate --pr-body`). Override for a single run with `--agent`.
 
+The summary is word-wrapped and displayed in a card that fits your terminal width:
+
+```
+  ✓ Generating standup summary with codex        4.1s
+
+  ╭──────────────────────────────────────────────────────────────────╮
+  │                                                                  │
+  │  Yesterday I shipped the Android UI release bump and wrapped     │
+  │  up the robot-android agents guidance. I also opened two PRs     │
+  │  for the robotaxi UI improvements and a faster mock-server,      │
+  │  and those are now out for review. Today I'm focused on          │
+  │  review follow-ups and have some branch cleanup to do.           │
+  │                                                                  │
+  ╰──────────────────────────────────────────────────────────────────╯
+```
+
+Key phrases are highlighted: completed work in green, new work in cyan, reviews in blue, and upcoming tasks in yellow.
+
 ### Output formats
 
 ```bash
-stax standup --summary                    # Spinner + colored prose (default)
-stax standup --summary --plain-text       # Raw text, no colors — pipe-friendly
+stax standup --summary                   # Spinner + colored card (default)
+stax standup --summary --plain-text      # Raw text, no colors — pipe-friendly
 stax standup --summary --json            # {"summary": "..."} JSON
 ```
 

@@ -363,10 +363,26 @@ st standup --summary --agent claude
 st standup --summary --agent gemini --hours 48
 ```
 
+The summary is displayed in a readable card, word-wrapped to fit your terminal:
+
+```
+  ✓ Generating standup summary with codex        4.1s
+
+  ╭──────────────────────────────────────────────────────────────────╮
+  │                                                                  │
+  │  Yesterday I shipped the Android UI release bump and wrapped     │
+  │  up the robot-android agents guidance. I also opened two PRs     │
+  │  for the robotaxi UI improvements and a faster mock-server,      │
+  │  and those are now out for review. Today I'm focused on          │
+  │  review follow-ups and have some branch cleanup to do.           │
+  │                                                                  │
+  ╰──────────────────────────────────────────────────────────────────╯
+```
+
 Output format options:
 
 ```bash
-st standup --summary                 # Spinner + colored prose (default)
+st standup --summary                 # Spinner + colored card (default)
 st standup --summary --plain-text    # Raw text, no colors — pipe-friendly
 st standup --summary --json          # {"summary": "..."} JSON
 ```
