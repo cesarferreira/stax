@@ -17,17 +17,17 @@
 
 ## Feature Highlights
 
-- [`stax merge`](#cascade-stack-merge) - Cascade-merge your stack from bottom -> current with CI/rebase-aware safety checks.
-- [`stax merge --when-ready`](#cascade-stack-merge) - Merge in explicit wait-for-ready mode with configurable polling.
-- [`stax generate --pr-body`](#ai-powered-pr-body-generation) - Generate polished PR descriptions with AI from your branch diff and context.
+- [`st merge`](#cascade-stack-merge) - Cascade-merge your stack from bottom -> current with CI/rebase-aware safety checks.
+- [`st merge --when-ready`](#cascade-stack-merge) - Merge in explicit wait-for-ready mode with configurable polling.
+- [`st generate --pr-body`](#ai-powered-pr-body-generation) - Generate polished PR descriptions with AI from your branch diff and context.
 - [`AI skill integrations`](#claude-code-integration) - Embed `skills.md` into Claude Code, Codex, Gemini CLI, or OpenCode so your AI can create and stack PRs.
-- [`stax standup`](#standup-summary) - Get a quick summary of recent PRs, pushes, and activity for daily standups.
-- [`stax ss`](#core-commands) - Submit or update the full PR stack with correct parent/child base relationships.
-- [`stax rs --restack`](#core-commands) - Sync trunk and restack descendants so your branch tree stays clean and current.
+- [`st standup`](#standup-summary) - Get a quick summary of recent PRs, pushes, and activity for daily standups.
+- [`st ss`](#core-commands) - Submit or update the full PR stack with correct parent/child base relationships.
+- [`st rs --restack`](#core-commands) - Sync trunk and restack descendants so your branch tree stays clean and current.
 - [`Interactive TUI`](#interactive-tui) - Browse your stack tree, PR status, diffs, and reorder branches visually.
-- [`stax undo` / `stax redo`](#safe-history-rewriting-with-undo) - Recover safely from restacks and rebases with transactional history snapshots.
-- [`stax demo`](#core-commands) - Interactive tutorial that walks you through stacked branches in a temp repo (no auth needed).
-- [`stax test`](#core-commands) - Run a command on each branch in the stack to validate before submitting.
+- [`st undo` / `st redo`](#safe-history-rewriting-with-undo) - Recover safely from restacks and rebases with transactional history snapshots.
+- [`st demo`](#core-commands) - Interactive tutorial that walks you through stacked branches in a temp repo (no auth needed).
+- [`st test`](#core-commands) - Run a command on each branch in the stack to validate before submitting.
 
 ## What are Stacked Branches?
 
@@ -55,10 +55,10 @@ Each branch is a focused PR. Reviewers see small diffs. You ship faster.
 
 stax is a modern stacked-branch workflow that keeps PRs small, rebases safe, and the whole stack easy to reason about.
 
-- **Blazing fast** - Native Rust binary (~22ms `stax ls` on a 10-branch stack)
+- **Blazing fast** - Native Rust binary (~22ms `st ls` on a 10-branch stack)
 - **Terminal UX** - Interactive TUI with tree view, PR status, diff viewer, and reorder mode
 - **Ship stacks, not mega-PRs** - Submit/update a whole stack of PRs with correct bases in one command
-- **Safe history rewriting** - Transactional restacks + automatic backups + `stax undo` / `stax redo`
+- **Safe history rewriting** - Transactional restacks + automatic backups + `st undo` / `st redo`
 - **Merge the stack for you** - Cascade merge bottom → current, with rebase/PR-base updates along the way
 - **Drop-in compatible** - Uses freephite metadata format—existing stacks migrate instantly
 
@@ -72,7 +72,7 @@ brew install cesarferreira/tap/stax
 cargo binstall stax
 ```
 
-Both `stax` and `st` (short alias) are installed automatically. All examples below use `stax`, but `st` works identically.
+Both `st` and `stax` are installed automatically. All examples below use `st`.
 
 ## Full Documentation
 
@@ -92,10 +92,10 @@ Set up GitHub auth first (required for PR creation, CI checks, and review metada
 ```bash
 # Option A (recommended): use GitHub CLI auth
 gh auth login
-stax auth --from-gh
+st auth --from-gh
 
 # Option B: enter a personal access token manually
-stax auth
+st auth
 
 # Option C: provide a stax-specific env var
 export STAX_GITHUB_TOKEN="ghp_xxxx"
@@ -105,68 +105,68 @@ By default, stax does not use ambient `GITHUB_TOKEN` unless you opt in via `[aut
 
 ```bash
 # 1. Create stacked branches
-stax create auth-api           # First branch off main
-stax create auth-ui            # Second branch, stacked on first
+st create auth-api           # First branch off main
+st create auth-ui            # Second branch, stacked on first
 
 # 2. View your stack
-stax ls
+st ls
 # ◉  auth-ui 1↑                ← you are here
 # ○  auth-api 1↑
 # ○  main
 
 # 3. Submit PRs for the whole stack
-stax ss
+st ss
 # Creating PR for auth-api... ✓ #12 (targets main)
 # Creating PR for auth-ui... ✓ #13 (targets auth-api)
 
 # 4. After reviews, sync and rebase
-stax rs --restack
+st rs --restack
 ```
 
 ## Core Commands
 
 | Command | What it does |
 |---------|--------------|
-| `stax` | Launch interactive TUI |
-| `stax ls` | Show your stack with PR status and what needs rebasing |
-| `stax ll` | Show stack with PR URLs and full details |
-| `stax create <name>` | Create a new branch stacked on current |
-| `stax ss` | Submit stack - push all branches and create/update PRs |
-| `stax merge` | Merge PRs from bottom of stack up to current branch |
-| `stax merge --when-ready` | Merge with explicit wait-for-ready mode and configurable polling interval |
-| `stax rs` | Repo sync - pull trunk, clean up merged branches |
-| `stax rs --restack` | Sync and rebase all branches onto updated trunk |
-| `stax restack` | Restack current stack (ancestors + current + descendants) |
-| `stax restack --auto-stash-pop` | Restack even when target worktrees are dirty (auto-stash/pop) |
-| `stax rs --restack --auto-stash-pop` | Sync, restack, auto-stash/pop dirty worktrees |
-| `stax cascade` | Restack from bottom, push, and create/update PRs |
-| `stax cascade --no-pr` | Restack and push (skip PR creation/updates) |
-| `stax cascade --no-submit` | Restack only (no remote interaction) |
-| `stax cascade --auto-stash-pop` | Cascade even when target worktrees are dirty (auto-stash/pop) |
-| `stax co` | Interactive branch checkout with fuzzy search |
-| `stax u` / `stax d` | Move up/down the stack |
-| `stax m` | Modify - stage all changes and amend current commit |
-| `stax pr` | Open current branch's PR in browser |
-| `stax open` | Open repository in browser |
-| `stax copy` | Copy branch name to clipboard |
-| `stax copy --pr` | Copy PR URL to clipboard |
-| `stax standup` | Show your recent activity for standups |
-| `stax changelog` | Generate changelog between two refs |
-| `stax undo` | Undo last operation (restack, submit, etc.) |
-| `stax abort` | Abort in-progress rebase/conflict resolution |
-| `stax detach` | Remove a branch from its stack (reparent children) |
-| `stax reorder` | Interactively reorder branches in a stack |
-| `stax validate` | Validate stack metadata health |
-| `stax fix` | Auto-repair broken metadata |
-| `stax test <cmd>` | Run a command on each branch in the stack |
-| `stax demo` | Interactive tutorial (no auth/repo needed) |
+| `st` | Launch interactive TUI |
+| `st ls` | Show your stack with PR status and what needs rebasing |
+| `st ll` | Show stack with PR URLs and full details |
+| `st create <name>` | Create a new branch stacked on current |
+| `st ss` | Submit stack - push all branches and create/update PRs |
+| `st merge` | Merge PRs from bottom of stack up to current branch |
+| `st merge --when-ready` | Merge with explicit wait-for-ready mode and configurable polling interval |
+| `st rs` | Repo sync - pull trunk, clean up merged branches |
+| `st rs --restack` | Sync and rebase all branches onto updated trunk |
+| `st restack` | Restack current stack (ancestors + current + descendants) |
+| `st restack --auto-stash-pop` | Restack even when target worktrees are dirty (auto-stash/pop) |
+| `st rs --restack --auto-stash-pop` | Sync, restack, auto-stash/pop dirty worktrees |
+| `st cascade` | Restack from bottom, push, and create/update PRs |
+| `st cascade --no-pr` | Restack and push (skip PR creation/updates) |
+| `st cascade --no-submit` | Restack only (no remote interaction) |
+| `st cascade --auto-stash-pop` | Cascade even when target worktrees are dirty (auto-stash/pop) |
+| `st co` | Interactive branch checkout with fuzzy search |
+| `st u` / `st d` | Move up/down the stack |
+| `st m` | Modify - stage all changes and amend current commit |
+| `st pr` | Open current branch's PR in browser |
+| `st open` | Open repository in browser |
+| `st copy` | Copy branch name to clipboard |
+| `st copy --pr` | Copy PR URL to clipboard |
+| `st standup` | Show your recent activity for standups |
+| `st changelog` | Generate changelog between two refs |
+| `st undo` | Undo last operation (restack, submit, etc.) |
+| `st abort` | Abort in-progress rebase/conflict resolution |
+| `st detach` | Remove a branch from its stack (reparent children) |
+| `st reorder` | Interactively reorder branches in a stack |
+| `st validate` | Validate stack metadata health |
+| `st fix` | Auto-repair broken metadata |
+| `st test <cmd>` | Run a command on each branch in the stack |
+| `st demo` | Interactive tutorial (no auth/repo needed) |
 
 ## Interactive Branch Creation
 
-Run `stax create` without arguments to launch the guided wizard:
+Run `st create` without arguments to launch the guided wizard:
 
 ```bash
-$ stax create
+$ st create
 
 ╭─ Create Stacked Branch ─────────────────────────────╮
 │ Parent: feature/auth (current branch)               │
@@ -187,7 +187,7 @@ $ stax create
 Use a one-liner when the branch name and commit message come from the same text:
 
 ```bash
-stax create -am "migrate checkout webhooks to v2"
+st create -am "migrate checkout webhooks to v2"
 # Creates a branch name from the message (using your branch format),
 # stages all changes, and commits with the same message.
 ```
@@ -197,19 +197,19 @@ stax create -am "migrate checkout webhooks to v2"
 Generate a PR description using AI, based on your diff, commit messages, and the repo's PR template:
 
 ```bash
-stax generate --pr-body
+st generate --pr-body
 ```
 
 stax collects the diff, commit messages, and PR template for the current branch, sends them to an AI agent (Claude, Codex, Gemini CLI, or OpenCode), and updates the PR body on GitHub.
 
 Prerequisites:
 - Current branch must be tracked by stax
-- Current branch must already have a PR (create one with `stax submit` / `stax ss`)
+- Current branch must already have a PR (create one with `st submit` / `st ss`)
 
 You can also generate during submit:
 
 ```bash
-stax submit --ai-body
+st submit --ai-body
 ```
 
 ### First Run
@@ -239,19 +239,19 @@ If no AI agent is configured, stax auto-detects what's installed and walks you t
 - `--edit`: Open $EDITOR to review/tweak the generated body before updating the PR
 
 ```bash
-stax generate --pr-body --agent codex                        # Use codex this time
-stax generate --pr-body --model claude-haiku-4-5-20251001    # Use a specific model
-stax generate --pr-body --agent gemini --model gemini-2.5-flash
-stax generate --pr-body --agent opencode
-stax generate --pr-body --edit                               # Review in editor first
+st generate --pr-body --agent codex                        # Use codex this time
+st generate --pr-body --model claude-haiku-4-5-20251001    # Use a specific model
+st generate --pr-body --agent gemini --model gemini-2.5-flash
+st generate --pr-body --agent opencode
+st generate --pr-body --edit                               # Review in editor first
 ```
 
 ## Interactive TUI
 
-Run `stax` with no arguments to launch the interactive terminal UI:
+Run `st` with no arguments to launch the interactive terminal UI:
 
 ```bash
-stax
+st
 ```
 
 <p align="center">
@@ -299,12 +299,12 @@ Rearrange branches within your stack without manually running reparent commands:
 Split a branch with many commits into multiple stacked branches:
 
 ```bash
-stax split
+st split
 ```
 
 
 **How it works:**
-1. Run `stax split` on a branch with multiple commits
+1. Run `st split` on a branch with multiple commits
 2. Navigate commits with `j/k` or arrows
 3. Press `s` to mark a split point and enter a branch name
 4. Preview shows the resulting branch structure in real-time
@@ -330,20 +330,20 @@ main                       main
                                       └─ my-feature (E)
 ```
 
-Split uses the transaction system, so you can `stax undo` if needed.
+Split uses the transaction system, so you can `st undo` if needed.
 
 ## Standup Summary
 
-Struggling to remember what you worked on yesterday? Run `stax standup` to get a quick summary of your recent activity:
+Struggling to remember what you worked on yesterday? Run `st standup` to get a quick summary of your recent activity:
 
 ![Standup Summary](assets/standup.png)
 
 Shows your merged PRs, opened PRs, recent pushes, and anything that needs attention - perfect for daily standups.
 
 ```bash
-stax standup              # Last 24 hours (default)
-stax standup --hours 48   # Look back further
-stax standup --json       # For scripting
+st standup              # Last 24 hours (default)
+st standup --hours 48   # Look back further
+st standup --json       # For scripting
 ```
 
 ## Changelog Generation
@@ -351,9 +351,9 @@ stax standup --json       # For scripting
 Generate a pretty changelog between two git refs - perfect for release notes or understanding what changed between versions:
 
 ```bash
-stax changelog v1.0.0              # From v1.0.0 to HEAD
-stax changelog v1.0.0 v2.0.0       # Between two tags
-stax changelog abc123 def456       # Between commits
+st changelog v1.0.0              # From v1.0.0 to HEAD
+st changelog v1.0.0 v2.0.0       # Between two tags
+st changelog abc123 def456       # Between commits
 ```
 
 Example output:
@@ -372,8 +372,8 @@ Changelog: v1.0.0 → HEAD (5 commits)
 Working in a monorepo? Filter commits to only those touching a specific folder:
 
 ```bash
-stax changelog v1.0.0 --path apps/frontend
-stax changelog v1.0.0 --path packages/shared-utils
+st changelog v1.0.0 --path apps/frontend
+st changelog v1.0.0 --path packages/shared-utils
 ```
 
 This shows only commits that modified files within that path - ideal for generating changelogs for individual packages or services.
@@ -383,7 +383,7 @@ This shows only commits that modified files within that path - ideal for generat
 For scripting or CI pipelines:
 
 ```bash
-stax changelog v1.0.0 --json
+st changelog v1.0.0 --json
 ```
 
 ```json
@@ -424,9 +424,9 @@ By default, stax fails fast if a target worktree has uncommitted changes, showin
 Use `--auto-stash-pop` to let stax stash changes automatically before rebasing and restore them afterward:
 
 ```bash
-stax restack --auto-stash-pop
-stax upstack restack --auto-stash-pop
-stax sync --restack --auto-stash-pop
+st restack --auto-stash-pop
+st upstack restack --auto-stash-pop
+st sync --restack --auto-stash-pop
 ```
 
 If the rebase results in a conflict, the stash is kept intact so your changes are not lost. Run `git stash list` to find them.
@@ -435,14 +435,14 @@ If the rebase results in a conflict, the stash is kept intact so your changes ar
 
 | Command | Behavior |
 |---|---|
-| `stax cascade` | restack → push → create/update PRs |
-| `stax cascade --no-pr` | restack → push (skip PR creation/updates) |
-| `stax cascade --no-submit` | restack only (no remote interaction) |
-| `stax cascade --auto-stash-pop` | any of the above, auto-stash/pop dirty worktrees |
+| `st cascade` | restack → push → create/update PRs |
+| `st cascade --no-pr` | restack → push (skip PR creation/updates) |
+| `st cascade --no-submit` | restack only (no remote interaction) |
+| `st cascade --auto-stash-pop` | any of the above, auto-stash/pop dirty worktrees |
 
 Use `--no-pr` when your remote branches should be updated (pushed) but you aren't ready to open or update PRs yet — e.g. branches still in progress. Use `--no-submit` for a pure local restack with no network activity at all. Use `--auto-stash-pop` if any branch in the stack is checked out in a dirty worktree.
 
-> **Tip:** run `stax rs` before `stax cascade` to pull the latest trunk and avoid rebasing onto stale commits. If your local trunk is behind remote, `stax cascade` will warn you.
+> **Tip:** run `st rs` before `st cascade` to pull the latest trunk and avoid rebasing onto stale commits. If your local trunk is behind remote, `st cascade` will warn you.
 
 ## Safe History Rewriting with Undo
 
@@ -450,12 +450,12 @@ Stax makes rebasing and force-pushing **safe** with automatic backups and one-co
 
 ```bash
 # Make a mistake while restacking? No problem.
-stax restack
+st restack
 # ✗ conflict in feature/auth
-# Your repo is recoverable via: stax undo
+# Your repo is recoverable via: st undo
 
 # Instantly restore to before the restack
-stax undo
+st undo
 # ✓ Undone! Restored 3 branch(es).
 ```
 
@@ -468,15 +468,15 @@ Every potentially-destructive operation (`restack`, `submit`, `sync --restack`, 
 3. **Execute** - Performs the operation (rebase, force-push, etc.)
 4. **Receipt** - Saves an operation receipt to `.git/stax/ops/<op-id>.json`
 
-If anything goes wrong, `stax undo` reads the receipt and restores all branches to their exact prior state.
+If anything goes wrong, `st undo` reads the receipt and restores all branches to their exact prior state.
 
 ### Undo & Redo Commands
 
 | Command | Description |
 |---------|-------------|
-| `stax undo` | Undo the last operation |
-| `stax undo <op-id>` | Undo a specific operation |
-| `stax redo` | Redo (re-apply) the last undone operation |
+| `st undo` | Undo the last operation |
+| `st undo <op-id>` | Undo a specific operation |
+| `st redo` | Redo (re-apply) the last undone operation |
 
 **Flags:**
 - `--yes` - Auto-approve prompts (useful for scripts)
@@ -487,7 +487,7 @@ If anything goes wrong, `stax undo` reads the receipt and restores all branches 
 If the undone operation had force-pushed branches, stax will prompt:
 
 ```bash
-stax undo
+st undo
 # ✓ Restored 2 local branch(es)
 # This operation force-pushed 2 branch(es) to remote.
 # Force-push to restore remote branches too? [y/N]
@@ -501,26 +501,26 @@ You're building a payments feature. Instead of one 2000-line PR:
 
 ```bash
 # Start the foundation
-stax create payments-models
+st create payments-models
 # ... write database models, commit ...
 
 # Stack the API layer on top
-stax create payments-api
+st create payments-api
 # ... write API endpoints, commit ...
 
 # Stack the UI on top of that
-stax create payments-ui
+st create payments-ui
 # ... write React components, commit ...
 
 # View your stack
-stax ls
+st ls
 # ◉  payments-ui 1↑           ← you are here
 # ○  payments-api 1↑
 # ○  payments-models 1↑
 # ○  main
 
 # Submit all 3 as separate PRs (each targeting its parent)
-stax ss
+st ss
 # Creating PR for payments-models... ✓ #101 (targets main)
 # Creating PR for payments-api... ✓ #102 (targets payments-models)
 # Creating PR for payments-ui... ✓ #103 (targets payments-api)
@@ -529,7 +529,7 @@ stax ss
 Reviewers can now review 3 small PRs instead of one giant one. When `payments-models` is approved and merged:
 
 ```bash
-stax rs --restack
+st rs --restack
 # ✓ Pulled latest main
 # ✓ Cleaned up payments-models (merged)
 # ✓ Rebased payments-api onto main
@@ -539,10 +539,10 @@ stax rs --restack
 
 ## Cascade Stack Merge
 
-Merge your entire stack with one command! `stax merge` intelligently merges PRs from the bottom of your stack up to your current branch, handling rebases and PR updates automatically.
+Merge your entire stack with one command! `st merge` intelligently merges PRs from the bottom of your stack up to your current branch, handling rebases and PR updates automatically.
 
-Need strict "merge when ready" behavior with configurable polling? Use `stax merge --when-ready`.
-The legacy command `stax merge-when-ready` (alias: `stax mwr`) remains available as a compatibility alias.
+Need strict "merge when ready" behavior with configurable polling? Use `st merge --when-ready`.
+The legacy command `st merge-when-ready` (alias: `st mwr`) remains available as a compatibility alias.
 
 ### How It Works
 
@@ -566,14 +566,14 @@ The merge scope depends on your current branch:
 
 ```bash
 # View your stack
-stax ls
+st ls
 # ◉  payments-ui 1↑           ← you are here
 # ○  payments-api 1↑
 # ○  payments-models 1↑
 # ○  main
 
 # Merge all 3 PRs into main
-stax merge
+st merge
 ```
 
 You'll see an interactive preview before merging:
@@ -619,44 +619,44 @@ For each PR in the stack (bottom to top):
 4. **Update PR base** - Changes the next PR's target from the merged branch to main
 5. **Push** - Force-pushes the rebased branch
 6. **Repeat** - Continues until all PRs are merged
-7. **Sync local repo** - Runs `stax rs --force` to fast-forward trunk and finalize local cleanup (use `--no-sync` to skip)
+7. **Sync local repo** - Runs `st rs --force` to fast-forward trunk and finalize local cleanup (use `--no-sync` to skip)
 
-If anything fails (CI, conflicts, permissions), the merge stops safely. Already-merged PRs remain merged, and you can fix the issue and run `stax merge` again to continue (or `stax merge --when-ready` if you were using that mode).
+If anything fails (CI, conflicts, permissions), the merge stops safely. Already-merged PRs remain merged, and you can fix the issue and run `st merge` again to continue (or `st merge --when-ready` if you were using that mode).
 
 ### Merge Options
 
 ```bash
 # Merge with preview only (no actual merge)
-stax merge --dry-run
+st merge --dry-run
 
 # Merge entire stack regardless of current position
-stax merge --all
+st merge --all
 
 # Choose merge strategy
-stax merge --method squash    # (default) Squash and merge
-stax merge --method merge     # Create merge commit
-stax merge --method rebase    # Rebase and merge
+st merge --method squash    # (default) Squash and merge
+st merge --method merge     # Create merge commit
+st merge --method rebase    # Rebase and merge
 
 # Use explicit wait-for-ready mode (replacement for merge-when-ready)
-stax merge --when-ready
+st merge --when-ready
 
 # Set custom polling interval for --when-ready mode (default: 15s)
-stax merge --when-ready --interval 10
+st merge --when-ready --interval 10
 
 # Skip CI polling (fail if not ready)
-stax merge --no-wait
+st merge --no-wait
 
 # Keep branches after merge (don't delete)
-stax merge --no-delete
+st merge --no-delete
 
 # Skip post-merge sync
-stax merge --no-sync
+st merge --no-sync
 
 # Set custom CI timeout (default: 30 minutes)
-stax merge --timeout 60
+st merge --timeout 60
 
 # Skip confirmation prompt
-stax merge --yes
+st merge --yes
 ```
 
 `--when-ready` cannot be combined with `--dry-run` or `--no-wait`.
@@ -667,13 +667,13 @@ You can merge just part of your stack by checking out a middle branch:
 
 ```bash
 # Stack: main ← auth ← auth-api ← auth-ui ← auth-tests
-stax checkout auth-api
+st checkout auth-api
 
 # This merges only: auth, auth-api (not auth-ui or auth-tests)
-stax merge
+st merge
 
 # Remaining branches (auth-ui, auth-tests) are rebased onto main
-# Run stax merge again later to merge those too
+# Run st merge again later to merge those too
 ```
 
 ## Import Your Open PRs
@@ -681,7 +681,7 @@ stax merge
 Already have open PRs on GitHub that aren't tracked by stax? Import them all at once:
 
 ```bash
-stax branch track --all-prs
+st branch track --all-prs
 ```
 
 This command:
@@ -698,16 +698,16 @@ You can have multiple independent stacks at once:
 
 ```bash
 # You're working on auth...
-stax create auth
-stax create auth-login
-stax create auth-validation
+st create auth
+st create auth-login
+st create auth-validation
 
 # Teammate needs urgent bugfix reviewed - start a new stack
-stax co main                   # or: stax t
-stax create hotfix-payment
+st co main                   # or: st t
+st create hotfix-payment
 
 # View everything
-stax ls
+st ls
 # ○  auth-validation 1↑
 # ○  auth-login 1↑
 # ○  auth 1↑
@@ -719,14 +719,14 @@ stax ls
 
 | Command | What it does |
 |---------|--------------|
-| `stax u` | Move up to child branch |
-| `stax d` | Move down to parent branch |
-| `stax u 3` | Move up 3 branches |
-| `stax top` | Jump to tip of current stack |
-| `stax bottom` | Jump to base of stack (first branch above trunk) |
-| `stax t` | Jump to trunk (main/master) |
-| `stax prev` | Toggle to previous branch (like `git checkout -`) |
-| `stax co` | Interactive picker with fuzzy search |
+| `st u` | Move up to child branch |
+| `st d` | Move down to parent branch |
+| `st u 3` | Move up 3 branches |
+| `st top` | Jump to tip of current stack |
+| `st bottom` | Jump to base of stack (first branch above trunk) |
+| `st t` | Jump to trunk (main/master) |
+| `st prev` | Toggle to previous branch (like `git checkout -`) |
+| `st co` | Interactive picker with fuzzy search |
 
 ## Reading the Stack View
 
@@ -750,7 +750,7 @@ stax ls
 ## Configuration
 
 ```bash
-stax config  # Show config path and current settings
+st config  # Show config path and current settings
 ```
 
 Config at `~/.config/stax/config.toml`:
@@ -817,10 +817,10 @@ stax looks for a GitHub token in the following order (first found wins):
 export STAX_GITHUB_TOKEN="ghp_xxxx"
 
 # Option 2: Interactive setup (saves to credentials file)
-stax auth
+st auth
 
 # Option 3: Import from GitHub CLI auth (saves to credentials file)
-stax auth --from-gh
+st auth --from-gh
 ```
 
 To use `GITHUB_TOKEN` as a fallback, opt in explicitly:
@@ -839,7 +839,7 @@ The credentials file is created with `600` permissions (read/write for owner onl
 Check which source stax is actively using:
 
 ```bash
-stax auth status
+st auth status
 ```
 
 ## Claude Code Integration
@@ -896,18 +896,18 @@ This enables OpenCode to help with stax workflows, stack operations, and PR gene
 
 stax uses the same metadata format as freephite and supports similar commands:
 
-| freephite | stax | graphite | stax |
+| freephite | st | graphite | st |
 |-----------|------|----------|------|
-| `fp ss` | `stax ss` | `gt submit` | `stax submit` |
-| `fp bs` | `stax branch submit` | `gt branch submit` | `stax branch submit` |
-| `fp us submit` | `stax upstack submit` | `gt upstack submit` | `stax upstack submit` |
-| `fp ds submit` | `stax downstack submit` | `gt downstack submit` | `stax downstack submit` |
-| `fp rs` | `stax rs` | `gt sync` | `stax sync` |
-| `fp bc` | `stax bc` | `gt create` | `stax create` |
-| `fp bco` | `stax bco` | `gt checkout` | `stax co` |
-| `fp bu` | `stax bu` | `gt up` | `stax u` |
-| `fp bd` | `stax bd` | `gt down` | `stax d` |
-| `fp ls` | `stax ls` | `gt log` | `stax log` |
+| `fp ss` | `st ss` | `gt submit` | `st submit` |
+| `fp bs` | `st branch submit` | `gt branch submit` | `st branch submit` |
+| `fp us submit` | `st upstack submit` | `gt upstack submit` | `st upstack submit` |
+| `fp ds submit` | `st downstack submit` | `gt downstack submit` | `st downstack submit` |
+| `fp rs` | `st rs` | `gt sync` | `st sync` |
+| `fp bc` | `st bc` | `gt create` | `st create` |
+| `fp bco` | `st bco` | `gt checkout` | `st co` |
+| `fp bu` | `st bu` | `gt up` | `st u` |
+| `fp bd` | `st bd` | `gt down` | `st d` |
+| `fp ls` | `st ls` | `gt log` | `st log` |
 
 **Migration is instant** - just install stax and your existing stacks work.
 
@@ -919,7 +919,7 @@ stax automatically discovers PR templates in your repository:
 If you have one template at `.github/PULL_REQUEST_TEMPLATE.md`, stax uses it automatically:
 
 ```bash
-stax submit  # Auto-uses template, shows "Edit body?" prompt
+st submit  # Auto-uses template, shows "Edit body?" prompt
 ```
 
 ### Multiple Templates
@@ -936,7 +936,7 @@ Place templates in `.github/PULL_REQUEST_TEMPLATE/` directory:
 stax shows an interactive fuzzy-search picker:
 
 ```bash
-stax submit
+st submit
 # ? Select PR template
 #   > No template
 #     bugfix
@@ -951,9 +951,9 @@ stax submit
 - `--edit`: Always open $EDITOR for body (regardless of template)
 
 ```bash
-stax submit --template bugfix  # Use bugfix.md directly
-stax submit --no-template      # Empty body
-stax submit --edit             # Force editor open
+st submit --template bugfix  # Use bugfix.md directly
+st submit --no-template      # Empty body
+st submit --edit             # Force editor open
 ```
 
 ## All Commands
@@ -964,185 +964,185 @@ stax submit --edit             # Force editor open
 ### Stack Operations
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `stax status` | `s`, `ls` | Show stack (simple view) |
-| `stax ll` | | Show stack with PR URLs and full details |
-| `stax log` | `l` | Show stack with commits and PR info |
-| `stax submit` | `ss` | Submit full current stack (ancestors + current + descendants) |
-| `stax merge` | | Merge PRs from bottom of stack to current |
-| `stax merge --when-ready` | | Merge with explicit wait-for-ready mode (legacy alias: `stax merge-when-ready`) |
-| `stax sync` | `rs` | Pull trunk, delete merged branches |
-| `stax restack` | | Restack current stack (ancestors + current + descendants) |
-| `stax diff` | | Show diffs for each branch vs parent |
-| `stax range-diff` | | Show range-diff for branches needing restack |
+| `st status` | `s`, `ls` | Show stack (simple view) |
+| `st ll` | | Show stack with PR URLs and full details |
+| `st log` | `l` | Show stack with commits and PR info |
+| `st submit` | `ss` | Submit full current stack (ancestors + current + descendants) |
+| `st merge` | | Merge PRs from bottom of stack to current |
+| `st merge --when-ready` | | Merge with explicit wait-for-ready mode (legacy alias: `st merge-when-ready`) |
+| `st sync` | `rs` | Pull trunk, delete merged branches |
+| `st restack` | | Restack current stack (ancestors + current + descendants) |
+| `st diff` | | Show diffs for each branch vs parent |
+| `st range-diff` | | Show range-diff for branches needing restack |
 
 ### Branch Management
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `stax create <name>` | `c`, `bc` | Create stacked branch |
-| `stax checkout` | `co`, `bco` | Interactive branch picker |
-| `stax modify` | `m` | Stage all + amend current commit |
-| `stax rename` | `b r` | Rename branch and optionally edit commit message |
-| `stax branch track` | | Track an existing branch |
-| `stax branch track --all-prs` | | Track all your open PRs |
-| `stax branch untrack` | `ut` | Remove stax metadata for a branch (keep git branch) |
-| `stax branch reparent` | | Change parent of a branch |
-| `stax branch submit` | `bs` | Submit only current branch |
-| `stax branch delete` | | Delete a branch |
-| `stax branch fold` | | Fold branch into parent |
-| `stax branch squash` | | Squash commits on branch |
-| `stax detach` | | Remove branch from stack, reparent children |
-| `stax reorder` | | Interactively reorder branches in stack |
-| `stax upstack restack` | | Restack current branch + descendants |
-| `stax upstack submit` | | Submit current branch + descendants |
-| `stax downstack get` | | Show branches below current |
-| `stax downstack submit` | | Submit ancestors + current branch |
+| `st create <name>` | `c`, `bc` | Create stacked branch |
+| `st checkout` | `co`, `bco` | Interactive branch picker |
+| `st modify` | `m` | Stage all + amend current commit |
+| `st rename` | `b r` | Rename branch and optionally edit commit message |
+| `st branch track` | | Track an existing branch |
+| `st branch track --all-prs` | | Track all your open PRs |
+| `st branch untrack` | `ut` | Remove stax metadata for a branch (keep git branch) |
+| `st branch reparent` | | Change parent of a branch |
+| `st branch submit` | `bs` | Submit only current branch |
+| `st branch delete` | | Delete a branch |
+| `st branch fold` | | Fold branch into parent |
+| `st branch squash` | | Squash commits on branch |
+| `st detach` | | Remove branch from stack, reparent children |
+| `st reorder` | | Interactively reorder branches in stack |
+| `st upstack restack` | | Restack current branch + descendants |
+| `st upstack submit` | | Submit current branch + descendants |
+| `st downstack get` | | Show branches below current |
+| `st downstack submit` | | Submit ancestors + current branch |
 
 ### Navigation
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `stax up [n]` | `u`, `bu` | Move up n branches |
-| `stax down [n]` | `d`, `bd` | Move down n branches |
-| `stax top` | | Move to stack tip |
-| `stax bottom` | | Move to stack base |
-| `stax trunk` | `t` | Switch to trunk |
-| `stax prev` | `p` | Toggle to previous branch |
+| `st up [n]` | `u`, `bu` | Move up n branches |
+| `st down [n]` | `d`, `bd` | Move down n branches |
+| `st top` | | Move to stack tip |
+| `st bottom` | | Move to stack base |
+| `st trunk` | `t` | Switch to trunk |
+| `st prev` | `p` | Toggle to previous branch |
 
 ### Interactive
 | Command | Description |
 |---------|-------------|
-| `stax` | Launch interactive TUI |
-| `stax split` | Interactive TUI to split branch into multiple stacked branches |
+| `st` | Launch interactive TUI |
+| `st split` | Interactive TUI to split branch into multiple stacked branches |
 
 ### Recovery
 | Command | Description |
 |---------|-------------|
-| `stax abort` | Abort in-progress rebase/conflict resolution |
-| `stax undo` | Undo last operation (restack, submit, etc.) |
-| `stax undo <op-id>` | Undo a specific operation by ID |
-| `stax redo` | Re-apply the last undone operation |
+| `st abort` | Abort in-progress rebase/conflict resolution |
+| `st undo` | Undo last operation (restack, submit, etc.) |
+| `st undo <op-id>` | Undo a specific operation by ID |
+| `st redo` | Re-apply the last undone operation |
 
 ### Health & Testing
 | Command | Description |
 |---------|-------------|
-| `stax validate` | Validate stack metadata (orphans, cycles, staleness) |
-| `stax fix` | Auto-repair broken metadata |
-| `stax fix --dry-run` | Preview fixes without applying |
-| `stax test <cmd>` | Run a command on each branch in the stack |
-| `stax test <cmd> --fail-fast` | Stop after first failure |
-| `stax test <cmd> --all` | Run on all tracked branches |
+| `st validate` | Validate stack metadata (orphans, cycles, staleness) |
+| `st fix` | Auto-repair broken metadata |
+| `st fix --dry-run` | Preview fixes without applying |
+| `st test <cmd>` | Run a command on each branch in the stack |
+| `st test <cmd> --fail-fast` | Stop after first failure |
+| `st test <cmd> --all` | Run on all tracked branches |
 
 ### Utilities
 | Command | Description |
 |---------|-------------|
-| `stax auth` | Set GitHub token (`--from-gh` supported) |
-| `stax auth status` | Show active GitHub auth source and resolution order |
-| `stax config` | Show configuration |
-| `stax doctor` | Check repo health |
-| `stax demo` | Interactive tutorial (no auth/repo needed) |
-| `stax continue` | Continue after resolving conflicts |
-| `stax pr` | Open PR in browser |
-| `stax open` | Open repository in browser |
-| `stax ci` | Show CI status for current branch (full table with ETA) |
-| `stax ci --stack` | Show CI status for all branches in current stack |
-| `stax ci --all` | Show CI status for all tracked branches |
-| `stax ci --watch` | Watch CI until completion (polls every 15s, records history) |
-| `stax ci --watch --interval 30` | Watch with custom polling interval in seconds |
-| `stax ci --verbose` | Compact summary cards instead of full per-check table |
-| `stax ci --json` | Output CI status as JSON |
-| `stax copy` | Copy branch name to clipboard |
-| `stax copy --pr` | Copy PR URL to clipboard |
-| `stax comments` | Show PR comments with rendered markdown |
-| `stax comments --plain` | Show PR comments as raw markdown |
-| `stax standup` | Show your recent activity for standups |
-| `stax standup --hours 48` | Look back 48 hours instead of default 24 |
-| `stax standup --json` | Output activity as JSON for scripting |
-| `stax changelog <from> [to]` | Generate changelog between two refs |
-| `stax changelog v1.0 --path src/` | Changelog filtered by path (monorepo) |
-| `stax changelog v1.0 --json` | Output changelog as JSON |
-| `stax generate --pr-body` | Generate PR body with AI and update the PR |
-| `stax generate --pr-body --edit` | Generate and review in editor before updating |
+| `st auth` | Set GitHub token (`--from-gh` supported) |
+| `st auth status` | Show active GitHub auth source and resolution order |
+| `st config` | Show configuration |
+| `st doctor` | Check repo health |
+| `st demo` | Interactive tutorial (no auth/repo needed) |
+| `st continue` | Continue after resolving conflicts |
+| `st pr` | Open PR in browser |
+| `st open` | Open repository in browser |
+| `st ci` | Show CI status for current branch (full table with ETA) |
+| `st ci --stack` | Show CI status for all branches in current stack |
+| `st ci --all` | Show CI status for all tracked branches |
+| `st ci --watch` | Watch CI until completion (polls every 15s, records history) |
+| `st ci --watch --interval 30` | Watch with custom polling interval in seconds |
+| `st ci --verbose` | Compact summary cards instead of full per-check table |
+| `st ci --json` | Output CI status as JSON |
+| `st copy` | Copy branch name to clipboard |
+| `st copy --pr` | Copy PR URL to clipboard |
+| `st comments` | Show PR comments with rendered markdown |
+| `st comments --plain` | Show PR comments as raw markdown |
+| `st standup` | Show your recent activity for standups |
+| `st standup --hours 48` | Look back 48 hours instead of default 24 |
+| `st standup --json` | Output activity as JSON for scripting |
+| `st changelog <from> [to]` | Generate changelog between two refs |
+| `st changelog v1.0 --path src/` | Changelog filtered by path (monorepo) |
+| `st changelog v1.0 --json` | Output changelog as JSON |
+| `st generate --pr-body` | Generate PR body with AI and update the PR |
+| `st generate --pr-body --edit` | Generate and review in editor before updating |
 
 ### Common Flags
-- `stax create -m "msg"` - Create branch with commit message
-- `stax create -a` - Stage all changes
-- `stax create -am "migrate checkout webhooks to v2"` - Create branch from message, stage all changes, and commit
-- `stax branch create --message "msg" --prefix feature/` - Create with explicit message and prefix
-- `stax branch reparent --branch feature-a --parent main` - Reparent a specific branch
-- `stax rename new-name` - Rename current branch
-- `stax rename -e` - Rename and edit commit message
-- `stax branch rename --push` - Rename and update remote branch in one step
-- `stax branch squash --message "Squashed commit"` - Squash branch commits with explicit message
-- `stax branch fold --keep` - Fold branch into parent but keep branch
-- `stax submit --draft` - Create PRs as drafts
-- `stax branch submit` / `stax bs` - Submit current branch only
-- `stax upstack submit` - Submit current branch and descendants
-- `stax downstack submit` - Submit ancestors and current branch
-- `stax submit --yes` - Auto-approve prompts
-- `stax submit --no-pr` - Push branches only, skip PR creation/updates
-- `stax submit --no-fetch` - Skip `git fetch`; use cached remote-tracking refs
-- `stax submit --open` - Open the current branch PR in browser after submit (`stax ss --open` / `stax bs --open`)
-- `stax submit --force` - Submit even when restack check fails
-- `stax submit --no-prompt` - Use defaults, skip interactive prompts
-- `stax submit --template <name>` - Use specific template by name (skip picker)
-- `stax submit --no-template` - Skip template selection (no template)
-- `stax submit --edit` - Always open editor for PR body
-- `stax submit --ai-body` - Generate PR body with AI during submit
-- `stax submit --reviewers alice,bob` - Add reviewers
-- `stax submit --labels bug,urgent` - Add labels
-- `stax submit --assignees alice` - Assign users
-- `stax submit --rerequest-review` - Re-request review from existing reviewers when updating PRs
-- `stax submit --quiet` - Minimize submit output
-- `stax submit --verbose` - Show detailed submit output, including GitHub API request counts
-- `stax merge --all` - Merge entire stack
-- `stax merge --method squash` - Choose merge method (squash/merge/rebase)
-- `stax merge --dry-run` - Preview merge without executing
-- `stax merge --when-ready` - Use explicit wait-for-ready mode (legacy: `stax merge-when-ready`)
-- `stax merge --when-ready --interval 10` - Use custom poll interval in seconds
-- `stax merge --no-wait` - Don't wait for CI, fail if not ready
-- `stax merge --no-delete` - Keep branches after merge
-- `stax merge --no-sync` - Skip the automatic post-merge `stax rs --force`
-- `stax merge --timeout 60` - Wait up to 60 minutes for CI per PR
-- `stax merge --quiet` - Minimize merge output
-- `stax restack --auto-stash-pop` - Auto-stash/pop dirty target worktrees during restack
-- `stax restack --all` - Restack all branches in current stack
-- `stax restack --continue` - Continue after resolving restack conflicts
-- `stax restack --submit-after ask|yes|no` - After restack, ask/auto-submit/skip `stax ss`
-- `stax restack --quiet` - Minimize restack output
-- `stax upstack restack --auto-stash-pop` - Auto-stash/pop when restacking descendants
-- `stax rs --restack --auto-stash-pop` - Sync, restack, auto-stash/pop dirty worktrees (`rs` = sync alias)
-- `stax sync --force` - Force sync without prompts
-- `stax sync --safe` - Avoid hard reset when updating trunk
-- `stax sync --continue` - Continue after resolving sync/restack conflicts
-- `stax sync --quiet` - Minimize sync output
-- `stax sync --verbose` - Show detailed sync output
-- `stax cascade --no-pr` - Restack and push branches; skip PR creation/updates
-- `stax cascade --no-submit` - Restack only, no remote interaction
-- `stax cascade --auto-stash-pop` - Auto-stash/pop dirty target worktrees during cascade restack
-- `stax sync --restack` - Sync and rebase all branches
-- `stax status --stack <branch>` - Show only one stack
-- `stax status --current` - Show only current stack
-- `stax status --compact` - Compact output
-- `stax status --json` - Output as JSON
-- `stax log --stack <branch> --current --compact --json` - Filter log output
-- `stax checkout --trunk` - Jump directly to trunk
-- `stax checkout --parent` - Jump to parent branch
-- `stax checkout --child 1` - Jump to first child branch
-- `stax ci --refresh` - Bypass CI cache
-- `stax undo --yes` - Undo without prompts
-- `stax undo --no-push` - Undo locally only, skip remote
-- `stax undo --quiet` - Minimize undo output
-- `stax redo --quiet` - Minimize redo output
-- `stax auth --token <token>` - Set GitHub token directly
-- `stax generate --pr-body --edit` - Generate and review in editor
-- `stax generate --pr-body --agent codex` - Use specific AI agent
-- `stax generate --pr-body --agent gemini` - Use Gemini CLI as the agent
-- `stax generate --pr-body --agent opencode` - Use OpenCode as the agent
-- `stax generate --pr-body --model claude-haiku-4-5-20251001` - Use specific model
+- `st create -m "msg"` - Create branch with commit message
+- `st create -a` - Stage all changes
+- `st create -am "migrate checkout webhooks to v2"` - Create branch from message, stage all changes, and commit
+- `st branch create --message "msg" --prefix feature/` - Create with explicit message and prefix
+- `st branch reparent --branch feature-a --parent main` - Reparent a specific branch
+- `st rename new-name` - Rename current branch
+- `st rename -e` - Rename and edit commit message
+- `st branch rename --push` - Rename and update remote branch in one step
+- `st branch squash --message "Squashed commit"` - Squash branch commits with explicit message
+- `st branch fold --keep` - Fold branch into parent but keep branch
+- `st submit --draft` - Create PRs as drafts
+- `st branch submit` / `st bs` - Submit current branch only
+- `st upstack submit` - Submit current branch and descendants
+- `st downstack submit` - Submit ancestors and current branch
+- `st submit --yes` - Auto-approve prompts
+- `st submit --no-pr` - Push branches only, skip PR creation/updates
+- `st submit --no-fetch` - Skip `git fetch`; use cached remote-tracking refs
+- `st submit --open` - Open the current branch PR in browser after submit (`st ss --open` / `st bs --open`)
+- `st submit --force` - Submit even when restack check fails
+- `st submit --no-prompt` - Use defaults, skip interactive prompts
+- `st submit --template <name>` - Use specific template by name (skip picker)
+- `st submit --no-template` - Skip template selection (no template)
+- `st submit --edit` - Always open editor for PR body
+- `st submit --ai-body` - Generate PR body with AI during submit
+- `st submit --reviewers alice,bob` - Add reviewers
+- `st submit --labels bug,urgent` - Add labels
+- `st submit --assignees alice` - Assign users
+- `st submit --rerequest-review` - Re-request review from existing reviewers when updating PRs
+- `st submit --quiet` - Minimize submit output
+- `st submit --verbose` - Show detailed submit output, including GitHub API request counts
+- `st merge --all` - Merge entire stack
+- `st merge --method squash` - Choose merge method (squash/merge/rebase)
+- `st merge --dry-run` - Preview merge without executing
+- `st merge --when-ready` - Use explicit wait-for-ready mode (legacy: `st merge-when-ready`)
+- `st merge --when-ready --interval 10` - Use custom poll interval in seconds
+- `st merge --no-wait` - Don't wait for CI, fail if not ready
+- `st merge --no-delete` - Keep branches after merge
+- `st merge --no-sync` - Skip the automatic post-merge `st rs --force`
+- `st merge --timeout 60` - Wait up to 60 minutes for CI per PR
+- `st merge --quiet` - Minimize merge output
+- `st restack --auto-stash-pop` - Auto-stash/pop dirty target worktrees during restack
+- `st restack --all` - Restack all branches in current stack
+- `st restack --continue` - Continue after resolving restack conflicts
+- `st restack --submit-after ask|yes|no` - After restack, ask/auto-submit/skip `st ss`
+- `st restack --quiet` - Minimize restack output
+- `st upstack restack --auto-stash-pop` - Auto-stash/pop when restacking descendants
+- `st rs --restack --auto-stash-pop` - Sync, restack, auto-stash/pop dirty worktrees (`rs` = sync alias)
+- `st sync --force` - Force sync without prompts
+- `st sync --safe` - Avoid hard reset when updating trunk
+- `st sync --continue` - Continue after resolving sync/restack conflicts
+- `st sync --quiet` - Minimize sync output
+- `st sync --verbose` - Show detailed sync output
+- `st cascade --no-pr` - Restack and push branches; skip PR creation/updates
+- `st cascade --no-submit` - Restack only, no remote interaction
+- `st cascade --auto-stash-pop` - Auto-stash/pop dirty target worktrees during cascade restack
+- `st sync --restack` - Sync and rebase all branches
+- `st status --stack <branch>` - Show only one stack
+- `st status --current` - Show only current stack
+- `st status --compact` - Compact output
+- `st status --json` - Output as JSON
+- `st log --stack <branch> --current --compact --json` - Filter log output
+- `st checkout --trunk` - Jump directly to trunk
+- `st checkout --parent` - Jump to parent branch
+- `st checkout --child 1` - Jump to first child branch
+- `st ci --refresh` - Bypass CI cache
+- `st undo --yes` - Undo without prompts
+- `st undo --no-push` - Undo locally only, skip remote
+- `st undo --quiet` - Minimize undo output
+- `st redo --quiet` - Minimize redo output
+- `st auth --token <token>` - Set GitHub token directly
+- `st generate --pr-body --edit` - Generate and review in editor
+- `st generate --pr-body --agent codex` - Use specific AI agent
+- `st generate --pr-body --agent gemini` - Use Gemini CLI as the agent
+- `st generate --pr-body --agent opencode` - Use OpenCode as the agent
+- `st generate --pr-body --model claude-haiku-4-5-20251001` - Use specific model
 
 **CI/Automation example:**
 ```bash
-stax submit --draft --yes --no-prompt
-stax merge --yes --method squash
+st submit --draft --yes --no-prompt
+st merge --yes --method squash
 ```
 
 </details>
@@ -1156,8 +1156,8 @@ stax merge --yes --method squash
 Raw [`hyperfine`](https://github.com/sharkdp/hyperfine) results:
 
 ```
-➜ hyperfine 'stax ls' 'fp ls' 'gt ls' --warmup 5
-Benchmark 1: stax ls
+➜ hyperfine 'st ls' 'fp ls' 'gt ls' --warmup 5
+Benchmark 1: st ls
   Time (mean ± σ):      46.8 ms ±   0.5 ms    [User: 7.9 ms, System: 8.8 ms]
   Range (min … max):    45.7 ms …  48.6 ms    57 runs
 
@@ -1170,7 +1170,7 @@ Benchmark 3: gt ls
   Range (min … max):   489.8 ms … 536.3 ms    10 runs
 
 Summary
-  stax ls ran
+  st ls ran
    10.81 ± 0.40 times faster than gt ls
    29.35 ± 0.41 times faster than fp ls
 ```
