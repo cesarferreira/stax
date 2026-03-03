@@ -26,6 +26,8 @@ pub enum OpKind {
     Reorder,
     Split,
     MergeWhenReady,
+    Detach,
+    Fix,
 }
 
 impl OpKind {
@@ -38,6 +40,8 @@ impl OpKind {
             OpKind::Reorder => "reorder",
             OpKind::Split => "split",
             OpKind::MergeWhenReady => "merge-when-ready",
+            OpKind::Detach => "detach",
+            OpKind::Fix => "stack fix",
         }
     }
 }

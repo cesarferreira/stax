@@ -26,6 +26,8 @@
 - [`stax rs --restack`](#core-commands) - Sync trunk and restack descendants so your branch tree stays clean and current.
 - [`Interactive TUI`](#interactive-tui) - Browse your stack tree, PR status, diffs, and reorder branches visually.
 - [`stax undo` / `stax redo`](#safe-history-rewriting-with-undo) - Recover safely from restacks and rebases with transactional history snapshots.
+- [`stax demo`](#core-commands) - Interactive tutorial that walks you through stacked branches in a temp repo (no auth needed).
+- [`stax test`](#core-commands) - Run a command on each branch in the stack to validate before submitting.
 
 ## What are Stacked Branches?
 
@@ -151,6 +153,13 @@ stax rs --restack
 | `stax standup` | Show your recent activity for standups |
 | `stax changelog` | Generate changelog between two refs |
 | `stax undo` | Undo last operation (restack, submit, etc.) |
+| `stax abort` | Abort in-progress rebase/conflict resolution |
+| `stax detach` | Remove a branch from its stack (reparent children) |
+| `stax reorder` | Interactively reorder branches in a stack |
+| `stax validate` | Validate stack metadata health |
+| `stax fix` | Auto-repair broken metadata |
+| `stax test <cmd>` | Run a command on each branch in the stack |
+| `stax demo` | Interactive tutorial (no auth/repo needed) |
 
 ## Interactive Branch Creation
 
@@ -981,6 +990,8 @@ stax submit --edit             # Force editor open
 | `stax branch delete` | | Delete a branch |
 | `stax branch fold` | | Fold branch into parent |
 | `stax branch squash` | | Squash commits on branch |
+| `stax detach` | | Remove branch from stack, reparent children |
+| `stax reorder` | | Interactively reorder branches in stack |
 | `stax upstack restack` | | Restack current branch + descendants |
 | `stax upstack submit` | | Submit current branch + descendants |
 | `stax downstack get` | | Show branches below current |
@@ -1005,9 +1016,20 @@ stax submit --edit             # Force editor open
 ### Recovery
 | Command | Description |
 |---------|-------------|
+| `stax abort` | Abort in-progress rebase/conflict resolution |
 | `stax undo` | Undo last operation (restack, submit, etc.) |
 | `stax undo <op-id>` | Undo a specific operation by ID |
 | `stax redo` | Re-apply the last undone operation |
+
+### Health & Testing
+| Command | Description |
+|---------|-------------|
+| `stax validate` | Validate stack metadata (orphans, cycles, staleness) |
+| `stax fix` | Auto-repair broken metadata |
+| `stax fix --dry-run` | Preview fixes without applying |
+| `stax test <cmd>` | Run a command on each branch in the stack |
+| `stax test <cmd> --fail-fast` | Stop after first failure |
+| `stax test <cmd> --all` | Run on all tracked branches |
 
 ### Utilities
 | Command | Description |
@@ -1016,6 +1038,7 @@ stax submit --edit             # Force editor open
 | `stax auth status` | Show active GitHub auth source and resolution order |
 | `stax config` | Show configuration |
 | `stax doctor` | Check repo health |
+| `stax demo` | Interactive tutorial (no auth/repo needed) |
 | `stax continue` | Continue after resolving conflicts |
 | `stax pr` | Open PR in browser |
 | `stax open` | Open repository in browser |
@@ -1067,6 +1090,7 @@ stax submit --edit             # Force editor open
 - `stax submit --reviewers alice,bob` - Add reviewers
 - `stax submit --labels bug,urgent` - Add labels
 - `stax submit --assignees alice` - Assign users
+- `stax submit --rerequest-review` - Re-request review from existing reviewers when updating PRs
 - `stax submit --quiet` - Minimize submit output
 - `stax submit --verbose` - Show detailed submit output, including GitHub API request counts
 - `stax merge --all` - Merge entire stack

@@ -567,6 +567,26 @@ impl GitHubClient {
         Ok(())
     }
 
+    /// Get the list of requested reviewer logins for a PR
+    pub async fn get_requested_reviewers(&self, pr_number: u64) -> Result<Vec<String>> {
+        self.record_api_call("pulls.get");
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .context("Failed to get PR for reviewers")?;
+
+        let reviewers: Vec<String> = pr
+            .requested_reviewers
+            .unwrap_or_default()
+            .iter()
+            .map(|r| r.login.clone())
+            .collect();
+
+        Ok(reviewers)
+    }
+
     pub async fn add_labels(&self, pr_number: u64, labels: &[String]) -> Result<()> {
         if labels.is_empty() {
             return Ok(());

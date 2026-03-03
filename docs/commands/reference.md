@@ -43,6 +43,8 @@
 | `stax branch delete` | | Delete branch |
 | `stax branch fold` | | Fold branch into parent |
 | `stax branch squash` | | Squash commits |
+| `stax detach` | | Remove branch from stack, reparent children |
+| `stax reorder` | | Interactively reorder branches in stack |
 | `stax upstack restack` | | Restack current + descendants |
 | `stax upstack submit` | | Submit current + descendants |
 | `stax downstack get` | | Show branches below current |
@@ -59,9 +61,21 @@
 
 | Command | Description |
 |---|---|
+| `stax abort` | Abort in-progress rebase/conflict resolution |
 | `stax undo` | Undo last operation |
 | `stax undo <op-id>` | Undo specific operation |
 | `stax redo` | Re-apply last undone operation |
+
+## Health & Testing
+
+| Command | Description |
+|---|---|
+| `stax validate` | Validate stack metadata (orphans, cycles, staleness) |
+| `stax fix` | Auto-repair broken metadata |
+| `stax stack fix --dry-run` | Preview fixes without applying |
+| `stax test <cmd>` | Run a command on each branch in the stack |
+| `stax test <cmd> --fail-fast` | Stop after first failure |
+| `stax test <cmd> --all` | Run on all tracked branches |
 
 ## Utilities
 
@@ -87,6 +101,7 @@
 | `stax standup` | Show recent activity |
 | `stax changelog <from> [to]` | Generate changelog |
 | `stax generate --pr-body` | Generate PR body with AI |
+| `stax demo` | Interactive tutorial (no auth/repo needed) |
 
 ## Common flags
 
@@ -111,6 +126,7 @@
 - `stax submit --template <name>`
 - `stax submit --no-template`
 - `stax submit --edit`
+- `stax submit --rerequest-review`
 - `stax merge --all --method squash --yes`
 - `stax merge --dry-run`
 - `stax merge --when-ready`
