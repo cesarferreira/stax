@@ -1,7 +1,7 @@
-use crate::config::Config;
-use crate::git::GitRepo;
 use super::registry::Registry;
 use super::util::{open_in_editor, resolve_editor};
+use crate::config::Config;
+use crate::git::GitRepo;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
 
@@ -28,14 +28,13 @@ pub fn run(name_or_slug: Option<String>) -> Result<()> {
                 .map(|e| format!("{} ({})", e.name, e.branch))
                 .collect();
 
-            let selection = dialoguer::FuzzySelect::with_theme(
-                &dialoguer::theme::ColorfulTheme::default(),
-            )
-            .with_prompt("Select agent worktree")
-            .items(&items)
-            .default(0)
-            .interact()
-            .context("Picker cancelled")?;
+            let selection =
+                dialoguer::FuzzySelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt("Select agent worktree")
+                    .items(&items)
+                    .default(0)
+                    .interact()
+                    .context("Picker cancelled")?;
 
             &registry.entries[selection]
         }

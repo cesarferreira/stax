@@ -24,11 +24,7 @@ pub fn run_validate() -> Result<()> {
     // 1. Orphaned metadata - refs exist for deleted branches
     let mut orphaned: Vec<String> = Vec::new();
     for name in &tracked {
-        if repo
-            .inner()
-            .find_branch(name, BranchType::Local)
-            .is_err()
-        {
+        if repo.inner().find_branch(name, BranchType::Local).is_err() {
             orphaned.push(name.clone());
         }
     }
@@ -191,10 +187,7 @@ pub fn run_fix(dry_run: bool, yes: bool) -> Result<()> {
     let mut invalid: Vec<String> = Vec::new();
 
     for name in &tracked {
-        let branch_exists = repo
-            .inner()
-            .find_branch(name, BranchType::Local)
-            .is_ok();
+        let branch_exists = repo.inner().find_branch(name, BranchType::Local).is_ok();
 
         if !branch_exists {
             orphaned.push(name.clone());
@@ -311,10 +304,7 @@ pub fn run_fix(dry_run: bool, yes: bool) -> Result<()> {
         for name in &needs_restack {
             println!("  {}", name.yellow());
         }
-        println!(
-            "{}",
-            "Run `stax restack --all` to update them.".dimmed()
-        );
+        println!("{}", "Run `stax restack --all` to update them.".dimmed());
     }
 
     println!();
@@ -325,8 +315,11 @@ pub fn run_fix(dry_run: bool, yes: bool) -> Result<()> {
         } else {
             println!(
                 "{}",
-                format!("{} issue(s) would be fixed. Run without --dry-run to apply.", total)
-                    .yellow()
+                format!(
+                    "{} issue(s) would be fixed. Run without --dry-run to apply.",
+                    total
+                )
+                .yellow()
             );
         }
     } else if fixes == 0 && orphaned.is_empty() && invalid.is_empty() && missing_parents.is_empty()
@@ -416,9 +409,17 @@ pub fn run_test(cmd: Vec<String>, all: bool, fail_fast: bool) -> Result<()> {
     println!();
     let failed_str = failed.to_string();
     if failed > 0 {
-        println!("{} passed, {} failed", passed.to_string().green(), failed_str.red());
+        println!(
+            "{} passed, {} failed",
+            passed.to_string().green(),
+            failed_str.red()
+        );
     } else {
-        println!("{} passed, {} failed", passed.to_string().green(), failed_str.green());
+        println!(
+            "{} passed, {} failed",
+            passed.to_string().green(),
+            failed_str.green()
+        );
     }
 
     if !failed_branches.is_empty() {

@@ -10,7 +10,13 @@ use std::process::Command;
 pub fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .split('-')
         .filter(|part| !part.is_empty())
@@ -25,7 +31,10 @@ pub fn ensure_gitignore(repo_root: &Path, worktrees_dir: &str) -> Result<()> {
 
     if gitignore.exists() {
         let content = fs::read_to_string(&gitignore)?;
-        if content.lines().any(|l| l.trim() == entry.trim_end_matches('/') || l.trim() == entry) {
+        if content
+            .lines()
+            .any(|l| l.trim() == entry.trim_end_matches('/') || l.trim() == entry)
+        {
             return Ok(());
         }
         let updated = if content.ends_with('\n') {
@@ -89,10 +98,12 @@ pub fn open_in_editor(editor: &str, path: &Path) -> Result<()> {
         _ => vec![path_str],
     };
 
-    Command::new(editor)
-        .args(&args)
-        .spawn()
-        .with_context(|| format!("Failed to launch '{}'. Is it installed and on PATH?", editor))?;
+    Command::new(editor).args(&args).spawn().with_context(|| {
+        format!(
+            "Failed to launch '{}'. Is it installed and on PATH?",
+            editor
+        )
+    })?;
 
     Ok(())
 }

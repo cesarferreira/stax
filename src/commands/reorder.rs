@@ -23,7 +23,10 @@ pub fn run(yes: bool) -> Result<()> {
         .collect();
 
     if branches.len() <= 1 {
-        println!("{}", "Only one branch in this stack. Nothing to reorder.".yellow());
+        println!(
+            "{}",
+            "Only one branch in this stack. Nothing to reorder.".yellow()
+        );
         return Ok(());
     }
 

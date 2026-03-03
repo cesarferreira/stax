@@ -99,6 +99,7 @@
 | `stax copy` | Copy branch name |
 | `stax copy --pr` | Copy PR URL |
 | `stax standup` | Show recent activity |
+| `stax standup --summary` | AI-generated spoken standup update |
 | `stax changelog <from> [to]` | Generate changelog |
 | `stax generate --pr-body` | Generate PR body with AI |
 | `stax demo` | Interactive tutorial (no auth/repo needed) |
@@ -159,6 +160,11 @@
 - `stax checkout --child 1`
 - `stax ci --stack --watch --interval 30 --json`
 - `stax standup --all --hours 48 --json`
+- `stax standup --summary`
+- `stax standup --summary --agent claude`
+- `stax standup --summary --hours 48`
+- `stax standup --summary --plain-text`
+- `stax standup --summary --json`
 - `stax auth --from-gh`
 - `stax auth --token <token>`
 - `stax undo --yes --no-push`

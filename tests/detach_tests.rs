@@ -109,10 +109,7 @@ fn test_detach_preserves_pr_info() {
     // Verify C is still tracked
     repo.run_stax(&["checkout", &branches[2]]);
     let parent = repo.get_current_parent();
-    assert!(
-        parent.is_some(),
-        "C should still be tracked after detach"
-    );
+    assert!(parent.is_some(), "C should still be tracked after detach");
 }
 
 #[test]

@@ -42,7 +42,11 @@ fn slugify_basic() {
     let out = repo.run_stax(&["agent", "create", "Add dark mode"]);
     out.assert_success();
 
-    let worktree_path = repo.path().join(".stax").join("trees").join("add-dark-mode");
+    let worktree_path = repo
+        .path()
+        .join(".stax")
+        .join("trees")
+        .join("add-dark-mode");
     assert!(
         worktree_path.exists(),
         "Expected worktree dir at .stax/trees/add-dark-mode"
@@ -114,7 +118,13 @@ fn agent_create_with_stack_on() {
     // Go back to main and create agent stacked on base-feature
     repo.run_stax(&["checkout", "main"]).assert_success();
 
-    let out = repo.run_stax(&["agent", "create", "child-feature", "--stack-on", &base_branch]);
+    let out = repo.run_stax(&[
+        "agent",
+        "create",
+        "child-feature",
+        "--stack-on",
+        &base_branch,
+    ]);
     out.assert_success();
 
     // Worktree should exist
@@ -239,7 +249,10 @@ fn agent_remove_cleans_worktree_and_registry() {
         .assert_success();
 
     let worktree_path = repo.path().join(".stax").join("trees").join("to-remove");
-    assert!(worktree_path.exists(), "Worktree should exist before remove");
+    assert!(
+        worktree_path.exists(),
+        "Worktree should exist before remove"
+    );
     assert!(registry_has_entry(&repo, "to-remove"));
 
     let out = repo.run_stax(&["agent", "remove", "to-remove"]);
@@ -262,8 +275,7 @@ fn agent_remove_with_delete_branch() {
     repo.run_stax(&["agent", "create", "del-branch-test"])
         .assert_success();
 
-    let entry =
-        registry_entry(&repo, "del-branch-test").expect("Registry entry should exist");
+    let entry = registry_entry(&repo, "del-branch-test").expect("Registry entry should exist");
     let branch_name = entry["branch"].as_str().unwrap().to_string();
 
     // Return to main so the branch is not currently checked out
@@ -300,11 +312,7 @@ fn agent_prune_removes_dead_entries() {
 
     assert!(registry_has_entry(&repo, "prune-target"));
 
-    let worktree_path = repo
-        .path()
-        .join(".stax")
-        .join("trees")
-        .join("prune-target");
+    let worktree_path = repo.path().join(".stax").join("trees").join("prune-target");
 
     // Manually remove just the dir (simulating external deletion)
     fs::remove_dir_all(&worktree_path).expect("Failed to manually remove worktree dir");

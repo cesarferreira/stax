@@ -73,6 +73,7 @@ stax comments                  # Show current PR comments
 stax copy [--pr]               # Copy branch name or PR URL
 stax ci                        # CI status
 stax standup                   # Recent activity summary
+stax standup --summary         # AI-generated spoken standup update (colored card)
 stax changelog <from> [to]     # Changelog between refs
 stax generate --pr-body        # AI PR body generation
 
@@ -227,6 +228,10 @@ stax ci --verbose                  # Compact summary cards
 
 stax standup --hours 48            # Summarize recent activity window
 stax standup --all --json          # All stacks in JSON
+stax standup --summary             # AI spoken standup — colored card, word-wrapped
+stax standup --summary --agent claude  # Override AI agent for one run
+stax standup --summary --plain-text    # Raw text output (pipe-friendly)
+stax standup --summary --json          # {"summary": "..."} JSON
 
 stax changelog v1.2.0 HEAD         # Changelog from ref to ref
 stax changelog v1.2.0 --path src/  # Filter by path

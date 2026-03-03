@@ -152,6 +152,7 @@ st rs --restack
 | `st copy` | Copy branch name to clipboard |
 | `st copy --pr` | Copy PR URL to clipboard |
 | `st standup` | Show your recent activity for standups |
+| `st standup --summary` | AI-generated spoken standup update |
 | `st changelog` | Generate changelog between two refs |
 | `st undo` | Undo last operation (restack, submit, etc.) |
 | `st abort` | Abort in-progress rebase/conflict resolution |
@@ -345,6 +346,45 @@ Shows your merged PRs, opened PRs, recent pushes, and anything that needs attent
 st standup              # Last 24 hours (default)
 st standup --hours 48   # Look back further
 st standup --json       # For scripting
+```
+
+### AI standup summary
+
+Let AI turn your activity into a short, natural spoken-style update — the kind of thing you'd actually say out loud at standup:
+
+```bash
+st standup --summary
+```
+
+Uses the same AI agent configured for `st generate --pr-body`. Override it with `--agent`:
+
+```bash
+st standup --summary --agent claude
+st standup --summary --agent gemini --hours 48
+```
+
+The summary is displayed in a readable card, word-wrapped to fit your terminal:
+
+```
+  ✓ Generating standup summary with codex        4.1s
+
+  ╭──────────────────────────────────────────────────────────────────╮
+  │                                                                  │
+  │  Yesterday I shipped the Android UI release bump and wrapped     │
+  │  up the robot-android agents guidance. I also opened two PRs     │
+  │  for the robotaxi UI improvements and a faster mock-server,      │
+  │  and those are now out for review. Today I'm focused on          │
+  │  review follow-ups and have some branch cleanup to do.           │
+  │                                                                  │
+  ╰──────────────────────────────────────────────────────────────────╯
+```
+
+Output format options:
+
+```bash
+st standup --summary                 # Spinner + colored card (default)
+st standup --summary --plain-text    # Raw text, no colors — pipe-friendly
+st standup --summary --json          # {"summary": "..."} JSON
 ```
 
 ## Changelog Generation
@@ -1057,6 +1097,10 @@ st submit --edit             # Force editor open
 | `st standup` | Show your recent activity for standups |
 | `st standup --hours 48` | Look back 48 hours instead of default 24 |
 | `st standup --json` | Output activity as JSON for scripting |
+| `st standup --summary` | AI-generated spoken standup update |
+| `st standup --summary --agent claude` | Override AI agent for one run |
+| `st standup --summary --plain-text` | Plain text output, no colors (pipe-friendly) |
+| `st standup --summary --json` | Output AI summary as JSON |
 | `st changelog <from> [to]` | Generate changelog between two refs |
 | `st changelog v1.0 --path src/` | Changelog filtered by path (monorepo) |
 | `st changelog v1.0 --json` | Output changelog as JSON |

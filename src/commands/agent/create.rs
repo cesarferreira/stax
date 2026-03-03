@@ -1,8 +1,8 @@
+use super::registry::{AgentWorktree, Registry};
+use super::util::{ensure_gitignore, open_in_editor, resolve_editor, slugify};
 use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
-use super::registry::{AgentWorktree, Registry};
-use super::util::{ensure_gitignore, open_in_editor, resolve_editor, slugify};
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use std::fs;
@@ -31,7 +31,10 @@ pub fn run(
 
     let slug = slugify(&title);
     if slug.is_empty() {
-        bail!("Title '{}' produces an empty slug — use alphanumeric characters", title);
+        bail!(
+            "Title '{}' produces an empty slug — use alphanumeric characters",
+            title
+        );
     }
 
     let branch_name = config.format_branch_name(&title);
@@ -123,10 +126,7 @@ pub fn run(
     if let Some(cmd) = editor_cmd {
         open_in_editor(&cmd, &worktree_path)?;
     } else {
-        println!(
-            "\n  Tip: {}",
-            format!("stax agent open {}", slug).cyan()
-        );
+        println!("\n  Tip: {}", format!("stax agent open {}", slug).cyan());
     }
 
     Ok(())

@@ -906,8 +906,10 @@ pub fn run(
 
                     // Re-request review from existing reviewers if flag is set
                     if rerequest_review {
-                        let existing_reviewers =
-                            client.get_requested_reviewers(existing_pr_number).await.unwrap_or_default();
+                        let existing_reviewers = client
+                            .get_requested_reviewers(existing_pr_number)
+                            .await
+                            .unwrap_or_default();
                         if !existing_reviewers.is_empty() {
                             client
                                 .request_reviewers(existing_pr_number, &existing_reviewers)
