@@ -418,15 +418,28 @@ impl GitRepo {
             .spawn()
             .context("Failed to run git patch-id --stable")?;
 
-        if let Some(stdin) = patch_id.stdin.as_mut() {
-            stdin
-                .write_all(input)
-                .context("Failed to stream diff to git patch-id")?;
-        }
+        // Write stdin on a background thread to avoid a deadlock: git patch-id
+        // buffers output as it reads input. If its stdout pipe fills up before
+        // we start reading stdout, both processes stall (git patch-id can't
+        // write, so it stops reading, so write_all blocks forever). Spawning a
+        // writer thread lets us drain stdout on the main thread concurrently.
+        let input = input.to_vec();
+        let mut stdin = patch_id.stdin.take().context("Failed to open stdin")?;
+        let writer = std::thread::spawn(move || -> std::io::Result<()> {
+            stdin.write_all(&input)?;
+            // Drop stdin here so git patch-id sees EOF and flushes output.
+            Ok(())
+        });
 
         let output = patch_id
             .wait_with_output()
             .context("Failed to read git patch-id output")?;
+
+        writer
+            .join()
+            .map_err(|_| anyhow::anyhow!("stdin writer thread panicked"))?
+            .context("Failed to write to git patch-id stdin")?;
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             anyhow::bail!("git patch-id --stable failed: {}", stderr);
