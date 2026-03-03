@@ -539,6 +539,9 @@ enum Commands {
         /// Summarize standup using AI agent
         #[arg(long)]
         summary: bool,
+        /// Include Jira sprint context from `jit` (tickets with PRs + next backlog items)
+        #[arg(long)]
+        jit: bool,
         /// AI agent to use (claude, codex, gemini, opencode). Defaults to config or auto-detect
         #[arg(long)]
         agent: Option<String>,
@@ -1165,9 +1168,10 @@ fn main() -> Result<()> {
             all,
             hours,
             summary,
+            jit,
             agent,
             plain_text,
-        } => commands::standup::run(json, all, hours, summary, agent, plain_text),
+        } => commands::standup::run(json, all, hours, summary, jit, agent, plain_text),
         Commands::Generate {
             pr_body,
             edit,

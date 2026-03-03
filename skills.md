@@ -74,6 +74,7 @@ stax copy [--pr]               # Copy branch name or PR URL
 stax ci                        # CI status
 stax standup                   # Recent activity summary
 stax standup --summary         # AI-generated spoken standup update (colored card)
+stax standup --summary --jit   # AI standup plus Jira next-up context via jit
 stax changelog <from> [to]     # Changelog between refs
 stax generate --pr-body        # AI PR body generation
 
@@ -232,6 +233,7 @@ stax standup --summary             # AI spoken standup — colored card, word-wr
 stax standup --summary --agent claude  # Override AI agent for one run
 stax standup --summary --plain-text    # Raw text output (pipe-friendly)
 stax standup --summary --json          # {"summary": "..."} JSON
+stax standup --summary --jit           # Add Jira context via jit
 
 stax changelog v1.2.0 HEAD         # Changelog from ref to ref
 stax changelog v1.2.0 --path src/  # Filter by path

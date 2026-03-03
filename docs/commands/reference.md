@@ -100,6 +100,7 @@
 | `stax copy --pr` | Copy PR URL |
 | `stax standup` | Show recent activity |
 | `stax standup --summary` | AI-generated spoken standup update |
+| `stax standup --summary --jit` | Include Jira `jit` context for in-flight and next-up work |
 | `stax changelog <from> [to]` | Generate changelog |
 | `stax generate --pr-body` | Generate PR body with AI |
 | `stax demo` | Interactive tutorial (no auth/repo needed) |
@@ -165,6 +166,7 @@
 - `stax standup --summary --hours 48`
 - `stax standup --summary --plain-text`
 - `stax standup --summary --json`
+- `stax standup --summary --jit`
 - `stax auth --from-gh`
 - `stax auth --token <token>`
 - `stax undo --yes --no-push`

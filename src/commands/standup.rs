@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 use regex::Regex;
 use serde::Serialize;
+use std::process::Command;
 
 /// JSON output structure for standup
 #[derive(Serialize)]
@@ -23,6 +24,10 @@ struct StandupJson {
     reviews_given: Vec<ReviewActivityJson>,
     recent_pushes: Vec<PushActivity>,
     needs_attention: NeedsAttention,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    jit: Option<JitSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    jit_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -55,6 +60,23 @@ struct NeedsAttention {
     branches_needing_restack: Vec<String>,
     ci_failing: Vec<String>,
     prs_with_requested_changes: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct JitTicket {
+    key: String,
+    summary: String,
+    status: String,
+    prs: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct JitSummary {
+    sprint: Option<String>,
+    total_tickets: usize,
+    tickets_with_prs: Vec<JitTicket>,
+    tickets_with_prs_not_started: Vec<JitTicket>,
+    next_up: Vec<JitTicket>,
 }
 
 /// All collected standup activity in one place.
@@ -112,29 +134,57 @@ fn collect_standup_data(all: bool, hours: i64) -> Result<StandupData> {
     })
 }
 
-pub fn run(json: bool, all: bool, hours: i64, summary: bool, agent_flag: Option<String>, plain_text: bool) -> Result<()> {
+pub fn run(
+    json: bool,
+    all: bool,
+    hours: i64,
+    summary: bool,
+    jit: bool,
+    agent_flag: Option<String>,
+    plain_text: bool,
+) -> Result<()> {
     if plain_text && !summary {
         bail!("--plain-text only applies when used with --summary");
     }
 
     let data = collect_standup_data(all, hours)?;
+    let (jit_summary, jit_error) = if jit {
+        match collect_jit_summary(30) {
+            Ok(summary) => (Some(summary), None),
+            Err(err) => (None, Some(err.to_string())),
+        }
+    } else {
+        (None, None)
+    };
 
     if summary {
         // --summary --json → {"summary": "..."}
         if json {
-            let raw = generate_summary(&data, agent_flag.as_deref(), true)?;
-            let out = serde_json::json!({ "summary": raw.trim() });
+            let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), true)?;
+            let mut out = serde_json::json!({ "summary": raw.trim() });
+            if jit {
+                out["jit"] = serde_json::to_value(&jit_summary)?;
+                out["jit_error"] = serde_json::to_value(&jit_error)?;
+            }
             println!("{}", serde_json::to_string_pretty(&out)?);
             return Ok(());
         }
         // --summary --plain-text → raw text, no spinner, no colors
         if plain_text {
-            let raw = generate_summary(&data, agent_flag.as_deref(), true)?;
+            let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), true)?;
             println!("{}", raw.trim());
             return Ok(());
         }
+        if let Some(err) = &jit_error {
+            println!(
+                "{} {}",
+                "Warning:".yellow().bold(),
+                format!("could not load jit context ({})", err).dimmed()
+            );
+            println!();
+        }
         // --summary alone → spinner + card with colors
-        let raw = generate_summary(&data, agent_flag.as_deref(), false)?;
+        let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), false)?;
         print_summary_card(raw.trim());
         return Ok(());
     }
@@ -198,6 +248,8 @@ pub fn run(json: bool, all: bool, hours: i64, summary: bool, agent_flag: Option<
                 .collect(),
             recent_pushes,
             needs_attention,
+            jit: jit_summary,
+            jit_error: if jit { jit_error } else { None },
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
@@ -324,6 +376,27 @@ pub fn run(json: bool, all: bool, hours: i64, summary: bool, agent_flag: Option<
         println!();
     }
 
+    if let Some(jit_data) = &jit_summary {
+        print_jit_section(jit_data);
+    } else if let Some(err) = &jit_error {
+        println!("{}", "Jira (jit)".magenta().bold());
+        println!(
+            "   {} {}",
+            "•".yellow(),
+            format!("Unable to load context: {}", err).dimmed()
+        );
+        println!();
+    }
+
+    let has_jit_signal = jit_summary
+        .as_ref()
+        .map(|j| {
+            !j.tickets_with_prs.is_empty()
+                || !j.tickets_with_prs_not_started.is_empty()
+                || !j.next_up.is_empty()
+        })
+        .unwrap_or(false);
+
     // Empty state
     if merged_prs.is_empty()
         && opened_prs.is_empty()
@@ -331,6 +404,7 @@ pub fn run(json: bool, all: bool, hours: i64, summary: bool, agent_flag: Option<
         && reviews_given.is_empty()
         && pushes_with_activity.is_empty()
         && !has_attention
+        && !has_jit_signal
     {
         println!("{}", "No activity in the last {} hours.".dimmed());
         println!();
@@ -339,7 +413,7 @@ pub fn run(json: bool, all: bool, hours: i64, summary: bool, agent_flag: Option<
     Ok(())
 }
 
-fn build_standup_prompt(data: &StandupData) -> String {
+fn build_standup_prompt(data: &StandupData, jit: Option<&JitSummary>) -> String {
     let period = if data.hours == 24 {
         "last 24 hours".to_string()
     } else {
@@ -351,7 +425,7 @@ fn build_standup_prompt(data: &StandupData) -> String {
         "You are writing a standup update that will be spoken out loud in a team meeting. \
         Write 2-3 short, natural sentences in first person. \
         Focus on WHAT was worked on, not git mechanics. \
-        Do NOT mention PR numbers, branch names, or commit counts — those are noise. \
+        Do NOT mention PR numbers, branch names, commit counts, or Jira ticket IDs — those are noise. \
         Do NOT list items — write flowing sentences like a human would say them. \
         If there are branches needing restack or cleanup, just say something vague like \
         \"I also have some branch cleanup to do\" — don't enumerate them. \
@@ -398,11 +472,45 @@ fn build_standup_prompt(data: &StandupData) -> String {
         prompt.push_str("Has some branch/stack cleanup to do today.\n\n");
     }
 
+    if let Some(jit) = jit {
+        if let Some(sprint) = &jit.sprint {
+            prompt.push_str(&format!("Jira sprint context: {}.\n", sprint));
+        }
+        if !jit.tickets_with_prs.is_empty() {
+            prompt.push_str("Jira tickets that already have PRs in flight:\n");
+            for ticket in &jit.tickets_with_prs {
+                prompt.push_str(&format!("- {} [{}]\n", ticket.summary, ticket.status));
+            }
+            prompt.push('\n');
+        }
+        if !jit.tickets_with_prs_not_started.is_empty() {
+            prompt.push_str(
+                "Jira tickets with linked PRs but likely no coding started yet (do not frame as active work):\n",
+            );
+            for ticket in &jit.tickets_with_prs_not_started {
+                prompt.push_str(&format!("- {} [{}]\n", ticket.summary, ticket.status));
+            }
+            prompt.push('\n');
+        }
+        if !jit.next_up.is_empty() {
+            prompt.push_str("Likely next Jira backlog items to pick up:\n");
+            for ticket in &jit.next_up {
+                prompt.push_str(&format!("- {} [{}]\n", ticket.summary, ticket.status));
+            }
+            prompt.push('\n');
+        }
+    }
+
     prompt.push_str("Write only the standup update — no preamble, no labels, just the sentences.");
     prompt
 }
 
-fn generate_summary(data: &StandupData, agent_flag: Option<&str>, quiet: bool) -> Result<String> {
+fn generate_summary(
+    data: &StandupData,
+    jit: Option<&JitSummary>,
+    agent_flag: Option<&str>,
+    quiet: bool,
+) -> Result<String> {
     let config = Config::load()?;
 
     let agent = if let Some(a) = agent_flag {
@@ -421,7 +529,7 @@ fn generate_summary(data: &StandupData, agent_flag: Option<&str>, quiet: bool) -
     };
 
     let model = config.ai.model.clone();
-    let prompt = build_standup_prompt(data);
+    let prompt = build_standup_prompt(data, jit);
 
     if quiet {
         let raw = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt)?;
@@ -472,8 +580,18 @@ fn print_summary_card(text: &str) {
     let lines = word_wrap(text, content_width);
 
     println!();
-    println!("  {}{}{}", "╭".dimmed(), "─".repeat(inner_width).dimmed(), "╮".dimmed());
-    println!("  {}{}{}", "│".dimmed(), " ".repeat(inner_width), "│".dimmed());
+    println!(
+        "  {}{}{}",
+        "╭".dimmed(),
+        "─".repeat(inner_width).dimmed(),
+        "╮".dimmed()
+    );
+    println!(
+        "  {}{}{}",
+        "│".dimmed(),
+        " ".repeat(inner_width),
+        "│".dimmed()
+    );
     for line in &lines {
         let visible_len = line.chars().count();
         let pad_right = content_width.saturating_sub(visible_len);
@@ -486,8 +604,18 @@ fn print_summary_card(text: &str) {
             "│".dimmed()
         );
     }
-    println!("  {}{}{}", "│".dimmed(), " ".repeat(inner_width), "│".dimmed());
-    println!("  {}{}{}", "╰".dimmed(), "─".repeat(inner_width).dimmed(), "╯".dimmed());
+    println!(
+        "  {}{}{}",
+        "│".dimmed(),
+        " ".repeat(inner_width),
+        "│".dimmed()
+    );
+    println!(
+        "  {}{}{}",
+        "╰".dimmed(),
+        "─".repeat(inner_width).dimmed(),
+        "╯".dimmed()
+    );
     println!();
 }
 
@@ -520,10 +648,9 @@ fn colorize_summary(text: &str) -> String {
             &|m: &str| m.yellow().to_string(),
         ),
         // "some branch cleanup" type phrases → yellow (multi-word)
-        (
-            r"(?i)(some\s+\w+\s+cleanup|some cleanup)",
-            &|m: &str| m.yellow().to_string(),
-        ),
+        (r"(?i)(some\s+\w+\s+cleanup|some cleanup)", &|m: &str| {
+            m.yellow().to_string()
+        }),
     ];
 
     let mut result = text.to_string();
@@ -535,6 +662,294 @@ fn colorize_summary(text: &str) -> String {
             .to_string();
     }
     result
+}
+
+fn collect_jit_summary(limit: usize) -> Result<JitSummary> {
+    let output = Command::new("jit")
+        .args([
+            "--my-tickets",
+            "--include-prs",
+            "--limit",
+            &limit.to_string(),
+        ])
+        .env("NO_COLOR", "1")
+        .output()
+        .context("failed to execute `jit`")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            bail!("`jit` exited with status {}", output.status);
+        }
+        bail!("`jit` failed: {}", stderr);
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("`jit` returned non-UTF8 output")?;
+    parse_jit_summary(&stdout)
+}
+
+fn parse_jit_summary(raw: &str) -> Result<JitSummary> {
+    #[derive(Clone, Copy)]
+    struct HeaderIndex {
+        key: usize,
+        summary: usize,
+        status: usize,
+        prs: Option<usize>,
+    }
+
+    let sprint = raw
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Current Sprint:")
+                .map(|s| s.trim().to_string())
+        })
+        .filter(|s| !s.is_empty());
+
+    let ansi_re = Regex::new(r"\x1b\[[0-9;]*m").expect("valid ANSI regex");
+    let key_re = Regex::new(r"^[A-Z][A-Z0-9]+-\d+$").expect("valid Jira key regex");
+    let pr_re = Regex::new(r"#\d+").expect("valid PR regex");
+
+    let mut header: Option<HeaderIndex> = None;
+    let mut tickets: Vec<JitTicket> = Vec::new();
+
+    for line in raw.lines() {
+        if !line.contains('│') {
+            continue;
+        }
+
+        let cleaned = ansi_re.replace_all(line, "");
+        let cols: Vec<String> = cleaned
+            .split('│')
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(ToString::to_string)
+            .collect();
+
+        if cols.is_empty() {
+            continue;
+        }
+
+        if header.is_none() {
+            let mut key_idx = None;
+            let mut summary_idx = None;
+            let mut status_idx = None;
+            let mut prs_idx = None;
+            for (idx, col) in cols.iter().enumerate() {
+                let label = col.to_ascii_lowercase();
+                match label.as_str() {
+                    "key" => key_idx = Some(idx),
+                    "summary" => summary_idx = Some(idx),
+                    "status" => status_idx = Some(idx),
+                    "prs" | "prs." | "pull requests" => prs_idx = Some(idx),
+                    _ => {}
+                }
+            }
+            if let (Some(key), Some(summary), Some(status)) = (key_idx, summary_idx, status_idx) {
+                header = Some(HeaderIndex {
+                    key,
+                    summary,
+                    status,
+                    prs: prs_idx,
+                });
+            }
+            continue;
+        }
+
+        let Some(h) = header else {
+            continue;
+        };
+        if cols.len() <= h.key || cols.len() <= h.summary || cols.len() <= h.status {
+            continue;
+        }
+
+        let key = cols[h.key].trim();
+        if !key_re.is_match(key) {
+            continue;
+        }
+
+        let prs = h
+            .prs
+            .and_then(|idx| cols.get(idx))
+            .map(|cell| {
+                pr_re
+                    .find_iter(cell)
+                    .map(|m| m.as_str().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        tickets.push(JitTicket {
+            key: key.to_string(),
+            summary: cols[h.summary].trim().to_string(),
+            status: cols[h.status].trim().to_string(),
+            prs,
+        });
+    }
+
+    if tickets.is_empty() {
+        bail!("no tickets found in `jit` output");
+    }
+
+    let mut tickets_with_prs_not_started: Vec<JitTicket> = tickets
+        .iter()
+        .filter(|t| !t.prs.is_empty())
+        .filter(|t| is_not_started_status(&t.status))
+        .cloned()
+        .collect();
+    tickets_with_prs_not_started.sort_by_key(|t| jit_next_up_rank(&t.status));
+    tickets_with_prs_not_started.truncate(5);
+
+    let mut tickets_with_prs: Vec<JitTicket> = tickets
+        .iter()
+        .filter(|t| !t.prs.is_empty())
+        .filter(|t| !is_not_started_status(&t.status))
+        .cloned()
+        .collect();
+    tickets_with_prs.sort_by_key(|t| jit_inflight_rank(&t.status));
+    tickets_with_prs.truncate(5);
+
+    let mut next_up: Vec<JitTicket> = tickets
+        .iter()
+        .filter(|t| t.prs.is_empty())
+        .filter(|t| !is_done_status(&t.status))
+        .filter(|t| is_not_started_status(&t.status))
+        .cloned()
+        .collect();
+
+    if next_up.is_empty() {
+        next_up = tickets
+            .iter()
+            .filter(|t| t.prs.is_empty())
+            .filter(|t| !is_done_status(&t.status))
+            .cloned()
+            .collect();
+    }
+
+    next_up.sort_by_key(|t| jit_next_up_rank(&t.status));
+    next_up.truncate(5);
+
+    Ok(JitSummary {
+        sprint,
+        total_tickets: tickets.len(),
+        tickets_with_prs,
+        tickets_with_prs_not_started,
+        next_up,
+    })
+}
+
+fn is_done_status(status: &str) -> bool {
+    let s = status.to_ascii_lowercase();
+    s.contains("done")
+        || s.contains("closed")
+        || s.contains("resolved")
+        || s.contains("complete")
+        || s.contains("cancelled")
+        || s.contains("canceled")
+}
+
+fn is_not_started_status(status: &str) -> bool {
+    let s = status.to_ascii_lowercase();
+    s.contains("selected")
+        || s.contains("backlog")
+        || s == "todo"
+        || s == "to do"
+        || s.contains("ready")
+        || s.contains("triage")
+        || s.contains("open")
+}
+
+fn jit_inflight_rank(status: &str) -> usize {
+    let s = status.to_ascii_lowercase();
+    if s.contains("in progress") {
+        0
+    } else if s.contains("review") {
+        1
+    } else if s.contains("selected") || s.contains("ready") {
+        2
+    } else if is_done_status(status) {
+        3
+    } else {
+        4
+    }
+}
+
+fn jit_next_up_rank(status: &str) -> usize {
+    let s = status.to_ascii_lowercase();
+    if s.contains("selected") || s.contains("ready") {
+        0
+    } else if s == "todo" || s == "to do" {
+        1
+    } else if s.contains("backlog") {
+        2
+    } else if s.contains("triage") || s.contains("open") {
+        3
+    } else if s.contains("in progress") {
+        4
+    } else {
+        5
+    }
+}
+
+fn print_jit_section(jit: &JitSummary) {
+    println!("{}", "Jira (jit)".magenta().bold());
+    if let Some(sprint) = &jit.sprint {
+        println!("   {} Sprint: {}", "•".magenta(), sprint.cyan());
+    }
+
+    if !jit.tickets_with_prs.is_empty() {
+        println!("   {} Tickets with PRs:", "•".magenta());
+        for ticket in &jit.tickets_with_prs {
+            let prs = ticket.prs.join(", ");
+            println!(
+                "     {} {}: {} ({}, {})",
+                "•".magenta(),
+                ticket.key.cyan(),
+                ticket.summary,
+                ticket.status.dimmed(),
+                prs.cyan()
+            );
+        }
+    }
+
+    if !jit.tickets_with_prs_not_started.is_empty() {
+        println!("   {} Linked PRs but likely not started:", "•".yellow());
+        for ticket in &jit.tickets_with_prs_not_started {
+            let prs = ticket.prs.join(", ");
+            println!(
+                "     {} {}: {} ({}, {})",
+                "•".yellow(),
+                ticket.key.cyan(),
+                ticket.summary,
+                ticket.status.dimmed(),
+                prs.cyan()
+            );
+        }
+    }
+
+    if !jit.next_up.is_empty() {
+        println!("   {} Next up from backlog:", "•".yellow());
+        for ticket in &jit.next_up {
+            println!(
+                "     {} {}: {} ({})",
+                "•".yellow(),
+                ticket.key.cyan(),
+                ticket.summary,
+                ticket.status.dimmed()
+            );
+        }
+    }
+
+    if jit.tickets_with_prs.is_empty()
+        && jit.tickets_with_prs_not_started.is_empty()
+        && jit.next_up.is_empty()
+    {
+        println!(
+            "   {} No in-flight or next-up Jira tickets found",
+            "•".dimmed()
+        );
+    }
+
+    println!();
 }
 
 fn fetch_github_activity(
@@ -760,6 +1175,8 @@ mod tests {
                 ci_failing: vec![],
                 prs_with_requested_changes: vec![],
             },
+            jit: None,
+            jit_error: None,
         };
 
         let json = serde_json::to_string_pretty(&output).unwrap();
@@ -812,5 +1229,43 @@ mod tests {
             || !needs.prs_with_requested_changes.is_empty();
 
         assert!(has_attention);
+    }
+
+    #[test]
+    fn test_parse_jit_summary_extracts_smart_buckets() {
+        let raw = r#"
+Current Sprint: OBX Sprint
+
+┌────────┬───────────────────────────────┬──────────────────────────┬──────────┐
+│ Key    │ Summary                       │ Status                   │ PRs      │
+├────────┼───────────────────────────────┼──────────────────────────┼──────────┤
+│ APP-1  │ Improve startup time          │ In progress              │ #12345   │
+├────────┼───────────────────────────────┼──────────────────────────┼──────────┤
+│ APP-2  │ Handle map re-centering       │ Selected for development │ -        │
+├────────┼───────────────────────────────┼──────────────────────────┼──────────┤
+│ APP-3  │ Add missing route telemetry   │ Backlog                  │ -        │
+├────────┼───────────────────────────────┼──────────────────────────┼──────────┤
+│ APP-4  │ Update docs                   │ Done                     │ #54321   │
+├────────┼───────────────────────────────┼──────────────────────────┼──────────┤
+│ APP-5  │ Spike integration approach    │ Backlog                  │ #77777   │
+└────────┴───────────────────────────────┴──────────────────────────┴──────────┘
+"#;
+
+        let parsed = parse_jit_summary(raw).unwrap();
+
+        assert_eq!(parsed.sprint.as_deref(), Some("OBX Sprint"));
+        assert_eq!(parsed.total_tickets, 5);
+        assert_eq!(parsed.tickets_with_prs.len(), 2);
+        assert_eq!(parsed.tickets_with_prs[0].key, "APP-1");
+        assert_eq!(parsed.tickets_with_prs_not_started.len(), 1);
+        assert_eq!(parsed.tickets_with_prs_not_started[0].key, "APP-5");
+        assert_eq!(parsed.next_up.len(), 2);
+        assert_eq!(parsed.next_up[0].key, "APP-2");
+    }
+
+    #[test]
+    fn test_parse_jit_summary_errors_when_no_tickets_present() {
+        let raw = "Current Sprint: Sprint\n\nNo tickets found in the current sprint.";
+        assert!(parse_jit_summary(raw).is_err());
     }
 }

@@ -153,6 +153,7 @@ st rs --restack
 | `st copy --pr` | Copy PR URL to clipboard |
 | `st standup` | Show your recent activity for standups |
 | `st standup --summary` | AI-generated spoken standup update |
+| `st standup --summary --jit` | Add Jira `jit` context for in-flight PR tickets and likely next backlog work |
 | `st changelog` | Generate changelog between two refs |
 | `st undo` | Undo last operation (restack, submit, etc.) |
 | `st abort` | Abort in-progress rebase/conflict resolution |
@@ -361,6 +362,7 @@ Uses the same AI agent configured for `st generate --pr-body`. Override it with 
 ```bash
 st standup --summary --agent claude
 st standup --summary --agent gemini --hours 48
+st standup --summary --jit            # Include Jira context from jit
 ```
 
 The summary is displayed in a readable card, word-wrapped to fit your terminal:
@@ -385,6 +387,7 @@ Output format options:
 st standup --summary                 # Spinner + colored card (default)
 st standup --summary --plain-text    # Raw text, no colors — pipe-friendly
 st standup --summary --json          # {"summary": "..."} JSON
+st standup --summary --jit           # Add Jira backlog + in-flight ticket context via jit
 ```
 
 ## Changelog Generation
@@ -1098,6 +1101,7 @@ st submit --edit             # Force editor open
 | `st standup --hours 48` | Look back 48 hours instead of default 24 |
 | `st standup --json` | Output activity as JSON for scripting |
 | `st standup --summary` | AI-generated spoken standup update |
+| `st standup --summary --jit` | AI standup with Jira `jit` context (tickets with PRs + next-up backlog) |
 | `st standup --summary --agent claude` | Override AI agent for one run |
 | `st standup --summary --plain-text` | Plain text output, no colors (pipe-friendly) |
 | `st standup --summary --json` | Output AI summary as JSON |

@@ -22,9 +22,14 @@ stax standup --summary
 stax standup --summary --hours 48
 stax standup --summary --agent claude
 stax standup --summary --agent gemini
+stax standup --summary --jit
 ```
 
 Uses the AI agent configured under `[ai]` in `~/.config/stax/config.toml` (same agent as `stax generate --pr-body`). Override for a single run with `--agent`.
+
+When `--jit` is enabled, standup also inspects your current Jira sprint via the `jit` CLI and feeds the AI two extra signals:
+- tickets that already have PRs in flight
+- likely next backlog tickets without PRs yet
 
 The summary is word-wrapped and displayed in a card that fits your terminal width:
 
@@ -50,6 +55,7 @@ Key phrases are highlighted: completed work in green, new work in cyan, reviews 
 stax standup --summary                   # Spinner + colored card (default)
 stax standup --summary --plain-text      # Raw text, no colors — pipe-friendly
 stax standup --summary --json            # {"summary": "..."} JSON
+stax standup --summary --jit             # Add Jira context via jit
 ```
 
 ### Prerequisites
