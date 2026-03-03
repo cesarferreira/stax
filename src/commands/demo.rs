@@ -20,19 +20,38 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn run_stax(cwd: &Path, args: &[&str]) -> Result<String> {
-    let exe = std::env::current_exe().unwrap_or_else(|_| "stax".into());
-    let output = Command::new(exe)
+fn stax_exe() -> std::path::PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| "stax".into())
+}
+
+/// Run stax and print its output (for demo steps the user should see)
+fn run_stax(cwd: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new(stax_exe())
         .args(args)
         .current_dir(cwd)
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .output()
         .with_context(|| format!("Failed to run stax {}", args.join(" ")))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout);
     if !stdout.is_empty() {
         print!("{}", stdout);
     }
-    Ok(stdout)
+    Ok(())
+}
+
+/// Run stax silently (for setup scaffolding)
+fn run_stax_quiet(cwd: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new(stax_exe())
+        .args(args)
+        .current_dir(cwd)
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .with_context(|| format!("Failed to run stax {}", args.join(" ")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("stax {} failed: {}", args.join(" "), stderr);
+    }
+    Ok(())
 }
 
 fn pause() -> Result<bool> {
@@ -60,6 +79,7 @@ fn cmd(text: &str) {
     println!();
 }
 
+/// Initialize a temp repo with stax trunk set — no noisy doctor output
 fn setup_repo() -> Result<(tempfile::TempDir, std::path::PathBuf)> {
     let tmp = tempfile::tempdir().context("Failed to create temp directory")?;
     let dir = tmp.path().to_path_buf();
@@ -69,7 +89,23 @@ fn setup_repo() -> Result<(tempfile::TempDir, std::path::PathBuf)> {
     fs::write(dir.join("README.md"), "# My Project\n")?;
     run_git(&dir, &["add", "-A"])?;
     run_git(&dir, &["commit", "-m", "Initial commit"])?;
-    run_stax(&dir, &["doctor"])?;
+
+    // Write the trunk ref directly (same as stax init) to avoid doctor output
+    let child = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()?;
+    use std::io::Write;
+    let mut child = child;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(b"main")?;
+    }
+    let output = child.wait_with_output()?;
+    let blob_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    run_git(&dir, &["update-ref", "refs/stax/trunk", &blob_hash])?;
+
     Ok((tmp, dir))
 }
 
@@ -77,6 +113,12 @@ fn commit(dir: &Path, file: &str, content: &str, msg: &str) -> Result<()> {
     fs::write(dir.join(file), content)?;
     run_git(dir, &["add", "-A"])?;
     run_git(dir, &["commit", "-m", msg])
+}
+
+/// Silently create a branch and commit (for scaffolding stacks before a demo step)
+fn scaffold_branch(dir: &Path, name: &str, file: &str, code: &str, msg: &str) -> Result<()> {
+    run_stax_quiet(dir, &["create", name])?;
+    commit(dir, file, code, msg)
 }
 
 // ─── Demo 1: First PR ───────────────────────────────────────────────────────
@@ -148,7 +190,6 @@ fn demo_stacking() -> Result<()> {
     if !pause()? { return Ok(()); }
 
     step(2, t, "Navigate the stack");
-    println!("Jump to bottom and back to top:");
     cmd("stax bottom");
     run_stax(&dir, &["bottom"])?;
     cmd("stax top");
@@ -156,12 +197,11 @@ fn demo_stacking() -> Result<()> {
     if !pause()? { return Ok(()); }
 
     step(3, t, "Edit a middle branch");
-    cmd("stax bottom");
-    run_stax(&dir, &["bottom"])?;
+    run_stax_quiet(&dir, &["bottom"])?;
     commit(&dir, "models.rs", "pub struct User { pub id: u64, pub name: String, pub email: String }\n", "Add email to User")?;
     cmd("stax status");
     run_stax(&dir, &["status"])?;
-    println!("{}", "The branches above are now marked as needing rebase.".dimmed());
+    println!("{}", "Branches above are marked as needing rebase.".dimmed());
     if !pause()? { return Ok(()); }
 
     step(4, t, "Restack everything");
@@ -192,15 +232,11 @@ fn demo_navigation() -> Result<()> {
 
     let (_tmp, dir) = setup_repo()?;
 
-    // Build a stack silently
-    run_stax(&dir, &["create", "feat-auth"])?;
-    commit(&dir, "auth.rs", "pub fn auth() {}\n", "Add auth")?;
-    run_stax(&dir, &["create", "feat-session"])?;
-    commit(&dir, "session.rs", "pub fn session() {}\n", "Add session")?;
-    run_stax(&dir, &["create", "feat-profile"])?;
-    commit(&dir, "profile.rs", "pub fn profile() {}\n", "Add profile")?;
-    run_stax(&dir, &["create", "feat-settings"])?;
-    commit(&dir, "settings.rs", "pub fn settings() {}\n", "Add settings")?;
+    // Build a 4-branch stack silently
+    scaffold_branch(&dir, "feat-auth", "auth.rs", "pub fn auth() {}\n", "Add auth")?;
+    scaffold_branch(&dir, "feat-session", "session.rs", "pub fn session() {}\n", "Add session")?;
+    scaffold_branch(&dir, "feat-profile", "profile.rs", "pub fn profile() {}\n", "Add profile")?;
+    scaffold_branch(&dir, "feat-settings", "settings.rs", "pub fn settings() {}\n", "Add settings")?;
 
     step(1, t, "See where you are");
     cmd("stax status");
@@ -249,18 +285,16 @@ fn demo_undo() -> Result<()> {
     let (_tmp, dir) = setup_repo()?;
 
     step(1, t, "Create a stack");
-    run_stax(&dir, &["create", "feat-payments"])?;
-    commit(&dir, "pay.rs", "pub fn charge(amount: u64) {}\n", "Add payments")?;
-    run_stax(&dir, &["create", "feat-receipts"])?;
-    commit(&dir, "receipt.rs", "pub fn receipt() {}\n", "Add receipts")?;
+    scaffold_branch(&dir, "feat-payments", "pay.rs", "pub fn charge(amount: u64) {}\n", "Add payments")?;
+    scaffold_branch(&dir, "feat-receipts", "receipt.rs", "pub fn receipt() {}\n", "Add receipts")?;
     cmd("stax log");
     run_stax(&dir, &["log"])?;
     if !pause()? { return Ok(()); }
 
     step(2, t, "Detach a branch (risky operation)");
     println!("Remove {} from the stack:", "feat-payments".cyan());
+    run_stax_quiet(&dir, &["down"])?;
     cmd("stax detach --yes");
-    run_stax(&dir, &["down"])?;
     run_stax(&dir, &["detach", "--yes"])?;
     cmd("stax status");
     run_stax(&dir, &["status"])?;
@@ -291,10 +325,8 @@ fn demo_health() -> Result<()> {
     let (_tmp, dir) = setup_repo()?;
 
     step(1, t, "Build a stack");
-    run_stax(&dir, &["create", "feat-cache"])?;
-    commit(&dir, "cache.rs", "pub fn cache() {}\n", "Add caching")?;
-    run_stax(&dir, &["create", "feat-ttl"])?;
-    commit(&dir, "ttl.rs", "pub fn ttl() {}\n", "Add TTL support")?;
+    scaffold_branch(&dir, "feat-cache", "cache.rs", "pub fn cache() {}\n", "Add caching")?;
+    scaffold_branch(&dir, "feat-ttl", "ttl.rs", "pub fn ttl() {}\n", "Add TTL support")?;
     cmd("stax status");
     run_stax(&dir, &["status"])?;
     if !pause()? { return Ok(()); }
