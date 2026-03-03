@@ -15,6 +15,8 @@
   <img src="assets/screenshot.png" width="900" alt="stax screenshot">
 </div>
 
+Ship small, reviewable PR stacks quickly without giving up safety.
+
 `stax` installs both binaries: `stax` and the short alias `st`. This README uses `st`.
 
 - Live docs: [cesarferreira.github.io/stax](https://cesarferreira.github.io/stax/)
@@ -22,13 +24,13 @@
 
 ## Why stax
 
-- Fast Rust CLI optimized for stacked-branch workflows
-- Small reviewable PR stacks instead of one mega PR
-- Interactive TUI for branch tree + diff navigation
-- Safe transactional history operations with `st undo` and `st redo`
-- Built-in stack-aware merge/cascade workflows
-- AI-friendly workflows for PR generation and standups
-- Worktree-aware operations for parallel agent development
+- Replace one giant PR with a clean stack of small, focused PRs
+- Keep shipping while lower-stack PRs are still in review
+- Navigate the full stack and diffs from an interactive TUI
+- Restack/merge with transactional safety and fast recovery (`st undo`, `st redo`)
+- Run stack-aware merge/cascade workflows with CI/readiness checks
+- Generate PR bodies and standup summaries with your preferred AI agent
+- Work across multiple worktrees, including parallel AI-agent workflows
 
 ## Install
 
@@ -47,7 +49,7 @@ st --version
 ```
 
 <a id="quick-start"></a>
-## Quick Start
+## 60-Second Quick Start
 
 Set up GitHub auth first (required for PR creation, CI checks, and review metadata).
 
@@ -83,6 +85,8 @@ st ss
 st rs --restack
 ```
 
+Result: two stacked branches, submitted as two linked PRs, then kept up to date with one sync/restack command.
+
 Next steps:
 - [Getting Started: Quick Start](docs/getting-started/quick-start.md)
 - [Workflow: Merge and Cascade](docs/workflows/merge-and-cascade.md)
@@ -114,7 +118,7 @@ For complete command and flag reference: [docs/commands/core.md](docs/commands/c
 <a id="cascade-stack-merge"></a>
 ### Cascade Stack Merge
 
-Merge from stack bottom up to your current branch with safety checks around CI/readiness.
+Merge from stack bottom up to your current branch with safety checks for CI/readiness.
 
 ```bash
 # Merge from bottom -> current branch
@@ -131,7 +135,7 @@ Read more: [docs/workflows/merge-and-cascade.md](docs/workflows/merge-and-cascad
 
 ### Safe History Rewriting (Undo/Redo)
 
-`stax` snapshots branch state before destructive operations (restack/submit/reorder), so you can recover quickly.
+`stax` snapshots branch state before destructive operations (`restack`, `submit`, `reorder`) so recovery is immediate when something goes wrong.
 
 ```bash
 st restack
@@ -143,7 +147,7 @@ Read more: [docs/safety/undo-redo.md](docs/safety/undo-redo.md)
 
 ### Interactive TUI
 
-Launch with no arguments to browse stacks, inspect diffs, and run common operations.
+Launch with no arguments to browse stacks, inspect diffs, and run common operations without leaving the terminal.
 
 ```bash
 st
@@ -177,7 +181,7 @@ Read more: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md
 
 ### AI PR Body + Standup Summary
 
-Use your configured AI agent for PR writing and daily status summaries.
+Use your configured AI agent to draft PR bodies and generate daily standup summaries.
 
 ```bash
 # Generate/update PR body from branch diff + context
