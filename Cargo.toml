@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "st"
-path = "src/main.rs"
+path = "src/bin/st.rs"
 
 [dependencies]
 # CLI

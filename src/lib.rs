@@ -6,12 +6,18 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-// Internal modules needed by github module
+// Internal modules used by the CLI and tests
 mod cache;
+mod ci;
+pub mod cli;
+mod commands;
 mod config;
 mod engine;
 mod git;
+mod ops;
+mod progress;
 mod remote;
+mod tui;
+mod update;
 
-// Expose github module for tests
 pub mod github;
