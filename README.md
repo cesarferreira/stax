@@ -1175,6 +1175,74 @@ stax agent remove add-dark-mode --delete-branch
 stax agent prune
 ```
 
+### Real-world example: running 3 agents in parallel
+
+Say you have a feature branch and want Codex, Claude Code, and OpenCode each tackling a different sub-task simultaneously — without them touching each other's files.
+
+**Step 1 — spin up three isolated worktrees (one command each):**
+
+```bash
+stax agent create "Add dark mode" --open-codex
+stax agent create "Fix auth token refresh" --open-cursor
+stax agent create "Write API integration tests"
+```
+
+Each command creates an isolated directory under `.stax/trees/` with its own branch, stacks it on your current branch, and optionally opens it in the specified editor. Your main checkout is untouched.
+
+```
+main
+ └── feature/my-feature                    ← your main checkout
+      ├── add-dark-mode                     ← Codex working here
+      ├── fix-auth-token-refresh            ← Cursor / Claude Code working here
+      └── write-api-integration-tests       ← OpenCode / terminal working here
+```
+
+**Step 2 — point each agent at its directory:**
+
+- Codex opened automatically via `--open-codex`
+- For Claude Code: run `claude` inside `.stax/trees/fix-auth-token-refresh`
+- For OpenCode: run `opencode` inside `.stax/trees/write-api-integration-tests`
+
+Each agent sees only its own branch. They cannot conflict with each other.
+
+**Step 3 — check on things while agents run:**
+
+```bash
+stax agent list   # all three worktrees, their branches, existence status
+stax status       # all three branches appear in the stack tree as normal
+```
+
+**Step 4 — come back later and reattach to a session:**
+
+```bash
+stax agent open                     # fuzzy picker to choose
+stax agent open fix-auth-token-refresh   # or by name
+```
+
+**Step 5 — trunk moved while agents were running:**
+
+```bash
+git pull
+stax agent sync   # restacks all three branches at once — no manual rebasing
+```
+
+**Step 6 — review and submit each branch normally:**
+
+```bash
+stax checkout add-dark-mode
+stax submit
+```
+
+**Step 7 — clean up when done:**
+
+```bash
+stax agent remove add-dark-mode --delete-branch
+stax agent remove fix-auth-token-refresh --delete-branch
+stax agent remove write-api-integration-tests --delete-branch
+```
+
+> **What stax does not do:** it doesn't talk to the agents or tell them what to work on — that's still you. What it solves is directory isolation, branch tracking, restack-after-trunk-moves, and the "where did I leave that session" problem that makes running parallel agents messy in practice.
+
 ### How it works
 
 ```
@@ -1223,13 +1291,15 @@ post_create_hook = "npm install" # optional shell command run in new worktree
 --no-hook             Skip post_create_hook for this run
 ```
 
-### Cursor integration
+### Editor slash-command recipes
 
-The file [`examples/cursor/stax-new-agent.md`](examples/cursor/stax-new-agent.md) is a ready-to-use Cursor slash command recipe:
+Ready-to-import slash command recipes live in `examples/`:
 
-```
-stax agent create "{{input}}" --open-cursor
-```
+| File | Editor | Command |
+|------|--------|---------|
+| [`examples/cursor/stax-new-agent.md`](examples/cursor/stax-new-agent.md) | Cursor | `stax agent create "{{input}}" --open-cursor` |
+| [`examples/codex/stax-new-agent.md`](examples/codex/stax-new-agent.md) | Codex | `stax agent create "{{input}}" --open-codex` |
+| [`examples/generic/stax-new-agent.md`](examples/generic/stax-new-agent.md) | Any (auto-detect) | `stax agent create "{{input}}" --open` |
 
 ## Benchmarks
 

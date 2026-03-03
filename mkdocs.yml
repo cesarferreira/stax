@@ -67,6 +67,7 @@ nav:
   - Workflows:
       - Merge and Cascade: workflows/merge-and-cascade.md
       - Multi-Worktree: workflows/multi-worktree.md
+      - Agent Worktrees: workflows/agent-worktrees.md
       - Standup and Changelog: workflows/reporting.md
   - Safety:
       - Undo and Redo: safety/undo-redo.md

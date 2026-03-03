@@ -26,6 +26,74 @@ stax agent remove add-dark-mode --delete-branch
 stax agent prune
 ```
 
+## Real-world example: running 3 agents in parallel
+
+Say you have a feature branch and want Codex, Claude Code, and OpenCode each tackling a different sub-task simultaneously — without them touching each other's files.
+
+### Step 1 — spin up three isolated worktrees
+
+```bash
+stax agent create "Add dark mode" --open-codex
+stax agent create "Fix auth token refresh" --open-cursor
+stax agent create "Write API integration tests"
+```
+
+Each command creates an isolated directory under `.stax/trees/` with its own stacked branch. Your main checkout is untouched.
+
+```
+main
+ └── feature/my-feature                    ← your main checkout
+      ├── add-dark-mode                     ← Codex working here
+      ├── fix-auth-token-refresh            ← Cursor / Claude Code working here
+      └── write-api-integration-tests       ← OpenCode / terminal working here
+```
+
+### Step 2 — point each agent at its directory
+
+- **Codex** opened automatically via `--open-codex`
+- **Claude Code**: `claude` inside `.stax/trees/fix-auth-token-refresh`
+- **OpenCode**: `opencode` inside `.stax/trees/write-api-integration-tests`
+
+Each agent sees only its own branch. They cannot conflict with each other.
+
+### Step 3 — check on things while agents run
+
+```bash
+stax agent list   # all three worktrees, their branches, existence status
+stax status       # all three branches appear in the normal stack tree
+```
+
+### Step 4 — come back later and reattach
+
+```bash
+stax agent open                           # fuzzy picker
+stax agent open fix-auth-token-refresh    # or by name
+```
+
+### Step 5 — trunk moved while agents were running
+
+```bash
+git pull
+stax agent sync   # restacks all three branches at once
+```
+
+### Step 6 — review and submit each branch normally
+
+```bash
+stax checkout add-dark-mode
+stax submit
+```
+
+### Step 7 — clean up
+
+```bash
+stax agent remove add-dark-mode --delete-branch
+stax agent remove fix-auth-token-refresh --delete-branch
+stax agent remove write-api-integration-tests --delete-branch
+```
+
+> **What stax does not do:** it doesn't talk to the agents or assign them tasks — that's still you. What it solves is directory isolation, branch tracking, restack-after-trunk-moves, and the "where did I leave that session" problem that makes running parallel agents messy in practice.
+
 ## How it works
 
 ```
