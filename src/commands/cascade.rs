@@ -18,6 +18,8 @@ pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
     warn_if_trunk_stale(&repo);
 
     commands::navigate::bottom()?;
+    // A bottom-anchored restack already walks ancestors/current/descendants for
+    // this stack, so we do not need a follow-up upstack restack.
     commands::restack::run(
         false,
         false,
@@ -27,12 +29,6 @@ pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
         auto_stash_pop,
         commands::restack::SubmitAfterRestack::No,
     )?;
-
-    if repo.rebase_in_progress()? {
-        return Ok(());
-    }
-
-    commands::upstack::restack::run(auto_stash_pop)?;
 
     if repo.rebase_in_progress()? {
         return Ok(());

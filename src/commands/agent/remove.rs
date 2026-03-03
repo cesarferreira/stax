@@ -1,6 +1,6 @@
+use super::registry::Registry;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
-use super::registry::Registry;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use std::process::Command;
@@ -28,14 +28,13 @@ pub fn run(name_or_slug: Option<String>, force: bool, delete_branch: bool) -> Re
                 .map(|e| format!("{} ({})", e.name, e.branch))
                 .collect();
 
-            let selection = dialoguer::FuzzySelect::with_theme(
-                &dialoguer::theme::ColorfulTheme::default(),
-            )
-            .with_prompt("Select agent worktree to remove")
-            .items(&items)
-            .default(0)
-            .interact()
-            .context("Picker cancelled")?;
+            let selection =
+                dialoguer::FuzzySelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt("Select agent worktree to remove")
+                    .items(&items)
+                    .default(0)
+                    .interact()
+                    .context("Picker cancelled")?;
 
             registry.entries[selection].clone()
         }
@@ -63,7 +62,10 @@ pub fn run(name_or_slug: Option<String>, force: bool, delete_branch: bool) -> Re
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             if force {
-                eprintln!("{}", format!("  Warning: git worktree remove failed: {}", stderr).yellow());
+                eprintln!(
+                    "{}",
+                    format!("  Warning: git worktree remove failed: {}", stderr).yellow()
+                );
             } else {
                 bail!(
                     "git worktree remove failed: {}\n  Hint: use --force to remove dirty worktrees.",

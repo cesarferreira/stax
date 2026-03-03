@@ -1,5 +1,5 @@
-use crate::git::GitRepo;
 use super::registry::{AgentWorktree, Registry};
+use crate::git::GitRepo;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
 
@@ -29,7 +29,9 @@ pub fn run() -> Result<()> {
         );
     }
 
-    let parent_rev = repo.branch_commit(&current).context("Could not read current branch commit")?;
+    let parent_rev = repo
+        .branch_commit(&current)
+        .context("Could not read current branch commit")?;
     let _ = parent_rev; // used for validation only
 
     registry.add(AgentWorktree {

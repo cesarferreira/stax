@@ -1210,6 +1210,93 @@ fn test_cascade_no_submit_keeps_original_branch() {
     assert_eq!(after, original, "cascade should restore original branch");
 }
 
+#[test]
+fn test_cascade_no_submit_from_middle_restacks_full_stack() {
+    let repo = TestRepo::new();
+
+    // Build stack: main -> base -> middle -> tip.
+    repo.run_stax(&["bc", "cascade-base"]);
+    let base = repo.current_branch();
+    repo.create_file("base.txt", "base");
+    repo.commit("base commit");
+
+    repo.run_stax(&["bc", "cascade-middle"]);
+    let middle = repo.current_branch();
+    repo.create_file("middle.txt", "middle");
+    repo.commit("middle commit");
+
+    repo.run_stax(&["bc", "cascade-tip"]);
+    let tip = repo.current_branch();
+    repo.create_file("tip.txt", "tip");
+    repo.commit("tip commit");
+
+    // Advance trunk so this stack requires rebasing.
+    repo.run_stax(&["t"]);
+    repo.create_file("main-update.txt", "main update");
+    repo.commit("main update");
+
+    // Run cascade from a non-bottom branch.
+    repo.run_stax(&["checkout", &middle]);
+    let original = repo.current_branch();
+
+    let before_output = repo.run_stax(&["status", "--json"]);
+    assert!(
+        before_output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&before_output)
+    );
+    let before_json: Value =
+        serde_json::from_str(&TestRepo::stdout(&before_output)).expect("Invalid JSON");
+    let before_branches = before_json["branches"]
+        .as_array()
+        .expect("Expected branches array");
+    let tracked = [&base, &middle, &tip];
+    assert!(
+        tracked.iter().any(|name| {
+            before_branches
+                .iter()
+                .find(|b| b["name"].as_str() == Some(name.as_str()))
+                .and_then(|b| b["needs_restack"].as_bool())
+                .unwrap_or(false)
+        }),
+        "Expected at least one stack branch to need restack before cascade"
+    );
+
+    let output = repo.run_stax(&["cascade", "--no-submit"]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let after = repo.current_branch();
+    assert_eq!(after, original, "cascade should restore original branch");
+
+    let after_output = repo.run_stax(&["status", "--json"]);
+    assert!(
+        after_output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&after_output)
+    );
+    let after_json: Value =
+        serde_json::from_str(&TestRepo::stdout(&after_output)).expect("Invalid JSON");
+    let after_branches = after_json["branches"]
+        .as_array()
+        .expect("Expected branches array");
+    for name in tracked {
+        let branch = after_branches
+            .iter()
+            .find(|b| b["name"].as_str() == Some(name.as_str()))
+            .unwrap_or_else(|| panic!("Missing branch {} in status output", name));
+        assert_eq!(
+            branch["needs_restack"],
+            Value::Bool(false),
+            "Expected {} to be fully restacked by cascade",
+            name
+        );
+    }
+}
+
 // =============================================================================
 // Rename Tests
 // =============================================================================

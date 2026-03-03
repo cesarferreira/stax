@@ -1,5 +1,5 @@
-use crate::git::GitRepo;
 use super::registry::Registry;
+use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
 use std::process::Command;
@@ -22,16 +22,25 @@ pub fn run() -> Result<()> {
     match output {
         Ok(o) if !o.status.success() => {
             let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            eprintln!("{}", format!("  Warning: git worktree prune failed: {}", stderr).yellow());
+            eprintln!(
+                "{}",
+                format!("  Warning: git worktree prune failed: {}", stderr).yellow()
+            );
         }
         Err(e) => {
-            eprintln!("{}", format!("  Warning: could not run git worktree prune: {}", e).yellow());
+            eprintln!(
+                "{}",
+                format!("  Warning: could not run git worktree prune: {}", e).yellow()
+            );
         }
         _ => {}
     }
 
     if pruned == 0 {
-        println!("{}", "Nothing to prune — all registered worktrees exist.".dimmed());
+        println!(
+            "{}",
+            "Nothing to prune — all registered worktrees exist.".dimmed()
+        );
     } else {
         println!(
             "{}  {} stale {}",

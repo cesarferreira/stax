@@ -127,7 +127,10 @@ fn demo_first_pr() -> Result<()> {
     let t = 4;
     println!();
     println!("{}", "Demo: Your first pull request".bold().green());
-    println!("{}", "Create a branch, commit, and see how st tracks it.".dimmed());
+    println!(
+        "{}",
+        "Create a branch, commit, and see how st tracks it.".dimmed()
+    );
     println!();
 
     let (_tmp, dir) = setup_repo()?;
@@ -135,27 +138,49 @@ fn demo_first_pr() -> Result<()> {
     step(1, t, "Start from trunk");
     cmd("st status");
     run_stax(&dir, &["status"])?;
-    if !pause()? { return Ok(()); }
+    if !pause()? {
+        return Ok(());
+    }
 
     step(2, t, "Create a branch and add a commit");
     cmd("st create add-login");
     run_stax(&dir, &["create", "add-login"])?;
-    commit(&dir, "login.rs", "pub fn login(user: &str, pass: &str) -> bool { true }\n", "Add login function")?;
+    commit(
+        &dir,
+        "login.rs",
+        "pub fn login(user: &str, pass: &str) -> bool { true }\n",
+        "Add login function",
+    )?;
     cmd("st status");
     run_stax(&dir, &["status"])?;
-    println!("{}", "st tracks the parent automatically — no manual base branches.".dimmed());
-    if !pause()? { return Ok(()); }
+    println!(
+        "{}",
+        "st tracks the parent automatically — no manual base branches.".dimmed()
+    );
+    if !pause()? {
+        return Ok(());
+    }
 
     step(3, t, "See commits per branch");
     cmd("st log");
     run_stax(&dir, &["log"])?;
-    if !pause()? { return Ok(()); }
+    if !pause()? {
+        return Ok(());
+    }
 
     step(4, t, "Submit your PR");
-    println!("With GitHub configured, {} pushes and creates a PR.", "st submit".cyan());
+    println!(
+        "With GitHub configured, {} pushes and creates a PR.",
+        "st submit".cyan()
+    );
     println!("The PR targets the correct parent branch automatically.");
     println!();
-    println!("{}", "Done! You can now create branches and submit PRs with st.".bold().green());
+    println!(
+        "{}",
+        "Done! You can now create branches and submit PRs with st."
+            .bold()
+            .green()
+    );
     println!();
     Ok(())
 }
@@ -166,7 +191,10 @@ fn demo_stacking() -> Result<()> {
     let t = 5;
     println!();
     println!("{}", "Demo: Stacking multiple PRs".bold().green());
-    println!("{}", "Break a big feature into small, reviewable PRs.".dimmed());
+    println!(
+        "{}",
+        "Break a big feature into small, reviewable PRs.".dimmed()
+    );
     println!();
 
     let (_tmp, dir) = setup_repo()?;
@@ -174,49 +202,94 @@ fn demo_stacking() -> Result<()> {
     step(1, t, "Build a 3-branch stack");
     cmd("st create add-models");
     run_stax(&dir, &["create", "add-models"])?;
-    commit(&dir, "models.rs", "pub struct User { pub id: u64, pub name: String }\n", "Add User model")?;
+    commit(
+        &dir,
+        "models.rs",
+        "pub struct User { pub id: u64, pub name: String }\n",
+        "Add User model",
+    )?;
 
     cmd("st create add-api");
     run_stax(&dir, &["create", "add-api"])?;
-    commit(&dir, "api.rs", "pub fn get_user(id: u64) -> User { todo!() }\n", "Add user API")?;
+    commit(
+        &dir,
+        "api.rs",
+        "pub fn get_user(id: u64) -> User { todo!() }\n",
+        "Add user API",
+    )?;
 
     cmd("st create add-ui");
     run_stax(&dir, &["create", "add-ui"])?;
-    commit(&dir, "ui.rs", "pub fn render(user: &User) { println!(\"{}\", user.name); }\n", "Add user UI")?;
+    commit(
+        &dir,
+        "ui.rs",
+        "pub fn render(user: &User) { println!(\"{}\", user.name); }\n",
+        "Add user UI",
+    )?;
 
     cmd("st log");
     run_stax(&dir, &["log"])?;
-    println!("{}", "3 branches, each building on the last. Each becomes its own PR.".dimmed());
-    if !pause()? { return Ok(()); }
+    println!(
+        "{}",
+        "3 branches, each building on the last. Each becomes its own PR.".dimmed()
+    );
+    if !pause()? {
+        return Ok(());
+    }
 
     step(2, t, "Navigate the stack");
     cmd("st bottom");
     run_stax(&dir, &["bottom"])?;
     cmd("st top");
     run_stax(&dir, &["top"])?;
-    if !pause()? { return Ok(()); }
+    if !pause()? {
+        return Ok(());
+    }
 
     step(3, t, "Edit a middle branch");
     run_stax_quiet(&dir, &["bottom"])?;
-    commit(&dir, "models.rs", "pub struct User { pub id: u64, pub name: String, pub email: String }\n", "Add email to User")?;
+    commit(
+        &dir,
+        "models.rs",
+        "pub struct User { pub id: u64, pub name: String, pub email: String }\n",
+        "Add email to User",
+    )?;
     cmd("st status");
     run_stax(&dir, &["status"])?;
-    println!("{}", "Branches above are marked as needing rebase.".dimmed());
-    if !pause()? { return Ok(()); }
+    println!(
+        "{}",
+        "Branches above are marked as needing rebase.".dimmed()
+    );
+    if !pause()? {
+        return Ok(());
+    }
 
     step(4, t, "Restack everything");
     cmd("st restack --all");
     run_stax(&dir, &["restack", "--all"])?;
     cmd("st status");
     run_stax(&dir, &["status"])?;
-    println!("{}", "All branches rebased onto their updated parents.".dimmed());
-    if !pause()? { return Ok(()); }
+    println!(
+        "{}",
+        "All branches rebased onto their updated parents.".dimmed()
+    );
+    if !pause()? {
+        return Ok(());
+    }
 
     step(5, t, "Submit the whole stack");
-    println!("{} pushes every branch and creates/updates all PRs at once.", "st submit".cyan());
+    println!(
+        "{} pushes every branch and creates/updates all PRs at once.",
+        "st submit".cyan()
+    );
     println!("Each PR targets the correct parent — reviewers see small diffs.");
     println!();
-    println!("{}", "Done! You can build, restack, and submit entire stacks.".bold().green());
+    println!(
+        "{}",
+        "Done! You can build, restack, and submit entire stacks."
+            .bold()
+            .green()
+    );
     println!();
     Ok(())
 }
@@ -227,22 +300,51 @@ fn demo_navigation() -> Result<()> {
     let t = 4;
     println!();
     println!("{}", "Demo: Navigating your stack".bold().green());
-    println!("{}", "Move between branches without remembering names.".dimmed());
+    println!(
+        "{}",
+        "Move between branches without remembering names.".dimmed()
+    );
     println!();
 
     let (_tmp, dir) = setup_repo()?;
 
     // Build a 4-branch stack silently
-    scaffold_branch(&dir, "feat-auth", "auth.rs", "pub fn auth() {}\n", "Add auth")?;
-    scaffold_branch(&dir, "feat-session", "session.rs", "pub fn session() {}\n", "Add session")?;
-    scaffold_branch(&dir, "feat-profile", "profile.rs", "pub fn profile() {}\n", "Add profile")?;
-    scaffold_branch(&dir, "feat-settings", "settings.rs", "pub fn settings() {}\n", "Add settings")?;
+    scaffold_branch(
+        &dir,
+        "feat-auth",
+        "auth.rs",
+        "pub fn auth() {}\n",
+        "Add auth",
+    )?;
+    scaffold_branch(
+        &dir,
+        "feat-session",
+        "session.rs",
+        "pub fn session() {}\n",
+        "Add session",
+    )?;
+    scaffold_branch(
+        &dir,
+        "feat-profile",
+        "profile.rs",
+        "pub fn profile() {}\n",
+        "Add profile",
+    )?;
+    scaffold_branch(
+        &dir,
+        "feat-settings",
+        "settings.rs",
+        "pub fn settings() {}\n",
+        "Add settings",
+    )?;
 
     step(1, t, "See where you are");
     cmd("st status");
     run_stax(&dir, &["status"])?;
     println!("{}", "You're at the top of a 4-branch stack.".dimmed());
-    if !pause()? { return Ok(()); }
+    if !pause()? {
+        return Ok(());
+    }
 
     step(2, t, "Move down and up");
     cmd("st down");
@@ -251,24 +353,39 @@ fn demo_navigation() -> Result<()> {
     run_stax(&dir, &["down", "2"])?;
     cmd("st up");
     run_stax(&dir, &["up"])?;
-    println!("{}", "down/up accept a count — jump multiple levels at once.".dimmed());
-    if !pause()? { return Ok(()); }
+    println!(
+        "{}",
+        "down/up accept a count — jump multiple levels at once.".dimmed()
+    );
+    if !pause()? {
+        return Ok(());
+    }
 
     step(3, t, "Jump to top and bottom");
     cmd("st bottom");
     run_stax(&dir, &["bottom"])?;
     cmd("st top");
     run_stax(&dir, &["top"])?;
-    if !pause()? { return Ok(()); }
+    if !pause()? {
+        return Ok(());
+    }
 
     step(4, t, "Switch to trunk and back");
     cmd("st trunk");
     run_stax(&dir, &["trunk"])?;
     cmd("st prev");
     run_stax(&dir, &["prev"])?;
-    println!("{}", "prev returns to whatever branch you were on before.".dimmed());
+    println!(
+        "{}",
+        "prev returns to whatever branch you were on before.".dimmed()
+    );
     println!();
-    println!("{}", "Done! Navigate any stack without typing branch names.".bold().green());
+    println!(
+        "{}",
+        "Done! Navigate any stack without typing branch names."
+            .bold()
+            .green()
+    );
     println!();
     Ok(())
 }
@@ -279,17 +396,34 @@ fn demo_undo() -> Result<()> {
     let t = 3;
     println!();
     println!("{}", "Demo: Undo and safety net".bold().green());
-    println!("{}", "Every risky operation can be reversed with st undo.".dimmed());
+    println!(
+        "{}",
+        "Every risky operation can be reversed with st undo.".dimmed()
+    );
     println!();
 
     let (_tmp, dir) = setup_repo()?;
 
     step(1, t, "Create a stack");
-    scaffold_branch(&dir, "feat-payments", "pay.rs", "pub fn charge(amount: u64) {}\n", "Add payments")?;
-    scaffold_branch(&dir, "feat-receipts", "receipt.rs", "pub fn receipt() {}\n", "Add receipts")?;
+    scaffold_branch(
+        &dir,
+        "feat-payments",
+        "pay.rs",
+        "pub fn charge(amount: u64) {}\n",
+        "Add payments",
+    )?;
+    scaffold_branch(
+        &dir,
+        "feat-receipts",
+        "receipt.rs",
+        "pub fn receipt() {}\n",
+        "Add receipts",
+    )?;
     cmd("st log");
     run_stax(&dir, &["log"])?;
-    if !pause()? { return Ok(()); }
+    if !pause()? {
+        return Ok(());
+    }
 
     step(2, t, "Detach a branch (risky operation)");
     println!("Remove {} from the stack:", "feat-payments".cyan());
@@ -298,17 +432,30 @@ fn demo_undo() -> Result<()> {
     run_stax(&dir, &["detach", "--yes"])?;
     cmd("st status");
     run_stax(&dir, &["status"])?;
-    println!("{}", "feat-receipts was reparented to main automatically.".dimmed());
-    if !pause()? { return Ok(()); }
+    println!(
+        "{}",
+        "feat-receipts was reparented to main automatically.".dimmed()
+    );
+    if !pause()? {
+        return Ok(());
+    }
 
     step(3, t, "Undo it");
     cmd("st undo --yes");
     run_stax(&dir, &["undo", "--yes"])?;
     cmd("st log");
     run_stax(&dir, &["log"])?;
-    println!("{}", "The stack is restored to its original shape.".dimmed());
+    println!(
+        "{}",
+        "The stack is restored to its original shape.".dimmed()
+    );
     println!();
-    println!("{}", "Done! Experiment freely — st undo has your back.".bold().green());
+    println!(
+        "{}",
+        "Done! Experiment freely — st undo has your back."
+            .bold()
+            .green()
+    );
     println!();
     Ok(())
 }
@@ -319,34 +466,70 @@ fn demo_health() -> Result<()> {
     let t = 3;
     println!();
     println!("{}", "Demo: Stack health checks".bold().green());
-    println!("{}", "Detect and fix broken metadata before it causes problems.".dimmed());
+    println!(
+        "{}",
+        "Detect and fix broken metadata before it causes problems.".dimmed()
+    );
     println!();
 
     let (_tmp, dir) = setup_repo()?;
 
     step(1, t, "Build a stack");
-    scaffold_branch(&dir, "feat-cache", "cache.rs", "pub fn cache() {}\n", "Add caching")?;
-    scaffold_branch(&dir, "feat-ttl", "ttl.rs", "pub fn ttl() {}\n", "Add TTL support")?;
+    scaffold_branch(
+        &dir,
+        "feat-cache",
+        "cache.rs",
+        "pub fn cache() {}\n",
+        "Add caching",
+    )?;
+    scaffold_branch(
+        &dir,
+        "feat-ttl",
+        "ttl.rs",
+        "pub fn ttl() {}\n",
+        "Add TTL support",
+    )?;
     cmd("st status");
     run_stax(&dir, &["status"])?;
-    if !pause()? { return Ok(()); }
+    if !pause()? {
+        return Ok(());
+    }
 
     step(2, t, "Run a health check");
     cmd("st validate");
     run_stax(&dir, &["validate"])?;
-    println!("{}", "All checks passed — no orphaned refs, no cycles, no stale parents.".dimmed());
-    if !pause()? { return Ok(()); }
+    println!(
+        "{}",
+        "All checks passed — no orphaned refs, no cycles, no stale parents.".dimmed()
+    );
+    if !pause()? {
+        return Ok(());
+    }
 
     step(3, t, "Auto-fix problems");
-    println!("If validate finds issues, {} repairs them automatically:", "st fix".cyan());
+    println!(
+        "If validate finds issues, {} repairs them automatically:",
+        "st fix".cyan()
+    );
     println!();
-    println!("  {} Deletes metadata for branches that no longer exist", "-".dimmed());
+    println!(
+        "  {} Deletes metadata for branches that no longer exist",
+        "-".dimmed()
+    );
     println!("  {} Reparents orphans to trunk", "-".dimmed());
     println!("  {} Cleans up invalid JSON refs", "-".dimmed());
     println!();
-    println!("Use {} to preview without changing anything.", "st fix --dry-run".cyan());
+    println!(
+        "Use {} to preview without changing anything.",
+        "st fix --dry-run".cyan()
+    );
     println!();
-    println!("{}", "Done! Keep your stacks healthy with st validate and st fix.".bold().green());
+    println!(
+        "{}",
+        "Done! Keep your stacks healthy with st validate and st fix."
+            .bold()
+            .green()
+    );
     println!();
     Ok(())
 }
@@ -378,33 +561,16 @@ pub fn run() -> Result<()> {
             "Navigating your stack".bold(),
             "(~2 min)".dimmed()
         ),
-        format!(
-            "{}  {}",
-            "Undo and safety net".bold(),
-            "(~2 min)".dimmed()
-        ),
-        format!(
-            "{}  {}",
-            "Stack health checks".bold(),
-            "(~1 min)".dimmed()
-        ),
+        format!("{}  {}", "Undo and safety net".bold(), "(~2 min)".dimmed()),
+        format!("{}  {}", "Stack health checks".bold(), "(~1 min)".dimmed()),
     ];
 
     let theme = ColorfulTheme {
-        active_item_style: console::Style::new()
-            .for_stderr()
-            .green()
-            .bold(),
-        active_item_prefix: console::style("▸ ".to_string())
-            .for_stderr()
-            .green()
-            .bold(),
+        active_item_style: console::Style::new().for_stderr().green().bold(),
+        active_item_prefix: console::style("▸ ".to_string()).for_stderr().green().bold(),
         inactive_item_prefix: console::style("  ".to_string()).for_stderr(),
         prompt_style: console::Style::new().for_stderr().bold().cyan(),
-        prompt_prefix: console::style("?".to_string())
-            .for_stderr()
-            .green()
-            .bold(),
+        prompt_prefix: console::style("?".to_string()).for_stderr().green().bold(),
         ..ColorfulTheme::default()
     };
 

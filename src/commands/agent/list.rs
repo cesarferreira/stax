@@ -1,5 +1,5 @@
-use crate::git::GitRepo;
 use super::registry::Registry;
+use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
 
@@ -11,10 +11,7 @@ pub fn run() -> Result<()> {
 
     if registry.entries.is_empty() {
         println!("{}", "No agent worktrees registered.".dimmed());
-        println!(
-            "Create one with: {}",
-            "stax agent create <title>".cyan()
-        );
+        println!("Create one with: {}", "stax agent create <title>".cyan());
         return Ok(());
     }
 

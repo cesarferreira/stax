@@ -28,10 +28,7 @@ pub fn render_agent_worktrees(f: &mut Frame, app: &App, area: Rect) {
 
             Line::from(vec![
                 Span::styled(indicator, name_style),
-                Span::styled(
-                    agent.name.clone(),
-                    name_style.add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(agent.name.clone(), name_style.add_modifier(Modifier::BOLD)),
                 Span::styled(
                     format!(" {}", branch_short),
                     Style::default().fg(Color::DarkGray),

@@ -1,5 +1,5 @@
-use crate::git::GitRepo;
 use super::registry::Registry;
+use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
 use std::process::Command;
@@ -15,7 +15,11 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    let existing: Vec<_> = registry.entries.iter().filter(|e| e.path.exists()).collect();
+    let existing: Vec<_> = registry
+        .entries
+        .iter()
+        .filter(|e| e.path.exists())
+        .collect();
 
     if existing.is_empty() {
         println!(
@@ -28,7 +32,11 @@ pub fn run() -> Result<()> {
     println!(
         "Syncing {} agent {}...\n",
         existing.len(),
-        if existing.len() == 1 { "worktree" } else { "worktrees" }
+        if existing.len() == 1 {
+            "worktree"
+        } else {
+            "worktrees"
+        }
     );
 
     let stax_bin = std::env::current_exe().unwrap_or_else(|_| "stax".into());
