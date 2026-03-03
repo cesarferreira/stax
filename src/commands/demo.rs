@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
+use console;
+use dialoguer::theme::ColorfulTheme;
+use dialoguer::Select;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -32,10 +35,10 @@ fn run_stax(cwd: &Path, args: &[&str]) -> Result<String> {
     Ok(stdout)
 }
 
-fn pause(message: &str) -> Result<bool> {
+fn pause() -> Result<bool> {
     println!();
     let cont = dialoguer::Confirm::new()
-        .with_prompt(message)
+        .with_prompt("Continue?")
         .default(true)
         .interact()
         .unwrap_or(false);
@@ -43,324 +46,276 @@ fn pause(message: &str) -> Result<bool> {
     Ok(cont)
 }
 
-fn step_header(step: usize, total: usize, title: &str) {
+fn step(n: usize, total: usize, title: &str) {
     println!(
         "{}  {}",
-        format!("[{}/{}]", step, total).bold().blue(),
+        format!("[{}/{}]", n, total).bold().blue(),
         title.bold()
     );
     println!();
 }
 
-fn print_command(cmd: &str) {
-    println!("  {} {}", "$".dimmed(), cmd.cyan());
+fn cmd(text: &str) {
+    println!("  {} {}", "$".dimmed(), text.cyan());
     println!();
 }
 
-/// Set up a fresh temp repo with stax initialized
-fn setup_demo_repo() -> Result<(tempfile::TempDir, std::path::PathBuf)> {
+fn setup_repo() -> Result<(tempfile::TempDir, std::path::PathBuf)> {
     let tmp = tempfile::tempdir().context("Failed to create temp directory")?;
     let dir = tmp.path().to_path_buf();
-
     run_git(&dir, &["init", "-b", "main"])?;
     run_git(&dir, &["config", "user.email", "demo@stax.dev"])?;
     run_git(&dir, &["config", "user.name", "Stax Demo"])?;
-
     fs::write(dir.join("README.md"), "# My Project\n")?;
     run_git(&dir, &["add", "-A"])?;
     run_git(&dir, &["commit", "-m", "Initial commit"])?;
-
-    // Initialize stax metadata
     run_stax(&dir, &["doctor"])?;
-
     Ok((tmp, dir))
 }
 
-// ─── Demo 1: Your first pull request ────────────────────────────────────────
+fn commit(dir: &Path, file: &str, content: &str, msg: &str) -> Result<()> {
+    fs::write(dir.join(file), content)?;
+    run_git(dir, &["add", "-A"])?;
+    run_git(dir, &["commit", "-m", msg])
+}
+
+// ─── Demo 1: First PR ───────────────────────────────────────────────────────
 
 fn demo_first_pr() -> Result<()> {
-    let total = 6;
+    let t = 4;
     println!();
-    println!(
-        "{}",
-        "Demo: Creating your first pull request".bold().green()
-    );
-    println!(
-        "{}",
-        "This demo walks you through creating a branch, making changes,"
-            .dimmed()
-    );
-    println!(
-        "{}",
-        "and preparing a pull request with stax.".dimmed()
-    );
+    println!("{}", "Demo: Your first pull request".bold().green());
+    println!("{}", "Create a branch, commit, and see how stax tracks it.".dimmed());
     println!();
 
-    let (_tmp, dir) = setup_demo_repo()?;
+    let (_tmp, dir) = setup_repo()?;
 
-    // Step 1: Current state
-    step_header(1, total, "Your repo starts on trunk (main)");
-    println!("Every stax workflow starts from your trunk branch.");
-    println!("Let's see the current state:");
-    print_command("stax status");
+    step(1, t, "Start from trunk");
+    cmd("stax status");
     run_stax(&dir, &["status"])?;
+    if !pause()? { return Ok(()); }
 
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 2: Create a branch
-    step_header(2, total, "Create a new branch");
-    println!("Create a branch stacked on top of main.");
-    println!("This is like `git checkout -b`, but stax tracks the parent relationship.");
-    print_command("stax create add-login");
+    step(2, t, "Create a branch and add a commit");
+    cmd("stax create add-login");
     run_stax(&dir, &["create", "add-login"])?;
-
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 3: Make changes and commit
-    step_header(3, total, "Make changes and commit");
-    println!("Add some code and commit — just like normal git:");
-    println!();
-    println!(
-        "  {}",
-        "echo 'fn login() { ... }' > login.rs".dimmed()
-    );
-    println!("  {} {}", "$".dimmed(), "git add -A && git commit -m \"Add login function\"".cyan());
-    println!();
-    fs::write(dir.join("login.rs"), "fn login() {\n    // TODO: implement\n}\n")?;
-    run_git(&dir, &["add", "-A"])?;
-    run_git(&dir, &["commit", "-m", "Add login function"])?;
-
-    println!("Now let's see the stack:");
-    print_command("stax status");
+    commit(&dir, "login.rs", "pub fn login(user: &str, pass: &str) -> bool { true }\n", "Add login function")?;
+    cmd("stax status");
     run_stax(&dir, &["status"])?;
+    println!("{}", "stax tracks the parent automatically — no manual base branches.".dimmed());
+    if !pause()? { return Ok(()); }
 
-    println!(
-        "{}",
-        "Your branch is tracked and shows its relationship to main.".dimmed()
-    );
-
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 4: View the log
-    step_header(4, total, "View your stack with commit details");
-    println!("The log command shows commits for each branch:");
-    print_command("stax log");
+    step(3, t, "See commits per branch");
+    cmd("stax log");
     run_stax(&dir, &["log"])?;
+    if !pause()? { return Ok(()); }
 
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 5: Submit (simulated)
-    step_header(5, total, "Submit your pull request");
-    println!("In a real repo with GitHub configured, running:");
-    print_command("stax submit");
-    println!("would push your branch and create a PR with the correct base branch.");
+    step(4, t, "Submit your PR");
+    println!("With GitHub configured, {} pushes and creates a PR.", "stax submit".cyan());
+    println!("The PR targets the correct parent branch automatically.");
     println!();
-    println!("For stacks with multiple branches, stax creates one PR per branch,");
-    println!("each targeting the correct parent — no manual base-branch fiddling.");
-
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 6: Wrap up
-    step_header(6, total, "You're ready!");
-    println!("You've learned the basics:");
+    println!("{}", "Done! You can now create branches and submit PRs with stax.".bold().green());
     println!();
-    println!("  {} - create a stacked branch", "stax create <name>".cyan());
-    println!("  {} - see the stack tree", "stax status".cyan());
-    println!("  {} - see commits per branch", "stax log".cyan());
-    println!("  {} - push and create/update PRs", "stax submit".cyan());
-    println!();
-    println!(
-        "{}",
-        "Next: try the \"Creating a stack\" demo to learn multi-branch workflows."
-            .dimmed()
-    );
-    println!();
-
     Ok(())
 }
 
-// ─── Demo 2: Creating a stack of pull requests ──────────────────────────────
+// ─── Demo 2: Stacking PRs ───────────────────────────────────────────────────
 
-fn demo_stacked_prs() -> Result<()> {
-    let total = 8;
+fn demo_stacking() -> Result<()> {
+    let t = 5;
     println!();
-    println!(
-        "{}",
-        "Demo: Creating a stack of pull requests".bold().green()
-    );
-    println!(
-        "{}",
-        "This demo shows the full stacked-branch workflow: create multiple"
-            .dimmed()
-    );
-    println!(
-        "{}",
-        "branches, navigate between them, and keep them in sync.".dimmed()
-    );
+    println!("{}", "Demo: Stacking multiple PRs".bold().green());
+    println!("{}", "Break a big feature into small, reviewable PRs.".dimmed());
     println!();
 
-    let (_tmp, dir) = setup_demo_repo()?;
+    let (_tmp, dir) = setup_repo()?;
 
-    // Step 1: Plan
-    step_header(1, total, "Plan your stack");
-    println!("Imagine you're building a user dashboard. You'll break it into:");
-    println!();
-    println!("  {} Add the data models", "1.".bold());
-    println!("  {} Add the API endpoints", "2.".bold());
-    println!("  {} Add the dashboard UI", "3.".bold());
-    println!();
-    println!("Each becomes a branch stacked on the previous one.");
-    println!("Reviewers see small, focused PRs instead of one giant diff.");
-
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 2: First branch - models
-    step_header(2, total, "Create the first branch");
-    print_command("stax create add-models");
+    step(1, t, "Build a 3-branch stack");
+    cmd("stax create add-models");
     run_stax(&dir, &["create", "add-models"])?;
+    commit(&dir, "models.rs", "pub struct User { pub id: u64, pub name: String }\n", "Add User model")?;
 
-    fs::write(
-        dir.join("models.rs"),
-        "pub struct User {\n    pub id: u64,\n    pub name: String,\n}\n",
-    )?;
-    run_git(&dir, &["add", "-A"])?;
-    run_git(&dir, &["commit", "-m", "Add User model"])?;
-    println!("Added a commit with the data models.");
-
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 3: Second branch - API
-    step_header(3, total, "Stack a second branch on top");
-    println!(
-        "While still on {}, create the next branch:",
-        "add-models".cyan()
-    );
-    print_command("stax create add-api");
+    cmd("stax create add-api");
     run_stax(&dir, &["create", "add-api"])?;
+    commit(&dir, "api.rs", "pub fn get_user(id: u64) -> User { todo!() }\n", "Add user API")?;
 
-    fs::write(
-        dir.join("api.rs"),
-        "pub fn get_user(id: u64) -> User {\n    // fetch from database\n    todo!()\n}\n",
-    )?;
-    run_git(&dir, &["add", "-A"])?;
-    run_git(&dir, &["commit", "-m", "Add user API endpoint"])?;
-    println!("Now we have two branches stacked:");
-    print_command("stax status");
-    run_stax(&dir, &["status"])?;
+    cmd("stax create add-ui");
+    run_stax(&dir, &["create", "add-ui"])?;
+    commit(&dir, "ui.rs", "pub fn render(user: &User) { println!(\"{}\", user.name); }\n", "Add user UI")?;
 
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 4: Third branch - UI
-    step_header(4, total, "Add the final branch");
-    print_command("stax create add-dashboard");
-    run_stax(&dir, &["create", "add-dashboard"])?;
-
-    fs::write(
-        dir.join("dashboard.rs"),
-        "pub fn render_dashboard() {\n    let user = get_user(1);\n    println!(\"Welcome, {}\", user.name);\n}\n",
-    )?;
-    run_git(&dir, &["add", "-A"])?;
-    run_git(&dir, &["commit", "-m", "Add dashboard UI"])?;
-
-    println!("Here's the full stack:");
-    print_command("stax log");
+    cmd("stax log");
     run_stax(&dir, &["log"])?;
+    println!("{}", "3 branches, each building on the last. Each becomes its own PR.".dimmed());
+    if !pause()? { return Ok(()); }
 
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 5: Navigate the stack
-    step_header(5, total, "Navigate between branches");
-    println!("Move through the stack with {} and {}:", "stax up".cyan(), "stax down".cyan());
-    println!();
-    println!("Go to the bottom of the stack:");
-    print_command("stax bottom");
+    step(2, t, "Navigate the stack");
+    println!("Jump to bottom and back to top:");
+    cmd("stax bottom");
     run_stax(&dir, &["bottom"])?;
-    println!("Go back to the top:");
-    print_command("stax top");
+    cmd("stax top");
     run_stax(&dir, &["top"])?;
+    if !pause()? { return Ok(()); }
 
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 6: Edit a middle branch
-    step_header(6, total, "Edit a branch in the middle");
-    println!("Need to fix something in the models branch? Navigate to it:");
-    print_command("stax bottom");
+    step(3, t, "Edit a middle branch");
+    cmd("stax bottom");
     run_stax(&dir, &["bottom"])?;
-
-    println!("Make a change:");
-    fs::write(
-        dir.join("models.rs"),
-        "pub struct User {\n    pub id: u64,\n    pub name: String,\n    pub email: String,\n}\n",
-    )?;
-    run_git(&dir, &["add", "-A"])?;
-    run_git(&dir, &["commit", "-m", "Add email field to User"])?;
-    println!("After editing a middle branch, the branches above may need rebasing.");
-    println!("stax tracks this automatically:");
-    print_command("stax status");
+    commit(&dir, "models.rs", "pub struct User { pub id: u64, pub name: String, pub email: String }\n", "Add email to User")?;
+    cmd("stax status");
     run_stax(&dir, &["status"])?;
+    println!("{}", "The branches above are now marked as needing rebase.".dimmed());
+    if !pause()? { return Ok(()); }
 
-    if !pause("Continue?")? {
-        return Ok(());
-    }
-
-    // Step 7: Restack
-    step_header(7, total, "Restack the entire stack");
-    println!("Restack rebases each branch onto its updated parent:");
-    print_command("stax restack --all");
+    step(4, t, "Restack everything");
+    cmd("stax restack --all");
     run_stax(&dir, &["restack", "--all"])?;
-    println!();
-    println!("All branches are now up to date:");
-    print_command("stax status");
+    cmd("stax status");
     run_stax(&dir, &["status"])?;
+    println!("{}", "All branches rebased onto their updated parents.".dimmed());
+    if !pause()? { return Ok(()); }
 
-    if !pause("Continue?")? {
-        return Ok(());
-    }
+    step(5, t, "Submit the whole stack");
+    println!("{} pushes every branch and creates/updates all PRs at once.", "stax submit".cyan());
+    println!("Each PR targets the correct parent — reviewers see small diffs.");
+    println!();
+    println!("{}", "Done! You can build, restack, and submit entire stacks.".bold().green());
+    println!();
+    Ok(())
+}
 
-    // Step 8: Wrap up
-    step_header(8, total, "The full workflow");
-    println!("Here's the typical stacked-branch cycle:");
-    println!();
-    println!("  {} Create branches with {}", "1.".bold(), "stax create".cyan());
-    println!("  {} Make commits on each branch", "2.".bold());
-    println!("  {} Submit all PRs with {}", "3.".bold(), "stax submit".cyan());
-    println!("  {} Get reviews, make changes", "4.".bold());
-    println!("  {} Rebase the stack with {}", "5.".bold(), "stax restack".cyan());
-    println!("  {} Merge from the bottom with {}", "6.".bold(), "stax merge".cyan());
-    println!("  {} Clean up with {}", "7.".bold(), "stax sync".cyan());
-    println!();
-    println!("Useful extras:");
-    println!("  {} - restack + push + submit in one step", "stax cascade".cyan());
-    println!("  {} - interactive TUI for your stacks", "stax".cyan());
-    println!("  {} - undo any risky operation", "stax undo".cyan());
-    println!();
-    println!(
-        "{}",
-        "Run `stax --help` to see all available commands.".dimmed()
-    );
-    println!();
-    println!("{}", "Happy stacking!".bold().green());
+// ─── Demo 3: Navigating stacks ──────────────────────────────────────────────
 
+fn demo_navigation() -> Result<()> {
+    let t = 4;
+    println!();
+    println!("{}", "Demo: Navigating your stack".bold().green());
+    println!("{}", "Move between branches without remembering names.".dimmed());
+    println!();
+
+    let (_tmp, dir) = setup_repo()?;
+
+    // Build a stack silently
+    run_stax(&dir, &["create", "feat-auth"])?;
+    commit(&dir, "auth.rs", "pub fn auth() {}\n", "Add auth")?;
+    run_stax(&dir, &["create", "feat-session"])?;
+    commit(&dir, "session.rs", "pub fn session() {}\n", "Add session")?;
+    run_stax(&dir, &["create", "feat-profile"])?;
+    commit(&dir, "profile.rs", "pub fn profile() {}\n", "Add profile")?;
+    run_stax(&dir, &["create", "feat-settings"])?;
+    commit(&dir, "settings.rs", "pub fn settings() {}\n", "Add settings")?;
+
+    step(1, t, "See where you are");
+    cmd("stax status");
+    run_stax(&dir, &["status"])?;
+    println!("{}", "You're at the top of a 4-branch stack.".dimmed());
+    if !pause()? { return Ok(()); }
+
+    step(2, t, "Move down and up");
+    cmd("stax down");
+    run_stax(&dir, &["down"])?;
+    cmd("stax down 2");
+    run_stax(&dir, &["down", "2"])?;
+    cmd("stax up");
+    run_stax(&dir, &["up"])?;
+    println!("{}", "down/up accept a count — jump multiple levels at once.".dimmed());
+    if !pause()? { return Ok(()); }
+
+    step(3, t, "Jump to top and bottom");
+    cmd("stax bottom");
+    run_stax(&dir, &["bottom"])?;
+    cmd("stax top");
+    run_stax(&dir, &["top"])?;
+    if !pause()? { return Ok(()); }
+
+    step(4, t, "Switch to trunk and back");
+    cmd("stax trunk");
+    run_stax(&dir, &["trunk"])?;
+    cmd("stax prev");
+    run_stax(&dir, &["prev"])?;
+    println!("{}", "prev returns to whatever branch you were on before.".dimmed());
+    println!();
+    println!("{}", "Done! Navigate any stack without typing branch names.".bold().green());
+    println!();
+    Ok(())
+}
+
+// ─── Demo 4: Undo risky operations ──────────────────────────────────────────
+
+fn demo_undo() -> Result<()> {
+    let t = 3;
+    println!();
+    println!("{}", "Demo: Undo and safety net".bold().green());
+    println!("{}", "Every risky operation can be reversed with stax undo.".dimmed());
+    println!();
+
+    let (_tmp, dir) = setup_repo()?;
+
+    step(1, t, "Create a stack");
+    run_stax(&dir, &["create", "feat-payments"])?;
+    commit(&dir, "pay.rs", "pub fn charge(amount: u64) {}\n", "Add payments")?;
+    run_stax(&dir, &["create", "feat-receipts"])?;
+    commit(&dir, "receipt.rs", "pub fn receipt() {}\n", "Add receipts")?;
+    cmd("stax log");
+    run_stax(&dir, &["log"])?;
+    if !pause()? { return Ok(()); }
+
+    step(2, t, "Detach a branch (risky operation)");
+    println!("Remove {} from the stack:", "feat-payments".cyan());
+    cmd("stax detach --yes");
+    run_stax(&dir, &["down"])?;
+    run_stax(&dir, &["detach", "--yes"])?;
+    cmd("stax status");
+    run_stax(&dir, &["status"])?;
+    println!("{}", "feat-receipts was reparented to main automatically.".dimmed());
+    if !pause()? { return Ok(()); }
+
+    step(3, t, "Undo it");
+    cmd("stax undo --yes");
+    run_stax(&dir, &["undo", "--yes"])?;
+    cmd("stax log");
+    run_stax(&dir, &["log"])?;
+    println!("{}", "The stack is restored to its original shape.".dimmed());
+    println!();
+    println!("{}", "Done! Experiment freely — stax undo has your back.".bold().green());
+    println!();
+    Ok(())
+}
+
+// ─── Demo 5: Validate and fix ───────────────────────────────────────────────
+
+fn demo_health() -> Result<()> {
+    let t = 3;
+    println!();
+    println!("{}", "Demo: Stack health checks".bold().green());
+    println!("{}", "Detect and fix broken metadata before it causes problems.".dimmed());
+    println!();
+
+    let (_tmp, dir) = setup_repo()?;
+
+    step(1, t, "Build a stack");
+    run_stax(&dir, &["create", "feat-cache"])?;
+    commit(&dir, "cache.rs", "pub fn cache() {}\n", "Add caching")?;
+    run_stax(&dir, &["create", "feat-ttl"])?;
+    commit(&dir, "ttl.rs", "pub fn ttl() {}\n", "Add TTL support")?;
+    cmd("stax status");
+    run_stax(&dir, &["status"])?;
+    if !pause()? { return Ok(()); }
+
+    step(2, t, "Run a health check");
+    cmd("stax validate");
+    run_stax(&dir, &["validate"])?;
+    println!("{}", "All checks passed — no orphaned refs, no cycles, no stale parents.".dimmed());
+    if !pause()? { return Ok(()); }
+
+    step(3, t, "Auto-fix problems");
+    println!("If validate finds issues, {} repairs them automatically:", "stax fix".cyan());
+    println!();
+    println!("  {} Deletes metadata for branches that no longer exist", "-".dimmed());
+    println!("  {} Reparents orphans to trunk", "-".dimmed());
+    println!("  {} Cleans up invalid JSON refs", "-".dimmed());
+    println!();
+    println!("Use {} to preview without changing anything.", "stax fix --dry-run".cyan());
+    println!();
+    println!("{}", "Done! Keep your stacks healthy with validate and fix.".bold().green());
+    println!();
     Ok(())
 }
 
@@ -369,24 +324,59 @@ fn demo_stacked_prs() -> Result<()> {
 pub fn run() -> Result<()> {
     println!();
     println!("{}", "Welcome to the stax interactive demo!".bold().green());
-    println!();
     println!(
         "{}",
-        "Pick a demo to learn how stax works. A temporary repo will be"
-            .dimmed()
-    );
-    println!(
-        "{}",
-        "created — nothing in your real projects will be changed.".dimmed()
+        "A temporary repo is created for each demo — your projects are untouched.".dimmed()
     );
     println!();
 
     let demos = &[
-        "Creating a pull request          (Time to completion: ~2 min)",
-        "Creating a stack of pull requests (Time to completion: ~5 min)",
+        format!(
+            "{}  {}",
+            "Your first pull request".bold(),
+            "(~1 min)".dimmed()
+        ),
+        format!(
+            "{}  {}",
+            "Stacking multiple PRs".bold(),
+            "(~3 min)".dimmed()
+        ),
+        format!(
+            "{}  {}",
+            "Navigating your stack".bold(),
+            "(~2 min)".dimmed()
+        ),
+        format!(
+            "{}  {}",
+            "Undo and safety net".bold(),
+            "(~2 min)".dimmed()
+        ),
+        format!(
+            "{}  {}",
+            "Stack health checks".bold(),
+            "(~1 min)".dimmed()
+        ),
     ];
 
-    let selection = dialoguer::Select::new()
+    let theme = ColorfulTheme {
+        active_item_style: console::Style::new()
+            .for_stderr()
+            .green()
+            .bold(),
+        active_item_prefix: console::style("▸ ".to_string())
+            .for_stderr()
+            .green()
+            .bold(),
+        inactive_item_prefix: console::style("  ".to_string()).for_stderr(),
+        prompt_style: console::Style::new().for_stderr().bold().cyan(),
+        prompt_prefix: console::style("?".to_string())
+            .for_stderr()
+            .green()
+            .bold(),
+        ..ColorfulTheme::default()
+    };
+
+    let selection = Select::with_theme(&theme)
         .with_prompt("What demo would you like to run?")
         .items(demos)
         .default(0)
@@ -395,10 +385,13 @@ pub fn run() -> Result<()> {
 
     match selection {
         Some(0) => demo_first_pr()?,
-        Some(1) => demo_stacked_prs()?,
+        Some(1) => demo_stacking()?,
+        Some(2) => demo_navigation()?,
+        Some(3) => demo_undo()?,
+        Some(4) => demo_health()?,
         _ => {
             println!();
-            println!("No demo selected. Run {} anytime to try again.", "stax demo".cyan());
+            println!("No demo selected. Run {} anytime.", "stax demo".cyan());
         }
     }
 
