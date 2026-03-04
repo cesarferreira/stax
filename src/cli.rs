@@ -513,6 +513,23 @@ enum Commands {
     },
 
     /// Run a command on each branch in the stack
+    Run {
+        /// Command to run
+        #[arg(trailing_var_arg = true, required = true)]
+        cmd: Vec<String>,
+        /// Run on all tracked branches (not just current stack)
+        #[arg(long)]
+        all: bool,
+        /// Run only one stack (current stack by default, or a specific branch's stack with --stack=<branch>)
+        #[arg(long, num_args = 0..=1, require_equals = true)]
+        stack: Option<Option<String>>,
+        /// Stop after first failure
+        #[arg(long)]
+        fail_fast: bool,
+    },
+
+    /// Backward-compatible alias for `run`
+    #[command(hide = true)]
     Test {
         /// Command to run
         #[arg(trailing_var_arg = true, required = true)]
@@ -520,6 +537,9 @@ enum Commands {
         /// Run on all tracked branches (not just current stack)
         #[arg(long)]
         all: bool,
+        /// Run only one stack (current stack by default, or a specific branch's stack with --stack=<branch>)
+        #[arg(long, num_args = 0..=1, require_equals = true)]
+        stack: Option<Option<String>>,
         /// Stop after first failure
         #[arg(long)]
         fail_fast: bool,
@@ -1167,11 +1187,18 @@ pub fn run() -> Result<()> {
         Commands::Reorder { yes } => commands::reorder::run(yes),
         Commands::Validate => commands::stack_cmd::run_validate(),
         Commands::Fix { dry_run, yes } => commands::stack_cmd::run_fix(dry_run, yes),
-        Commands::Test {
+        Commands::Run {
             cmd,
             all,
+            stack,
             fail_fast,
-        } => commands::stack_cmd::run_test(cmd, all, fail_fast),
+        }
+        | Commands::Test {
+            cmd,
+            all,
+            stack,
+            fail_fast,
+        } => commands::stack_cmd::run_test(cmd, all, stack, fail_fast),
         Commands::Demo => unreachable!(), // Handled above
         Commands::Standup {
             json,

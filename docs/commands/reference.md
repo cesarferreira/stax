@@ -75,9 +75,10 @@
 | `st validate` | Validate stack metadata (orphans, cycles, staleness) |
 | `st fix` | Auto-repair broken metadata |
 | `st fix --dry-run` | Preview fixes without applying |
-| `st test <cmd>` | Run a command on each branch in the stack |
-| `st test <cmd> --fail-fast` | Stop after first failure |
-| `st test <cmd> --all` | Run on all tracked branches |
+| `st run <cmd>` | Run a command on each branch in the stack (alias: `st test <cmd>`) |
+| `st run <cmd> --stack[=<branch>]` | Run only one stack (current stack by default, or `<branch>` stack when provided) |
+| `st run <cmd> --fail-fast` | Stop after first failure |
+| `st run <cmd> --all` | Run on all tracked branches |
 
 ## Utilities
 

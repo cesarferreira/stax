@@ -20,6 +20,7 @@ fn test_help() {
     assert!(stdout.contains("Fast stacked Git branches and PRs"));
     assert!(stdout.contains("status"));
     assert!(stdout.contains("submit"));
+    assert!(stdout.contains("run"));
     assert!(stdout.contains("restack"));
     assert!(stdout.contains("resolve"));
 }
@@ -57,6 +58,24 @@ fn test_sync_alias_rs() {
     assert!(stdout.contains("delete-upstream-gone"));
     assert!(stdout.contains("safe"));
     assert!(stdout.contains("continue"));
+}
+
+#[test]
+fn test_run_command_help() {
+    let output = stax(&["run", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Run a command on each branch in the stack"));
+    assert!(stdout.contains("--fail-fast"));
+    assert!(stdout.contains("--all"));
+    assert!(stdout.contains("--stack"));
+    assert!(stdout.contains("--stack[=<STACK>]"));
+}
+
+#[test]
+fn test_test_command_backcompat_alias_works() {
+    let output = stax(&["test", "--help"]);
+    assert!(output.status.success());
 }
 
 #[test]

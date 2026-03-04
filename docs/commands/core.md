@@ -21,7 +21,7 @@
 | `st resolve` | Resolve in-progress rebase conflicts using AI |
 | `st abort` | Abort in-progress rebase/conflict resolution |
 | `st detach` | Remove branch from stack, reparent children |
-| `st test <cmd>` | Run a command on each branch in the stack |
+| `st run <cmd>` (alias: `st test <cmd>`) | Run a command on each branch in the stack |
 | `st demo` | Interactive tutorial (no auth/repo needed) |
 
 For the complete CLI list and aliases, see [Full Reference](reference.md).

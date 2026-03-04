@@ -109,7 +109,7 @@ Next steps:
 | `st undo` / `st redo` | Recover or re-apply risky operations |
 | `st standup` | Summarize recent engineering activity |
 | `st generate --pr-body` | Generate PR body with AI |
-| `st test <cmd>` | Run a command on each branch in stack |
+| `st run <cmd>` (alias: `st test <cmd>`) | Run a command on each branch in stack |
 
 For complete command and flag reference: [docs/commands/core.md](docs/commands/core.md) and [docs/commands/reference.md](docs/commands/reference.md).
 

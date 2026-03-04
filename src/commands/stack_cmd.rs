@@ -6,6 +6,7 @@ use anyhow::Result;
 use colored::Colorize;
 use git2::BranchType;
 use std::collections::HashSet;
+use std::io::{self, Write};
 
 // =========================================================================
 // validate
@@ -336,30 +337,46 @@ pub fn run_fix(dry_run: bool, yes: bool) -> Result<()> {
 // test
 // =========================================================================
 
-pub fn run_test(cmd: Vec<String>, all: bool, fail_fast: bool) -> Result<()> {
+pub fn run_test(
+    cmd: Vec<String>,
+    all: bool,
+    stack_filter: Option<Option<String>>,
+    fail_fast: bool,
+) -> Result<()> {
     let repo = GitRepo::open()?;
     let stack = Stack::load(&repo)?;
     let current = repo.current_branch()?;
-    let trunk = stack.trunk.clone();
 
     let branches: Vec<String> = if all {
-        // All tracked branches
-        stack
+        // All tracked non-trunk branches (stable order for deterministic output).
+        let mut list: Vec<String> = stack
             .branches
-            .keys()
-            .filter(|b| **b != trunk)
-            .cloned()
+            .values()
+            .filter(|b| b.parent.is_some())
+            .map(|b| b.name.clone())
+            .collect();
+        list.sort();
+        list
+    } else if let Some(stack_arg) = stack_filter {
+        let target = stack_arg.unwrap_or_else(|| current.clone());
+        if !stack.branches.contains_key(&target) {
+            anyhow::bail!("Branch '{}' is not tracked in the stack.", target);
+        }
+        stack
+            .current_stack(&target)
+            .into_iter()
+            .filter(|b| b != &stack.trunk)
             .collect()
     } else {
         stack
             .current_stack(&current)
             .into_iter()
-            .filter(|b| *b != trunk)
+            .filter(|b| b != &stack.trunk)
             .collect()
     };
 
     if branches.is_empty() {
-        println!("{}", "No branches to test.".yellow());
+        println!("{}", "No branches to run command on.".yellow());
         return Ok(());
     }
 
@@ -371,7 +388,7 @@ pub fn run_test(cmd: Vec<String>, all: bool, fail_fast: bool) -> Result<()> {
     );
     println!();
 
-    let mut passed = 0;
+    let mut succeeded = 0;
     let mut failed = 0;
     let mut failed_branches: Vec<String> = Vec::new();
 
@@ -379,19 +396,23 @@ pub fn run_test(cmd: Vec<String>, all: bool, fail_fast: bool) -> Result<()> {
         // Checkout branch
         repo.checkout(branch)?;
 
-        print!("  {} ... ", branch.cyan());
+        println!("  {}:", branch.cyan());
+        io::stdout().flush()?;
 
-        let output = std::process::Command::new("sh")
+        let status = std::process::Command::new("sh")
             .arg("-c")
             .arg(&cmd_str)
             .current_dir(repo.workdir()?)
-            .output()?;
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()?;
 
-        if output.status.success() {
-            println!("{}", "PASS".green());
-            passed += 1;
+        if status.success() {
+            println!("  {} {}", "Result:".dimmed(), "SUCCESS".green());
+            succeeded += 1;
         } else {
-            println!("{}", "FAIL".red());
+            println!("  {} {}", "Result:".dimmed(), "FAIL".red());
             failed += 1;
             failed_branches.push(branch.clone());
 
@@ -401,6 +422,8 @@ pub fn run_test(cmd: Vec<String>, all: bool, fail_fast: bool) -> Result<()> {
                 break;
             }
         }
+
+        println!();
     }
 
     // Return to original branch
@@ -410,14 +433,14 @@ pub fn run_test(cmd: Vec<String>, all: bool, fail_fast: bool) -> Result<()> {
     let failed_str = failed.to_string();
     if failed > 0 {
         println!(
-            "{} passed, {} failed",
-            passed.to_string().green(),
+            "{} succeeded, {} failed",
+            succeeded.to_string().green(),
             failed_str.red()
         );
     } else {
         println!(
-            "{} passed, {} failed",
-            passed.to_string().green(),
+            "{} succeeded, {} failed",
+            succeeded.to_string().green(),
             failed_str.green()
         );
     }

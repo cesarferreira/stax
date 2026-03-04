@@ -37,33 +37,42 @@ Repairs:
 
 Wrapped in a transaction for undo support (`st undo`).
 
-## `st test <cmd>`
+## `st run <cmd>` (alias: `st test <cmd>`)
 
 Run a shell command on each branch in the stack.
 
 ```bash
-st test "cargo test"          # Run tests on each branch
-st test "make lint"           # Run linting on each branch
-st test --fail-fast "cargo check"  # Stop on first failure
-st test --all "true"          # Run on all tracked branches
+st run "cargo test"           # Run tests on each branch
+st run "make lint"            # Run linting on each branch
+st run --stack "make test"       # Run current stack
+st run --stack=feature-a "make test" # Run a specific stack
+st run "cargo run -- --version" # Run any command across the stack
+st run --fail-fast "cargo check"  # Stop on first failure
+st run --all "true"           # Run on all tracked branches
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--fail-fast` | Stop after the first branch that fails |
 | `--all` | Run on all tracked branches, not just the current stack |
+| `--stack[=<branch>]` | Run one stack: current by default, or `<branch>` when provided |
 
-The command checks out each branch (bottom to top, excluding trunk), runs the command, and reports pass/fail. Returns to the original branch when done. Exit code `1` if any branch fails.
+The command checks out each branch (bottom to top, excluding trunk), runs the command, streams command output, and reports success/failure. Returns to the original branch when done. Exit code `1` if any branch fails.
 
 Example output:
 ```
 Running 'cargo test' on 3 branch(es)...
 
-  feature-a ... PASS
-  feature-b ... FAIL
-  feature-c ... PASS
+  feature-a:
+  Result: SUCCESS
 
-2 passed, 1 failed
+  feature-b:
+  Result: FAIL
+
+  feature-c:
+  Result: SUCCESS
+
+2 succeeded, 1 failed
 Failed branches:
   feature-b
 ```
