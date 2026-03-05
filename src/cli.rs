@@ -653,6 +653,18 @@ enum Commands {
     #[command(subcommand, visible_alias = "ag")]
     Agent(AgentCommands),
 
+    /// Manage worktrees for parallel branch development
+    #[command(subcommand, visible_alias = "wt")]
+    Worktree(WorktreeCommands),
+
+    /// Output shell integration snippet (add to shell config: eval "$(stax shell-setup)")
+    #[command(name = "shell-setup")]
+    ShellSetup {
+        /// Auto-append to your shell config file (~/.zshrc, ~/.bashrc, etc.)
+        #[arg(long)]
+        install: bool,
+    },
+
     // Hidden top-level shortcuts for convenience
     #[command(hide = true)]
     Bc {
@@ -683,6 +695,25 @@ enum Commands {
     Bs {
         #[command(flatten)]
         submit: SubmitOptions,
+    },
+    /// List worktrees (alias for `stax worktree list`)
+    #[command(hide = true)]
+    W,
+    #[command(hide = true)]
+    Wtc {
+        branch: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    #[command(hide = true)]
+    Wtls,
+    #[command(hide = true)]
+    Wtgo { name: String },
+    #[command(hide = true)]
+    Wtrm {
+        name: String,
+        #[arg(short, long)]
+        force: bool,
     },
 }
 
@@ -915,6 +946,38 @@ enum AgentCommands {
 
     /// Restack all registered agent worktrees
     Sync,
+}
+
+#[derive(Subcommand)]
+enum WorktreeCommands {
+    /// Create a new worktree for a branch
+    #[command(visible_alias = "c")]
+    Create {
+        /// Branch name (interactive picker if omitted)
+        branch: Option<String>,
+        /// Override the short name for the worktree directory
+        #[arg(long)]
+        name: Option<String>,
+    },
+
+    /// List all worktrees
+    #[command(visible_aliases = ["ls"])]
+    List,
+
+    /// Navigate to a worktree (requires shell integration)
+    Go { name: String },
+
+    /// Print the absolute path of a worktree (for scripting / shell integration)
+    Path { name: String },
+
+    /// Remove a worktree
+    #[command(visible_alias = "rm")]
+    Remove {
+        name: String,
+        /// Force removal even if the worktree has uncommitted changes
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Result<()> {
@@ -1340,6 +1403,24 @@ pub fn run() -> Result<()> {
             AgentCommands::Prune => commands::agent::prune::run(),
             AgentCommands::Sync => commands::agent::sync::run(),
         },
+        Commands::Worktree(cmd) => match cmd {
+            WorktreeCommands::Create { branch, name } => {
+                commands::worktree::create::run(branch, name)
+            }
+            WorktreeCommands::List => commands::worktree::list::run(),
+            WorktreeCommands::Go { name } => commands::worktree::go::run_go(&name),
+            WorktreeCommands::Path { name } => commands::worktree::go::run_path(&name),
+            WorktreeCommands::Remove { name, force } => {
+                commands::worktree::remove::run(&name, force)
+            }
+        },
+        Commands::ShellSetup { install } => commands::shell_setup::run(install),
+        // Hidden worktree shortcuts
+        Commands::W => commands::worktree::list::run(),
+        Commands::Wtc { branch, name } => commands::worktree::create::run(branch, name),
+        Commands::Wtls => commands::worktree::list::run(),
+        Commands::Wtgo { name } => commands::worktree::go::run_path(&name),
+        Commands::Wtrm { name, force } => commands::worktree::remove::run(&name, force),
     };
 
     // Show update notification (from cache, instant) and spawn background check for next run

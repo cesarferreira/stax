@@ -38,3 +38,5 @@ pub mod submit;
 pub mod sync;
 pub mod undo;
 pub mod upstack;
+pub mod shell_setup;
+pub mod worktree;

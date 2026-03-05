@@ -11,9 +11,15 @@ pub struct GitRepo {
 }
 
 #[derive(Debug, Clone)]
-struct WorktreeInfo {
-    path: PathBuf,
-    branch: Option<String>,
+pub struct WorktreeInfo {
+    /// Short display name: "main" for the main worktree, last path segment for others
+    pub name: String,
+    pub path: PathBuf,
+    pub branch: Option<String>,
+    /// True for the first entry (main worktree, not a linked worktree)
+    pub is_main: bool,
+    /// True if this worktree's path matches the current working directory
+    pub is_current: bool,
 }
 
 #[derive(Deserialize)]
@@ -135,26 +141,27 @@ impl GitRepo {
         Ok(())
     }
 
-    fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+    pub fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
         let output = self.run_git(self.workdir()?, &["worktree", "list", "--porcelain"])?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             anyhow::bail!("git worktree list failed: {}", stderr);
         }
 
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd_normalized = Self::normalize_path(&cwd);
+
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut worktrees = Vec::new();
+        let mut raw_entries: Vec<(PathBuf, Option<String>)> = Vec::new();
         let mut current_path: Option<PathBuf> = None;
         let mut current_branch: Option<String> = None;
 
-        let mut flush_entry = |path: &mut Option<PathBuf>, branch: &mut Option<String>| {
-            if let Some(p) = path.take() {
-                worktrees.push(WorktreeInfo {
-                    path: Self::normalize_path(&p),
-                    branch: branch.take(),
-                });
-            }
-        };
+        let mut flush_entry =
+            |path: &mut Option<PathBuf>, branch: &mut Option<String>| {
+                if let Some(p) = path.take() {
+                    raw_entries.push((Self::normalize_path(&p), branch.take()));
+                }
+            };
 
         for line in stdout.lines() {
             if line.is_empty() {
@@ -179,7 +186,103 @@ impl GitRepo {
         }
 
         flush_entry(&mut current_path, &mut current_branch);
+
+        let worktrees = raw_entries
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (path, branch))| {
+                let is_main = idx == 0;
+                let is_current = path == cwd_normalized;
+                let name = if is_main {
+                    "main".to_string()
+                } else {
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "unknown".to_string())
+                };
+                WorktreeInfo { name, path, branch, is_main, is_current }
+            })
+            .collect();
+
         Ok(worktrees)
+    }
+
+    /// Return the absolute path to the main repo's working directory.
+    /// Works correctly even when called from inside a linked worktree.
+    pub fn main_repo_workdir(&self) -> Result<PathBuf> {
+        let worktrees = self.list_worktrees()?;
+        worktrees
+            .into_iter()
+            .next()
+            .map(|wt| wt.path)
+            .context("git worktree list returned no entries")
+    }
+
+    /// Return the `.worktrees/` directory under the main repo root.
+    pub fn worktrees_dir(&self) -> Result<PathBuf> {
+        Ok(self.main_repo_workdir()?.join(".worktrees"))
+    }
+
+    /// Create a new linked worktree at `path` for an existing `branch`.
+    pub fn worktree_create(&self, branch: &str, path: &Path) -> Result<()> {
+        let main_dir = self.main_repo_workdir()?;
+        let output = self.run_git(
+            &main_dir,
+            &[
+                "worktree",
+                "add",
+                path.to_str().context("Non-UTF-8 worktree path")?,
+                branch,
+            ],
+        )?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git worktree add failed: {}", stderr);
+        }
+        Ok(())
+    }
+
+    /// Create a new linked worktree at `path` with a brand-new `branch` stacked on `base`.
+    pub fn worktree_create_new_branch(
+        &self,
+        branch: &str,
+        path: &Path,
+        base: &str,
+    ) -> Result<()> {
+        let main_dir = self.main_repo_workdir()?;
+        let output = self.run_git(
+            &main_dir,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                path.to_str().context("Non-UTF-8 worktree path")?,
+                base,
+            ],
+        )?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git worktree add -b failed: {}", stderr);
+        }
+        Ok(())
+    }
+
+    /// Remove a linked worktree by path.
+    pub fn worktree_remove(&self, path: &Path, force: bool) -> Result<()> {
+        let main_dir = self.main_repo_workdir()?;
+        let path_str = path.to_str().context("Non-UTF-8 worktree path")?;
+        let args: Vec<&str> = if force {
+            vec!["worktree", "remove", "--force", path_str]
+        } else {
+            vec!["worktree", "remove", path_str]
+        };
+        let output = self.run_git(&main_dir, &args)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git worktree remove failed: {}", stderr);
+        }
+        Ok(())
     }
 
     pub fn branch_worktree_path(&self, branch: &str) -> Result<Option<PathBuf>> {
