@@ -159,10 +159,38 @@ st
 
 Read more: [docs/interface/tui.md](docs/interface/tui.md)
 
+<a id="developer-worktrees"></a>
+### Developer Worktrees
+
+Work on multiple stacks in parallel without losing context. `st worktree` (alias `st wt`) creates and manages Git worktrees for your existing branches, with shell integration for transparent `cd`.
+
+```bash
+# One-time shell integration setup
+st shell-setup --install   # appends eval "$(stax shell-setup)" to ~/.zshrc
+
+# Create a worktree for an existing branch
+st worktree create feature/payments-api
+
+# List all worktrees (* = current)
+st worktree list
+
+# Jump to a worktree (transparent cd via shell function)
+st worktree go payments-api
+# or the quick alias:
+sw payments-api
+
+# Remove when done
+st worktree remove payments-api
+```
+
+Shortcuts: `st w` (list), `st wtc [branch]` (create), `st wtgo <name>` (go), `st wtrm <name>` (remove).
+
+Read more: [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
+
 <a id="agent-worktrees"></a>
 ### Agent Worktrees
 
-Run multiple AI/dev agents in isolated Git worktrees while preserving stack metadata and restack flows.
+Run multiple AI agents in isolated Git worktrees while preserving stack metadata and restack flows. `st agent` is title-based and includes editor integration and a registry.
 
 ```bash
 # Create isolated worktrees for parallel tasks
@@ -204,6 +232,7 @@ If you want to...
 - Navigate branches efficiently: [docs/commands/navigation.md](docs/commands/navigation.md)
 - Merge, cascade, and keep stacks healthy: [docs/workflows/merge-and-cascade.md](docs/workflows/merge-and-cascade.md)
 - Work across multiple worktrees: [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
+- Use developer worktrees (`st worktree`): [docs/workflows/multi-worktree.md#stax-worktree](docs/workflows/multi-worktree.md)
 - Use agent worktrees end-to-end: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md)
 - Configure auth/branch naming/remote behavior: [docs/configuration/index.md](docs/configuration/index.md)
 - Validate and repair metadata health: [docs/commands/stack-health.md](docs/commands/stack-health.md)
