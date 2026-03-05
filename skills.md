@@ -93,6 +93,23 @@ stax agent register            # Register current dir as an agent worktree
 stax agent remove [name]       # Remove worktree (+ --delete-branch to also delete branch)
 stax agent prune               # Remove dead registry entries + git worktree prune
 stax agent sync                # Restack all registered agent worktrees at once
+
+stax worktree create [branch]  # Create a worktree for an existing or new branch
+stax worktree list             # List all worktrees (* = current)
+stax worktree go <name>        # Navigate to a worktree (requires shell integration)
+stax worktree path <name>      # Print absolute path of a worktree (for scripting)
+stax worktree remove <name>    # Remove a worktree
+stax shell-setup               # Print shell integration snippet
+stax shell-setup --install     # Auto-install shell integration to ~/.zshrc etc.
+
+# Worktree shortcuts
+stax wt                        # Alias for worktree subcommand
+stax w                         # List worktrees
+stax wtc [branch]              # Create worktree
+stax wtls                      # List worktrees
+stax wtgo <name>               # Navigate to worktree path
+stax wtrm <name>               # Remove worktree
+sw <name>                      # Quick-switch (shell alias installed by stax shell-setup)
 ```
 
 ## High-Value Commands and Flags
@@ -348,6 +365,31 @@ stax fix --dry-run
 stax fix --yes
 ```
 
+### Work on Multiple Stacks in Parallel (Developer Worktrees)
+
+```bash
+# One-time shell integration (enables transparent cd)
+stax shell-setup --install
+
+# Create a worktree for an existing branch
+stax worktree create feature/payments-api
+
+# List all worktrees
+stax w
+
+# Jump to a worktree
+stax worktree go payments-api
+# or with the shell alias:
+sw payments-api
+
+# All stax commands work normally inside worktrees
+stax restack --all
+stax ss
+
+# Clean up
+stax worktree remove payments-api
+```
+
 ### Run Multiple AI Agents in Parallel
 
 Each agent gets its own isolated worktree and branch. They cannot conflict.
@@ -411,12 +453,16 @@ Symbols:
 6. Check stack shape (`stax ls` / `stax ll`) before submit or merge.
 7. Use `stax agent create` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
 8. After trunk moves, run `stax agent sync` once instead of rebasing each agent worktree manually.
+9. Use `stax worktree create` (not `stax agent create`) when you want a worktree for an existing branch or for human parallel development — no registry, no editor overhead.
+10. Run `stax shell-setup --install` once per machine to enable `stax worktree go` and the `sw` alias.
 
 ## Tips
 
 - Run `stax` with no args to launch the interactive TUI.
 - Use `stax --help` or `stax <command> --help` for exact flags.
-- Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`.
+- Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.
 - Use `--yes` for non-interactive scripting.
 - Use `--json` on supported commands for machine-readable output.
 - Use `stax agent open` with no arguments for a fuzzy picker over all registered agent sessions — useful when you forget where a session lives.
+- Use `stax worktree go` (or `sw`) + shell integration to switch between stacks without `cd` gymnastics.
+- `stax worktree list` shows ALL worktrees including those created externally via `git worktree add`.

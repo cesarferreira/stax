@@ -120,6 +120,18 @@
 | `st agent prune` | | Remove dead registry entries + `git worktree prune` |
 | `st agent sync` | | Restack all registered worktrees |
 
+## Developer worktrees
+
+| Command | Alias | Description |
+|---------|-------|-------------|
+| `st worktree create [branch]` | `wt c`, `wtc` | Create worktree for an existing or new branch |
+| `st worktree list` | `wt ls`, `w`, `wtls` | List all worktrees |
+| `st worktree go <name>` | `wt go`, `wtgo` | Navigate to a worktree (requires shell integration) |
+| `st worktree path <name>` | | Print absolute path of a worktree (for scripting) |
+| `st worktree remove <name>` | `wt rm`, `wtrm` | Remove a worktree |
+| `st shell-setup` | | Print shell integration snippet for `eval` |
+| `st shell-setup --install` | | Auto-append shell integration to your shell config |
+
 ## Common flags
 
 - `st create -am "msg"`
