@@ -1,6 +1,7 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::commands::merge_rebase::{
-    fetch_remote_for_descendant_rebase, rebase_descendant_onto_remote_trunk_with_provenance,
+    fetch_remote_for_descendant_rebase, rebase_descendant_onto_parent_with_provenance,
+    rebase_descendant_onto_remote_trunk_with_provenance,
 };
 use crate::config::Config;
 use crate::engine::Stack;
@@ -368,14 +369,23 @@ pub fn run(
         }
     }
 
-    // Rebase remaining branches onto trunk if any PRs were merged
+    // Rebase remaining branches while preserving their relative stack chain.
+    // First remaining branch is rebased onto trunk, then each subsequent branch
+    // is rebased onto the previous remaining branch.
     if !merged_prs.is_empty() && !scope.remaining.is_empty() && failed_pr.is_none() {
         if !quiet {
             println!();
             println!("{}", "Rebasing remaining stack branches...".dimmed());
         }
 
-        for remaining in &scope.remaining {
+        for (idx, remaining) in scope.remaining.iter().enumerate() {
+            let parent_branch = if idx == 0 {
+                scope.trunk.clone()
+            } else {
+                scope.remaining[idx - 1].branch.clone()
+            };
+            let parent_is_trunk = idx == 0;
+
             let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching latest...");
             let fetch_ok = fetch_remote_for_descendant_rebase(&repo, &remote_info.name)?;
             if !fetch_ok {
@@ -384,23 +394,36 @@ pub fn run(
                 LiveTimer::maybe_finish_ok(fetch_timer, "done");
             }
 
-            let remaining_timer =
-                LiveTimer::maybe_new(!quiet, &format!("Rebasing {}...", remaining.branch));
+            let remaining_timer = LiveTimer::maybe_new(
+                !quiet,
+                &format!("Rebasing {} onto {}...", remaining.branch, parent_branch),
+            );
 
             repo.checkout(&remaining.branch)?;
-            let rebase_result = rebase_descendant_onto_remote_trunk_with_provenance(
-                &repo,
-                &remaining.branch,
-                &scope.trunk,
-                &remote_info.name,
-            );
+            let rebase_result = if parent_is_trunk {
+                rebase_descendant_onto_remote_trunk_with_provenance(
+                    &repo,
+                    &remaining.branch,
+                    &scope.trunk,
+                    &remote_info.name,
+                )
+            } else {
+                rebase_descendant_onto_parent_with_provenance(
+                    &repo,
+                    &remaining.branch,
+                    &parent_branch,
+                    &remote_info.name,
+                    false,
+                )
+            };
 
             match rebase_result {
                 Ok(RebaseResult::Success) => {
-                    // Update PR base
+                    // Update PR base to the actual parent in the preserved chain.
                     if let Some(pr_num) = remaining.pr_number {
-                        let _ = rt
-                            .block_on(async { client.update_pr_base(pr_num, &scope.trunk).await });
+                        let _ = rt.block_on(async {
+                            client.update_pr_base(pr_num, &parent_branch).await
+                        });
                     }
 
                     // Push
