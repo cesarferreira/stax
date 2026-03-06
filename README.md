@@ -54,7 +54,7 @@ curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x
 # Linux (x86_64)
 curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-unknown-linux-gnu.tar.gz | tar xz
 
-# Move to PATH and create the short alias
+# Move binary to ~/.local/bin and symlink `st` alias
 mkdir -p ~/.local/bin
 mv stax ~/.local/bin/
 ln -s ~/.local/bin/stax ~/.local/bin/st
