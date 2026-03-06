@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct BranchMetadata {
     /// Name of the parent branch
+    #[serde(default)]
     pub parent_branch_name: String,
     /// Commit SHA of parent when this branch was last rebased
+    #[serde(default)]
     pub parent_branch_revision: String,
     /// PR information (if submitted)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,7 +43,26 @@ impl BranchMetadata {
     pub fn read(repo: &Repository, branch: &str) -> Result<Option<Self>> {
         match refs::read_metadata(repo, branch)? {
             Some(json) => {
-                let meta: Self = serde_json::from_str(&json)?;
+                let mut meta: Self = serde_json::from_str(&json)?;
+
+                // Backward/partial-compatibility guard:
+                // Some historical/broken metadata records may miss parent fields.
+                if meta.parent_branch_name.trim().is_empty() {
+                    // Prefer trunk-ish fallback to keep submit/restack workflows operational.
+                    // We intentionally avoid failing hard on deserialization-compatible but partial data.
+                    meta.parent_branch_name = "main".to_string();
+                }
+
+                if meta.parent_branch_revision.trim().is_empty() {
+                    if let Ok(parent_ref) =
+                        repo.find_branch(&meta.parent_branch_name, git2::BranchType::Local)
+                    {
+                        if let Ok(commit) = parent_ref.get().peel_to_commit() {
+                            meta.parent_branch_revision = commit.id().to_string();
+                        }
+                    }
+                }
+
                 Ok(Some(meta))
             }
             None => Ok(None),
@@ -111,6 +132,20 @@ mod tests {
         let pr = meta.pr_info.unwrap();
         assert_eq!(pr.number, 42);
         assert_eq!(pr.state, "OPEN");
+    }
+
+    #[test]
+    fn test_metadata_deserialization_missing_parent_fields_uses_defaults() {
+        let json = r#"{
+            "prInfo": {
+                "number": 99,
+                "state": "OPEN"
+            }
+        }"#;
+        let meta: BranchMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.parent_branch_name, "");
+        assert_eq!(meta.parent_branch_revision, "");
+        assert!(meta.pr_info.is_some());
     }
 
     #[test]
