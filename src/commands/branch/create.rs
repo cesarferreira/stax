@@ -26,12 +26,32 @@ pub fn run(
     }
 
     // Get the branch name from either name or message
-    // When using -m, the message is used for both branch name AND commit message
-    // When using -a (--all), stage changes but only commit if -m is also provided
-    // When neither is provided, launch interactive wizard
-    let (input, commit_message, should_stage) = match (&name, &message) {
-        (Some(n), _) => (n.clone(), None, all),
-        (None, Some(m)) => (m.clone(), Some(m.clone()), true),
+    // When using -m, the message is used for both branch name and commit message.
+    // IMPORTANT: `stax create -m` should commit only already-staged changes.
+    // Use -a/--all for the old explicit "stage everything" behavior.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum StageMode {
+        None,
+        ExistingOnly,
+        All,
+    }
+
+    // When neither name nor message is provided, launch interactive wizard.
+    let (input, commit_message, stage_mode) = match (&name, &message) {
+        (Some(n), _) => (
+            n.clone(),
+            None,
+            if all { StageMode::All } else { StageMode::None },
+        ),
+        (None, Some(m)) => (
+            m.clone(),
+            Some(m.clone()),
+            if all {
+                StageMode::All
+            } else {
+                StageMode::ExistingOnly
+            },
+        ),
         (None, None) => {
             // Check if we're in an interactive terminal
             if !Term::stderr().is_term() {
@@ -40,9 +60,17 @@ pub fn run(
                 );
             }
             // Launch interactive wizard
-            let (wizard_name, wizard_msg, wizard_stage) =
+            let (wizard_name, wizard_msg, wizard_stage_all) =
                 run_wizard(repo.workdir()?, &parent_branch)?;
-            (wizard_name, wizard_msg, wizard_stage)
+            (
+                wizard_name,
+                wizard_msg,
+                if wizard_stage_all {
+                    StageMode::All
+                } else {
+                    StageMode::None
+                },
+            )
         }
     };
 
@@ -116,23 +144,27 @@ pub fn run(
         parent_branch.blue()
     );
 
-    // Stage changes if -a or -m was used or wizard selected it
-    if should_stage {
+    // Stage/commit behavior:
+    // - StageMode::All => explicit stage all (`-a` or wizard choice)
+    // - StageMode::ExistingOnly => keep current index as-is (used by `-m` default)
+    // - StageMode::None => no staging/committing changes
+    if stage_mode != StageMode::None {
         let workdir = repo.workdir()?;
 
-        // Stage all changes (git add -A)
-        let add_status = Command::new("git")
-            .args(["add", "-A"])
-            .current_dir(workdir)
-            .status()?;
+        if stage_mode == StageMode::All {
+            let add_status = Command::new("git")
+                .args(["add", "-A"])
+                .current_dir(workdir)
+                .status()?;
 
-        if !add_status.success() {
-            bail!("Failed to stage changes");
+            if !add_status.success() {
+                bail!("Failed to stage changes");
+            }
         }
 
         // Only commit if -m was provided
         if let Some(msg) = commit_message {
-            // Check if there are changes to commit
+            // Check if there are staged changes to commit
             let diff_output = Command::new("git")
                 .args(["diff", "--cached", "--quiet"])
                 .current_dir(workdir)
@@ -151,9 +183,9 @@ pub fn run(
 
                 println!("Committed: {}", msg.cyan());
             } else {
-                println!("{}", "No changes to commit".dimmed());
+                println!("{}", "No staged changes to commit".dimmed());
             }
-        } else {
+        } else if stage_mode == StageMode::All {
             println!("{}", "Changes staged".dimmed());
         }
     }
