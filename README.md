@@ -42,6 +42,27 @@ brew install cesarferreira/tap/stax
 cargo binstall stax
 ```
 
+### Prebuilt binaries (no package manager needed)
+
+Download the latest binary from [GitHub Releases](https://github.com/cesarferreira/stax/releases):
+
+```bash
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-aarch64-apple-darwin.tar.gz | tar xz
+# macOS (Intel)
+curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-apple-darwin.tar.gz | tar xz
+# Linux (x86_64)
+curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-unknown-linux-gnu.tar.gz | tar xz
+
+# Move binary to ~/.local/bin and symlink `st` alias
+mkdir -p ~/.local/bin
+mv stax ~/.local/bin/
+ln -s ~/.local/bin/stax ~/.local/bin/st
+
+# If ~/.local/bin is not on your PATH, add it:
+# echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
+```
+
 Verify install:
 
 ```bash
