@@ -213,6 +213,7 @@ pub fn run(
     for (idx, branch_info) in scope.to_merge.iter().enumerate() {
         let pr_number = branch_info.pr_number.unwrap();
         let position = idx + 1;
+        let next_branch = scope.to_merge.get(idx + 1);
 
         if !quiet {
             println!();
@@ -263,6 +264,32 @@ pub fn run(
                 }
             }
 
+            if let Some(next_branch) = next_branch {
+                let next_pr = next_branch.pr_number.unwrap();
+                let update_base_timer = LiveTimer::maybe_new(
+                    !quiet,
+                    &format!(
+                        "Retargeting #{} to {} before merge...",
+                        next_pr, scope.trunk
+                    ),
+                );
+
+                match rt.block_on(async { client.update_pr_base(next_pr, &scope.trunk).await }) {
+                    Ok(()) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "done");
+                    }
+                    Err(e) => {
+                        LiveTimer::maybe_finish_err(update_base_timer, "failed");
+                        failed_pr = Some((
+                            branch_info.branch.clone(),
+                            pr_number,
+                            format!("Failed to retarget dependent PR #{}: {}", next_pr, e),
+                        ));
+                        break;
+                    }
+                }
+            }
+
             // Merge the PR
             let merge_timer =
                 LiveTimer::maybe_new(!quiet, &format!("Merging ({})...", method.as_str()));
@@ -283,9 +310,8 @@ pub fn run(
             }
         }
 
-        // If there are more PRs, rebase and update the next one
-        if idx + 1 < total {
-            let next_branch = &scope.to_merge[idx + 1];
+        // If there are more PRs, rebase the next one onto trunk.
+        if let Some(next_branch) = next_branch {
             let next_pr = next_branch.pr_number.unwrap();
 
             // Fetch latest from remote
@@ -329,19 +355,6 @@ pub fn run(
                         "Rebase conflict".to_string(),
                     ));
                     break;
-                }
-            }
-
-            // Update PR base to trunk
-            let update_base_timer =
-                LiveTimer::maybe_new(!quiet, &format!("Updating PR base to {}...", scope.trunk));
-
-            match rt.block_on(async { client.update_pr_base(next_pr, &scope.trunk).await }) {
-                Ok(()) => {
-                    LiveTimer::maybe_finish_ok(update_base_timer, "done");
-                }
-                Err(e) => {
-                    LiveTimer::maybe_finish_warn(update_base_timer, &format!("warning: {}", e));
                 }
             }
 

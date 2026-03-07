@@ -253,6 +253,7 @@ pub fn run(
     for idx in 0..total {
         let pr_number = branches[idx].pr_number;
         let branch_name = branches[idx].branch.clone();
+        let next_branch = branches.get(idx + 1).cloned();
 
         if !quiet {
             println!();
@@ -295,6 +296,36 @@ pub fn run(
                 }
             }
 
+            if let Some(next_branch) = &next_branch {
+                let update_base_timer = LiveTimer::maybe_new(
+                    !quiet,
+                    &format!(
+                        "Retargeting #{} to {} before merge...",
+                        next_branch.pr_number, scope.trunk
+                    ),
+                );
+
+                match rt.block_on(async {
+                    client
+                        .update_pr_base(next_branch.pr_number, &scope.trunk)
+                        .await
+                }) {
+                    Ok(()) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "done");
+                    }
+                    Err(e) => {
+                        LiveTimer::maybe_finish_err(update_base_timer, "failed");
+                        let reason = format!(
+                            "Failed to retarget dependent PR #{}: {}",
+                            next_branch.pr_number, e
+                        );
+                        branches[idx].status = LandStatus::Failed(reason.clone());
+                        failed_pr = Some((branch_name, pr_number, reason));
+                        break;
+                    }
+                }
+            }
+
             // Merge the PR
             branches[idx].status = LandStatus::Merging;
             let merge_timer =
@@ -319,10 +350,10 @@ pub fn run(
             }
         }
 
-        // If there are more PRs, rebase and update the next one
-        if idx + 1 < total {
-            let next_branch = branches[idx + 1].branch.clone();
-            let next_pr = branches[idx + 1].pr_number;
+        // If there are more PRs, rebase the next one onto trunk.
+        if let Some(next_branch) = next_branch {
+            let next_branch_name = next_branch.branch.clone();
+            let next_pr = next_branch.pr_number;
 
             // Fetch latest from remote
             let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching latest...");
@@ -336,13 +367,13 @@ pub fn run(
             // Rebase next branch onto trunk
             let rebase_timer = LiveTimer::maybe_new(
                 !quiet,
-                &format!("Rebasing {} onto {}...", next_branch, scope.trunk),
+                &format!("Rebasing {} onto {}...", next_branch_name, scope.trunk),
             );
 
-            repo.checkout(&next_branch)?;
+            repo.checkout(&next_branch_name)?;
             let rebase_result = rebase_descendant_onto_remote_trunk_with_provenance(
                 &repo,
-                &next_branch,
+                &next_branch_name,
                 &scope.trunk,
                 &remote_info.name,
             )?;
@@ -360,29 +391,16 @@ pub fn run(
                     LiveTimer::maybe_finish_err(rebase_timer, "conflict");
                     let reason = "Rebase conflict".to_string();
                     branches[idx + 1].status = LandStatus::Failed(reason.clone());
-                    failed_pr = Some((next_branch, next_pr, reason));
+                    failed_pr = Some((next_branch_name, next_pr, reason));
                     break;
                 }
             }
 
-            // Update PR base to trunk
-            let update_base_timer =
-                LiveTimer::maybe_new(!quiet, &format!("Updating PR base to {}...", scope.trunk));
-
-            match rt.block_on(async { client.update_pr_base(next_pr, &scope.trunk).await }) {
-                Ok(()) => {
-                    LiveTimer::maybe_finish_ok(update_base_timer, "done");
-                }
-                Err(e) => {
-                    LiveTimer::maybe_finish_warn(update_base_timer, &format!("warning: {}", e));
-                }
-            }
-
-            // Force push the rebased branch
-            let push_timer = LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", next_branch));
+            let push_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", next_branch_name));
 
             let push_status = Command::new("git")
-                .args(["push", "-f", &remote_info.name, &next_branch])
+                .args(["push", "-f", &remote_info.name, &next_branch_name])
                 .current_dir(repo.workdir()?)
                 .output()
                 .context("Failed to push")?;
@@ -391,7 +409,7 @@ pub fn run(
                 LiveTimer::maybe_finish_err(push_timer, "failed");
                 let reason = "Failed to push rebased branch".to_string();
                 branches[idx + 1].status = LandStatus::Failed(reason.clone());
-                failed_pr = Some((next_branch, next_pr, reason));
+                failed_pr = Some((next_branch_name, next_pr, reason));
                 break;
             }
 
