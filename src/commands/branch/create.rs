@@ -183,7 +183,7 @@ pub fn run(
 
                 println!("Committed: {}", msg.cyan());
             } else {
-                println!("{}", "No staged changes to commit".dimmed());
+                println!("{}", "No changes to commit".dimmed());
             }
         } else if stage_mode == StageMode::All {
             println!("{}", "Changes staged".dimmed());
