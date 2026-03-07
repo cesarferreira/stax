@@ -20,7 +20,36 @@ pub fn ensure_initialized() -> Result<bool> {
         return auto_init(&repo);
     }
 
-    run_init(&repo)
+    run_interactive(&repo, false)?;
+    Ok(true)
+}
+
+/// Initialize or reconfigure stax in the current repo.
+pub fn run(trunk: Option<String>) -> Result<()> {
+    let repo = GitRepo::open()?;
+
+    if let Some(trunk) = trunk {
+        set_trunk(repo, &trunk)?;
+        return Ok(());
+    }
+
+    if !std::io::stdin().is_terminal() {
+        if repo.is_initialized() {
+            anyhow::bail!(
+                "Repository already initialized. Use `stax init --trunk <branch>` to change trunk non-interactively."
+            );
+        }
+
+        if auto_init(&repo)? {
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "Could not detect a trunk branch automatically. Use `stax init --trunk <branch>`."
+        );
+    }
+
+    run_interactive(&repo, repo.is_initialized())
 }
 
 /// Auto-initialize without prompts (for non-interactive use)
@@ -32,75 +61,130 @@ fn auto_init(repo: &GitRepo) -> Result<bool> {
     Ok(false)
 }
 
-/// Run the interactive initialization
-fn run_init(repo: &GitRepo) -> Result<bool> {
-    println!(
-        "{}",
-        "stax has not been initialized, setting up now...".dimmed()
-    );
-    println!();
-    println!("{}", "Welcome to stax!".green().bold());
-    println!();
-
-    // Detect and confirm trunk branch
-    let detected_trunk = repo.detect_trunk().ok();
+fn set_trunk(repo: GitRepo, trunk: &str) -> Result<()> {
     let branches = repo.list_branches()?;
 
-    // Handle empty repo (no branches yet)
     if branches.is_empty() {
-        if let Some(detected) = detected_trunk {
-            // Use detected trunk even if no branches exist yet
-            repo.set_trunk(&detected)?;
-            println!("Trunk set to {}", detected.cyan());
-            println!();
-            println!(
-                "{}",
-                "Ready to go! Try `stax bc <name>` to create your first branch.".green()
-            );
-            return Ok(true);
-        } else {
-            // No branches and can't detect trunk - need at least one commit
-            anyhow::bail!(
-                "No branches found. Please make an initial commit first:\n  \
-                 git add . && git commit -m \"Initial commit\""
-            );
+        anyhow::bail!(
+            "No branches found. Please make an initial commit first:\n  \
+             git add . && git commit -m \"Initial commit\""
+        );
+    }
+
+    if !branches.iter().any(|branch| branch == trunk) {
+        anyhow::bail!(
+            "Branch '{}' does not exist. Available branches: {}",
+            trunk,
+            branches.join(", ")
+        );
+    }
+
+    let previous_trunk = if repo.is_initialized() {
+        repo.trunk_branch().ok()
+    } else {
+        None
+    };
+    repo.set_trunk(trunk)?;
+
+    match previous_trunk {
+        Some(previous) if previous == trunk => {
+            println!("Trunk unchanged: {}", trunk.cyan());
+        }
+        Some(previous) => {
+            println!("Trunk changed: {} -> {}", previous.cyan(), trunk.green());
+        }
+        None => {
+            println!("Trunk set to {}", trunk.cyan());
         }
     }
 
-    let trunk = if let Some(detected) = &detected_trunk {
-        // Show selection with detected as default
-        let prompt = format!(
-            "Select trunk branch (PRs target this) - detected {}",
-            detected.cyan()
-        );
+    Ok(())
+}
 
-        let default_idx = branches.iter().position(|b| b == detected).unwrap_or(0);
-
-        let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-            .with_prompt(&prompt)
-            .items(&branches)
-            .default(default_idx)
-            .interact()?;
-
-        branches[selection].clone()
+/// Run interactive initialization or trunk reconfiguration.
+fn run_interactive(repo: &GitRepo, reconfigure: bool) -> Result<()> {
+    if reconfigure {
+        if let Ok(current) = repo.trunk_branch() {
+            println!("Current trunk: {}", current.cyan());
+            println!();
+        }
     } else {
-        // No auto-detection, must select
-        let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-            .with_prompt("Select trunk branch (PRs target this)")
-            .items(&branches)
-            .interact()?;
+        println!(
+            "{}",
+            "stax has not been initialized, setting up now...".dimmed()
+        );
+        println!();
+        println!("{}", "Welcome to stax!".green().bold());
+        println!();
+    }
 
-        branches[selection].clone()
+    let branches = repo.list_branches()?;
+    let detected_trunk = repo
+        .trunk_branch()
+        .ok()
+        .or_else(|| repo.detect_trunk().ok());
+
+    if branches.is_empty() {
+        if let Some(detected) = detected_trunk {
+            repo.set_trunk(&detected)?;
+            println!("Trunk set to {}", detected.cyan());
+            if !reconfigure {
+                println!();
+                println!(
+                    "{}",
+                    "Ready to go! Try `stax bc <name>` to create your first branch.".green()
+                );
+            }
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "No branches found. Please make an initial commit first:\n  \
+             git add . && git commit -m \"Initial commit\""
+        );
+    }
+
+    let prompt = if reconfigure {
+        "Select trunk branch"
+    } else {
+        "Select trunk branch (PRs target this)"
     };
 
-    // Save trunk setting
+    let selection = if let Some(detected) = &detected_trunk {
+        let default_idx = branches.iter().position(|b| b == detected).unwrap_or(0);
+        FuzzySelect::with_theme(&ColorfulTheme::default())
+            .with_prompt(format!("{} - detected {}", prompt, detected.cyan()))
+            .items(&branches)
+            .default(default_idx)
+            .interact()?
+    } else {
+        FuzzySelect::with_theme(&ColorfulTheme::default())
+            .with_prompt(prompt)
+            .items(&branches)
+            .interact()?
+    };
+
+    let trunk = branches[selection].clone();
+    let previous_trunk = if repo.is_initialized() {
+        repo.trunk_branch().ok()
+    } else {
+        None
+    };
     repo.set_trunk(&trunk)?;
-    println!("Trunk set to {}", trunk.cyan());
+
+    match previous_trunk {
+        Some(previous) if previous == trunk => println!("Trunk unchanged: {}", trunk.cyan()),
+        Some(previous) => println!("Trunk changed: {} -> {}", previous.cyan(), trunk.green()),
+        None => println!("Trunk set to {}", trunk.cyan()),
+    }
+
+    if reconfigure {
+        return Ok(());
+    }
+
     println!();
 
-    // Offer to track existing branches
     let other_branches: Vec<_> = branches.iter().filter(|b| *b != &trunk).collect();
-
     if !other_branches.is_empty() {
         let track = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Would you like to track existing branches?")
@@ -121,5 +205,5 @@ fn run_init(repo: &GitRepo) -> Result<bool> {
         "Ready to go! Try `stax bc <name>` to create your first branch.".green()
     );
 
-    Ok(true)
+    Ok(())
 }

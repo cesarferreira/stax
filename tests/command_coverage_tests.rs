@@ -103,6 +103,28 @@ fn test_sync_alias_rs_help() {
     output.assert_success();
 }
 
+#[test]
+fn test_init_command_sets_trunk_branch() {
+    let repo = TestRepo::new();
+
+    let git_output = repo.git(&["branch", "master"]);
+    assert!(
+        git_output.status.success(),
+        "{}",
+        TestRepo::stderr(&git_output)
+    );
+
+    let output = repo.run_stax(&["init", "--trunk", "master"]);
+    output.assert_success();
+
+    let json = repo.get_status_json();
+    assert_eq!(json["trunk"], "master");
+
+    let trunk_output = repo.run_stax(&["trunk"]);
+    trunk_output.assert_success();
+    assert_eq!(repo.current_branch(), "master");
+}
+
 // =============================================================================
 // Restack Command Tests
 // =============================================================================

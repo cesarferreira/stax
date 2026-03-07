@@ -108,6 +108,8 @@ st rs --restack
 
 Result: two stacked branches, submitted as two linked PRs, then kept up to date with one sync/restack command.
 
+Picked the wrong trunk branch? Run `st init` to reconfigure it interactively, or `st init --trunk <branch>` to set it directly.
+
 Next steps:
 - [Getting Started: Quick Start](docs/getting-started/quick-start.md)
 - [Workflow: Merge and Cascade](docs/workflows/merge-and-cascade.md)

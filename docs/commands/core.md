@@ -13,6 +13,7 @@
 | `st rs --restack` | Sync and rebase full stack |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
 | `st cascade` | Restack, push, and create/update PRs |
+| `st init` | Initialize stax or reconfigure the repo trunk |
 | `st standup` | Summarize recent engineering activity |
 | `st changelog` | Generate changelog between refs |
 | `st open` | Open repository in browser |

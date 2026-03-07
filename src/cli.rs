@@ -363,6 +363,13 @@ enum Commands {
         yes: bool,
     },
 
+    /// Initialize stax or reconfigure the repo trunk branch
+    Init {
+        /// Set the trunk branch directly instead of prompting
+        #[arg(long)]
+        trunk: Option<String>,
+    },
+
     /// Show diffs for each branch vs parent plus an aggregate stack diff
     Diff {
         /// Show only the stack for this branch
@@ -1060,6 +1067,12 @@ pub fn run() -> Result<()> {
             update::check_in_background();
             return result;
         }
+        Commands::Init { trunk } => {
+            let result = commands::init::run(trunk.clone());
+            update::show_update_notification();
+            update::check_in_background();
+            return result;
+        }
         Commands::Doctor => {
             let result = commands::doctor::run();
             update::show_update_notification();
@@ -1223,6 +1236,7 @@ pub fn run() -> Result<()> {
         Commands::Modify { message, quiet } => commands::modify::run(message, quiet),
         Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Config { .. } => unreachable!(), // Handled above
+        Commands::Init { .. } => unreachable!(), // Handled above
         Commands::Diff { stack, all } => commands::diff::run(stack, all),
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
         Commands::Doctor => unreachable!(), // Handled above

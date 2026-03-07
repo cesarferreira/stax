@@ -240,6 +240,15 @@ fn test_config_reset_ai_no_prompt_clears_saved_defaults() {
 }
 
 #[test]
+fn test_init_help_includes_trunk_flag() {
+    let output = stax(&["init", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Initialize stax"));
+    assert!(stdout.contains("--trunk"));
+}
+
+#[test]
 fn test_status_help_flags() {
     let output = stax(&["status", "--help"]);
     assert!(output.status.success());

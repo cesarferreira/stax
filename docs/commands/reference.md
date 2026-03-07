@@ -89,6 +89,8 @@
 | `st config` | Show current configuration |
 | `st config --reset-ai` | Clear saved AI defaults, then re-prompt interactively |
 | `st config --reset-ai --no-prompt` | Clear saved AI defaults without reopening the picker |
+| `st init` | Initialize stax or reconfigure the repo trunk interactively |
+| `st init --trunk <branch>` | Set the repo trunk directly |
 | `st doctor` | Check repo health |
 | `st continue` | Continue after conflicts |
 | `st pr` | Open current branch PR |
@@ -188,6 +190,7 @@
 - `st standup --summary --jit`
 - `st auth --from-gh`
 - `st auth --token <token>`
+- `st init --trunk main`
 - `st undo --yes --no-push`
 - `st undo --quiet`
 - `st redo --yes --no-push --quiet`
