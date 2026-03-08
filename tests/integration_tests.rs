@@ -1591,7 +1591,10 @@ fn test_config_command() {
 
 #[test]
 fn test_status_outside_git_repo() {
-    let dir = test_tempdir();
+    #[cfg(unix)]
+    let dir = TempDir::new_in("/tmp").expect("Failed to create external temp dir");
+    #[cfg(not(unix))]
+    let dir = TempDir::new().expect("Failed to create external temp dir");
 
     let output = sanitized_stax_command()
         .args(["status"])
@@ -4489,6 +4492,39 @@ mod github_mock_tests {
             .unwrap_or_else(|| panic!("Did not find request {} {}", method_name, path_name))
     }
 
+    fn issue_comment_fixture(id: u64, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "node_id": format!("IC_test_{}", id),
+            "url": format!("https://api.github.com/repos/test/repo/issues/comments/{}", id),
+            "html_url": format!("https://github.com/test/repo/pull/42#issuecomment-{}", id),
+            "issue_url": "https://api.github.com/repos/test/repo/issues/42",
+            "body": body,
+            "user": {
+                "login": "stax",
+                "id": 1,
+                "node_id": "MDQ6VXNlcjE=",
+                "avatar_url": "https://avatars.githubusercontent.com/u/1?v=4",
+                "gravatar_id": "",
+                "url": "https://api.github.com/users/stax",
+                "html_url": "https://github.com/stax",
+                "followers_url": "https://api.github.com/users/stax/followers",
+                "following_url": "https://api.github.com/users/stax/following{/other_user}",
+                "gists_url": "https://api.github.com/users/stax/gists{/gist_id}",
+                "starred_url": "https://api.github.com/users/stax/starred{/owner}{/repo}",
+                "subscriptions_url": "https://api.github.com/users/stax/subscriptions",
+                "organizations_url": "https://api.github.com/users/stax/orgs",
+                "repos_url": "https://api.github.com/users/stax/repos",
+                "events_url": "https://api.github.com/users/stax/events{/privacy}",
+                "received_events_url": "https://api.github.com/users/stax/received_events",
+                "type": "User",
+                "site_admin": false
+            },
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z"
+        })
+    }
+
     fn squash_merge_branch_on_fake_remote(remote_root: &TempDir, branch: &str) {
         let remote_repo = remote_root.path().join("test").join("repo.git");
         let clone_dir = super::test_tempdir();
@@ -4761,12 +4797,7 @@ mod github_mock_tests {
         Mock::given(method("GET"))
             .and(path("/repos/test/repo/issues/42/comments"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "id": 901,
-                    "body": "<!-- stax-stack-comment -->\nold",
-                    "user": { "login": "stax" },
-                    "created_at": "2024-01-01T00:00:00Z"
-                }
+                issue_comment_fixture(901, "<!-- stax-stack-comment -->\nold")
             ])))
             .mount(&mock_server)
             .await;
@@ -4774,7 +4805,10 @@ mod github_mock_tests {
         Mock::given(method("PATCH"))
             .and(path("/repos/test/repo/issues/comments/901"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 901 })),
+                ResponseTemplate::new(200).set_body_json(issue_comment_fixture(
+                    901,
+                    "<!-- stax-stack-comment -->\nupdated",
+                )),
             )
             .mount(&mock_server)
             .await;
@@ -4853,12 +4887,7 @@ mod github_mock_tests {
         Mock::given(method("GET"))
             .and(path("/repos/test/repo/issues/42/comments"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "id": 901,
-                    "body": "<!-- stax-stack-comment -->\nold",
-                    "user": { "login": "stax" },
-                    "created_at": "2024-01-01T00:00:00Z"
-                }
+                issue_comment_fixture(901, "<!-- stax-stack-comment -->\nold")
             ])))
             .mount(&mock_server)
             .await;
@@ -4946,12 +4975,7 @@ mod github_mock_tests {
         Mock::given(method("GET"))
             .and(path("/repos/test/repo/issues/42/comments"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "id": 901,
-                    "body": "<!-- stax-stack-comment -->\nold",
-                    "user": { "login": "stax" },
-                    "created_at": "2024-01-01T00:00:00Z"
-                }
+                issue_comment_fixture(901, "<!-- stax-stack-comment -->\nold")
             ])))
             .mount(&mock_server)
             .await;
@@ -4959,7 +4983,10 @@ mod github_mock_tests {
         Mock::given(method("PATCH"))
             .and(path("/repos/test/repo/issues/comments/901"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 901 })),
+                ResponseTemplate::new(200).set_body_json(issue_comment_fixture(
+                    901,
+                    "<!-- stax-stack-comment -->\nupdated",
+                )),
             )
             .mount(&mock_server)
             .await;
@@ -5041,12 +5068,7 @@ mod github_mock_tests {
         Mock::given(method("GET"))
             .and(path("/repos/test/repo/issues/42/comments"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "id": 901,
-                    "body": "<!-- stax-stack-comment -->\nold",
-                    "user": { "login": "stax" },
-                    "created_at": "2024-01-01T00:00:00Z"
-                }
+                issue_comment_fixture(901, "<!-- stax-stack-comment -->\nold")
             ])))
             .mount(&mock_server)
             .await;

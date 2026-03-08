@@ -43,6 +43,19 @@ pub enum PrComment {
     Review(ReviewComment),
 }
 
+#[derive(Debug, Deserialize)]
+struct ApiUser {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApiIssueComment {
+    id: u64,
+    body: Option<String>,
+    user: ApiUser,
+    created_at: DateTime<Utc>,
+}
+
 impl PrComment {
     pub fn created_at(&self) -> DateTime<Utc> {
         match self {
@@ -524,9 +537,15 @@ impl GitHubClient {
         if let Some(comment_id) = self.find_stack_comment_id(pr_number).await? {
             let full_comment = format!("{}\n{}", STACK_COMMENT_MARKER, stack_comment);
             self.record_api_call("issues.comments.update");
+            let route = format!(
+                "/repos/{}/{}/issues/comments/{}",
+                self.owner, self.repo, comment_id
+            );
             self.octocrab
-                .issues(&self.owner, &self.repo)
-                .update_comment(comment_id, &full_comment)
+                .patch::<serde_json::Value, _, _>(
+                    &route,
+                    Some(&serde_json::json!({ "body": full_comment })),
+                )
                 .await
                 .context("Failed to update comment")?;
             return Ok(());
@@ -569,20 +588,22 @@ impl GitHubClient {
         pr_number: u64,
     ) -> Result<Option<octocrab::models::CommentId>> {
         self.record_api_call("issues.comments.list");
-        let comments = self
+        let url = format!(
+            "/repos/{}/{}/issues/{}/comments",
+            self.owner, self.repo, pr_number
+        );
+        let comments: Vec<ApiIssueComment> = self
             .octocrab
-            .issues(&self.owner, &self.repo)
-            .list_comments(pr_number)
-            .send()
+            .get(&url, None::<&()>)
             .await
             .context("Failed to list comments")?;
 
-        Ok(comments.items.into_iter().find_map(|comment| {
+        Ok(comments.into_iter().find_map(|comment| {
             comment
                 .body
                 .as_ref()
                 .filter(|body| body.contains(STACK_COMMENT_MARKER))
-                .map(|_| comment.id)
+                .map(|_| octocrab::models::CommentId::from(comment.id))
         }))
     }
 
@@ -800,19 +821,20 @@ impl GitHubClient {
 
     /// List all issue comments (conversation comments) on a PR
     pub async fn list_issue_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>> {
-        let comments = self
+        let url = format!(
+            "/repos/{}/{}/issues/{}/comments",
+            self.owner, self.repo, pr_number
+        );
+        let comments: Vec<ApiIssueComment> = self
             .octocrab
-            .issues(&self.owner, &self.repo)
-            .list_comments(pr_number)
-            .send()
+            .get(&url, None::<&()>)
             .await
             .context("Failed to list issue comments")?;
 
         Ok(comments
-            .items
             .into_iter()
             .map(|c| IssueComment {
-                id: c.id.into_inner(),
+                id: c.id,
                 body: c.body.unwrap_or_default(),
                 user: c.user.login,
                 created_at: c.created_at,
@@ -837,11 +859,6 @@ impl GitHubClient {
             start_line: Option<u32>,
             created_at: DateTime<Utc>,
             diff_hunk: Option<String>,
-        }
-
-        #[derive(Deserialize)]
-        struct ApiUser {
-            login: String,
         }
 
         let comments: Vec<ApiReviewComment> = self
@@ -1497,6 +1514,39 @@ mod tests {
         GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo")
     }
 
+    fn issue_comment_fixture(id: u64, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "node_id": format!("IC_test_{}", id),
+            "url": format!("https://api.github.com/repos/test-owner/test-repo/issues/comments/{}", id),
+            "html_url": format!("https://github.com/test-owner/test-repo/pull/11#issuecomment-{}", id),
+            "issue_url": "https://api.github.com/repos/test-owner/test-repo/issues/11",
+            "body": body,
+            "user": {
+                "login": "stax",
+                "id": 1,
+                "node_id": "MDQ6VXNlcjE=",
+                "avatar_url": "https://avatars.githubusercontent.com/u/1?v=4",
+                "gravatar_id": "",
+                "url": "https://api.github.com/users/stax",
+                "html_url": "https://github.com/stax",
+                "followers_url": "https://api.github.com/users/stax/followers",
+                "following_url": "https://api.github.com/users/stax/following{/other_user}",
+                "gists_url": "https://api.github.com/users/stax/gists{/gist_id}",
+                "starred_url": "https://api.github.com/users/stax/starred{/owner}{/repo}",
+                "subscriptions_url": "https://api.github.com/users/stax/subscriptions",
+                "organizations_url": "https://api.github.com/users/stax/orgs",
+                "repos_url": "https://api.github.com/users/stax/repos",
+                "events_url": "https://api.github.com/users/stax/events{/privacy}",
+                "received_events_url": "https://api.github.com/users/stax/received_events",
+                "type": "User",
+                "site_admin": false
+            },
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-01T00:00:00Z"
+        })
+    }
+
     #[tokio::test]
     async fn test_get_pr_body_returns_body_text() {
         let mock_server = MockServer::start().await;
@@ -1528,21 +1578,19 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/repos/test-owner/test-repo/issues/11/comments"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "id": 101,
-                    "body": "<!-- stax-stack-comment -->\nold",
-                    "user": { "login": "stax" },
-                    "created_at": "2024-01-01T00:00:00Z"
-                }
+                issue_comment_fixture(101, "<!-- stax-stack-comment -->\nold")
             ])))
             .mount(&mock_server)
             .await;
 
         Mock::given(method("PATCH"))
             .and(path("/repos/test-owner/test-repo/issues/comments/101"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": 101
-            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_comment_fixture(
+                    101,
+                    "<!-- stax-stack-comment -->\nnew body",
+                )),
+            )
             .mount(&mock_server)
             .await;
 
@@ -1568,12 +1616,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/repos/test-owner/test-repo/issues/11/comments"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "id": 101,
-                    "body": "<!-- stax-stack-comment -->\nold",
-                    "user": { "login": "stax" },
-                    "created_at": "2024-01-01T00:00:00Z"
-                }
+                issue_comment_fixture(101, "<!-- stax-stack-comment -->\nold")
             ])))
             .mount(&mock_server)
             .await;
