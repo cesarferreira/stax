@@ -71,6 +71,13 @@ You can also generate during submit:
 st submit --ai-body
 ```
 
+If you want the stack graph to live in the PR body instead of the usual stax comment, set:
+
+```toml
+[submit]
+stack_links = "body" # or "both"
+```
+
 ```bash
 st generate --pr-body --agent codex
 st generate --pr-body --model claude-haiku-4-5-20251001

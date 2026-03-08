@@ -4386,10 +4386,17 @@ mod github_mock_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn write_test_config(home: &Path, api_base_url: &str) {
+        write_test_config_with_submit(home, api_base_url, None);
+    }
+
+    fn write_test_config_with_submit(home: &Path, api_base_url: &str, stack_links: Option<&str>) {
         let config_dir = home.join(".config").join("stax");
         std::fs::create_dir_all(&config_dir).expect("Failed to create config dir");
         let config_path = config_dir.join("config.toml");
-        let config = format!("[remote]\napi_base_url = \"{}\"\n", api_base_url);
+        let mut config = format!("[remote]\napi_base_url = \"{}\"\n", api_base_url);
+        if let Some(mode) = stack_links {
+            config.push_str(&format!("\n[submit]\nstack_links = \"{}\"\n", mode));
+        }
         fs::write(&config_path, config).expect("Failed to write config");
     }
 
@@ -4524,6 +4531,32 @@ mod github_mock_tests {
             .env("STAX_DISABLE_UPDATE_CHECK", "1")
             .output()
             .expect("Failed to execute stax")
+    }
+
+    fn setup_branch_with_remote(home: &Path, branch: &str) -> TestRepo {
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home);
+
+        let output = run_stax_with_env(&repo, home, &["bc", branch]);
+        assert!(
+            output.status.success(),
+            "Failed to create branch {}: {}",
+            branch,
+            TestRepo::stderr(&output)
+        );
+
+        repo.create_file("feature.txt", &format!("content for {}\n", branch));
+        repo.commit(&format!("Add {}", branch));
+
+        let push = git_with_env(&repo, home, &["push", "-u", "origin", branch]);
+        assert!(
+            push.status.success(),
+            "Failed to push branch {}: {}",
+            branch,
+            TestRepo::stderr(&push)
+        );
+
+        repo
     }
 
     /// Create a test repo configured to use a mock GitHub API
@@ -4700,6 +4733,376 @@ mod github_mock_tests {
             "Expected PR number not to be persisted for fork, got: {}",
             metadata
         );
+    }
+
+    #[tokio::test]
+    async fn test_submit_default_comment_mode_updates_comment_and_removes_body_block() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-comment");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/42",
+                    "id": 42,
+                    "number": 42,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-comment", "sha": "aaaa", "label": "test:feature-comment" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 901,
+                    "body": "<!-- stax-stack-comment -->\nold",
+                    "user": { "login": "stax" },
+                    "created_at": "2024-01-01T00:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/issues/comments/901"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 901 })),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "body": "## Summary\n\nhello\n\n<!-- stax-stack-links:start -->\nold\n<!-- stax-stack-links:end -->",
+                "head": { "ref": "feature-comment", "sha": "aaaa", "label": "test:feature-comment" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "head": { "ref": "feature-comment", "sha": "aaaa", "label": "test:feature-comment" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--yes", "--no-prompt"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "PATCH"
+                && request.url.path() == "/repos/test/repo/issues/comments/901"
+        }));
+        let body_patch = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/42"
+            })
+            .expect("missing body patch");
+        let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
+        assert_eq!(payload["body"], "## Summary\n\nhello");
+    }
+
+    #[tokio::test]
+    async fn test_submit_body_mode_removes_comment_and_writes_body_block() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("body"));
+        let repo = setup_branch_with_remote(home.path(), "feature-body");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/42",
+                    "id": 42,
+                    "number": 42,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-body", "sha": "aaaa", "label": "test:feature-body" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 901,
+                    "body": "<!-- stax-stack-comment -->\nold",
+                    "user": { "login": "stax" },
+                    "created_at": "2024-01-01T00:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/repos/test/repo/issues/comments/901"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "body": "## Summary\n\nhello",
+                "head": { "ref": "feature-body", "sha": "aaaa", "label": "test:feature-body" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "head": { "ref": "feature-body", "sha": "aaaa", "label": "test:feature-body" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--yes", "--no-prompt"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "DELETE"
+                && request.url.path() == "/repos/test/repo/issues/comments/901"
+        }));
+        let body_patch = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/42"
+            })
+            .expect("missing body patch");
+        let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
+        let body = payload["body"].as_str().unwrap();
+        assert!(body.starts_with("## Summary\n\nhello"));
+        assert!(body.contains("<!-- stax-stack-links:start -->"));
+        assert!(body.contains("## Stack Links"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_both_mode_updates_comment_and_body() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("both"));
+        let repo = setup_branch_with_remote(home.path(), "feature-both");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/42",
+                    "id": 42,
+                    "number": 42,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-both", "sha": "aaaa", "label": "test:feature-both" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 901,
+                    "body": "<!-- stax-stack-comment -->\nold",
+                    "user": { "login": "stax" },
+                    "created_at": "2024-01-01T00:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/issues/comments/901"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": 901 })),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "body": "## Summary\n\nhello",
+                "head": { "ref": "feature-both", "sha": "aaaa", "label": "test:feature-both" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "head": { "ref": "feature-both", "sha": "aaaa", "label": "test:feature-both" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--yes", "--no-prompt"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "PATCH"
+                && request.url.path() == "/repos/test/repo/issues/comments/901"
+        }));
+        let body_patch = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/42"
+            })
+            .expect("missing body patch");
+        let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
+        assert!(payload["body"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- stax-stack-links:start -->"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_off_mode_removes_comment_and_body_block() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
+        let repo = setup_branch_with_remote(home.path(), "feature-off");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/42",
+                    "id": 42,
+                    "number": 42,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-off", "sha": "aaaa", "label": "test:feature-off" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 901,
+                    "body": "<!-- stax-stack-comment -->\nold",
+                    "user": { "login": "stax" },
+                    "created_at": "2024-01-01T00:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/repos/test/repo/issues/comments/901"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "body": "## Summary\n\nhello\n\n<!-- stax-stack-links:start -->\nold\n<!-- stax-stack-links:end -->",
+                "head": { "ref": "feature-off", "sha": "aaaa", "label": "test:feature-off" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "head": { "ref": "feature-off", "sha": "aaaa", "label": "test:feature-off" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--yes", "--no-prompt"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "DELETE"
+                && request.url.path() == "/repos/test/repo/issues/comments/901"
+        }));
+        let body_patch = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/42"
+            })
+            .expect("missing body patch");
+        let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
+        assert_eq!(payload["body"], "## Summary\n\nhello");
     }
 
     #[tokio::test]
