@@ -8,6 +8,10 @@ use std::collections::HashMap;
 use super::GitHubClient;
 use crate::remote::RemoteInfo;
 
+const STACK_COMMENT_MARKER: &str = "<!-- stax-stack-comment -->";
+const STACK_LINKS_BODY_START_MARKER: &str = "<!-- stax-stack-links:start -->";
+const STACK_LINKS_BODY_END_MARKER: &str = "<!-- stax-stack-links:end -->";
+
 /// A comment on a PR issue thread (conversation comment)
 #[derive(Debug, Clone)]
 pub struct IssueComment {
@@ -502,8 +506,68 @@ impl GitHubClient {
         Ok(())
     }
 
+    /// Get the current PR body text.
+    pub async fn get_pr_body(&self, pr_number: u64) -> Result<String> {
+        self.record_api_call("pulls.get.body");
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .context("Failed to get PR body")?;
+
+        Ok(pr.body.unwrap_or_default())
+    }
+
     /// Add or update the stack comment on a PR
     pub async fn update_stack_comment(&self, pr_number: u64, stack_comment: &str) -> Result<()> {
+        if let Some(comment_id) = self.find_stack_comment_id(pr_number).await? {
+            let full_comment = format!("{}\n{}", STACK_COMMENT_MARKER, stack_comment);
+            self.record_api_call("issues.comments.update");
+            self.octocrab
+                .issues(&self.owner, &self.repo)
+                .update_comment(comment_id, &full_comment)
+                .await
+                .context("Failed to update comment")?;
+            return Ok(());
+        }
+
+        self.create_stack_comment(pr_number, stack_comment).await
+    }
+
+    /// Create a stax stack comment on a PR without listing existing comments.
+    pub async fn create_stack_comment(&self, pr_number: u64, stack_comment: &str) -> Result<()> {
+        self.record_api_call("issues.comments.create");
+        let full_comment = format!("{}\n{}", STACK_COMMENT_MARKER, stack_comment);
+        self.octocrab
+            .issues(&self.owner, &self.repo)
+            .create_comment(pr_number, &full_comment)
+            .await
+            .context("Failed to create comment")?;
+
+        Ok(())
+    }
+
+    /// Delete the stax-managed stack comment on a PR, if present.
+    pub async fn delete_stack_comment(&self, pr_number: u64) -> Result<()> {
+        let Some(comment_id) = self.find_stack_comment_id(pr_number).await? else {
+            return Ok(());
+        };
+
+        self.record_api_call("issues.comments.delete");
+        self.octocrab
+            .issues(&self.owner, &self.repo)
+            .delete_comment(comment_id)
+            .await
+            .context("Failed to delete comment")?;
+
+        Ok(())
+    }
+
+    async fn find_stack_comment_id(
+        &self,
+        pr_number: u64,
+    ) -> Result<Option<octocrab::models::CommentId>> {
         self.record_api_call("issues.comments.list");
         let comments = self
             .octocrab
@@ -513,43 +577,13 @@ impl GitHubClient {
             .await
             .context("Failed to list comments")?;
 
-        // Look for existing stax comment
-        let marker = "<!-- stax-stack-comment -->";
-        let full_comment = format!("{}\n{}", marker, stack_comment);
-
-        for comment in comments.items {
-            if comment
+        Ok(comments.items.into_iter().find_map(|comment| {
+            comment
                 .body
                 .as_ref()
-                .map(|b| b.contains(marker))
-                .unwrap_or(false)
-            {
-                // Update existing comment
-                self.record_api_call("issues.comments.update");
-                self.octocrab
-                    .issues(&self.owner, &self.repo)
-                    .update_comment(comment.id, &full_comment)
-                    .await
-                    .context("Failed to update comment")?;
-                return Ok(());
-            }
-        }
-
-        self.create_stack_comment(pr_number, stack_comment).await
-    }
-
-    /// Create a stax stack comment on a PR without listing existing comments.
-    pub async fn create_stack_comment(&self, pr_number: u64, stack_comment: &str) -> Result<()> {
-        self.record_api_call("issues.comments.create");
-        let marker = "<!-- stax-stack-comment -->";
-        let full_comment = format!("{}\n{}", marker, stack_comment);
-        self.octocrab
-            .issues(&self.owner, &self.repo)
-            .create_comment(pr_number, &full_comment)
-            .await
-            .context("Failed to create comment")?;
-
-        Ok(())
+                .filter(|body| body.contains(STACK_COMMENT_MARKER))
+                .map(|_| comment.id)
+        }))
     }
 
     pub async fn request_reviewers(&self, pr_number: u64, reviewers: &[String]) -> Result<()> {
@@ -862,17 +896,19 @@ pub struct StackPrInfo {
     pub pr_number: Option<u64>,
 }
 
-/// Generate the stack comment body
-pub fn generate_stack_comment(
+/// Generate the stack links markdown shared by PR comments and PR bodies.
+pub fn generate_stack_links_markdown(
     prs: &[StackPrInfo],
     current_pr_number: u64,
     _remote: &RemoteInfo,
     trunk: &str,
 ) -> String {
     let mut lines = vec![
-        "Current dependencies on/for this PR:".to_string(),
+        "## Stack Links".to_string(),
         "".to_string(),
-        format!("* {}:", trunk),
+        "This PR is part of a stacked series:".to_string(),
+        "".to_string(),
+        format!("* `{}`", trunk),
     ];
 
     // Build stack from bottom (trunk-adjacent) to top (leaf)
@@ -892,12 +928,69 @@ pub fn generate_stack_comment(
     }
 
     lines.push("".to_string());
-    lines.push(
-        "This comment was autogenerated by [stax](https://github.com/cesarferreira/stax)"
-            .to_string(),
-    );
+    lines.push("Managed by [stax](https://github.com/cesarferreira/stax)".to_string());
 
     lines.join("\n")
+}
+
+/// Backward-compatible alias for the existing comment generator name.
+pub fn generate_stack_comment(
+    prs: &[StackPrInfo],
+    current_pr_number: u64,
+    remote: &RemoteInfo,
+    trunk: &str,
+) -> String {
+    generate_stack_links_markdown(prs, current_pr_number, remote, trunk)
+}
+
+pub fn upsert_stack_links_in_body(existing_body: &str, stack_links: &str) -> String {
+    let managed_block = format!(
+        "{start}\n{stack_links}\n{end}",
+        start = STACK_LINKS_BODY_START_MARKER,
+        stack_links = stack_links.trim(),
+        end = STACK_LINKS_BODY_END_MARKER
+    );
+
+    let body_without_existing = remove_stack_links_from_body(existing_body);
+    if body_without_existing.is_empty() {
+        return managed_block;
+    }
+
+    if body_without_existing.ends_with("\n\n") {
+        format!("{}{}", body_without_existing, managed_block)
+    } else if body_without_existing.ends_with('\n') {
+        format!("{}\n{}", body_without_existing, managed_block)
+    } else {
+        format!("{}\n\n{}", body_without_existing, managed_block)
+    }
+}
+
+pub fn remove_stack_links_from_body(existing_body: &str) -> String {
+    let Some(start_idx) = existing_body.find(STACK_LINKS_BODY_START_MARKER) else {
+        return existing_body.to_string();
+    };
+    let Some(end_marker_idx) = existing_body[start_idx..].find(STACK_LINKS_BODY_END_MARKER) else {
+        return existing_body.to_string();
+    };
+
+    let end_idx = start_idx + end_marker_idx + STACK_LINKS_BODY_END_MARKER.len();
+    let mut remove_start = start_idx;
+    let mut remove_end = end_idx;
+
+    if existing_body[..start_idx].ends_with("\n\n") {
+        remove_start -= 2;
+    } else if existing_body[..start_idx].ends_with('\n') {
+        remove_start -= 1;
+    } else if existing_body[end_idx..].starts_with("\n\n") {
+        remove_end += 2;
+    } else if existing_body[end_idx..].starts_with('\n') {
+        remove_end += 1;
+    }
+
+    let mut result = String::with_capacity(existing_body.len());
+    result.push_str(&existing_body[..remove_start]);
+    result.push_str(&existing_body[remove_end..]);
+    result
 }
 
 #[cfg(test)]
@@ -1223,8 +1316,8 @@ mod tests {
 
         let comment = generate_stack_comment(&prs, 1, &remote, "main");
 
-        assert!(comment.contains("Current dependencies"));
-        assert!(comment.contains("main"));
+        assert!(comment.contains("## Stack Links"));
+        assert!(comment.contains("`main`"));
         assert!(comment.contains("PR #1"));
         assert!(comment.contains("👈")); // Current PR marker
         assert!(comment.contains("stax"));
@@ -1289,6 +1382,44 @@ mod tests {
 
         assert!(comment.contains("PR #1"));
         assert!(comment.contains("`feature-b`")); // Branch name in backticks
+    }
+
+    #[test]
+    fn test_upsert_stack_links_in_empty_body() {
+        let body = upsert_stack_links_in_body("", "## Stack Links\n\n- item");
+        assert!(body.contains(STACK_LINKS_BODY_START_MARKER));
+        assert!(body.contains("## Stack Links"));
+        assert!(body.contains(STACK_LINKS_BODY_END_MARKER));
+    }
+
+    #[test]
+    fn test_upsert_stack_links_appends_to_existing_body() {
+        let body = upsert_stack_links_in_body("## Summary\n\nhello", "## Stack Links\n\n- item");
+        assert!(body.starts_with("## Summary\n\nhello"));
+        assert!(body.ends_with(STACK_LINKS_BODY_END_MARKER));
+        assert!(body.contains("\n\n<!-- stax-stack-links:start -->"));
+    }
+
+    #[test]
+    fn test_upsert_stack_links_replaces_existing_block() {
+        let existing = format!(
+            "## Summary\n\nhello\n\n{}\nold\n{}\n",
+            STACK_LINKS_BODY_START_MARKER, STACK_LINKS_BODY_END_MARKER
+        );
+        let body = upsert_stack_links_in_body(&existing, "## Stack Links\n\nnew");
+        assert!(!body.contains("\nold\n"));
+        assert!(body.contains("new"));
+        assert_eq!(body.matches(STACK_LINKS_BODY_START_MARKER).count(), 1);
+    }
+
+    #[test]
+    fn test_remove_stack_links_from_body_preserves_surrounding_content() {
+        let existing = format!(
+            "## Summary\n\nhello\n\n{}\nmanaged\n{}\n\n## Testing\n\nok",
+            STACK_LINKS_BODY_START_MARKER, STACK_LINKS_BODY_END_MARKER
+        );
+        let body = remove_stack_links_from_body(&existing);
+        assert_eq!(body, "## Summary\n\nhello\n\n## Testing\n\nok");
     }
 
     #[test]
@@ -1364,6 +1495,103 @@ mod tests {
             .unwrap();
 
         GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo")
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_body_returns_body_text() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/11"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
+                "id": 11,
+                "number": 11,
+                "state": "open",
+                "draft": false,
+                "body": "## Summary\n\nhello",
+                "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let body = client.get_pr_body(11).await.unwrap();
+        assert_eq!(body, "## Summary\n\nhello");
+    }
+
+    #[tokio::test]
+    async fn test_update_stack_comment_updates_existing_comment() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues/11/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 101,
+                    "body": "<!-- stax-stack-comment -->\nold",
+                    "user": { "login": "stax" },
+                    "created_at": "2024-01-01T00:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test-owner/test-repo/issues/comments/101"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 101
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        client.update_stack_comment(11, "new body").await.unwrap();
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let patch_request = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test-owner/test-repo/issues/comments/101"
+            })
+            .expect("missing patch request");
+        let body: serde_json::Value = serde_json::from_slice(&patch_request.body).unwrap();
+        assert_eq!(body["body"], format!("{}\nnew body", STACK_COMMENT_MARKER));
+    }
+
+    #[tokio::test]
+    async fn test_delete_stack_comment_deletes_existing_comment() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues/11/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "id": 101,
+                    "body": "<!-- stax-stack-comment -->\nold",
+                    "user": { "login": "stax" },
+                    "created_at": "2024-01-01T00:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/repos/test-owner/test-repo/issues/comments/101"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        client.delete_stack_comment(11).await.unwrap();
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "DELETE"
+                && request.url.path() == "/repos/test-owner/test-repo/issues/comments/101"
+        }));
     }
 
     #[tokio::test]

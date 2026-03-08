@@ -55,10 +55,53 @@ fn test_default_config() {
     assert_eq!(config.branch.replacement, "-");
     assert_eq!(config.remote.name, "origin");
     assert_eq!(config.remote.base_url, "https://github.com");
+    assert_eq!(config.submit.stack_links, StackLinksMode::Comment);
     assert!(config.ui.tips);
     assert!(config.auth.use_gh_cli);
     assert!(!config.auth.allow_github_token_env);
     assert!(config.auth.gh_hostname.is_none());
+}
+
+#[test]
+fn test_submit_stack_links_round_trip() {
+    let config: Config = toml::from_str(
+        r#"
+[submit]
+stack_links = "both"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.submit.stack_links, StackLinksMode::Both);
+
+    let encoded = toml::to_string(&config).unwrap();
+    assert!(encoded.contains("stack_links = \"both\""));
+}
+
+#[test]
+fn test_submit_stack_links_defaults_to_comment_when_missing() {
+    let config: Config = toml::from_str(
+        r#"
+[remote]
+name = "origin"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.submit.stack_links, StackLinksMode::Comment);
+}
+
+#[test]
+fn test_submit_stack_links_rejects_unknown_value() {
+    let err = toml::from_str::<Config>(
+        r#"
+[submit]
+stack_links = "weird"
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("unknown variant"));
 }
 
 #[test]

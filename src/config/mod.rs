@@ -12,6 +12,8 @@ pub struct Config {
     #[serde(default)]
     pub remote: RemoteConfig,
     #[serde(default)]
+    pub submit: SubmitConfig,
+    #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
     pub ai: AiConfig,
@@ -62,6 +64,23 @@ pub struct RemoteConfig {
     /// API base URL (GitHub Enterprise), e.g., https://github.company.com/api/v3
     #[serde(default)]
     pub api_base_url: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct SubmitConfig {
+    /// Where stax-managed stack links should be synced on submit.
+    #[serde(default)]
+    pub stack_links: StackLinksMode,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum StackLinksMode {
+    #[default]
+    Comment,
+    Body,
+    Both,
+    Off,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

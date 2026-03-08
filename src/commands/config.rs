@@ -25,6 +25,12 @@ pub fn run(reset_ai: bool, no_prompt: bool, yes: bool) -> Result<()> {
         println!("Run any stax command to create a default config.");
     }
 
+    println!();
+    println!("{}", "Submit stack links setting:".blue().bold());
+    println!("  {}", r#"[submit]"#);
+    println!(r#"  stack_links = "comment"  # "comment" | "body" | "both" | "off""#);
+    println!(r#"  # Example: stack_links = "body""#);
+
     Ok(())
 }
 
