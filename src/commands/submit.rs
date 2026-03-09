@@ -1,7 +1,10 @@
-use crate::config::Config;
+use crate::config::{Config, StackLinksMode};
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
-use crate::github::pr::{generate_stack_comment, PrInfoWithHead, StackPrInfo};
+use crate::github::pr::{
+    generate_stack_links_markdown, remove_stack_links_from_body, upsert_stack_links_in_body,
+    PrInfoWithHead, StackPrInfo,
+};
 use crate::github::pr_template::{discover_pr_templates, select_template_interactive};
 use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
@@ -56,7 +59,7 @@ struct SubmitPhaseTimings {
     planning: Duration,
     open_pr_discovery: Duration,
     pr_create_update: Duration,
-    stack_comment: Duration,
+    stack_links: Duration,
 }
 
 const PR_TYPE_OPTIONS: [&str; 2] = ["Create as draft", "Publish immediately"];
@@ -101,6 +104,7 @@ pub fn run(
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
     let config = Config::load()?;
+    let stack_links_mode = config.submit.stack_links;
     let _ = yes; // Used for future auto-confirm features
 
     // Track if --draft was explicitly passed (we'll ask interactively if not)
@@ -846,7 +850,9 @@ pub fn run(
         .iter()
         .any(|p| !p.is_empty && (p.existing_pr.is_none() || p.needs_pr_update));
 
-    if !any_pr_work && branches_needing_push.is_empty() {
+    let any_existing_prs = plans.iter().any(|p| !p.is_empty && p.existing_pr.is_some());
+
+    if !any_pr_work && branches_needing_push.is_empty() && !any_existing_prs {
         if !quiet {
             println!();
             println!("{}", "✓ Stack already up to date!".green().bold());
@@ -992,32 +998,53 @@ pub fn run(
         }
         async_timings.pr_create_update = create_update_started_at.elapsed();
 
-        // Update stack comment on ALL PRs in the stack
+        // Sync stack links on ALL PRs in the stack, even on otherwise no-op submit runs.
         let prs_with_numbers: Vec<_> = pr_infos
             .iter()
             .filter_map(|p| p.pr_number.map(|num| (num, p.branch.clone())))
             .collect();
 
-        let stack_comment_started_at = Instant::now();
+        let stack_links_started_at = Instant::now();
         for (pr_number, _branch) in &prs_with_numbers {
-            let comment_timer = LiveTimer::maybe_new(
-                !quiet,
-                &format!("Updating stack comment on #{}...", pr_number),
-            );
-            let stack_comment =
-                generate_stack_comment(&pr_infos, *pr_number, &remote_info, &stack.trunk);
-            if created_pr_numbers.contains(pr_number) {
-                client
-                    .create_stack_comment(*pr_number, &stack_comment)
-                    .await?;
-            } else {
-                client
-                    .update_stack_comment(*pr_number, &stack_comment)
-                    .await?;
+            let sync_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Syncing stack links on #{}...", pr_number));
+            let stack_links =
+                generate_stack_links_markdown(&pr_infos, *pr_number, &remote_info, &stack.trunk);
+
+            match stack_links_mode {
+                StackLinksMode::Comment | StackLinksMode::Both => {
+                    if created_pr_numbers.contains(pr_number) {
+                        client
+                            .create_stack_comment(*pr_number, &stack_links)
+                            .await?;
+                    } else {
+                        client
+                            .update_stack_comment(*pr_number, &stack_links)
+                            .await?;
+                    }
+                }
+                StackLinksMode::Body | StackLinksMode::Off => {
+                    client.delete_stack_comment(*pr_number).await?;
+                }
             }
-            LiveTimer::maybe_finish_ok(comment_timer, "done");
+
+            let current_body = client.get_pr_body(*pr_number).await?;
+            let desired_body = match stack_links_mode {
+                StackLinksMode::Body | StackLinksMode::Both => {
+                    upsert_stack_links_in_body(&current_body, &stack_links)
+                }
+                StackLinksMode::Comment | StackLinksMode::Off => {
+                    remove_stack_links_from_body(&current_body)
+                }
+            };
+
+            if desired_body != current_body {
+                client.update_pr_body(*pr_number, &desired_body).await?;
+            }
+
+            LiveTimer::maybe_finish_ok(sync_timer, "done");
         }
-        async_timings.stack_comment = stack_comment_started_at.elapsed();
+        async_timings.stack_links = stack_links_started_at.elapsed();
 
         if !quiet {
             println!();
@@ -1051,7 +1078,7 @@ pub fn run(
     })?;
     timings.open_pr_discovery += async_timings.open_pr_discovery;
     timings.pr_create_update += async_timings.pr_create_update;
-    timings.stack_comment += async_timings.stack_comment;
+    timings.stack_links += async_timings.stack_links;
     full_scan_fallbacks += async_full_scan_fallbacks;
 
     if let Some(pr_url) = open_pr_url {
@@ -1454,8 +1481,8 @@ fn print_verbose_network_summary(
     );
     println!(
         "  {:<28} {}",
-        "stack comments",
-        format_duration(timings.stack_comment)
+        "stack links",
+        format_duration(timings.stack_links)
     );
     println!(
         "  {:<28} {}",
