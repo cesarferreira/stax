@@ -13,8 +13,27 @@ use std::process::{Command, Output};
 use tempfile::TempDir;
 
 /// Get path to compiled binary (built by cargo test)
-pub fn stax_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_stax")
+pub fn stax_bin() -> PathBuf {
+    let exe_name = format!("stax{}", std::env::consts::EXE_SUFFIX);
+    let mut candidates = Vec::new();
+
+    if let Some(runtime_path) = std::env::var_os("CARGO_BIN_EXE_stax") {
+        candidates.push(PathBuf::from(runtime_path));
+    }
+
+    candidates.push(PathBuf::from(env!("CARGO_BIN_EXE_stax")));
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(debug_dir) = current_exe.parent().and_then(|p| p.parent()) {
+            candidates.push(debug_dir.join(&exe_name));
+            candidates.push(debug_dir.join("deps").join(&exe_name));
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| panic!("Failed to locate compiled stax binary"))
 }
 
 /// Create temporary directories in STAX_TEST_TMPDIR when set.

@@ -22,6 +22,9 @@ Main config path: `~/.config/stax/config.toml`
 # base_url = "https://github.com"
 # api_base_url = "https://github.company.com/api/v3"
 
+[submit]
+# stack_links = "comment" # "comment" | "body" | "both" | "off"
+
 [auth]
 # use_gh_cli = true
 # allow_github_token_env = false
@@ -66,6 +69,17 @@ date_format = "%m-%d"
 ```
 
 The legacy `prefix` field still works when `format` is not set.
+
+## Submit stack links placement
+
+```toml
+[submit]
+stack_links = "body"
+```
+
+`stax submit` can keep the stack links in the PR comment (`comment`), the PR body (`body`), both places (`both`), or remove stax-managed stack links entirely (`off`).
+
+When body output is enabled, stax appends a managed block to the bottom of the PR body and only rewrites that managed block on future submits.
 
 ## GitHub auth resolution order
 

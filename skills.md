@@ -155,6 +155,10 @@ stax submit --edit                 # Always edit PR body
 stax submit --ai-body              # Generate PR body with AI
 stax submit --rerequest-review     # Re-request existing reviewers on update
 
+# ~/.config/stax/config.toml
+[submit]
+stack_links = "body"               # "comment" | "body" | "both" | "off"
+
 stax branch submit                 # Submit current branch only
 stax bs                            # Hidden shortcut alias for branch submit
 stax upstack submit                # Submit current + descendants

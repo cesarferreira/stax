@@ -296,7 +296,14 @@ Config file location:
 ~/.config/stax/config.toml
 ```
 
-Common settings include branch naming format, auth source preferences, and enterprise GitHub API host overrides.
+Common settings include branch naming format, submit stack-links placement, auth source preferences, and enterprise GitHub API host overrides.
+
+Example:
+
+```toml
+[submit]
+stack_links = "body" # "comment" | "body" | "both" | "off"
+```
 
 If you want stax to reset and immediately re-prompt for the AI agent/model, run:
 

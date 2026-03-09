@@ -160,6 +160,7 @@
 - `st submit --no-template`
 - `st submit --edit`
 - `st submit --rerequest-review`
+- `~/.config/stax/config.toml`: set `[submit] stack_links = "comment"` (or `"body" | "both" | "off"`)
 - `st merge --all --method squash --yes`
 - `st merge --dry-run`
 - `st merge --when-ready`
