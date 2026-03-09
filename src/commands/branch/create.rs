@@ -20,6 +20,7 @@ pub fn run(
     let config = Config::load()?;
     let current = repo.current_branch()?;
     let parent_branch = from.unwrap_or_else(|| current.clone());
+    let generated_from_message = name.is_none() && message.is_some();
 
     if repo.branch_commit(&parent_branch).is_err() {
         anyhow::bail!("Branch '{}' does not exist", parent_branch);
@@ -79,34 +80,9 @@ pub fn run(
         Some(_) => config.format_branch_name_with_prefix_override(&input, prefix.as_deref()),
         None => config.format_branch_name(&input),
     };
-
-    // Check for branch name conflicts (Git doesn't allow both "foo" and "foo/bar")
-    let existing_branches = repo.list_branches().unwrap_or_default();
-    for existing in &existing_branches {
-        // Check if new branch would be a child path of existing (e.g., creating "foo/bar" when "foo" exists)
-        if branch_name.starts_with(&format!("{}/", existing)) {
-            bail!(
-                "Cannot create '{}': branch '{}' already exists.\n\
-                 Git doesn't allow a branch and its sub-path to coexist.\n\
-                 Either delete '{}' first, or use a different name like '{}-ui'.",
-                branch_name,
-                existing,
-                existing,
-                existing
-            );
-        }
-        // Check if existing branch is a child path of new (e.g., creating "foo" when "foo/bar" exists)
-        if existing.starts_with(&format!("{}/", branch_name)) {
-            bail!(
-                "Cannot create '{}': branch '{}' already exists.\n\
-                 Git doesn't allow a branch and its sub-path to coexist.\n\
-                 Either delete '{}' first, or use a different name.",
-                branch_name,
-                existing,
-                existing
-            );
-        }
-    }
+    let existing_branches = repo.list_branches()?;
+    let branch_name =
+        resolve_branch_name_conflicts(&branch_name, &existing_branches, generated_from_message)?;
 
     // Create the branch
     if parent_branch == current {
@@ -191,6 +167,89 @@ pub fn run(
     }
 
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum BranchNameConflict<'a> {
+    Exact(&'a str),
+    ExistingIsAncestor(&'a str),
+    ExistingIsDescendant(&'a str),
+}
+
+fn resolve_branch_name_conflicts(
+    branch_name: &str,
+    existing_branches: &[String],
+    generated_from_message: bool,
+) -> Result<String> {
+    match detect_branch_name_conflict(branch_name, existing_branches) {
+        None => Ok(branch_name.to_string()),
+        Some(BranchNameConflict::Exact(_) | BranchNameConflict::ExistingIsDescendant(_))
+            if generated_from_message =>
+        {
+            for suffix in 2..1000 {
+                let candidate = append_branch_suffix(branch_name, suffix);
+                if detect_branch_name_conflict(&candidate, existing_branches).is_none() {
+                    return Ok(candidate);
+                }
+            }
+
+            bail!(
+                "Cannot create a unique branch name from '{}'. Too many similarly named branches already exist.",
+                branch_name
+            );
+        }
+        Some(conflict) => bail!("{}", branch_name_conflict_message(branch_name, conflict)),
+    }
+}
+
+fn detect_branch_name_conflict<'a>(
+    branch_name: &str,
+    existing_branches: &'a [String],
+) -> Option<BranchNameConflict<'a>> {
+    for existing in existing_branches {
+        if branch_name == existing {
+            return Some(BranchNameConflict::Exact(existing));
+        }
+
+        if branch_name.starts_with(&format!("{}/", existing)) {
+            return Some(BranchNameConflict::ExistingIsAncestor(existing));
+        }
+
+        if existing.starts_with(&format!("{}/", branch_name)) {
+            return Some(BranchNameConflict::ExistingIsDescendant(existing));
+        }
+    }
+
+    None
+}
+
+fn branch_name_conflict_message(branch_name: &str, conflict: BranchNameConflict<'_>) -> String {
+    match conflict {
+        BranchNameConflict::Exact(existing) => format!(
+            "Cannot create '{}': branch '{}' already exists.\n\
+             Use `st checkout {}` or choose a different name.",
+            branch_name, existing, existing
+        ),
+        BranchNameConflict::ExistingIsAncestor(existing) => format!(
+            "Cannot create '{}': branch '{}' already exists.\n\
+             Git doesn't allow a branch and its sub-path to coexist.\n\
+             Either delete '{}' first, or use a different name like '{}-ui'.",
+            branch_name, existing, existing, existing
+        ),
+        BranchNameConflict::ExistingIsDescendant(existing) => format!(
+            "Cannot create '{}': branch '{}' already exists.\n\
+             Git doesn't allow a branch and its sub-path to coexist.\n\
+             Either delete '{}' first, or use a different name.",
+            branch_name, existing, existing
+        ),
+    }
+}
+
+fn append_branch_suffix(branch_name: &str, suffix: usize) -> String {
+    match branch_name.rsplit_once('/') {
+        Some((prefix, leaf)) => format!("{}/{}-{}", prefix, leaf, suffix),
+        None => format!("{}-{}", branch_name, suffix),
+    }
 }
 
 /// Interactive wizard for branch creation when no arguments provided

@@ -481,6 +481,38 @@ fn test_branch_create_with_message() {
 }
 
 #[test]
+fn test_branch_create_with_message_uses_unique_suffix_on_collision() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["bc", "-m", "Add new feature"]);
+    assert!(
+        output.status.success(),
+        "Failed first create: {}",
+        TestRepo::stderr(&output)
+    );
+    let first_branch = repo.current_branch();
+
+    let output = repo.run_stax(&["bc", "-m", "Add new feature"]);
+    assert!(
+        output.status.success(),
+        "Failed second create: {}",
+        TestRepo::stderr(&output)
+    );
+    let second_branch = repo.current_branch();
+
+    assert_ne!(first_branch, second_branch);
+    assert!(
+        second_branch.ends_with("-2") && second_branch.to_lowercase().contains("new-feature"),
+        "Expected suffixed branch name, got: {}",
+        second_branch
+    );
+
+    let branches = repo.list_branches();
+    assert!(branches.iter().any(|b| b == &first_branch));
+    assert!(branches.iter().any(|b| b == &second_branch));
+}
+
+#[test]
 fn test_branch_create_from_another_branch() {
     let repo = TestRepo::new();
 
@@ -526,6 +558,24 @@ fn test_branch_create_nested() {
     assert!(repo.find_branch_containing("feature-1").is_some());
     assert!(repo.find_branch_containing("feature-2").is_some());
     assert!(repo.find_branch_containing("feature-3").is_some());
+}
+
+#[test]
+fn test_branch_create_exact_name_conflict_has_clear_error() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["bc", "feature-1"]);
+    assert!(output.status.success());
+
+    let output = repo.run_stax(&["bc", "feature-1"]);
+    assert!(!output.status.success());
+
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("already exists") && stderr.contains("Use `st checkout "),
+        "Expected exact-conflict guidance, got: {}",
+        stderr
+    );
 }
 
 #[test]
