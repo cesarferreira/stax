@@ -1,3 +1,4 @@
+use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
@@ -194,7 +195,7 @@ pub fn run(
 
     let mut summary: Vec<(String, String)> = Vec::new();
 
-    for branch in &scope_branches {
+    for (index, branch) in scope_branches.iter().enumerate() {
         let live_stack = Stack::load(&repo)?;
         let needs_restack = live_stack
             .branches
@@ -241,14 +242,26 @@ pub fn run(
             }
             RebaseResult::Conflict => {
                 LiveTimer::maybe_finish_err(restack_timer, "conflict");
-                if !quiet {
-                    println!();
-                    println!("{}", "Resolve conflicts and run:".yellow());
-                    println!("  {}", "stax resolve".cyan());
-                    println!("  {}", "stax continue".cyan());
-                    println!("  {}", "stax restack --continue".cyan());
-                }
-                if stashed && !quiet {
+                let completed_branches: Vec<String> = summary
+                    .iter()
+                    .filter(|(_, status)| status == "ok")
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                print_restack_conflict(
+                    &repo,
+                    &RestackConflictContext {
+                        branch,
+                        parent_branch: &meta.parent_branch_name,
+                        completed_branches: &completed_branches,
+                        remaining_branches: scope_branches.len().saturating_sub(index + 1),
+                        continue_commands: &[
+                            "stax resolve",
+                            "stax continue",
+                            "stax restack --continue",
+                        ],
+                    },
+                );
+                if stashed {
                     println!("{}", "Stash kept to avoid conflicts.".yellow());
                 }
                 summary.push((branch.clone(), "conflict".to_string()));

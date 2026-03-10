@@ -1,3 +1,4 @@
+use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
@@ -76,6 +77,8 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
     tx.set_plan_summary(summary);
     tx.snapshot()?;
 
+    let mut completed_branches = Vec::new();
+
     for branch in &upstack {
         let live_stack = Stack::load(&repo)?;
         let needs_restack = live_stack
@@ -115,14 +118,25 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
                 // Record the after-OID for this branch
                 tx.record_after(&repo, branch)?;
 
+                completed_branches.push(branch.clone());
                 println!("    {}", "✓ done".green());
             }
             RebaseResult::Conflict => {
                 println!("    {}", "✗ conflict".red());
-                println!();
-                println!("{}", "Resolve conflicts and run:".yellow());
-                println!("  {}", "stax resolve".cyan());
-                println!("  {}", "stax continue".cyan());
+                print_restack_conflict(
+                    &repo,
+                    &RestackConflictContext {
+                        branch,
+                        parent_branch: &meta.parent_branch_name,
+                        completed_branches: &completed_branches,
+                        remaining_branches: upstack
+                            .iter()
+                            .position(|candidate| candidate == branch)
+                            .map(|index| upstack.len().saturating_sub(index + 1))
+                            .unwrap_or(0),
+                        continue_commands: &["stax resolve", "stax continue"],
+                    },
+                );
 
                 // Finish transaction with error
                 tx.finish_err("Rebase conflict", Some("rebase"), Some(branch))?;
