@@ -109,7 +109,7 @@
 | `st standup --summary` | AI-generated spoken standup update |
 | `st standup --summary --jit` | Include Jira `jit` context for in-flight and next-up work |
 | `st changelog <from> [to]` | Generate changelog |
-| `st generate --pr-body` | Generate PR body with AI |
+| `st generate --pr-body [--no-prompt]` | Generate PR body with AI |
 | `st demo` | Interactive tutorial (no auth/repo needed) |
 
 ## Agent worktrees

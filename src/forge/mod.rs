@@ -431,3 +431,187 @@ fn make_review_comment(
         diff_hunk,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- stack_comment_body / is_stack_comment ---
+
+    #[test]
+    fn test_stack_comment_body_prepends_marker() {
+        let result = stack_comment_body("my stack info");
+        assert_eq!(result, "<!-- stax-stack-comment -->\nmy stack info");
+    }
+
+    #[test]
+    fn test_is_stack_comment_detects_marker() {
+        assert!(is_stack_comment(
+            "<!-- stax-stack-comment -->\nsome stack"
+        ));
+        assert!(is_stack_comment(
+            "prefix <!-- stax-stack-comment --> suffix"
+        ));
+    }
+
+    #[test]
+    fn test_is_stack_comment_false_for_regular_comment() {
+        assert!(!is_stack_comment("just a normal comment"));
+        assert!(!is_stack_comment(""));
+    }
+
+    // --- read_env_token ---
+
+    #[test]
+    fn test_read_env_token_returns_trimmed_value() {
+        std::env::set_var("__STAX_TEST_TOKEN_1", "  my-token  ");
+        assert_eq!(
+            read_env_token("__STAX_TEST_TOKEN_1"),
+            Some("my-token".to_string())
+        );
+        std::env::remove_var("__STAX_TEST_TOKEN_1");
+    }
+
+    #[test]
+    fn test_read_env_token_returns_none_for_empty() {
+        std::env::set_var("__STAX_TEST_TOKEN_2", "");
+        assert_eq!(read_env_token("__STAX_TEST_TOKEN_2"), None);
+        std::env::remove_var("__STAX_TEST_TOKEN_2");
+    }
+
+    #[test]
+    fn test_read_env_token_returns_none_for_whitespace_only() {
+        std::env::set_var("__STAX_TEST_TOKEN_3", "   ");
+        assert_eq!(read_env_token("__STAX_TEST_TOKEN_3"), None);
+        std::env::remove_var("__STAX_TEST_TOKEN_3");
+    }
+
+    #[test]
+    fn test_read_env_token_returns_none_for_unset() {
+        std::env::remove_var("__STAX_TEST_TOKEN_UNSET");
+        assert_eq!(read_env_token("__STAX_TEST_TOKEN_UNSET"), None);
+    }
+
+    // --- forge_token fallback ---
+
+    #[test]
+    fn test_forge_token_gitlab_priority() {
+        // Specific token takes priority over generic
+        std::env::set_var("STAX_GITLAB_TOKEN", "gitlab-specific");
+        std::env::set_var("GITLAB_TOKEN", "gitlab-generic");
+        std::env::set_var("STAX_FORGE_TOKEN", "forge-fallback");
+        assert_eq!(
+            forge_token(ForgeType::GitLab),
+            Some("gitlab-specific".to_string())
+        );
+        std::env::remove_var("STAX_GITLAB_TOKEN");
+        std::env::remove_var("GITLAB_TOKEN");
+        std::env::remove_var("STAX_FORGE_TOKEN");
+    }
+
+    #[test]
+    fn test_forge_token_gitlab_falls_to_gitlab_token() {
+        std::env::remove_var("STAX_GITLAB_TOKEN");
+        std::env::set_var("GITLAB_TOKEN", "gitlab-generic");
+        std::env::set_var("STAX_FORGE_TOKEN", "forge-fallback");
+        assert_eq!(
+            forge_token(ForgeType::GitLab),
+            Some("gitlab-generic".to_string())
+        );
+        std::env::remove_var("GITLAB_TOKEN");
+        std::env::remove_var("STAX_FORGE_TOKEN");
+    }
+
+    #[test]
+    fn test_forge_token_gitlab_falls_to_stax_forge_token() {
+        std::env::remove_var("STAX_GITLAB_TOKEN");
+        std::env::remove_var("GITLAB_TOKEN");
+        std::env::set_var("STAX_FORGE_TOKEN", "forge-fallback");
+        assert_eq!(
+            forge_token(ForgeType::GitLab),
+            Some("forge-fallback".to_string())
+        );
+        std::env::remove_var("STAX_FORGE_TOKEN");
+    }
+
+    #[test]
+    fn test_forge_token_gitea_priority() {
+        std::env::set_var("STAX_GITEA_TOKEN", "gitea-specific");
+        std::env::set_var("GITEA_TOKEN", "gitea-generic");
+        std::env::set_var("STAX_FORGE_TOKEN", "forge-fallback");
+        assert_eq!(
+            forge_token(ForgeType::Gitea),
+            Some("gitea-specific".to_string())
+        );
+        std::env::remove_var("STAX_GITEA_TOKEN");
+        std::env::remove_var("GITEA_TOKEN");
+        std::env::remove_var("STAX_FORGE_TOKEN");
+    }
+
+    #[test]
+    fn test_forge_token_gitea_falls_to_gitea_token() {
+        std::env::remove_var("STAX_GITEA_TOKEN");
+        std::env::set_var("GITEA_TOKEN", "gitea-generic");
+        std::env::set_var("STAX_FORGE_TOKEN", "forge-fallback");
+        assert_eq!(
+            forge_token(ForgeType::Gitea),
+            Some("gitea-generic".to_string())
+        );
+        std::env::remove_var("GITEA_TOKEN");
+        std::env::remove_var("STAX_FORGE_TOKEN");
+    }
+
+    // --- mergeable_bool ---
+
+    #[test]
+    fn test_mergeable_bool_indeterminate_states() {
+        for state in &["checking", "unchecked", "preparing", "unknown"] {
+            assert_eq!(mergeable_bool(state), None, "state: {}", state);
+        }
+    }
+
+    #[test]
+    fn test_mergeable_bool_truthy_states() {
+        for state in &["mergeable", "can_be_merged", "clean"] {
+            assert_eq!(mergeable_bool(state), Some(true), "state: {}", state);
+        }
+    }
+
+    #[test]
+    fn test_mergeable_bool_false_for_unknown_states() {
+        // Unrecognized states are conservatively treated as false
+        for state in &[
+            "blocked",
+            "conflict",
+            "discussions_not_resolved",
+            "dirty",
+            "",
+        ] {
+            assert_eq!(mergeable_bool(state), Some(false), "state: {}", state);
+        }
+    }
+
+    // --- ci_status_from_string ---
+
+    #[test]
+    fn test_ci_status_from_string_known_values() {
+        assert_eq!(ci_status_from_string(Some("success")), CiStatus::Success);
+        assert_eq!(ci_status_from_string(Some("pending")), CiStatus::Pending);
+        assert_eq!(ci_status_from_string(Some("failure")), CiStatus::Failure);
+        assert_eq!(ci_status_from_string(Some("error")), CiStatus::Failure);
+    }
+
+    #[test]
+    fn test_ci_status_from_string_no_ci() {
+        assert_eq!(ci_status_from_string(None), CiStatus::NoCi);
+        assert_eq!(ci_status_from_string(Some("")), CiStatus::NoCi);
+        assert_eq!(ci_status_from_string(Some("unknown")), CiStatus::NoCi);
+    }
+
+    #[test]
+    fn test_ci_status_from_string_neutral_is_success() {
+        // GitHub returns "neutral" for skipped/cancelled checks
+        assert_eq!(ci_status_from_string(Some("neutral")), CiStatus::Success);
+        assert_eq!(ci_status_from_string(Some("skipped")), CiStatus::Success);
+    }
+}

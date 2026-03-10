@@ -9,7 +9,7 @@ use super::{
     mergeable_bool, patch_json, post_json, put_json, stack_comment_body, AuthStyle,
 };
 use crate::ci::CheckRunInfo;
-use crate::github::pr::{MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
+use crate::github::pr::{CiStatus, MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
 use crate::remote::{ForgeType, RemoteInfo};
 
 const STACK_COMMENT_MARKER: &str = "<!-- stax-stack-comment -->";
@@ -437,6 +437,34 @@ mod tests {
         }
     }
 
+    fn pull_json(overrides: serde_json::Value) -> serde_json::Value {
+        let mut base = serde_json::json!({
+            "number": 3,
+            "state": "open",
+            "title": "Feature",
+            "body": "body",
+            "draft": false,
+            "mergeable": true,
+            "mergeable_state": "clean",
+            "merged": false,
+            "head": { "ref": "feature-a", "sha": "abc123", "label": "org:feature-a" },
+            "base": { "ref": "main", "sha": "def456", "label": "org:main" }
+        });
+        if let serde_json::Value::Object(map) = overrides {
+            base.as_object_mut().unwrap().extend(map);
+        }
+        base
+    }
+
+    fn comment_json(id: u64, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "body": body,
+            "created_at": "2024-01-01T00:00:00Z",
+            "user": { "login": "bot" }
+        })
+    }
+
     #[tokio::test]
     async fn test_list_open_prs_by_head() {
         let server = MockServer::start().await;
@@ -446,20 +474,10 @@ mod tests {
             .and(header("Authorization", "token test-token"))
             .and(path("/repos/org/repo/pulls"))
             .and(query_param("state", "open"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "number": 3,
-                    "state": "open",
-                    "title": "Feature",
-                    "body": "body",
-                    "draft": false,
-                    "mergeable": true,
-                    "mergeable_state": "clean",
-                    "merged": false,
-                    "head": { "ref": "feature-a", "sha": "abc123", "label": "org:feature-a" },
-                    "base": { "ref": "main", "sha": "def456", "label": "org:main" }
-                }
-            ])))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([pull_json(serde_json::json!({}))])),
+            )
             .mount(&server)
             .await;
 
@@ -467,7 +485,554 @@ mod tests {
         let prs = client.list_open_prs_by_head().await.unwrap();
         let pr = prs.get("feature-a").unwrap();
         assert_eq!(pr.info.number, 3);
+        assert_eq!(pr.info.state, "OPEN");
         assert_eq!(pr.info.base, "main");
+        assert!(!pr.info.is_draft);
+        assert_eq!(pr.head, "feature-a");
+        assert_eq!(pr.head_label.as_deref(), Some("org:feature-a"));
+    }
+
+    #[tokio::test]
+    async fn test_list_open_prs_by_head_multiple() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                pull_json(serde_json::json!({})),
+                pull_json(serde_json::json!({
+                    "number": 4,
+                    "head": { "ref": "feature-b", "sha": "def789", "label": "org:feature-b" },
+                    "base": { "ref": "develop", "sha": "aaa111", "label": "org:develop" }
+                })),
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let prs = client.list_open_prs_by_head().await.unwrap();
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs["feature-a"].info.number, 3);
+        assert_eq!(prs["feature-b"].info.number, 4);
+        assert_eq!(prs["feature-b"].info.base, "develop");
+    }
+
+    #[tokio::test]
+    async fn test_find_open_pr_by_head_found() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([pull_json(serde_json::json!({}))])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let pr = client
+            .find_open_pr_by_head("feature-a")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pr.info.number, 3);
+        assert_eq!(pr.head, "feature-a");
+    }
+
+    #[tokio::test]
+    async fn test_find_pr_delegates_to_find_open_pr() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([pull_json(serde_json::json!({}))])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let pr = client.find_pr("feature-a").await.unwrap().unwrap();
+        assert_eq!(pr.number, 3);
+        assert_eq!(pr.state, "OPEN");
+        assert_eq!(pr.base, "main");
+    }
+
+    #[tokio::test]
+    async fn test_find_open_pr_by_head_not_found() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        assert!(client
+            .find_open_pr_by_head("no-such")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_create_pr() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/pulls"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(pull_json(serde_json::json!({
+                "number": 10,
+                "draft": true
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let pr = client
+            .create_pr("feature-a", "main", "Feature", "body", true)
+            .await
+            .unwrap();
+        assert_eq!(pr.number, 10);
+        assert!(pr.is_draft);
+    }
+
+    #[tokio::test]
+    async fn test_get_pr() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let pr = client.get_pr(3).await.unwrap();
+        assert_eq!(pr.number, 3);
+        assert_eq!(pr.state, "OPEN");
+        assert!(!pr.is_draft);
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_with_head() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let pr = client.get_pr_with_head(3).await.unwrap();
+        assert_eq!(pr.info.number, 3);
+        assert_eq!(pr.info.state, "OPEN");
+        assert_eq!(pr.info.base, "main");
+        assert_eq!(pr.head, "feature-a");
+        assert_eq!(pr.head_label.as_deref(), Some("org:feature-a"));
+    }
+
+    #[tokio::test]
+    async fn test_update_pr_base() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({
+                "base": { "ref": "develop", "sha": "def456", "label": "org:develop" }
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        client.update_pr_base(3, "develop").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_pr_body() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({
+                "body": "new body"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        client.update_pr_body(3, "new body").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_body() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({
+                "body": "hello world"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let body = client.get_pr_body(3).await.unwrap();
+        assert_eq!(body, "hello world");
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_body_null() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({
+                "body": null
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let body = client.get_pr_body(3).await.unwrap();
+        assert_eq!(body, "");
+    }
+
+    #[tokio::test]
+    async fn test_create_stack_comment() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/issues/3/comments"))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(comment_json(100, "<!-- stax-stack-comment -->\nstack info")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        client.create_stack_comment(3, "stack info").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_stack_comment_existing() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/issues/3/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                comment_json(50, "<!-- stax-stack-comment -->\nold stack")
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/org/repo/issues/comments/50"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(comment_json(50, "<!-- stax-stack-comment -->\nnew stack")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        client
+            .update_stack_comment(3, "new stack")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_stack_comment_creates_when_missing() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/issues/3/comments"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([comment_json(99, "normal comment")])),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/issues/3/comments"))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(comment_json(100, "<!-- stax-stack-comment -->\nstack")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        client.update_stack_comment(3, "stack").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delete_stack_comment() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/issues/3/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                comment_json(50, "<!-- stax-stack-comment -->\nstack")
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/repos/org/repo/issues/comments/50"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        client.delete_stack_comment(3).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delete_stack_comment_noop_when_missing() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/issues/3/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        client.delete_stack_comment(3).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_list_all_comments() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/issues/3/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                comment_json(1, "first"),
+                comment_json(2, "second")
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let comments = client.list_all_comments(3).await.unwrap();
+        assert_eq!(comments.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_merge_pr() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/pulls/3/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        client
+            .merge_pr(3, MergeMethod::Squash, Some("feat: squash"), Some("abc123"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        // fetch_checks is called for CI status
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/abc123/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "context": "ci", "status": "success", "target_url": null, "created_at": null, "updated_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let status = client.get_pr_merge_status(3).await.unwrap();
+        assert_eq!(status.number, 3);
+        assert_eq!(status.title, "Feature");
+        assert_eq!(status.state, "OPEN");
+        assert!(!status.is_draft);
+        assert_eq!(status.mergeable_state, "clean");
+        assert!(status.mergeable.unwrap());
+        assert_eq!(status.head_sha, "abc123");
+        assert!(matches!(status.ci_status, CiStatus::Success));
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_not_mergeable() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({
+                "mergeable": false,
+                "mergeable_state": null
+            }))))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/abc123/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let status = client.get_pr_merge_status(3).await.unwrap();
+        assert_eq!(status.mergeable_state, "unknown");
+        // mergeable from PR overrides mergeable_bool for Gitea
+        assert_eq!(status.mergeable, Some(false));
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_pending_ci() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/abc123/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "context": "ci", "status": "pending", "target_url": null, "created_at": null, "updated_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let status = client.get_pr_merge_status(3).await.unwrap();
+        assert!(matches!(status.ci_status, CiStatus::Pending));
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_ci_fetch_failure_treated_as_no_ci() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        // fetch_checks returns 500 — get_pr_merge_status uses .ok() to swallow error
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/abc123/statuses"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let status = client.get_pr_merge_status(3).await.unwrap();
+        // Error is swallowed → NoCi
+        assert!(matches!(status.ci_status, CiStatus::NoCi));
+    }
+
+    #[tokio::test]
+    async fn test_is_pr_merged_true() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({
+                "merged": true,
+                "state": "closed"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        assert!(client.is_pr_merged(3).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_is_pr_merged_false() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        assert!(!client.is_pr_merged(3).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_is_pr_merged_closed_without_merge_flag() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        // Gitea treats closed PRs as merged (see is_pr_merged impl)
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({
+                "merged": false,
+                "state": "closed"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        assert!(client.is_pr_merged(3).await.unwrap());
     }
 
     #[tokio::test]
@@ -502,5 +1067,253 @@ mod tests {
         assert_eq!(overall.as_deref(), Some("pending"));
         assert_eq!(checks.len(), 2);
         assert_eq!(checks[0].status, "in_progress");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_failure_takes_precedence() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/sha1/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "context": "a", "status": "failure", "target_url": null, "created_at": null, "updated_at": null },
+                { "context": "b", "status": "success", "target_url": null, "created_at": null, "updated_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let (overall, _) = client.fetch_checks("sha1").await.unwrap();
+        assert_eq!(overall.as_deref(), Some("failure"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_all_success() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/sha2/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "context": "a", "status": "success", "target_url": null, "created_at": null, "updated_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let (overall, _) = client.fetch_checks("sha2").await.unwrap();
+        assert_eq!(overall.as_deref(), Some("success"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_empty() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/sha3/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let (overall, checks) = client.fetch_checks("sha3").await.unwrap();
+        assert!(overall.is_none());
+        assert!(checks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_error_status_is_failure() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/sha4/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "context": "ci", "status": "error", "target_url": null, "created_at": null, "updated_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let (overall, checks) = client.fetch_checks("sha4").await.unwrap();
+        assert_eq!(overall.as_deref(), Some("failure"));
+        assert_eq!(checks[0].conclusion.as_deref(), Some("error"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_check_run_info_fields() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/sha5/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "context": "build",
+                    "status": "success",
+                    "target_url": "https://ci.example.com/42",
+                    "created_at": "2024-01-01T00:00:00Z",
+                    "updated_at": "2024-01-01T00:05:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let (_, checks) = client.fetch_checks("sha5").await.unwrap();
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "build");
+        assert_eq!(checks[0].status, "completed");
+        assert_eq!(checks[0].conclusion.as_deref(), Some("success"));
+        assert_eq!(
+            checks[0].url.as_deref(),
+            Some("https://ci.example.com/42")
+        );
+        assert_eq!(
+            checks[0].started_at.as_deref(),
+            Some("2024-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            checks[0].completed_at.as_deref(),
+            Some("2024-01-01T00:05:00Z")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_null_context_defaults_to_status() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/commits/sha6/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "context": null, "status": "success", "target_url": null, "created_at": null, "updated_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let (_, checks) = client.fetch_checks("sha6").await.unwrap();
+        assert_eq!(checks[0].name, "status");
+    }
+
+    // --- API error response tests ---
+
+    #[tokio::test]
+    async fn test_get_pr_returns_error_on_404() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/999"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_string(r#"{"message":"Not Found"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let err = client.get_pr(999).await.unwrap_err();
+        assert!(
+            err.to_string().contains("404"),
+            "Error should mention 404: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_pr_returns_error_on_401() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "bad-token");
+
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/pulls"))
+            .respond_with(
+                ResponseTemplate::new(401).set_body_string(r#"{"message":"Unauthorized"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let err = client
+            .create_pr("feat", "main", "title", "body", false)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("401"),
+            "Error should mention 401: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_pr_returns_error_on_405() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/pulls/3/merge"))
+            .respond_with(
+                ResponseTemplate::new(405)
+                    .set_body_string(r#"{"message":"Method Not Allowed"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let err = client
+            .merge_pr(3, MergeMethod::Merge, None, None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("405"),
+            "Error should mention 405: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_pr_rebase() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("POST"))
+            .and(path("/repos/org/repo/pulls/3/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        client
+            .merge_pr(3, MergeMethod::Rebase, None, None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_draft_pr_state() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/org/repo/pulls/3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pull_json(serde_json::json!({
+                "draft": true
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let pr = client.get_pr(3).await.unwrap();
+        assert!(pr.is_draft);
+    }
+
+    #[tokio::test]
+    async fn test_state_normalization() {
+        // Gitea uses simple uppercase conversion
+        assert_eq!("open".to_uppercase(), "OPEN");
+        assert_eq!("closed".to_uppercase(), "CLOSED");
     }
 }

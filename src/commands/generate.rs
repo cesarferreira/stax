@@ -51,7 +51,12 @@ const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub fn run(edit: bool, agent_flag: Option<String>, model_flag: Option<String>) -> Result<()> {
+pub fn run(
+    edit: bool,
+    no_prompt: bool,
+    agent_flag: Option<String>,
+    model_flag: Option<String>,
+) -> Result<()> {
     let config = Config::load()?;
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?.to_path_buf();
@@ -82,7 +87,7 @@ pub fn run(edit: bool, agent_flag: Option<String>, model_flag: Option<String>) -
 
     // Resolve AI agent and model (interactive if needed)
     let mut config = config;
-    let agent = resolve_agent(agent_flag.as_deref(), &mut config)?;
+    let agent = resolve_agent(agent_flag.as_deref(), &mut config, no_prompt)?;
     let model = resolve_model(model_flag.as_deref(), &config, &agent)?;
 
     // Collect context for the prompt
@@ -120,6 +125,8 @@ pub fn run(edit: bool, agent_flag: Option<String>, model_flag: Option<String>) -
         Editor::new()
             .edit(&generated_body)?
             .unwrap_or(generated_body)
+    } else if no_prompt {
+        generated_body
     } else {
         // Show preview and confirm
         println!();
@@ -171,7 +178,7 @@ pub fn run(edit: bool, agent_flag: Option<String>, model_flag: Option<String>) -
 // Agent resolution
 // ---------------------------------------------------------------------------
 
-fn resolve_agent(cli_flag: Option<&str>, config: &mut Config) -> Result<String> {
+fn resolve_agent(cli_flag: Option<&str>, config: &mut Config, no_prompt: bool) -> Result<String> {
     // 1. CLI flag takes priority
     if let Some(agent) = cli_flag {
         validate_agent_name(agent)?;
@@ -183,6 +190,16 @@ fn resolve_agent(cli_flag: Option<&str>, config: &mut Config) -> Result<String> 
         if !agent.is_empty() {
             return Ok(agent.clone());
         }
+    }
+
+    if no_prompt {
+        let agent = auto_detect_agent(&detect_available_agents())?;
+        println!(
+            "  {} {}",
+            "Detected AI agent:".dimmed(),
+            agent.cyan().bold()
+        );
+        return Ok(agent);
     }
 
     let (agent, _) = prompt_for_agent_and_model(config, true)?;
@@ -206,6 +223,20 @@ fn detect_available_agents() -> Vec<String> {
         .filter(|&&name| which_exists(name))
         .map(|&name| name.to_string())
         .collect()
+}
+
+fn auto_detect_agent(available: &[String]) -> Result<String> {
+    available.first().cloned().context(
+        "No AI agent found on PATH.\n  \
+         Install one of:\n    \
+         - claude (https://docs.anthropic.com)\n    \
+         - codex  (https://github.com/openai/codex)\n  \
+         - gemini (https://github.com/google-gemini/gemini-cli)\n  \
+         - opencode (https://opencode.ai)\n  \
+         Or set manually in ~/.config/stax/config.toml:\n    \
+         [ai]\n    \
+         agent = \"claude\"",
+    )
 }
 
 fn which_exists(command: &str) -> bool {
@@ -321,17 +352,7 @@ pub(crate) fn prompt_for_agent_and_model(
 
     match available.len() {
         0 => {
-            bail!(
-                "No AI agent found on PATH.\n  \
-                 Install one of:\n    \
-                 - claude (https://docs.anthropic.com)\n    \
-                 - codex  (https://github.com/openai/codex)\n  \
-                 - gemini (https://github.com/google-gemini/gemini-cli)\n  \
-                 - opencode (https://opencode.ai)\n  \
-                 Or set manually in ~/.config/stax/config.toml:\n    \
-                 [ai]\n    \
-                 agent = \"claude\""
-            );
+            return auto_detect_agent(&available).map(|agent| (agent, None));
         }
         1 => {
             let agent = available[0].clone();
@@ -833,5 +854,21 @@ mod tests {
     fn known_agent_for_model_recognizes_newer_codex_family_models() {
         assert_eq!(known_agent_for_model("gpt-5.4"), Some("codex"));
         assert_eq!(known_agent_for_model("gpt-5.4-pro"), Some("codex"));
+    }
+
+    #[test]
+    fn auto_detect_agent_uses_first_available_agent() {
+        let available = vec!["codex".to_string(), "gemini".to_string()];
+
+        let resolved = auto_detect_agent(&available).unwrap();
+
+        assert_eq!(resolved, "codex");
+    }
+
+    #[test]
+    fn auto_detect_agent_errors_when_none_available() {
+        let err = auto_detect_agent(&[]).unwrap_err();
+
+        assert!(err.to_string().contains("No AI agent found on PATH"));
     }
 }

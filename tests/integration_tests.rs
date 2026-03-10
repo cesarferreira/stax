@@ -378,6 +378,28 @@ impl TestRepo {
             .output()
             .expect("Failed to run git command")
     }
+
+    /// Create a two-branch stack where the parent restacks cleanly and the child conflicts.
+    fn create_restack_progress_conflict_scenario(&self) -> (String, String) {
+        self.run_stax(&["bc", "progress-parent"]);
+        let parent = self.current_branch();
+        self.create_file("parent.txt", "parent content\n");
+        self.commit("Parent commit");
+
+        self.run_stax(&["bc", "progress-child"]);
+        let child = self.current_branch();
+        self.create_file("conflict.txt", "child content\n");
+        self.commit("Child conflict commit");
+
+        self.run_stax(&["t"]);
+        self.create_file("main-update.txt", "main update\n");
+        self.create_file("conflict.txt", "main content\n");
+        self.commit("Main conflict commit");
+
+        self.run_stax(&["checkout", &child]);
+
+        (parent, child)
+    }
 }
 
 fn configure_submit_remote(repo: &TestRepo) {
@@ -1407,6 +1429,65 @@ fn test_restack_all_flag() {
     );
 }
 
+#[test]
+fn test_restack_conflict_reports_branch_progress_and_files() {
+    let repo = TestRepo::new();
+    let (parent, child) = repo.create_restack_progress_conflict_scenario();
+
+    let output = repo.run_stax(&["restack", "--yes"]);
+    assert!(
+        output.status.success(),
+        "restack failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Restack stopped on conflict:"),
+        "Expected conflict heading, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains(&format!("Stopped at: {}", child)),
+        "Expected stopped-at branch, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains(&format!("Parent: {}", parent)),
+        "Expected parent branch, got: {}",
+        stdout
+    );
+    assert!(
+        stdout
+            .contains("Progress: 1 branch rebased before conflict, 0 branches remaining in stack"),
+        "Expected progress summary, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains(&format!("Completed: {}", parent)),
+        "Expected completed branch list, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Conflicted files:") && stdout.contains("conflict.txt"),
+        "Expected conflicted files in output, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("stax restack --continue"),
+        "Expected continue guidance, got: {}",
+        stdout
+    );
+
+    let abort = repo.git(&["rebase", "--abort"]);
+    assert!(
+        abort.status.success(),
+        "Failed to abort rebase during cleanup: {}",
+        TestRepo::stderr(&abort)
+    );
+}
+
 // =============================================================================
 // Cascade Tests
 // =============================================================================
@@ -1511,6 +1592,49 @@ fn test_cascade_no_submit_from_middle_restacks_full_stack() {
             name
         );
     }
+}
+
+#[test]
+fn test_cascade_conflict_reports_restack_context() {
+    let repo = TestRepo::new();
+    let (_parent, child) = repo.create_restack_progress_conflict_scenario();
+
+    let output = repo.run_stax(&["cascade", "--no-submit"]);
+    assert!(
+        output.status.success(),
+        "cascade failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Cascading stack..."),
+        "Expected cascade banner, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Restack stopped on conflict:"),
+        "Expected restack conflict block, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains(&format!("Stopped at: {}", child)),
+        "Expected stopped-at branch in cascade output, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Conflicted files:") && stdout.contains("conflict.txt"),
+        "Expected conflicted files in cascade output, got: {}",
+        stdout
+    );
+
+    let abort = repo.git(&["rebase", "--abort"]);
+    assert!(
+        abort.status.success(),
+        "Failed to abort rebase during cleanup: {}",
+        TestRepo::stderr(&abort)
+    );
 }
 
 // =============================================================================

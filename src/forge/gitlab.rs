@@ -9,7 +9,7 @@ use super::{
     mergeable_bool, patch_json, post_json, put_json, stack_comment_body, AuthStyle,
 };
 use crate::ci::CheckRunInfo;
-use crate::github::pr::{MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
+use crate::github::pr::{CiStatus, MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
 use crate::remote::{ForgeType, RemoteInfo};
 
 const STACK_COMMENT_MARKER: &str = "<!-- stax-stack-comment -->";
@@ -463,6 +463,35 @@ mod tests {
         }
     }
 
+    fn mr_json(overrides: serde_json::Value) -> serde_json::Value {
+        let mut base = serde_json::json!({
+            "iid": 7,
+            "title": "Feature",
+            "state": "opened",
+            "draft": false,
+            "source_branch": "feature-a",
+            "target_branch": "main",
+            "description": "body",
+            "merge_status": "can_be_merged",
+            "detailed_merge_status": "mergeable",
+            "web_url": "https://gitlab.example.com/group/subgroup/repo/-/merge_requests/7",
+            "sha": "abc123"
+        });
+        if let serde_json::Value::Object(map) = overrides {
+            base.as_object_mut().unwrap().extend(map);
+        }
+        base
+    }
+
+    fn note_json(id: u64, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "body": body,
+            "created_at": "2024-01-01T00:00:00Z",
+            "author": { "username": "bot" }
+        })
+    }
+
     #[tokio::test]
     async fn test_list_open_prs_by_head() {
         let server = MockServer::start().await;
@@ -472,21 +501,11 @@ mod tests {
             .and(header("PRIVATE-TOKEN", "test-token"))
             .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
             .and(query_param("state", "opened"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "iid": 7,
-                    "title": "Feature",
-                    "state": "opened",
-                    "draft": false,
-                    "source_branch": "feature-a",
-                    "target_branch": "main",
-                    "description": "body",
-                    "merge_status": "can_be_merged",
-                    "detailed_merge_status": "mergeable",
-                    "web_url": "https://gitlab.example.com/group/subgroup/repo/-/merge_requests/7",
-                    "sha": "abc123"
-                }
-            ])))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([mr_json(
+                    serde_json::json!({})
+                )])),
+            )
             .mount(&server)
             .await;
 
@@ -496,6 +515,585 @@ mod tests {
         assert_eq!(pr.info.number, 7);
         assert_eq!(pr.info.state, "OPEN");
         assert_eq!(pr.info.base, "main");
+        assert!(!pr.info.is_draft);
+        assert_eq!(pr.head, "feature-a");
+        assert_eq!(
+            pr.head_label.as_deref(),
+            Some("https://gitlab.example.com/group/subgroup/repo/-/merge_requests/7")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_open_prs_by_head_multiple() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                mr_json(serde_json::json!({"iid": 7, "source_branch": "feature-a"})),
+                mr_json(serde_json::json!({"iid": 8, "source_branch": "feature-b", "target_branch": "develop"})),
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let prs = client.list_open_prs_by_head().await.unwrap();
+        assert_eq!(prs.len(), 2);
+        assert_eq!(prs["feature-a"].info.number, 7);
+        assert_eq!(prs["feature-b"].info.number, 8);
+        assert_eq!(prs["feature-b"].info.base, "develop");
+    }
+
+    #[tokio::test]
+    async fn test_find_open_pr_by_head_found() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("source_branch", "feature-a"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([mr_json(
+                    serde_json::json!({})
+                )])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let pr = client
+            .find_open_pr_by_head("feature-a")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pr.info.number, 7);
+        assert_eq!(pr.head, "feature-a");
+    }
+
+    #[tokio::test]
+    async fn test_find_pr_delegates_to_find_open_pr() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!([mr_json(
+                    serde_json::json!({})
+                )])),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let pr = client.find_pr("feature-a").await.unwrap().unwrap();
+        assert_eq!(pr.number, 7);
+        assert_eq!(pr.state, "OPEN");
+        // find_pr returns PrInfo, not PrInfoWithHead
+        assert_eq!(pr.base, "main");
+    }
+
+    #[tokio::test]
+    async fn test_find_open_pr_by_head_not_found() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        assert!(client
+            .find_open_pr_by_head("no-such")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_create_pr() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("POST"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(mr_json(serde_json::json!({
+                "iid": 10,
+                "draft": true
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let pr = client
+            .create_pr("feature-a", "main", "Feature", "body", true)
+            .await
+            .unwrap();
+        assert_eq!(pr.number, 10);
+        assert!(pr.is_draft);
+    }
+
+    #[tokio::test]
+    async fn test_get_pr() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let pr = client.get_pr(7).await.unwrap();
+        assert_eq!(pr.number, 7);
+        assert_eq!(pr.state, "OPEN");
+        assert!(!pr.is_draft);
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_with_head() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let pr = client.get_pr_with_head(7).await.unwrap();
+        assert_eq!(pr.info.number, 7);
+        assert_eq!(pr.info.state, "OPEN");
+        assert_eq!(pr.info.base, "main");
+        assert_eq!(pr.head, "feature-a");
+        assert_eq!(
+            pr.head_label.as_deref(),
+            Some("https://gitlab.example.com/group/subgroup/repo/-/merge_requests/7")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_pr_base() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("PUT"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "target_branch": "develop"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        client.update_pr_base(7, "develop").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_pr_body() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("PUT"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "description": "new body"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        client.update_pr_body(7, "new body").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_body() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "description": "hello world"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let body = client.get_pr_body(7).await.unwrap();
+        assert_eq!(body, "hello world");
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_body_null_description() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "description": null
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let body = client.get_pr_body(7).await.unwrap();
+        assert_eq!(body, "");
+    }
+
+    #[tokio::test]
+    async fn test_create_stack_comment() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("POST"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/notes",
+            ))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(note_json(100, "<!-- stax-stack-comment -->\nstack info")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        client.create_stack_comment(7, "stack info").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_stack_comment_existing() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        // find_stack_comment_id lists notes
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/notes",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                note_json(50, "<!-- stax-stack-comment -->\nold stack")
+            ])))
+            .mount(&server)
+            .await;
+
+        // update existing note
+        Mock::given(method("PUT"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/notes/50",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(note_json(50, "<!-- stax-stack-comment -->\nnew stack")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        client
+            .update_stack_comment(7, "new stack")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_stack_comment_creates_when_missing() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        // No existing stack comment
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/notes",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([note_json(99, "normal comment")])),
+            )
+            .mount(&server)
+            .await;
+
+        // Falls back to create
+        Mock::given(method("POST"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/notes",
+            ))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(note_json(100, "<!-- stax-stack-comment -->\nstack")),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        client.update_stack_comment(7, "stack").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delete_stack_comment() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/notes",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                note_json(50, "<!-- stax-stack-comment -->\nstack")
+            ])))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/notes/50",
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        client.delete_stack_comment(7).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delete_stack_comment_noop_when_missing() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/notes",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        client.delete_stack_comment(7).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_list_all_comments() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/notes",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                note_json(1, "first"),
+                note_json(2, "second")
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let comments = client.list_all_comments(7).await.unwrap();
+        assert_eq!(comments.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_merge_pr_squash() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("PUT"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/merge",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        client
+            .merge_pr(7, MergeMethod::Squash, Some("feat: squash"), Some("abc123"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "head_pipeline": { "status": "success" }
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let status = client.get_pr_merge_status(7).await.unwrap();
+        assert_eq!(status.number, 7);
+        assert_eq!(status.title, "Feature");
+        assert_eq!(status.state, "OPEN");
+        assert!(!status.is_draft);
+        assert_eq!(status.mergeable_state, "mergeable");
+        assert!(status.mergeable.unwrap());
+        assert_eq!(status.head_sha, "abc123");
+        assert!(matches!(status.ci_status, CiStatus::Success));
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_pending_pipeline() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "head_pipeline": { "status": "running" }
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let status = client.get_pr_merge_status(7).await.unwrap();
+        assert!(matches!(status.ci_status, CiStatus::Pending));
+    }
+
+    #[tokio::test]
+    async fn test_is_pr_merged_true() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "state": "merged"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        assert!(client.is_pr_merged(7).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_is_pr_merged_false() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({}))),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        assert!(!client.is_pr_merged(7).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_no_pipeline() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "head_pipeline": null
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let status = client.get_pr_merge_status(7).await.unwrap();
+        // No pipeline → NoCi
+        assert!(matches!(status.ci_status, CiStatus::NoCi));
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_falls_back_to_merge_status() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "detailed_merge_status": null,
+                "merge_status": "can_be_merged"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let status = client.get_pr_merge_status(7).await.unwrap();
+        assert_eq!(status.mergeable_state, "can_be_merged");
+        assert!(status.mergeable.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_both_null_defaults_unknown() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "detailed_merge_status": null,
+                "merge_status": null
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let status = client.get_pr_merge_status(7).await.unwrap();
+        assert_eq!(status.mergeable_state, "unknown");
+        assert!(status.mergeable.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_normalize_gitlab_state() {
+        assert_eq!(normalize_gitlab_state("opened"), "OPEN");
+        assert_eq!(normalize_gitlab_state("closed"), "CLOSED");
+        assert_eq!(normalize_gitlab_state("merged"), "MERGED");
+        assert_eq!(normalize_gitlab_state("weird"), "WEIRD");
     }
 
     #[tokio::test]
@@ -532,5 +1130,288 @@ mod tests {
         assert_eq!(overall.as_deref(), Some("pending"));
         assert_eq!(checks.len(), 2);
         assert_eq!(checks[0].status, "in_progress");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_failure_takes_precedence() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/repository/commits/sha1/statuses",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": "a", "status": "failed", "target_url": null, "started_at": null, "finished_at": null },
+                { "name": "b", "status": "success", "target_url": null, "started_at": null, "finished_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let (overall, _) = client.fetch_checks("sha1").await.unwrap();
+        assert_eq!(overall.as_deref(), Some("failure"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_all_success() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/repository/commits/sha2/statuses",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": "a", "status": "success", "target_url": null, "started_at": null, "finished_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let (overall, _) = client.fetch_checks("sha2").await.unwrap();
+        assert_eq!(overall.as_deref(), Some("success"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_empty() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/repository/commits/sha3/statuses",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let (overall, checks) = client.fetch_checks("sha3").await.unwrap();
+        assert!(overall.is_none());
+        assert!(checks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_canceled_is_failure() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/repository/commits/sha4/statuses",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": "ci", "status": "canceled", "target_url": null, "started_at": null, "finished_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let (overall, checks) = client.fetch_checks("sha4").await.unwrap();
+        assert_eq!(overall.as_deref(), Some("failure"));
+        assert_eq!(checks[0].status, "completed");
+        assert_eq!(checks[0].conclusion.as_deref(), Some("canceled"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_check_run_info_fields() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/repository/commits/sha5/statuses",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "name": "build",
+                    "status": "success",
+                    "target_url": "https://ci.example.com/42",
+                    "started_at": "2024-01-01T00:00:00Z",
+                    "finished_at": "2024-01-01T00:05:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let (_, checks) = client.fetch_checks("sha5").await.unwrap();
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "build");
+        assert_eq!(checks[0].status, "completed");
+        assert_eq!(checks[0].conclusion.as_deref(), Some("success"));
+        assert_eq!(
+            checks[0].url.as_deref(),
+            Some("https://ci.example.com/42")
+        );
+        assert_eq!(
+            checks[0].started_at.as_deref(),
+            Some("2024-01-01T00:00:00Z")
+        );
+        assert_eq!(
+            checks[0].completed_at.as_deref(),
+            Some("2024-01-01T00:05:00Z")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_checks_null_name_defaults_to_pipeline() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/repository/commits/sha6/statuses",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "name": null, "status": "success", "target_url": null, "started_at": null, "finished_at": null }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let (_, checks) = client.fetch_checks("sha6").await.unwrap();
+        assert_eq!(checks[0].name, "pipeline");
+    }
+
+    // --- API error response tests ---
+
+    #[tokio::test]
+    async fn test_get_pr_returns_error_on_404() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/999",
+            ))
+            .respond_with(ResponseTemplate::new(404).set_body_string(r#"{"message":"404 Not Found"}"#))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let err = client.get_pr(999).await.unwrap_err();
+        assert!(
+            err.to_string().contains("404"),
+            "Error should mention 404: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_pr_returns_error_on_401() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "bad-token");
+
+        Mock::given(method("POST"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"message":"401 Unauthorized"}"#))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let err = client
+            .create_pr("feat", "main", "title", "body", false)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("401"),
+            "Error should mention 401: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_pr_returns_error_on_405() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("PUT"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/merge",
+            ))
+            .respond_with(
+                ResponseTemplate::new(405)
+                    .set_body_string(r#"{"message":"Method Not Allowed"}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let err = client
+            .merge_pr(7, MergeMethod::Merge, None, None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("405"),
+            "Error should mention 405: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_pr_non_squash() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("PUT"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/merge",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        // Merge (not squash) - should work fine
+        client
+            .merge_pr(7, MergeMethod::Merge, None, None)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_is_pr_merged_closed_is_not_merged() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        // GitLab "closed" != "merged" (unlike Gitea)
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "state": "closed"
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        assert!(!client.is_pr_merged(7).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_draft_mr_state() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mr_json(serde_json::json!({
+                "draft": true
+            }))))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let pr = client.get_pr(7).await.unwrap();
+        assert!(pr.is_draft);
+
+        // Also verify merge status reports draft
+        let status = client.get_pr_merge_status(7).await.unwrap();
+        assert!(status.is_draft);
     }
 }

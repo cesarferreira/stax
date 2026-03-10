@@ -212,6 +212,16 @@ fn test_config_help_includes_reset_ai_flag() {
 }
 
 #[test]
+fn test_generate_help_includes_no_prompt_flag() {
+    let output = stax(&["generate", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--pr-body"));
+    assert!(stdout.contains("--no-prompt"));
+    assert!(stdout.contains("--edit"));
+}
+
+#[test]
 fn test_config_reset_ai_no_prompt_clears_saved_defaults() {
     let temp_dir = std::env::temp_dir().join(format!(
         "stax-cli-test-config-reset-ai-{}",
