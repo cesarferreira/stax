@@ -36,6 +36,12 @@ Generate and update PR body based on diff, commits, and template:
 st generate --pr-body
 ```
 
+If you want stax to generate the body and update the PR without the final review prompt:
+
+```bash
+st generate --pr-body --no-prompt
+```
+
 ### Prerequisites
 
 - Current branch must be tracked by stax
@@ -52,6 +58,7 @@ st generate --pr-body
 
 - `--agent <name>` override configured agent for one run
 - `--model <name>` override model for one run
+- `--no-prompt` skip AI picker/review prompts and use defaults
 - `--edit` review/edit generated body before update
 - Supported agents: `claude`, `codex`, `gemini`, `opencode`
 
@@ -83,5 +90,6 @@ st generate --pr-body --agent codex
 st generate --pr-body --model claude-haiku-4-5-20251001
 st generate --pr-body --agent gemini --model gemini-2.5-flash
 st generate --pr-body --agent opencode
+st generate --pr-body --no-prompt
 st generate --pr-body --edit
 ```

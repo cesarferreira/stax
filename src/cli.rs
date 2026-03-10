@@ -598,6 +598,9 @@ enum Commands {
         /// Open editor to review before updating
         #[arg(long)]
         edit: bool,
+        /// Disable interactive prompts (use defaults)
+        #[arg(long)]
+        no_prompt: bool,
         /// AI agent to use (claude, codex, gemini, opencode). Defaults to config or auto-detect
         #[arg(long)]
         agent: Option<String>,
@@ -1303,13 +1306,14 @@ pub fn run() -> Result<()> {
         Commands::Generate {
             pr_body,
             edit,
+            no_prompt,
             agent,
             model,
         } => {
             if !pr_body {
                 anyhow::bail!("Please specify what to generate. Usage: stax generate --pr-body");
             }
-            commands::generate::run(edit, agent, model)
+            commands::generate::run(edit, no_prompt, agent, model)
         }
         Commands::Changelog {
             from,

@@ -131,7 +131,7 @@ Next steps:
 | `st cascade` | Restack, push, and create/update PRs |
 | `st undo` / `st redo` | Recover or re-apply risky operations |
 | `st standup` | Summarize recent engineering activity |
-| `st generate --pr-body` | Generate PR body with AI |
+| `st generate --pr-body [--no-prompt]` | Generate PR body with AI |
 | `st run <cmd>` (alias: `st test <cmd>`) | Run a command on each branch in stack |
 
 For complete command and flag reference: [docs/commands/core.md](docs/commands/core.md) and [docs/commands/reference.md](docs/commands/reference.md).
@@ -237,6 +237,9 @@ Use your configured AI agent to draft PR bodies and generate daily standup summa
 ```bash
 # Generate/update PR body from branch diff + context
 st generate --pr-body
+
+# Generate/update PR body without the review prompt
+st generate --pr-body --no-prompt
 
 # Spoken-style standup summary
 st standup --summary
