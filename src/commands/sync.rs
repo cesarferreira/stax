@@ -1,4 +1,5 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
+use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
@@ -907,7 +908,7 @@ pub fn run(
 
             let mut summary: Vec<(String, String)> = Vec::new();
 
-            for branch in &branches_to_restack {
+            for (index, branch) in branches_to_restack.iter().enumerate() {
                 let restack_timer = LiveTimer::maybe_new(!quiet, &format!("Restack {}", branch));
 
                 let meta = match BranchMetadata::read(repo.inner(), branch)? {
@@ -937,13 +938,28 @@ pub fn run(
                     }
                     RebaseResult::Conflict => {
                         LiveTimer::maybe_finish_warn(restack_timer, "conflict");
-                        if !quiet {
-                            println!("  {}", "Resolve conflicts and run:".yellow());
-                            println!("    {}", "stax resolve".cyan());
-                            println!("    {}", "stax continue".cyan());
-                            println!("    {}", "stax sync --continue".cyan());
-                        }
-                        if stashed && !quiet {
+                        let completed_branches: Vec<String> = summary
+                            .iter()
+                            .filter(|(_, status)| status == "ok")
+                            .map(|(name, _)| name.clone())
+                            .collect();
+                        print_restack_conflict(
+                            &repo,
+                            &RestackConflictContext {
+                                branch,
+                                parent_branch: &meta.parent_branch_name,
+                                completed_branches: &completed_branches,
+                                remaining_branches: branches_to_restack
+                                    .len()
+                                    .saturating_sub(index + 1),
+                                continue_commands: &[
+                                    "stax resolve",
+                                    "stax continue",
+                                    "stax sync --continue",
+                                ],
+                            },
+                        );
+                        if stashed {
                             println!("{}", "Stash kept to avoid conflicts.".yellow());
                         }
                         summary.push((branch.clone(), "conflict".to_string()));

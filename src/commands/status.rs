@@ -503,46 +503,179 @@ fn collect_display_branches_with_nesting(
     max_column: &mut usize,
     allowed: Option<&HashSet<String>>,
 ) {
-    collect_recursive(stack, branch, base_column, result, max_column, allowed);
-}
-
-fn collect_recursive(
-    stack: &Stack,
-    branch: &str,
-    column: usize,
-    result: &mut Vec<DisplayBranch>,
-    max_column: &mut usize,
-    allowed: Option<&HashSet<String>>,
-) {
-    if allowed.is_some_and(|set| !set.contains(branch)) {
-        return;
+    #[derive(Clone)]
+    struct Frame {
+        branch: String,
+        column: usize,
+        expanded: bool,
     }
 
-    *max_column = (*max_column).max(column);
+    let mut stack_frames = vec![Frame {
+        branch: branch.to_string(),
+        column: base_column,
+        expanded: false,
+    }];
+    let mut visiting = HashSet::new();
+    let mut emitted = HashSet::new();
 
-    if let Some(info) = stack.branches.get(branch) {
-        let mut children: Vec<&String> = info
-            .children
-            .iter()
-            .filter(|c| allowed.is_none_or(|set| set.contains(*c)))
-            .collect();
+    while let Some(frame) = stack_frames.pop() {
+        if allowed.is_some_and(|set| !set.contains(&frame.branch)) {
+            continue;
+        }
 
-        if !children.is_empty() {
-            // Sort children alphabetically (like fp)
+        if frame.expanded {
+            visiting.remove(&frame.branch);
+            if emitted.insert(frame.branch.clone()) {
+                result.push(DisplayBranch {
+                    name: frame.branch,
+                    column: frame.column,
+                });
+            }
+            continue;
+        }
+
+        if emitted.contains(&frame.branch) || !visiting.insert(frame.branch.clone()) {
+            continue;
+        }
+
+        *max_column = (*max_column).max(frame.column);
+        stack_frames.push(Frame {
+            branch: frame.branch.clone(),
+            column: frame.column,
+            expanded: true,
+        });
+
+        if let Some(info) = stack.branches.get(&frame.branch) {
+            let mut children: Vec<&String> = info
+                .children
+                .iter()
+                .filter(|child| allowed.is_none_or(|set| set.contains(*child)))
+                .collect();
+
             children.sort();
 
-            // Each child gets column + index: first child at same column, second at +1, etc.
-            for (i, child) in children.iter().enumerate() {
-                collect_recursive(stack, child, column + i, result, max_column, allowed);
+            for (i, child) in children.into_iter().enumerate().rev() {
+                if emitted.contains(child) || visiting.contains(child) {
+                    continue;
+                }
+
+                stack_frames.push(Frame {
+                    branch: child.clone(),
+                    column: frame.column + i,
+                    expanded: false,
+                });
             }
         }
     }
+}
 
-    // Add current branch after all children are processed (post-order)
-    result.push(DisplayBranch {
-        name: branch.to_string(),
-        column,
-    });
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::stack::StackBranch;
+
+    fn branch(parent: Option<&str>, children: Vec<String>) -> StackBranch {
+        StackBranch {
+            name: String::new(),
+            parent: parent.map(str::to_string),
+            children,
+            needs_restack: false,
+            pr_number: None,
+            pr_state: None,
+            pr_is_draft: None,
+        }
+    }
+
+    #[test]
+    fn collect_display_branches_handles_deep_chains_without_recursion() {
+        let depth = 20_000;
+        let mut branches = HashMap::new();
+        let trunk = "main".to_string();
+        branches.insert(
+            trunk.clone(),
+            StackBranch {
+                name: trunk.clone(),
+                parent: None,
+                children: vec!["branch-0".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+
+        for i in 0..depth {
+            let name = format!("branch-{i}");
+            let child = (i + 1 < depth).then(|| format!("branch-{}", i + 1));
+            branches.insert(
+                name.clone(),
+                StackBranch {
+                    name,
+                    parent: Some(if i == 0 {
+                        trunk.clone()
+                    } else {
+                        format!("branch-{}", i - 1)
+                    }),
+                    children: child.into_iter().collect(),
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: None,
+                    pr_is_draft: None,
+                },
+            );
+        }
+
+        let stack = Stack { branches, trunk };
+        let mut result = Vec::new();
+        let mut max_column = 0;
+        collect_display_branches_with_nesting(
+            &stack,
+            "branch-0",
+            0,
+            &mut result,
+            &mut max_column,
+            None,
+        );
+
+        assert_eq!(result.len(), depth);
+        assert_eq!(
+            result.first().map(|b| b.name.as_str()),
+            Some("branch-19999")
+        );
+        assert_eq!(result.last().map(|b| b.name.as_str()), Some("branch-0"));
+        assert_eq!(max_column, 0);
+    }
+
+    #[test]
+    fn collect_display_branches_skips_cycles() {
+        let mut branches = HashMap::new();
+        branches.insert(
+            "main".to_string(),
+            StackBranch {
+                name: "main".to_string(),
+                parent: None,
+                children: vec!["a".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert("a".to_string(), branch(Some("main"), vec!["b".to_string()]));
+        branches.insert("b".to_string(), branch(Some("a"), vec!["a".to_string()]));
+
+        let stack = Stack {
+            branches,
+            trunk: "main".to_string(),
+        };
+        let mut result = Vec::new();
+        let mut max_column = 0;
+        collect_display_branches_with_nesting(&stack, "a", 0, &mut result, &mut max_column, None);
+
+        let names: Vec<&str> = result.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, vec!["b", "a"]);
+        assert_eq!(max_column, 0);
+    }
 }
 
 /// Get line additions and deletions between parent and branch

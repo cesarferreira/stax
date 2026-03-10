@@ -8,6 +8,7 @@
 - Integration tests that shell out to the compiled `stax` binary must resolve a path that exists at runtime; prefer helper logic that falls back from `CARGO_BIN_EXE_stax` to the sibling `target/.../stax` binary so `nextest` and Docker runs stay stable.
 - Tests that must run outside any Git repository must not use temp dirs rooted under `STAX_TEST_TMPDIR`/`TMPDIR` inside the workspace; `git discover` walks parent directories, so those fixtures can accidentally execute inside the repo during `make test-native`.
 - For full-suite test runs, use `make test` or `just test` (never `cargo test`); on macOS the default should use Docker for performance and consistency.
+- Stack/branch graph traversal in user-facing commands must be iterative and cycle-safe; do not recurse over metadata graphs that can be deep or corrupted by local refs.
 - For stack-merge flows that delete merged branches, always rebase and retarget descendant branches/PR bases before cleanup; deleting a base branch first can auto-close descendant PRs on GitHub.
 - Any descendant-rebase path (`merge`, `merge --when-ready`, `restack`, `upstack restack`, `sync --restack`) must preserve provenance boundaries (`parent_branch_revision` / old parent tip) and use provenance-aware rebase logic; plain `git rebase <trunk>` will replay already-integrated parent history after squash merges.
 - Configure explicit connect/read/write timeouts for GitHub API clients (and other network clients); never rely on library defaults for long-running CLI flows where silent waits look like hangs.
