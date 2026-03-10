@@ -97,7 +97,10 @@ pub fn run(
     let client = remote_info
         .as_ref()
         .ok()
-        .and_then(|info| ForgeClient::new(info).ok());
+        .and_then(|info| {
+            let _enter = rt.enter();
+            ForgeClient::new(info).ok()
+        });
 
     // For branches missing PR metadata, check the forge for existing PRs
     if let Some(ref client) = client {
