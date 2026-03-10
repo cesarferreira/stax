@@ -2,7 +2,7 @@ use crate::engine::BranchMetadata;
 use crate::git::{refs, GitRepo};
 use anyhow::Result;
 use git2::BranchType;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Represents a branch in the stack
 #[derive(Debug, Clone)]
@@ -108,9 +108,13 @@ impl Stack {
     pub fn ancestors(&self, branch: &str) -> Vec<String> {
         let mut result = Vec::new();
         let mut current = branch.to_string();
+        let mut visited = HashSet::from([current.clone()]);
 
         while let Some(b) = self.branches.get(&current) {
             if let Some(parent) = &b.parent {
+                if !visited.insert(parent.clone()) {
+                    break;
+                }
                 result.push(parent.clone());
                 current = parent.clone();
             } else {
@@ -125,10 +129,14 @@ impl Stack {
     pub fn descendants(&self, branch: &str) -> Vec<String> {
         let mut result = Vec::new();
         let mut to_visit = vec![branch.to_string()];
+        let mut visited = HashSet::from([branch.to_string()]);
 
         while let Some(current) = to_visit.pop() {
             if let Some(b) = self.branches.get(&current) {
                 for child in &b.children {
+                    if !visited.insert(child.clone()) {
+                        continue;
+                    }
                     result.push(child.clone());
                     to_visit.push(child.clone());
                 }
@@ -140,11 +148,28 @@ impl Stack {
 
     /// Get the current stack (ancestors + current + descendants)
     pub fn current_stack(&self, branch: &str) -> Vec<String> {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
         let mut ancestors = self.ancestors(branch);
         ancestors.reverse();
-        ancestors.push(branch.to_string());
-        ancestors.extend(self.descendants(branch));
-        ancestors
+
+        for name in ancestors {
+            if seen.insert(name.clone()) {
+                result.push(name);
+            }
+        }
+
+        if seen.insert(branch.to_string()) {
+            result.push(branch.to_string());
+        }
+
+        for name in self.descendants(branch) {
+            if seen.insert(name.clone()) {
+                result.push(name);
+            }
+        }
+
+        result
     }
 
     /// Get branches that need restacking
@@ -368,6 +393,103 @@ mod tests {
         let stack = create_test_stack();
         let current = stack.current_stack("feature-b");
         assert_eq!(current, vec!["main", "feature-b"]);
+    }
+
+    #[test]
+    fn test_ancestors_breaks_parent_cycles() {
+        let mut branches = HashMap::new();
+        branches.insert(
+            "main".to_string(),
+            StackBranch {
+                name: "main".to_string(),
+                parent: None,
+                children: vec![],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert(
+            "a".to_string(),
+            StackBranch {
+                name: "a".to_string(),
+                parent: Some("b".to_string()),
+                children: vec!["b".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert(
+            "b".to_string(),
+            StackBranch {
+                name: "b".to_string(),
+                parent: Some("a".to_string()),
+                children: vec!["a".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+
+        let stack = Stack {
+            branches,
+            trunk: "main".to_string(),
+        };
+
+        assert_eq!(stack.ancestors("a"), vec!["b"]);
+        assert_eq!(stack.current_stack("a"), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn test_descendants_breaks_child_cycles() {
+        let mut branches = HashMap::new();
+        branches.insert(
+            "main".to_string(),
+            StackBranch {
+                name: "main".to_string(),
+                parent: None,
+                children: vec!["a".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert(
+            "a".to_string(),
+            StackBranch {
+                name: "a".to_string(),
+                parent: Some("main".to_string()),
+                children: vec!["b".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert(
+            "b".to_string(),
+            StackBranch {
+                name: "b".to_string(),
+                parent: Some("a".to_string()),
+                children: vec!["a".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+
+        let stack = Stack {
+            branches,
+            trunk: "main".to_string(),
+        };
+
+        assert_eq!(stack.descendants("a"), vec!["b"]);
     }
 
     #[test]
