@@ -29,6 +29,7 @@ pub mod redo;
 pub mod reorder;
 pub mod resolve;
 pub mod restack;
+pub(crate) mod restack_conflict;
 pub(crate) mod restack_parent;
 pub mod shell_setup;
 pub mod split;
