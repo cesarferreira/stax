@@ -260,21 +260,62 @@ impl App {
         &self,
         result: &mut Vec<BranchDisplay>,
         branch: &str,
-        column: usize,
+        base_column: usize,
         max_column: &mut usize,
     ) -> Result<()> {
-        *max_column = (*max_column).max(column);
+        #[derive(Clone)]
+        struct Frame {
+            branch: String,
+            column: usize,
+            expanded: bool,
+        }
 
-        if let Some(info) = self.stack.branches.get(branch) {
-            let mut children: Vec<&String> = info.children.iter().collect();
-            children.sort();
+        let mut stack_frames = vec![Frame {
+            branch: branch.to_string(),
+            column: base_column,
+            expanded: false,
+        }];
+        let mut visiting = std::collections::HashSet::new();
+        let mut emitted = std::collections::HashSet::new();
 
-            for (i, child) in children.iter().enumerate() {
-                self.collect_branches(result, child, column + i, max_column)?;
+        while let Some(frame) = stack_frames.pop() {
+            if frame.expanded {
+                visiting.remove(&frame.branch);
+                if emitted.insert(frame.branch.clone()) {
+                    result.push(self.create_branch_display(&frame.branch, frame.column, false)?);
+                }
+                continue;
+            }
+
+            if emitted.contains(&frame.branch) || !visiting.insert(frame.branch.clone()) {
+                continue;
+            }
+
+            *max_column = (*max_column).max(frame.column);
+            stack_frames.push(Frame {
+                branch: frame.branch.clone(),
+                column: frame.column,
+                expanded: true,
+            });
+
+            if let Some(info) = self.stack.branches.get(&frame.branch) {
+                let mut children: Vec<&String> = info.children.iter().collect();
+                children.sort();
+
+                for (i, child) in children.into_iter().enumerate().rev() {
+                    if emitted.contains(child) || visiting.contains(child) {
+                        continue;
+                    }
+
+                    stack_frames.push(Frame {
+                        branch: child.clone(),
+                        column: frame.column + i,
+                        expanded: false,
+                    });
+                }
             }
         }
 
-        result.push(self.create_branch_display(branch, column, false)?);
         Ok(())
     }
 
