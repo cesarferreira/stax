@@ -1293,6 +1293,67 @@ fn test_restack_auto_normalizes_squash_merged_parent() {
 }
 
 #[test]
+fn test_restack_auto_normalizes_squash_merged_parent_after_trunk_advances() {
+    let repo = TestRepo::new();
+
+    // Build stack: main -> parent -> child
+    repo.run_stax(&["bc", "restack-parent-advanced"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent 1\n");
+    repo.commit("Parent commit 1");
+
+    repo.run_stax(&["bc", "restack-child-advanced"]);
+    let child = repo.current_branch();
+    repo.create_file("child.txt", "child change\n");
+    repo.commit("Child commit");
+
+    // Squash-merge parent into main.
+    repo.run_stax(&["t"]);
+    let squash = repo.git(&["merge", "--squash", &parent]);
+    assert!(
+        squash.status.success(),
+        "Failed squash merge: {}",
+        TestRepo::stderr(&squash)
+    );
+    repo.commit("Squash merge parent");
+
+    // Advance trunk with unrelated work after the squash merge.
+    repo.create_file("main-later.txt", "later trunk work\n");
+    repo.commit("Later trunk commit");
+
+    repo.run_stax(&["checkout", &child]);
+    let output = repo.run_stax(&["restack", "--quiet"]);
+    assert!(
+        output.status.success(),
+        "restack failed after trunk advanced\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let metadata_ref = format!("refs/branch-metadata/{}", child);
+    let metadata_output = repo.git(&["show", &metadata_ref]);
+    assert!(
+        metadata_output.status.success(),
+        "Failed to read metadata: {}",
+        TestRepo::stderr(&metadata_output)
+    );
+    let metadata = TestRepo::stdout(&metadata_output);
+    assert!(
+        metadata.contains("\"parentBranchName\":\"main\""),
+        "Expected child to be reparented to trunk after squash merge, metadata was: {}",
+        metadata
+    );
+
+    let count_output = repo.git(&["rev-list", "--count", &format!("main..{}", child)]);
+    assert!(count_output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&count_output.stdout).trim(),
+        "1",
+        "Expected child to retain only novel commits after restack even when trunk advanced"
+    );
+}
+
+#[test]
 fn test_restack_auto_normalizes_missing_parent() {
     let repo = TestRepo::new();
 
