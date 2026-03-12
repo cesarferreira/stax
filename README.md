@@ -102,11 +102,19 @@ st ls
 # 3. Submit PRs for whole stack
 st ss
 
-# 4. Sync trunk and restack after merges
+# 4. After auth-api PR is merged on GitHub...
+
+# Pull trunk, detect the merge, delete auth-api, reparent auth-ui → main
+st rs
+
+# Rebase auth-ui onto updated main
+st restack
+
+# Or do both in one shot:
 st rs --restack
 ```
 
-Result: two stacked branches, submitted as two linked PRs, then kept up to date with one sync/restack command.
+Result: two stacked branches, submitted as two linked PRs. After the bottom PR is merged, sync detects it, cleans up, and restack rebases the remaining branch onto trunk.
 
 Picked the wrong trunk branch? Run `st init` to reconfigure it interactively, or `st init --trunk <branch>` to set it directly.
 

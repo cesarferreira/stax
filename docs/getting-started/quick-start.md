@@ -30,7 +30,15 @@ st ls
 # 3. Submit PRs for the whole stack
 st ss
 
-# 4. Sync and rebase after merges
+# 4. After auth-api PR is merged on GitHub...
+
+# Pull trunk, detect the merge, delete auth-api, reparent auth-ui → main
+st rs
+
+# Rebase auth-ui onto updated main
+st restack
+
+# Or do both in one shot:
 st rs --restack
 ```
 
