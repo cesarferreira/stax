@@ -178,7 +178,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
             i,
             &mut display_branches,
             &mut max_column,
-        );
+        )?;
     }
 
     let tree_target_width = (max_column + 1) * 2;
@@ -352,8 +352,18 @@ fn collect_display_branches_with_nesting(
     base_column: usize,
     result: &mut Vec<DisplayBranch>,
     max_column: &mut usize,
-) {
-    collect_recursive(stack, branch, base_column, result, max_column);
+) -> Result<()> {
+    let mut active = HashSet::new();
+    let mut seen = HashSet::new();
+    collect_recursive(
+        stack,
+        branch,
+        base_column,
+        result,
+        max_column,
+        &mut active,
+        &mut seen,
+    )
 }
 
 fn collect_recursive(
@@ -362,7 +372,18 @@ fn collect_recursive(
     column: usize,
     result: &mut Vec<DisplayBranch>,
     max_column: &mut usize,
-) {
+    active: &mut HashSet<String>,
+    seen: &mut HashSet<String>,
+) -> Result<()> {
+    if active.contains(branch) {
+        anyhow::bail!("Cycle detected in stack metadata at branch '{}'", branch);
+    }
+    if seen.contains(branch) {
+        return Ok(());
+    }
+
+    active.insert(branch.to_string());
+    seen.insert(branch.to_string());
     *max_column = (*max_column).max(column);
 
     if let Some(info) = stack.branches.get(branch) {
@@ -371,15 +392,17 @@ fn collect_recursive(
         if !children.is_empty() {
             children.sort();
             for (i, child) in children.iter().enumerate() {
-                collect_recursive(stack, child, column + i, result, max_column);
+                collect_recursive(stack, child, column + i, result, max_column, active, seen)?;
             }
         }
     }
 
+    active.remove(branch);
     result.push(DisplayBranch {
         name: branch.to_string(),
         column,
     });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -481,7 +504,8 @@ mod tests {
                 i,
                 &mut display_branches,
                 &mut max_column,
-            );
+            )
+            .unwrap();
         }
         let names: Vec<_> = display_branches.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(names, vec!["auth-ui", "auth-api", "auth", "hotfix"]);
@@ -493,5 +517,24 @@ mod tests {
         let truncated = truncate_display(text, 16);
         assert!(console::measure_text_width(&truncated) <= 16);
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_collect_display_branches_detects_cycle() {
+        let mut stack = test_stack();
+        stack.branches.get_mut("auth").unwrap().children = vec!["auth-api".to_string()];
+        stack.branches.get_mut("auth-api").unwrap().children = vec!["auth".to_string()];
+
+        let mut display_branches = Vec::new();
+        let mut max_column = 0;
+        let err = collect_display_branches_with_nesting(
+            &stack,
+            "auth",
+            0,
+            &mut display_branches,
+            &mut max_column,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("Cycle detected in stack metadata"));
     }
 }
