@@ -1276,9 +1276,10 @@ fn test_restack_auto_normalizes_squash_merged_parent() {
         "Failed to read metadata: {}",
         TestRepo::stderr(&metadata_output)
     );
-    let metadata = TestRepo::stdout(&metadata_output);
-    assert!(
-        metadata.contains("\"parentBranchName\":\"main\""),
+    let metadata: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output)).expect("Invalid JSON metadata");
+    assert_eq!(
+        metadata["parentBranchName"], "main",
         "Expected child to be reparented to trunk, metadata was: {}",
         metadata
     );
@@ -1337,9 +1338,10 @@ fn test_restack_auto_normalizes_squash_merged_parent_after_trunk_advances() {
         "Failed to read metadata: {}",
         TestRepo::stderr(&metadata_output)
     );
-    let metadata = TestRepo::stdout(&metadata_output);
-    assert!(
-        metadata.contains("\"parentBranchName\":\"main\""),
+    let metadata: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output)).expect("Invalid JSON metadata");
+    assert_eq!(
+        metadata["parentBranchName"], "main",
         "Expected child to be reparented to trunk after squash merge, metadata was: {}",
         metadata
     );
@@ -1390,9 +1392,10 @@ fn test_restack_auto_normalizes_missing_parent() {
         "Failed to read metadata: {}",
         TestRepo::stderr(&metadata_output)
     );
-    let metadata = TestRepo::stdout(&metadata_output);
-    assert!(
-        metadata.contains("\"parentBranchName\":\"main\""),
+    let metadata: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output)).expect("Invalid JSON metadata");
+    assert_eq!(
+        metadata["parentBranchName"], "main",
         "Expected missing-parent child to be reparented to trunk, metadata was: {}",
         metadata
     );
@@ -1454,9 +1457,10 @@ fn test_restack_cleanup_reparents_children_before_deleting_merged_parent() {
         "Failed to read child metadata after cleanup: {}",
         TestRepo::stderr(&metadata_output)
     );
-    let metadata = TestRepo::stdout(&metadata_output);
-    assert!(
-        metadata.contains("\"parentBranchName\":\"main\""),
+    let metadata: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output)).expect("Invalid JSON metadata");
+    assert_eq!(
+        metadata["parentBranchName"], "main",
         "Expected cleanup to reparent child before deleting parent, metadata was: {}",
         metadata
     );
@@ -5517,9 +5521,10 @@ mod github_mock_tests {
             "Failed to read branch_b metadata: {}",
             TestRepo::stderr(&metadata_output)
         );
-        let metadata = TestRepo::stdout(&metadata_output);
-        assert!(
-            metadata.contains("\"parentBranchName\":\"main\""),
+        let metadata: Value = serde_json::from_str(&TestRepo::stdout(&metadata_output))
+            .expect("Invalid JSON metadata");
+        assert_eq!(
+            metadata["parentBranchName"], "main",
             "Expected merge-b to be reparented to trunk, metadata was: {}",
             metadata
         );
@@ -5863,9 +5868,10 @@ mod github_mock_tests {
             "Failed to read branch_b metadata: {}",
             TestRepo::stderr(&metadata_output)
         );
-        let metadata = TestRepo::stdout(&metadata_output);
-        assert!(
-            metadata.contains("\"parentBranchName\":\"main\""),
+        let metadata: Value = serde_json::from_str(&TestRepo::stdout(&metadata_output))
+            .expect("Invalid JSON metadata");
+        assert_eq!(
+            metadata["parentBranchName"], "main",
             "Expected mwr-b to be reparented to trunk, metadata was: {}",
             metadata
         );

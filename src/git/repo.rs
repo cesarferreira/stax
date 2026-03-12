@@ -1030,18 +1030,6 @@ Use --auto-stash-pop or stash/commit changes first.",
     }
 
     /// Return true when two refs have no content diff.
-    pub fn refs_have_no_diff(&self, left: &str, right: &str) -> Result<bool> {
-        let output = self.run_git(self.workdir()?, &["diff", "--quiet", left, right])?;
-        match output.status.code() {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
-            _ => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                anyhow::bail!("git diff --quiet {} {} failed: {}", left, right, stderr)
-            }
-        }
-    }
-
     /// Check whether a branch is merged-equivalent to trunk.
     ///
     /// Besides a direct ancestor relationship, this also detects squash/cherry-pick
