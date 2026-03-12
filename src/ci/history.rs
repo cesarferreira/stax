@@ -5,6 +5,7 @@ use std::process::Command;
 
 /// Maximum number of historical runs to keep per check
 const MAX_HISTORY_RUNS: usize = 5;
+const HISTORY_REF_PREFIX: &str = "refs/stax/ci-history/";
 
 /// CI check history stored in git refs
 #[derive(Debug, Serialize, Deserialize)]
@@ -29,9 +30,18 @@ impl CiCheckHistory {
     }
 }
 
+fn history_ref_name(check_name: &str) -> String {
+    let encoded = check_name
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>();
+    format!("{HISTORY_REF_PREFIX}{encoded}")
+}
+
 /// Load CI history for a specific check name from git refs
 pub fn load_check_history(repo: &GitRepo, check_name: &str) -> Result<CiCheckHistory> {
-    let ref_name = format!("refs/stax/ci-history/{}", check_name);
+    let ref_name = history_ref_name(check_name);
     let inner_repo = repo.inner();
 
     match inner_repo.find_reference(&ref_name) {
@@ -52,7 +62,7 @@ pub fn load_check_history(repo: &GitRepo, check_name: &str) -> Result<CiCheckHis
 
 /// Save CI history for a specific check name to git refs
 pub fn save_check_history(repo: &GitRepo, history: &CiCheckHistory) -> Result<()> {
-    let ref_name = format!("refs/stax/ci-history/{}", history.check_name);
+    let ref_name = history_ref_name(&history.check_name);
     let workdir = repo.workdir()?;
     let json = serde_json::to_string(history)?;
 
@@ -70,14 +80,22 @@ pub fn save_check_history(repo: &GitRepo, history: &CiCheckHistory) -> Result<()
     }
 
     let output = child.wait_with_output()?;
+    if !output.status.success() {
+        anyhow::bail!("git hash-object -w --stdin failed");
+    }
+
     let hash = String::from_utf8(output.stdout)?.trim().to_string();
 
     // Update the ref to point to the blob
-    Command::new("git")
+    let status = Command::new("git")
         .args(["update-ref", &ref_name, &hash])
         .current_dir(workdir)
         .status()
         .context("Failed to update CI history ref")?;
+
+    if !status.success() {
+        anyhow::bail!("git update-ref {} {} failed", ref_name, hash);
+    }
 
     Ok(())
 }
@@ -121,12 +139,29 @@ pub fn calculate_average(history: &CiCheckHistory) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn test_new_history() {
         let history = CiCheckHistory::new("build".to_string());
         assert_eq!(history.check_name, "build");
         assert_eq!(history.runs.len(), 0);
+    }
+
+    #[test]
+    fn test_history_ref_name_encodes_invalid_ref_chars() {
+        let ref_name = history_ref_name("branch-overall:feature/foo CI (Ubuntu)");
+        assert!(ref_name.starts_with(HISTORY_REF_PREFIX));
+        assert_eq!(
+            ref_name,
+            "refs/stax/ci-history/6272616e63682d6f766572616c6c3a666561747572652f666f6f20434920285562756e747529"
+        );
+
+        let status = Command::new("git")
+            .args(["check-ref-format", &ref_name])
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     #[test]
