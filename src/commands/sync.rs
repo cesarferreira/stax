@@ -1,5 +1,6 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
+use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
@@ -309,7 +310,7 @@ pub fn run(
     if delete_merged {
         let detect_merged_started_at = Instant::now();
         let detect_timer = LiveTimer::maybe_new(!quiet, "Detect merged branches");
-        let merged = find_merged_branches(workdir, &stack, &remote_name)?;
+        let merged = find_merged_branches(&repo, workdir, &stack, &remote_name)?;
         step_timings.push((
             "detect merged branches".to_string(),
             detect_merged_started_at.elapsed(),
@@ -877,7 +878,11 @@ pub fn run(
             } else {
                 Vec::new()
             };
-        // Reload stack to use fresh metadata after sync/deletion steps.
+        // Normalize parents for branches whose parent was squash-merged into trunk,
+        // so the rebase uses the correct --onto boundary.
+        normalize_scope_parents_for_restack(&repo, &scope_order, quiet)?;
+
+        // Reload stack to use fresh metadata after sync/deletion and normalization steps.
         let restack_stack = Stack::load(&repo)?;
         let branches_to_restack: Vec<String> = scope_order
             .into_iter()
@@ -1032,6 +1037,7 @@ pub fn run(
 
 /// Find branches that have been merged into trunk or are orphaned (no longer exist locally/remotely)
 fn find_merged_branches(
+    repo: &GitRepo,
     workdir: &std::path::Path,
     stack: &Stack,
     remote_name: &str,
@@ -1107,78 +1113,18 @@ fn find_merged_branches(
         }
     }
 
-    // Method 3: Check if branch has empty diff against origin/trunk
-    // (catches squash/rebase merges and avoids local-trunk drift issues).
-    // First get list of local branches to avoid diffing non-existent branches
-    let local_output = Command::new("git")
-        .args(["branch", "--format=%(refname:short)"])
-        .current_dir(workdir)
-        .output()
-        .context("Failed to list local branches")?;
-
-    let local_branches: std::collections::HashSet<String> =
-        String::from_utf8_lossy(&local_output.stdout)
-            .lines()
-            .map(|s| s.trim().to_string())
-            .collect();
-
-    let diff_candidates: Vec<String> = stack
-        .branches
-        .keys()
-        .filter(|branch| {
-            *branch != &stack.trunk && !merged.contains(*branch) && local_branches.contains(*branch)
-        })
-        .cloned()
-        .collect();
-
-    let worker_count = std::thread::available_parallelism()
-        .map(|n| n.get().min(8))
-        .unwrap_or(1);
-
-    if worker_count <= 1 || diff_candidates.len() < 2 {
-        for branch in diff_candidates {
-            let diff_output = Command::new("git")
-                .args(["diff", "--quiet", &remote_trunk_ref, &branch])
-                .current_dir(workdir)
-                .stderr(std::process::Stdio::null())
-                .status();
-
-            if diff_output.map(|s| s.success()).unwrap_or(false) {
-                merged.push(branch);
-            }
+    // Method 3: Patch-id provenance check — detects squash/rebase merges even
+    // when trunk has advanced past the merge point (where a simple tree diff
+    // would show false negatives).
+    for (branch, _) in &stack.branches {
+        if branch == &stack.trunk || merged.contains(branch) {
+            continue;
         }
-    } else {
-        let chunk_size = (diff_candidates.len() + worker_count - 1) / worker_count;
-        let mut handles = Vec::new();
-
-        for chunk in diff_candidates.chunks(chunk_size) {
-            let chunk_branches = chunk.to_vec();
-            let workdir = workdir.to_path_buf();
-            let remote_trunk_ref = remote_trunk_ref.clone();
-
-            handles.push(std::thread::spawn(move || {
-                let mut chunk_merged = Vec::new();
-
-                for branch in chunk_branches {
-                    let diff_output = Command::new("git")
-                        .args(["diff", "--quiet", &remote_trunk_ref, &branch])
-                        .current_dir(&workdir)
-                        .stderr(std::process::Stdio::null())
-                        .status();
-
-                    if diff_output.map(|s| s.success()).unwrap_or(false) {
-                        chunk_merged.push(branch);
-                    }
-                }
-
-                chunk_merged
-            }));
-        }
-
-        for handle in handles {
-            if let Ok(chunk_merged) = handle.join() {
-                merged.extend(chunk_merged);
-            }
+        if repo
+            .is_branch_merged_equivalent_to_trunk(branch)
+            .unwrap_or(false)
+        {
+            merged.push(branch.clone());
         }
     }
 
@@ -1222,7 +1168,16 @@ fn find_merged_branches(
     }
 
     // Method 5: Find orphaned branches (tracked but no longer exist locally or remotely)
-    // Reuse local_branches from Method 3, remote_branches from Method 4
+    let local_output = Command::new("git")
+        .args(["branch", "--format=%(refname:short)"])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to list local branches")?;
+    let local_branches: std::collections::HashSet<String> =
+        String::from_utf8_lossy(&local_output.stdout)
+            .lines()
+            .map(|s| s.trim().to_string())
+            .collect();
     for branch in stack.branches.keys() {
         // Skip trunk
         if branch == &stack.trunk {

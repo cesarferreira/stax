@@ -4141,6 +4141,102 @@ fn test_sync_restack_handles_squash_merged_middle_branch() {
     );
 }
 
+#[test]
+fn test_sync_restack_handles_squash_merged_parent_after_trunk_advances() {
+    let repo = TestRepo::new_with_remote();
+
+    // Build stack: main -> parent -> child
+    repo.run_stax(&["bc", "sync-squash-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent 1\n");
+    repo.commit("Parent commit 1");
+    repo.git(&["push", "-u", "origin", &parent]);
+
+    repo.run_stax(&["bc", "sync-squash-child"]);
+    let child = repo.current_branch();
+    repo.create_file("child.txt", "child change\n");
+    repo.commit("Child commit");
+    repo.git(&["push", "-u", "origin", &child]);
+
+    // Squash-merge parent on remote, advance trunk, then delete parent branch.
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let clone_dir = test_tempdir();
+    let run_remote_git = |args: &[&str]| {
+        let output = hermetic_git_command()
+            .args(args)
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to run git in remote clone");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_remote_git(&["clone", remote_path.to_str().unwrap(), "."]);
+    run_remote_git(&["checkout", "-B", "main", "origin/main"]);
+    run_remote_git(&["config", "user.email", "merger@test.com"]);
+    run_remote_git(&["config", "user.name", "Merger"]);
+    run_remote_git(&["fetch", "origin", &parent]);
+    run_remote_git(&["merge", "--squash", &format!("origin/{}", parent)]);
+    run_remote_git(&["commit", "-m", "Squash merge parent"]);
+    // Advance trunk with unrelated work after squash merge.
+    std::fs::write(clone_dir.path().join("later.txt"), "later trunk work\n").unwrap();
+    run_remote_git(&["add", "later.txt"]);
+    run_remote_git(&["commit", "-m", "Later trunk commit"]);
+    run_remote_git(&["push", "origin", "main"]);
+    run_remote_git(&["push", "origin", "--delete", &parent]);
+
+    repo.run_stax(&["checkout", &child]);
+
+    let output = repo.run_stax(&["sync", "--restack", "--force"]);
+    assert!(
+        output.status.success(),
+        "sync --restack failed after trunk advanced\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        !TestRepo::stdout(&output).contains("conflict"),
+        "Expected no conflict after provenance-aware sync restack.\nstdout: {}",
+        TestRepo::stdout(&output)
+    );
+
+    // Parent branch should be cleaned up.
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|b| b == &parent),
+        "Expected merged parent branch to be deleted"
+    );
+
+    // Child metadata should be reparented to trunk.
+    let metadata_ref = format!("refs/branch-metadata/{}", child);
+    let metadata_output = repo.git(&["show", &metadata_ref]);
+    assert!(
+        metadata_output.status.success(),
+        "Failed to read metadata: {}",
+        TestRepo::stderr(&metadata_output)
+    );
+    let metadata: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output)).expect("Invalid JSON metadata");
+    assert_eq!(
+        metadata["parentBranchName"], "main",
+        "Expected child reparented to trunk, metadata was: {}",
+        metadata
+    );
+
+    // Child should have only its own commit relative to main.
+    let count_output = repo.git(&["rev-list", "--count", &format!("main..{}", child)]);
+    assert!(count_output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&count_output.stdout).trim(),
+        "1",
+        "Expected child to keep only novel commits after sync restack with advanced trunk"
+    );
+}
+
 // =============================================================================
 // Merge Command Tests
 // =============================================================================

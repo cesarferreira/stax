@@ -1032,16 +1032,27 @@ Use --auto-stash-pop or stash/commit changes first.",
     /// Return true when two refs have no content diff.
     /// Check whether a branch is merged-equivalent to trunk.
     ///
-    /// Besides a direct ancestor relationship, this also detects squash/cherry-pick
-    /// merges by comparing patch-id provenance for the branch-only commits. Unlike a
-    /// full-tree diff, this remains true even when trunk has moved on with unrelated
-    /// commits after the branch was merged.
+    /// Uses multiple strategies in order:
+    /// 1. Ancestor check (`git branch --merged`)
+    /// 2. Tree-level diff (`git diff --quiet`) — catches multi-commit squash merges
+    ///    when trunk hasn't diverged
+    /// 3. Patch-id provenance — catches single-commit squash/cherry-pick merges even
+    ///    after trunk has advanced with unrelated commits
     pub fn is_branch_merged_equivalent_to_trunk(&self, branch: &str) -> Result<bool> {
         if self.is_branch_merged(branch).unwrap_or(false) {
             return Ok(true);
         }
 
         let trunk = self.trunk_branch()?;
+
+        // Tree-level diff: if the trees are identical the branch is fully merged,
+        // regardless of how many commits were squashed.
+        if self.refs_have_no_diff(&trunk, branch)? {
+            return Ok(true);
+        }
+
+        // Patch-id provenance: handles the case where trunk has advanced past the
+        // merge point with unrelated commits (tree diff would show false negatives).
         let merge_base = match self.merge_base(&trunk, branch) {
             Ok(base) => base,
             Err(_) => return Ok(false),
@@ -1060,6 +1071,19 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
 
         Ok(branch_patch_ids.is_subset(&trunk_patch_ids))
+    }
+
+    /// Return true when two refs have identical trees (no content diff).
+    fn refs_have_no_diff(&self, left: &str, right: &str) -> Result<bool> {
+        let output = self.run_git(self.workdir()?, &["diff", "--quiet", left, right])?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                anyhow::bail!("git diff --quiet {} {} failed: {}", left, right, stderr)
+            }
+        }
     }
 
     /// Check if a branch has a remote tracking branch (origin/<branch>)
