@@ -1042,15 +1042,36 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
     }
 
-    /// Check whether a branch is merged-equivalent to trunk
-    /// (ancestor relationship or empty-diff equivalence).
+    /// Check whether a branch is merged-equivalent to trunk.
+    ///
+    /// Besides a direct ancestor relationship, this also detects squash/cherry-pick
+    /// merges by comparing patch-id provenance for the branch-only commits. Unlike a
+    /// full-tree diff, this remains true even when trunk has moved on with unrelated
+    /// commits after the branch was merged.
     pub fn is_branch_merged_equivalent_to_trunk(&self, branch: &str) -> Result<bool> {
         if self.is_branch_merged(branch).unwrap_or(false) {
             return Ok(true);
         }
 
         let trunk = self.trunk_branch()?;
-        self.refs_have_no_diff(&trunk, branch)
+        let merge_base = match self.merge_base(&trunk, branch) {
+            Ok(base) => base,
+            Err(_) => return Ok(false),
+        };
+
+        let branch_range = format!("{}..{}", merge_base, branch);
+        let branch_patch_ids = self.patch_ids_for_range(self.workdir()?, &branch_range)?;
+        if branch_patch_ids.is_empty() {
+            return Ok(true);
+        }
+
+        let trunk_range = format!("{}..{}", merge_base, trunk);
+        let trunk_patch_ids = self.patch_ids_for_range(self.workdir()?, &trunk_range)?;
+        if trunk_patch_ids.is_empty() {
+            return Ok(false);
+        }
+
+        Ok(branch_patch_ids.is_subset(&trunk_patch_ids))
     }
 
     /// Check if a branch has a remote tracking branch (origin/<branch>)
