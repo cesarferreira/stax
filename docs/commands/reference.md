@@ -10,9 +10,10 @@
 | `st submit` | `ss` | Submit full current stack |
 | `st merge` | | Merge PRs bottom -> current with provenance-aware descendant rebases, then sync local repo (`--no-sync` to skip) |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
-| `st sync` | `rs` | Pull trunk, delete merged branches, preserve child provenance for restack |
+| `st sync` | `rs` | Pull trunk from remote, detect and delete merged branches (incl. squash merges), reparent their children — **no rebasing** |
+| `st sync --restack` | `rs --restack` | Everything `sync` does, **then** rebase the current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
-| `st restack` | | Rebase current branch onto parent; auto-normalize missing/merged-equivalent parents and use provenance-aware `--onto` when possible |
+| `st restack` | | Rebase current stack onto parents (local only, no fetch/delete) — auto-normalizes missing or merged parents before rebasing |
 | `st cascade` | | Restack from bottom and submit updates |
 | `st diff` | | Show per-branch diffs vs parent |
 | `st range-diff` | | Show range-diff for branches needing restack |

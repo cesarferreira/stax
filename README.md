@@ -126,8 +126,9 @@ Next steps:
 | `st ss` | Submit full stack and create/update PRs |
 | `st merge` | Merge PRs from stack bottom to current |
 | `st merge --when-ready` | Wait/poll until mergeable, then merge |
-| `st rs` | Sync trunk and clean merged branches |
-| `st rs --restack` | Sync trunk and restack full stack |
+| `st rs` | Sync trunk and clean merged branches (no rebasing) |
+| `st rs --restack` | Sync trunk, clean merged branches, then rebase stack |
+| `st restack` | Rebase current stack onto parents (local only) |
 | `st cascade` | Restack, push, and create/update PRs |
 | `st undo` / `st redo` | Recover or re-apply risky operations |
 | `st standup` | Summarize recent engineering activity |
