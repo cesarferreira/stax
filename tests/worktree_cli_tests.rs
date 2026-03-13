@@ -30,6 +30,17 @@ fn wt_create_without_name_creates_random_lane() {
 
     let out = repo.run_stax_with_env(&["wt", "c"], &[("HOME", home.as_str())]);
     out.assert_success();
+    let stderr = TestRepo::stderr(&out);
+    assert!(
+        stderr.contains("You're in a new copy of"),
+        "expected conductor-style creation message, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("and copied"),
+        "expected copied-files summary, got:\n{}",
+        stderr
+    );
 
     let worktrees = linked_worktree_dirs(&repo);
     assert_eq!(worktrees.len(), 1, "expected one linked worktree");
@@ -139,6 +150,11 @@ done
         ],
     );
     out.assert_success();
+    assert!(
+        TestRepo::stderr(&out).contains("Branched"),
+        "expected branch source summary, got:\n{}",
+        TestRepo::stderr(&out)
+    );
 
     let log = fs::read_to_string(&log_path).expect("read codex log");
     assert!(

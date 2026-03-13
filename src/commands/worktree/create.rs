@@ -113,7 +113,8 @@ pub fn run(
     }
 
     fs::create_dir_all(&worktrees_dir)?;
-    ensure_gitignore(&repo.main_repo_workdir()?, &config.worktree.root_dir)?;
+    let main_repo_workdir = repo.main_repo_workdir()?;
+    ensure_gitignore(&main_repo_workdir, &config.worktree.root_dir)?;
 
     if branch_exists {
         repo.worktree_create(&branch_name, &worktree_path)?;
@@ -127,8 +128,28 @@ pub fn run(
         meta.write(repo.inner(), &branch_name)?;
     }
 
-    let from_label = base_branch.as_deref().unwrap_or(&branch_name);
-    format_create_message(&worktree_name, &branch_name, &worktree_path, from_label);
+    let copied_files = repo.tracked_file_count_at(&worktree_path).unwrap_or(0);
+    let repo_name = main_repo_workdir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "repo".to_string());
+    let from_label = if let Some(base_branch) = base_branch.as_deref() {
+        if repo.has_remote(base_branch) {
+            format!("origin/{}", base_branch)
+        } else {
+            base_branch.to_string()
+        }
+    } else {
+        branch_name.clone()
+    };
+    format_create_message(
+        &repo_name,
+        &worktree_name,
+        &branch_name,
+        &from_label,
+        copied_files,
+        branch_exists,
+    );
 
     if !no_verify {
         run_blocking_hook(

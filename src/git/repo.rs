@@ -126,6 +126,21 @@ impl GitRepo {
         Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
     }
 
+    /// Count tracked files in the given worktree path.
+    pub fn tracked_file_count_at(&self, cwd: &Path) -> Result<usize> {
+        let output = self.run_git(cwd, &["ls-files", "-z"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git ls-files failed in '{}': {}", cwd.display(), stderr);
+        }
+
+        Ok(output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .count())
+    }
+
     pub(crate) fn stash_push_at(&self, cwd: &Path) -> Result<bool> {
         let output = self.run_git(cwd, &["stash", "push", "-u", "-m", "stax auto-stash"])?;
         if !output.status.success() {

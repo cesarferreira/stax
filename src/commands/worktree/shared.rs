@@ -635,15 +635,48 @@ pub fn spawn_background_hook(command: Option<&str>, cwd: &Path, label: &str) -> 
     Ok(())
 }
 
-pub fn format_create_message(worktree_name: &str, branch_name: &str, path: &Path, from: &str) {
+pub fn format_create_message(
+    repo_name: &str,
+    worktree_name: &str,
+    branch_name: &str,
+    from: &str,
+    copied_files: usize,
+    existing_branch: bool,
+) {
     eprintln!(
-        "{}  worktree '{}' → branch '{}'",
-        "Created".green().bold(),
-        worktree_name.cyan(),
-        branch_name.blue()
+        "{} {} {} {}",
+        "You're in a new copy of".bold(),
+        repo_name.cyan().bold(),
+        "called".bold(),
+        worktree_name.yellow().bold()
     );
-    eprintln!("  Path:   {}", path.display().to_string().dimmed());
-    eprintln!("  From:   {}", from.dimmed());
+    if existing_branch {
+        eprintln!(
+            "  {} {}",
+            "Checked out existing branch".dimmed(),
+            branch_name.blue()
+        );
+    } else {
+        eprintln!(
+            "  {} {} {} {}",
+            "Branched".dimmed(),
+            branch_name.blue(),
+            "from".dimmed(),
+            from.dimmed()
+        );
+    }
+    eprintln!(
+        "  {} {} {} {}",
+        "Created".dimmed(),
+        worktree_name.yellow(),
+        "and copied".dimmed(),
+        format!(
+            "{} {}",
+            copied_files,
+            if copied_files == 1 { "file" } else { "files" }
+        )
+        .dimmed()
+    );
 }
 
 pub fn format_go_message(worktree: &WorktreeInfo) {
