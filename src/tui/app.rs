@@ -1,5 +1,4 @@
 use crate::cache::CiCache;
-use crate::commands::agent::registry::Registry;
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
@@ -130,14 +129,15 @@ pub struct ReorderState {
     pub preview: ReorderPreview,
 }
 
-/// A registered agent worktree entry for TUI display
+/// A linked worktree entry for TUI display
 #[derive(Debug, Clone)]
-pub struct AgentWorktreeDisplay {
+pub struct WorktreeDisplay {
     pub name: String,
     pub branch: String,
     #[allow(dead_code)] // stored for future open-from-TUI action
     pub path: PathBuf,
     pub exists: bool,
+    pub is_current: bool,
 }
 
 /// Main application state
@@ -164,7 +164,7 @@ pub struct App {
     pub should_quit: bool,
     pub needs_refresh: bool,
     pub reorder_state: Option<ReorderState>,
-    pub agent_worktrees: Vec<AgentWorktreeDisplay>,
+    pub worktrees: Vec<WorktreeDisplay>,
     diff_cache: HashMap<String, CachedDiff>,
 }
 
@@ -178,7 +178,7 @@ impl App {
         let config = Config::load()?;
         let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
 
-        let agent_worktrees = load_agent_worktrees(&repo);
+        let worktrees = load_worktrees(&repo);
 
         let mut app = Self {
             stack,
@@ -202,7 +202,7 @@ impl App {
             should_quit: false,
             needs_refresh: true,
             reorder_state: None,
-            agent_worktrees,
+            worktrees,
             diff_cache: HashMap::new(),
         };
 
@@ -218,7 +218,7 @@ impl App {
         self.stack = Stack::load(&self.repo)?;
         self.current_branch = self.repo.current_branch()?;
         self.branches = self.build_branch_list()?;
-        self.agent_worktrees = load_agent_worktrees(&self.repo);
+        self.worktrees = load_worktrees(&self.repo);
         self.diff_cache.clear();
         self.needs_refresh = false;
         self.update_diff();
@@ -784,27 +784,18 @@ impl App {
     }
 }
 
-/// Load agent worktrees from the registry (best-effort; returns empty list on error).
-fn load_agent_worktrees(repo: &GitRepo) -> Vec<AgentWorktreeDisplay> {
-    let git_dir = match repo.git_dir() {
-        Ok(d) => d.to_path_buf(),
-        Err(_) => return Vec::new(),
-    };
-    let registry = match Registry::load(&git_dir) {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
-    registry
-        .entries
+/// Load linked worktrees from git (best-effort; returns empty list on error).
+fn load_worktrees(repo: &GitRepo) -> Vec<WorktreeDisplay> {
+    repo.list_worktrees()
+        .unwrap_or_default()
         .into_iter()
-        .map(|e| {
-            let exists = e.path.exists();
-            AgentWorktreeDisplay {
-                name: e.name,
-                branch: e.branch,
-                path: e.path,
-                exists,
-            }
+        .filter(|worktree| !worktree.is_main)
+        .map(|worktree| WorktreeDisplay {
+            name: worktree.name,
+            branch: worktree.branch.unwrap_or_else(|| "(detached)".to_string()),
+            path: worktree.path.clone(),
+            exists: worktree.path.exists(),
+            is_current: worktree.is_current,
         })
         .collect()
 }

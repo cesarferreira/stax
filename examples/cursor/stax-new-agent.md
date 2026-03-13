@@ -1,10 +1,10 @@
 # stax-new
-Description: Create a new parallel agent worktree with STAX and open it in a fresh Cursor window.
+Description: Create or reuse a STAX worktree lane and open Cursor inside it.
 
 Run this command:
-stax agent create "{{input}}" --open-cursor
+stax wt c "{{input}}" --run "cursor ."
 
 This will:
-- Create a new stacked branch + isolated worktree in .stax/trees/
-- Open it automatically in a new Cursor window
+- Create or reuse a stacked worktree lane in .worktrees/
+- Start Cursor inside that lane
 - Keep full STAX power (restack, undo, TUI, etc.)

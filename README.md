@@ -219,22 +219,26 @@ Shortcuts: `st w` (list), `st wtc [branch]` (create), `st wtgo <name>` (go), `st
 
 Read more: [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
 
-<a id="agent-worktrees"></a>
-### Agent Worktrees
+<a id="worktree-lanes"></a>
+### Worktree Lanes For AI
 
-Run multiple AI agents in isolated Git worktrees while preserving stack metadata and restack flows. `st agent` is title-based and includes editor integration and a registry.
+Run parallel AI sessions in normal Git worktrees without a separate registry. `st wt c` creates or reuses a lane, `st wt go` jumps back into it, and `--agent` launches the tool inside the target worktree.
 
 ```bash
-# Create isolated worktrees for parallel tasks
-st agent create "Add dark mode" --open-codex
-st agent create "Fix auth refresh" --open
+# Create a fresh random lane and start Codex there
+st wt c --agent codex -- "fix the flaky tests"
 
-# Keep all agent branches rebased when trunk moves
-st agent sync
+# Create or reuse a named lane
+st wt c auth-refresh
+st wt go auth-refresh --agent claude
 
-# View and clean up
-st agent list
-st agent remove add-dark-mode --delete-branch
+# Keep managed lanes rebased when trunk moves
+st wt rs
+
+# Rich status + cleanup
+st wt ll
+st wt prune
+st wt rm auth-refresh --delete-branch
 ```
 
 Read more: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md)
@@ -267,8 +271,8 @@ If you want to...
 - Navigate branches efficiently: [docs/commands/navigation.md](docs/commands/navigation.md)
 - Merge, cascade, and keep stacks healthy: [docs/workflows/merge-and-cascade.md](docs/workflows/merge-and-cascade.md)
 - Work across multiple worktrees: [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
-- Use developer worktrees (`st worktree`): [docs/workflows/multi-worktree.md#stax-worktree](docs/workflows/multi-worktree.md)
-- Use agent worktrees end-to-end: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md)
+- Use developer worktrees (`st worktree`): [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
+- Run AI sessions in worktree lanes: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md)
 - Configure auth/branch naming/remote behavior: [docs/configuration/index.md](docs/configuration/index.md)
 - Validate and repair metadata health: [docs/commands/stack-health.md](docs/commands/stack-health.md)
 

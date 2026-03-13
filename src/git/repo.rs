@@ -20,6 +20,14 @@ pub struct WorktreeInfo {
     pub is_main: bool,
     /// True if this worktree's path matches the current working directory
     pub is_current: bool,
+    /// True when git marks the worktree as locked
+    pub is_locked: bool,
+    /// Optional lock reason from `git worktree list --porcelain`
+    pub lock_reason: Option<String>,
+    /// True when git marks the worktree as prunable/stale
+    pub is_prunable: bool,
+    /// Optional prune reason from `git worktree list --porcelain`
+    pub prunable_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -152,24 +160,61 @@ impl GitRepo {
         let cwd_normalized = Self::normalize_path(&cwd);
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut raw_entries: Vec<(PathBuf, Option<String>)> = Vec::new();
+        let mut raw_entries: Vec<(
+            PathBuf,
+            Option<String>,
+            bool,
+            Option<String>,
+            bool,
+            Option<String>,
+        )> = Vec::new();
         let mut current_path: Option<PathBuf> = None;
         let mut current_branch: Option<String> = None;
+        let mut current_locked = false;
+        let mut current_lock_reason: Option<String> = None;
+        let mut current_prunable = false;
+        let mut current_prunable_reason: Option<String> = None;
 
-        let mut flush_entry = |path: &mut Option<PathBuf>, branch: &mut Option<String>| {
+        let mut flush_entry = |path: &mut Option<PathBuf>,
+                               branch: &mut Option<String>,
+                               locked: &mut bool,
+                               lock_reason: &mut Option<String>,
+                               prunable: &mut bool,
+                               prunable_reason: &mut Option<String>| {
             if let Some(p) = path.take() {
-                raw_entries.push((Self::normalize_path(&p), branch.take()));
+                raw_entries.push((
+                    Self::normalize_path(&p),
+                    branch.take(),
+                    std::mem::take(locked),
+                    lock_reason.take(),
+                    std::mem::take(prunable),
+                    prunable_reason.take(),
+                ));
             }
         };
 
         for line in stdout.lines() {
             if line.is_empty() {
-                flush_entry(&mut current_path, &mut current_branch);
+                flush_entry(
+                    &mut current_path,
+                    &mut current_branch,
+                    &mut current_locked,
+                    &mut current_lock_reason,
+                    &mut current_prunable,
+                    &mut current_prunable_reason,
+                );
                 continue;
             }
 
             if let Some(path) = line.strip_prefix("worktree ") {
-                flush_entry(&mut current_path, &mut current_branch);
+                flush_entry(
+                    &mut current_path,
+                    &mut current_branch,
+                    &mut current_locked,
+                    &mut current_lock_reason,
+                    &mut current_prunable,
+                    &mut current_prunable_reason,
+                );
                 current_path = Some(PathBuf::from(path.trim()));
                 continue;
             }
@@ -181,32 +226,63 @@ impl GitRepo {
                     .unwrap_or(branch.trim())
                     .to_string();
                 current_branch = Some(branch);
+                continue;
+            }
+
+            if let Some(reason) = line.strip_prefix("locked") {
+                current_locked = true;
+                let reason = reason.trim();
+                if !reason.is_empty() {
+                    current_lock_reason = Some(reason.to_string());
+                }
+                continue;
+            }
+
+            if let Some(reason) = line.strip_prefix("prunable") {
+                current_prunable = true;
+                let reason = reason.trim();
+                if !reason.is_empty() {
+                    current_prunable_reason = Some(reason.to_string());
+                }
             }
         }
 
-        flush_entry(&mut current_path, &mut current_branch);
+        flush_entry(
+            &mut current_path,
+            &mut current_branch,
+            &mut current_locked,
+            &mut current_lock_reason,
+            &mut current_prunable,
+            &mut current_prunable_reason,
+        );
 
         let worktrees = raw_entries
             .into_iter()
             .enumerate()
-            .map(|(idx, (path, branch))| {
-                let is_main = idx == 0;
-                let is_current = path == cwd_normalized;
-                let name = if is_main {
-                    "main".to_string()
-                } else {
-                    path.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "unknown".to_string())
-                };
-                WorktreeInfo {
-                    name,
-                    path,
-                    branch,
-                    is_main,
-                    is_current,
-                }
-            })
+            .map(
+                |(idx, (path, branch, is_locked, lock_reason, is_prunable, prunable_reason))| {
+                    let is_main = idx == 0;
+                    let is_current = path == cwd_normalized;
+                    let name = if is_main {
+                        "main".to_string()
+                    } else {
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "unknown".to_string())
+                    };
+                    WorktreeInfo {
+                        name,
+                        path,
+                        branch,
+                        is_main,
+                        is_current,
+                        is_locked,
+                        lock_reason,
+                        is_prunable,
+                        prunable_reason,
+                    }
+                },
+            )
             .collect();
 
         Ok(worktrees)
@@ -281,6 +357,17 @@ impl GitRepo {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             anyhow::bail!("git worktree remove failed: {}", stderr);
+        }
+        Ok(())
+    }
+
+    /// Run `git worktree prune` from the main worktree.
+    pub fn worktree_prune(&self) -> Result<()> {
+        let main_dir = self.main_repo_workdir()?;
+        let output = self.run_git(&main_dir, &["worktree", "prune"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git worktree prune failed: {}", stderr);
         }
         Ok(())
     }
@@ -808,6 +895,27 @@ Use --auto-stash-pop or stash/commit changes first.",
         self.rebase_in_progress_at(self.workdir()?)
     }
 
+    /// Check whether a rebase is in progress inside the given worktree path.
+    pub fn rebase_in_progress_in(&self, cwd: &Path) -> Result<bool> {
+        self.rebase_in_progress_at(cwd)
+    }
+
+    /// Check whether a merge is in progress inside the given worktree path.
+    pub fn merge_in_progress_in(&self, cwd: &Path) -> Result<bool> {
+        let git_dir = self.git_dir_in_path(cwd)?;
+        Ok(git_dir.join("MERGE_HEAD").exists())
+    }
+
+    /// Check whether the given worktree path currently has unresolved conflicts.
+    pub fn has_conflicts_in(&self, cwd: &Path) -> Result<bool> {
+        let output = self.run_git(cwd, &["diff", "--name-only", "--diff-filter=U"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git diff --name-only --diff-filter=U failed: {}", stderr);
+        }
+        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    }
+
     /// Create a new branch at HEAD
     pub fn create_branch(&self, name: &str) -> Result<()> {
         let head = self.repo.head()?;
@@ -917,6 +1025,22 @@ Use --auto-stash-pop or stash/commit changes first.",
             branch.delete()?;
         }
         Ok(())
+    }
+
+    /// Read an optional user-defined worktree marker for a branch from git config.
+    pub fn worktree_marker(&self, branch: &str) -> Option<String> {
+        let key = format!(
+            "stax.worktree-marker.{}",
+            branch
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect::<String>()
+        );
+        self.repo
+            .config()
+            .ok()
+            .and_then(|cfg| cfg.get_string(&key).ok())
+            .filter(|value| !value.trim().is_empty())
     }
 
     /// Get underlying repository (for advanced operations)

@@ -83,6 +83,22 @@ impl From<RestackSubmitAfter> for commands::restack::SubmitAfterRestack {
     }
 }
 
+#[derive(Args, Clone, Default)]
+struct WorktreeLaunchArgs {
+    /// Launch an AI agent after entering the worktree
+    #[arg(long)]
+    agent: Option<String>,
+    /// Model override for the selected AI agent
+    #[arg(long, requires = "agent")]
+    model: Option<String>,
+    /// Run an arbitrary shell command after entering the worktree
+    #[arg(long, conflicts_with = "agent")]
+    run: Option<String>,
+    /// Arguments passed through to the launched agent or command (after `--`)
+    #[arg(last = true)]
+    args: Vec<String>,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Show all stacks (simple tree view)
@@ -671,10 +687,6 @@ enum Commands {
         quiet: bool,
     },
 
-    /// Manage parallel AI agent worktrees
-    #[command(subcommand, visible_alias = "ag")]
-    Agent(AgentCommands),
-
     /// Manage worktrees for parallel branch development
     #[command(subcommand, visible_alias = "wt")]
     Worktree(WorktreeCommands),
@@ -723,20 +735,49 @@ enum Commands {
     W,
     #[command(hide = true)]
     Wtc {
-        branch: Option<String>,
-        #[arg(long)]
         name: Option<String>,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        pick: bool,
+        #[arg(long = "name")]
+        worktree_name: Option<String>,
+        #[arg(long)]
+        no_verify: bool,
+        #[arg(long, hide = true)]
+        shell_output: bool,
+        #[command(flatten)]
+        launch: WorktreeLaunchArgs,
     },
     #[command(hide = true)]
     Wtls,
     #[command(hide = true)]
-    Wtgo { name: String },
+    Wtll {
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(hide = true)]
+    Wtgo {
+        name: Option<String>,
+        #[arg(long)]
+        no_verify: bool,
+        #[arg(long, hide = true)]
+        shell_output: bool,
+        #[command(flatten)]
+        launch: WorktreeLaunchArgs,
+    },
     #[command(hide = true)]
     Wtrm {
-        name: String,
+        name: Option<String>,
         #[arg(short, long)]
         force: bool,
+        #[arg(long)]
+        delete_branch: bool,
     },
+    #[command(hide = true)]
+    Wtprune,
+    #[command(hide = true)]
+    Wtrs,
 }
 
 #[derive(Subcommand, Clone)]
@@ -912,82 +953,57 @@ enum DownstackCommands {
 }
 
 #[derive(Subcommand)]
-enum AgentCommands {
-    /// Create a new agent worktree + stacked branch
-    Create {
-        /// Human title — slugified into branch name and folder (e.g. "Add dark mode")
-        title: String,
-        /// Base branch to create from (defaults to current)
-        #[arg(long)]
-        base: Option<String>,
-        /// Stack on this branch (alias for --base)
-        #[arg(long)]
-        stack_on: Option<String>,
-        /// Open the worktree in the default editor after creation
-        #[arg(long)]
-        open: bool,
-        /// Open in Cursor after creation
-        #[arg(long)]
-        open_cursor: bool,
-        /// Open in Codex after creation
-        #[arg(long)]
-        open_codex: bool,
-        /// Skip post-create hook even if configured
-        #[arg(long)]
-        no_hook: bool,
-    },
-
-    /// Open (reattach to) an agent worktree in the editor
-    #[command(visible_alias = "attach")]
-    Open {
-        /// Name or slug of the worktree (interactive picker if omitted)
-        name: Option<String>,
-    },
-
-    /// List all registered agent worktrees
-    #[command(visible_aliases = ["ls"])]
-    List,
-
-    /// Register the current directory as a managed agent worktree
-    Register,
-
-    /// Remove an agent worktree (and optionally its branch)
-    Remove {
-        /// Name or slug of the worktree (interactive picker if omitted)
-        name: Option<String>,
-        /// Force removal even if the worktree has uncommitted changes
-        #[arg(short, long)]
-        force: bool,
-        /// Also delete the branch and its stax metadata
-        #[arg(long)]
-        delete_branch: bool,
-    },
-
-    /// Remove stale registry entries and run git worktree prune
-    Prune,
-
-    /// Restack all registered agent worktrees
-    Sync,
-}
-
-#[derive(Subcommand)]
 enum WorktreeCommands {
-    /// Create a new worktree for a branch
+    /// Create or enter a worktree lane
     #[command(visible_alias = "c")]
     Create {
-        /// Branch name (interactive picker if omitted)
-        branch: Option<String>,
-        /// Override the short name for the worktree directory
-        #[arg(long)]
+        /// Branch/worktree name to create or enter
         name: Option<String>,
+        /// Create from an explicit base branch
+        #[arg(long)]
+        from: Option<String>,
+        /// Pick an existing branch interactively
+        #[arg(long)]
+        pick: bool,
+        /// Override the short name for the worktree directory
+        #[arg(long = "name")]
+        worktree_name: Option<String>,
+        /// Skip worktree hooks
+        #[arg(long = "no-verify")]
+        no_verify: bool,
+        #[arg(long, hide = true)]
+        shell_output: bool,
+        #[command(flatten)]
+        launch: WorktreeLaunchArgs,
     },
 
     /// List all worktrees
     #[command(visible_aliases = ["ls"])]
-    List,
+    List {
+        /// Output JSON instead of the compact table
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show a richer worktree status view
+    #[command(name = "ll")]
+    LongList {
+        /// Output JSON instead of the long table
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Navigate to a worktree (requires shell integration)
-    Go { name: String },
+    Go {
+        name: Option<String>,
+        /// Skip worktree hooks
+        #[arg(long = "no-verify")]
+        no_verify: bool,
+        #[arg(long, hide = true)]
+        shell_output: bool,
+        #[command(flatten)]
+        launch: WorktreeLaunchArgs,
+    },
 
     /// Print the absolute path of a worktree (for scripting / shell integration)
     Path { name: String },
@@ -995,11 +1011,21 @@ enum WorktreeCommands {
     /// Remove a worktree
     #[command(visible_alias = "rm")]
     Remove {
-        name: String,
+        name: Option<String>,
         /// Force removal even if the worktree has uncommitted changes
         #[arg(short, long)]
         force: bool,
+        /// Also delete the branch and stax metadata when safe
+        #[arg(long)]
+        delete_branch: bool,
     },
+
+    /// Remove stale git worktree bookkeeping
+    Prune,
+
+    /// Restack all stax-managed worktrees
+    #[command(visible_alias = "rs")]
+    Restack,
 }
 
 fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Result<()> {
@@ -1323,7 +1349,13 @@ pub fn run() -> Result<()> {
             tag_prefix,
             path,
             json,
-        } => commands::changelog::run(from, to.unwrap_or_else(|| "HEAD".to_string()), tag_prefix, path, json),
+        } => commands::changelog::run(
+            from,
+            to.unwrap_or_else(|| "HEAD".to_string()),
+            tag_prefix,
+            path,
+            json,
+        ),
         Commands::Rename {
             name,
             edit,
@@ -1409,53 +1441,98 @@ pub fn run() -> Result<()> {
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
         Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
-        Commands::Agent(cmd) => match cmd {
-            AgentCommands::Create {
-                title,
-                base,
-                stack_on,
-                open,
-                open_cursor,
-                open_codex,
-                no_hook,
-            } => commands::agent::create::run(
-                title,
-                base,
-                stack_on,
-                open,
-                open_cursor,
-                open_codex,
-                no_hook,
+        Commands::Worktree(cmd) => match cmd {
+            WorktreeCommands::Create {
+                name,
+                from,
+                pick,
+                worktree_name,
+                no_verify,
+                shell_output,
+                launch,
+            } => commands::worktree::create::run(
+                name,
+                from,
+                pick,
+                worktree_name,
+                no_verify,
+                shell_output,
+                launch.agent,
+                launch.model,
+                launch.run,
+                launch.args,
             ),
-            AgentCommands::Open { name } => commands::agent::open::run(name),
-            AgentCommands::List => commands::agent::list::run(),
-            AgentCommands::Register => commands::agent::register::run(),
-            AgentCommands::Remove {
+            WorktreeCommands::List { json } => commands::worktree::list::run(json),
+            WorktreeCommands::LongList { json } => commands::worktree::ll::run(json),
+            WorktreeCommands::Go {
+                name,
+                no_verify,
+                shell_output,
+                launch,
+            } => commands::worktree::go::run_go(
+                name,
+                no_verify,
+                shell_output,
+                launch.agent,
+                launch.model,
+                launch.run,
+                launch.args,
+            ),
+            WorktreeCommands::Path { name } => commands::worktree::go::run_path(&name),
+            WorktreeCommands::Remove {
                 name,
                 force,
                 delete_branch,
-            } => commands::agent::remove::run(name, force, delete_branch),
-            AgentCommands::Prune => commands::agent::prune::run(),
-            AgentCommands::Sync => commands::agent::sync::run(),
-        },
-        Commands::Worktree(cmd) => match cmd {
-            WorktreeCommands::Create { branch, name } => {
-                commands::worktree::create::run(branch, name)
-            }
-            WorktreeCommands::List => commands::worktree::list::run(),
-            WorktreeCommands::Go { name } => commands::worktree::go::run_go(&name),
-            WorktreeCommands::Path { name } => commands::worktree::go::run_path(&name),
-            WorktreeCommands::Remove { name, force } => {
-                commands::worktree::remove::run(&name, force)
-            }
+            } => commands::worktree::remove::run(name, force, delete_branch),
+            WorktreeCommands::Prune => commands::worktree::prune::run(),
+            WorktreeCommands::Restack => commands::worktree::restack::run(),
         },
         Commands::ShellSetup { install } => commands::shell_setup::run(install),
         // Hidden worktree shortcuts
-        Commands::W => commands::worktree::list::run(),
-        Commands::Wtc { branch, name } => commands::worktree::create::run(branch, name),
-        Commands::Wtls => commands::worktree::list::run(),
-        Commands::Wtgo { name } => commands::worktree::go::run_path(&name),
-        Commands::Wtrm { name, force } => commands::worktree::remove::run(&name, force),
+        Commands::W => commands::worktree::list::run(false),
+        Commands::Wtc {
+            name,
+            from,
+            pick,
+            worktree_name,
+            no_verify,
+            shell_output,
+            launch,
+        } => commands::worktree::create::run(
+            name,
+            from,
+            pick,
+            worktree_name,
+            no_verify,
+            shell_output,
+            launch.agent,
+            launch.model,
+            launch.run,
+            launch.args,
+        ),
+        Commands::Wtls => commands::worktree::list::run(false),
+        Commands::Wtll { json } => commands::worktree::ll::run(json),
+        Commands::Wtgo {
+            name,
+            no_verify,
+            shell_output,
+            launch,
+        } => commands::worktree::go::run_go(
+            name,
+            no_verify,
+            shell_output,
+            launch.agent,
+            launch.model,
+            launch.run,
+            launch.args,
+        ),
+        Commands::Wtrm {
+            name,
+            force,
+            delete_branch,
+        } => commands::worktree::remove::run(name, force, delete_branch),
+        Commands::Wtprune => commands::worktree::prune::run(),
+        Commands::Wtrs => commands::worktree::restack::run(),
     };
 
     // Show update notification (from cache, instant) and spawn background check for next run

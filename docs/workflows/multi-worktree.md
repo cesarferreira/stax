@@ -1,6 +1,6 @@
 # Multi-Worktree Support
 
-stax is worktree-aware. If a branch in your stack is checked out in another worktree, stax runs operations in the right worktree automatically.
+stax is worktree-aware. If a branch in your stack is checked out in another worktree, stax runs rebase, sync, and metadata operations in the right place automatically.
 
 ## Worktree-safe operations
 
@@ -25,154 +25,81 @@ If conflicts occur, stax preserves the stash entry so changes are not lost.
 
 ---
 
-## `stax worktree` — developer worktree management
+## `st worktree`
 
-`st worktree` (alias `st wt`) lets you create and navigate Git worktrees for parallel branch development. Unlike `st agent` (which is oriented around AI task isolation with title-based branch naming), `st worktree` works with your existing branches and is optimised for human developers switching between stacks.
+`st worktree` (alias `st wt`) is the stax-native workflow for parallel lanes. It keeps `wt ls` simple, uses `go` instead of `switch`, and layers optional AI launch on top of normal Git worktrees instead of a separate registry.
 
 ### Quick start
 
 ```bash
-# Create a worktree for an existing branch
-st worktree create feature/payments-api
+# Create a fresh lane with a random funny name
+st wt c
 
-# List all worktrees (including those created outside stax)
-st worktree list
+# Create or reuse a named lane
+st wt c payments-api
 
-# Jump to a worktree (requires shell integration — see below)
-st worktree go payments-api
+# Start from a specific base branch
+st wt c payments-api --from main
 
-# Remove when done
-st worktree remove payments-api
+# Jump back into an existing lane
+st wt go payments-api
+
+# Compact inventory
+st wt ls
+
+# Rich status view
+st wt ll
+
+# Remove a lane
+st wt rm payments-api
 ```
 
-### Shell integration (one-time setup)
+### AI launch
 
-`st worktree go` needs to change your shell's working directory. Because a child process cannot `cd` its parent shell, a shell function wrapper is required.
+Use `--agent` to start a supported interactive CLI inside the target worktree:
 
 ```bash
-# Print the snippet (add to ~/.zshrc manually)
-st shell-setup
+st wt c auth-refresh --agent codex -- "fix the flaky tests"
+st wt go auth-refresh --agent claude
+st wt go ui-polish --run "cursor ."
+```
 
-# Or install automatically
+Supported agent values match the other AI-aware commands in stax: `claude`, `codex`, `gemini`, and `opencode`.
+
+### Shell integration
+
+`st wt c` and `st wt go` need shell integration if you want the parent shell to move into the target directory automatically.
+
+```bash
+st shell-setup
 st shell-setup --install
 ```
 
-`--install` auto-detects your shell (`$SHELL`), checks for idempotency, and appends:
+After installation, both `st` and `stax` transparently handle:
 
-```bash
-eval "$(stax shell-setup)"
-```
+- `st wt c ...`
+- `st wt go ...`
+- `st wt rm` when removing the current worktree
+- `sw <name>` as a quick alias for `st wt go <name>`
 
-to `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`. Restart your shell or `source ~/.zshrc` once to activate.
+### Command shape
 
-After installing, the `stax` shell function and `sw` alias are available:
+| Command | Purpose |
+|---|---|
+| `st wt c [name]` | Create or reuse a worktree lane. With no name, generate a random lane name. |
+| `st wt go [name]` | Jump to an existing worktree. With no name, open a fuzzy picker. |
+| `st wt ls` | Simple `NAME / BRANCH / PATH` inventory. |
+| `st wt ll` | Rich worktree status: managed, dirty, rebase/conflicts, marker, prunable, locked. |
+| `st wt rm [name]` | Remove a worktree. With no name, remove the current lane. |
+| `st wt prune` | Run safe `git worktree prune` housekeeping only. |
+| `st wt restack` / `st wt rs` | Restack stax-managed worktrees only. |
 
-```bash
-sw payments-api   # quick switch — equivalent to: st worktree go payments-api
-```
+### Managed vs unmanaged worktrees
 
-### Full example
+`st wt ls` shows every Git worktree, including ones created outside stax.
 
-```bash
-# Working on stack A
-~/project $ st status
-main
- └── feature/auth-api  ← (you are here)
-      └── feature/auth-ui
+`st wt restack` only targets stax-managed worktrees: linked worktrees whose branch is tracked by stax metadata. Detached worktrees and ad-hoc third-party worktrees still show up in `ls`, `ll`, `go`, `rm`, and `prune`, but they are skipped by `restack`.
 
-# Need to work on stack B without losing context
-~/project $ st worktree create feature/payments-api
-  Created  worktree 'payments-api' → branch 'feature/payments-api'
-  Path:   /home/you/project/.worktrees/payments-api
+### Related guide
 
-~/project $ st worktree list
-  NAME           BRANCH                   PATH
-  ─────────────────────────────────────────────────────────────────────────
-*  main           feature/auth-api         ~/project
-   payments-api   feature/payments-api     ~/project/.worktrees/payments-api
-
-~/project $ st worktree go payments-api
-~/project/.worktrees/payments-api $
-
-# All stax commands work normally inside worktrees
-~/project/.worktrees/payments-api $ st restack --all
-
-# Clean up
-~/project $ st worktree remove payments-api
-  Removed  worktree 'payments-api' (branch 'feature/payments-api')
-```
-
-### Worktree directory layout
-
-All managed worktrees live under `.worktrees/` in your repo root (automatically added to `.gitignore`):
-
-```
-<repo-root>/
-  .worktrees/
-    payments-api/       ← st worktree create feature/payments-api
-    auth-v2/            ← st worktree create feature/auth-v2
-```
-
-Worktrees created outside stax (via raw `git worktree add`) still appear in `st worktree list` and can be navigated with `st worktree go`.
-
-### Commands
-
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `st worktree create [branch]` | `st wt c` | Create a worktree for an existing or new branch |
-| `st worktree list` | `st wt ls`, `st w` | List all worktrees |
-| `st worktree go <name>` | `st wtgo <name>` | Navigate to a worktree (shell integration required) |
-| `st worktree path <name>` | | Print absolute path (for scripting) |
-| `st worktree remove <name>` | `st wt rm`, `st wtrm <name>` | Remove a worktree |
-| `st shell-setup` | | Print shell integration snippet |
-| `st shell-setup --install` | | Install shell integration automatically |
-
-**Hidden top-level shortcuts:**
-
-| Shortcut | Expands to |
-|----------|-----------|
-| `st w` | `st worktree list` |
-| `st wtc [branch]` | `st worktree create [branch]` |
-| `st wtls` | `st worktree list` |
-| `st wtgo <name>` | `st worktree path <name>` (shell wrapper does the `cd`) |
-| `st wtrm <name>` | `st worktree remove <name>` |
-| `sw <name>` | `st worktree go <name>` (shell alias from `st shell-setup`) |
-
-### Naming
-
-The worktree short name is derived from the branch by taking the last `/`-delimited segment:
-
-- `feature/payments-api` → `payments-api`
-- `bugfix/auth-api` → `auth-api` (collision with `feature/auth-api`? stax prefixes: `bugfix-auth-api`)
-
-Override with `--name`:
-
-```bash
-st worktree create feature/payments-api --name pay
-```
-
-### Non-existent branches
-
-If you pass a branch name that doesn't exist yet, stax offers to create it stacked on your current branch:
-
-```bash
-st worktree create feature/new-thing
-# Branch 'feature/new-thing' does not exist. Create it stacked on current branch? [Y/n]
-```
-
----
-
-## Agent worktrees
-
-For running multiple AI agents (Cursor, Codex, Aider) in parallel, `st agent` automates the full worktree lifecycle with title-based branch naming, editor integration, and a registry.
-
-See [Agent Worktrees](agent-worktrees.md) for details.
-
-| | `st worktree` | `st agent` |
-|---|---|---|
-| Input | Existing or new branch name | Human title (slugified to branch) |
-| Target user | Developer switching stacks | AI agent orchestration |
-| Storage | Raw `git worktree list` | Registry at `.git/stax/agent-worktrees.json` |
-| Editor opening | — | ✓ (`--open-cursor`, `--open-codex`) |
-| Shell `cd` integration | ✓ (`st shell-setup`) | — |
-| Post-create hook | — | ✓ (`agent.post_create_hook`) |
+For the AI-oriented version of this flow, including `--agent` examples and random lane creation, see [Agent Worktrees](agent-worktrees.md).
