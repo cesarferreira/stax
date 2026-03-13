@@ -5,7 +5,7 @@ mod ui;
 mod widgets;
 
 use app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
-use event::{poll_event, KeyAction};
+use event::{poll_event, KeyAction, KeyContext};
 
 use crate::engine::BranchMetadata;
 use crate::git::RebaseResult;
@@ -13,12 +13,13 @@ use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use anyhow::Result;
 use crossterm::{
-    event::Event,
+    event::{Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
+use std::io::Write;
 use std::process::Command;
 use std::time::Duration;
 
@@ -58,8 +59,28 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
 
         // Handle events
         if let Some(Event::Key(key)) = poll_event(Duration::from_millis(100))? {
-            let action = KeyAction::from(key);
-            handle_action(app, action)?;
+            log_key_event(app, &key);
+            match &app.mode {
+                Mode::Input(input_action) => {
+                    let input_action = input_action.clone();
+                    handle_input_key(app, key, &input_action)?;
+                }
+                Mode::Search => {
+                    handle_search_key(app, key)?;
+                }
+                _ => {
+                    let context = match app.mode {
+                        Mode::Normal => KeyContext::Normal,
+                        Mode::Search => KeyContext::Search,
+                        Mode::Help => KeyContext::Help,
+                        Mode::Confirm(_) => KeyContext::Confirm,
+                        Mode::Input(_) => KeyContext::Input,
+                        Mode::Reorder => KeyContext::Reorder,
+                    };
+                    let action = KeyAction::from_key(key, context);
+                    handle_action(app, action)?;
+                }
+            }
         }
 
         if app.should_quit {
@@ -92,6 +113,28 @@ fn handle_action(app: &mut App, action: KeyAction) -> Result<()> {
 /// Handle actions in normal mode
 fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
     match action {
+        KeyAction::Char(c) => {
+            let mapped = match c {
+                'k' => Some(KeyAction::Up),
+                'j' => Some(KeyAction::Down),
+                'r' => Some(KeyAction::Restack),
+                'R' => Some(KeyAction::RestackAll),
+                's' => Some(KeyAction::Submit),
+                'p' => Some(KeyAction::OpenPr),
+                'n' => Some(KeyAction::NewBranch),
+                'd' => Some(KeyAction::Delete),
+                'e' => Some(KeyAction::Rename),
+                '/' => Some(KeyAction::Search),
+                '?' => Some(KeyAction::Help),
+                'q' => Some(KeyAction::Quit),
+                'o' => Some(KeyAction::ReorderMode),
+                _ => None,
+            };
+
+            if let Some(mapped_action) = mapped {
+                return handle_normal_action(app, mapped_action);
+            }
+        }
         KeyAction::Tab => {
             app.focused_pane = match app.focused_pane {
                 FocusedPane::Stack => FocusedPane::Diff,
@@ -229,6 +272,45 @@ fn handle_search_action(app: &mut App, action: KeyAction) -> Result<()> {
             app.update_search();
         }
         KeyAction::Backspace => {
+            app.search_query.pop();
+            app.update_search();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_search_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    if is_ctrl_c(&key) {
+        app.should_quit = true;
+        return Ok(());
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = Mode::Normal;
+            app.search_query.clear();
+            app.filtered_indices.clear();
+            app.select_current_branch();
+        }
+        KeyCode::Enter => {
+            if let Some(branch) = app.selected_branch() {
+                if !branch.is_current {
+                    let name = branch.name.clone();
+                    app.mode = Mode::Normal;
+                    checkout_branch(app, &name)?;
+                } else {
+                    app.mode = Mode::Normal;
+                }
+            }
+        }
+        KeyCode::Up => app.select_previous(),
+        KeyCode::Down => app.select_next(),
+        KeyCode::Char(c) => {
+            app.search_query.push(c);
+            app.update_search();
+        }
+        KeyCode::Backspace => {
             app.search_query.pop();
             app.update_search();
         }
@@ -378,6 +460,100 @@ fn handle_input_action(app: &mut App, action: KeyAction, input_action: &InputAct
         _ => {}
     }
     Ok(())
+}
+
+fn handle_input_key(app: &mut App, key: KeyEvent, input_action: &InputAction) -> Result<()> {
+    if is_ctrl_c(&key) {
+        app.should_quit = true;
+        return Ok(());
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = Mode::Normal;
+            app.input_buffer.clear();
+            app.input_cursor = 0;
+        }
+        KeyCode::Enter => {
+            let input = app.input_buffer.trim().to_string();
+            if input.is_empty() {
+                app.set_status("Name cannot be empty");
+            } else {
+                match input_action {
+                    InputAction::Rename => {
+                        run_external_command(app, &["rename", "--literal", &input])?;
+                    }
+                    InputAction::NewBranch => {
+                        run_external_command(app, &["create", &input])?;
+                    }
+                }
+                app.mode = Mode::Normal;
+                app.input_buffer.clear();
+                app.input_cursor = 0;
+            }
+        }
+        KeyCode::Left => {
+            if app.input_cursor > 0 {
+                app.input_cursor -= 1;
+            }
+        }
+        KeyCode::Right => {
+            if app.input_cursor < app.input_buffer.len() {
+                app.input_cursor += 1;
+            }
+        }
+        KeyCode::Home => {
+            app.input_cursor = 0;
+        }
+        KeyCode::End => {
+            app.input_cursor = app.input_buffer.len();
+        }
+        KeyCode::Char(c) => {
+            app.input_buffer.insert(app.input_cursor, c);
+            app.input_cursor += 1;
+        }
+        KeyCode::Backspace => {
+            if app.input_cursor > 0 {
+                app.input_cursor -= 1;
+                app.input_buffer.remove(app.input_cursor);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn is_ctrl_c(key: &KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c'))
+}
+
+fn log_key_event(app: &App, key: &KeyEvent) {
+    let Ok(path) = std::env::var("STAX_TUI_KEYLOG") else {
+        return;
+    };
+
+    let mode = match &app.mode {
+        Mode::Normal => "normal",
+        Mode::Search => "search",
+        Mode::Help => "help",
+        Mode::Confirm(_) => "confirm",
+        Mode::Input(_) => "input",
+        Mode::Reorder => "reorder",
+    };
+
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+
+    let _ = writeln!(
+        file,
+        "mode={} code={:?} mods={:?} kind={:?} state={:?}",
+        mode, key.code, key.modifiers, key.kind, key.state
+    );
 }
 
 /// Checkout a branch

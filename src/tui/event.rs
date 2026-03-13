@@ -53,8 +53,25 @@ pub enum KeyAction {
     None,
 }
 
+/// Current input context for key mapping
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyContext {
+    Normal,
+    Search,
+    Input,
+    Confirm,
+    Help,
+    Reorder,
+}
+
 impl From<KeyEvent> for KeyAction {
     fn from(key: KeyEvent) -> Self {
+        Self::from_key(key, KeyContext::Normal)
+    }
+}
+
+impl KeyAction {
+    pub fn from_key(key: KeyEvent, context: KeyContext) -> Self {
         // Handle Ctrl+C for quit
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             if let KeyCode::Char('c') = key.code {
@@ -63,7 +80,9 @@ impl From<KeyEvent> for KeyAction {
         }
 
         // Handle Shift modifiers
-        if key.modifiers.contains(KeyModifiers::SHIFT) {
+        if key.modifiers.contains(KeyModifiers::SHIFT)
+            && !matches!(context, KeyContext::Input | KeyContext::Search)
+        {
             match key.code {
                 KeyCode::Char('R') | KeyCode::Char('r') => return KeyAction::RestackAll,
                 KeyCode::Char('K') | KeyCode::Char('k') => return KeyAction::MoveUp,
@@ -86,29 +105,128 @@ impl From<KeyEvent> for KeyAction {
             KeyCode::End => KeyAction::End,
             KeyCode::Tab => KeyAction::Tab,
 
-            // Vim navigation
-            KeyCode::Char('k') => KeyAction::Up,
-            KeyCode::Char('j') => KeyAction::Down,
-
-            // Actions
-            KeyCode::Char('r') => KeyAction::Restack,
-            KeyCode::Char('s') => KeyAction::Submit,
-            KeyCode::Char('p') => KeyAction::OpenPr,
-            KeyCode::Char('n') => KeyAction::NewBranch,
-            KeyCode::Char('d') => KeyAction::Delete,
-            KeyCode::Char('e') => KeyAction::Rename,
-
-            // Modes
-            KeyCode::Char('/') => KeyAction::Search,
-            KeyCode::Char('?') => KeyAction::Help,
-            KeyCode::Char('q') => KeyAction::Quit,
-            KeyCode::Char('o') => KeyAction::ReorderMode,
-
-            // Text input (for search mode)
+            // Text input (and mode-specific shortcuts handled by each mode handler)
             KeyCode::Char(c) => KeyAction::Char(c),
             KeyCode::Backspace => KeyAction::Backspace,
 
             _ => KeyAction::None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KeyAction, KeyContext};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn normal_mode_keeps_shortcuts() {
+        let action = KeyAction::from_key(
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            KeyContext::Normal,
+        );
+        assert_eq!(action, KeyAction::Char('n'));
+    }
+
+    #[test]
+    fn input_mode_treats_shortcut_letters_as_text() {
+        for c in ['n', 'r', 's', 'q', 'd', 'e', 'p', 'o', 'j', 'k'] {
+            let action = KeyAction::from_key(
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                KeyContext::Input,
+            );
+            assert_eq!(action, KeyAction::Char(c));
+        }
+    }
+
+    #[test]
+    fn input_mode_accepts_all_lowercase_letters() {
+        for c in 'a'..='z' {
+            let action = KeyAction::from_key(
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                KeyContext::Input,
+            );
+            assert_eq!(action, KeyAction::Char(c));
+        }
+    }
+
+    #[test]
+    fn search_mode_treats_shortcut_letters_as_text() {
+        let action = KeyAction::from_key(
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+            KeyContext::Search,
+        );
+        assert_eq!(action, KeyAction::Char('q'));
+    }
+
+    #[test]
+    fn input_mode_keeps_control_keys() {
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                KeyContext::Input
+            ),
+            KeyAction::Escape
+        );
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                KeyContext::Input
+            ),
+            KeyAction::Enter
+        );
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+                KeyContext::Input
+            ),
+            KeyAction::Backspace
+        );
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+                KeyContext::Input
+            ),
+            KeyAction::Home
+        );
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+                KeyContext::Input
+            ),
+            KeyAction::End
+        );
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+                KeyContext::Input
+            ),
+            KeyAction::Left
+        );
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+                KeyContext::Input
+            ),
+            KeyAction::Right
+        );
+    }
+
+    #[test]
+    fn ctrl_c_quits_in_all_modes() {
+        let action = KeyAction::from_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            KeyContext::Input,
+        );
+        assert_eq!(action, KeyAction::Quit);
+    }
+
+    #[test]
+    fn input_mode_allows_shifted_letters_as_text() {
+        let action = KeyAction::from_key(
+            KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT),
+            KeyContext::Input,
+        );
+        assert_eq!(action, KeyAction::Char('K'));
     }
 }
