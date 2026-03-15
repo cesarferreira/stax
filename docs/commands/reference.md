@@ -128,6 +128,11 @@
 | `st shell-setup` | | Print shell integration snippet for `eval` |
 | `st shell-setup --install` | | Auto-append shell integration to your shell config |
 
+Worktree launch examples:
+- `st wt c review-pass --agent codex --tmux -- "address PR comments"`
+- `st wt go review-pass --agent codex --tmux`
+- `st wt go ui-polish --run "cursor ." --tmux`
+
 ## Common flags
 
 - `st create -am "msg"`

@@ -232,6 +232,7 @@ Each lane is an isolated Git worktree with a real branch behind it. When stax cr
 st wt c auth-refresh --agent claude -- "fix token refresh edge cases"
 st wt c flaky-tests --agent codex -- "stabilize the flaky test suite"
 st wt c ui-polish --run "cursor ."
+st wt c review-pass --agent codex --tmux -- "address the open PR comments"
 
 # They are normal stax branches, not hidden scratch dirs
 st ls
@@ -241,6 +242,7 @@ st wt rs
 
 # Jump back into any lane and continue exactly where you left off
 st wt go flaky-tests --agent codex
+st wt go review-pass --agent codex --tmux
 
 # Rich status + cleanup
 st wt ll

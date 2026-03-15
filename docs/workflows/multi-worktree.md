@@ -64,9 +64,13 @@ Use `--agent` to start a supported interactive CLI inside the target worktree:
 st wt c auth-refresh --agent codex -- "fix the flaky tests"
 st wt go auth-refresh --agent claude
 st wt go ui-polish --run "cursor ."
+st wt c review-pass --agent codex --tmux -- "address the open PR comments"
+st wt go review-pass --agent codex --tmux
 ```
 
 Supported agent values match the other AI-aware commands in stax: `claude`, `codex`, `gemini`, and `opencode`.
+
+Add `--tmux` if you want a lane to create or attach to a tmux session named after the worktree, so revisiting the lane resumes the same terminal session instead of launching a second copy.
 
 This is what makes the feature stronger than raw `git worktree`: you can spin up several isolated sessions in parallel while keeping them visible to stax as normal branches instead of losing track of them in ad-hoc directories.
 

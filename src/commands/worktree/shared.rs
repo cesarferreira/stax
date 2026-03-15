@@ -77,6 +77,8 @@ pub struct LaunchOptions {
     pub agent: Option<String>,
     pub model: Option<String>,
     pub run: Option<String>,
+    pub tmux: bool,
+    pub tmux_session: Option<String>,
     pub args: Vec<String>,
 }
 
@@ -555,15 +557,22 @@ pub fn compute_worktree_details(repo: &GitRepo, worktree: WorktreeInfo) -> Resul
     })
 }
 
-pub fn build_launch_spec(config: &Config, options: &LaunchOptions) -> Result<Option<LaunchSpec>> {
+pub fn build_launch_spec(
+    config: &Config,
+    options: &LaunchOptions,
+    default_tmux_session: &str,
+) -> Result<Option<LaunchSpec>> {
     if options.agent.is_some() && options.run.is_some() {
         bail!("--agent and --run cannot be used together");
     }
     if options.model.is_some() && options.agent.is_none() {
         bail!("--model requires --agent");
     }
+    if options.tmux_session.is_some() && !options.tmux {
+        bail!("--tmux-session requires --tmux");
+    }
 
-    if let Some(agent) = options.agent.as_deref() {
+    let base_launch = if let Some(agent) = options.agent.as_deref() {
         generate::validate_agent_name(agent)?;
         let model = options
             .model
@@ -603,14 +612,12 @@ pub fn build_launch_spec(config: &Config, options: &LaunchOptions) -> Result<Opt
             agent.to_string()
         };
 
-        return Ok(Some(LaunchSpec::Process {
+        Some(LaunchSpec::Process {
             program: agent.to_string(),
             args,
             display,
-        }));
-    }
-
-    if let Some(command) = options.run.as_deref() {
+        })
+    } else if let Some(command) = options.run.as_deref() {
         let full_command = if options.args.is_empty() {
             command.to_string()
         } else {
@@ -622,13 +629,24 @@ pub fn build_launch_spec(config: &Config, options: &LaunchOptions) -> Result<Opt
                 .join(" ");
             format!("{} {}", command, args)
         };
-        return Ok(Some(LaunchSpec::Shell {
+        Some(LaunchSpec::Shell {
             command: full_command.clone(),
             display: full_command,
-        }));
+        })
+    } else {
+        None
+    };
+
+    if options.tmux {
+        ensure_tmux_available()?;
+        let session = options
+            .tmux_session
+            .as_deref()
+            .unwrap_or(default_tmux_session);
+        return Ok(Some(build_tmux_launch_spec(session, base_launch.as_ref())?));
     }
 
-    Ok(None)
+    Ok(base_launch)
 }
 
 pub fn emit_shell_payload(path: &Path, launch: Option<&LaunchSpec>) {
@@ -807,4 +825,91 @@ pub fn shell_escape(value: &str) -> String {
     }
 
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn ensure_tmux_available() -> Result<()> {
+    let status = Command::new("tmux")
+        .arg("-V")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        _ => bail!("tmux is not installed or not available on PATH"),
+    }
+}
+
+fn build_tmux_launch_spec(session_name: &str, inner: Option<&LaunchSpec>) -> Result<LaunchSpec> {
+    let session = sanitize_tmux_session_name(session_name);
+    if session.is_empty() {
+        bail!("Could not derive a valid tmux session name");
+    }
+
+    let session_escaped = shell_escape(&session);
+    let new_session_cmd = if let Some(inner) = inner {
+        format!(
+            "tmux new-session -s {session} sh -lc {command}",
+            session = session_escaped,
+            command = shell_escape(&inner.shell_command())
+        )
+    } else {
+        format!("tmux new-session -s {}", session_escaped)
+    };
+    let new_session_detached_cmd = if let Some(inner) = inner {
+        format!(
+            "tmux new-session -d -s {session} sh -lc {command}",
+            session = session_escaped,
+            command = shell_escape(&inner.shell_command())
+        )
+    } else {
+        format!("tmux new-session -d -s {}", session_escaped)
+    };
+
+    let command = format!(
+        "if tmux has-session -t {session} 2>/dev/null; then \
+            if [ -n \"${{TMUX:-}}\" ]; then \
+                exec tmux switch-client -t {session}; \
+            else \
+                exec tmux attach-session -t {session}; \
+            fi; \
+        else \
+            if [ -n \"${{TMUX:-}}\" ]; then \
+                {new_detached} || exit $?; \
+                exec tmux switch-client -t {session}; \
+            else \
+                exec {new_attached}; \
+            fi; \
+        fi",
+        session = session_escaped,
+        new_detached = new_session_detached_cmd,
+        new_attached = new_session_cmd,
+    );
+
+    let display = if let Some(inner) = inner {
+        format!("tmux:{} -> {}", session, inner.display())
+    } else {
+        format!("tmux:{}", session)
+    };
+
+    Ok(LaunchSpec::Shell { command, display })
+}
+
+fn sanitize_tmux_session_name(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    sanitized
+        .trim_matches('-')
+        .trim_matches(':')
+        .trim_matches('_')
+        .to_string()
 }

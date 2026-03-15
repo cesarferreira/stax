@@ -24,6 +24,8 @@ pub fn run_go(
     agent: Option<String>,
     model: Option<String>,
     run: Option<String>,
+    tmux: bool,
+    tmux_session: Option<String>,
     args: Vec<String>,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
@@ -40,8 +42,11 @@ pub fn run_go(
             agent,
             model,
             run,
+            tmux,
+            tmux_session,
             args,
         },
+        &worktree.name,
     )?;
 
     if !worktree.path.exists() {

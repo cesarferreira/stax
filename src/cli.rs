@@ -94,6 +94,12 @@ struct WorktreeLaunchArgs {
     /// Run an arbitrary shell command after entering the worktree
     #[arg(long, conflicts_with = "agent")]
     run: Option<String>,
+    /// Create or attach to a tmux session for this worktree
+    #[arg(long)]
+    tmux: bool,
+    /// Override the tmux session name (defaults to the worktree name)
+    #[arg(long, requires = "tmux")]
+    tmux_session: Option<String>,
     /// Arguments passed through to the launched agent or command (after `--`)
     #[arg(last = true)]
     args: Vec<String>,
@@ -1460,6 +1466,8 @@ pub fn run() -> Result<()> {
                 launch.agent,
                 launch.model,
                 launch.run,
+                launch.tmux,
+                launch.tmux_session,
                 launch.args,
             ),
             WorktreeCommands::List { json } => commands::worktree::list::run(json),
@@ -1476,6 +1484,8 @@ pub fn run() -> Result<()> {
                 launch.agent,
                 launch.model,
                 launch.run,
+                launch.tmux,
+                launch.tmux_session,
                 launch.args,
             ),
             WorktreeCommands::Path { name } => commands::worktree::go::run_path(&name),
@@ -1508,6 +1518,8 @@ pub fn run() -> Result<()> {
             launch.agent,
             launch.model,
             launch.run,
+            launch.tmux,
+            launch.tmux_session,
             launch.args,
         ),
         Commands::Wtls => commands::worktree::list::run(false),
@@ -1524,6 +1536,8 @@ pub fn run() -> Result<()> {
             launch.agent,
             launch.model,
             launch.run,
+            launch.tmux,
+            launch.tmux_session,
             launch.args,
         ),
         Commands::Wtrm {

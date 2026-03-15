@@ -32,12 +32,14 @@ If you are working with multiple coding tools at once, this is the difference be
 st wt c auth-refresh --agent claude -- "fix token refresh edge cases"
 st wt c flaky-tests --agent codex -- "stabilize the flaky test suite"
 st wt c ui-polish --run "cursor ."
+st wt c review-pass --agent codex --tmux -- "address the open PR comments"
 
 # They are normal stax branches
 st ls
 
 # Jump back into any lane later
 st wt go flaky-tests --agent codex
+st wt go review-pass --agent codex --tmux
 
 # Trunk moved while those sessions were in flight
 st wt rs
@@ -86,6 +88,8 @@ st wt c auth-refresh
 
 # Re-enter a lane and relaunch the tool there
 st wt go auth-refresh --agent claude
+st wt c review-pass --agent codex --tmux -- "address the open PR comments"
+st wt go review-pass --agent codex --tmux
 
 # Rich status + cleanup
 st wt ll
@@ -141,6 +145,19 @@ Use `--run` when you want an arbitrary launcher instead:
 ```bash
 st wt go api-tests --run "cursor ."
 ```
+
+Add `--tmux` if you want the lane to create or attach to a tmux session named after the worktree:
+
+```bash
+st wt c api-tests --agent codex --tmux -- "write the missing integration tests"
+st wt go api-tests --agent codex --tmux
+```
+
+Behavior:
+
+- first entry creates the tmux session and launches the requested command there
+- later entries attach to the existing session instead of relaunching the command
+- inside an existing tmux client, stax switches to the lane's session instead of nesting tmux
 
 ## Base branch behavior
 

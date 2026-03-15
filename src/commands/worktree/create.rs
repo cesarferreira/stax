@@ -23,6 +23,8 @@ pub fn run(
     agent: Option<String>,
     model: Option<String>,
     run: Option<String>,
+    tmux: bool,
+    tmux_session: Option<String>,
     args: Vec<String>,
 ) -> Result<()> {
     if pick && name.is_some() {
@@ -31,18 +33,18 @@ pub fn run(
 
     let repo = GitRepo::open()?;
     let config = Config::load()?;
-    let launch = build_launch_spec(
-        &config,
-        &LaunchOptions {
-            agent,
-            model,
-            run,
-            args,
-        },
-    )?;
+    let launch_options = LaunchOptions {
+        agent,
+        model,
+        run,
+        tmux,
+        tmux_session,
+        args,
+    };
 
     if let Some(ref target) = name {
         if let Some(worktree) = find_worktree(&repo, target)? {
+            let launch = build_launch_spec(&config, &launch_options, &worktree.name)?;
             format_go_message(&worktree);
             if !no_verify {
                 spawn_background_hook(
@@ -82,6 +84,7 @@ pub fn run(
 
     let (branch_name, branch_exists) = resolve_branch_name(&repo, &config, &input_name)?;
     if let Some(worktree) = find_worktree(&repo, &branch_name)? {
+        let launch = build_launch_spec(&config, &launch_options, &worktree.name)?;
         format_go_message(&worktree);
         if !no_verify {
             spawn_background_hook(
@@ -121,6 +124,7 @@ pub fn run(
     };
 
     let worktree_name = worktree_name.unwrap_or(derive_unique_worktree_name(&repo, &branch_name)?);
+    let launch = build_launch_spec(&config, &launch_options, &worktree_name)?;
     let worktrees_dir = managed_worktrees_dir(&repo, &config)?;
     let worktree_path = worktrees_dir.join(&worktree_name);
     if worktree_path.exists() {

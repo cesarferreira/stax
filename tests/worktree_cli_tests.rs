@@ -46,6 +46,13 @@ fn write_worktree_config(home: &str, root_dir: &str) {
     .expect("write config.toml");
 }
 
+fn write_executable(path: &PathBuf, content: &str) {
+    fs::write(path, content).expect("write executable");
+    let mut perms = fs::metadata(path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).expect("chmod executable");
+}
+
 fn linked_worktree_dirs_default(repo: &TestRepo, home: &str) -> Vec<PathBuf> {
     let root = default_worktree_root(repo, home);
     if !root.exists() {
@@ -53,6 +60,114 @@ fn linked_worktree_dirs_default(repo: &TestRepo, home: &str) -> Vec<PathBuf> {
     }
 
     linked_worktree_dirs(&root)
+}
+
+fn setup_fake_tmux_env(repo: &TestRepo) -> (PathBuf, String, String, String) {
+    let bin_dir = repo.path().join("fake-bin");
+    fs::create_dir_all(&bin_dir).expect("create fake bin");
+
+    let tmux_log = repo.path().join("tmux.log");
+    let agent_log = repo.path().join("agent.log");
+    let tmux_state = repo.path().join("tmux-state");
+    fs::create_dir_all(&tmux_state).expect("create tmux state");
+
+    write_executable(
+        &bin_dir.join("tmux"),
+        r#"#!/bin/sh
+set -eu
+cmd="${1:-}"
+if [ "$cmd" = "-V" ]; then
+  echo "tmux 3.4"
+  exit 0
+fi
+shift || true
+log="${STAX_TMUX_LOG:?}"
+state="${STAX_TMUX_STATE_DIR:?}"
+printf 'cmd=%s args=%s\n' "$cmd" "$*" >> "$log"
+case "$cmd" in
+  has-session)
+    if [ "${1:-}" = "-t" ]; then
+      session="${2:-}"
+    else
+      session="${1:-}"
+    fi
+    if [ -f "$state/$session" ]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  new-session)
+    detached=0
+    session=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -d)
+          detached=1
+          shift
+          ;;
+        -s)
+          session="$2"
+          shift 2
+          ;;
+        *)
+          break
+          ;;
+      esac
+    done
+    : > "$state/$session"
+    printf 'new=%s detached=%s\n' "$session" "$detached" >> "$log"
+    if [ "$#" -gt 0 ]; then
+      "$@"
+    fi
+    ;;
+  attach-session)
+    if [ "${1:-}" = "-t" ]; then
+      session="${2:-}"
+    else
+      session="${1:-}"
+    fi
+    printf 'attach=%s\n' "$session" >> "$log"
+    ;;
+  switch-client)
+    if [ "${1:-}" = "-t" ]; then
+      session="${2:-}"
+    else
+      session="${1:-}"
+    fi
+    printf 'switch=%s\n' "$session" >> "$log"
+    ;;
+  *)
+    echo "unsupported tmux command: $cmd" >&2
+    exit 1
+    ;;
+esac
+"#,
+    );
+
+    write_executable(
+        &bin_dir.join("codex"),
+        r#"#!/bin/sh
+set -eu
+log="${STAX_AGENT_LOG:?}"
+printf 'cwd=%s\n' "$PWD" >> "$log"
+for arg in "$@"; do
+  printf 'arg=%s\n' "$arg" >> "$log"
+done
+"#,
+    );
+
+    let path_env = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    (
+        bin_dir,
+        path_env,
+        tmux_log.to_string_lossy().into_owned(),
+        agent_log.to_string_lossy().into_owned(),
+    )
 }
 
 #[test]
@@ -204,6 +319,107 @@ done
         log.contains("arg=fix flaky test"),
         "expected trailing args to reach the agent, got:\n{}",
         log
+    );
+}
+
+#[test]
+fn wt_tmux_creates_then_attaches_existing_session() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+    let (_bin_dir, path_env, tmux_log, agent_log) = setup_fake_tmux_env(&repo);
+    let tmux_state = repo.path().join("tmux-state");
+    let tmux_state_str = tmux_state.to_string_lossy().into_owned();
+
+    let out = repo.run_stax_with_env(
+        &[
+            "wt",
+            "c",
+            "tmux-lane",
+            "--agent",
+            "codex",
+            "--tmux",
+            "--",
+            "fix flaky test",
+        ],
+        &[
+            ("HOME", home.as_str()),
+            ("PATH", path_env.as_str()),
+            ("STAX_TMUX_LOG", tmux_log.as_str()),
+            ("STAX_TMUX_STATE_DIR", tmux_state_str.as_str()),
+            ("STAX_AGENT_LOG", agent_log.as_str()),
+        ],
+    );
+    out.assert_success();
+
+    let out = repo.run_stax_with_env(
+        &["wt", "go", "tmux-lane", "--agent", "codex", "--tmux"],
+        &[
+            ("HOME", home.as_str()),
+            ("PATH", path_env.as_str()),
+            ("STAX_TMUX_LOG", tmux_log.as_str()),
+            ("STAX_TMUX_STATE_DIR", tmux_state_str.as_str()),
+            ("STAX_AGENT_LOG", agent_log.as_str()),
+        ],
+    );
+    out.assert_success();
+
+    let tmux_log_contents = fs::read_to_string(&tmux_log).expect("read tmux log");
+    assert!(
+        tmux_log_contents.contains("new=tmux-lane"),
+        "expected tmux session to be created with worktree name, got:\n{}",
+        tmux_log_contents
+    );
+    assert!(
+        tmux_log_contents.contains("attach=tmux-lane"),
+        "expected existing session to attach on revisit, got:\n{}",
+        tmux_log_contents
+    );
+
+    let agent_log_contents = fs::read_to_string(&agent_log).expect("read agent log");
+    assert_eq!(
+        agent_log_contents.matches("cwd=").count(),
+        1,
+        "expected agent to launch only once when tmux session is first created, got:\n{}",
+        agent_log_contents
+    );
+    assert!(
+        agent_log_contents.contains("arg=fix flaky test"),
+        "expected initial agent args to be preserved inside tmux session, got:\n{}",
+        agent_log_contents
+    );
+}
+
+#[test]
+fn wt_tmux_switches_client_when_already_inside_tmux() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+    let (_bin_dir, path_env, tmux_log, agent_log) = setup_fake_tmux_env(&repo);
+    let tmux_state = repo.path().join("tmux-state");
+    let tmux_state_str = tmux_state.to_string_lossy().into_owned();
+
+    let out = repo.run_stax_with_env(
+        &["wt", "c", "inside-tmux", "--tmux"],
+        &[
+            ("HOME", home.as_str()),
+            ("PATH", path_env.as_str()),
+            ("STAX_TMUX_LOG", tmux_log.as_str()),
+            ("STAX_TMUX_STATE_DIR", tmux_state_str.as_str()),
+            ("STAX_AGENT_LOG", agent_log.as_str()),
+            ("TMUX", "1"),
+        ],
+    );
+    out.assert_success();
+
+    let tmux_log_contents = fs::read_to_string(&tmux_log).expect("read tmux log");
+    assert!(
+        tmux_log_contents.contains("new=inside-tmux detached=1"),
+        "expected detached session creation inside tmux, got:\n{}",
+        tmux_log_contents
+    );
+    assert!(
+        tmux_log_contents.contains("switch=inside-tmux"),
+        "expected switch-client inside tmux, got:\n{}",
+        tmux_log_contents
     );
 }
 
