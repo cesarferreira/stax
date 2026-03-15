@@ -1,45 +1,108 @@
 # Worktree Lanes For AI
 
-Run parallel AI sessions with normal `st wt` worktrees plus `--agent`.
+`st wt` lets you run multiple AI coding sessions in parallel while keeping them inside stax's normal branch model.
 
-That keeps the workflow familiar to existing stax users:
+This is the important part: these lanes are not a separate subsystem and they are not hidden scratch directories. When stax creates the branch for a lane, it writes normal stax metadata, so the lane behaves like a first-class branch in your stack.
 
-- `wt c` creates a lane
-- `wt go` jumps back into a lane
-- `wt ls` stays compact
-- `wt ll` shows richer status
-- `wt rs` restacks stax-managed lanes
+That means you can:
+
+- see it in `st ls`
+- restack it safely when trunk or a parent moves
+- jump back into it with `st wt go`
+- inspect it with `st wt ll`
+- clean it up with `st wt rm`
+- keep several lanes alive at once without them touching the same checkout
+
+## Why this is powerful
+
+Raw `git worktree` gives you extra directories. This feature gives you a parallel workflow:
+
+- create a lane and immediately start Claude/Codex/Gemini/OpenCode inside it
+- keep each session isolated to its own working tree and branch
+- let those branches stay visible to stax instead of disappearing into ad-hoc directories
+- recover cleanly when trunk moves by restacking all managed lanes together
+- come back hours later and resume any lane without remembering where you left it
+
+If you are working with multiple coding tools at once, this is the difference between "a pile of terminals" and "several active branches that stax still understands."
+
+## The workflow in one example
+
+```bash
+# Start three parallel lanes
+st wt c auth-refresh --agent claude -- "fix token refresh edge cases"
+st wt c flaky-tests --agent codex -- "stabilize the flaky test suite"
+st wt c ui-polish --run "cursor ."
+
+# They are normal stax branches
+st ls
+
+# Jump back into any lane later
+st wt go flaky-tests --agent codex
+
+# Trunk moved while those sessions were in flight
+st wt rs
+
+# See which lanes are dirty / rebasing / managed
+st wt ll
+
+# Remove finished work
+st wt rm auth-refresh --delete-branch
+```
+
+## What `st wt c` actually gives you
+
+`st wt c` is intentionally convenience-first:
+
+- with no name, it creates a new lane with a random funny slug
+- with a new name, it creates a new branch + worktree and takes you there
+- with an existing branch, it creates a worktree for that branch
+- with an existing worktree target, it reuses it instead of duplicating it
+
+So the command is less "make a raw worktree" and more "make sure this lane exists and put me in it."
+
+## First-class branch behavior
+
+When stax creates a new branch for the lane, it writes normal branch metadata. That is why the lane participates in the usual stax flows:
+
+- `st ls` shows the branch in the stack
+- `st restack`, `st sync --restack`, and `st wt rs` can reason about it
+- undo/redo still operate on the branch history
+- the TUI keeps showing the stack while the separate worktrees panel shows the linked directories
+
+Tracking nuance:
+
+- new lane name via `st wt c foo`: tracked by stax
+- existing already-tracked branch via `st wt c some-branch`: still tracked
+- existing plain Git branch via `st wt c some-branch`: worktree exists, but the branch stays untracked until you run `st branch track`
 
 ## Quick start
 
 ```bash
-# Create a random lane and start Codex there
+# Fastest possible scratch lane
 st wt c --agent codex -- "fix flaky tests"
 
 # Create or reuse a named lane
 st wt c auth-refresh
 
-# Jump back into an existing lane and launch Claude
+# Re-enter a lane and relaunch the tool there
 st wt go auth-refresh --agent claude
 
-# Rich status view
+# Rich status + cleanup
 st wt ll
-
-# Safe cleanup
 st wt prune
 st wt rm auth-refresh --delete-branch
 ```
 
-## Why this shape
+## Why the command shape feels native to stax
 
 stax already had strong verbs for this workflow:
 
-- `create` means “make the thing and take me there”
-- `go` means “jump to the existing thing”
-- `ls` means “show me the inventory”
-- `ll` means “show me the richer view”
+- `create` means "make the thing and take me there"
+- `go` means "jump to the existing thing"
+- `ls` means "show me the inventory"
+- `ll` means "show me the richer view"
 
-The AI behavior is an option on top of that, not a separate subsystem.
+The AI launch is an option on top of those verbs, not a separate command family.
 
 ## Random no-arg creation
 
@@ -52,7 +115,7 @@ st wt c
 #   branch cheeky-bagel (or your configured branch.format variant)
 ```
 
-This is the fastest way to spin up an isolated scratch lane for an agent.
+This is the fastest way to spin up an isolated scratch lane.
 
 ## Agent launch
 
@@ -86,8 +149,6 @@ For new branches:
 - `--from <branch>` explicitly sets the base branch
 - otherwise, if the current branch is already tracked by stax, the new lane stacks on the current branch
 - otherwise, the new lane starts from trunk
-
-When stax creates a new branch for the lane, it writes normal stax branch metadata, so restack/sync/undo continue to work as expected.
 
 ## Status views
 

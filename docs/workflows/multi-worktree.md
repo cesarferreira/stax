@@ -27,7 +27,9 @@ If conflicts occur, stax preserves the stash entry so changes are not lost.
 
 ## `st worktree`
 
-`st worktree` (alias `st wt`) is the stax-native workflow for parallel lanes. It keeps `wt ls` simple, uses `go` instead of `switch`, and layers optional AI launch on top of normal Git worktrees instead of a separate registry.
+`st worktree` (alias `st wt`) is the stax-native workflow for parallel lanes. It keeps `wt ls` simple, uses `go` instead of `switch`, and layers optional AI launch on top of normal Git worktrees.
+
+When `st wt c` creates a new branch for a lane, stax also writes normal branch metadata. That means the lane is not "just another directory": it shows up in `st ls`, participates in restack/sync/undo flows, and can be reopened later with `st wt go`.
 
 ### Quick start
 
@@ -66,6 +68,8 @@ st wt go ui-polish --run "cursor ."
 
 Supported agent values match the other AI-aware commands in stax: `claude`, `codex`, `gemini`, and `opencode`.
 
+This is what makes the feature stronger than raw `git worktree`: you can spin up several isolated sessions in parallel while keeping them visible to stax as normal branches instead of losing track of them in ad-hoc directories.
+
 ### Shell integration
 
 `st wt c` and `st wt go` need shell integration if you want the parent shell to move into the target directory automatically.
@@ -102,4 +106,4 @@ After installation, both `st` and `stax` transparently handle:
 
 ### Related guide
 
-For the AI-oriented version of this flow, including `--agent` examples and random lane creation, see [Agent Worktrees](agent-worktrees.md).
+For the parallel-lane version of this flow, including `--agent` examples, random lane creation, and restack behavior, see [Worktree Lanes For AI](agent-worktrees.md).
