@@ -849,7 +849,7 @@ fn build_tmux_launch_spec(session_name: &str, inner: Option<&LaunchSpec>) -> Res
     let session_escaped = shell_escape(&session);
     let new_session_cmd = if let Some(inner) = inner {
         format!(
-            "tmux new-session -s {session} sh -lc {command}",
+            "tmux new-session -s {session} sh -c {command}",
             session = session_escaped,
             command = shell_escape(&inner.shell_command())
         )
@@ -858,7 +858,7 @@ fn build_tmux_launch_spec(session_name: &str, inner: Option<&LaunchSpec>) -> Res
     };
     let new_session_detached_cmd = if let Some(inner) = inner {
         format!(
-            "tmux new-session -d -s {session} sh -lc {command}",
+            "tmux new-session -d -s {session} sh -c {command}",
             session = session_escaped,
             command = shell_escape(&inner.shell_command())
         )
