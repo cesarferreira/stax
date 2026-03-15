@@ -800,7 +800,7 @@ fn test_status_marks_branches_checked_out_in_linked_worktrees() {
         .find(|line| line.contains(&branch_name))
         .expect("Expected branch in status output");
     assert!(
-        line.contains("⧉"),
+        line.contains("◫"),
         "Expected linked worktree glyph in status output line: {}",
         line
     );

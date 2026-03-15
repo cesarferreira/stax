@@ -21,7 +21,7 @@ const COLUMN_COLORS: &[Color] = &[
     Color::BrightMagenta,
     Color::BrightBlue,
 ];
-const LINKED_WORKTREE_GLYPH: &str = "⧉";
+const LINKED_WORKTREE_GLYPH: &str = "◫";
 
 /// Represents a branch in the display with its column position
 struct DisplayBranch {
@@ -306,8 +306,6 @@ pub fn run(
 
         if entry.and_then(|e| e.linked_worktree.as_ref()).is_some() {
             info_str.push_str(&format!("{} ", LINKED_WORKTREE_GLYPH.bright_cyan()));
-        } else {
-            info_str.push_str("  ");
         }
 
         // Color branch names to match their column in the graph
@@ -413,8 +411,6 @@ pub fn run(
         .is_some()
     {
         trunk_info.push_str(&format!("{} ", LINKED_WORKTREE_GLYPH.bright_cyan()));
-    } else {
-        trunk_info.push_str("  ");
     }
     // Color trunk name to match column 0
     if is_trunk_current {
