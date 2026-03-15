@@ -115,7 +115,8 @@ pub struct AuthConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WorktreeConfig {
-    /// Directory for stax-managed worktrees, relative to repo root (default: .worktrees)
+    /// Directory for stax-managed worktrees. Empty means the default external root:
+    /// ~/.stax/worktrees/<repo>.
     #[serde(default = "default_worktree_root_dir")]
     pub root_dir: String,
     #[serde(default)]
@@ -231,7 +232,7 @@ fn default_replacement() -> String {
 }
 
 fn default_worktree_root_dir() -> String {
-    ".worktrees".to_string()
+    String::new()
 }
 
 fn default_remote_name() -> String {

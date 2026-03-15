@@ -55,6 +55,7 @@ fn sanitized_stax_command() -> Command {
     // Keep tests hermetic and avoid accidentally hitting real GitHub APIs.
     cmd.env_remove("GITHUB_TOKEN")
         .env_remove("STAX_GITHUB_TOKEN")
+        .env_remove("STAX_SHELL_INTEGRATION")
         .env_remove("GH_TOKEN")
         .env("GIT_CONFIG_GLOBAL", null_path)
         .env("GIT_CONFIG_SYSTEM", null_path)

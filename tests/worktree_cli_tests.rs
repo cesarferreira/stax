@@ -7,20 +7,52 @@ use std::path::PathBuf;
 
 fn clean_home(repo: &TestRepo) -> String {
     let home = repo.path().join(".test-home");
-    fs::create_dir_all(home.join(".config")).expect("create clean home");
+    fs::create_dir_all(home.join(".config").join("stax")).expect("create clean home");
     home.to_string_lossy().into_owned()
 }
 
-fn linked_worktree_dirs(repo: &TestRepo) -> Vec<PathBuf> {
-    let root = repo.path().join(".worktrees");
+fn default_worktree_root(repo: &TestRepo, home: &str) -> PathBuf {
+    let repo_name = repo
+        .path()
+        .file_name()
+        .expect("repo dir name")
+        .to_string_lossy()
+        .into_owned();
+    PathBuf::from(home)
+        .join(".stax")
+        .join("worktrees")
+        .join(repo_name)
+}
+
+fn linked_worktree_dirs(root: &PathBuf) -> Vec<PathBuf> {
     if !root.exists() {
         return Vec::new();
     }
 
     fs::read_dir(root)
-        .expect("read .worktrees")
+        .expect("read worktree root")
         .map(|entry| entry.expect("read dir entry").path())
+        .filter(|path| path.is_dir())
         .collect()
+}
+
+fn write_worktree_config(home: &str, root_dir: &str) {
+    let config_dir = PathBuf::from(home).join(".config").join("stax");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        format!("[worktree]\nroot_dir = \"{}\"\n", root_dir),
+    )
+    .expect("write config.toml");
+}
+
+fn linked_worktree_dirs_default(repo: &TestRepo, home: &str) -> Vec<PathBuf> {
+    let root = default_worktree_root(repo, home);
+    if !root.exists() {
+        return Vec::new();
+    }
+
+    linked_worktree_dirs(&root)
 }
 
 #[test]
@@ -42,7 +74,7 @@ fn wt_create_without_name_creates_random_lane() {
         stderr
     );
 
-    let worktrees = linked_worktree_dirs(&repo);
+    let worktrees = linked_worktree_dirs_default(&repo, &home);
     assert_eq!(worktrees.len(), 1, "expected one linked worktree");
 
     let slug = worktrees[0]
@@ -70,8 +102,8 @@ fn wt_create_without_name_creates_random_lane() {
 
     let gitignore = fs::read_to_string(repo.path().join(".gitignore")).unwrap_or_default();
     assert!(
-        gitignore.contains(".worktrees"),
-        "expected .gitignore to contain .worktrees, got:\n{}",
+        !gitignore.contains(".worktrees"),
+        "default external worktree root should not touch .gitignore, got:\n{}",
         gitignore
     );
 }
@@ -88,14 +120,14 @@ fn wt_create_reuses_existing_worktree_target() {
 
     repo.run_stax_with_env(&["wt", "c", "feature-lane"], &[("HOME", home.as_str())])
         .assert_success();
-    let before = linked_worktree_dirs(&repo);
+    let before = linked_worktree_dirs_default(&repo, &home);
     assert_eq!(before.len(), 1);
     assert!(before[0].ends_with("feature-lane"));
 
     let out = repo.run_stax_with_env(&["wt", "c", "feature-lane"], &[("HOME", home.as_str())]);
     out.assert_success();
 
-    let after = linked_worktree_dirs(&repo);
+    let after = linked_worktree_dirs_default(&repo, &home);
     assert_eq!(after.len(), 1, "should not create a duplicate worktree");
     assert!(
         TestRepo::stderr(&out).contains("Opening"),
@@ -157,8 +189,14 @@ done
     );
 
     let log = fs::read_to_string(&log_path).expect("read codex log");
+    let expected_worktree_root = default_worktree_root(&repo, &home);
     assert!(
-        log.contains(".worktrees/launch-me"),
+        log.contains(
+            expected_worktree_root
+                .join("launch-me")
+                .to_string_lossy()
+                .as_ref()
+        ),
         "expected launch cwd inside new worktree, got:\n{}",
         log
     );
@@ -166,6 +204,117 @@ done
         log.contains("arg=fix flaky test"),
         "expected trailing args to reach the agent, got:\n{}",
         log
+    );
+}
+
+#[test]
+fn wt_create_prints_cd_hint_when_shell_env_is_set_without_shell_wrapper() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+
+    let out = repo.run_stax_with_env(
+        &["wt", "c", "shell-env-lane"],
+        &[("HOME", home.as_str()), ("STAX_SHELL_INTEGRATION", "1")],
+    );
+    out.assert_success();
+
+    let stdout = TestRepo::stdout(&out);
+    let expected_path = default_worktree_root(&repo, &home).join("shell-env-lane");
+    assert!(
+        stdout.contains(expected_path.to_string_lossy().as_ref()),
+        "expected direct cd hint when shell wrapper is not active, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("cd "),
+        "expected cd hint when shell wrapper is not active, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Current shell did not move automatically."),
+        "expected explicit non-navigation warning, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn wt_go_prints_cd_hint_when_shell_env_is_set_without_shell_wrapper() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+
+    repo.run_stax_with_env(&["wt", "c", "go-shell-env"], &[("HOME", home.as_str())])
+        .assert_success();
+
+    let out = repo.run_stax_with_env(
+        &["wt", "go", "go-shell-env"],
+        &[("HOME", home.as_str()), ("STAX_SHELL_INTEGRATION", "1")],
+    );
+    out.assert_success();
+
+    let stdout = TestRepo::stdout(&out);
+    let expected_path = default_worktree_root(&repo, &home).join("go-shell-env");
+    assert!(
+        stdout.contains(expected_path.to_string_lossy().as_ref()),
+        "expected direct cd hint when shell wrapper is not active, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("cd "),
+        "expected cd hint when shell wrapper is not active, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Current shell did not move automatically."),
+        "expected explicit non-navigation warning, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn wt_create_without_shell_integration_suggests_install() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+
+    let out = repo.run_stax_with_env(&["wt", "c", "install-shell"], &[("HOME", home.as_str())]);
+    out.assert_success();
+
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        stdout.contains("Current shell did not move automatically."),
+        "expected explicit non-navigation warning, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("stax shell-setup --install"),
+        "expected shell integration install hint, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn wt_go_without_shell_integration_suggests_install() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+
+    repo.run_stax_with_env(&["wt", "c", "go-install-shell"], &[("HOME", home.as_str())])
+        .assert_success();
+
+    let out = repo.run_stax_with_env(
+        &["wt", "go", "go-install-shell"],
+        &[("HOME", home.as_str())],
+    );
+    out.assert_success();
+
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        stdout.contains("Current shell did not move automatically."),
+        "expected explicit non-navigation warning, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("stax shell-setup --install"),
+        "expected shell integration install hint, got:\n{}",
+        stdout
     );
 }
 
@@ -197,13 +346,34 @@ fn wt_ls_stays_compact_and_wt_ll_shows_status() {
 }
 
 #[test]
+fn wt_create_respects_explicit_repo_local_root_dir() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+    write_worktree_config(&home, ".worktrees");
+
+    let out = repo.run_stax_with_env(&["wt", "c", "local-root"], &[("HOME", home.as_str())]);
+    out.assert_success();
+
+    let worktrees = linked_worktree_dirs(&repo.path().join(".worktrees"));
+    assert_eq!(worktrees.len(), 1, "expected repo-local worktree root");
+    assert!(worktrees[0].ends_with("local-root"));
+
+    let gitignore = fs::read_to_string(repo.path().join(".gitignore")).unwrap_or_default();
+    assert!(
+        gitignore.contains(".worktrees"),
+        "expected explicit repo-local root to update .gitignore, got:\n{}",
+        gitignore
+    );
+}
+
+#[test]
 fn wt_prune_cleans_stale_git_worktree_entries() {
     let repo = TestRepo::new();
     let home = clean_home(&repo);
 
     repo.run_stax_with_env(&["wt", "c", "prune-me"], &[("HOME", home.as_str())])
         .assert_success();
-    let worktree_path = repo.path().join(".worktrees").join("prune-me");
+    let worktree_path = default_worktree_root(&repo, &home).join("prune-me");
     fs::remove_dir_all(&worktree_path).expect("manually delete worktree path");
 
     let ll = repo.run_stax_with_env(&["wt", "ll"], &[("HOME", home.as_str())]);
@@ -237,7 +407,7 @@ fn wt_remove_without_name_removes_current_worktree() {
 
     repo.run_stax_with_env(&["wt", "c", "remove-me"], &[("HOME", home.as_str())])
         .assert_success();
-    let worktree_path = repo.path().join(".worktrees").join("remove-me");
+    let worktree_path = default_worktree_root(&repo, &home).join("remove-me");
 
     let out = repo.run_stax_in_with_env(&worktree_path, &["wt", "rm"], &[("HOME", home.as_str())]);
     out.assert_success();

@@ -111,7 +111,7 @@ The AI launch is an option on top of those verbs, not a separate command family.
 ```bash
 st wt c
 # creates something like:
-#   .worktrees/cheeky-bagel
+#   ~/.stax/worktrees/stax/cheeky-bagel
 #   branch cheeky-bagel (or your configured branch.format variant)
 ```
 
@@ -199,7 +199,10 @@ Worktree hooks live under `[worktree.hooks]` in `~/.config/stax/config.toml`:
 
 ```toml
 [worktree]
-root_dir = ".worktrees"
+# Leave unset/empty for the default external root (~/.stax/worktrees/<repo>)
+# root_dir = ""
+# Or opt back into repo-local lanes:
+# root_dir = ".worktrees"
 
 [worktree.hooks]
 post_create = ""

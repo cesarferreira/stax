@@ -33,6 +33,7 @@ fn sanitized_stax_command() -> Command {
     // Keep tests hermetic and avoid accidentally hitting real GitHub APIs.
     cmd.env_remove("GITHUB_TOKEN")
         .env_remove("STAX_GITHUB_TOKEN")
+        .env_remove("STAX_SHELL_INTEGRATION")
         .env_remove("GH_TOKEN")
         .env("GIT_CONFIG_GLOBAL", null_path)
         .env("GIT_CONFIG_SYSTEM", null_path)
@@ -763,6 +764,63 @@ fn test_status_json_output() {
         "Expected branch containing feature-1 in branches: {:?}",
         branches
     );
+}
+
+#[test]
+fn test_status_marks_branches_checked_out_in_linked_worktrees() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-1"]);
+    let branch_name = repo.current_branch();
+    repo.run_stax(&["t"]);
+
+    let worktree_path = repo.path().join("feature-1-wt");
+    let git_output = repo.git(&[
+        "worktree",
+        "add",
+        worktree_path.to_str().expect("utf8 worktree path"),
+        &branch_name,
+    ]);
+    assert!(
+        git_output.status.success(),
+        "git worktree add failed: {}",
+        String::from_utf8_lossy(&git_output.stderr)
+    );
+
+    let output = repo.run_stax(&["status"]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let line = stdout
+        .lines()
+        .find(|line| line.contains(&branch_name))
+        .expect("Expected branch in status output");
+    assert!(
+        line.contains("⧉"),
+        "Expected linked worktree glyph in status output line: {}",
+        line
+    );
+
+    let json_output = repo.run_stax(&["status", "--json"]);
+    assert!(
+        json_output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&json_output)
+    );
+
+    let json: Value =
+        serde_json::from_str(&TestRepo::stdout(&json_output)).expect("Invalid JSON output");
+    let branch = json["branches"]
+        .as_array()
+        .expect("branches array")
+        .iter()
+        .find(|entry| entry["name"] == branch_name)
+        .expect("branch entry");
+    assert_eq!(branch["linked_worktree"], "feature-1-wt");
 }
 
 #[test]

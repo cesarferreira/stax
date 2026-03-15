@@ -38,7 +38,7 @@ Main config path: `~/.config/stax/config.toml`
 # model = "claude-sonnet-4-5-20250929"
 
 [worktree]
-# root_dir = ".worktrees"
+# root_dir = "" # default: ~/.stax/worktrees/<repo>
 
 [worktree.hooks]
 # post_create = "" # blocking hook run in a new worktree before launch

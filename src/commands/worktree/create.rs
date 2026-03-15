@@ -1,7 +1,7 @@
 use super::shared::{
     build_launch_spec, default_create_base, derive_unique_worktree_name, emit_shell_payload,
-    ensure_gitignore, find_worktree, format_create_message, format_go_message,
-    generate_random_lane_slug, managed_worktrees_dir, pick_branch_interactively,
+    ensure_gitignore, ensure_managed_worktrees_root, find_worktree, format_create_message,
+    format_go_message, generate_random_lane_slug, managed_worktrees_dir, pick_branch_interactively,
     resolve_branch_name, run_blocking_hook, spawn_background_hook, LaunchOptions,
 };
 use crate::commands::shell_setup;
@@ -56,9 +56,18 @@ pub fn run(
                 emit_shell_payload(&worktree.path, launch.as_ref());
             } else if let Some(launch) = launch.as_ref() {
                 launch.execute_in(&worktree.path)?;
-            } else if !shell_setup::is_installed() {
+            } else {
                 println!();
+                println!("{}", "Current shell did not move automatically.".yellow());
                 println!("  {}", format!("cd {}", worktree.path.display()).cyan());
+                if !shell_setup::is_installed() {
+                    println!();
+                    println!(
+                        "{}",
+                        "Tip: add shell integration for automatic cd:".dimmed()
+                    );
+                    println!("  {}", "stax shell-setup --install".cyan());
+                }
             }
 
             return Ok(());
@@ -86,9 +95,18 @@ pub fn run(
             emit_shell_payload(&worktree.path, launch.as_ref());
         } else if let Some(launch) = launch.as_ref() {
             launch.execute_in(&worktree.path)?;
-        } else if !shell_setup::is_installed() {
+        } else {
             println!();
+            println!("{}", "Current shell did not move automatically.".yellow());
             println!("  {}", format!("cd {}", worktree.path.display()).cyan());
+            if !shell_setup::is_installed() {
+                println!();
+                println!(
+                    "{}",
+                    "Tip: add shell integration for automatic cd:".dimmed()
+                );
+                println!("  {}", "stax shell-setup --install".cyan());
+            }
         }
         return Ok(());
     }
@@ -113,6 +131,7 @@ pub fn run(
     }
 
     fs::create_dir_all(&worktrees_dir)?;
+    ensure_managed_worktrees_root(&repo, &config, &worktrees_dir)?;
     let main_repo_workdir = repo.main_repo_workdir()?;
     ensure_gitignore(&main_repo_workdir, &config.worktree.root_dir)?;
 
@@ -168,9 +187,18 @@ pub fn run(
         emit_shell_payload(&worktree_path, launch.as_ref());
     } else if let Some(launch) = launch.as_ref() {
         launch.execute_in(&worktree_path)?;
-    } else if !shell_setup::is_installed() {
+    } else {
         println!();
+        println!("{}", "Current shell did not move automatically.".yellow());
         println!("  {}", format!("cd {}", worktree_path.display()).cyan());
+        if !shell_setup::is_installed() {
+            println!();
+            println!(
+                "{}",
+                "Tip: add shell integration for automatic cd:".dimmed()
+            );
+            println!("  {}", "stax shell-setup --install".cyan());
+        }
     }
 
     Ok(())

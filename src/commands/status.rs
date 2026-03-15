@@ -21,6 +21,7 @@ const COLUMN_COLORS: &[Color] = &[
     Color::BrightMagenta,
     Color::BrightBlue,
 ];
+const LINKED_WORKTREE_GLYPH: &str = "⧉";
 
 /// Represents a branch in the display with its column position
 struct DisplayBranch {
@@ -34,6 +35,7 @@ struct BranchStatusJson {
     parent: Option<String>,
     is_current: bool,
     is_trunk: bool,
+    linked_worktree: Option<String>,
     needs_restack: bool,
     pr_number: Option<u64>,
     pr_state: Option<String>,
@@ -143,6 +145,12 @@ pub fn run(
 
     let mut branch_statuses: Vec<BranchStatusJson> = Vec::new();
     let mut branch_status_map: HashMap<String, BranchStatusJson> = HashMap::new();
+    let linked_worktrees_by_branch: HashMap<String, String> = repo
+        .list_worktrees()?
+        .into_iter()
+        .filter(|worktree| !worktree.is_main && !worktree.is_prunable)
+        .filter_map(|worktree| worktree.branch.map(|branch| (branch, worktree.name)))
+        .collect();
 
     for name in &ordered_branches {
         let info = stack.branches.get(name);
@@ -188,6 +196,7 @@ pub fn run(
             parent: parent.clone(),
             is_current: name == &current,
             is_trunk: name == &stack.trunk,
+            linked_worktree: linked_worktrees_by_branch.get(name).cloned(),
             needs_restack: info.map(|b| b.needs_restack).unwrap_or(false),
             pr_number,
             pr_state,
@@ -295,6 +304,12 @@ pub fn run(
             info_str.push_str("   "); // Space for alignment when no remote (emoji is 2 cells wide)
         }
 
+        if entry.and_then(|e| e.linked_worktree.as_ref()).is_some() {
+            info_str.push_str(&format!("{} ", LINKED_WORKTREE_GLYPH.bright_cyan()));
+        } else {
+            info_str.push_str("  ");
+        }
+
         // Color branch names to match their column in the graph
         let branch_color = COLUMN_COLORS[db.column % COLUMN_COLORS.len()];
         if is_current {
@@ -390,6 +405,16 @@ pub fn run(
         trunk_info.push_str(&format!("{} ", "☁️".bright_blue()));
     } else {
         trunk_info.push_str("   "); // Space for alignment when no remote (emoji is 2 cells wide)
+    }
+
+    if branch_status_map
+        .get(&stack.trunk)
+        .and_then(|entry| entry.linked_worktree.as_ref())
+        .is_some()
+    {
+        trunk_info.push_str(&format!("{} ", LINKED_WORKTREE_GLYPH.bright_cyan()));
+    } else {
+        trunk_info.push_str("  ");
     }
     // Color trunk name to match column 0
     if is_trunk_current {

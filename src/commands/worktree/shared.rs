@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SHELL_PATH_PREFIX: &str = "STAX_SHELL_PATH=";
 const SHELL_LAUNCH_PREFIX: &str = "STAX_SHELL_LAUNCH=";
+const DEFAULT_WORKTREE_ROOT_MARKER: &str = ".stax-repo-root";
 
 const ADJECTIVES: &[&str] = &[
     "beaming", "bouncy", "brisk", "cheeky", "chirpy", "curious", "dapper", "fizzy", "fluffy",
@@ -144,17 +145,41 @@ impl LaunchSpec {
 }
 
 pub fn managed_worktrees_dir(repo: &GitRepo, config: &Config) -> Result<PathBuf> {
-    let root_dir = config.worktree.root_dir.trim_end_matches('/');
-    let path = Path::new(root_dir);
-    if path.is_absolute() {
-        Ok(path.to_path_buf())
+    let configured = config.worktree.root_dir.trim();
+    if configured.is_empty() {
+        return default_managed_worktrees_dir(repo);
+    }
+
+    let expanded = expand_home_path(configured)?;
+    if expanded.is_absolute() {
+        Ok(expanded)
     } else {
-        Ok(repo.main_repo_workdir()?.join(path))
+        Ok(repo.main_repo_workdir()?.join(expanded))
     }
 }
 
+pub fn ensure_managed_worktrees_root(
+    repo: &GitRepo,
+    config: &Config,
+    worktrees_dir: &Path,
+) -> Result<()> {
+    if !config.worktree.root_dir.trim().is_empty() {
+        return Ok(());
+    }
+
+    let repo_id = canonical_repo_identity(repo)?;
+    let marker_path = worktrees_dir.join(DEFAULT_WORKTREE_ROOT_MARKER);
+    fs::write(marker_path, format!("{}\n", repo_id))?;
+    Ok(())
+}
+
 pub fn ensure_gitignore(repo_root: &Path, worktrees_dir: &str) -> Result<()> {
-    if Path::new(worktrees_dir).is_absolute() {
+    if worktrees_dir.trim().is_empty() {
+        return Ok(());
+    }
+
+    let expanded = expand_home_path(worktrees_dir)?;
+    if expanded.is_absolute() {
         return Ok(());
     }
 
@@ -182,6 +207,86 @@ pub fn ensure_gitignore(repo_root: &Path, worktrees_dir: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn default_managed_worktrees_dir(repo: &GitRepo) -> Result<PathBuf> {
+    let home =
+        dirs::home_dir().context("Could not determine home directory for default worktree root")?;
+    let base_dir = home.join(".stax").join("worktrees");
+    let repo_root = repo.main_repo_workdir()?;
+    let repo_name = repo_root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "repo".to_string());
+    let repo_id = canonical_repo_identity(repo)?;
+
+    let primary = base_dir.join(&repo_name);
+    if repo_dir_available_for(&primary, &repo_id)? {
+        return Ok(primary);
+    }
+
+    let suffix = short_stable_hash(&repo_id);
+    let hashed = base_dir.join(format!("{}-{}", repo_name, suffix));
+    if repo_dir_available_for(&hashed, &repo_id)? {
+        return Ok(hashed);
+    }
+
+    for attempt in 2..=100 {
+        let candidate = base_dir.join(format!("{}-{}-{}", repo_name, suffix, attempt));
+        if repo_dir_available_for(&candidate, &repo_id)? {
+            return Ok(candidate);
+        }
+    }
+
+    bail!(
+        "Could not derive a unique default worktree directory under '{}'",
+        base_dir.display()
+    )
+}
+
+fn canonical_repo_identity(repo: &GitRepo) -> Result<String> {
+    let repo_root = repo.main_repo_workdir()?;
+    let canonical = fs::canonicalize(&repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
+fn repo_dir_available_for(path: &Path, repo_id: &str) -> Result<bool> {
+    if !path.exists() {
+        return Ok(true);
+    }
+
+    let marker_path = path.join(DEFAULT_WORKTREE_ROOT_MARKER);
+    if marker_path.exists() {
+        let existing = fs::read_to_string(marker_path)?;
+        return Ok(existing.trim() == repo_id);
+    }
+
+    let mut entries = fs::read_dir(path)?;
+    Ok(entries.next().is_none())
+}
+
+fn short_stable_hash(input: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{:04x}", hash & 0xffff)
+}
+
+fn expand_home_path(path: &str) -> Result<PathBuf> {
+    if path == "~" {
+        return dirs::home_dir().context("Could not determine home directory for '~' expansion");
+    }
+
+    if let Some(suffix) = path.strip_prefix("~/") {
+        return Ok(dirs::home_dir()
+            .context("Could not determine home directory for '~' expansion")?
+            .join(suffix));
+    }
+
+    Ok(PathBuf::from(path))
 }
 
 pub fn default_create_base(repo: &GitRepo) -> Result<String> {

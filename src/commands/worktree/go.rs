@@ -66,19 +66,19 @@ pub fn run_go(
         emit_shell_payload(&worktree.path, launch.as_ref());
     } else if let Some(launch) = launch.as_ref() {
         launch.execute_in(&worktree.path)?;
-    } else if !shell_setup::is_installed() {
+    } else {
         println!();
-        println!(
-            "{} {}",
-            "Worktree path:".dimmed(),
-            worktree.path.display().to_string().cyan()
-        );
-        println!();
-        println!(
-            "{}",
-            "Tip: add shell integration for transparent cd:".dimmed()
-        );
-        println!("  {}", "stax shell-setup --install".cyan());
+        println!("{}", "Current shell did not move automatically.".yellow());
+        println!("  {}", format!("cd {}", worktree.path.display()).cyan());
+
+        if !shell_setup::is_installed() {
+            println!();
+            println!(
+                "{}",
+                "Tip: add shell integration for automatic cd:".dimmed()
+            );
+            println!("  {}", "stax shell-setup --install".cyan());
+        }
     }
 
     Ok(())

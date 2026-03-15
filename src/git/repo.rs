@@ -314,11 +314,6 @@ impl GitRepo {
             .context("git worktree list returned no entries")
     }
 
-    /// Return the `.worktrees/` directory under the main repo root.
-    pub fn worktrees_dir(&self) -> Result<PathBuf> {
-        Ok(self.main_repo_workdir()?.join(".worktrees"))
-    }
-
     /// Create a new linked worktree at `path` for an existing `branch`.
     pub fn worktree_create(&self, branch: &str, path: &Path) -> Result<()> {
         let main_dir = self.main_repo_workdir()?;
