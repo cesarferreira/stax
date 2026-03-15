@@ -21,7 +21,7 @@ const COLUMN_COLORS: &[Color] = &[
     Color::BrightMagenta,
     Color::BrightBlue,
 ];
-const LINKED_WORKTREE_GLYPH: &str = "◫";
+const LINKED_WORKTREE_GLYPH: &str = "↳";
 
 /// Represents a branch in the display with its column position
 struct DisplayBranch {
