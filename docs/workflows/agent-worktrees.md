@@ -1,6 +1,6 @@
 # Worktree Lanes For AI
 
-The old `st agent` experiment is gone. The stax-native way to run parallel AI sessions is normal `st wt` worktrees plus `--agent`.
+Run parallel AI sessions with normal `st wt` worktrees plus `--agent`.
 
 That keeps the workflow familiar to existing stax users:
 
