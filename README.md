@@ -140,6 +140,9 @@ Next steps:
 | `st cascade` | Restack, push, and create/update PRs |
 | `st undo` / `st redo` | Recover or re-apply risky operations |
 | `st standup` | Summarize recent engineering activity |
+| `st pr` | Open the current branch PR in the browser |
+| `st pr list` | Show open pull requests in the current repo |
+| `st issue list` | Show open issues in the current repo |
 | `st generate --pr-body [--no-prompt]` | Generate PR body with AI |
 | `st run <cmd>` (alias: `st test <cmd>`) | Run a command on each branch in stack |
 

@@ -704,7 +704,32 @@ fn gt_parity_pr_command() {
     let output = stax(&["pr", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("PR") || stdout.contains("browser"));
+    assert!(stdout.contains("open"));
+    assert!(stdout.contains("list"));
+}
+
+#[test]
+fn gt_parity_pr_open_subcommand() {
+    let output = stax(&["pr", "open", "--help"]);
+    assert!(output.status.success());
+}
+
+#[test]
+fn gt_parity_pr_list_subcommand() {
+    let output = stax(&["pr", "list", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--limit"));
+    assert!(stdout.contains("--json"));
+}
+
+#[test]
+fn gt_parity_issue_list_subcommand() {
+    let output = stax(&["issue", "list", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--limit"));
+    assert!(stdout.contains("--json"));
 }
 
 #[test]

@@ -1,6 +1,8 @@
 use crate::{commands, config::Config, tui, update};
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+
+const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
 
 #[derive(Parser)]
 #[command(name = "stax")]
@@ -474,8 +476,17 @@ enum Commands {
         prefix: Option<String>,
     },
 
-    /// Open the PR for the current branch in browser
-    Pr,
+    /// Open the current branch PR or list repo pull requests
+    Pr {
+        #[command(subcommand)]
+        command: Option<PrCommands>,
+    },
+
+    /// Browse open issues in the current repository
+    Issue {
+        #[command(subcommand)]
+        command: Option<IssueCommands>,
+    },
 
     /// Open the repository in browser
     Open,
@@ -1034,6 +1045,35 @@ enum WorktreeCommands {
     Restack,
 }
 
+#[derive(Subcommand, Clone)]
+enum PrCommands {
+    /// Open the current branch PR in the browser
+    Open,
+
+    /// List open pull requests in the current repository
+    List {
+        /// Maximum number of pull requests to return (max: 100)
+        #[arg(long, default_value_t = DEFAULT_GITHUB_LIST_LIMIT, value_parser = clap::value_parser!(u8).range(1..=100))]
+        limit: u8,
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+enum IssueCommands {
+    /// List open issues in the current repository
+    List {
+        /// Maximum number of issues to return (max: 100)
+        #[arg(long, default_value_t = DEFAULT_GITHUB_LIST_LIMIT, value_parser = clap::value_parser!(u8).range(1..=100))]
+        limit: u8,
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Result<()> {
     commands::submit::run(
         scope,
@@ -1055,6 +1095,16 @@ fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Re
         submit.ai_body,
         submit.rerequest_review,
     )
+}
+
+fn print_subcommand_help(name: &str) -> Result<()> {
+    let mut cmd = Cli::command();
+    let subcommand = cmd
+        .find_subcommand_mut(name)
+        .ok_or_else(|| anyhow::anyhow!("Unknown subcommand '{}'", name))?;
+    subcommand.print_help()?;
+    println!();
+    Ok(())
 }
 
 pub fn run() -> Result<()> {
@@ -1296,7 +1346,14 @@ pub fn run() -> Result<()> {
             from,
             prefix,
         } => commands::branch::create::run(name, message, from, prefix, all),
-        Commands::Pr => commands::pr::run(),
+        Commands::Pr { command } => match command.unwrap_or(PrCommands::Open) {
+            PrCommands::Open => commands::pr::run_open(),
+            PrCommands::List { limit, json } => commands::pr::run_list(limit, json),
+        },
+        Commands::Issue { command } => match command {
+            Some(IssueCommands::List { limit, json }) => commands::issue::run_list(limit, json),
+            None => print_subcommand_help("issue"),
+        },
         Commands::Open => commands::open::run(),
         Commands::Comments { plain } => commands::comments::run(plain),
         Commands::Ci {

@@ -118,6 +118,31 @@ pub struct OpenPrInfo {
     pub is_draft: bool,
 }
 
+/// Open pull request info for repo-level listing commands
+#[derive(Debug, Clone, Serialize)]
+pub struct RepoPrListItem {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub author: String,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Open issue info for repo-level listing commands
+#[derive(Debug, Clone, Serialize)]
+pub struct RepoIssueListItem {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub author: String,
+    pub labels: Vec<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ReviewUser {
     login: String,
@@ -144,6 +169,46 @@ struct SearchIssue {
     html_url: String,
     created_at: DateTime<Utc>,
     closed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepoListUser {
+    login: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepoListPullRef {
+    #[serde(rename = "ref")]
+    ref_field: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepoListPullRequest {
+    number: u64,
+    title: String,
+    html_url: String,
+    user: RepoListUser,
+    head: RepoListPullRef,
+    base: RepoListPullRef,
+    state: String,
+    draft: Option<bool>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepoListLabel {
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepoListIssue {
+    number: u64,
+    title: String,
+    html_url: String,
+    user: RepoListUser,
+    labels: Vec<RepoListLabel>,
+    updated_at: DateTime<Utc>,
+    pull_request: Option<serde_json::Value>,
 }
 
 impl GitHubClient {
@@ -450,12 +515,78 @@ impl GitHubClient {
 
         Ok(results)
     }
+
+    /// List open pull requests for the current repository.
+    pub async fn list_open_pull_requests(&self, limit: u8) -> Result<Vec<RepoPrListItem>> {
+        self.record_api_call("pulls.list");
+        let per_page = limit.clamp(1, 100);
+        let url = format!(
+            "/repos/{}/{}/pulls?state=open&sort=created&direction=desc&per_page={}",
+            self.owner, self.repo, per_page
+        );
+
+        let response: Vec<RepoListPullRequest> = self
+            .octocrab
+            .get(&url, None::<&()>)
+            .await
+            .context("Failed to list pull requests")?;
+
+        Ok(response
+            .into_iter()
+            .take(per_page as usize)
+            .map(|pr| RepoPrListItem {
+                number: pr.number,
+                title: pr.title,
+                url: pr.html_url,
+                author: pr.user.login,
+                head_branch: pr.head.ref_field,
+                base_branch: pr.base.ref_field,
+                state: pr.state,
+                is_draft: pr.draft.unwrap_or(false),
+                created_at: pr.created_at,
+            })
+            .collect())
+    }
+
+    /// List open issues for the current repository.
+    pub async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
+        self.record_api_call("issues.list");
+        let per_page = limit.clamp(1, 100);
+        let url = format!(
+            "/repos/{}/{}/issues?state=open&sort=updated&direction=desc&per_page={}",
+            self.owner, self.repo, per_page
+        );
+
+        let response: Vec<RepoListIssue> = self
+            .octocrab
+            .get(&url, None::<&()>)
+            .await
+            .context("Failed to list issues")?;
+
+        Ok(response
+            .into_iter()
+            .filter(|issue| issue.pull_request.is_none())
+            .take(per_page as usize)
+            .map(|issue| RepoIssueListItem {
+                number: issue.number,
+                title: issue.title,
+                url: issue.html_url,
+                author: issue.user.login,
+                labels: issue
+                    .labels
+                    .into_iter()
+                    .filter_map(|label| label.name)
+                    .collect(),
+                updated_at: issue.updated_at,
+            })
+            .collect())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     async fn create_test_client(server: &MockServer) -> GitHubClient {
@@ -827,6 +958,159 @@ mod tests {
         let check_run: CheckRun = serde_json::from_str(json).unwrap();
         assert_eq!(check_run.status, "completed");
         assert_eq!(check_run.conclusion, Some("failure".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_list_open_pull_requests() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .and(query_param("state", "open"))
+            .and(query_param("sort", "created"))
+            .and(query_param("direction", "desc"))
+            .and(query_param("per_page", "30"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 114,
+                    "title": "worktrees enhanced",
+                    "html_url": "https://github.com/test-owner/test-repo/pull/114",
+                    "user": { "login": "cesar" },
+                    "head": { "ref": "cesar/worktrees-enhanced" },
+                    "base": { "ref": "main" },
+                    "state": "open",
+                    "draft": false,
+                    "created_at": "2026-03-15T10:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let prs = client.list_open_pull_requests(30).await.unwrap();
+
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 114);
+        assert_eq!(prs[0].title, "worktrees enhanced");
+        assert_eq!(prs[0].author, "cesar");
+        assert_eq!(prs[0].head_branch, "cesar/worktrees-enhanced");
+        assert_eq!(prs[0].base_branch, "main");
+        assert_eq!(prs[0].state, "open");
+        assert!(!prs[0].is_draft);
+    }
+
+    #[tokio::test]
+    async fn test_list_open_pull_requests_preserves_draft_state() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 45,
+                    "title": "draft stack cleanup",
+                    "html_url": "https://github.com/test-owner/test-repo/pull/45",
+                    "user": { "login": "cesar" },
+                    "head": { "ref": "codex/draft-stack-cleanup" },
+                    "base": { "ref": "main" },
+                    "state": "open",
+                    "draft": true,
+                    "created_at": "2026-03-14T09:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let prs = client.list_open_pull_requests(30).await.unwrap();
+
+        assert_eq!(prs.len(), 1);
+        assert!(prs[0].is_draft);
+    }
+
+    #[tokio::test]
+    async fn test_list_open_issues_filters_pull_requests_and_reads_labels() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .and(query_param("state", "open"))
+            .and(query_param("sort", "updated"))
+            .and(query_param("direction", "desc"))
+            .and(query_param("per_page", "30"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 113,
+                    "title": "Handle browser launcher failures",
+                    "html_url": "https://github.com/test-owner/test-repo/issues/113",
+                    "user": { "login": "cesar" },
+                    "labels": [],
+                    "updated_at": "2026-03-15T11:00:00Z"
+                },
+                {
+                    "number": 112,
+                    "title": "This is actually a pull request",
+                    "html_url": "https://github.com/test-owner/test-repo/issues/112",
+                    "user": { "login": "cesar" },
+                    "labels": [],
+                    "updated_at": "2026-03-15T10:00:00Z",
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/test-owner/test-repo/pulls/112"
+                    }
+                },
+                {
+                    "number": 77,
+                    "title": "Gitlab Support",
+                    "html_url": "https://github.com/test-owner/test-repo/issues/77",
+                    "user": { "login": "geoHeil" },
+                    "labels": [
+                        { "name": "help wanted" },
+                        { "name": "integration" }
+                    ],
+                    "updated_at": "2026-03-14T12:30:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let issues = client.list_open_issues(30).await.unwrap();
+
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].number, 113);
+        assert!(issues[0].labels.is_empty());
+        assert_eq!(issues[1].number, 77);
+        assert_eq!(issues[1].labels, vec!["help wanted", "integration"]);
+    }
+
+    #[tokio::test]
+    async fn test_list_open_pull_requests_empty_response() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let prs = client.list_open_pull_requests(30).await.unwrap();
+        assert!(prs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_open_issues_empty_response() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let issues = client.list_open_issues(30).await.unwrap();
+        assert!(issues.is_empty());
     }
 
     #[test]

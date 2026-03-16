@@ -95,6 +95,9 @@
 | `st doctor` | Check repo health |
 | `st continue` | Continue after conflicts |
 | `st pr` | Open current branch PR |
+| `st pr open` | Explicit form of `st pr` |
+| `st pr list` | List open pull requests in the current repo |
+| `st issue list` | List open issues in the current repo |
 | `st open` | Open repository in browser |
 | `st ci` | Show CI status for current branch (full per-check table with ETA) |
 | `st ci --stack` | Show CI status for all branches in current stack |
@@ -186,6 +189,8 @@ Worktree launch examples:
 - `st standup --summary --plain-text`
 - `st standup --summary --json`
 - `st standup --summary --jit`
+- `st pr list --limit 50 --json`
+- `st issue list --limit 50 --json`
 - `st changelog --tag-prefix release/ios`
 - `st changelog --json`
 - `st changelog --path src/`

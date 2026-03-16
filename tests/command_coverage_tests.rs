@@ -416,6 +416,36 @@ fn test_pr_help() {
 
     let output = repo.run_stax(&["pr", "--help"]);
     output.assert_success();
+    output.assert_stdout_contains("open");
+    output.assert_stdout_contains("list");
+}
+
+#[test]
+fn test_pr_open_help() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["pr", "open", "--help"]);
+    output.assert_success();
+}
+
+#[test]
+fn test_pr_list_help() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["pr", "list", "--help"]);
+    output.assert_success();
+    output.assert_stdout_contains("limit");
+    output.assert_stdout_contains("json");
+}
+
+#[test]
+fn test_issue_list_help() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["issue", "list", "--help"]);
+    output.assert_success();
+    output.assert_stdout_contains("limit");
+    output.assert_stdout_contains("json");
 }
 
 #[test]
