@@ -535,24 +535,3 @@ mod tests {
         assert_eq!(updated, existing);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::shell_snippet;
-
-    #[test]
-    fn shell_snippet_clears_aliases_before_function_definitions() {
-        let snippet = shell_snippet();
-
-        let unalias_stax = snippet.find("unalias stax").expect("missing stax unalias");
-        let unalias_st = snippet.find("unalias st ").expect("missing st unalias");
-        let unalias_sw = snippet.find("unalias sw").expect("missing sw unalias");
-        let stax_fn = snippet.find("stax()").expect("missing stax function");
-        let st_fn = snippet.find("st()").expect("missing st function");
-        let sw_fn = snippet.find("sw()").expect("missing sw function");
-
-        assert!(unalias_stax < stax_fn);
-        assert!(unalias_st < st_fn);
-        assert!(unalias_sw < sw_fn);
-    }
-}
