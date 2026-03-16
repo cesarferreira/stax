@@ -87,6 +87,54 @@ fn restack_all_handles_branch_checked_out_elsewhere() {
 }
 
 #[test]
+fn restack_cleanup_skips_merged_branch_checked_out_in_worktree() {
+    let (repo, a, b, _wt_a, _wt_b) = setup_stack_with_worktrees(false);
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    repo.git(&["merge", "--no-ff", &a, "-m", "Merge A"])
+        .assert_success();
+
+    // Force another branch to need restack so the merged-branch cleanup path runs.
+    repo.run_stax(&["create", "cleanup-trigger"])
+        .assert_success();
+    let trigger = repo.current_branch();
+    repo.create_file("trigger.txt", "trigger\n");
+    repo.commit("Trigger commit");
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    repo.create_file("main-update.txt", "main update\n");
+    repo.commit("Main update");
+    repo.run_stax(&["checkout", &trigger]).assert_success();
+
+    let before = status_json(&repo, &repo.path());
+    assert_eq!(branch_needs_restack(&before, &trigger), Some(true));
+
+    let output = repo.run_stax(&["restack", "--yes"]);
+    output
+        .assert_success()
+        .assert_stdout_contains("Kept")
+        .assert_stdout_contains("checked out in another worktree");
+    assert!(
+        !TestRepo::stderr(&output).contains("cannot locate local branch"),
+        "restack should not fail cleanup when a merged branch is checked out elsewhere\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    assert!(
+        repo.list_branches().iter().any(|branch| branch == &a),
+        "Expected merged branch checked out in another worktree to remain local"
+    );
+
+    let metadata_ref = format!("refs/branch-metadata/{}", b);
+    let metadata_output = repo.git(&["show", &metadata_ref]);
+    metadata_output.assert_success();
+    let metadata: Value =
+        serde_json::from_str(&TestRepo::stdout(&metadata_output)).expect("Invalid JSON metadata");
+    assert_eq!(metadata["parentBranchName"], "main");
+}
+
+#[test]
 fn sync_restack_handles_branch_checked_out_elsewhere() {
     let (repo, a, _b, _wt_a, wt_b) = setup_stack_with_worktrees(true);
 

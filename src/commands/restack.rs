@@ -9,6 +9,8 @@ use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use std::io::IsTerminal;
+use std::path::Path;
+use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitAfterRestack {
@@ -336,6 +338,7 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> R
         return Ok(());
     }
 
+    let workdir = repo.workdir()?;
     let merged = repo.merged_branches()?;
 
     if merged.is_empty() {
@@ -424,17 +427,82 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> R
                 }
             }
 
-            // Delete the branch
-            repo.delete_branch(branch, true)?;
+            let branch_existed_before = local_branch_exists(workdir, branch);
+            let delete_output = if branch_existed_before {
+                Some(
+                    Command::new("git")
+                        .args(["branch", "-D", branch])
+                        .current_dir(workdir)
+                        .output(),
+                )
+            } else {
+                None
+            };
 
-            // Delete metadata if it exists
-            let _ = BranchMetadata::delete(repo.inner(), branch);
+            let (local_deleted, local_worktree_blocked) = match delete_output {
+                Some(Ok(out)) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    (out.status.success(), stderr.contains("used by worktree"))
+                }
+                Some(Err(_)) | None => (false, false),
+            };
 
-            println!(
-                "  {} {}",
-                "✓".green(),
-                format!("Deleted {}", branch).dimmed()
-            );
+            let local_still_exists = local_branch_exists(workdir, branch);
+            let metadata_deleted = if !local_still_exists {
+                let _ = BranchMetadata::delete(repo.inner(), branch);
+                true
+            } else {
+                false
+            };
+
+            if local_deleted {
+                println!(
+                    "  {} {}",
+                    "✓".green(),
+                    format!("Deleted {}", branch).dimmed()
+                );
+            } else if !branch_existed_before || !local_still_exists {
+                println!(
+                    "  {} {}",
+                    "✓".green(),
+                    format!("{} already absent locally", branch).dimmed()
+                );
+                if metadata_deleted {
+                    println!(
+                        "  {} {}",
+                        "↷".cyan(),
+                        format!("Removed metadata for {}", branch).dimmed()
+                    );
+                }
+            } else if local_worktree_blocked {
+                println!(
+                    "  {} {}",
+                    "⚠".yellow(),
+                    format!(
+                        "Kept {}: branch is checked out in another worktree.",
+                        branch
+                    )
+                    .dimmed()
+                );
+                println!(
+                    "  {} {}",
+                    "↷".yellow(),
+                    "Metadata kept because the local branch still exists.".dimmed()
+                );
+            } else {
+                println!(
+                    "  {} {}",
+                    "○".dimmed(),
+                    format!("Skipped {}", branch).dimmed()
+                );
+                if !metadata_deleted {
+                    println!(
+                        "  {} {}",
+                        "↷".yellow(),
+                        "Metadata kept because the local branch still exists.".dimmed()
+                    );
+                }
+            }
         } else {
             println!(
                 "  {} {}",
@@ -445,6 +513,16 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> R
     }
 
     Ok(())
+}
+
+fn local_branch_exists(workdir: &Path, branch: &str) -> bool {
+    let local_ref = format!("refs/heads/{}", branch);
+    Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &local_ref])
+        .current_dir(workdir)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn should_submit_after_restack(
