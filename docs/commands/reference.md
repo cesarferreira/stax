@@ -120,6 +120,7 @@
 
 | Command | Alias | Description |
 |---------|-------|-------------|
+| `st worktree` | `wt` | Open the interactive worktree dashboard in a TTY; otherwise print worktree help |
 | `st worktree create [name]` | `wt c`, `wtc` | Create or reuse a worktree lane (`wt c` with no args generates a random lane name) |
 | `st worktree list` | `wt ls`, `w`, `wtls` | List all worktrees |
 | `st worktree ll` | `wt ll` | Show richer worktree status, including managed/prunable/conflict state |

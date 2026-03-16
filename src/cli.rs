@@ -1,6 +1,7 @@
 use crate::{commands, config::Config, tui, update};
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use std::io::IsTerminal;
 
 const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
 
@@ -704,9 +705,12 @@ enum Commands {
         quiet: bool,
     },
 
-    /// Manage worktrees for parallel branch development
-    #[command(subcommand, visible_alias = "wt")]
-    Worktree(WorktreeCommands),
+    /// Manage worktrees for parallel branch development (`st wt` opens the dashboard in a TTY)
+    #[command(visible_alias = "wt")]
+    Worktree {
+        #[command(subcommand)]
+        command: Option<WorktreeCommands>,
+    },
 
     /// Output shell integration snippet for manual install or use `--install`
     #[command(name = "shell-setup")]
@@ -1510,8 +1514,19 @@ pub fn run() -> Result<()> {
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
         Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
-        Commands::Worktree(cmd) => match cmd {
-            WorktreeCommands::Create {
+        Commands::Worktree { command } => match command {
+            None => {
+                if should_launch_worktree_dashboard(
+                    std::io::stdin().is_terminal(),
+                    std::io::stdout().is_terminal(),
+                ) {
+                    commands::init::ensure_initialized()?;
+                    tui::worktree::run()
+                } else {
+                    print_worktree_help()
+                }
+            }
+            Some(WorktreeCommands::Create {
                 name,
                 from,
                 pick,
@@ -1519,7 +1534,7 @@ pub fn run() -> Result<()> {
                 no_verify,
                 shell_output,
                 launch,
-            } => commands::worktree::create::run(
+            }) => commands::worktree::create::run(
                 name,
                 from,
                 pick,
@@ -1533,14 +1548,14 @@ pub fn run() -> Result<()> {
                 launch.tmux_session,
                 launch.args,
             ),
-            WorktreeCommands::List { json } => commands::worktree::list::run(json),
-            WorktreeCommands::LongList { json } => commands::worktree::ll::run(json),
-            WorktreeCommands::Go {
+            Some(WorktreeCommands::List { json }) => commands::worktree::list::run(json),
+            Some(WorktreeCommands::LongList { json }) => commands::worktree::ll::run(json),
+            Some(WorktreeCommands::Go {
                 name,
                 no_verify,
                 shell_output,
                 launch,
-            } => commands::worktree::go::run_go(
+            }) => commands::worktree::go::run_go(
                 name,
                 no_verify,
                 shell_output,
@@ -1551,14 +1566,14 @@ pub fn run() -> Result<()> {
                 launch.tmux_session,
                 launch.args,
             ),
-            WorktreeCommands::Path { name } => commands::worktree::go::run_path(&name),
-            WorktreeCommands::Remove {
+            Some(WorktreeCommands::Path { name }) => commands::worktree::go::run_path(&name),
+            Some(WorktreeCommands::Remove {
                 name,
                 force,
                 delete_branch,
-            } => commands::worktree::remove::run(name, force, delete_branch),
-            WorktreeCommands::Prune => commands::worktree::prune::run(),
-            WorktreeCommands::Restack => commands::worktree::restack::run(),
+            }) => commands::worktree::remove::run(name, force, delete_branch),
+            Some(WorktreeCommands::Prune) => commands::worktree::prune::run(),
+            Some(WorktreeCommands::Restack) => commands::worktree::restack::run(),
         },
         Commands::ShellSetup { .. } => {
             unreachable!("shell-setup returns before repo initialization")
@@ -1619,4 +1634,50 @@ pub fn run() -> Result<()> {
     update::check_in_background();
 
     result
+}
+
+fn should_launch_worktree_dashboard(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
+    stdin_is_terminal && stdout_is_terminal
+}
+
+fn print_worktree_help() -> Result<()> {
+    let mut command = Cli::command();
+    if let Some(worktree) = command.find_subcommand_mut("worktree") {
+        worktree.print_help()?;
+        println!();
+        return Ok(());
+    }
+
+    anyhow::bail!("Failed to load worktree help");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_launch_worktree_dashboard, Cli, Commands};
+    use clap::Parser;
+
+    #[test]
+    fn worktree_dashboard_requires_interactive_terminal() {
+        assert!(should_launch_worktree_dashboard(true, true));
+        assert!(!should_launch_worktree_dashboard(true, false));
+        assert!(!should_launch_worktree_dashboard(false, true));
+    }
+
+    #[test]
+    fn bare_worktree_command_parses_without_subcommand() {
+        let cli = Cli::try_parse_from(["stax", "wt"]).expect("parse bare worktree");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Worktree { command: None })
+        ));
+    }
+
+    #[test]
+    fn explicit_worktree_subcommand_still_parses() {
+        let cli = Cli::try_parse_from(["stax", "wt", "ls"]).expect("parse worktree list");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Worktree { command: Some(_) })
+        ));
+    }
 }

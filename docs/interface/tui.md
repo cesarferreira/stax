@@ -15,6 +15,20 @@ stax
 - Keyboard-driven checkout, restack, submit, create, rename, and delete
 - Reorder mode for branch reparenting
 
+## Worktree Dashboard
+
+Run `st wt` in an interactive terminal to open the worktree dashboard.
+
+- Left pane: all Git worktrees, including unmanaged entries
+- Right pane: branch/base/path/status details plus tmux session state
+- `Enter`: attach or switch to the derived tmux session for the selected worktree
+- `c`: create a lane and open it in tmux
+- `d`: remove the selected worktree
+- `R`: restack all stax-managed worktrees
+- `?`: show help
+- `q`/`Esc`: quit
+- The footer keeps these shortcuts visible and highlights the key itself in the TUI
+
 ## Keybindings
 
 | Key | Action |

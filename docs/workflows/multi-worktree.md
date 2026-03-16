@@ -27,13 +27,16 @@ If conflicts occur, stax preserves the stash entry so changes are not lost.
 
 ## `st worktree`
 
-`st worktree` (alias `st wt`) is the stax-native workflow for parallel lanes. It keeps `wt ls` simple, uses `go` instead of `switch`, and layers optional AI launch on top of normal Git worktrees.
+`st worktree` (alias `st wt`) is the stax-native workflow for parallel lanes. Bare `st wt` opens an interactive dashboard in a real terminal, while the explicit subcommands keep the scriptable workflow simple and predictable.
 
 When `st wt c` creates a new branch for a lane, stax also writes normal branch metadata. That means the lane is not "just another directory": it shows up in `st ls`, participates in restack/sync/undo flows, and can be reopened later with `st wt go`.
 
 ### Quick start
 
 ```bash
+# Open the dashboard and attach/switch to tmux-backed lanes
+st wt
+
 # Create a fresh lane with a random funny name
 st wt c
 
@@ -96,6 +99,7 @@ After installation, both `st` and `stax` transparently handle:
 
 | Command | Purpose |
 |---|---|
+| `st wt` | Open the interactive worktree dashboard when stdin/stdout are TTYs; otherwise show help. |
 | `st wt c [name]` | Create or reuse a worktree lane. With no name, generate a random lane name. |
 | `st wt go [name]` | Jump to an existing worktree. With no name, open a fuzzy picker. |
 | `st wt ls` | Simple `NAME / BRANCH / PATH` inventory. |
@@ -109,6 +113,17 @@ After installation, both `st` and `stax` transparently handle:
 `st wt ls` shows every Git worktree, including ones created outside stax.
 
 `st wt restack` only targets stax-managed worktrees: linked worktrees whose branch is tracked by stax metadata. Detached worktrees and ad-hoc third-party worktrees still show up in `ls`, `ll`, `go`, `rm`, and `prune`, but they are skipped by `restack`.
+
+### Dashboard behavior
+
+The dashboard is intentionally a control plane, not an embedded shell:
+
+- Left pane: all Git worktrees, including unmanaged entries.
+- Right pane: branch/base/path/status details and tmux session state.
+- `Enter`: attach or switch to the derived tmux session for the selected worktree, creating it on demand.
+- `c`: create a lane and immediately open it in tmux.
+- `d`: remove the selected worktree.
+- `R`: restack all stax-managed worktrees.
 
 ### Related guide
 

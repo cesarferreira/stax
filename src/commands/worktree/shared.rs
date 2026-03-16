@@ -72,6 +72,12 @@ pub struct WorktreeDetails {
     pub behind: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TmuxSession {
+    pub name: String,
+    pub attached_clients: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LaunchOptions {
     pub agent: Option<String>,
@@ -649,6 +655,39 @@ pub fn build_launch_spec(
     Ok(base_launch)
 }
 
+pub fn default_tmux_session_name(value: &str) -> Result<String> {
+    let session = sanitize_tmux_session_name(value);
+    if session.is_empty() {
+        bail!("Could not derive a valid tmux session name");
+    }
+    Ok(session)
+}
+
+pub fn list_tmux_sessions() -> Result<Vec<TmuxSession>> {
+    ensure_tmux_available()?;
+
+    let output = Command::new("tmux")
+        .args([
+            "list-sessions",
+            "-F",
+            "#{session_name}\t#{session_attached}",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .context("Failed to list tmux sessions")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("no server running") || stderr.contains("failed to connect to server") {
+            return Ok(Vec::new());
+        }
+        bail!("tmux list-sessions failed: {}", stderr.trim());
+    }
+
+    parse_tmux_sessions_output(&String::from_utf8_lossy(&output.stdout))
+}
+
 pub fn emit_shell_payload(path: &Path, launch: Option<&LaunchSpec>) {
     println!("{}{}", SHELL_PATH_PREFIX, path.display());
     if let Some(launch) = launch {
@@ -841,10 +880,7 @@ fn ensure_tmux_available() -> Result<()> {
 }
 
 fn build_tmux_launch_spec(session_name: &str, inner: Option<&LaunchSpec>) -> Result<LaunchSpec> {
-    let session = sanitize_tmux_session_name(session_name);
-    if session.is_empty() {
-        bail!("Could not derive a valid tmux session name");
-    }
+    let session = default_tmux_session_name(session_name)?;
 
     let session_escaped = shell_escape(&session);
     let new_session_cmd = if let Some(inner) = inner {
@@ -912,4 +948,41 @@ fn sanitize_tmux_session_name(value: &str) -> String {
         .trim_matches(':')
         .trim_matches('_')
         .to_string()
+}
+
+fn parse_tmux_sessions_output(output: &str) -> Result<Vec<TmuxSession>> {
+    output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (name, attached) = line
+                .split_once('\t')
+                .context("Unexpected tmux list-sessions output")?;
+            Ok(TmuxSession {
+                name: name.to_string(),
+                attached_clients: attached.parse::<usize>().unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_tmux_session_name, parse_tmux_sessions_output};
+
+    #[test]
+    fn default_tmux_session_name_sanitizes_invalid_chars() {
+        let session = default_tmux_session_name("review pass/main").expect("session name");
+        assert_eq!(session, "review-pass-main");
+    }
+
+    #[test]
+    fn parse_tmux_sessions_output_parses_attached_counts() {
+        let sessions = parse_tmux_sessions_output("lane-a\t0\nlane-b\t2\n").expect("sessions");
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].name, "lane-a");
+        assert_eq!(sessions[0].attached_clients, 0);
+        assert_eq!(sessions[1].name, "lane-b");
+        assert_eq!(sessions[1].attached_clients, 2);
+    }
 }

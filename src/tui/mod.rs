@@ -3,6 +3,7 @@ mod event;
 pub mod split;
 mod ui;
 mod widgets;
+pub mod worktree;
 
 use app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
 use event::{poll_event, KeyAction};

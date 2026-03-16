@@ -200,6 +200,9 @@ Read more: [docs/interface/tui.md](docs/interface/tui.md)
 Work on multiple stacks in parallel without losing context. `st worktree` (alias `st wt`) creates and manages Git worktree lanes for existing or new branches, with shell integration for transparent `cd`.
 
 ```bash
+# Open the worktree dashboard (interactive terminals only)
+st wt
+
 # One-time shell integration setup
 st shell-setup --install   # writes ~/.config/stax/shell-setup.sh and sources it from ~/.zshrc
 
@@ -219,7 +222,7 @@ sw payments-api
 st worktree remove payments-api
 ```
 
-Shortcuts: `st w` (list), `st wtc [branch]` (create), `st wtgo <name>` (go), `st wtrm <name>` (remove).
+Shortcuts: `st w` (list), `st wtc [branch]` (create), `st wtgo <name>` (go), `st wtrm <name>` (remove). In an interactive terminal, bare `st wt` opens the worktree dashboard and uses tmux-backed re-entry for lanes.
 
 Read more: [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
 
