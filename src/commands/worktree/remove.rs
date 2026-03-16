@@ -1,39 +1,38 @@
+use super::shared::{
+    find_current_worktree, find_worktree, run_blocking_hook, spawn_background_hook,
+};
+use crate::config::Config;
+use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::{bail, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 
-pub fn run(name: &str, force: bool) -> Result<()> {
+pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()> {
     let repo = GitRepo::open()?;
-    let worktrees = repo.list_worktrees()?;
+    let config = Config::load()?;
+    let worktree = match name {
+        Some(name) => find_worktree(&repo, &name)?
+            .ok_or_else(|| anyhow::anyhow!("No worktree named '{}'", name))?,
+        None => find_current_worktree(&repo)?,
+    };
 
-    let wt = worktrees
-        .iter()
-        .find(|wt| {
-            wt.name == name
-                || wt.branch.as_deref() == Some(name)
-                || wt
-                    .branch
-                    .as_deref()
-                    .map(|b| b.ends_with(&format!("/{}", name)))
-                    .unwrap_or(false)
-        })
-        .ok_or_else(|| anyhow::anyhow!("No worktree named '{}'", name))?;
-
-    if wt.is_main {
+    if worktree.is_main {
         bail!("Cannot remove the main worktree.");
     }
 
-    if wt.is_current {
-        bail!("Cannot remove the worktree you are currently in. Switch to another worktree first.");
+    if !worktree.path.exists() {
+        bail!(
+            "Worktree path '{}' no longer exists. Run `stax worktree prune`.",
+            worktree.path.display()
+        );
     }
 
-    // Warn about dirty state unless --force
-    if !force && repo.is_dirty_at(&wt.path)? {
+    if !force && repo.is_dirty_at(&worktree.path)? {
         eprintln!(
             "{} Worktree '{}' has uncommitted changes.",
             "Warning:".yellow().bold(),
-            name
+            worktree.name
         );
         let proceed = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Remove anyway?")
@@ -45,16 +44,51 @@ pub fn run(name: &str, force: bool) -> Result<()> {
         }
     }
 
-    let path = wt.path.clone();
-    let branch = wt.branch.clone().unwrap_or_else(|| name.to_string());
+    let main_workdir = repo.main_repo_workdir()?;
+    run_blocking_hook(
+        config.worktree.hooks.pre_remove.as_deref(),
+        &main_workdir,
+        "pre_remove",
+    )?;
 
+    let branch = worktree.branch.clone();
+    let path = worktree.path.clone();
+    let display_name = worktree.name.clone();
     repo.worktree_remove(&path, force)?;
 
+    if delete_branch {
+        if let Some(branch) = branch.as_deref() {
+            match repo.delete_branch(branch, force) {
+                Ok(()) => {
+                    let _ = BranchMetadata::delete(repo.inner(), branch);
+                    println!("  Deleted branch '{}'", branch.blue());
+                }
+                Err(error) => {
+                    eprintln!(
+                        "{}",
+                        format!("  Warning: could not delete branch '{}': {}", branch, error)
+                            .yellow()
+                    );
+                }
+            }
+        } else {
+            eprintln!(
+                "{}",
+                "  Warning: detached worktrees do not have a branch to delete.".yellow()
+            );
+        }
+    }
+
+    spawn_background_hook(
+        config.worktree.hooks.post_remove.as_deref(),
+        &main_workdir,
+        "post_remove",
+    )?;
+
     println!(
-        "{}  worktree '{}' (branch '{}')",
+        "{}  worktree '{}'",
         "Removed".green().bold(),
-        name.cyan(),
-        branch.blue()
+        display_name.cyan()
     );
 
     Ok(())

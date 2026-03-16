@@ -1,10 +1,25 @@
+use super::shared::{compute_worktree_details, worktree_to_json};
 use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
 
-pub fn run() -> Result<()> {
+pub fn run(json: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let worktrees = repo.list_worktrees()?;
+
+    if json {
+        let details = worktrees
+            .into_iter()
+            .map(|worktree| compute_worktree_details(&repo, worktree))
+            .collect::<Result<Vec<_>>>()?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &details.iter().map(worktree_to_json).collect::<Vec<_>>()
+            )?
+        );
+        return Ok(());
+    }
 
     if worktrees.is_empty() {
         println!("{}", "No worktrees found.".dimmed());
@@ -34,21 +49,18 @@ pub fn run() -> Result<()> {
     );
     println!("  {}", "─".repeat(name_width + branch_width + 50).dimmed());
 
-    for wt in &worktrees {
-        let marker = if wt.is_current { "*" } else { " " };
-        let branch_str = wt.branch.as_deref().unwrap_or("(detached)");
-
-        // Print columns with fixed logical widths (pad manually to avoid ANSI offset issues)
-        let name_padded = format!("{:<width$}", wt.name, width = name_width);
+    for worktree in &worktrees {
+        let marker = if worktree.is_current { "*" } else { " " };
+        let branch_str = worktree.branch.as_deref().unwrap_or("(detached)");
+        let name_padded = format!("{:<width$}", worktree.name, width = name_width);
         let branch_padded = format!("{:<width$}", branch_str, width = branch_width);
 
-        let name_col = if wt.is_current {
+        let name_col = if worktree.is_current {
             name_padded.cyan().bold().to_string()
         } else {
             name_padded.cyan().to_string()
         };
-
-        let branch_col = if wt.is_current {
+        let branch_col = if worktree.is_current {
             branch_padded.green().bold().to_string()
         } else {
             branch_padded.green().to_string()
@@ -59,7 +71,7 @@ pub fn run() -> Result<()> {
             marker.yellow(),
             name_col,
             branch_col,
-            wt.path.display().to_string().dimmed(),
+            worktree.path.display().to_string().dimmed(),
         );
     }
 

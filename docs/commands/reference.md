@@ -113,29 +113,25 @@
 | `st generate --pr-body [--no-prompt]` | Generate PR body with AI |
 | `st demo` | Interactive tutorial (no auth/repo needed) |
 
-## Agent worktrees
-
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `st agent create <title>` | `ag create` | Create worktree + stacked branch |
-| `st agent open [name]` | `ag attach` | Reopen in editor (fuzzy picker if no name) |
-| `st agent list` | `ag ls` | Show all registered worktrees |
-| `st agent register` | | Register current dir as an agent worktree |
-| `st agent remove [name]` | | Remove worktree (+ `--delete-branch` to delete branch) |
-| `st agent prune` | | Remove dead registry entries + `git worktree prune` |
-| `st agent sync` | | Restack all registered worktrees |
-
 ## Developer worktrees
 
 | Command | Alias | Description |
 |---------|-------|-------------|
-| `st worktree create [branch]` | `wt c`, `wtc` | Create worktree for an existing or new branch |
+| `st worktree create [name]` | `wt c`, `wtc` | Create or reuse a worktree lane (`wt c` with no args generates a random lane name) |
 | `st worktree list` | `wt ls`, `w`, `wtls` | List all worktrees |
-| `st worktree go <name>` | `wt go`, `wtgo` | Navigate to a worktree (requires shell integration) |
+| `st worktree ll` | `wt ll` | Show richer worktree status, including managed/prunable/conflict state |
+| `st worktree go [name]` | `wt go`, `wtgo` | Navigate to a worktree (picker if no name; requires shell integration for transparent `cd`) |
 | `st worktree path <name>` | | Print absolute path of a worktree (for scripting) |
-| `st worktree remove <name>` | `wt rm`, `wtrm` | Remove a worktree |
+| `st worktree remove [name]` | `wt rm`, `wtrm` | Remove a worktree (`wt rm` with no name removes the current lane) |
+| `st worktree prune` | `wt prune`, `wtprune` | Clean stale git worktree bookkeeping only |
+| `st worktree restack` | `wt rs`, `wtrs` | Restack all stax-managed worktrees |
 | `st shell-setup` | | Print shell integration snippet for `eval` |
 | `st shell-setup --install` | | Auto-append shell integration to your shell config |
+
+Worktree launch examples:
+- `st wt c review-pass --agent codex --tmux -- "address PR comments"`
+- `st wt go review-pass --agent codex --tmux`
+- `st wt go ui-polish --run "cursor ." --tmux`
 
 ## Common flags
 

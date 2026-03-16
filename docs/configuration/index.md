@@ -37,10 +37,15 @@ Main config path: `~/.config/stax/config.toml`
 # agent = "claude" # or "codex" / "gemini" / "opencode"
 # model = "claude-sonnet-4-5-20250929"
 
-[agent]
-# worktrees_dir = ".stax/trees"
-# default_editor = "auto"   # "auto" | "cursor" | "codex" | "code"
-# post_create_hook = ""     # shell command run inside new worktree after creation
+[worktree]
+# root_dir = "" # default: ~/.stax/worktrees/<repo>
+
+[worktree.hooks]
+# post_create = "" # blocking hook run in a new worktree before launch
+# post_start = ""  # background hook run after creation
+# post_go = ""     # background hook run after entering an existing worktree
+# pre_remove = ""  # blocking hook run before removal
+# post_remove = "" # background hook run after removal
 ```
 
 ## Reset saved AI defaults

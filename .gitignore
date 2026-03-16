@@ -6,3 +6,4 @@ Cargo.lock
 /.venv
 /.test-tmp
 /.docker-cache
+.worktrees/

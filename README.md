@@ -30,7 +30,7 @@ Ship small, reviewable PR stacks quickly without giving up safety.
 - Restack/merge with transactional safety and fast recovery (`st undo`, `st redo`)
 - Run stack-aware merge/cascade workflows with CI/readiness checks
 - Generate PR bodies and standup summaries with your preferred AI agent
-- Work across multiple worktrees, including parallel AI-agent workflows
+- Work across multiple worktrees, including parallel AI worktree lanes
 
 ## Install
 
@@ -194,14 +194,15 @@ Read more: [docs/interface/tui.md](docs/interface/tui.md)
 <a id="developer-worktrees"></a>
 ### Developer Worktrees
 
-Work on multiple stacks in parallel without losing context. `st worktree` (alias `st wt`) creates and manages Git worktrees for your existing branches, with shell integration for transparent `cd`.
+Work on multiple stacks in parallel without losing context. `st worktree` (alias `st wt`) creates and manages Git worktree lanes for existing or new branches, with shell integration for transparent `cd`.
 
 ```bash
 # One-time shell integration setup
 st shell-setup --install   # appends eval "$(stax shell-setup)" to ~/.zshrc
 
-# Create a worktree for an existing branch
-st worktree create feature/payments-api
+# Create a fresh random lane or a named lane
+st worktree create
+st worktree create payments-api
 
 # List all worktrees (* = current)
 st worktree list
@@ -219,22 +220,34 @@ Shortcuts: `st w` (list), `st wtc [branch]` (create), `st wtgo <name>` (go), `st
 
 Read more: [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
 
-<a id="agent-worktrees"></a>
-### Agent Worktrees
+<a id="worktree-lanes"></a>
+### Worktree Lanes For AI
 
-Run multiple AI agents in isolated Git worktrees while preserving stack metadata and restack flows. `st agent` is title-based and includes editor integration and a registry.
+Run 2, 3, or 8 AI coding sessions in parallel without sharing one working directory.
+
+Each lane is an isolated Git worktree with a real branch behind it. When stax creates the branch for a lane, it also writes normal stax metadata, so that lane shows up in `st ls`, participates in restack/sync/undo, and can be reopened instantly with `st wt go`.
 
 ```bash
-# Create isolated worktrees for parallel tasks
-st agent create "Add dark mode" --open-codex
-st agent create "Fix auth refresh" --open
+# Spin up three lanes in parallel
+st wt c auth-refresh --agent claude -- "fix token refresh edge cases"
+st wt c flaky-tests --agent codex -- "stabilize the flaky test suite"
+st wt c ui-polish --run "cursor ."
+st wt c review-pass --agent codex --tmux -- "address the open PR comments"
 
-# Keep all agent branches rebased when trunk moves
-st agent sync
+# They are normal stax branches, not hidden scratch dirs
+st ls
 
-# View and clean up
-st agent list
-st agent remove add-dark-mode --delete-branch
+# Trunk moved while they were running? Restack every managed lane
+st wt rs
+
+# Jump back into any lane and continue exactly where you left off
+st wt go flaky-tests --agent codex
+st wt go review-pass --agent codex --tmux
+
+# Rich status + cleanup
+st wt ll
+st wt prune
+st wt rm auth-refresh --delete-branch
 ```
 
 Read more: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md)
@@ -267,8 +280,8 @@ If you want to...
 - Navigate branches efficiently: [docs/commands/navigation.md](docs/commands/navigation.md)
 - Merge, cascade, and keep stacks healthy: [docs/workflows/merge-and-cascade.md](docs/workflows/merge-and-cascade.md)
 - Work across multiple worktrees: [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
-- Use developer worktrees (`st worktree`): [docs/workflows/multi-worktree.md#stax-worktree](docs/workflows/multi-worktree.md)
-- Use agent worktrees end-to-end: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md)
+- Use developer worktrees (`st worktree`): [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
+- Run several AI worktree lanes in parallel: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md)
 - Configure auth/branch naming/remote behavior: [docs/configuration/index.md](docs/configuration/index.md)
 - Validate and repair metadata health: [docs/commands/stack-health.md](docs/commands/stack-health.md)
 

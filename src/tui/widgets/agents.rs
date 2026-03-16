@@ -7,28 +7,33 @@ use ratatui::{
     Frame,
 };
 
-/// Render the active agent worktrees panel (bottom of left column)
-pub fn render_agent_worktrees(f: &mut Frame, app: &App, area: Rect) {
+/// Render the linked worktrees panel (bottom of left column)
+pub fn render_worktrees(f: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = app
-        .agent_worktrees
+        .worktrees
         .iter()
-        .map(|agent| {
-            let (indicator, name_style) = if agent.exists {
+        .map(|worktree| {
+            let (indicator, name_style) = if worktree.is_current {
+                ("◆ ", Style::default().fg(Color::Yellow))
+            } else if worktree.exists {
                 ("◈ ", Style::default().fg(Color::Cyan))
             } else {
                 ("◇ ", Style::default().fg(Color::DarkGray))
             };
 
-            let branch_short = agent
+            let branch_short = worktree
                 .branch
                 .split('/')
                 .last()
-                .unwrap_or(&agent.branch)
+                .unwrap_or(&worktree.branch)
                 .to_string();
 
             Line::from(vec![
                 Span::styled(indicator, name_style),
-                Span::styled(agent.name.clone(), name_style.add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    worktree.name.clone(),
+                    name_style.add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(
                     format!(" {}", branch_short),
                     Style::default().fg(Color::DarkGray),
@@ -38,10 +43,10 @@ pub fn render_agent_worktrees(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let title = if app.agent_worktrees.is_empty() {
-        " Agents (none) "
+    let title = if app.worktrees.is_empty() {
+        " Worktrees (none) "
     } else {
-        " Agents "
+        " Worktrees "
     };
 
     let list = List::new(items).block(

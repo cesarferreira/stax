@@ -1,48 +1,132 @@
-use crate::commands::agent::util::ensure_gitignore;
+use super::shared::{
+    build_launch_spec, default_create_base, derive_unique_worktree_name, emit_shell_payload,
+    ensure_gitignore, ensure_managed_worktrees_root, find_worktree, format_create_message,
+    format_go_message, generate_random_lane_slug, managed_worktrees_dir, pick_branch_interactively,
+    resolve_branch_name, run_blocking_hook, spawn_background_hook, LaunchOptions,
+};
 use crate::commands::shell_setup;
+use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect, Input};
 use std::fs;
 
-pub fn run(branch: Option<String>, name: Option<String>) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    name: Option<String>,
+    from: Option<String>,
+    pick: bool,
+    worktree_name: Option<String>,
+    no_verify: bool,
+    shell_output: bool,
+    agent: Option<String>,
+    model: Option<String>,
+    run: Option<String>,
+    tmux: bool,
+    tmux_session: Option<String>,
+    args: Vec<String>,
+) -> Result<()> {
+    if pick && name.is_some() {
+        bail!("Use either a name or --pick, not both.");
+    }
+
     let repo = GitRepo::open()?;
-
-    // Prompt for shell integration if not installed
-    shell_setup::prompt_if_missing()?;
-
-    let branch_name = match branch {
-        Some(b) => b,
-        None => pick_branch_interactively(&repo)?,
+    let config = Config::load()?;
+    let launch_options = LaunchOptions {
+        agent,
+        model,
+        run,
+        tmux,
+        tmux_session,
+        args,
     };
 
-    // Check if branch exists; if not, offer to create it
-    let branch_exists = repo.branch_commit(&branch_name).is_ok();
-    if !branch_exists {
-        let create_it = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(format!(
-                "Branch '{}' does not exist. Create it stacked on current branch?",
-                branch_name
-            ))
-            .default(true)
-            .interact()?;
-        if !create_it {
-            println!("{}", "Aborted.".dimmed());
+    if let Some(ref target) = name {
+        if let Some(worktree) = find_worktree(&repo, target)? {
+            let launch = build_launch_spec(&config, &launch_options, &worktree.name)?;
+            format_go_message(&worktree);
+            if !no_verify {
+                spawn_background_hook(
+                    config.worktree.hooks.post_go.as_deref(),
+                    &worktree.path,
+                    "post_go",
+                )?;
+            }
+
+            if shell_output {
+                emit_shell_payload(&worktree.path, launch.as_ref());
+            } else if let Some(launch) = launch.as_ref() {
+                launch.execute_in(&worktree.path)?;
+            } else {
+                println!();
+                println!("{}", "Current shell did not move automatically.".yellow());
+                println!("  {}", format!("cd {}", worktree.path.display()).cyan());
+                if !shell_setup::is_installed() {
+                    println!();
+                    println!(
+                        "{}",
+                        "Tip: add shell integration for automatic cd:".dimmed()
+                    );
+                    println!("  {}", "stax shell-setup --install".cyan());
+                }
+            }
+
             return Ok(());
         }
     }
 
-    // Derive worktree name
-    let worktree_name = match name {
-        Some(n) => n,
-        None => derive_unique_name(&repo, &branch_name)?,
+    let input_name = match (pick, name) {
+        (true, _) => pick_branch_interactively(&repo)?,
+        (false, Some(name)) => name,
+        (false, None) => generate_random_lane_slug(&repo, &config)?,
     };
 
-    let worktrees_dir = repo.worktrees_dir()?;
-    let worktree_path = worktrees_dir.join(&worktree_name);
+    let (branch_name, branch_exists) = resolve_branch_name(&repo, &config, &input_name)?;
+    if let Some(worktree) = find_worktree(&repo, &branch_name)? {
+        let launch = build_launch_spec(&config, &launch_options, &worktree.name)?;
+        format_go_message(&worktree);
+        if !no_verify {
+            spawn_background_hook(
+                config.worktree.hooks.post_go.as_deref(),
+                &worktree.path,
+                "post_go",
+            )?;
+        }
 
+        if shell_output {
+            emit_shell_payload(&worktree.path, launch.as_ref());
+        } else if let Some(launch) = launch.as_ref() {
+            launch.execute_in(&worktree.path)?;
+        } else {
+            println!();
+            println!("{}", "Current shell did not move automatically.".yellow());
+            println!("  {}", format!("cd {}", worktree.path.display()).cyan());
+            if !shell_setup::is_installed() {
+                println!();
+                println!(
+                    "{}",
+                    "Tip: add shell integration for automatic cd:".dimmed()
+                );
+                println!("  {}", "stax shell-setup --install".cyan());
+            }
+        }
+        return Ok(());
+    }
+
+    let base_branch = if branch_exists {
+        None
+    } else {
+        let base_branch = from.unwrap_or(default_create_base(&repo)?);
+        repo.branch_commit(&base_branch)
+            .with_context(|| format!("Base branch '{}' does not exist", base_branch))?;
+        Some(base_branch)
+    };
+
+    let worktree_name = worktree_name.unwrap_or(derive_unique_worktree_name(&repo, &branch_name)?);
+    let launch = build_launch_spec(&config, &launch_options, &worktree_name)?;
+    let worktrees_dir = managed_worktrees_dir(&repo, &config)?;
+    let worktree_path = worktrees_dir.join(&worktree_name);
     if worktree_path.exists() {
         bail!(
             "Worktree path '{}' already exists.",
@@ -51,93 +135,75 @@ pub fn run(branch: Option<String>, name: Option<String>) -> Result<()> {
     }
 
     fs::create_dir_all(&worktrees_dir)?;
-
-    let main_dir = repo.main_repo_workdir()?;
-    ensure_gitignore(&main_dir, ".worktrees")?;
+    ensure_managed_worktrees_root(&repo, &config, &worktrees_dir)?;
+    let main_repo_workdir = repo.main_repo_workdir()?;
+    ensure_gitignore(&main_repo_workdir, &config.worktree.root_dir)?;
 
     if branch_exists {
         repo.worktree_create(&branch_name, &worktree_path)?;
     } else {
-        let current = repo.current_branch()?;
-        let parent_rev = repo.branch_commit(&current)?;
-        repo.worktree_create_new_branch(&branch_name, &worktree_path, &current)?;
-        let meta = BranchMetadata::new(&current, &parent_rev);
+        let from_branch = base_branch
+            .as_deref()
+            .expect("base branch is always set for a new branch");
+        repo.worktree_create_new_branch(&branch_name, &worktree_path, &from_branch)?;
+        let parent_rev = repo.branch_commit(&from_branch)?;
+        let meta = BranchMetadata::new(&from_branch, &parent_rev);
         meta.write(repo.inner(), &branch_name)?;
     }
 
-    println!(
-        "{}  worktree '{}' → branch '{}'",
-        "Created".green().bold(),
-        worktree_name.cyan(),
-        branch_name.blue()
-    );
-    println!("  Path:   {}", worktree_path.display().to_string().dimmed());
-
-    if std::env::var("STAX_SHELL_INTEGRATION").is_ok() {
-        println!(
-            "\n  {}",
-            format!("stax worktree go {}", worktree_name).cyan()
-        );
+    let copied_files = repo.tracked_file_count_at(&worktree_path).unwrap_or(0);
+    let repo_name = main_repo_workdir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "repo".to_string());
+    let from_label = if let Some(base_branch) = base_branch.as_deref() {
+        if repo.has_remote(base_branch) {
+            format!("origin/{}", base_branch)
+        } else {
+            base_branch.to_string()
+        }
     } else {
-        println!("\n  {}", format!("cd {}", worktree_path.display()).cyan());
+        branch_name.clone()
+    };
+    format_create_message(
+        &repo_name,
+        &worktree_name,
+        &branch_name,
+        &from_label,
+        copied_files,
+        branch_exists,
+    );
+
+    if !no_verify {
+        run_blocking_hook(
+            config.worktree.hooks.post_create.as_deref(),
+            &worktree_path,
+            "post_create",
+        )?;
+        spawn_background_hook(
+            config.worktree.hooks.post_start.as_deref(),
+            &worktree_path,
+            "post_start",
+        )?;
+    }
+
+    if shell_output {
+        emit_shell_payload(&worktree_path, launch.as_ref());
+    } else if let Some(launch) = launch.as_ref() {
+        launch.execute_in(&worktree_path)?;
+    } else {
+        println!();
+        println!("{}", "Current shell did not move automatically.".yellow());
+        println!("  {}", format!("cd {}", worktree_path.display()).cyan());
+        if !shell_setup::is_installed() {
+            println!();
+            println!(
+                "{}",
+                "Tip: add shell integration for automatic cd:".dimmed()
+            );
+            println!("  {}", "stax shell-setup --install".cyan());
+        }
     }
 
     Ok(())
-}
-
-fn pick_branch_interactively(repo: &GitRepo) -> Result<String> {
-    let branches = repo.list_branches()?;
-
-    if branches.is_empty() {
-        bail!("No local branches found.");
-    }
-
-    let current = repo.current_branch().unwrap_or_default();
-    let default_idx = branches.iter().position(|b| b == &current).unwrap_or(0);
-
-    let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select branch for worktree")
-        .items(&branches)
-        .default(default_idx)
-        .interact()?;
-
-    Ok(branches[selection].clone())
-}
-
-/// Derive a unique short name from the branch, handling path-prefix collisions.
-fn derive_unique_name(repo: &GitRepo, branch: &str) -> Result<String> {
-    let existing_worktrees = repo.list_worktrees()?;
-    let existing_names: std::collections::HashSet<String> = existing_worktrees
-        .iter()
-        .map(|wt| wt.name.clone())
-        .collect();
-
-    // Try last segment first: "feature/auth-api" → "auth-api"
-    let segments: Vec<&str> = branch.split('/').collect();
-    for start in (0..segments.len()).rev() {
-        let candidate = segments[start..].join("-");
-        if !existing_names.contains(&candidate) {
-            return Ok(candidate);
-        }
-    }
-
-    // Full branch with slashes replaced by dashes
-    let full = branch.replace('/', "-");
-    if !existing_names.contains(&full) {
-        return Ok(full);
-    }
-
-    // Append numeric suffix
-    for i in 2..=99u32 {
-        let candidate = format!("{}-{}", full, i);
-        if !existing_names.contains(&candidate) {
-            return Ok(candidate);
-        }
-    }
-
-    // Last resort: prompt
-    let name: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Worktree name")
-        .interact_text()?;
-    Ok(name)
 }

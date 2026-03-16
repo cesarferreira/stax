@@ -20,7 +20,7 @@ pub struct Config {
     #[serde(default)]
     pub auth: AuthConfig,
     #[serde(default)]
-    pub agent: AgentConfig,
+    pub worktree: WorktreeConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,24 +114,39 @@ pub struct AuthConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct AgentConfig {
-    /// Directory for agent worktrees, relative to repo root (default: .stax/trees)
-    #[serde(default = "default_worktrees_dir")]
-    pub worktrees_dir: String,
-    /// Default editor: "auto" | "cursor" | "codex" (default: auto)
-    #[serde(default = "default_agent_editor")]
-    pub default_editor: String,
-    /// Optional shell command to run after creating a worktree (e.g. "npm install")
+pub struct WorktreeConfig {
+    /// Directory for stax-managed worktrees. Empty means the default external root:
+    /// ~/.stax/worktrees/<repo>.
+    #[serde(default = "default_worktree_root_dir")]
+    pub root_dir: String,
     #[serde(default)]
-    pub post_create_hook: Option<String>,
+    pub hooks: WorktreeHooksConfig,
 }
 
-impl Default for AgentConfig {
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct WorktreeHooksConfig {
+    /// Blocking hook run after creating a worktree and before launch
+    #[serde(default)]
+    pub post_create: Option<String>,
+    /// Background hook run after a new worktree is ready
+    #[serde(default)]
+    pub post_start: Option<String>,
+    /// Background hook run after jumping to an existing worktree
+    #[serde(default)]
+    pub post_go: Option<String>,
+    /// Blocking hook run before removing a worktree
+    #[serde(default)]
+    pub pre_remove: Option<String>,
+    /// Background hook run after removing a worktree
+    #[serde(default)]
+    pub post_remove: Option<String>,
+}
+
+impl Default for WorktreeConfig {
     fn default() -> Self {
         Self {
-            worktrees_dir: default_worktrees_dir(),
-            default_editor: default_agent_editor(),
-            post_create_hook: None,
+            root_dir: default_worktree_root_dir(),
+            hooks: WorktreeHooksConfig::default(),
         }
     }
 }
@@ -216,12 +231,8 @@ fn default_replacement() -> String {
     "-".to_string()
 }
 
-fn default_worktrees_dir() -> String {
-    ".stax/trees".to_string()
-}
-
-fn default_agent_editor() -> String {
-    "auto".to_string()
+fn default_worktree_root_dir() -> String {
+    String::new()
 }
 
 fn default_remote_name() -> String {
