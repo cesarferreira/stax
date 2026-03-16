@@ -171,6 +171,26 @@ done
 }
 
 #[test]
+fn wt_without_subcommand_prints_help_noninteractive() {
+    let repo = TestRepo::new();
+
+    let out = repo.run_stax(&["wt"]);
+    out.assert_success();
+
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        stdout.contains("Usage: worktree [COMMAND]"),
+        "expected worktree help output, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Create or enter a worktree lane"),
+        "expected worktree subcommand help, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn wt_create_without_name_creates_random_lane() {
     let repo = TestRepo::new();
     let home = clean_home(&repo);

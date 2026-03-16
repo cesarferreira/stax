@@ -1,6 +1,6 @@
 # Worktree Lanes For AI
 
-`st wt` lets you run multiple AI coding sessions in parallel while keeping them inside stax's normal branch model.
+`st wt` lets you run multiple AI coding sessions in parallel while keeping them inside stax's normal branch model. In an interactive terminal, bare `st wt` opens the worktree dashboard so you can browse lanes and re-enter tmux-backed sessions quickly.
 
 This is the important part: these lanes are not a separate subsystem and they are not hidden scratch directories. When stax creates the branch for a lane, it writes normal stax metadata, so the lane behaves like a first-class branch in your stack.
 
