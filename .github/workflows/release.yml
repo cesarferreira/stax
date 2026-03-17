@@ -26,6 +26,8 @@ jobs:
             os: macos-15
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -43,17 +45,24 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: matrix.target != 'x86_64-pc-windows-msvc'
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../stax-${{ matrix.target }}.tar.gz stax
           cd ../../..
 
+      - name: Package (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/stax.exe" -DestinationPath "stax-${{ matrix.target }}.zip"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
           name: stax-${{ matrix.target }}
-          path: stax-${{ matrix.target }}.tar.gz
+          path: stax-${{ matrix.target }}.*
 
   release:
     name: Release
@@ -84,6 +93,7 @@ jobs:
           echo "ARM_SHA=$(sha256sum stax-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)" >> $GITHUB_ENV
           echo "INTEL_SHA=$(sha256sum stax-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)" >> $GITHUB_ENV
           echo "LINUX_SHA=$(sha256sum stax-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)" >> $GITHUB_ENV
+          echo "WINDOWS_SHA=$(sha256sum stax-x86_64-pc-windows-msvc.zip | cut -d' ' -f1)" >> $GITHUB_ENV
 
       - name: Checkout Homebrew tap
         uses: actions/checkout@v6

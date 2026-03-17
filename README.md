@@ -63,6 +63,8 @@ ln -s ~/.local/bin/stax ~/.local/bin/st
 # echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
 ```
 
+**Windows (x86_64):** download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/cesarferreira/stax/releases), extract `stax.exe`, and place it in a directory on your `PATH`. See [Windows notes](#windows-notes) for shell and worktree limitations.
+
 Verify install:
 
 ```bash
@@ -345,6 +347,23 @@ st config --reset-ai
 Use `st config --reset-ai --no-prompt` to only clear the saved pairing without opening the picker.
 
 Read full config reference: [docs/configuration/index.md](docs/configuration/index.md)
+
+<a id="windows-notes"></a>
+## Windows Notes
+
+stax builds and runs on Windows (x86_64) with pre-built binaries available from [GitHub Releases](https://github.com/cesarferreira/stax/releases). Most commands work identically, with the following limitations:
+
+**Shell integration is not available.** `st shell-setup` supports bash, zsh, and fish only. On Windows this means:
+
+- `st wt c` and `st wt go` create/navigate worktrees but cannot auto-`cd` the parent shell. After running these commands, manually `cd` to the printed path.
+- The `sw` quick alias is not available.
+- `st wt rm` (with no argument, to remove the current worktree) cannot relocate the shell automatically. Specify the worktree name explicitly: `st wt rm <name>`.
+
+**Worktree commands still work.** `st wt c`, `st wt go`, `st wt ls`, `st wt ll`, `st wt rm <name>`, `st wt prune`, and `st wt restack` all function normally — only the shell-level directory change is missing.
+
+**tmux integration requires WSL or a Unix-like environment.** The `--tmux` flag and the worktree dashboard's tmux session management assume a Unix tmux binary is available.
+
+All other stax features — stacked branches, PRs, restack, sync, undo/redo, TUI, AI generation — work on Windows without limitations.
 
 ## Contributing & License
 
