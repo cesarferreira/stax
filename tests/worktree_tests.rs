@@ -161,6 +161,41 @@ fn sync_restack_handles_branch_checked_out_elsewhere() {
 }
 
 #[test]
+fn sync_reports_when_checkout_target_is_in_another_worktree() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["create", "merged-feature"])
+        .assert_success();
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch])
+        .assert_success();
+
+    let main_worktree = repo.path().join("wt-main");
+    repo.git(&["worktree", "add", main_worktree.to_str().unwrap(), "main"])
+        .assert_success();
+
+    repo.merge_branch_on_remote(&branch);
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    output.assert_success();
+    output.assert_stdout_contains("already checked out in another worktree");
+
+    assert_eq!(
+        repo.current_branch(),
+        branch,
+        "sync should keep the current branch when it cannot switch to main"
+    );
+    assert!(
+        repo.list_branches()
+            .iter()
+            .any(|candidate| candidate == &branch),
+        "Expected the merged branch to remain local when main is checked out elsewhere"
+    );
+}
+
+#[test]
 fn upstack_restack_handles_branch_checked_out_elsewhere() {
     let (repo, _a, b, wt_a, wt_b) = setup_stack_with_worktrees(false);
 

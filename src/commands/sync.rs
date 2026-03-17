@@ -425,45 +425,48 @@ pub fn run(
                 if confirm {
                     // If we're on this branch, checkout parent first
                     if is_current_branch {
-                        let checkout_status = Command::new("git")
-                            .args(["checkout", &parent_branch])
-                            .current_dir(workdir)
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status();
-
-                        if checkout_status.map(|s| s.success()).unwrap_or(false) {
-                            if !quiet {
-                                println!("    {} checked out {}", "→".cyan(), parent_branch.cyan());
-                            }
-
-                            // Pull latest changes for the parent branch
-                            let pull_status = Command::new("git")
-                                .args(["pull", "--ff-only", &remote_name, &parent_branch])
-                                .current_dir(workdir)
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::null())
-                                .status();
-
-                            if let Ok(status) = pull_status {
-                                if status.success() && !quiet {
+                        match checkout_branch_for_cleanup(&repo, workdir, &parent_branch) {
+                            Ok(()) => {
+                                if !quiet {
                                     println!(
-                                        "    {} pulled latest {}",
-                                        "↓".cyan(),
+                                        "    {} checked out {}",
+                                        "→".cyan(),
                                         parent_branch.cyan()
                                     );
                                 }
+
+                                // Pull latest changes for the parent branch
+                                let pull_status = Command::new("git")
+                                    .args(["pull", "--ff-only", &remote_name, &parent_branch])
+                                    .current_dir(workdir)
+                                    .stdout(std::process::Stdio::null())
+                                    .stderr(std::process::Stdio::null())
+                                    .status();
+
+                                if let Ok(status) = pull_status {
+                                    if status.success() && !quiet {
+                                        println!(
+                                            "    {} pulled latest {}",
+                                            "↓".cyan(),
+                                            parent_branch.cyan()
+                                        );
+                                    }
+                                }
                             }
-                        } else {
-                            if !quiet {
-                                println!(
-                                    "    {} {}",
-                                    branch.bright_black(),
-                                    format!("failed to checkout '{}', skipping", parent_branch)
+                            Err(checkout_error) => {
+                                if !quiet {
+                                    println!(
+                                        "    {} {}",
+                                        branch.bright_black(),
+                                        format!(
+                                            "failed to checkout '{}': {}, skipping",
+                                            parent_branch, checkout_error
+                                        )
                                         .red()
-                                );
+                                    );
+                                }
+                                continue;
                             }
-                            continue;
                         }
                     }
 
@@ -707,27 +710,31 @@ pub fn run(
                 }
 
                 if is_current_branch {
-                    let checkout_status = Command::new("git")
-                        .args(["checkout", fallback_parent])
-                        .current_dir(workdir)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status();
-
-                    if checkout_status.map(|s| s.success()).unwrap_or(false) {
-                        current_after_deletions = fallback_parent.clone();
-                        if !quiet {
-                            println!("    {} checked out {}", "→".cyan(), fallback_parent.cyan());
+                    match checkout_branch_for_cleanup(&repo, workdir, fallback_parent) {
+                        Ok(()) => {
+                            current_after_deletions = fallback_parent.clone();
+                            if !quiet {
+                                println!(
+                                    "    {} checked out {}",
+                                    "→".cyan(),
+                                    fallback_parent.cyan()
+                                );
+                            }
                         }
-                    } else {
-                        if !quiet {
-                            println!(
-                                "    {} {}",
-                                branch.bright_black(),
-                                format!("failed to checkout '{}', skipping", fallback_parent).red()
-                            );
+                        Err(checkout_error) => {
+                            if !quiet {
+                                println!(
+                                    "    {} {}",
+                                    branch.bright_black(),
+                                    format!(
+                                        "failed to checkout '{}': {}, skipping",
+                                        fallback_parent, checkout_error
+                                    )
+                                    .red()
+                                );
+                            }
+                            continue;
                         }
-                        continue;
                     }
                 }
 
@@ -1242,6 +1249,45 @@ fn local_branch_exists(workdir: &std::path::Path, branch: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+fn checkout_branch_for_cleanup(
+    repo: &GitRepo,
+    workdir: &std::path::Path,
+    branch: &str,
+) -> std::result::Result<(), String> {
+    if let Ok(Some(other_worktree_path)) = repo.branch_worktree_path(branch) {
+        let current_path = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+        let other_path = std::fs::canonicalize(&other_worktree_path)
+            .unwrap_or_else(|_| other_worktree_path.clone());
+        if other_path != current_path {
+            return Err(format!(
+                "'{}' is already checked out in another worktree at '{}'",
+                branch,
+                other_worktree_path.display()
+            ));
+        }
+    }
+
+    let output = Command::new("git")
+        .args(["checkout", branch])
+        .current_dir(workdir)
+        .output()
+        .map_err(|e| format!("git checkout '{}' failed: {}", branch, e))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        Err(format!(
+            "git checkout '{}' exited with {}",
+            branch, output.status
+        ))
+    } else {
+        Err(stderr)
+    }
 }
 
 fn resolve_effective_parent(
