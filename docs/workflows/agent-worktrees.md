@@ -212,6 +212,9 @@ This writes a static shell snippet under `~/.config/stax/` and sources it from y
 
 After that, `st wt c` and `st wt go` change the parent shell directory directly, and `st wt rm` can safely relocate the shell before removing the current worktree.
 
+!!! note "Windows"
+    Shell integration and `--tmux` require a Unix shell (bash/zsh/fish) and tmux. On Windows, worktree commands work but auto-`cd` and tmux session management are unavailable. See [Windows notes](../reference/windows.md).
+
 ## Hooks
 
 Worktree hooks live under `[worktree.hooks]` in `~/.config/stax/config.toml`:
