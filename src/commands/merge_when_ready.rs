@@ -4,9 +4,9 @@ use crate::commands::merge_rebase::{
 };
 use crate::config::Config;
 use crate::engine::Stack;
+use crate::forge::ForgeClient;
 use crate::git::{GitRepo, RebaseResult};
 use crate::github::pr::{MergeMethod, PrMergeStatus};
-use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
@@ -131,19 +131,12 @@ pub fn run(
     // Build branch info list
     let mut branches: Vec<LandBranchInfo> = Vec::new();
 
-    // Set up GitHub client
+    // Set up forge client
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
     let rt = tokio::runtime::Runtime::new()?;
-
-    let client = rt
-        .block_on(async {
-            GitHubClient::new(
-                remote_info.owner(),
-                &remote_info.repo,
-                remote_info.api_base_url.clone(),
-            )
-        })
-        .context("Failed to connect to GitHub. Check your token and remote configuration.")?;
+    let client = ForgeClient::new(&remote_info).context(
+        "Failed to connect to the configured forge. Check your token and remote configuration.",
+    )?;
 
     // Resolve PR numbers for merge scope and optional PR numbers for remaining scope.
     let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching PR info...");
@@ -152,7 +145,7 @@ pub fn run(
         let branch_info = stack.branches.get(branch_name);
         let mut pr_number = branch_info.and_then(|b| b.pr_number);
 
-        // If no PR in metadata, try looking it up on GitHub
+        // If no PR in metadata, try looking it up on the forge
         if pr_number.is_none() {
             if let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await }) {
                 pr_number = Some(pr_info.number);
@@ -710,7 +703,7 @@ fn print_dashboard(branches: &[LandBranchInfo], quiet: bool) {
 /// Wait for a PR to be ready to merge (CI passed, approved)
 fn wait_for_pr_ready(
     rt: &tokio::runtime::Runtime,
-    client: &GitHubClient,
+    client: &ForgeClient,
     pr_number: u64,
     timeout: Duration,
     poll_interval: Duration,
@@ -770,7 +763,7 @@ fn wait_for_pr_ready(
 fn record_ci_history_for_branch(
     repo: &GitRepo,
     rt: &tokio::runtime::Runtime,
-    client: &GitHubClient,
+    client: &ForgeClient,
     stack: &Stack,
     branch: &str,
 ) {

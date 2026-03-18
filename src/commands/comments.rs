@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::engine::Stack;
+use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::github::pr::PrComment;
-use crate::github::GitHubClient;
 use crate::remote::RemoteInfo;
 use anyhow::Result;
 use colored::Colorize;
@@ -38,16 +38,8 @@ pub fn run(plain: bool) -> Result<()> {
     let pr_number = pr_number.unwrap();
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
 
-    // Create GitHub client and fetch comments
-    // Must create client inside block_on - Octocrab requires runtime context
     let rt = tokio::runtime::Runtime::new()?;
-    let client = rt.block_on(async {
-        GitHubClient::new(
-            &remote_info.namespace,
-            &remote_info.repo,
-            remote_info.api_base_url.clone(),
-        )
-    })?;
+    let client = ForgeClient::new(&remote_info)?;
 
     let comments = rt.block_on(async { client.list_all_comments(pr_number).await })?;
 
