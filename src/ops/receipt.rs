@@ -112,6 +112,8 @@ pub struct OpReceipt {
     pub repo_workdir: String,
     /// Trunk branch name
     pub trunk: String,
+    /// Whether the operation auto-stashed dirty target worktrees
+    pub auto_stash_pop: bool,
     /// Branch that was checked out when operation started
     pub head_branch_before: String,
     /// Local refs that were/will be modified
@@ -143,6 +145,7 @@ impl OpReceipt {
             status: OpStatus::InProgress,
             repo_workdir,
             trunk,
+            auto_stash_pop: false,
             head_branch_before,
             local_refs: Vec::new(),
             remote_refs: Vec::new(),
@@ -350,6 +353,7 @@ mod tests {
         assert!(matches!(receipt.kind, OpKind::Submit));
         assert!(matches!(receipt.status, OpStatus::InProgress));
         assert!(receipt.finished_at.is_none());
+        assert!(!receipt.auto_stash_pop);
         assert!(receipt.local_refs.is_empty());
         assert!(receipt.remote_refs.is_empty());
         assert!(receipt.error.is_none());

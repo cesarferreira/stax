@@ -29,8 +29,6 @@ pub fn run(
     submit_after: SubmitAfterRestack,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
-    let current = repo.current_branch()?;
-    let mut stack = Stack::load(&repo)?;
 
     if r#continue {
         crate::commands::continue_cmd::run()?;
@@ -38,6 +36,52 @@ pub fn run(
             return Ok(());
         }
     }
+
+    run_impl(
+        &repo,
+        all,
+        dry_run,
+        yes,
+        quiet,
+        auto_stash_pop,
+        submit_after,
+        r#continue,
+        None,
+    )
+}
+
+pub(crate) fn resume_after_rebase(
+    auto_stash_pop: bool,
+    restore_branch: Option<String>,
+) -> Result<()> {
+    let repo = GitRepo::open()?;
+    run_impl(
+        &repo,
+        false,
+        false,
+        true,
+        false,
+        auto_stash_pop,
+        SubmitAfterRestack::No,
+        true,
+        restore_branch,
+    )
+}
+
+fn run_impl(
+    repo: &GitRepo,
+    all: bool,
+    dry_run: bool,
+    yes: bool,
+    quiet: bool,
+    auto_stash_pop: bool,
+    submit_after: SubmitAfterRestack,
+    skip_prediction: bool,
+    restore_branch: Option<String>,
+) -> Result<()> {
+    let current = repo.current_branch()?;
+    let restore_branch = restore_branch.unwrap_or_else(|| current.clone());
+    let mut stack = Stack::load(repo)?;
 
     let mut stashed = false;
     if repo.is_dirty()? {
@@ -92,9 +136,9 @@ pub fn run(
         });
     }
 
-    let normalized = normalize_scope_parents_for_restack(&repo, &scope_branches, quiet)?;
+    let normalized = normalize_scope_parents_for_restack(repo, &scope_branches, quiet)?;
     if normalized > 0 {
-        stack = Stack::load(&repo)?;
+        stack = Stack::load(repo)?;
     }
 
     let branches_to_restack = branches_needing_restack(&stack, &scope_branches);
@@ -110,7 +154,7 @@ pub fn run(
     }
 
     // Predict conflicts before proceeding
-    if !r#continue {
+    if !skip_prediction {
         let timer = LiveTimer::maybe_new(!quiet, "Checking for conflicts...");
         let branch_parent_pairs: Vec<(String, String)> = branches_to_restack
             .iter()
@@ -180,8 +224,8 @@ pub fn run(
     }
 
     // Begin transaction
-    let mut tx = Transaction::begin(OpKind::Restack, &repo, quiet)?;
-    tx.plan_branches(&repo, &scope_branches)?;
+    let mut tx = Transaction::begin(OpKind::Restack, repo, quiet)?;
+    tx.plan_branches(repo, &scope_branches)?;
     let summary = PlanSummary {
         branches_to_rebase: scope_branches.len(),
         branches_to_push: 0,
@@ -193,12 +237,13 @@ pub fn run(
     };
     tx::print_plan(tx.kind(), &summary, quiet);
     tx.set_plan_summary(summary);
+    tx.set_auto_stash_pop(auto_stash_pop);
     tx.snapshot()?;
 
     let mut summary: Vec<(String, String)> = Vec::new();
 
     for (index, branch) in scope_branches.iter().enumerate() {
-        let live_stack = Stack::load(&repo)?;
+        let live_stack = Stack::load(repo)?;
         let needs_restack = live_stack
             .branches
             .get(branch)
@@ -237,7 +282,7 @@ pub fn run(
                 updated_meta.write(repo.inner(), branch)?;
 
                 // Record the after-OID for this branch
-                tx.record_after(&repo, branch)?;
+                tx.record_after(repo, branch)?;
 
                 LiveTimer::maybe_finish_ok(restack_timer, "done");
                 summary.push((branch.clone(), "ok".to_string()));
@@ -250,7 +295,7 @@ pub fn run(
                     .map(|(name, _)| name.clone())
                     .collect();
                 print_restack_conflict(
-                    &repo,
+                    repo,
                     &RestackConflictContext {
                         branch,
                         parent_branch: &meta.parent_branch_name,
@@ -277,7 +322,7 @@ pub fn run(
     }
 
     // Return to original branch
-    repo.checkout(&current)?;
+    repo.checkout(&restore_branch)?;
 
     // Finish transaction successfully
     tx.finish_ok()?;
@@ -297,7 +342,7 @@ pub fn run(
     }
 
     // Check for merged branches and offer to delete them
-    cleanup_merged_branches(&repo, quiet, yes)?;
+    cleanup_merged_branches(repo, quiet, yes)?;
 
     if stashed {
         repo.stash_pop()?;
@@ -307,9 +352,6 @@ pub fn run(
     }
 
     let should_submit = should_submit_after_restack(&summary, quiet, submit_after)?;
-
-    // Release libgit2 handles from restack before opening a fresh repo in submit.
-    drop(repo);
 
     if should_submit {
         submit_after_restack(quiet)?;

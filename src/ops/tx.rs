@@ -95,6 +95,11 @@ impl Transaction {
         self.receipt.plan_summary = summary;
     }
 
+    /// Record whether the operation should auto-stash dirty target worktrees.
+    pub fn set_auto_stash_pop(&mut self, auto_stash_pop: bool) {
+        self.receipt.auto_stash_pop = auto_stash_pop;
+    }
+
     /// Create backup refs and write the in-progress receipt
     pub fn snapshot(&mut self) -> Result<()> {
         if self.snapshotted {

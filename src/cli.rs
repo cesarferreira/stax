@@ -1323,7 +1323,7 @@ pub fn run() -> Result<()> {
             parent,
             child,
         } => commands::checkout::run(branch, trunk, parent, child),
-        Commands::Continue => commands::continue_cmd::run(),
+        Commands::Continue => commands::continue_cmd::run_and_resume_restack(),
         Commands::Resolve {
             agent,
             model,

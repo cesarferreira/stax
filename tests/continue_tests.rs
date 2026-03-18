@@ -5,6 +5,16 @@
 mod common;
 
 use common::{OutputAssertions, TestRepo};
+use serde_json::Value;
+
+fn branch_needs_restack(status: &Value, branch: &str) -> Option<bool> {
+    status["branches"].as_array().and_then(|branches| {
+        branches
+            .iter()
+            .find(|b| b["name"].as_str() == Some(branch))
+            .and_then(|b| b["needs_restack"].as_bool())
+    })
+}
 
 // =============================================================================
 // No Rebase In Progress Tests
@@ -180,6 +190,66 @@ fn test_continue_after_restack_creates_conflict_marker() {
         // Abort the rebase for cleanup
         repo.abort_rebase();
     }
+}
+
+#[test]
+fn test_continue_resumes_remaining_restack_after_conflict() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "resume-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent content\n");
+    repo.commit("Parent commit");
+
+    repo.run_stax(&["bc", "resume-child"]);
+    let child = repo.current_branch();
+    repo.create_file("conflict.txt", "child content\n");
+    repo.commit("Child commit");
+
+    repo.run_stax(&["bc", "resume-grandchild"]);
+    let grandchild = repo.current_branch();
+    repo.create_file("grandchild.txt", "grandchild content\n");
+    repo.commit("Grandchild commit");
+
+    repo.run_stax(&["t"]);
+    repo.create_file("conflict.txt", "main content\n");
+    repo.commit("Main conflict commit");
+
+    repo.run_stax(&["checkout", &grandchild]);
+
+    let output = repo.run_stax(&["restack", "--quiet"]);
+    assert!(
+        output.status.success(),
+        "Restack should stop on conflict without failing\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        repo.has_rebase_in_progress(),
+        "Expected a rebase in progress after the conflict"
+    );
+
+    repo.resolve_conflicts_ours();
+
+    let output = repo.run_stax(&["continue"]);
+    output.assert_success();
+
+    let status = repo.get_status_json();
+    assert_eq!(
+        branch_needs_restack(&status, &grandchild),
+        Some(false),
+        "Grandchild should be fully restacked after continue"
+    );
+    assert_eq!(
+        branch_needs_restack(&status, &child),
+        Some(false),
+        "Child should remain restacked after continue"
+    );
+    assert_eq!(
+        branch_needs_restack(&status, &parent),
+        Some(false),
+        "Parent should remain restacked after continue"
+    );
 }
 
 // =============================================================================

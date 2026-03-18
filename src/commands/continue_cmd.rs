@@ -1,6 +1,8 @@
+use crate::commands::restack;
 use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::{GitRepo, RebaseResult};
+use crate::ops::receipt::{OpKind, OpReceipt, OpStatus};
 use anyhow::Result;
 use colored::Colorize;
 
@@ -23,9 +25,24 @@ pub(crate) fn continue_rebase_and_update_metadata(repo: &GitRepo) -> Result<Reba
     }
 }
 
-pub fn run() -> Result<()> {
-    let repo = GitRepo::open()?;
+fn latest_failed_restack(repo: &GitRepo) -> Result<Option<OpReceipt>> {
+    let git_dir = repo.git_dir()?;
+    let current = repo.current_branch()?;
+    let workdir = repo.workdir()?.to_string_lossy().to_string();
 
+    Ok(OpReceipt::load_latest(git_dir)?.filter(|receipt| {
+        receipt.kind == OpKind::Restack
+            && receipt.status == OpStatus::Failed
+            && receipt.repo_workdir == workdir
+            && receipt
+                .error
+                .as_ref()
+                .and_then(|error| error.failed_branch.as_deref())
+                == Some(current.as_str())
+    }))
+}
+
+fn continue_impl(repo: &GitRepo, resume_restack: bool) -> Result<()> {
     if !repo.rebase_in_progress()? {
         println!("{}", "No rebase in progress.".yellow());
         return Ok(());
@@ -33,9 +50,22 @@ pub fn run() -> Result<()> {
 
     println!("Continuing rebase...");
 
-    match continue_rebase_and_update_metadata(&repo)? {
+    match continue_rebase_and_update_metadata(repo)? {
         RebaseResult::Success => {
             println!("{}", "✓ Rebase completed successfully!".green());
+
+            if resume_restack {
+                if let Some(receipt) = latest_failed_restack(repo)? {
+                    println!();
+                    println!("{}", "Continuing restack...".bold());
+                    restack::resume_after_rebase(
+                        receipt.auto_stash_pop,
+                        Some(receipt.head_branch_before.clone()),
+                    )?;
+                    return Ok(());
+                }
+            }
+
             let config = Config::load().unwrap_or_default();
             if config.ui.tips {
                 println!();
@@ -59,4 +89,14 @@ pub fn run() -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn run() -> Result<()> {
+    let repo = GitRepo::open()?;
+    continue_impl(&repo, false)
+}
+
+pub fn run_and_resume_restack() -> Result<()> {
+    let repo = GitRepo::open()?;
+    continue_impl(&repo, true)
 }
