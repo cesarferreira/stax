@@ -283,6 +283,9 @@ enum Commands {
         /// Restack all branches in the stack
         #[arg(short, long)]
         all: bool,
+        /// Restack only up to the current branch, excluding descendants
+        #[arg(long, conflicts_with = "all")]
+        stop_here: bool,
         /// Continue after resolving conflicts
         #[arg(long)]
         r#continue: bool,
@@ -1297,6 +1300,7 @@ pub fn run() -> Result<()> {
         ),
         Commands::Restack {
             all,
+            stop_here,
             r#continue,
             dry_run,
             yes,
@@ -1305,6 +1309,7 @@ pub fn run() -> Result<()> {
             submit_after,
         } => commands::restack::run(
             all,
+            stop_here,
             r#continue,
             dry_run,
             yes,

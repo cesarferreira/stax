@@ -21,6 +21,7 @@ pub enum SubmitAfterRestack {
 
 pub fn run(
     all: bool,
+    stop_here: bool,
     r#continue: bool,
     dry_run: bool,
     yes: bool,
@@ -40,6 +41,7 @@ pub fn run(
     run_impl(
         &repo,
         all,
+        stop_here,
         dry_run,
         yes,
         quiet,
@@ -59,6 +61,7 @@ pub(crate) fn resume_after_rebase(
         &repo,
         false,
         false,
+        false,
         true,
         false,
         auto_stash_pop,
@@ -71,6 +74,7 @@ pub(crate) fn resume_after_rebase(
 fn run_impl(
     repo: &GitRepo,
     all: bool,
+    stop_here: bool,
     dry_run: bool,
     yes: bool,
     quiet: bool,
@@ -116,6 +120,15 @@ fn run_impl(
             .filter(|b| *b != &stack.trunk)
             .cloned()
             .collect()
+    } else if stop_here {
+        // Current stack up to the current branch: ancestors + current, excluding descendants.
+        let mut branches = stack.ancestors(&current);
+        branches.reverse();
+        branches.retain(|branch| branch != &stack.trunk);
+        if current != stack.trunk {
+            branches.push(current.clone());
+        }
+        branches
     } else {
         // Current stack: ancestors + current + descendants, excluding trunk.
         stack

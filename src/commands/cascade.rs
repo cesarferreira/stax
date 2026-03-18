@@ -24,6 +24,7 @@ pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
         false,
         false,
         false,
+        false,
         true,
         true,
         auto_stash_pop,

@@ -4,6 +4,7 @@
 mod common;
 
 use common::{OutputAssertions, TestRepo};
+use serde_json::Value;
 
 // =============================================================================
 // Downstack Command Tests
@@ -220,6 +221,41 @@ fn test_restack_with_parent_changes() {
     output.assert_success();
 }
 
+#[test]
+fn test_restack_stop_here_excludes_descendants() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["stop-a", "stop-b", "stop-c"]);
+
+    repo.run_stax(&["t"]).assert_success();
+    repo.create_file("root-change.txt", "updated trunk content");
+    repo.commit("Trunk change");
+
+    repo.run_stax(&["checkout", &branches[1]]).assert_success();
+
+    let output = repo.run_stax(&["restack", "--stop-here"]);
+    output.assert_success();
+
+    let status = repo.get_status_json();
+    assert_eq!(
+        branch_needs_restack(&status, &branches[0]),
+        Some(false),
+        "expected ancestor '{}' to be restacked",
+        branches[0]
+    );
+    assert_eq!(
+        branch_needs_restack(&status, &branches[1]),
+        Some(false),
+        "expected current branch '{}' to be restacked",
+        branches[1]
+    );
+    assert_eq!(
+        branch_needs_restack(&status, &branches[2]),
+        Some(true),
+        "expected descendant '{}' to remain needing restack",
+        branches[2]
+    );
+}
+
 // =============================================================================
 // Status Command Tests
 // =============================================================================
@@ -249,6 +285,15 @@ fn test_status_long() {
 // =============================================================================
 // Branch Track/Untrack Tests
 // =============================================================================
+
+fn branch_needs_restack(status: &Value, branch: &str) -> Option<bool> {
+    status["branches"].as_array().and_then(|branches| {
+        branches
+            .iter()
+            .find(|b| b["name"].as_str() == Some(branch))
+            .and_then(|b| b["needs_restack"].as_bool())
+    })
+}
 
 #[test]
 fn test_branch_untrack() {
