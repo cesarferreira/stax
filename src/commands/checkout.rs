@@ -1,13 +1,13 @@
 use crate::config::Config;
 use crate::engine::Stack;
-use crate::git::{refs, GitRepo};
-use crate::remote;
+use crate::git::{checkout_branch_in, refs, GitRepo};
 use anyhow::Result;
 use colored::{Color, Colorize};
 use console::truncate_str;
 use crossterm::terminal;
 use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 use std::collections::HashSet;
+use std::path::Path;
 
 // Colors for different columns (matching status.rs)
 const COLUMN_COLORS: &[Color] = &[
@@ -34,6 +34,7 @@ struct CheckoutRow {
 
 pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usize>) -> Result<()> {
     let repo = GitRepo::open()?;
+    let workdir = repo.workdir()?.to_path_buf();
     let current = repo.current_branch()?;
 
     if branch.is_some() && (trunk || parent || child.is_some()) {
@@ -136,11 +137,11 @@ pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usiz
     if target == current {
         println!("Already on '{}'", target);
     } else {
-        // Save current branch as previous before switching
-        if let Err(e) = refs::write_prev_branch(repo.inner(), &current) {
+        drop(repo);
+        if let Err(e) = refs::write_prev_branch_at(&workdir, &current) {
             eprintln!("Warning: failed to save previous branch: {}", e);
         }
-        repo.checkout(&target)?;
+        checkout_branch_in(&workdir, &target)?;
         println!("Switched to branch '{}'", target);
     }
 
@@ -150,10 +151,6 @@ pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usiz
 fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<Vec<CheckoutRow>> {
     let workdir = repo.workdir()?;
     let config = Config::load()?;
-    let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<HashSet<_>>();
 
     let trunk_info = stack.branches.get(&stack.trunk);
     let trunk_children: Vec<String> = trunk_info
@@ -195,7 +192,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
             .unwrap_or((0, 0));
         let needs_restack = entry.map(|b| b.needs_restack).unwrap_or(false);
         let has_pr = entry.and_then(|b| b.pr_number).is_some();
-        let has_remote = remote_branches.contains(branch) || has_pr;
+        let has_remote = remote_branch_exists(workdir, config.remote_name(), branch) || has_pr;
 
         let prev_branch_col = if i > 0 {
             Some(display_branches[i - 1].column)
@@ -295,7 +292,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
 
     let mut trunk_info = String::new();
     trunk_info.push(' ');
-    if remote_branches.contains(&stack.trunk) {
+    if remote_branch_exists(workdir, config.remote_name(), &stack.trunk) {
         trunk_info.push_str(&format!("{} ", "☁️".bright_blue()));
     } else {
         trunk_info.push_str("   ");
@@ -328,6 +325,16 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
     });
 
     Ok(rows)
+}
+
+fn remote_branch_exists(workdir: &Path, remote_name: &str, branch: &str) -> bool {
+    let remote_ref = format!("refs/remotes/{}/{}", remote_name, branch);
+    std::process::Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &remote_ref])
+        .current_dir(workdir)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn truncate_display(text: &str, max_width: usize) -> String {

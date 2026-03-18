@@ -318,6 +318,7 @@ pub fn run(
         LiveTimer::maybe_finish_timed(detect_timer);
 
         let delete_merged_started_at = Instant::now();
+        let repo = GitRepo::open()?;
 
         // Lazy-initialize GitHub client for updating PR bases (only if needed)
         let github_client: Option<(tokio::runtime::Runtime, GitHubClient)> = {
@@ -561,13 +562,7 @@ pub fn run(
                     let remote_deleted = remote_status.map(|s| s.success()).unwrap_or(false);
 
                     // Only delete metadata if branch no longer exists locally.
-                    let local_ref = format!("refs/heads/{}", branch);
-                    let local_still_exists = Command::new("git")
-                        .args(["show-ref", "--verify", "--quiet", &local_ref])
-                        .current_dir(workdir)
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(true);
+                    let local_still_exists = local_branch_exists(workdir, branch);
 
                     let metadata_deleted = if !local_still_exists {
                         let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
@@ -752,13 +747,7 @@ pub fn run(
                 };
 
                 // Only delete metadata if branch no longer exists locally.
-                let local_ref = format!("refs/heads/{}", branch);
-                let local_still_exists = Command::new("git")
-                    .args(["show-ref", "--verify", "--quiet", &local_ref])
-                    .current_dir(workdir)
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(true);
+                let local_still_exists = local_branch_exists(workdir, branch);
 
                 let metadata_deleted = if !local_still_exists {
                     let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
@@ -1120,35 +1109,9 @@ fn find_merged_branches(
         }
     }
 
-    // Method 3: Patch-id provenance check — detects squash/rebase merges even
-    // when trunk has advanced past the merge point (where a simple tree diff
-    // would show false negatives).
-    for (branch, _) in &stack.branches {
-        if branch == &stack.trunk || merged.contains(branch) {
-            continue;
-        }
-        if repo
-            .is_branch_merged_equivalent_to_trunk(branch)
-            .unwrap_or(false)
-        {
-            merged.push(branch.clone());
-        }
-    }
-
-    // Method 4: Check if remote branch was deleted (GitHub deletes branch after merge)
-    // Get list of remote branches
-    let remote_output = Command::new("git")
-        .args(["branch", "-r", "--format=%(refname:short)"])
-        .current_dir(workdir)
-        .output()
-        .context("Failed to list remote branches")?;
-
-    let remote_branches: std::collections::HashSet<String> =
-        String::from_utf8_lossy(&remote_output.stdout)
-            .lines()
-            .map(|s| s.trim().to_string())
-            .collect();
-
+    // Method 4: Check if the tracked remote branch was deleted (GitHub deletes
+    // branch after merge). This is cheaper and more robust than enumerating the
+    // entire remote ref namespace in very large repos.
     for (branch, info) in &stack.branches {
         // Skip trunk
         if branch == &stack.trunk {
@@ -1167,8 +1130,7 @@ fn find_merged_branches(
         }
 
         // Check if remote branch was deleted (strong signal it was merged)
-        let remote_ref = format!("{}/{}", remote_name, branch);
-        if !remote_branches.contains(&remote_ref) {
+        if !remote_branch_exists(workdir, remote_name, branch) {
             // Remote branch doesn't exist and had a PR - likely merged and deleted
             merged.push(branch.clone());
         }
@@ -1197,11 +1159,26 @@ fn find_merged_branches(
         }
 
         let local_exists = local_branches.contains(branch);
-        let remote_ref = format!("{}/{}", remote_name, branch);
-        let remote_exists = remote_branches.contains(&remote_ref);
+        let remote_exists = remote_branch_exists(workdir, remote_name, branch);
 
         // If branch doesn't exist locally AND doesn't exist remotely, it's orphaned
         if !local_exists && !remote_exists {
+            merged.push(branch.clone());
+        }
+    }
+
+    // Method 3: Patch-id provenance check — detects squash/rebase merges even
+    // when trunk has advanced past the merge point (where a simple tree diff
+    // would show false negatives). Run this last so cheaper signals resolve
+    // most cases before the provenance path touches more refs.
+    for (branch, _) in &stack.branches {
+        if branch == &stack.trunk || merged.contains(branch) {
+            continue;
+        }
+        if repo
+            .is_branch_merged_equivalent_to_trunk(branch)
+            .unwrap_or(false)
+        {
             merged.push(branch.clone());
         }
     }
@@ -1245,6 +1222,16 @@ fn local_branch_exists(workdir: &std::path::Path, branch: &str) -> bool {
     let local_ref = format!("refs/heads/{}", branch);
     Command::new("git")
         .args(["show-ref", "--verify", "--quiet", &local_ref])
+        .current_dir(workdir)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn remote_branch_exists(workdir: &std::path::Path, remote_name: &str, branch: &str) -> bool {
+    let remote_ref = format!("refs/remotes/{}/{}", remote_name, branch);
+    Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &remote_ref])
         .current_dir(workdir)
         .status()
         .map(|s| s.success())

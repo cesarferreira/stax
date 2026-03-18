@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use git2::Repository;
+use std::path::Path;
 use std::process::Command;
 
 const METADATA_REF_PREFIX: &str = "refs/branch-metadata/";
@@ -164,7 +165,10 @@ pub fn write_prev_branch(repo: &Repository, branch: &str) -> Result<()> {
     let workdir = repo
         .workdir()
         .context("Repository has no working directory")?;
+    write_prev_branch_at(workdir, branch)
+}
 
+pub fn write_prev_branch_at(workdir: &Path, branch: &str) -> Result<()> {
     // Create blob with branch name
     let mut child = Command::new("git")
         .args(["hash-object", "-w", "--stdin"])

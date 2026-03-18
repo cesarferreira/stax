@@ -10,6 +10,31 @@ pub struct GitRepo {
     repo: Repository,
 }
 
+pub fn checkout_branch_in(workdir: &Path, branch: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["checkout", branch])
+        .current_dir(workdir)
+        .output()
+        .with_context(|| format!("Failed to run git checkout {}", branch))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!("git checkout {} failed: {}", branch, stderr);
+    }
+
+    Ok(())
+}
+
+pub fn local_branch_exists_in(workdir: &Path, branch: &str) -> bool {
+    let local_ref = format!("refs/heads/{}", branch);
+    Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &local_ref])
+        .current_dir(workdir)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 #[derive(Debug, Clone)]
 pub struct WorktreeInfo {
     /// Short display name: "main" for the main worktree, last path segment for others
