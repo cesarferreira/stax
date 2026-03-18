@@ -220,6 +220,33 @@ fn test_restack_with_parent_changes() {
     output.assert_success();
 }
 
+#[test]
+fn test_restack_auto_stash_pop_restores_dirty_current_worktree() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["a", "b", "c"]);
+
+    repo.run_stax(&["t"]);
+    repo.create_file("main-update.txt", "main update");
+    repo.commit("Main update");
+
+    repo.run_stax(&["checkout", &branches[2]]);
+    repo.create_file("dirty.txt", "committed content\n");
+    repo.commit("Add dirty file");
+    repo.create_file("dirty.txt", "committed content\nlocal change\n");
+
+    let output = repo.run_stax(&["restack", "--auto-stash-pop"]);
+    output.assert_success();
+
+    let status = repo.git(&["status", "--porcelain"]);
+    assert!(status.status.success(), "git status should succeed");
+    let stdout = TestRepo::stdout(&status);
+    assert!(
+        stdout.contains("dirty.txt"),
+        "Expected dirty current worktree changes to be restored, got:\n{}",
+        stdout
+    );
+}
+
 // =============================================================================
 // Status Command Tests
 // =============================================================================
