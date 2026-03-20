@@ -299,7 +299,7 @@ enum Commands {
         #[arg(long)]
         auto_stash_pop: bool,
         /// After restack, submit stack updates (`ask`, `yes`, `no`)
-        #[arg(long, value_enum, default_value_t = RestackSubmitAfter::Ask)]
+        #[arg(long, value_enum, default_value_t = RestackSubmitAfter::No)]
         submit_after: RestackSubmitAfter,
     },
 
@@ -1323,7 +1323,7 @@ pub fn run() -> Result<()> {
             parent,
             child,
         } => commands::checkout::run(branch, trunk, parent, child),
-        Commands::Continue => commands::continue_cmd::run(),
+        Commands::Continue => commands::continue_cmd::run_and_resume_restack(),
         Commands::Resolve {
             agent,
             model,
@@ -1653,7 +1653,7 @@ fn print_worktree_help() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_launch_worktree_dashboard, Cli, Commands};
+    use super::{should_launch_worktree_dashboard, Cli, Commands, RestackSubmitAfter};
     use clap::Parser;
 
     #[test]
@@ -1678,6 +1678,18 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Worktree { command: Some(_) })
+        ));
+    }
+
+    #[test]
+    fn restack_defaults_to_not_submitting_after_success() {
+        let cli = Cli::try_parse_from(["stax", "restack"]).expect("parse restack");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Restack {
+                submit_after: RestackSubmitAfter::No,
+                ..
+            })
         ));
     }
 }

@@ -920,6 +920,7 @@ pub fn run(
             };
             tx::print_plan(tx.kind(), &summary, quiet);
             tx.set_plan_summary(summary);
+            tx.set_auto_stash_pop(auto_stash_pop);
             tx.snapshot()?;
 
             let mut summary: Vec<(String, String)> = Vec::new();

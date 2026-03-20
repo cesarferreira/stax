@@ -75,6 +75,7 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
     };
     tx::print_plan(tx.kind(), &summary, false);
     tx.set_plan_summary(summary);
+    tx.set_auto_stash_pop(auto_stash_pop);
     tx.snapshot()?;
 
     let mut completed_branches = Vec::new();
