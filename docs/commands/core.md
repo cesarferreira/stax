@@ -11,7 +11,7 @@
 | `st merge --when-ready` | Merge in explicit wait-for-ready mode (legacy alias: `st merge-when-ready`) |
 | `st rs` | Pull trunk and clean merged branches (no rebasing) |
 | `st rs --restack` | Pull trunk, clean merged branches, **then** rebase current stack |
-| `st restack` | Rebase current stack onto parents (local only, no fetch/delete) |
+| `st restack` | Rebase current stack onto parents (local only, no fetch/delete; `--stop-here` skips descendants) |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
 | `st cascade` | Restack, push, and create/update PRs |
 | `st init` | Initialize stax or reconfigure the repo trunk |

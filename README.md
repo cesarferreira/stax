@@ -136,7 +136,7 @@ Next steps:
 | `st merge --when-ready` | Wait/poll until mergeable, then merge |
 | `st rs` | Sync trunk and clean merged branches (no rebasing) |
 | `st rs --restack` | Sync trunk, clean merged branches, then rebase stack |
-| `st restack` | Rebase current stack onto parents (local only) |
+| `st restack` | Rebase current stack onto parents locally (`--stop-here` skips descendants) |
 | `st cascade` | Restack, push, and create/update PRs |
 | `st undo` / `st redo` | Recover or re-apply risky operations |
 | `st standup` | Summarize recent engineering activity |

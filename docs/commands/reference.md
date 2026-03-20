@@ -13,7 +13,7 @@
 | `st sync` | `rs` | Pull trunk from remote, detect and delete merged branches (incl. squash merges), reparent their children — **no rebasing** |
 | `st sync --restack` | `rs --restack` | Everything `sync` does, **then** rebase the current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
-| `st restack` | | Rebase current stack onto parents (local only, no fetch/delete) — auto-normalizes missing or merged parents before rebasing |
+| `st restack` | | Rebase current stack onto parents (local only, no fetch/delete) — auto-normalizes missing or merged parents before rebasing; `--stop-here` limits scope to ancestors + current |
 | `st cascade` | | Restack from bottom and submit updates |
 | `st diff` | | Show per-branch diffs vs parent |
 | `st range-diff` | | Show range-diff for branches needing restack |
@@ -175,6 +175,7 @@ Worktree launch examples:
 - `st sync --quiet`
 - `st sync --verbose`
 - `st restack --all --continue --quiet`
+- `st restack --stop-here`
 - `st restack --submit-after ask|yes|no`
 - `st resolve --agent codex --model gpt-5.3-codex --max-rounds 5`
 - `st cascade --no-pr`

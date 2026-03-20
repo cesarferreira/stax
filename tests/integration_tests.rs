@@ -1553,6 +1553,70 @@ fn test_restack_all_flag() {
 }
 
 #[test]
+fn test_restack_stop_here_skips_descendants() {
+    let repo = TestRepo::new();
+
+    // main -> feature-1 -> feature-2 -> feature-3
+    repo.run_stax(&["bc", "feature-1"]);
+    repo.create_file("f1.txt", "content");
+    repo.commit("Feature 1");
+
+    repo.run_stax(&["bc", "feature-2"]);
+    repo.create_file("f2.txt", "content");
+    repo.commit("Feature 2");
+    let feature_2 = repo.current_branch();
+
+    repo.run_stax(&["bc", "feature-3"]);
+    repo.create_file("f3.txt", "content");
+    repo.commit("Feature 3");
+    let feature_3 = repo.current_branch();
+
+    // Move trunk so restacking from the middle will restack ancestors/current.
+    repo.run_stax(&["t"]);
+    repo.create_file("main.txt", "main");
+    repo.commit("Main update");
+
+    repo.run_stax(&["checkout", &feature_2]);
+    let feature_3_before = repo.get_commit_sha(&feature_3);
+
+    let output = repo.run_stax(&["restack", "--stop-here", "--quiet"]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let feature_3_after = repo.get_commit_sha(&feature_3);
+    assert_eq!(
+        feature_3_before, feature_3_after,
+        "Expected descendant branch to remain untouched by restack --stop-here"
+    );
+
+    let status_output = repo.run_stax(&["status", "--json"]);
+    assert!(
+        status_output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&status_output)
+    );
+    let status_json: Value =
+        serde_json::from_str(&TestRepo::stdout(&status_output)).expect("Invalid JSON");
+    let branches = status_json["branches"]
+        .as_array()
+        .expect("Expected branches array");
+    let feature_2_entry = branches
+        .iter()
+        .find(|b| b["name"].as_str().unwrap_or("") == feature_2.as_str())
+        .expect("Expected feature-2 in status");
+    let feature_3_entry = branches
+        .iter()
+        .find(|b| b["name"].as_str().unwrap_or("") == feature_3.as_str())
+        .expect("Expected feature-3 in status");
+
+    assert_eq!(feature_2_entry["needs_restack"], Value::Bool(false));
+    assert_eq!(feature_3_entry["needs_restack"], Value::Bool(true));
+}
+
+#[test]
 fn test_restack_conflict_reports_branch_progress_and_files() {
     let repo = TestRepo::new();
     let (parent, child) = repo.create_restack_progress_conflict_scenario();

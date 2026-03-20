@@ -165,6 +165,15 @@ fn test_restack_quiet_flag() {
 }
 
 #[test]
+fn test_restack_stop_here_flag() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature-a", "feature-b"]);
+
+    let output = repo.run_stax(&["restack", "--stop-here", "--quiet"]);
+    output.assert_success();
+}
+
+#[test]
 fn test_restack_submit_after_no_flag() {
     let repo = TestRepo::new();
     repo.create_stack(&["feature"]);

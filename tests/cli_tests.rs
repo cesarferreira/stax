@@ -321,6 +321,7 @@ fn test_restack_help_flags() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("continue"));
+    assert!(stdout.contains("stop-here"));
     assert!(stdout.contains("quiet"));
     assert!(stdout.contains("stop-here"));
     assert!(stdout.contains("submit-after"));

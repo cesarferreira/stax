@@ -283,7 +283,7 @@ enum Commands {
         /// Restack all branches in the stack
         #[arg(short, long)]
         all: bool,
-        /// Restack only up to the current branch, excluding descendants
+        /// Restack ancestors + current only (skip descendants)
         #[arg(long, conflicts_with = "all")]
         stop_here: bool,
         /// Continue after resolving conflicts
@@ -1692,7 +1692,21 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Commands::Restack {
+                stop_here: false,
                 submit_after: RestackSubmitAfter::No,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn restack_parses_stop_here_flag() {
+        let cli = Cli::try_parse_from(["stax", "restack", "--stop-here"])
+            .expect("parse restack --stop-here");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Restack {
+                stop_here: true,
                 ..
             })
         ));
