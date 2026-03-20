@@ -396,11 +396,13 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> R
     let workdir = repo.workdir()?;
 
     // Only check stax-tracked branches (not all local branches) for merge status.
+    // Also exclude the currently checked-out branch — we never offer to delete it.
     let stack = Stack::load(repo)?;
+    let current = repo.current_branch()?;
     let tracked: Vec<String> = stack
         .branches
         .keys()
-        .filter(|b| *b != &stack.trunk)
+        .filter(|b| *b != &stack.trunk && *b != &current)
         .cloned()
         .collect();
 
