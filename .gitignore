@@ -7,3 +7,4 @@ Cargo.lock
 /.test-tmp
 /.docker-cache
 .worktrees/
+.claude

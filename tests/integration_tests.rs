@@ -1525,6 +1525,102 @@ fn test_restack_cleanup_reparents_children_before_deleting_merged_parent() {
 }
 
 #[test]
+fn test_restack_cleanup_only_considers_stax_tracked_branches() {
+    let repo = TestRepo::new();
+
+    // Create a stax-tracked branch that needs restack (so cleanup path runs).
+    repo.run_stax(&["bc", "tracked-branch"]);
+    repo.create_file("tracked.txt", "tracked");
+    repo.commit("Tracked commit");
+
+    // Create an untracked local branch manually (not via stax) and merge it into main.
+    repo.git(&["checkout", "main"]);
+    repo.git(&["checkout", "-b", "untracked-merged"]);
+    repo.create_file("untracked.txt", "untracked");
+    repo.git(&["add", "."]);
+    repo.git(&["commit", "-m", "Untracked commit"]);
+    repo.git(&["checkout", "main"]);
+    repo.git(&[
+        "merge",
+        "--no-ff",
+        "untracked-merged",
+        "-m",
+        "Merge untracked",
+    ]);
+
+    // Make tracked-branch need restack by advancing main.
+    repo.create_file("main-update.txt", "main update");
+    repo.commit("Main update");
+    repo.run_stax(&["checkout", "tracked-branch"]);
+
+    let output = repo.run_stax(&["restack", "--yes"]);
+    assert!(
+        output.status.success(),
+        "restack failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == "untracked-merged"),
+        "Cleanup should not touch branches that are not tracked by stax"
+    );
+}
+
+#[test]
+fn test_restack_cleanup_excludes_checked_out_branch() {
+    let repo = TestRepo::new();
+
+    // Stack: main -> merged-branch -> child-branch
+    repo.run_stax(&["bc", "merged-branch"]);
+    repo.create_file("merged.txt", "merged");
+    repo.commit("Merged commit");
+
+    repo.run_stax(&["bc", "child-branch"]);
+    repo.create_file("child.txt", "child");
+    repo.commit("Child commit");
+
+    // Merge merged-branch into main so cleanup will consider it.
+    repo.run_stax(&["t"]);
+    repo.git(&[
+        "merge",
+        "--no-ff",
+        "merged-branch",
+        "-m",
+        "Merge merged-branch",
+    ]);
+
+    // Create another branch that needs restack so cleanup path runs.
+    repo.run_stax(&["bc", "trigger-branch"]);
+    repo.create_file("trigger.txt", "trigger");
+    repo.commit("Trigger commit");
+
+    // Advance main so trigger-branch needs restack.
+    repo.run_stax(&["t"]);
+    repo.create_file("main-update.txt", "main update");
+    repo.commit("Main update");
+
+    // Checkout the merged branch — it should be excluded from cleanup.
+    repo.run_stax(&["checkout", "merged-branch"]);
+    assert_eq!(repo.current_branch(), "merged-branch");
+
+    let output = repo.run_stax(&["restack", "--yes"]);
+    assert!(
+        output.status.success(),
+        "restack failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == "merged-branch"),
+        "Cleanup should not delete the currently checked-out branch even if it is merged"
+    );
+}
+
+#[test]
 fn test_restack_all_flag() {
     let repo = TestRepo::new();
 
