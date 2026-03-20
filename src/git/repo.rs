@@ -10,6 +10,17 @@ pub struct GitRepo {
     repo: Repository,
 }
 
+fn normalize_local_branch_name(branch: &str) -> &str {
+    branch.strip_prefix("refs/heads/").unwrap_or(branch)
+}
+
+fn parse_branch_vv_worktree_path(line: &str) -> Option<PathBuf> {
+    let start = line.find(" (")?;
+    let rest = &line[start + 2..];
+    let end = rest.find(')')?;
+    Some(PathBuf::from(&rest[..end]))
+}
+
 pub fn checkout_branch_in(workdir: &Path, branch: &str) -> Result<()> {
     let output = Command::new("git")
         .args(["checkout", branch])
@@ -414,13 +425,64 @@ impl GitRepo {
         Ok(())
     }
 
-    pub fn branch_worktree_path(&self, branch: &str) -> Result<Option<PathBuf>> {
-        for worktree in self.list_worktrees()? {
-            if worktree.branch.as_deref() == Some(branch) {
-                return Ok(Some(worktree.path));
+    pub fn branch_worktree(&self, branch: &str) -> Result<Option<WorktreeInfo>> {
+        let branch = normalize_local_branch_name(branch);
+        let worktrees = self.list_worktrees()?;
+
+        let output = self.run_git(self.workdir()?, &["branch", "-vv", "--list", branch])?;
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(path) = stdout.lines().find_map(parse_branch_vv_worktree_path) {
+                let normalized_path = Self::normalize_path(&path);
+                if let Some(worktree) = worktrees
+                    .iter()
+                    .find(|worktree| worktree.path == normalized_path)
+                {
+                    return Ok(Some(worktree.clone()));
+                }
             }
         }
-        Ok(None)
+
+        Ok(worktrees.into_iter().find(|worktree| {
+            worktree.branch.as_deref().map(normalize_local_branch_name) == Some(branch)
+        }))
+    }
+
+    pub fn branch_worktree_path(&self, branch: &str) -> Result<Option<PathBuf>> {
+        Ok(self.branch_worktree(branch)?.map(|worktree| worktree.path))
+    }
+
+    pub fn branch_delete_resolution_hint(&self, branch: &str) -> Result<Option<String>> {
+        let branch = normalize_local_branch_name(branch);
+        let Some(worktree) = self.branch_worktree(branch)? else {
+            return Ok(None);
+        };
+
+        let switch_target = self.trunk_branch().unwrap_or_else(|_| "main".to_string());
+        let switch_cmd = format!(
+            "git -C '{}' switch {}",
+            worktree.path.display(),
+            switch_target
+        );
+
+        let hint = if worktree.is_main {
+            format!(
+                "switch worktree '{}' at '{}' to another branch first, for example: {}",
+                worktree.name,
+                worktree.path.display(),
+                switch_cmd
+            )
+        } else {
+            format!(
+                "remove it with: st wt rm {}; or switch worktree '{}' at '{}' to another branch first, for example: {}",
+                worktree.name,
+                worktree.name,
+                worktree.path.display(),
+                switch_cmd
+            )
+        };
+
+        Ok(Some(hint))
     }
 
     /// Get the current branch name
@@ -1027,6 +1089,15 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Delete a branch
     pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
+        let name = normalize_local_branch_name(name);
+        if let Some(hint) = self.branch_delete_resolution_hint(name)? {
+            anyhow::bail!(
+                "Cannot delete branch '{}' because it is currently checked out in a linked worktree. To fix it, {}.",
+                name,
+                hint
+            );
+        }
+
         let mut branch = self.repo.find_branch(name, BranchType::Local)?;
         if force {
             branch.delete()?;

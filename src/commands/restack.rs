@@ -434,7 +434,7 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> R
         format!("Found {} merged {}:", merged.len(), branch_word).dimmed()
     );
     for branch in &merged {
-        println!("  {} {}", "▸".bright_black(), branch);
+        println!("  {} {}", "▸".bright_black(), branch.yellow());
     }
     println!();
 
@@ -569,6 +569,13 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> R
                 )
                 .dimmed()
             );
+            if let Ok(Some(hint)) = repo.branch_delete_resolution_hint(branch) {
+                println!(
+                    "  {} {}",
+                    "↷".yellow(),
+                    format!("To remove it, {}", hint).dimmed()
+                );
+            }
             println!(
                 "  {} {}",
                 "↷".yellow(),

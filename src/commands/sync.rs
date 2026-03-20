@@ -607,6 +607,13 @@ pub fn run(
                                     "not deleted locally (checked out in another worktree)"
                                         .yellow()
                                 );
+                                if let Ok(Some(hint)) = repo.branch_delete_resolution_hint(branch) {
+                                    println!(
+                                        "    {} {}",
+                                        "↷".yellow(),
+                                        format!("To remove it, {}", hint).dimmed()
+                                    );
+                                }
                             } else {
                                 println!("    {} {}", branch.bright_black(), "skipped".dimmed());
                             }
@@ -774,6 +781,13 @@ pub fn run(
                             branch.bright_black(),
                             "not deleted locally (checked out in another worktree)".yellow()
                         );
+                        if let Ok(Some(hint)) = repo.branch_delete_resolution_hint(branch) {
+                            println!(
+                                "    {} {}",
+                                "↷".yellow(),
+                                format!("To remove it, {}", hint).dimmed()
+                            );
+                        }
                     } else {
                         println!("    {} {}", branch.bright_black(), "skipped".dimmed());
                     }
