@@ -13,7 +13,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Build binaries for each target
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -29,7 +28,7 @@ jobs:
             os: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -56,14 +55,13 @@ jobs:
           name: stax-${{ matrix.target }}
           path: stax-${{ matrix.target }}.tar.gz
 
-  # Create release and update Homebrew
   release:
     name: Release
     needs: build
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -88,27 +86,30 @@ jobs:
           echo "LINUX_SHA=$(sha256sum stax-x86_64-unknown-linux-gnu.tar.gz | cut -d' ' -f1)" >> $GITHUB_ENV
 
       - name: Checkout Homebrew tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: cesarferreira/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
       - name: Update formula
+        env:
+          VERSION: ${{ github.ref_name }}
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          CLEAN_VERSION=${VERSION#v}
           FORMULA=tap/Formula/stax.rb
 
-          sed -i "s/version \".*\"/version \"$VERSION\"/" $FORMULA
-          sed -i "s|releases/download/v[^/]*/stax-|releases/download/v$VERSION/stax-|g" $FORMULA
+          sed -i "s/version \".*\"/version \"$CLEAN_VERSION\"/" $FORMULA
+          sed -i "s|releases/download/v[^/]*/stax-|releases/download/$VERSION/stax-|g" $FORMULA
           sed -i "s/sha256 \"[a-f0-9]\{64\}\"/sha256 \"PLACEHOLDER\"/g" $FORMULA
           
-          # Now replace with actual SHAs in order
           sed -i "0,/PLACEHOLDER/s/PLACEHOLDER/$ARM_SHA/" $FORMULA
           sed -i "0,/PLACEHOLDER/s/PLACEHOLDER/$INTEL_SHA/" $FORMULA
           sed -i "0,/PLACEHOLDER/s/PLACEHOLDER/$LINUX_SHA/" $FORMULA
 
       - name: Commit and push tap
+        env:
+          VERSION: ${{ github.ref_name }}
         run: |
           cd tap
           git config user.name "github-actions[bot]"
@@ -116,6 +117,3 @@ jobs:
           git add Formula/stax.rb
           git commit -m "stax $VERSION"
           git push
-        env:
-          VERSION: ${{ github.ref_name }}
-
