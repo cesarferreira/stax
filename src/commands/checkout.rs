@@ -102,15 +102,16 @@ pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usiz
                 let items: Vec<String> = rows.iter().map(|r| r.display.clone()).collect();
                 let branch_names: Vec<String> = rows.iter().map(|r| r.branch.clone()).collect();
 
-                let mut theme = ColorfulTheme::default();
-                theme.active_item_style =
-                    console::Style::new().for_stderr().black().on_white().bold();
-                theme.active_item_prefix = console::style("▶".to_string())
-                    .for_stderr()
-                    .black()
-                    .on_white()
-                    .bold();
-                theme.inactive_item_prefix = console::style(" ".to_string()).for_stderr();
+                let theme = ColorfulTheme {
+                    active_item_style: console::Style::new().for_stderr().black().on_white().bold(),
+                    active_item_prefix: console::style("▶".to_string())
+                        .for_stderr()
+                        .black()
+                        .on_white()
+                        .bold(),
+                    inactive_item_prefix: console::style(" ".to_string()).for_stderr(),
+                    ..ColorfulTheme::default()
+                };
 
                 let term = console::Term::stderr();
                 if term.is_term() {

@@ -70,6 +70,20 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
         }
     }
 
+    // CI status
+    if let Some(ci) = &branch.ci_state {
+        let (label, color) = match ci.as_str() {
+            "success" => ("passing", Color::Green),
+            "failure" | "error" => ("failing", Color::Red),
+            "pending" => ("pending", Color::Yellow),
+            other => (other, Color::DarkGray),
+        };
+        lines.push(Line::from(vec![
+            Span::styled("CI: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(label.to_string(), Style::default().fg(color)),
+        ]));
+    }
+
     // Remote status (vs origin)
     if branch.has_remote {
         let mut remote_parts = Vec::new();

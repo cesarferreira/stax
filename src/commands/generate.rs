@@ -9,7 +9,6 @@ use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm, Editor, Select};
 use regex::Regex;
 use serde::Deserialize;
-use std::io::IsTerminal;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -356,9 +355,7 @@ pub(crate) fn prompt_for_agent_and_model(
     let available = detect_available_agents();
 
     match available.len() {
-        0 => {
-            return auto_detect_agent(&available).map(|agent| (agent, None));
-        }
+        0 => auto_detect_agent(&available).map(|agent| (agent, None)),
         1 => {
             let agent = available[0].clone();
             println!(

@@ -145,9 +145,9 @@ pub fn run(
         let from_branch = base_branch
             .as_deref()
             .expect("base branch is always set for a new branch");
-        repo.worktree_create_new_branch(&branch_name, &worktree_path, &from_branch)?;
-        let parent_rev = repo.branch_commit(&from_branch)?;
-        let meta = BranchMetadata::new(&from_branch, &parent_rev);
+        repo.worktree_create_new_branch(&branch_name, &worktree_path, from_branch)?;
+        let parent_rev = repo.branch_commit(from_branch)?;
+        let meta = BranchMetadata::new(from_branch, &parent_rev);
         meta.write(repo.inner(), &branch_name)?;
     }
 

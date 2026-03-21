@@ -14,7 +14,7 @@ const TITLE_MIN_WIDTH: usize = 24;
 const BRANCH_MIN_WIDTH: usize = 18;
 const BRANCH_MAX_WIDTH: usize = 36;
 
-/// Open the PR for the current branch in the default browser.
+#[allow(dead_code)]
 pub fn run() -> Result<()> {
     run_open()
 }

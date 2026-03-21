@@ -24,7 +24,7 @@ pub fn render_worktrees(f: &mut Frame, app: &App, area: Rect) {
             let branch_short = worktree
                 .branch
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or(&worktree.branch)
                 .to_string();
 

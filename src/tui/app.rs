@@ -55,6 +55,7 @@ pub struct BranchDisplay {
     pub pr_number: Option<u64>,
     pub pr_state: Option<String>,
     pub pr_url: Option<String>,
+    pub ci_state: Option<String>,
     pub commits: Vec<String>,
 }
 
@@ -143,7 +144,6 @@ pub struct WorktreeDisplay {
 /// Main application state
 pub struct App {
     pub stack: Stack,
-    #[allow(dead_code)] // Reserved for future CI status display
     pub cache: CiCache,
     pub repo: GitRepo,
     pub remote_info: Option<RemoteInfo>,
@@ -363,6 +363,8 @@ impl App {
             Vec::new()
         };
 
+        let ci_state = self.cache.get_ci_state(branch);
+
         Ok(BranchDisplay {
             name: branch.to_string(),
             parent,
@@ -378,6 +380,7 @@ impl App {
             pr_number,
             pr_state,
             pr_url,
+            ci_state,
             commits,
         })
     }

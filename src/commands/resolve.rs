@@ -92,7 +92,7 @@ fn resolve_agent_and_model(
 ) -> Result<(String, Option<String>)> {
     let config = Config::load()?;
     let agent = agent_flag
-        .or_else(|| config.ai.agent)
+        .or(config.ai.agent)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .context(

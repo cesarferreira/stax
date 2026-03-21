@@ -25,8 +25,8 @@ struct SubmitOptions {
     /// Skip git fetch and use cached remote-tracking refs
     #[arg(long = "no-fetch", action = clap::ArgAction::SetTrue)]
     no_fetch: bool,
-    /// Skip restack check and submit anyway
-    #[arg(short, long)]
+    /// Deprecated: kept for CLI compatibility (currently a no-op)
+    #[arg(short, long, hide = true)]
     force: bool,
     /// Auto-approve prompts
     #[arg(long)]

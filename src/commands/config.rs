@@ -27,7 +27,7 @@ pub fn run(reset_ai: bool, no_prompt: bool, yes: bool) -> Result<()> {
 
     println!();
     println!("{}", "Submit stack links setting:".blue().bold());
-    println!("  {}", r#"[submit]"#);
+    println!("  [submit]");
     println!(r#"  stack_links = "comment"  # "comment" | "body" | "both" | "off""#);
     println!(r#"  # Example: stack_links = "body""#);
 

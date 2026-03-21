@@ -19,6 +19,7 @@ pub enum SubmitAfterRestack {
     No,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     all: bool,
     stop_here: bool,
@@ -71,6 +72,7 @@ pub(crate) fn resume_after_rebase(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_impl(
     repo: &GitRepo,
     all: bool,
@@ -442,11 +444,7 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> R
         true
     } else {
         Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(format!(
-                "Delete {} merged {}?",
-                merged.len(),
-                branch_word
-            ))
+            .with_prompt(format!("Delete {} merged {}?", merged.len(), branch_word))
             .default(true)
             .interact()?
     };

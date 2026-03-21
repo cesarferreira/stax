@@ -92,6 +92,20 @@ pub fn render_stack_tree(f: &mut Frame, app: &App, area: Rect) {
                 ));
             }
 
+            // CI status from cache
+            if let Some(ci) = &branch.ci_state {
+                let (icon, color) = match ci.as_str() {
+                    "success" => ("●", Color::Green),
+                    "failure" | "error" => ("●", Color::Red),
+                    "pending" => ("●", Color::Yellow),
+                    _ => ("●", Color::DarkGray),
+                };
+                status_spans.push(Span::styled(
+                    format!(" {}", icon),
+                    Style::default().fg(color),
+                ));
+            }
+
             // Build the line with styling
             let branch_style = if branch.is_current {
                 Style::default()
