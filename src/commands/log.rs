@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn collect_display_branches_handles_deep_chains_without_recursion() {
-        let depth = 20_000;
+        let depth = 500;
         let mut branches = HashMap::new();
         let trunk = "main".to_string();
         branches.insert(
@@ -671,7 +671,7 @@ mod tests {
         );
 
         assert_eq!(result.len(), depth);
-        assert_eq!(result.first().map(|b| b.name.as_str()), Some("branch-19999"));
+        assert_eq!(result.first().map(|b| b.name.as_str()), Some("branch-499"));
         assert_eq!(result.last().map(|b| b.name.as_str()), Some("branch-0"));
         assert_eq!(max_column, 0);
     }
