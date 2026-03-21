@@ -387,33 +387,73 @@ fn branches_needing_restack(stack: &Stack, scope: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Check for merged branches and prompt to delete each one
+/// Check for merged branches and prompt to delete them
 fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> Result<()> {
     if quiet {
         return Ok(());
     }
 
     let workdir = repo.workdir()?;
-    let merged = repo.merged_branches()?;
+
+    // Only check stax-tracked branches (not all local branches) for merge status.
+    // Also exclude the currently checked-out branch — we never offer to delete it.
+    let stack = Stack::load(repo)?;
+    let current = repo.current_branch()?;
+    let tracked: Vec<String> = stack
+        .branches
+        .keys()
+        .filter(|b| *b != &stack.trunk && *b != &current)
+        .cloned()
+        .collect();
+
+    let timer = LiveTimer::maybe_new(!quiet, "Checking for merged branches...");
+    let mut merged = Vec::new();
+    for branch in &tracked {
+        if repo
+            .is_branch_merged_equivalent_to_trunk(branch)
+            .unwrap_or(false)
+        {
+            merged.push(branch.clone());
+        }
+    }
+    LiveTimer::maybe_finish_timed(timer);
 
     if merged.is_empty() {
         return Ok(());
     }
 
+    let branch_word = if merged.len() == 1 {
+        "branch"
+    } else {
+        "branches"
+    };
+
     println!();
     println!(
         "{}",
-        format!(
-            "Found {} merged {}:",
-            merged.len(),
-            if merged.len() == 1 {
-                "branch"
-            } else {
-                "branches"
-            }
-        )
-        .dimmed()
+        format!("Found {} merged {}:", merged.len(), branch_word).dimmed()
     );
+    for branch in &merged {
+        println!("  {} {}", "▸".bright_black(), branch);
+    }
+    println!();
+
+    let confirm = if auto_confirm {
+        true
+    } else {
+        Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt(format!(
+                "Delete {} merged {}?",
+                merged.len(),
+                branch_word
+            ))
+            .default(true)
+            .interact()?
+    };
+
+    if !confirm {
+        return Ok(());
+    }
 
     for branch in &merged {
         let live_stack = Stack::load(repo)?;
@@ -432,138 +472,121 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> R
             recorded_parent_branch.clone()
         };
 
-        let confirm = if auto_confirm {
-            true
+        let children: Vec<String> = live_stack
+            .branches
+            .iter()
+            .filter(|(_, info)| info.parent.as_deref() == Some(branch.as_str()))
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        if !children.is_empty() && repo.branch_commit(&parent_branch).is_err() {
+            println!(
+                "  {} {}",
+                "⚠".yellow(),
+                format!(
+                    "Skipped deleting {}: couldn't resolve local fallback parent '{}'.",
+                    branch, parent_branch
+                )
+                .dimmed()
+            );
+            continue;
+        }
+
+        let merged_branch_tip = repo.branch_commit(branch).ok();
+        for child in &children {
+            if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
+                let old_parent_boundary = merged_branch_tip
+                    .clone()
+                    .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
+                let updated_meta = BranchMetadata {
+                    parent_branch_name: parent_branch.clone(),
+                    parent_branch_revision: old_parent_boundary,
+                    ..child_meta
+                };
+                updated_meta.write(repo.inner(), child)?;
+                println!(
+                    "  {} {}",
+                    "↪".cyan(),
+                    format!("Reparented {} → {}", child, parent_branch).dimmed()
+                );
+            }
+        }
+
+        let branch_existed_before = local_branch_exists(workdir, branch);
+        let delete_output = if branch_existed_before {
+            Some(
+                Command::new("git")
+                    .args(["branch", "-D", branch])
+                    .current_dir(workdir)
+                    .output(),
+            )
         } else {
-            Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt(format!("Delete '{}'?", branch.yellow()))
-                .default(true)
-                .interact()?
+            None
         };
 
-        if confirm {
-            let children: Vec<String> = live_stack
-                .branches
-                .iter()
-                .filter(|(_, info)| info.parent.as_deref() == Some(branch))
-                .map(|(name, _)| name.clone())
-                .collect();
+        let (local_deleted, local_worktree_blocked) = match delete_output {
+            Some(Ok(out)) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                (out.status.success(), stderr.contains("used by worktree"))
+            }
+            Some(Err(_)) | None => (false, false),
+        };
 
-            if !children.is_empty() && repo.branch_commit(&parent_branch).is_err() {
+        let local_still_exists = local_branch_exists(workdir, branch);
+        let metadata_deleted = if !local_still_exists {
+            let _ = BranchMetadata::delete(repo.inner(), branch);
+            true
+        } else {
+            false
+        };
+
+        if local_deleted {
+            println!(
+                "  {} {}",
+                "✓".green(),
+                format!("Deleted {}", branch).dimmed()
+            );
+        } else if !branch_existed_before || !local_still_exists {
+            println!(
+                "  {} {}",
+                "✓".green(),
+                format!("{} already absent locally", branch).dimmed()
+            );
+            if metadata_deleted {
                 println!(
                     "  {} {}",
-                    "⚠".yellow(),
-                    format!(
-                        "Skipped deleting {}: couldn't resolve local fallback parent '{}'.",
-                        branch, parent_branch
-                    )
-                    .dimmed()
+                    "↷".cyan(),
+                    format!("Removed metadata for {}", branch).dimmed()
                 );
-                continue;
             }
-
-            let merged_branch_tip = repo.branch_commit(branch).ok();
-            for child in &children {
-                if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
-                    let old_parent_boundary = merged_branch_tip
-                        .clone()
-                        .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
-                    let updated_meta = BranchMetadata {
-                        parent_branch_name: parent_branch.clone(),
-                        parent_branch_revision: old_parent_boundary,
-                        ..child_meta
-                    };
-                    updated_meta.write(repo.inner(), child)?;
-                    println!(
-                        "  {} {}",
-                        "↪".cyan(),
-                        format!("Reparented {} → {}", child, parent_branch).dimmed()
-                    );
-                }
-            }
-
-            let branch_existed_before = local_branch_exists(workdir, branch);
-            let delete_output = if branch_existed_before {
-                Some(
-                    Command::new("git")
-                        .args(["branch", "-D", branch])
-                        .current_dir(workdir)
-                        .output(),
+        } else if local_worktree_blocked {
+            println!(
+                "  {} {}",
+                "⚠".yellow(),
+                format!(
+                    "Kept {}: branch is checked out in another worktree.",
+                    branch
                 )
-            } else {
-                None
-            };
-
-            let (local_deleted, local_worktree_blocked) = match delete_output {
-                Some(Ok(out)) => {
-                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                    (out.status.success(), stderr.contains("used by worktree"))
-                }
-                Some(Err(_)) | None => (false, false),
-            };
-
-            let local_still_exists = local_branch_exists(workdir, branch);
-            let metadata_deleted = if !local_still_exists {
-                let _ = BranchMetadata::delete(repo.inner(), branch);
-                true
-            } else {
-                false
-            };
-
-            if local_deleted {
-                println!(
-                    "  {} {}",
-                    "✓".green(),
-                    format!("Deleted {}", branch).dimmed()
-                );
-            } else if !branch_existed_before || !local_still_exists {
-                println!(
-                    "  {} {}",
-                    "✓".green(),
-                    format!("{} already absent locally", branch).dimmed()
-                );
-                if metadata_deleted {
-                    println!(
-                        "  {} {}",
-                        "↷".cyan(),
-                        format!("Removed metadata for {}", branch).dimmed()
-                    );
-                }
-            } else if local_worktree_blocked {
-                println!(
-                    "  {} {}",
-                    "⚠".yellow(),
-                    format!(
-                        "Kept {}: branch is checked out in another worktree.",
-                        branch
-                    )
-                    .dimmed()
-                );
-                println!(
-                    "  {} {}",
-                    "↷".yellow(),
-                    "Metadata kept because the local branch still exists.".dimmed()
-                );
-            } else {
-                println!(
-                    "  {} {}",
-                    "○".dimmed(),
-                    format!("Skipped {}", branch).dimmed()
-                );
-                if !metadata_deleted {
-                    println!(
-                        "  {} {}",
-                        "↷".yellow(),
-                        "Metadata kept because the local branch still exists.".dimmed()
-                    );
-                }
-            }
+                .dimmed()
+            );
+            println!(
+                "  {} {}",
+                "↷".yellow(),
+                "Metadata kept because the local branch still exists.".dimmed()
+            );
         } else {
             println!(
                 "  {} {}",
                 "○".dimmed(),
                 format!("Skipped {}", branch).dimmed()
             );
+            if !metadata_deleted {
+                println!(
+                    "  {} {}",
+                    "↷".yellow(),
+                    "Metadata kept because the local branch still exists.".dimmed()
+                );
+            }
         }
     }
 
