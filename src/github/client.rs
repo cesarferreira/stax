@@ -4,7 +4,7 @@ use octocrab::params::repos::Reference;
 use octocrab::service::middleware::retry::RetryConfig;
 use octocrab::Octocrab;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -84,6 +84,8 @@ struct CheckRunsResponse {
 
 #[derive(Debug, Deserialize)]
 struct CheckRun {
+    id: u64,
+    name: String,
     status: String,
     conclusion: Option<String>,
 }
@@ -297,12 +299,22 @@ impl GitHubClient {
             return Ok(None); // No check runs configured
         }
 
-        // Analyze all check runs to determine overall status
+        // Deduplicate check runs by name, keeping the latest (highest id) for each.
+        // GitHub returns all check runs including superseded ones from workflow re-runs.
+        let mut latest_by_name: HashMap<&str, &CheckRun> = HashMap::new();
+        for run in &response.check_runs {
+            let entry = latest_by_name.entry(&run.name).or_insert(run);
+            if run.id > entry.id {
+                *entry = run;
+            }
+        }
+
+        // Analyze deduplicated check runs to determine overall status
         let mut has_pending = false;
         let mut has_failure = false;
         let mut all_success = true;
 
-        for run in &response.check_runs {
+        for run in latest_by_name.values() {
             match run.status.as_str() {
                 "completed" => match run.conclusion.as_deref() {
                     Some("success") | Some("skipped") | Some("neutral") => {}
@@ -611,8 +623,8 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 2,
                 "check_runs": [
-                    {"status": "completed", "conclusion": "success"},
-                    {"status": "completed", "conclusion": "success"}
+                    {"id": 1, "name": "build", "status": "completed", "conclusion": "success"},
+                    {"id": 2, "name": "test", "status": "completed", "conclusion": "success"}
                 ]
             })))
             .mount(&mock_server)
@@ -634,9 +646,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 3,
                 "check_runs": [
-                    {"status": "completed", "conclusion": "success"},
-                    {"status": "completed", "conclusion": "failure"},
-                    {"status": "completed", "conclusion": "success"}
+                    {"id": 1, "name": "build", "status": "completed", "conclusion": "success"},
+                    {"id": 2, "name": "lint", "status": "completed", "conclusion": "failure"},
+                    {"id": 3, "name": "test", "status": "completed", "conclusion": "success"}
                 ]
             })))
             .mount(&mock_server)
@@ -658,8 +670,8 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 2,
                 "check_runs": [
-                    {"status": "completed", "conclusion": "success"},
-                    {"status": "in_progress", "conclusion": null}
+                    {"id": 1, "name": "build", "status": "completed", "conclusion": "success"},
+                    {"id": 2, "name": "test", "status": "in_progress", "conclusion": null}
                 ]
             })))
             .mount(&mock_server)
@@ -681,7 +693,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 1,
                 "check_runs": [
-                    {"status": "queued", "conclusion": null}
+                    {"id": 1, "name": "build", "status": "queued", "conclusion": null}
                 ]
             })))
             .mount(&mock_server)
@@ -703,7 +715,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 1,
                 "check_runs": [
-                    {"status": "waiting", "conclusion": null}
+                    {"id": 1, "name": "build", "status": "waiting", "conclusion": null}
                 ]
             })))
             .mount(&mock_server)
@@ -745,9 +757,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 3,
                 "check_runs": [
-                    {"status": "completed", "conclusion": "success"},
-                    {"status": "completed", "conclusion": "skipped"},
-                    {"status": "completed", "conclusion": "neutral"}
+                    {"id": 1, "name": "build", "status": "completed", "conclusion": "success"},
+                    {"id": 2, "name": "release", "status": "completed", "conclusion": "skipped"},
+                    {"id": 3, "name": "deploy", "status": "completed", "conclusion": "neutral"}
                 ]
             })))
             .mount(&mock_server)
@@ -769,7 +781,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 1,
                 "check_runs": [
-                    {"status": "completed", "conclusion": "timed_out"}
+                    {"id": 1, "name": "build", "status": "completed", "conclusion": "timed_out"}
                 ]
             })))
             .mount(&mock_server)
@@ -791,7 +803,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 1,
                 "check_runs": [
-                    {"status": "completed", "conclusion": "cancelled"}
+                    {"id": 1, "name": "build", "status": "completed", "conclusion": "cancelled"}
                 ]
             })))
             .mount(&mock_server)
@@ -813,7 +825,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 1,
                 "check_runs": [
-                    {"status": "completed", "conclusion": "action_required"}
+                    {"id": 1, "name": "build", "status": "completed", "conclusion": "action_required"}
                 ]
             })))
             .mount(&mock_server)
@@ -835,7 +847,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 1,
                 "check_runs": [
-                    {"status": "completed", "conclusion": "unknown_state"}
+                    {"id": 1, "name": "build", "status": "completed", "conclusion": "unknown_state"}
                 ]
             })))
             .mount(&mock_server)
@@ -858,7 +870,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 1,
                 "check_runs": [
-                    {"status": "some_unknown_status", "conclusion": null}
+                    {"id": 1, "name": "build", "status": "some_unknown_status", "conclusion": null}
                 ]
             })))
             .mount(&mock_server)
@@ -881,7 +893,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 1,
                 "check_runs": [
-                    {"status": "requested", "conclusion": null}
+                    {"id": 1, "name": "build", "status": "requested", "conclusion": null}
                 ]
             })))
             .mount(&mock_server)
@@ -903,7 +915,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "total_count": 1,
                 "check_runs": [
-                    {"status": "pending", "conclusion": null}
+                    {"id": 1, "name": "build", "status": "pending", "conclusion": null}
                 ]
             })))
             .mount(&mock_server)
@@ -912,6 +924,31 @@ mod tests {
         let client = create_test_client(&mock_server).await;
         let status = client.get_check_runs_status("abc123").await.unwrap();
         assert_eq!(status, Some("pending".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_check_runs_rerun_supersedes_failure() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path(
+                "/repos/test-owner/test-repo/commits/abc123/check-runs",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total_count": 4,
+                "check_runs": [
+                    {"id": 100, "name": "lint", "status": "completed", "conclusion": "success"},
+                    {"id": 101, "name": "build", "status": "completed", "conclusion": "failure"},
+                    {"id": 102, "name": "test", "status": "completed", "conclusion": "success"},
+                    {"id": 200, "name": "build", "status": "completed", "conclusion": "success"}
+                ]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_check_runs_status("abc123").await.unwrap();
+        assert_eq!(status, Some("success".to_string()));
     }
 
     #[tokio::test]
@@ -935,8 +972,8 @@ mod tests {
         let json = r#"{
             "total_count": 2,
             "check_runs": [
-                {"status": "completed", "conclusion": "success"},
-                {"status": "in_progress", "conclusion": null}
+                {"id": 1, "name": "build", "status": "completed", "conclusion": "success"},
+                {"id": 2, "name": "test", "status": "in_progress", "conclusion": null}
             ]
         }"#;
 
@@ -954,7 +991,7 @@ mod tests {
 
     #[test]
     fn test_check_run_deserialization() {
-        let json = r#"{"status": "completed", "conclusion": "failure"}"#;
+        let json = r#"{"id": 1, "name": "build", "status": "completed", "conclusion": "failure"}"#;
         let check_run: CheckRun = serde_json::from_str(json).unwrap();
         assert_eq!(check_run.status, "completed");
         assert_eq!(check_run.conclusion, Some("failure".to_string()));
