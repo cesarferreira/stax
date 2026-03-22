@@ -4,6 +4,15 @@
 |---|---:|---:|---:|
 | `ls` (10-branch stack) | 24.2ms | 418.3ms | 217.4ms |
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#4CAF50'}}}%%
+xychart-beta
+    title "ls command – mean execution time (lower is better)"
+    x-axis ["stax", "graphite", "freephite"]
+    y-axis "Time (ms)" 0 --> 450
+    bar [24.2, 217.4, 418.3]
+```
+
 Raw `hyperfine` sample:
 
 ```text
