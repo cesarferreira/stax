@@ -1061,6 +1061,7 @@ fn find_merged_branches(
 ) -> Result<Vec<String>> {
     let mut merged = Vec::new();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
+    let remote_branches = repo.remote_branch_names(remote_name)?;
 
     // Method 1: git branch --merged (finds local branches merged into trunk)
     let output = Command::new("git")
@@ -1151,7 +1152,7 @@ fn find_merged_branches(
         }
 
         // Check if remote branch was deleted (strong signal it was merged)
-        if !remote_branch_exists(workdir, remote_name, branch) {
+        if !remote_branches.contains(branch.as_str()) {
             // Remote branch doesn't exist and had a PR - likely merged and deleted
             merged.push(branch.clone());
         }
@@ -1180,7 +1181,7 @@ fn find_merged_branches(
         }
 
         let local_exists = local_branches.contains(branch);
-        let remote_exists = remote_branch_exists(workdir, remote_name, branch);
+        let remote_exists = remote_branches.contains(branch.as_str());
 
         // If branch doesn't exist locally AND doesn't exist remotely, it's orphaned
         if !local_exists && !remote_exists {
@@ -1243,16 +1244,6 @@ fn local_branch_exists(workdir: &std::path::Path, branch: &str) -> bool {
     let local_ref = format!("refs/heads/{}", branch);
     Command::new("git")
         .args(["show-ref", "--verify", "--quiet", &local_ref])
-        .current_dir(workdir)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn remote_branch_exists(workdir: &std::path::Path, remote_name: &str, branch: &str) -> bool {
-    let remote_ref = format!("refs/remotes/{}/{}", remote_name, branch);
-    Command::new("git")
-        .args(["show-ref", "--verify", "--quiet", &remote_ref])
         .current_dir(workdir)
         .status()
         .map(|s| s.success())

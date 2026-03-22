@@ -1332,6 +1332,25 @@ Use --auto-stash-pop or stash/commit changes first.",
             .is_ok()
     }
 
+    /// Return all branch names under `refs/remotes/<remote>/` as a set.
+    /// One libgit2 ref-glob instead of one subprocess per branch.
+    pub fn remote_branch_names(&self, remote: &str) -> Result<HashSet<String>> {
+        let prefix = format!("refs/remotes/{}/", remote);
+        let refs = self
+            .repo
+            .references_glob(&format!("{}*", prefix))
+            .context("Failed to glob remote refs")?;
+        let mut names = HashSet::new();
+        for r in refs.flatten() {
+            if let Some(name) = r.name() {
+                if let Some(branch) = name.strip_prefix(&prefix) {
+                    names.insert(branch.to_string());
+                }
+            }
+        }
+        Ok(names)
+    }
+
     /// Get commits ahead/behind compared to remote tracking branch (origin/branch)
     /// Returns (unpushed, unpulled) or None if no remote tracking branch exists
     pub fn commits_vs_remote(&self, branch: &str) -> Option<(usize, usize)> {

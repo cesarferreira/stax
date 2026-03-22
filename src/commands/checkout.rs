@@ -7,7 +7,6 @@ use console::truncate_str;
 use crossterm::terminal;
 use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 use std::collections::HashSet;
-use std::path::Path;
 
 // Colors for different columns (matching status.rs)
 const COLUMN_COLORS: &[Color] = &[
@@ -151,8 +150,8 @@ pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usiz
 }
 
 fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<Vec<CheckoutRow>> {
-    let workdir = repo.workdir()?;
     let config = Config::load()?;
+    let remote_branches = repo.remote_branch_names(config.remote_name())?;
     let linked_worktrees_by_branch: HashSet<String> = repo
         .list_worktrees()?
         .into_iter()
@@ -201,7 +200,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
             .unwrap_or((0, 0));
         let needs_restack = entry.map(|b| b.needs_restack).unwrap_or(false);
         let has_pr = entry.and_then(|b| b.pr_number).is_some();
-        let has_remote = remote_branch_exists(workdir, config.remote_name(), branch) || has_pr;
+        let has_remote = remote_branches.contains(branch) || has_pr;
         let has_linked_worktree = linked_worktrees_by_branch.contains(branch);
 
         let prev_branch_col = if i > 0 {
@@ -296,7 +295,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
     }
 
     let mut trunk_info = render_presence_markers(
-        remote_branch_exists(workdir, config.remote_name(), &stack.trunk),
+        remote_branches.contains(&*stack.trunk),
         show_worktree_column,
         linked_worktrees_by_branch.contains(&stack.trunk),
     );
@@ -352,16 +351,6 @@ fn render_presence_markers(
     }
 
     info_str
-}
-
-fn remote_branch_exists(workdir: &Path, remote_name: &str, branch: &str) -> bool {
-    let remote_ref = format!("refs/remotes/{}/{}", remote_name, branch);
-    std::process::Command::new("git")
-        .args(["show-ref", "--verify", "--quiet", &remote_ref])
-        .current_dir(workdir)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
 }
 
 fn truncate_display(text: &str, max_width: usize) -> String {
