@@ -123,9 +123,9 @@ impl GitLabClient {
 
     pub async fn find_open_pr_by_head(&self, branch: &str) -> Result<Option<PrInfoWithHead>> {
         let url = format!(
-            "{}?state=opened&source_branch={}",
+            "{}?state=opened&source_branch={}&per_page=100",
             self.project_url("/merge_requests"),
-            branch
+            encode_query_value(branch)
         );
         let prs: Vec<GitLabMr> = get_json(&self.client, &url).await?;
         Ok(prs
@@ -141,7 +141,7 @@ impl GitLabClient {
     pub async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfoWithHead>> {
         let prs: Vec<GitLabMr> = get_json(
             &self.client,
-            &self.project_url("/merge_requests?state=opened"),
+            &self.project_url("/merge_requests?state=opened&per_page=100"),
         )
         .await?;
         Ok(prs
@@ -269,7 +269,7 @@ impl GitLabClient {
     async fn find_stack_comment_id(&self, number: u64) -> Result<Option<u64>> {
         let notes: Vec<GitLabNote> = get_json(
             &self.client,
-            &self.project_url(&format!("/merge_requests/{}/notes", number)),
+            &self.project_url(&format!("/merge_requests/{}/notes?per_page=100", number)),
         )
         .await?;
         Ok(notes
@@ -281,7 +281,7 @@ impl GitLabClient {
     pub async fn list_all_comments(&self, number: u64) -> Result<Vec<PrComment>> {
         let notes: Vec<GitLabNote> = get_json(
             &self.client,
-            &self.project_url(&format!("/merge_requests/{}/notes", number)),
+            &self.project_url(&format!("/merge_requests/{}/notes?per_page=100", number)),
         )
         .await?;
         let mut comments = notes
@@ -367,7 +367,10 @@ impl GitLabClient {
     pub async fn fetch_checks(&self, sha: &str) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
         let statuses: Vec<GitLabCommitStatus> = get_json(
             &self.client,
-            &self.project_url(&format!("/repository/commits/{}/statuses", sha)),
+            &self.project_url(&format!(
+                "/repository/commits/{}/statuses?per_page=100",
+                sha
+            )),
         )
         .await?;
 
@@ -379,7 +382,7 @@ impl GitLabClient {
                     .clone()
                     .unwrap_or_else(|| "pipeline".to_string()),
                 status: normalize_gitlab_check_status(status.status.as_deref()),
-                conclusion: status.status.clone(),
+                conclusion: status.status.as_deref().map(normalize_gitlab_conclusion),
                 url: status.target_url.clone(),
                 started_at: status.started_at.clone(),
                 completed_at: status.finished_at.clone(),
@@ -410,10 +413,36 @@ impl GitLabClient {
     }
 }
 
+/// Percent-encode a value for use in a URL query parameter.
+fn encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            // Unreserved characters (RFC 3986 section 2.3)
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                encoded.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    encoded
+}
+
 fn normalize_gitlab_check_status(status: Option<&str>) -> String {
     match status.unwrap_or("") {
         "running" | "pending" | "created" => "in_progress".to_string(),
         _ => "completed".to_string(),
+    }
+}
+
+fn normalize_gitlab_conclusion(status: &str) -> String {
+    match status {
+        "success" => "success".to_string(),
+        "failed" => "failure".to_string(),
+        "canceled" => "cancelled".to_string(),
+        _ => status.to_string(),
     }
 }
 
