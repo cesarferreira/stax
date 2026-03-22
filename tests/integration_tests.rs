@@ -5251,7 +5251,7 @@ mod forge_mock_tests {
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
-    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::matchers::{method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn ensure_crypto_provider() {
@@ -5399,6 +5399,47 @@ mod forge_mock_tests {
             "updated_at": "2024-01-01T00:00:00Z"
         })
     }
+
+    fn gitlab_mr_fixture(
+        iid: u64,
+        title: &str,
+        source_branch: &str,
+        target_branch: &str,
+        state: &str,
+        description: &str,
+        sha: &str,
+        pipeline_status: Option<&str>,
+    ) -> serde_json::Value {
+        let mut mr = serde_json::json!({
+            "iid": iid,
+            "title": title,
+            "state": state,
+            "draft": false,
+            "source_branch": source_branch,
+            "target_branch": target_branch,
+            "description": description,
+            "merge_status": "can_be_merged",
+            "detailed_merge_status": "mergeable",
+            "web_url": format!("https://gitlab.com/test/repo/-/merge_requests/{}", iid),
+            "sha": sha
+        });
+
+        if let Some(status) = pipeline_status {
+            mr["head_pipeline"] = serde_json::json!({ "status": status });
+        }
+
+        mr
+    }
+
+    fn gitlab_note_fixture(id: u64, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "body": body,
+            "created_at": "2024-01-01T00:00:00Z",
+            "author": { "username": "stax" }
+        })
+    }
+
 
 
     fn squash_merge_branch_on_fake_remote(remote_root: &TempDir, branch: &str) {
@@ -6779,5 +6820,820 @@ mod forge_mock_tests {
         let prs: Vec<serde_json::Value> = prs_response.json().await.unwrap();
         assert_eq!(prs.len(), 1);
         assert_eq!(prs[0]["number"], 42);
+    }
+
+    async fn test_submit_gitlab_comment_mode_creates_merge_request_and_stack_note() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_remote(
+            &repo,
+            home.path(),
+            "https://gitlab.com/test/repo.git",
+            "https://gitlab.com/",
+        );
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["bc", "feature-gitlab-comment"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        repo.create_file("feature.txt", "content");
+        repo.commit("Feature commit");
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("source_branch", "feature-gitlab-comment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "iid": 42,
+                "title": "Feature commit",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature-gitlab-comment",
+                "target_branch": "main",
+                "description": "",
+                "merge_status": "can_be_merged",
+                "detailed_merge_status": "mergeable",
+                "web_url": "https://gitlab.com/test/repo/-/merge_requests/42",
+                "sha": "abc123"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/projects/test%2Frepo/merge_requests/42/notes"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 900,
+                "body": "<!-- stax-stack-comment -->\ncomment",
+                "created_at": "2024-01-01T00:00:00Z",
+                "author": { "username": "stax" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "iid": 42,
+                "title": "Feature commit",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature-gitlab-comment",
+                "target_branch": "main",
+                "description": "",
+                "merge_status": "can_be_merged",
+                "detailed_merge_status": "mergeable",
+                "web_url": "https://gitlab.com/test/repo/-/merge_requests/42",
+                "sha": "abc123"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["submit", "--yes", "--no-prompt"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "POST"
+                && request.url.path() == "/projects/test%2Frepo/merge_requests"
+        }));
+        let note_request = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "POST"
+                    && request.url.path() == "/projects/test%2Frepo/merge_requests/42/notes"
+            })
+            .expect("missing GitLab stack note request");
+        let payload: serde_json::Value = serde_json::from_slice(&note_request.body).unwrap();
+        assert!(payload["body"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- stax-stack-comment -->"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_gitlab_body_mode_updates_merge_request_body() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("body"));
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_remote(
+            &repo,
+            home.path(),
+            "https://gitlab.com/test/repo.git",
+            "https://gitlab.com/",
+        );
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["bc", "feature-gitlab-body"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        repo.create_file("feature.txt", "content");
+        repo.commit("Feature commit");
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("source_branch", "feature-gitlab-body"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "iid": 42,
+                "title": "Feature commit",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature-gitlab-body",
+                "target_branch": "main",
+                "description": "## Summary\n\nhello",
+                "merge_status": "can_be_merged",
+                "detailed_merge_status": "mergeable",
+                "web_url": "https://gitlab.com/test/repo/-/merge_requests/42",
+                "sha": "abc123"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/42/notes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "iid": 42,
+                "title": "Feature commit",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature-gitlab-body",
+                "target_branch": "main",
+                "description": "## Summary\n\nhello",
+                "merge_status": "can_be_merged",
+                "detailed_merge_status": "mergeable",
+                "web_url": "https://gitlab.com/test/repo/-/merge_requests/42",
+                "sha": "abc123"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "iid": 42,
+                "title": "Feature commit",
+                "state": "opened",
+                "draft": false,
+                "source_branch": "feature-gitlab-body",
+                "target_branch": "main",
+                "description": "## Summary\n\nhello",
+                "merge_status": "can_be_merged",
+                "detailed_merge_status": "mergeable",
+                "web_url": "https://gitlab.com/test/repo/-/merge_requests/42",
+                "sha": "abc123"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["submit", "--yes", "--no-prompt"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let body_update = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PUT"
+                    && request.url.path() == "/projects/test%2Frepo/merge_requests/42"
+            })
+            .expect("missing GitLab body update request");
+        let payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
+        assert!(payload["description"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- stax-stack-links:start -->"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_gitlab_both_mode_updates_stack_note_and_body() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("both"));
+        let repo = setup_branch_with_forge_remote(
+            home.path(),
+            "feature-gitlab-both",
+            "https://gitlab.com/test/repo.git",
+            "https://gitlab.com/",
+            "STAX_GITLAB_TOKEN",
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("source_branch", "feature-gitlab-both"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitlab_mr_fixture(
+                    42,
+                    "Feature commit",
+                    "feature-gitlab-both",
+                    "main",
+                    "opened",
+                    "## Summary\n\nhello",
+                    "abc123",
+                    None,
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/42/notes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitlab_note_fixture(900, "<!-- stax-stack-comment -->\nold")
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/42/notes/900"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(gitlab_note_fixture(
+                    900,
+                    "<!-- stax-stack-comment -->\nupdated",
+                )),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                42,
+                "Feature commit",
+                "feature-gitlab-both",
+                "main",
+                "opened",
+                "## Summary\n\nhello",
+                "abc123",
+                None,
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                42,
+                "Feature commit",
+                "feature-gitlab-both",
+                "main",
+                "opened",
+                "## Summary\n\nhello",
+                "abc123",
+                None,
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["submit", "--yes", "--no-prompt"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let note_update = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PUT"
+                    && request.url.path() == "/projects/test%2Frepo/merge_requests/42/notes/900"
+            })
+            .expect("missing GitLab note update request");
+        let note_payload: serde_json::Value = serde_json::from_slice(&note_update.body).unwrap();
+        assert!(note_payload["body"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- stax-stack-comment -->"));
+
+        let body_update = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PUT"
+                    && request.url.path() == "/projects/test%2Frepo/merge_requests/42"
+            })
+            .expect("missing GitLab body update request");
+        let body_payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
+        assert!(body_payload["description"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- stax-stack-links:start -->"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_gitlab_off_mode_removes_stack_note_and_body_block() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
+        let repo = setup_branch_with_forge_remote(
+            home.path(),
+            "feature-gitlab-off",
+            "https://gitlab.com/test/repo.git",
+            "https://gitlab.com/",
+            "STAX_GITLAB_TOKEN",
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("source_branch", "feature-gitlab-off"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitlab_mr_fixture(
+                    42,
+                    "Feature commit",
+                    "feature-gitlab-off",
+                    "main",
+                    "opened",
+                    "## Summary\n\nhello",
+                    "abc123",
+                    None,
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/42/notes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitlab_note_fixture(900, "<!-- stax-stack-comment -->\nold")
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/projects/test%2Frepo/merge_requests/42/notes/900"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                42,
+                "Feature commit",
+                "feature-gitlab-off",
+                "main",
+                "opened",
+                "## Summary\n\nhello\n\n<!-- stax-stack-links:start -->\nold\n<!-- stax-stack-links:end -->",
+                "abc123",
+                None,
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                42,
+                "Feature commit",
+                "feature-gitlab-off",
+                "main",
+                "opened",
+                "## Summary\n\nhello",
+                "abc123",
+                None,
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["submit", "--yes", "--no-prompt"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "DELETE"
+                && request.url.path() == "/projects/test%2Frepo/merge_requests/42/notes/900"
+        }));
+        let body_update = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PUT"
+                    && request.url.path() == "/projects/test%2Frepo/merge_requests/42"
+            })
+            .expect("missing GitLab body update request");
+        let payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
+        assert_eq!(payload["description"], "## Summary\n\nhello");
+    }
+
+    #[tokio::test]
+    async fn test_merge_gitlab_retargets_next_mr_before_merging_parent_mr() {
+        let mock_server = MockServer::start().await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_remote(
+            &repo,
+            home.path(),
+            "https://gitlab.com/test/repo.git",
+            "https://gitlab.com/",
+        );
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["bc", "gitlab-merge-a"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["bc", "gitlab-merge-b"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("source_branch", branch_a.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitlab_mr_fixture(
+                    101,
+                    "Parent",
+                    branch_a.as_str(),
+                    "main",
+                    "opened",
+                    "",
+                    "sha-a",
+                    None
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("source_branch", branch_b.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitlab_mr_fixture(
+                    102,
+                    "Child",
+                    branch_b.as_str(),
+                    branch_a.as_str(),
+                    "opened",
+                    "",
+                    "sha-b",
+                    None,
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/101"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                101,
+                "Parent",
+                branch_a.as_str(),
+                "main",
+                "opened",
+                "",
+                "sha-a",
+                Some("success"),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/102"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                102,
+                "Child",
+                branch_b.as_str(),
+                branch_a.as_str(),
+                "opened",
+                "",
+                "sha-b",
+                Some("success"),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(
+                r"/projects/test%2Frepo/repository/commits/.*/statuses",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "name": "pipeline",
+                    "status": "success",
+                    "target_url": "https://ci.example.com/1",
+                    "started_at": "2024-01-01T00:00:00Z",
+                    "finished_at": "2024-01-01T00:01:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/102"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                102,
+                "Child",
+                branch_b.as_str(),
+                "main",
+                "opened",
+                "",
+                "sha-b",
+                Some("success"),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/101/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/102/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        let merge_output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["merge", "--yes", "--no-wait", "--no-delete", "--no-sync"],
+        );
+        assert!(
+            merge_output.status.success(),
+            "Merge failed: {}\n{}",
+            TestRepo::stderr(&merge_output),
+            TestRepo::stdout(&merge_output)
+        );
+
+        let requests = mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        let retarget_idx =
+            find_request_index(&requests, "PUT", "/projects/test%2Frepo/merge_requests/102");
+        let merge_idx = find_request_index(
+            &requests,
+            "PUT",
+            "/projects/test%2Frepo/merge_requests/101/merge",
+        );
+        assert!(retarget_idx < merge_idx);
+        let retarget = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PUT"
+                    && request.url.path() == "/projects/test%2Frepo/merge_requests/102"
+            })
+            .expect("missing GitLab retarget request");
+        let payload: serde_json::Value = serde_json::from_slice(&retarget.body).unwrap();
+        assert_eq!(payload["target_branch"], "main");
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "GET"
+                && request.url.path().contains("/repository/commits/")
+                && request.url.path().ends_with("/statuses")
+        }));
+    }
+
+    #[tokio::test]
+    async fn test_merge_when_ready_gitlab_retargets_next_mr_before_merging_parent_mr() {
+        let mock_server = MockServer::start().await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_remote(
+            &repo,
+            home.path(),
+            "https://gitlab.com/test/repo.git",
+            "https://gitlab.com/",
+        );
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["bc", "gitlab-mwr-a"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &["bc", "gitlab-mwr-b"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("source_branch", branch_a.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitlab_mr_fixture(
+                    201,
+                    "Parent",
+                    branch_a.as_str(),
+                    "main",
+                    "opened",
+                    "",
+                    "sha-a",
+                    None
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("source_branch", branch_b.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitlab_mr_fixture(
+                    202,
+                    "Child",
+                    branch_b.as_str(),
+                    branch_a.as_str(),
+                    "opened",
+                    "",
+                    "sha-b",
+                    None,
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/201"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                201,
+                "Parent",
+                branch_a.as_str(),
+                "main",
+                "opened",
+                "",
+                "sha-a",
+                Some("success"),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/projects/test%2Frepo/merge_requests/202"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                202,
+                "Child",
+                branch_b.as_str(),
+                branch_a.as_str(),
+                "opened",
+                "",
+                "sha-b",
+                Some("success"),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(
+                r"/projects/test%2Frepo/repository/commits/.*/statuses",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "name": "pipeline",
+                    "status": "success",
+                    "target_url": "https://ci.example.com/1",
+                    "started_at": "2024-01-01T00:00:00Z",
+                    "finished_at": "2024-01-01T00:01:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/202"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitlab_mr_fixture(
+                202,
+                "Child",
+                branch_b.as_str(),
+                "main",
+                "opened",
+                "",
+                "sha-b",
+                Some("success"),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/201/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/projects/test%2Frepo/merge_requests/202/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        let merge_output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITLAB_TOKEN",
+            &[
+                "merge",
+                "--when-ready",
+                "--yes",
+                "--no-delete",
+                "--timeout",
+                "1",
+                "--interval",
+                "1",
+                "--no-sync",
+            ],
+        );
+        assert!(
+            merge_output.status.success(),
+            "Merge-when-ready failed: {}\n{}",
+            TestRepo::stderr(&merge_output),
+            TestRepo::stdout(&merge_output)
+        );
+
+        let requests = mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        let retarget_idx =
+            find_request_index(&requests, "PUT", "/projects/test%2Frepo/merge_requests/202");
+        let merge_idx = find_request_index(
+            &requests,
+            "PUT",
+            "/projects/test%2Frepo/merge_requests/201/merge",
+        );
+        assert!(retarget_idx < merge_idx);
     }
 }

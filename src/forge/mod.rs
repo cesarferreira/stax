@@ -1,10 +1,23 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Utc};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
+use reqwest::Client;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::ci::CheckRunInfo;
+use crate::config::Config;
 use crate::github::client::{GitHubClient, OpenPrInfo};
-use crate::github::pr::{MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
+use crate::github::pr::{
+    CiStatus, IssueComment, MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus,
+};
 use crate::remote::{ForgeType, RemoteInfo};
+
+mod gitlab;
+
+use gitlab::GitLabClient;
 
 /// HTML comment marker embedded in stack comments to identify them for updates/deletion.
 pub(crate) const STACK_COMMENT_MARKER: &str = "<!-- stax-stack-comment -->";
@@ -13,11 +26,17 @@ pub fn stack_comment_body(stack_comment: &str) -> String {
     format!("{}\n{}", STACK_COMMENT_MARKER, stack_comment)
 }
 
+#[derive(Clone, Copy)]
+pub enum AuthStyle {
+    PrivateToken,
+}
+
 /// Dispatch an async method call uniformly across all forge variants.
 macro_rules! dispatch {
     ($self:expr, $method:ident ( $($arg:expr),* $(,)? )) => {
         match $self {
             Self::GitHub(c) => c.$method($($arg),*).await,
+            Self::GitLab(c) => c.$method($($arg),*).await,
         }
     };
 }
@@ -25,6 +44,7 @@ macro_rules! dispatch {
 #[derive(Clone)]
 pub enum ForgeClient {
     GitHub(GitHubClient),
+    GitLab(GitLabClient),
 }
 
 impl ForgeClient {
@@ -35,9 +55,10 @@ impl ForgeClient {
                 &remote.repo,
                 remote.api_base_url.clone(),
             )?)),
-            ForgeType::GitLab | ForgeType::Gitea => {
+            ForgeType::GitLab => Ok(Self::GitLab(GitLabClient::new(remote)?)),
+            ForgeType::Gitea => {
                 bail!(
-                    "Forge type {:?} is not yet supported. Only GitHub is currently implemented.",
+                    "Forge type {:?} is not yet supported. Only GitHub and GitLab are currently implemented.",
                     remote.forge
                 )
             }
@@ -47,6 +68,7 @@ impl ForgeClient {
     pub fn api_call_stats(&self) -> Option<crate::github::client::ApiCallStats> {
         match self {
             Self::GitHub(client) => Some(client.api_call_stats()),
+            Self::GitLab(_) => None,
         }
     }
 
@@ -60,6 +82,7 @@ impl ForgeClient {
     ) -> Result<Option<PrInfoWithHead>> {
         match self {
             Self::GitHub(client) => client.find_open_pr_by_head(&client.owner, branch).await,
+            Self::GitLab(client) => client.find_open_pr_by_head(branch).await,
         }
     }
 
@@ -123,7 +146,7 @@ impl ForgeClient {
         number: u64,
         method: MergeMethod,
         commit_title: Option<&str>,
-        _sha: Option<&str>,
+        sha: Option<&str>,
     ) -> Result<()> {
         match self {
             // GitHub's merge_pr takes (number, method, commit_title, commit_message).
@@ -134,6 +157,7 @@ impl ForgeClient {
                     .merge_pr(number, method, commit_title.map(str::to_string), None)
                     .await
             }
+            Self::GitLab(client) => client.merge_pr(number, method, commit_title, sha).await,
         }
     }
 
@@ -154,30 +178,238 @@ impl ForgeClient {
             Self::GitHub(client) => {
                 crate::commands::ci::fetch_github_checks(repo, client, sha).await
             }
+            Self::GitLab(client) => client.fetch_checks(sha).await,
         }
     }
 
     pub async fn request_reviewers(&self, number: u64, reviewers: &[String]) -> Result<()> {
-        dispatch!(self, request_reviewers(number, reviewers))
+        match self {
+            Self::GitHub(client) => client.request_reviewers(number, reviewers).await,
+            Self::GitLab(_) => Ok(()),
+        }
     }
 
     pub async fn get_requested_reviewers(&self, number: u64) -> Result<Vec<String>> {
-        dispatch!(self, get_requested_reviewers(number))
+        match self {
+            Self::GitHub(client) => client.get_requested_reviewers(number).await,
+            Self::GitLab(_) => Ok(Vec::new()),
+        }
     }
 
     pub async fn add_labels(&self, number: u64, labels: &[String]) -> Result<()> {
-        dispatch!(self, add_labels(number, labels))
+        match self {
+            Self::GitHub(client) => client.add_labels(number, labels).await,
+            Self::GitLab(_) => Ok(()),
+        }
     }
 
     pub async fn add_assignees(&self, number: u64, assignees: &[String]) -> Result<()> {
-        dispatch!(self, add_assignees(number, assignees))
+        match self {
+            Self::GitHub(client) => client.add_assignees(number, assignees).await,
+            Self::GitLab(_) => Ok(()),
+        }
     }
 
     pub async fn get_current_user(&self) -> Result<String> {
-        dispatch!(self, get_current_user())
+        match self {
+            Self::GitHub(client) => client.get_current_user().await,
+            Self::GitLab(_) => {
+                bail!("`stax branch track --all-prs` is currently only supported for GitHub")
+            }
+        }
     }
 
     pub async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
-        dispatch!(self, get_user_open_prs(username))
+        match self {
+            Self::GitHub(client) => client.get_user_open_prs(username).await,
+            Self::GitLab(_) => {
+                bail!("`stax branch track --all-prs` is currently only supported for GitHub")
+            }
+        }
+    }
+}
+
+pub fn forge_token(forge: ForgeType) -> Option<String> {
+    match forge {
+        ForgeType::GitHub => Config::github_token(),
+        ForgeType::GitLab => read_env_token("STAX_GITLAB_TOKEN")
+            .or_else(|| read_env_token("GITLAB_TOKEN"))
+            .or_else(|| read_env_token("STAX_FORGE_TOKEN")),
+        ForgeType::Gitea => read_env_token("STAX_GITEA_TOKEN")
+            .or_else(|| read_env_token("GITEA_TOKEN"))
+            .or_else(|| read_env_token("STAX_FORGE_TOKEN")),
+    }
+}
+
+fn read_env_token(var_name: &str) -> Option<String> {
+    std::env::var(var_name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn base_headers(token: &str, auth_style: AuthStyle) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static("stax"));
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    match auth_style {
+        AuthStyle::PrivateToken => {
+            headers.insert(
+                "PRIVATE-TOKEN",
+                HeaderValue::from_str(token).context("Invalid private token header")?,
+            );
+        }
+    }
+    Ok(headers)
+}
+
+fn build_http_client(token: &str, auth_style: AuthStyle) -> Result<Client> {
+    Client::builder()
+        .default_headers(base_headers(token, auth_style)?)
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .context("Failed to build forge HTTP client")
+}
+
+async fn get_json<T: DeserializeOwned>(client: &Client, url: &str) -> Result<T> {
+    let response = client.get(url).send().await?;
+    parse_json_response(response).await
+}
+
+async fn post_json<T: DeserializeOwned, B: Serialize>(
+    client: &Client,
+    url: &str,
+    body: &B,
+) -> Result<T> {
+    let response = client.post(url).json(body).send().await?;
+    parse_json_response(response).await
+}
+
+async fn put_json<T: DeserializeOwned, B: Serialize>(
+    client: &Client,
+    url: &str,
+    body: &B,
+) -> Result<T> {
+    let response = client.put(url).json(body).send().await?;
+    parse_json_response(response).await
+}
+
+async fn delete_empty(client: &Client, url: &str) -> Result<()> {
+    let response = client.delete(url).send().await?;
+    if response.status().is_success() || response.status().as_u16() == 404 {
+        Ok(())
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!("Forge API request failed: {} {}", status, body);
+    }
+}
+
+async fn parse_json_response<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
+    if response.status().is_success() {
+        Ok(response.json().await?)
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!("Forge API request failed: {} {}", status, body);
+    }
+}
+
+/// Aggregate individual CI statuses into one overall result.
+/// Scans all statuses so that failure always takes priority over pending.
+fn aggregate_ci_overall<'a>(
+    statuses: impl Iterator<Item = &'a str>,
+    is_failure: impl Fn(&str) -> bool,
+    is_pending: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let mut has_any = false;
+    let mut has_failure = false;
+    let mut has_pending = false;
+    for status in statuses {
+        has_any = true;
+        if is_failure(status) {
+            has_failure = true;
+        } else if is_pending(status) {
+            has_pending = true;
+        }
+    }
+    if has_failure {
+        Some("failure".to_string())
+    } else if has_pending {
+        Some("pending".to_string())
+    } else if has_any {
+        Some("success".to_string())
+    } else {
+        None
+    }
+}
+
+fn mergeable_bool(mergeable_state: &str) -> Option<bool> {
+    match mergeable_state {
+        "checking" | "unchecked" | "preparing" | "unknown" => None,
+        "mergeable" | "can_be_merged" | "clean" => Some(true),
+        _ => Some(false),
+    }
+}
+
+fn ci_status_from_string(status: Option<&str>) -> CiStatus {
+    status.map(CiStatus::from_str).unwrap_or(CiStatus::NoCi)
+}
+
+fn make_issue_comment(id: u64, body: String, user: String, created_at: DateTime<Utc>) -> PrComment {
+    PrComment::Issue(IssueComment {
+        id,
+        body,
+        user,
+        created_at,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_failure(s: &str) -> bool {
+        matches!(s, "failed" | "canceled" | "failure" | "error")
+    }
+    fn is_pending(s: &str) -> bool {
+        matches!(s, "running" | "pending" | "created")
+    }
+
+    #[test]
+    fn aggregate_ci_failure_takes_priority_over_pending() {
+        let statuses = ["pending", "failed"];
+        let result = aggregate_ci_overall(statuses.iter().copied(), is_failure, is_pending);
+        assert_eq!(result.as_deref(), Some("failure"));
+    }
+
+    #[test]
+    fn aggregate_ci_pending_before_failure_still_reports_failure() {
+        let statuses = ["running", "success", "failed"];
+        let result = aggregate_ci_overall(statuses.iter().copied(), is_failure, is_pending);
+        assert_eq!(result.as_deref(), Some("failure"));
+    }
+
+    #[test]
+    fn aggregate_ci_all_success() {
+        let statuses = ["success", "success"];
+        let result = aggregate_ci_overall(statuses.iter().copied(), is_failure, is_pending);
+        assert_eq!(result.as_deref(), Some("success"));
+    }
+
+    #[test]
+    fn aggregate_ci_pending_only() {
+        let statuses = ["success", "running"];
+        let result = aggregate_ci_overall(statuses.iter().copied(), is_failure, is_pending);
+        assert_eq!(result.as_deref(), Some("pending"));
+    }
+
+    #[test]
+    fn aggregate_ci_empty_returns_none() {
+        let statuses: [&str; 0] = [];
+        let result = aggregate_ci_overall(statuses.iter().copied(), is_failure, is_pending);
+        assert_eq!(result, None);
     }
 }
