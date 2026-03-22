@@ -57,6 +57,7 @@ impl PendingCommand {
 }
 
 pub struct WorktreeApp {
+    #[allow(dead_code)]
     pub repo: GitRepo,
     pub records: Vec<WorktreeRecord>,
     pub selected_index: usize,

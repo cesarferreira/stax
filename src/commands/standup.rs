@@ -406,7 +406,10 @@ pub fn run(
         && !has_attention
         && !has_jit_signal
     {
-        println!("{}", "No activity in the last {} hours.".dimmed());
+        println!(
+            "{}",
+            format!("No activity in the last {} hours.", hours).dimmed()
+        );
         println!();
     }
 
@@ -620,6 +623,7 @@ fn print_summary_card(text: &str) {
 }
 
 /// Apply terminal colors to key phrases in the AI-generated standup text.
+#[allow(clippy::type_complexity)]
 fn colorize_summary(text: &str) -> String {
     // Patterns and their colorizers, applied in order (word-boundary aware where needed).
     // Each entry: (regex pattern, replacement closure).

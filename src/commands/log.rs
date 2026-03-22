@@ -723,7 +723,10 @@ mod tests {
             },
         );
         branches.insert("a".to_string(), branch(Some("main"), vec!["b".to_string()]));
-        branches.insert("b".to_string(), branch(Some("a"), vec!["a".to_string(), "c".to_string()]));
+        branches.insert(
+            "b".to_string(),
+            branch(Some("a"), vec!["a".to_string(), "c".to_string()]),
+        );
         branches.insert("c".to_string(), branch(Some("b"), vec![]));
 
         let stack = Stack {

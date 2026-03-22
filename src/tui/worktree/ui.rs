@@ -42,7 +42,7 @@ fn render_worktree_list(f: &mut Frame, app: &WorktreeApp, area: Rect) {
                 .details
                 .branch_label
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or(&record.details.branch_label);
 
             let mut spans = vec![

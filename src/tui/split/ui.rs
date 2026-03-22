@@ -92,8 +92,8 @@ fn render_commits(f: &mut Frame, app: &SplitApp, area: Rect) {
         app.commits.len()
     );
 
-    let help_text = if app.status_message.is_some() {
-        app.status_message.as_ref().unwrap().clone()
+    let help_text = if let Some(msg) = &app.status_message {
+        msg.clone()
     } else {
         "s: split | d: remove | Enter: apply | ?: help | q: quit".to_string()
     };

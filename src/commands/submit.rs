@@ -733,7 +733,7 @@ pub fn run(
             } else {
                 let choice = Select::with_theme(&ColorfulTheme::default())
                     .with_prompt("  PR type")
-                    .items(&PR_TYPE_OPTIONS)
+                    .items(PR_TYPE_OPTIONS)
                     .default(PR_TYPE_DEFAULT_INDEX)
                     .interact()?;
                 choice == PR_TYPE_DEFAULT_INDEX

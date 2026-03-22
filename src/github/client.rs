@@ -483,8 +483,10 @@ impl GitHubClient {
         _hours: i64,
         _username: &str,
     ) -> Result<Vec<ReviewActivity>> {
-        // Skip for now - scanning all PRs is too slow for large repos
-        // Could be implemented with GitHub's GraphQL API in the future
+        // Not yet implemented: scanning all PRs via REST is O(N) and too slow
+        // for large repos. A future version could use GitHub's GraphQL
+        // PullRequestReviewContributionsByRepository connection to fetch this
+        // efficiently in a single query.
         Ok(vec![])
     }
 

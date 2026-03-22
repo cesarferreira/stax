@@ -16,6 +16,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// Sync repo: pull trunk from remote, delete merged branches, optionally restack
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     restack: bool,
     prune: bool,
@@ -1191,7 +1192,7 @@ fn find_merged_branches(
     // when trunk has advanced past the merge point (where a simple tree diff
     // would show false negatives). Run this last so cheaper signals resolve
     // most cases before the provenance path touches more refs.
-    for (branch, _) in &stack.branches {
+    for branch in stack.branches.keys() {
         if branch == &stack.trunk || merged.contains(branch) {
             continue;
         }

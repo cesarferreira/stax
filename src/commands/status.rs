@@ -659,10 +659,7 @@ mod tests {
         );
 
         assert_eq!(result.len(), depth);
-        assert_eq!(
-            result.first().map(|b| b.name.as_str()),
-            Some("branch-499")
-        );
+        assert_eq!(result.first().map(|b| b.name.as_str()), Some("branch-499"));
         assert_eq!(result.last().map(|b| b.name.as_str()), Some("branch-0"));
         assert_eq!(max_column, 0);
     }

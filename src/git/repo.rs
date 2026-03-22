@@ -218,6 +218,7 @@ impl GitRepo {
         let cwd_normalized = Self::normalize_path(&cwd);
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+        #[allow(clippy::type_complexity)]
         let mut raw_entries: Vec<(
             PathBuf,
             Option<String>,

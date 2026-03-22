@@ -161,6 +161,7 @@ pub fn read_prev_branch(repo: &Repository) -> Result<Option<String>> {
 }
 
 /// Write the previous branch (for `stax prev` command)
+#[allow(dead_code)]
 pub fn write_prev_branch(repo: &Repository, branch: &str) -> Result<()> {
     let workdir = repo
         .workdir()

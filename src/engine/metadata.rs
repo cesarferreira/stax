@@ -48,9 +48,8 @@ impl BranchMetadata {
                 // Backward/partial-compatibility guard:
                 // Some historical/broken metadata records may miss parent fields.
                 if meta.parent_branch_name.trim().is_empty() {
-                    // Prefer trunk-ish fallback to keep submit/restack workflows operational.
-                    // We intentionally avoid failing hard on deserialization-compatible but partial data.
-                    meta.parent_branch_name = "main".to_string();
+                    meta.parent_branch_name =
+                        refs::read_trunk(repo)?.unwrap_or_else(|| "main".to_string());
                 }
 
                 if meta.parent_branch_revision.trim().is_empty() {
