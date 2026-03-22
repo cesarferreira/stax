@@ -5440,6 +5440,47 @@ mod forge_mock_tests {
         })
     }
 
+    fn gitea_pull_fixture(
+        number: u64,
+        title: &str,
+        head_branch: &str,
+        base_branch: &str,
+        state: &str,
+        body: &str,
+        merged: bool,
+        head_sha: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "number": number,
+            "state": state,
+            "title": title,
+            "body": body,
+            "draft": false,
+            "mergeable": true,
+            "mergeable_state": "clean",
+            "merged": merged,
+            "head": {
+                "ref": head_branch,
+                "sha": head_sha,
+                "label": format!("test:{}", head_branch)
+            },
+            "base": {
+                "ref": base_branch,
+                "sha": format!("{}-sha", base_branch),
+                "label": format!("test:{}", base_branch)
+            }
+        })
+    }
+
+    fn gitea_comment_fixture(id: u64, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "body": body,
+            "created_at": "2024-01-01T00:00:00Z",
+            "user": { "login": "stax" }
+        })
+    }
+
 
 
     fn squash_merge_branch_on_fake_remote(remote_root: &TempDir, branch: &str) {
@@ -7637,4 +7678,778 @@ mod forge_mock_tests {
         );
         assert!(retarget_idx < merge_idx);
     }
+
+    async fn test_submit_gitea_comment_mode_creates_pull_and_issue_comment() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_remote(
+            &repo,
+            home.path(),
+            "https://gitea.example.com/test/repo.git",
+            "https://gitea.example.com/",
+        );
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["bc", "feature-gitea-comment"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        repo.create_file("feature.txt", "content");
+        repo.commit("Feature commit");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "number": 42,
+                "state": "open",
+                "title": "Feature commit",
+                "body": "",
+                "draft": false,
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "merged": false,
+                "head": { "ref": "feature-gitea-comment", "sha": "abc123", "label": "test:feature-gitea-comment" },
+                "base": { "ref": "main", "sha": "def456", "label": "test:main" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 901,
+                "body": "<!-- stax-stack-comment -->\ncomment",
+                "created_at": "2024-01-01T00:00:00Z",
+                "user": { "login": "stax" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "number": 42,
+                "state": "open",
+                "title": "Feature commit",
+                "body": "",
+                "draft": false,
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "merged": false,
+                "head": { "ref": "feature-gitea-comment", "sha": "abc123", "label": "test:feature-gitea-comment" },
+                "base": { "ref": "main", "sha": "def456", "label": "test:main" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["submit", "--yes", "--no-prompt"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "POST" && request.url.path() == "/repos/test/repo/pulls"
+        }));
+        let comment_request = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "POST"
+                    && request.url.path() == "/repos/test/repo/issues/42/comments"
+            })
+            .expect("missing Gitea issue comment request");
+        let payload: serde_json::Value = serde_json::from_slice(&comment_request.body).unwrap();
+        assert!(payload["body"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- stax-stack-comment -->"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_gitea_body_mode_updates_pull_body() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("body"));
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_remote(
+            &repo,
+            home.path(),
+            "https://gitea.example.com/test/repo.git",
+            "https://gitea.example.com/",
+        );
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["bc", "feature-gitea-body"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        repo.create_file("feature.txt", "content");
+        repo.commit("Feature commit");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "number": 42,
+                "state": "open",
+                "title": "Feature commit",
+                "body": "## Summary\n\nhello",
+                "draft": false,
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "merged": false,
+                "head": { "ref": "feature-gitea-body", "sha": "abc123", "label": "test:feature-gitea-body" },
+                "base": { "ref": "main", "sha": "def456", "label": "test:main" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "number": 42,
+                "state": "open",
+                "title": "Feature commit",
+                "body": "## Summary\n\nhello",
+                "draft": false,
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "merged": false,
+                "head": { "ref": "feature-gitea-body", "sha": "abc123", "label": "test:feature-gitea-body" },
+                "base": { "ref": "main", "sha": "def456", "label": "test:main" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "number": 42,
+                "state": "open",
+                "title": "Feature commit",
+                "body": "## Summary\n\nhello",
+                "draft": false,
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "merged": false,
+                "head": { "ref": "feature-gitea-body", "sha": "abc123", "label": "test:feature-gitea-body" },
+                "base": { "ref": "main", "sha": "def456", "label": "test:main" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["submit", "--yes", "--no-prompt"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let body_update = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/42"
+            })
+            .expect("missing Gitea body update request");
+        let payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
+        assert!(payload["body"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- stax-stack-links:start -->"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_gitea_both_mode_updates_issue_comment_and_body() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("both"));
+        let repo = setup_branch_with_forge_remote(
+            home.path(),
+            "feature-gitea-both",
+            "https://gitea.example.com/test/repo.git",
+            "https://gitea.example.com/",
+            "STAX_GITEA_TOKEN",
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitea_pull_fixture(
+                    42,
+                    "Feature commit",
+                    "feature-gitea-both",
+                    "main",
+                    "open",
+                    "## Summary\n\nhello",
+                    false,
+                    "abc123",
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitea_comment_fixture(901, "<!-- stax-stack-comment -->\nold")
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/issues/comments/901"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(gitea_comment_fixture(
+                    901,
+                    "<!-- stax-stack-comment -->\nupdated",
+                )),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                42,
+                "Feature commit",
+                "feature-gitea-both",
+                "main",
+                "open",
+                "## Summary\n\nhello",
+                false,
+                "abc123",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                42,
+                "Feature commit",
+                "feature-gitea-both",
+                "main",
+                "open",
+                "## Summary\n\nhello",
+                false,
+                "abc123",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["submit", "--yes", "--no-prompt"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let comment_update = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/issues/comments/901"
+            })
+            .expect("missing Gitea issue comment update request");
+        let comment_payload: serde_json::Value =
+            serde_json::from_slice(&comment_update.body).unwrap();
+        assert!(comment_payload["body"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- stax-stack-comment -->"));
+
+        let body_update = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/42"
+            })
+            .expect("missing Gitea body update request");
+        let body_payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
+        assert!(body_payload["body"]
+            .as_str()
+            .unwrap()
+            .contains("<!-- stax-stack-links:start -->"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_gitea_off_mode_removes_issue_comment_and_body_block() {
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
+        let repo = setup_branch_with_forge_remote(
+            home.path(),
+            "feature-gitea-off",
+            "https://gitea.example.com/test/repo.git",
+            "https://gitea.example.com/",
+            "STAX_GITEA_TOKEN",
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitea_pull_fixture(
+                    42,
+                    "Feature commit",
+                    "feature-gitea-off",
+                    "main",
+                    "open",
+                    "## Summary\n\nhello",
+                    false,
+                    "abc123",
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitea_comment_fixture(901, "<!-- stax-stack-comment -->\nold")
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/repos/test/repo/issues/comments/901"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                42,
+                "Feature commit",
+                "feature-gitea-off",
+                "main",
+                "open",
+                "## Summary\n\nhello\n\n<!-- stax-stack-links:start -->\nold\n<!-- stax-stack-links:end -->",
+                false,
+                "abc123",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                42,
+                "Feature commit",
+                "feature-gitea-off",
+                "main",
+                "open",
+                "## Summary\n\nhello",
+                false,
+                "abc123",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["submit", "--yes", "--no-prompt"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "DELETE"
+                && request.url.path() == "/repos/test/repo/issues/comments/901"
+        }));
+        let body_update = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/42"
+            })
+            .expect("missing Gitea body update request");
+        let payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
+        assert_eq!(payload["body"], "## Summary\n\nhello");
+    }
+
+    #[tokio::test]
+    async fn test_merge_gitea_retargets_next_pr_before_merging_parent_pr() {
+        let mock_server = MockServer::start().await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_remote(
+            &repo,
+            home.path(),
+            "https://gitea.example.com/test/repo.git",
+            "https://gitea.example.com/",
+        );
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["bc", "gitea-merge-a"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["bc", "gitea-merge-b"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitea_pull_fixture(
+                    101,
+                    "Parent",
+                    branch_a.as_str(),
+                    "main",
+                    "open",
+                    "",
+                    false,
+                    "sha-a"
+                ),
+                gitea_pull_fixture(
+                    102,
+                    "Child",
+                    branch_b.as_str(),
+                    branch_a.as_str(),
+                    "open",
+                    "",
+                    false,
+                    "sha-b"
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/101"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                101,
+                "Parent",
+                branch_a.as_str(),
+                "main",
+                "open",
+                "",
+                false,
+                "sha-a",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                102,
+                "Child",
+                branch_b.as_str(),
+                branch_a.as_str(),
+                "open",
+                "",
+                false,
+                "sha-b",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/repos/test/repo/commits/.*/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "context": "ci",
+                    "status": "success",
+                    "target_url": "https://ci.example.com/1",
+                    "created_at": "2024-01-01T00:00:00Z",
+                    "updated_at": "2024-01-01T00:01:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                102,
+                "Child",
+                branch_b.as_str(),
+                "main",
+                "open",
+                "",
+                false,
+                "sha-b",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls/101/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls/102/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        let merge_output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["merge", "--yes", "--no-wait", "--no-delete", "--no-sync"],
+        );
+        assert!(
+            merge_output.status.success(),
+            "Merge failed: {}\n{}",
+            TestRepo::stderr(&merge_output),
+            TestRepo::stdout(&merge_output)
+        );
+
+        let requests = mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        let retarget_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/102");
+        let merge_idx = find_request_index(&requests, "POST", "/repos/test/repo/pulls/101/merge");
+        assert!(retarget_idx < merge_idx);
+        let retarget = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/102"
+            })
+            .expect("missing Gitea retarget request");
+        let payload: serde_json::Value = serde_json::from_slice(&retarget.body).unwrap();
+        assert_eq!(payload["base"], "main");
+        assert!(requests.iter().any(|request| {
+            request.method.as_str() == "GET"
+                && request.url.path().contains("/commits/")
+                && request.url.path().ends_with("/statuses")
+        }));
+    }
+
+    #[tokio::test]
+    async fn test_merge_when_ready_gitea_retargets_next_pr_before_merging_parent_pr() {
+        let mock_server = MockServer::start().await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_remote(
+            &repo,
+            home.path(),
+            "https://gitea.example.com/test/repo.git",
+            "https://gitea.example.com/",
+        );
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["bc", "gitea-mwr-a"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &["bc", "gitea-mwr-b"],
+        );
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                gitea_pull_fixture(
+                    201,
+                    "Parent",
+                    branch_a.as_str(),
+                    "main",
+                    "open",
+                    "",
+                    false,
+                    "sha-a"
+                ),
+                gitea_pull_fixture(
+                    202,
+                    "Child",
+                    branch_b.as_str(),
+                    branch_a.as_str(),
+                    "open",
+                    "",
+                    false,
+                    "sha-b"
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/201"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                201,
+                "Parent",
+                branch_a.as_str(),
+                "main",
+                "open",
+                "",
+                false,
+                "sha-a",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/202"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                202,
+                "Child",
+                branch_b.as_str(),
+                branch_a.as_str(),
+                "open",
+                "",
+                false,
+                "sha-b",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/repos/test/repo/commits/.*/statuses"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "context": "ci",
+                    "status": "success",
+                    "target_url": "https://ci.example.com/1",
+                    "created_at": "2024-01-01T00:00:00Z",
+                    "updated_at": "2024-01-01T00:01:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/202"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(gitea_pull_fixture(
+                202,
+                "Child",
+                branch_b.as_str(),
+                "main",
+                "open",
+                "",
+                false,
+                "sha-b",
+            )))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls/201/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls/202/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        let merge_output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITEA_TOKEN",
+            &[
+                "merge",
+                "--when-ready",
+                "--yes",
+                "--no-delete",
+                "--timeout",
+                "1",
+                "--interval",
+                "1",
+                "--no-sync",
+            ],
+        );
+        assert!(
+            merge_output.status.success(),
+            "Merge-when-ready failed: {}\n{}",
+            TestRepo::stderr(&merge_output),
+            TestRepo::stdout(&merge_output)
+        );
+
+        let requests = mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        let retarget_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/202");
+        let merge_idx = find_request_index(&requests, "POST", "/repos/test/repo/pulls/201/merge");
+        assert!(retarget_idx < merge_idx);
+    }
+
+
 }
