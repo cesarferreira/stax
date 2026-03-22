@@ -7,7 +7,7 @@
   <p>
     <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml"><img alt="CI" src="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml/badge.svg"></a>
     <a href="https://crates.io/crates/stax"><img alt="Crates.io" src="https://img.shields.io/crates/v/stax"></a>
-    <img alt="Performance" src="https://img.shields.io/badge/~21ms-startup-blue">
+    <img alt="Performance" src="https://img.shields.io/badge/~24ms-startup-blue">
     <img alt="TUI" src="https://img.shields.io/badge/TUI-ratatui-5f5fff">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
   </p>
