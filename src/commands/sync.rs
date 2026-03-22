@@ -901,14 +901,15 @@ pub fn run(
         // Reload stack to use fresh metadata after sync/deletion and normalization steps.
         let restack_stack = Stack::load(&repo)?;
         let branches_to_restack: Vec<String> = scope_order
-            .into_iter()
+            .iter()
             .filter(|branch| {
                 restack_stack
                     .branches
-                    .get(branch)
+                    .get(branch.as_str())
                     .map(|br| br.needs_restack)
                     .unwrap_or(false)
             })
+            .cloned()
             .collect();
 
         if branches_to_restack.is_empty() {
@@ -918,7 +919,7 @@ pub fn run(
         } else {
             // Begin transaction for restack phase
             let mut tx = Transaction::begin(OpKind::SyncRestack, &repo, quiet)?;
-            tx.plan_branches(&repo, &branches_to_restack)?;
+            tx.plan_branches(&repo, &scope_order)?;
             let restack_count = branches_to_restack.len();
             let summary = PlanSummary {
                 branches_to_rebase: restack_count,
@@ -940,7 +941,17 @@ pub fn run(
 
             let mut summary: Vec<(String, String)> = Vec::new();
 
-            for (index, branch) in branches_to_restack.iter().enumerate() {
+            for (index, branch) in scope_order.iter().enumerate() {
+                let live_stack = Stack::load(&repo)?;
+                let needs_restack = live_stack
+                    .branches
+                    .get(branch.as_str())
+                    .map(|br| br.needs_restack)
+                    .unwrap_or(false);
+                if !needs_restack {
+                    continue;
+                }
+
                 let restack_timer = LiveTimer::maybe_new(!quiet, &format!("Restack {}", branch));
 
                 let meta = match BranchMetadata::read(repo.inner(), branch)? {
@@ -981,7 +992,7 @@ pub fn run(
                                 branch,
                                 parent_branch: &meta.parent_branch_name,
                                 completed_branches: &completed_branches,
-                                remaining_branches: branches_to_restack
+                                remaining_branches: scope_order
                                     .len()
                                     .saturating_sub(index + 1),
                                 continue_commands: &[

@@ -4455,6 +4455,115 @@ fn test_sync_restack_handles_squash_merged_parent_after_trunk_advances() {
     );
 }
 
+/// Regression test for issue #118: `sync --restack` must restack the entire
+/// stack, not just the first stale branch.  With a 3-level stack
+/// `main <- A <- B <- C`, squash-merging A and running sync --restack should
+/// restack both B (onto main) and C (onto the updated B).
+#[test]
+fn test_sync_restack_restacks_full_chain_after_squash_merge() {
+    let repo = TestRepo::new_with_remote();
+
+    // Build 3-level stack: main -> branch_a -> branch_b -> branch_c
+    repo.run_stax(&["bc", "chain-a"]);
+    let branch_a = repo.current_branch();
+    repo.create_file("a.txt", "a content\n");
+    repo.commit("Commit A");
+    repo.git(&["push", "-u", "origin", &branch_a]);
+
+    repo.run_stax(&["bc", "chain-b"]);
+    let branch_b = repo.current_branch();
+    repo.create_file("b.txt", "b content\n");
+    repo.commit("Commit B");
+    repo.git(&["push", "-u", "origin", &branch_b]);
+
+    repo.run_stax(&["bc", "chain-c"]);
+    let branch_c = repo.current_branch();
+    repo.create_file("c.txt", "c content\n");
+    repo.commit("Commit C");
+    repo.git(&["push", "-u", "origin", &branch_c]);
+
+    // Squash-merge branch_a on remote and delete it
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let clone_dir = test_tempdir();
+    let run_remote_git = |args: &[&str]| {
+        let output = hermetic_git_command()
+            .args(args)
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to run git in remote clone");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_remote_git(&["clone", remote_path.to_str().unwrap(), "."]);
+    run_remote_git(&["checkout", "-B", "main", "origin/main"]);
+    run_remote_git(&["config", "user.email", "merger@test.com"]);
+    run_remote_git(&["config", "user.name", "Merger"]);
+    run_remote_git(&["fetch", "origin", &branch_a]);
+    run_remote_git(&["merge", "--squash", &format!("origin/{}", branch_a)]);
+    run_remote_git(&["commit", "-m", "Squash merge A"]);
+    run_remote_git(&["push", "origin", "main"]);
+    run_remote_git(&["push", "origin", "--delete", &branch_a]);
+
+    // Check out branch_c (top of the stack) and run sync --restack
+    repo.run_stax(&["checkout", &branch_c]);
+
+    let output = repo.run_stax(&["sync", "--restack", "--force"]);
+    assert!(
+        output.status.success(),
+        "sync --restack failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        !TestRepo::stdout(&output).contains("conflict"),
+        "Expected no conflict during sync --restack.\nstdout: {}",
+        TestRepo::stdout(&output)
+    );
+
+    // branch_a should be cleaned up
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|b| b == &branch_a),
+        "Expected merged branch_a to be deleted"
+    );
+
+    // branch_b should have only its own commit relative to main
+    let count_b = repo.git(&["rev-list", "--count", &format!("main..{}", branch_b)]);
+    assert!(count_b.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&count_b.stdout).trim(),
+        "1",
+        "Expected branch_b to have 1 unique commit after restack onto main"
+    );
+
+    // branch_c should have only its own commit relative to branch_b
+    let count_c = repo.git(&[
+        "rev-list",
+        "--count",
+        &format!("{}..{}", branch_b, branch_c),
+    ]);
+    assert!(count_c.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&count_c.stdout).trim(),
+        "1",
+        "Expected branch_c to have 1 unique commit after restack onto branch_b (issue #118)"
+    );
+
+    // branch_c should also have exactly 2 unique commits relative to main (B + C)
+    let count_c_main = repo.git(&["rev-list", "--count", &format!("main..{}", branch_c)]);
+    assert!(count_c_main.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&count_c_main.stdout).trim(),
+        "2",
+        "Expected branch_c to have 2 unique commits relative to main after full restack"
+    );
+}
+
 // =============================================================================
 // Merge Command Tests
 // =============================================================================
