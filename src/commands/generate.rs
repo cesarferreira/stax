@@ -153,7 +153,7 @@ pub fn run(
         }
     };
 
-    // Update the PR body on GitHub
+    // Update the PR body on the forge
     print!("  Updating PR #{} body... ", pr_number.to_string().cyan());
     std::io::stdout().flush().ok();
 

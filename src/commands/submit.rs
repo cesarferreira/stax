@@ -868,7 +868,7 @@ pub fn run(
     }
 
     let rt = rt.context("Internal error: missing runtime for PR submission")?;
-    let client = client.context("Internal error: missing GitHub client for PR submission")?;
+    let client = client.context("Internal error: missing forge client for PR submission")?;
 
     let (open_pr_url, async_timings, async_full_scan_fallbacks) = rt.block_on(async {
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();

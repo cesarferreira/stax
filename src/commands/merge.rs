@@ -115,7 +115,7 @@ pub fn run(
         }
     }
 
-    // Check that all branches have PRs (after GitHub lookup)
+    // Check that all branches have PRs (after forge lookup)
     let missing_prs: Vec<_> = scope
         .to_merge
         .iter()
