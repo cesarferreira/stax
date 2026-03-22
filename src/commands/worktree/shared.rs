@@ -17,6 +17,20 @@ const SHELL_PATH_PREFIX: &str = "STAX_SHELL_PATH=";
 const SHELL_LAUNCH_PREFIX: &str = "STAX_SHELL_LAUNCH=";
 const DEFAULT_WORKTREE_ROOT_MARKER: &str = ".stax-repo-root";
 
+/// Build a [`Command`] that runs a shell snippet on the current platform.
+/// Uses `sh -c` on Unix and `cmd /C` on Windows.
+fn platform_shell(command: &str) -> Command {
+    if cfg!(target_os = "windows") {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", command]);
+        cmd
+    } else {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", command]);
+        cmd
+    }
+}
+
 const ADJECTIVES: &[&str] = &[
     "beaming", "bouncy", "brisk", "cheeky", "chirpy", "curious", "dapper", "fizzy", "fluffy",
     "giddy", "jolly", "lively", "loopy", "merry", "nimble", "peppy", "perky", "plucky", "puffy",
@@ -135,8 +149,7 @@ impl LaunchSpec {
                 }
             }
             Self::Shell { command, .. } => {
-                let status = Command::new("sh")
-                    .args(["-c", command])
+                let status = platform_shell(command)
                     .current_dir(cwd)
                     .stdin(Stdio::inherit())
                     .stdout(Stdio::inherit())
@@ -764,8 +777,7 @@ pub fn run_blocking_hook(command: Option<&str>, cwd: &Path, label: &str) -> Resu
         return Ok(());
     };
 
-    let status = Command::new("sh")
-        .args(["-c", command])
+    let status = platform_shell(command)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -785,8 +797,7 @@ pub fn spawn_background_hook(command: Option<&str>, cwd: &Path, label: &str) -> 
         return Ok(());
     };
 
-    Command::new("sh")
-        .args(["-c", command])
+    platform_shell(command)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

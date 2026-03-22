@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use std::fs;
@@ -238,6 +238,15 @@ end"#
 
 /// Print the shell snippet to stdout for manual shell setup.
 pub fn run(install: bool) -> Result<()> {
+    if cfg!(target_os = "windows") {
+        bail!(
+            "Shell integration is not yet available on Windows.\n\
+             Workaround: use WSL or Git Bash, where bash/zsh/fish shells are available.\n\
+             All stax commands still work on Windows — only the transparent `cd` on \
+             `stax wt create` / `stax wt go` requires shell integration."
+        );
+    }
+
     if install {
         install_to_shell_config()
     } else {
@@ -360,49 +369,39 @@ fn detect_shell_kind() -> ShellKind {
 
 fn detect_shell_config() -> Result<PathBuf> {
     let shell = std::env::var("SHELL").unwrap_or_default();
-    let home = std::env::var("HOME").unwrap_or_default();
-
-    if home.is_empty() {
-        bail!("$HOME is not set; cannot detect shell config file.");
-    }
+    let home = dirs::home_dir().context("Could not find home directory")?;
 
     let path = if shell.ends_with("zsh") {
-        PathBuf::from(&home).join(".zshrc")
+        home.join(".zshrc")
     } else if shell.ends_with("bash") {
         // Prefer .bash_profile on macOS, .bashrc on Linux
-        let profile = PathBuf::from(&home).join(".bash_profile");
+        let profile = home.join(".bash_profile");
         if cfg!(target_os = "macos") && !profile.exists() {
-            PathBuf::from(&home).join(".bashrc")
+            home.join(".bashrc")
         } else if cfg!(target_os = "macos") {
             profile
         } else {
-            PathBuf::from(&home).join(".bashrc")
+            home.join(".bashrc")
         }
     } else if shell.ends_with("fish") {
-        PathBuf::from(&home).join(".config/fish/config.fish")
+        home.join(".config").join("fish").join("config.fish")
     } else {
         // Fallback to .profile
-        PathBuf::from(&home).join(".profile")
+        home.join(".profile")
     };
 
     Ok(path)
 }
 
 fn shell_integration_path(shell_kind: ShellKind) -> Result<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if home.is_empty() {
-        bail!("$HOME is not set; cannot determine shell integration path.");
-    }
+    let config_dir = crate::config::Config::dir()?;
 
     let filename = match shell_kind {
         ShellKind::Posix => POSIX_INTEGRATION_FILENAME,
         ShellKind::Fish => FISH_INTEGRATION_FILENAME,
     };
 
-    Ok(PathBuf::from(home)
-        .join(".config")
-        .join("stax")
-        .join(filename))
+    Ok(config_dir.join(filename))
 }
 
 fn shell_source_line(integration_path: &Path) -> String {

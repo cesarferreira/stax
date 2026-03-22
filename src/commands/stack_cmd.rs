@@ -399,9 +399,15 @@ pub fn run_test(
         println!("  {}:", branch.cyan());
         io::stdout().flush()?;
 
-        let status = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&cmd_str)
+        let status = if cfg!(target_os = "windows") {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/C", &cmd_str]);
+            cmd
+        } else {
+            let mut cmd = std::process::Command::new("sh");
+            cmd.args(["-c", &cmd_str]);
+            cmd
+        }
             .current_dir(repo.workdir()?)
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
