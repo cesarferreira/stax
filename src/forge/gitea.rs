@@ -363,7 +363,7 @@ impl GiteaClient {
                     .clone()
                     .unwrap_or_else(|| "status".to_string()),
                 status: normalize_gitea_status(status.status.as_deref()),
-                conclusion: status.status.clone(),
+                conclusion: status.status.as_deref().map(normalize_gitea_conclusion),
                 url: status.target_url.clone(),
                 started_at: status.created_at.clone(),
                 completed_at: status.updated_at.clone(),
@@ -389,6 +389,14 @@ fn normalize_gitea_status(status: Option<&str>) -> String {
     match status.unwrap_or("") {
         "pending" => "in_progress".to_string(),
         _ => "completed".to_string(),
+    }
+}
+
+fn normalize_gitea_conclusion(status: &str) -> String {
+    match status {
+        "success" => "success".to_string(),
+        "failure" | "error" => "failure".to_string(),
+        _ => status.to_string(),
     }
 }
 
