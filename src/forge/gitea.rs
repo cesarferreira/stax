@@ -126,7 +126,7 @@ impl GiteaClient {
     }
 
     pub async fn find_open_pr_by_head(&self, branch: &str) -> Result<Option<PrInfoWithHead>> {
-        let url = format!("{}?state=open", self.repo_url("/pulls"));
+        let url = format!("{}?state=open&limit=50", self.repo_url("/pulls"));
         let prs: Vec<GiteaPull> = get_json(&self.client, &url).await?;
         Ok(prs
             .into_iter()
@@ -141,7 +141,7 @@ impl GiteaClient {
     pub async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfoWithHead>> {
         let prs: Vec<GiteaPull> = get_json(
             &self.client,
-            &format!("{}?state=open", self.repo_url("/pulls")),
+            &format!("{}?state=open&limit=50", self.repo_url("/pulls")),
         )
         .await?;
         Ok(prs
@@ -237,7 +237,7 @@ impl GiteaClient {
         };
         let _: GiteaComment = post_json(
             &self.client,
-            &self.repo_url(&format!("/issues/{}/comments", number)),
+            &self.repo_url(&format!("/issues/{}/comments?limit=50", number)),
             &request,
         )
         .await?;
@@ -258,7 +258,7 @@ impl GiteaClient {
     async fn find_stack_comment_id(&self, number: u64) -> Result<Option<u64>> {
         let comments: Vec<GiteaComment> = get_json(
             &self.client,
-            &self.repo_url(&format!("/issues/{}/comments", number)),
+            &self.repo_url(&format!("/issues/{}/comments?limit=50", number)),
         )
         .await?;
         Ok(comments
@@ -270,7 +270,7 @@ impl GiteaClient {
     pub async fn list_all_comments(&self, number: u64) -> Result<Vec<PrComment>> {
         let comments: Vec<GiteaComment> = get_json(
             &self.client,
-            &self.repo_url(&format!("/issues/{}/comments", number)),
+            &self.repo_url(&format!("/issues/{}/comments?limit=50", number)),
         )
         .await?;
         let mut comments = comments
@@ -345,13 +345,13 @@ impl GiteaClient {
     pub async fn is_pr_merged(&self, number: u64) -> Result<bool> {
         let pr: GiteaPull =
             get_json(&self.client, &self.repo_url(&format!("/pulls/{}", number))).await?;
-        Ok(pr.merged.unwrap_or(false) || pr.state.eq_ignore_ascii_case("closed"))
+        Ok(pr.merged.unwrap_or(false))
     }
 
     pub async fn fetch_checks(&self, sha: &str) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
         let statuses: Vec<GiteaCommitStatus> = get_json(
             &self.client,
-            &self.repo_url(&format!("/commits/{}/statuses", sha)),
+            &self.repo_url(&format!("/commits/{}/statuses?limit=50", sha)),
         )
         .await?;
 
