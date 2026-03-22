@@ -4941,6 +4941,10 @@ mod github_mock_tests {
     use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    fn ensure_crypto_provider() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    }
+
     fn write_test_config(home: &Path, api_base_url: &str) {
         write_test_config_with_submit(home, api_base_url, None);
     }
@@ -5150,6 +5154,7 @@ mod github_mock_tests {
 
     /// Create a test repo configured to use a mock GitHub API
     async fn setup_mock_github() -> (TestRepo, MockServer) {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let repo = TestRepo::new_with_remote();
 
@@ -6380,6 +6385,7 @@ mod github_mock_tests {
 
     #[tokio::test]
     async fn test_github_api_mock_responses() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         // Mock fetching remote refs
