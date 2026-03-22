@@ -237,7 +237,7 @@ impl GiteaClient {
         };
         let _: GiteaComment = post_json(
             &self.client,
-            &self.repo_url(&format!("/issues/{}/comments?limit=50", number)),
+            &self.repo_url(&format!("/issues/{}/comments", number)),
             &request,
         )
         .await?;
