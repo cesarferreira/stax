@@ -5,9 +5,18 @@ use git2::{ConfigLevel, Repository};
 use std::path::Path;
 use std::process::Command;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgeType {
+    GitHub,
+    GitLab,
+    Gitea,
+}
+
 #[derive(Debug, Clone)]
 pub struct RemoteInfo {
     pub name: String,
+    pub forge: ForgeType,
+    pub host: String,
     pub namespace: String,
     pub repo: String,
     pub base_url: String,
@@ -19,11 +28,14 @@ impl RemoteInfo {
         let name = config.remote_name().to_string();
         let url = get_remote_url(repo.workdir()?, &name)?;
         let (host, path) = parse_remote_url(&url)?;
+        let forge = detect_forge(&host, config.remote_base_url());
         let (namespace, repo_name) = split_namespace_repo(&path)?;
 
         let configured_base = config.remote_base_url().trim_end_matches('/');
         let base_url = if configured_base.is_empty()
             || (configured_base == "https://github.com" && host != "github.com")
+            || (configured_base == "https://gitlab.com" && host != "gitlab.com")
+            || (configured_base == "https://gitea.com" && host != "gitea.com")
         {
             format!("https://{}", host)
         } else {
@@ -32,15 +44,14 @@ impl RemoteInfo {
 
         let api_base_url = if let Some(api) = &config.remote.api_base_url {
             Some(api.clone())
-        } else if base_url == "https://github.com" {
-            Some("https://api.github.com".to_string())
         } else {
-            // GitHub Enterprise
-            Some(format!("{}/api/v3", base_url))
+            Some(default_api_base_url(forge, &base_url))
         };
 
         Ok(Self {
             name,
+            forge,
+            host,
             namespace,
             repo: repo_name,
             base_url,
@@ -55,12 +66,51 @@ impl RemoteInfo {
         self.namespace.split('/').next().unwrap_or(&self.namespace)
     }
 
+    pub fn project_path(&self) -> String {
+        format!("{}/{}", self.namespace, self.repo)
+    }
+
+    pub fn encoded_project_path(&self) -> String {
+        self.project_path().replace('/', "%2F")
+    }
+
     pub fn repo_url(&self) -> String {
         format!("{}/{}/{}", self.base_url, self.namespace, self.repo)
     }
 
     pub fn pr_url(&self, number: u64) -> String {
-        format!("{}/pull/{}", self.repo_url(), number)
+        match self.forge {
+            ForgeType::GitHub => format!("{}/pull/{}", self.repo_url(), number),
+            ForgeType::GitLab => format!("{}/-/merge_requests/{}", self.repo_url(), number),
+            ForgeType::Gitea => format!("{}/pulls/{}", self.repo_url(), number),
+        }
+    }
+}
+
+fn detect_forge(host: &str, configured_base_url: &str) -> ForgeType {
+    let host = host.to_ascii_lowercase();
+    let configured_base_url = configured_base_url.to_ascii_lowercase();
+
+    if host.contains("gitlab") || configured_base_url.contains("gitlab") {
+        ForgeType::GitLab
+    } else if host.contains("gitea") || configured_base_url.contains("gitea") {
+        ForgeType::Gitea
+    } else {
+        ForgeType::GitHub
+    }
+}
+
+fn default_api_base_url(forge: ForgeType, base_url: &str) -> String {
+    match forge {
+        ForgeType::GitHub => {
+            if base_url == "https://github.com" {
+                "https://api.github.com".to_string()
+            } else {
+                format!("{}/api/v3", base_url)
+            }
+        }
+        ForgeType::GitLab => format!("{}/api/v4", base_url),
+        ForgeType::Gitea => format!("{}/api/v1", base_url),
     }
 }
 
@@ -364,6 +414,8 @@ mod tests {
     fn test_remote_info_owner() {
         let info = RemoteInfo {
             name: "origin".to_string(),
+            forge: ForgeType::GitHub,
+            host: "github.com".to_string(),
             namespace: "myorg".to_string(),
             repo: "myrepo".to_string(),
             base_url: "https://github.com".to_string(),
@@ -376,6 +428,8 @@ mod tests {
     fn test_remote_info_repo_url() {
         let info = RemoteInfo {
             name: "origin".to_string(),
+            forge: ForgeType::GitHub,
+            host: "github.com".to_string(),
             namespace: "myorg".to_string(),
             repo: "myrepo".to_string(),
             base_url: "https://github.com".to_string(),
@@ -388,6 +442,8 @@ mod tests {
     fn test_remote_info_pr_url() {
         let info = RemoteInfo {
             name: "origin".to_string(),
+            forge: ForgeType::GitHub,
+            host: "github.com".to_string(),
             namespace: "myorg".to_string(),
             repo: "myrepo".to_string(),
             base_url: "https://github.com".to_string(),
@@ -400,12 +456,64 @@ mod tests {
     fn test_remote_info_nested_namespace() {
         let info = RemoteInfo {
             name: "origin".to_string(),
+            forge: ForgeType::GitLab,
+            host: "gitlab.com".to_string(),
             namespace: "org/team".to_string(),
             repo: "project".to_string(),
             base_url: "https://gitlab.com".to_string(),
             api_base_url: None,
         };
         assert_eq!(info.repo_url(), "https://gitlab.com/org/team/project");
+    }
+
+    #[test]
+    fn test_remote_info_gitlab_pr_url() {
+        let info = RemoteInfo {
+            name: "origin".to_string(),
+            forge: ForgeType::GitLab,
+            host: "gitlab.com".to_string(),
+            namespace: "org/team".to_string(),
+            repo: "project".to_string(),
+            base_url: "https://gitlab.com".to_string(),
+            api_base_url: Some("https://gitlab.com/api/v4".to_string()),
+        };
+        assert_eq!(
+            info.pr_url(42),
+            "https://gitlab.com/org/team/project/-/merge_requests/42"
+        );
+    }
+
+    #[test]
+    fn test_remote_info_gitea_pr_url() {
+        let info = RemoteInfo {
+            name: "origin".to_string(),
+            forge: ForgeType::Gitea,
+            host: "gitea.example.com".to_string(),
+            namespace: "org".to_string(),
+            repo: "project".to_string(),
+            base_url: "https://gitea.example.com".to_string(),
+            api_base_url: Some("https://gitea.example.com/api/v1".to_string()),
+        };
+        assert_eq!(
+            info.pr_url(42),
+            "https://gitea.example.com/org/project/pulls/42"
+        );
+    }
+
+    #[test]
+    fn test_detect_forge_prefers_host() {
+        assert_eq!(
+            detect_forge("gitlab.com", "https://github.com"),
+            ForgeType::GitLab
+        );
+        assert_eq!(
+            detect_forge("gitea.example.com", "https://github.com"),
+            ForgeType::Gitea
+        );
+        assert_eq!(
+            detect_forge("github.example.com", "https://github.com"),
+            ForgeType::GitHub
+        );
     }
 
     #[test]

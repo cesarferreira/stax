@@ -5,9 +5,9 @@ use crate::commands::merge_rebase::{
 };
 use crate::config::Config;
 use crate::engine::Stack;
+use crate::forge::ForgeClient;
 use crate::git::{GitRepo, RebaseResult};
 use crate::github::pr::{CiStatus, MergeMethod, PrMergeStatus};
-use crate::github::GitHubClient;
 use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
@@ -89,19 +89,20 @@ pub fn run(
         return Ok(());
     }
 
-    // Set up GitHub client for PR lookups
+    // Set up forge client for PR lookups
     let remote_info = RemoteInfo::from_repo(&repo, &config);
     let rt = tokio::runtime::Runtime::new()?;
 
-    // Try to create GitHub client (may fail if no remote or no token)
-    let client = remote_info.as_ref().ok().and_then(|info| {
-        rt.block_on(async {
-            GitHubClient::new(info.owner(), &info.repo, info.api_base_url.clone())
-        })
+    // Try to create forge client (may fail if no remote or no token)
+    let client = remote_info
+        .as_ref()
         .ok()
-    });
+        .and_then(|info| {
+            let _enter = rt.enter();
+            ForgeClient::new(info).ok()
+        });
 
-    // For branches missing PR metadata, check GitHub for existing PRs
+    // For branches missing PR metadata, check the forge for existing PRs
     if let Some(ref client) = client {
         for branch_info in &mut scope.to_merge {
             if branch_info.pr_number.is_none() {
@@ -132,7 +133,9 @@ pub fn run(
     // Get remote info and client (will fail with clear error if not available)
     let remote_info = remote_info?;
     let client = client.ok_or_else(|| {
-        anyhow::anyhow!("Failed to connect to GitHub. Check your token and remote configuration.")
+        anyhow::anyhow!(
+            "Failed to connect to the configured forge. Check your token and remote configuration."
+        )
     })?;
 
     let fetch_status_timer = LiveTimer::maybe_new(!quiet, "Fetching PR status...");
@@ -921,7 +924,7 @@ enum WaitResult {
 /// Wait for a PR to be ready to merge (CI passed, approved)
 fn wait_for_pr_ready(
     rt: &tokio::runtime::Runtime,
-    client: &GitHubClient,
+    client: &ForgeClient,
     pr_number: u64,
     timeout: Duration,
     quiet: bool,
@@ -985,7 +988,7 @@ fn wait_for_pr_ready(
 fn record_ci_history_for_branch(
     repo: &GitRepo,
     rt: &tokio::runtime::Runtime,
-    client: &GitHubClient,
+    client: &ForgeClient,
     stack: &Stack,
     branch: &str,
 ) {
