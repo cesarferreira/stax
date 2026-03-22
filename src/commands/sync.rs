@@ -324,7 +324,7 @@ pub fn run(
         let repo = GitRepo::open_from_path(&reopen_repo_path)?;
 
         // Lazy-initialize forge client for updating PR bases (only if needed)
-        let github_client: Option<(tokio::runtime::Runtime, ForgeClient)> = {
+        let forge_client: Option<(tokio::runtime::Runtime, ForgeClient)> = {
             let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
 
             if let Some(info) = remote_info {
@@ -356,7 +356,7 @@ pub fn run(
             }
 
             // Record CI history for merged branches before deleting them
-            if let Some((ref rt, ref client)) = github_client {
+            if let Some((ref rt, ref client)) = forge_client {
                 record_ci_history_for_merged(&repo, rt, client, &merged, &stack, quiet);
             }
 
@@ -496,7 +496,7 @@ pub fn run(
 
                             // Update PR base on the forge if this branch has a PR
                             if let Some(pr_info) = &child_meta.pr_info {
-                                if let Some((rt, client)) = &github_client {
+                                if let Some((rt, client)) = &forge_client {
                                     match rt.block_on(
                                         client.update_pr_base(pr_info.number, &parent_branch),
                                     ) {

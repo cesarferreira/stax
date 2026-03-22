@@ -261,8 +261,8 @@ pub fn run(
     if no_pr {
         let runtime = tokio::runtime::Runtime::new().ok();
         let _enter = runtime.as_ref().map(|rt| rt.enter());
-        let gh_client = ForgeClient::new(&remote_info).ok();
-        client = gh_client.clone();
+        let forge_client = ForgeClient::new(&remote_info).ok();
+        client = forge_client.clone();
         let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
 
         for branch in &branches_to_submit {
@@ -275,13 +275,13 @@ pub fn run(
 
             // Best-effort metadata refresh when no-pr is used.
             if !is_empty {
-                if let (Some(runtime), Some(gh_client)) = (runtime.as_ref(), gh_client.as_ref()) {
+                if let (Some(runtime), Some(forge_client)) = (runtime.as_ref(), forge_client.as_ref()) {
                     let mut found_pr: Option<PrInfoWithHead> = None;
 
                     if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
                         let lookup_started_at = Instant::now();
                         found_pr = runtime
-                            .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
+                            .block_on(async { forge_client.get_pr_with_head(pr_info.number).await })
                             .ok();
                         timings.open_pr_discovery += lookup_started_at.elapsed();
                     }
@@ -290,7 +290,7 @@ pub fn run(
                         let lookup_started_at = Instant::now();
                         found_pr = runtime
                             .block_on(async {
-                                gh_client
+                                forge_client
                                     .find_open_pr_by_head(remote_info.owner(), branch)
                                     .await
                             })
@@ -310,7 +310,7 @@ pub fn run(
                         if open_prs_by_head.is_none() {
                             let lookup_started_at = Instant::now();
                             open_prs_by_head = runtime
-                                .block_on(async { gh_client.list_open_prs_by_head().await })
+                                .block_on(async { forge_client.list_open_prs_by_head().await })
                                 .ok();
                             timings.open_pr_discovery += lookup_started_at.elapsed();
                             if verbose && !quiet {
@@ -373,7 +373,7 @@ pub fn run(
     } else {
         let runtime = tokio::runtime::Runtime::new()?;
         let _enter = runtime.enter();
-        let gh_client = ForgeClient::new(&remote_info)?;
+        let forge_client = ForgeClient::new(&remote_info)?;
         let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
 
         for branch in &branches_to_submit {
@@ -397,7 +397,7 @@ pub fn run(
 
                     let lookup_started_at = Instant::now();
                     match runtime
-                        .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
+                        .block_on(async { forge_client.get_pr_with_head(pr_info.number).await })
                     {
                         Ok(pr) => {
                             let state = pr.info.state.to_ascii_lowercase();
@@ -425,7 +425,7 @@ pub fn run(
                 if existing_pr.is_none() {
                     let lookup_started_at = Instant::now();
                     existing_pr = runtime.block_on(async {
-                        gh_client
+                        forge_client
                             .find_open_pr_by_head(remote_info.owner(), branch)
                             .await
                     })?;
@@ -447,7 +447,7 @@ pub fn run(
                     if open_prs_by_head.is_none() {
                         let lookup_started_at = Instant::now();
                         let prs =
-                            runtime.block_on(async { gh_client.list_open_prs_by_head().await })?;
+                            runtime.block_on(async { forge_client.list_open_prs_by_head().await })?;
                         timings.open_pr_discovery += lookup_started_at.elapsed();
                         if verbose && !quiet {
                             println!("      Cached {} open PRs", prs.len());
@@ -541,7 +541,7 @@ pub fn run(
         }
 
         rt = Some(runtime);
-        client = Some(gh_client);
+        client = Some(forge_client);
     }
     timings.planning = planning_started_at.elapsed();
     LiveTimer::maybe_finish_ok(planning_timer, "done");
