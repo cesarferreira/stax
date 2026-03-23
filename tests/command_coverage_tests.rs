@@ -783,6 +783,12 @@ fn test_branch_reparent_help() {
 
     let output = repo.run_stax(&["branch", "reparent", "--help"]);
     output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("--restack"),
+        "help should document --restack, got: {}",
+        stdout
+    );
 }
 
 // =============================================================================

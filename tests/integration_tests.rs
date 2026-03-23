@@ -1082,6 +1082,114 @@ fn test_branch_reparent() {
     );
 }
 
+/// Reparent with `--restack` rebases onto the new parent so middle-of-stack commits are not kept.
+#[test]
+fn test_branch_reparent_restack_rewrites_onto_new_parent() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-1"]);
+    repo.create_file("feature1.txt", "one");
+    repo.commit("Commit feature 1");
+
+    repo.run_stax(&["bc", "feature-2"]);
+    let feature2 = repo.current_branch();
+    repo.create_file("feature2.txt", "two");
+    repo.commit("Commit feature 2");
+
+    assert!(repo.path().join("feature1.txt").exists());
+    assert!(repo.path().join("feature2.txt").exists());
+
+    repo.run_stax(&["t"]);
+    let output = repo.run_stax(&[
+        "branch",
+        "reparent",
+        "--branch",
+        &feature2,
+        "--parent",
+        "main",
+        "--restack",
+    ]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    assert_eq!(repo.current_branch(), "main");
+
+    let co = repo.git(&["checkout", &feature2]);
+    assert!(co.status.success(), "checkout feature2: {:?}", co);
+
+    assert!(
+        !repo.path().join("feature1.txt").exists(),
+        "expected feature-2 without feature-1 file after reparent --restack"
+    );
+    assert!(repo.path().join("feature2.txt").exists());
+}
+
+/// Without `--restack`, reparent only updates metadata; working tree still reflects old ancestry.
+#[test]
+fn test_branch_reparent_without_restack_keeps_middle_ancestor_files() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-1"]);
+    repo.create_file("feature1.txt", "one");
+    repo.commit("Commit feature 1");
+
+    repo.run_stax(&["bc", "feature-2"]);
+    let feature2 = repo.current_branch();
+    repo.create_file("feature2.txt", "two");
+    repo.commit("Commit feature 2");
+
+    repo.run_stax(&["t"]);
+    let output = repo.run_stax(&[
+        "branch", "reparent", "--branch", &feature2, "--parent", "main",
+    ]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("metadata only") || stdout.contains("Reparent updated stax"),
+        "expected guidance about metadata-only reparent, got: {}",
+        stdout
+    );
+
+    let co = repo.git(&["checkout", &feature2]);
+    assert!(co.status.success());
+
+    assert!(
+        repo.path().join("feature1.txt").exists(),
+        "without --restack, branch should still include ancestor commits from the middle branch"
+    );
+    assert!(repo.path().join("feature2.txt").exists());
+}
+
+/// `--restack` needs prior stax metadata to infer the old parent as the rebase boundary.
+#[test]
+fn test_branch_reparent_restack_requires_existing_metadata() {
+    let repo = TestRepo::new();
+
+    repo.git(&["checkout", "-b", "raw-branch"]);
+    repo.create_file("only.txt", "x");
+    repo.commit("raw commit");
+
+    let output = repo.run_stax(&["branch", "reparent", "-p", "main", "--restack"]);
+    assert!(
+        !output.status.success(),
+        "expected failure without metadata"
+    );
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("--restack") || stderr.contains("metadata"),
+        "expected metadata hint, got: {}",
+        stderr
+    );
+}
+
 #[test]
 fn test_branch_delete() {
     let repo = TestRepo::new();
@@ -4652,9 +4760,7 @@ fn test_sync_restack_no_ghost_commits_after_two_step_squash_merge() {
     // If ghost commits from A remain, this count would be > 1.
     let count_b = repo.git(&["rev-list", "--count", &format!("main..{}", branch_b)]);
     assert!(count_b.status.success());
-    let unique_commits = String::from_utf8_lossy(&count_b.stdout)
-        .trim()
-        .to_string();
+    let unique_commits = String::from_utf8_lossy(&count_b.stdout).trim().to_string();
     assert_eq!(
         unique_commits, "1",
         "Expected branch_b to have 1 unique commit (no ghost commits from A), got {} (issue #120)",

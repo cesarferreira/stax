@@ -997,9 +997,7 @@ pub fn run(
                                 branch,
                                 parent_branch: &meta.parent_branch_name,
                                 completed_branches: &completed_branches,
-                                remaining_branches: scope_order
-                                    .len()
-                                    .saturating_sub(index + 1),
+                                remaining_branches: scope_order.len().saturating_sub(index + 1),
                                 continue_commands: &[
                                     "stax resolve",
                                     "stax continue",
