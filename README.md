@@ -116,7 +116,7 @@ st rs --restack
 
 Result: two stacked branches, submitted as two linked PRs. After the bottom PR is merged, sync detects it, cleans up, and restack rebases the remaining branch onto trunk.
 
-Picked the wrong trunk branch? Run `st init` to reconfigure it interactively, or `st init --trunk <branch>` to set it directly.
+Picked the wrong trunk branch? Run `st trunk main` to switch it, or `st init --trunk <branch>` to reconfigure from scratch.
 
 Next steps:
 - [Getting Started: Quick Start](docs/getting-started/quick-start.md)

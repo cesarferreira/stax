@@ -23,7 +23,7 @@
 | Command | Alias | Description |
 |---|---|---|
 | `st checkout` | `co`, `bco` | Interactive branch picker |
-| `st trunk` | `t` | Switch to trunk |
+| `st trunk` | `t` | Switch to trunk (or `st trunk <branch>` to set trunk) |
 | `st up [n]` | `u` | Move up to child branch |
 | `st down [n]` | `d` | Move down to parent branch |
 | `st top` | | Move to stack tip |

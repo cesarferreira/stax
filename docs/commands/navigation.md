@@ -11,6 +11,7 @@
 | `st top` | Jump to stack tip |
 | `st bottom` | Jump to stack base |
 | `st trunk` / `st t` | Jump to trunk |
+| `st trunk <branch>` | Set the trunk branch |
 | `st prev` | Toggle to previous branch |
 | `st co` | Interactive branch picker |
 

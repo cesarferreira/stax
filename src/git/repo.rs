@@ -594,10 +594,20 @@ impl GitRepo {
     pub fn trunk_branch(&self) -> Result<String> {
         // First check if trunk is stored
         if let Some(trunk) = super::refs::read_trunk(&self.repo)? {
-            return Ok(trunk);
+            // Validate the stored trunk branch actually exists locally
+            if self
+                .repo
+                .find_branch(&trunk, BranchType::Local)
+                .is_ok()
+            {
+                return Ok(trunk);
+            }
+            // Stored trunk doesn't exist, fall through to auto-detection
         }
-        // Fall back to auto-detection
-        self.detect_trunk()
+        // Fall back to auto-detection and persist the result
+        let detected = self.detect_trunk()?;
+        super::refs::write_trunk(&self.repo, &detected)?;
+        Ok(detected)
     }
 
     /// Auto-detect trunk branch (main or master)

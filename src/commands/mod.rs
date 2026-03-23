@@ -32,6 +32,7 @@ pub mod resolve;
 pub mod restack;
 pub(crate) mod restack_conflict;
 pub(crate) mod restack_parent;
+pub mod set_trunk;
 pub mod shell_setup;
 pub mod split;
 pub mod stack_cmd;

@@ -45,6 +45,7 @@ stax cascade                   # Restack bottom-up and submit updates
 
 stax checkout|co|bco           # Checkout branch (interactive by default)
 stax trunk|t                   # Checkout trunk
+stax trunk <branch>            # Set trunk branch
 stax up|u [n]                  # Move to child branch
 stax down|d [n]                # Move to parent branch
 stax top                       # Move to stack tip
@@ -206,6 +207,7 @@ stax checkout --trunk              # Jump to trunk
 stax checkout --parent             # Jump to parent
 stax checkout --child 1            # Jump to first child
 stax t                             # Trunk alias
+stax trunk main                    # Set trunk to 'main'
 stax u 3                           # Move up 3 branches
 stax d                             # Move down 1 branch
 stax top                           # Tip of current stack

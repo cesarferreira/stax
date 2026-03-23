@@ -421,9 +421,12 @@ enum Commands {
     /// Check stax configuration and repo health
     Doctor,
 
-    /// Switch to the trunk branch
+    /// Switch to the trunk branch, or set it with `stax trunk <branch>`
     #[command(visible_alias = "t")]
-    Trunk,
+    Trunk {
+        /// Set this branch as the new trunk
+        branch: Option<String>,
+    },
 
     /// Move up the stack (to child branch)
     #[command(visible_alias = "u")]
@@ -1347,7 +1350,13 @@ pub fn run() -> Result<()> {
         Commands::Diff { stack, all } => commands::diff::run(stack, all),
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
         Commands::Doctor => unreachable!(), // Handled above
-        Commands::Trunk => commands::checkout::run(None, true, false, None),
+        Commands::Trunk { branch } => {
+            if let Some(name) = branch {
+                commands::set_trunk::run(&name)
+            } else {
+                commands::checkout::run(None, true, false, None)
+            }
+        }
         Commands::Up { count } => commands::navigate::up(count),
         Commands::Down { count } => commands::navigate::down(count),
         Commands::Top => commands::navigate::top(),
