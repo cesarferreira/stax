@@ -872,6 +872,9 @@ enum BranchCommands {
         /// New parent branch name
         #[arg(short, long)]
         parent: Option<String>,
+        /// Rebase the branch onto the new parent immediately (rewrites history)
+        #[arg(long)]
+        restack: bool,
     },
 
     /// Rename the current branch
@@ -1472,9 +1475,11 @@ pub fn run() -> Result<()> {
                 commands::branch::track::run(parent, all_prs)
             }
             BranchCommands::Untrack { branch } => commands::branch::untrack::run(branch),
-            BranchCommands::Reparent { branch, parent } => {
-                commands::branch::reparent::run(branch, parent)
-            }
+            BranchCommands::Reparent {
+                branch,
+                parent,
+                restack,
+            } => commands::branch::reparent::run(branch, parent, restack),
             BranchCommands::Rename {
                 name,
                 edit,
