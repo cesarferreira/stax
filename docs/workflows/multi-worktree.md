@@ -95,6 +95,9 @@ After installation, both `st` and `stax` transparently handle:
 - `st wt rm` when removing the current worktree
 - `sw <name>` as a quick alias for `st wt go <name>`
 
+!!! note "Windows"
+    Shell integration supports **bash, zsh, and fish** only. On Windows (PowerShell/CMD), worktree commands still work but cannot auto-`cd` the parent shell. After `st wt c` or `st wt go`, manually `cd` to the printed path. The `sw` alias and automatic shell relocation on `st wt rm` are also unavailable. See [Windows notes](../reference/windows.md) for the full list of limitations.
+
 ### Command shape
 
 | Command | Purpose |

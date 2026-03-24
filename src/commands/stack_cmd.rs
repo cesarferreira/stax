@@ -1,3 +1,4 @@
+use crate::commands::worktree::shared::platform_shell;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{refs, GitRepo};
 use crate::ops::receipt::OpKind;
@@ -399,9 +400,7 @@ pub fn run_test(
         println!("  {}:", branch.cyan());
         io::stdout().flush()?;
 
-        let status = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&cmd_str)
+        let status = platform_shell(&cmd_str)
             .current_dir(repo.workdir()?)
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
