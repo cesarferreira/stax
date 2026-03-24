@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::engine::{BranchMetadata, PrInfo};
+use crate::forge::ForgeClient;
 use crate::git::GitRepo;
-use crate::github::client::GitHubClient;
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -123,23 +123,17 @@ fn run_track_all_prs() -> Result<()> {
     let workdir = repo.workdir()?;
     let remote_name = config.remote_name();
 
-    // Get remote info for GitHub API
+    // Get remote info for forge API
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
 
-    // Create GitHub client
     let rt = tokio::runtime::Runtime::new().context("Failed to create async runtime")?;
-    let client = rt.block_on(async {
-        GitHubClient::new(
-            remote_info.owner(),
-            &remote_info.repo,
-            remote_info.api_base_url.clone(),
-        )
-    })?;
+    let _enter = rt.enter();
+    let client = ForgeClient::new(&remote_info)?;
 
     // Get current user
     let username = rt
         .block_on(async { client.get_current_user().await })
-        .context("Failed to get current GitHub user")?;
+        .context("Failed to get current forge user")?;
 
     // Fetch all open PRs
     let open_prs = rt

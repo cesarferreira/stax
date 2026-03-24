@@ -5246,7 +5246,7 @@ fn test_merge_combined_flags() {
     );
 }
 
-mod github_mock_tests {
+mod forge_mock_tests {
     use super::*;
     use std::fs;
     use std::path::Path;
@@ -5294,6 +5294,20 @@ mod github_mock_tests {
     }
 
     fn setup_fake_github_remote(repo: &TestRepo, home: &Path) -> TempDir {
+        setup_fake_remote(
+            repo,
+            home,
+            "https://github.com/test/repo.git",
+            "https://github.com/",
+        )
+    }
+
+    fn setup_fake_remote(
+        repo: &TestRepo,
+        home: &Path,
+        remote_url: &str,
+        remote_base: &str,
+    ) -> TempDir {
         let remote_root = super::test_tempdir();
         let remote_repo = remote_root.path().join("test").join("repo.git");
         if let Some(parent) = remote_repo.parent() {
@@ -5307,16 +5321,7 @@ mod github_mock_tests {
             .output()
             .expect("Failed to init bare remote repo");
 
-        let add_remote = git_with_env(
-            repo,
-            home,
-            &[
-                "remote",
-                "add",
-                "origin",
-                "https://github.com/test/repo.git",
-            ],
-        );
+        let add_remote = git_with_env(repo, home, &["remote", "add", "origin", remote_url]);
         assert!(
             add_remote.status.success(),
             "Failed to add origin: {}",
@@ -5330,7 +5335,7 @@ mod github_mock_tests {
             &[
                 "config",
                 &format!("url.{}.insteadOf", file_base),
-                "https://github.com/",
+                remote_base,
             ],
         );
         assert!(
@@ -5395,6 +5400,7 @@ mod github_mock_tests {
         })
     }
 
+
     fn squash_merge_branch_on_fake_remote(remote_root: &TempDir, branch: &str) {
         let remote_repo = remote_root.path().join("test").join("repo.git");
         let clone_dir = super::test_tempdir();
@@ -5426,24 +5432,49 @@ mod github_mock_tests {
     }
 
     fn run_stax_with_env(repo: &TestRepo, home: &Path, args: &[&str]) -> Output {
+        run_stax_with_token_env(repo, home, "STAX_GITHUB_TOKEN", args)
+    }
+
+    fn run_stax_with_token_env(
+        repo: &TestRepo,
+        home: &Path,
+        token_env: &str,
+        args: &[&str],
+    ) -> Output {
         let gitconfig = ensure_empty_gitconfig(home);
-        Command::new(stax_bin())
+        let mut command = Command::new(stax_bin());
+        command
             .args(args)
             .current_dir(repo.path())
             .env("HOME", home)
             .env("GIT_CONFIG_GLOBAL", &gitconfig)
             .env("GIT_CONFIG_SYSTEM", &gitconfig)
-            .env("STAX_GITHUB_TOKEN", "mock-token")
-            .env("STAX_DISABLE_UPDATE_CHECK", "1")
-            .output()
-            .expect("Failed to execute stax")
+            .env(token_env, "mock-token")
+            .env("STAX_DISABLE_UPDATE_CHECK", "1");
+        command.output().expect("Failed to execute stax")
     }
 
     fn setup_branch_with_remote(home: &Path, branch: &str) -> TestRepo {
-        let repo = TestRepo::new();
-        let _remote_root = setup_fake_github_remote(&repo, home);
+        setup_branch_with_forge_remote(
+            home,
+            branch,
+            "https://github.com/test/repo.git",
+            "https://github.com/",
+            "STAX_GITHUB_TOKEN",
+        )
+    }
 
-        let output = run_stax_with_env(&repo, home, &["bc", branch]);
+    fn setup_branch_with_forge_remote(
+        home: &Path,
+        branch: &str,
+        remote_url: &str,
+        remote_base: &str,
+        token_env: &str,
+    ) -> TestRepo {
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_remote(&repo, home, remote_url, remote_base);
+
+        let output = run_stax_with_token_env(&repo, home, token_env, &["bc", branch]);
         assert!(
             output.status.success(),
             "Failed to create branch {}: {}",

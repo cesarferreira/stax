@@ -3,8 +3,8 @@ use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictC
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
+use crate::forge::ForgeClient;
 use crate::git::{GitRepo, RebaseResult};
-use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
@@ -323,24 +323,15 @@ pub fn run(
         drop(repo);
         let repo = GitRepo::open_from_path(&reopen_repo_path)?;
 
-        // Lazy-initialize GitHub client for updating PR bases (only if needed)
-        let github_client: Option<(tokio::runtime::Runtime, GitHubClient)> = {
+        // Lazy-initialize forge client for updating PR bases (only if needed)
+        let forge_client: Option<(tokio::runtime::Runtime, ForgeClient)> = {
             let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
-            let has_github_token = Config::github_token().is_some();
 
-            if has_github_token {
-                if let Some(info) = remote_info {
-                    tokio::runtime::Runtime::new().ok().and_then(|rt| {
-                        // Must create client inside block_on - Octocrab requires runtime context
-                        rt.block_on(async {
-                            GitHubClient::new(info.owner(), &info.repo, info.api_base_url.clone())
-                                .ok()
-                        })
-                        .map(|client| (rt, client))
-                    })
-                } else {
-                    None
-                }
+            if let Some(info) = remote_info {
+                tokio::runtime::Runtime::new().ok().and_then(|rt| {
+                    let _enter = rt.enter();
+                    ForgeClient::new(&info).ok().map(|client| (rt, client))
+                })
             } else {
                 None
             }
@@ -365,7 +356,7 @@ pub fn run(
             }
 
             // Record CI history for merged branches before deleting them
-            if let Some((ref rt, ref client)) = github_client {
+            if let Some((ref rt, ref client)) = forge_client {
                 record_ci_history_for_merged(&repo, rt, client, &merged, &stack, quiet);
             }
 
@@ -503,9 +494,9 @@ pub fn run(
                             };
                             updated_meta.write(repo.inner(), child)?;
 
-                            // Update PR base on GitHub if this branch has a PR
+                            // Update PR base on the forge if this branch has a PR
                             if let Some(pr_info) = &child_meta.pr_info {
-                                if let Some((rt, client)) = &github_client {
+                                if let Some((rt, client)) = &forge_client {
                                     match rt.block_on(
                                         client.update_pr_base(pr_info.number, &parent_branch),
                                     ) {
@@ -1323,7 +1314,7 @@ fn resolve_effective_parent(
 fn record_ci_history_for_merged(
     repo: &GitRepo,
     rt: &tokio::runtime::Runtime,
-    client: &GitHubClient,
+    client: &ForgeClient,
     merged_branches: &[String],
     stack: &Stack,
     quiet: bool,

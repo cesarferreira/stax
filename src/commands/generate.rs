@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
+use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::github::pr_template::discover_pr_templates;
-use crate::github::GitHubClient;
 use crate::remote;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
@@ -153,18 +153,14 @@ pub fn run(
         }
     };
 
-    // Update the PR body on GitHub
+    // Update the PR body on the forge
     print!("  Updating PR #{} body... ", pr_number.to_string().cyan());
     std::io::stdout().flush().ok();
 
     let remote_info = remote::RemoteInfo::from_repo(&repo, &config)?;
-    let owner = remote_info.owner().to_string();
-    let repo_name = remote_info.repo.clone();
-
     let runtime = tokio::runtime::Runtime::new()?;
-    let client = runtime.block_on(async {
-        GitHubClient::new(&owner, &repo_name, remote_info.api_base_url.clone())
-    })?;
+    let _enter = runtime.enter();
+    let client = ForgeClient::new(&remote_info)?;
 
     runtime.block_on(async { client.update_pr_body(pr_number, &final_body).await })?;
 

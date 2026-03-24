@@ -1,12 +1,12 @@
 use crate::config::{Config, StackLinksMode};
 use crate::engine::{BranchMetadata, Stack};
+use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::github::pr::{
     generate_stack_links_markdown, remove_stack_links_from_body, upsert_stack_links_in_body,
     PrInfoWithHead, StackPrInfo,
 };
 use crate::github::pr_template::{discover_pr_templates, select_template_interactive};
-use crate::github::GitHubClient;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
@@ -178,9 +178,6 @@ pub fn run(
 
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
 
-    let owner = remote_info.owner().to_string();
-    let repo_name = remote_info.repo.clone();
-
     // Fetch to ensure we have latest remote refs (non-fatal if it fails)
     let fetch_summary = if no_fetch {
         if !quiet {
@@ -259,18 +256,13 @@ pub fn run(
 
     let mut plans: Vec<PrPlan> = Vec::new();
     let mut rt: Option<tokio::runtime::Runtime> = None;
-    let client: Option<GitHubClient>;
+    let client: Option<ForgeClient>;
 
     if no_pr {
         let runtime = tokio::runtime::Runtime::new().ok();
-        let gh_client = runtime.as_ref().and_then(|runtime| {
-            runtime
-                .block_on(async {
-                    GitHubClient::new(&owner, &repo_name, remote_info.api_base_url.clone())
-                })
-                .ok()
-        });
-        client = gh_client.clone();
+        let _enter = runtime.as_ref().map(|rt| rt.enter());
+        let forge_client = ForgeClient::new(&remote_info).ok();
+        client = forge_client.clone();
         let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
 
         for branch in &branches_to_submit {
@@ -283,13 +275,13 @@ pub fn run(
 
             // Best-effort metadata refresh when no-pr is used.
             if !is_empty {
-                if let (Some(runtime), Some(gh_client)) = (runtime.as_ref(), gh_client.as_ref()) {
+                if let (Some(runtime), Some(forge_client)) = (runtime.as_ref(), forge_client.as_ref()) {
                     let mut found_pr: Option<PrInfoWithHead> = None;
 
                     if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
                         let lookup_started_at = Instant::now();
                         found_pr = runtime
-                            .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
+                            .block_on(async { forge_client.get_pr_with_head(pr_info.number).await })
                             .ok();
                         timings.open_pr_discovery += lookup_started_at.elapsed();
                     }
@@ -298,8 +290,8 @@ pub fn run(
                         let lookup_started_at = Instant::now();
                         found_pr = runtime
                             .block_on(async {
-                                gh_client
-                                    .find_open_pr_by_head(remote_info.owner(), branch)
+                                forge_client
+                                    .find_open_pr_by_head(branch)
                                     .await
                             })
                             .ok()
@@ -318,7 +310,7 @@ pub fn run(
                         if open_prs_by_head.is_none() {
                             let lookup_started_at = Instant::now();
                             open_prs_by_head = runtime
-                                .block_on(async { gh_client.list_open_prs_by_head().await })
+                                .block_on(async { forge_client.list_open_prs_by_head().await })
                                 .ok();
                             timings.open_pr_discovery += lookup_started_at.elapsed();
                             if verbose && !quiet {
@@ -380,9 +372,8 @@ pub fn run(
         }
     } else {
         let runtime = tokio::runtime::Runtime::new()?;
-        let gh_client = runtime.block_on(async {
-            GitHubClient::new(&owner, &repo_name, remote_info.api_base_url.clone())
-        })?;
+        let _enter = runtime.enter();
+        let forge_client = ForgeClient::new(&remote_info)?;
         let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
 
         for branch in &branches_to_submit {
@@ -406,10 +397,11 @@ pub fn run(
 
                     let lookup_started_at = Instant::now();
                     match runtime
-                        .block_on(async { gh_client.get_pr_with_head(pr_info.number).await })
+                        .block_on(async { forge_client.get_pr_with_head(pr_info.number).await })
                     {
                         Ok(pr) => {
-                            if pr.head == *branch && pr.info.state == "Open" {
+                            let state = pr.info.state.to_ascii_lowercase();
+                            if pr.head == *branch && matches!(state.as_str(), "open" | "opened") {
                                 existing_pr = Some(pr);
                             } else if verbose && !quiet {
                                 println!(
@@ -433,8 +425,8 @@ pub fn run(
                 if existing_pr.is_none() {
                     let lookup_started_at = Instant::now();
                     existing_pr = runtime.block_on(async {
-                        gh_client
-                            .find_open_pr_by_head(remote_info.owner(), branch)
+                        forge_client
+                            .find_open_pr_by_head(branch)
                             .await
                     })?;
                     timings.open_pr_discovery += lookup_started_at.elapsed();
@@ -455,7 +447,7 @@ pub fn run(
                     if open_prs_by_head.is_none() {
                         let lookup_started_at = Instant::now();
                         let prs =
-                            runtime.block_on(async { gh_client.list_open_prs_by_head().await })?;
+                            runtime.block_on(async { forge_client.list_open_prs_by_head().await })?;
                         timings.open_pr_discovery += lookup_started_at.elapsed();
                         if verbose && !quiet {
                             println!("      Cached {} open PRs", prs.len());
@@ -549,7 +541,7 @@ pub fn run(
         }
 
         rt = Some(runtime);
-        client = Some(gh_client);
+        client = Some(forge_client);
     }
     timings.planning = planning_started_at.elapsed();
     LiveTimer::maybe_finish_ok(planning_timer, "done");
@@ -876,7 +868,7 @@ pub fn run(
     }
 
     let rt = rt.context("Internal error: missing runtime for PR submission")?;
-    let client = client.context("Internal error: missing GitHub client for PR submission")?;
+    let client = client.context("Internal error: missing forge client for PR submission")?;
 
     let (open_pr_url, async_timings, async_full_scan_fallbacks) = rt.block_on(async {
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();
@@ -1411,7 +1403,7 @@ fn load_pr_template(workdir: &Path) -> Option<String> {
 }
 
 async fn apply_pr_metadata(
-    client: &GitHubClient,
+    client: &ForgeClient,
     pr_number: u64,
     reviewers: &[String],
     labels: &[String],
@@ -1433,7 +1425,7 @@ async fn apply_pr_metadata(
 }
 
 fn print_verbose_network_summary(
-    client: Option<&GitHubClient>,
+    client: Option<&ForgeClient>,
     remote_name: &str,
     fetch_summary: &str,
     timings: &SubmitPhaseTimings,
@@ -1447,8 +1439,7 @@ fn print_verbose_network_summary(
         fetch_summary
     );
 
-    if let Some(client) = client {
-        let stats = client.api_call_stats();
+    if let Some(stats) = client.and_then(|client| client.api_call_stats()) {
         println!(
             "  {:<28} {}",
             "github.api.total",

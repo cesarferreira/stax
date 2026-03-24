@@ -10,6 +10,7 @@ pub mod cli;
 mod commands;
 mod config;
 mod engine;
+mod forge;
 mod git;
 mod ops;
 mod progress;
@@ -18,3 +19,4 @@ mod tui;
 mod update;
 
 pub mod github;
+pub use forge::ForgeClient;

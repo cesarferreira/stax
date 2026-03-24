@@ -1323,6 +1323,8 @@ mod tests {
     fn test_generate_stack_comment_single_pr() {
         let remote = crate::remote::RemoteInfo {
             name: "origin".to_string(),
+            forge: crate::remote::ForgeType::GitHub,
+            host: "github.com".to_string(),
             namespace: "user".to_string(),
             repo: "repo".to_string(),
             base_url: "https://github.com".to_string(),
@@ -1347,6 +1349,8 @@ mod tests {
     fn test_generate_stack_comment_multiple_prs() {
         let remote = crate::remote::RemoteInfo {
             name: "origin".to_string(),
+            forge: crate::remote::ForgeType::GitHub,
+            host: "github.com".to_string(),
             namespace: "user".to_string(),
             repo: "repo".to_string(),
             base_url: "https://github.com".to_string(),
@@ -1381,6 +1385,8 @@ mod tests {
     fn test_generate_stack_comment_without_pr() {
         let remote = crate::remote::RemoteInfo {
             name: "origin".to_string(),
+            forge: crate::remote::ForgeType::GitHub,
+            host: "github.com".to_string(),
             namespace: "user".to_string(),
             repo: "repo".to_string(),
             base_url: "https://github.com".to_string(),

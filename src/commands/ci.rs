@@ -1,7 +1,8 @@
 use crate::cache::CiCache;
-use crate::ci::history;
+use crate::ci::{history, CheckRunInfo};
 use crate::config::Config;
 use crate::engine::Stack;
+use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::github::GitHubClient;
 use crate::remote::RemoteInfo;
@@ -12,27 +13,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
 use std::time::Duration;
-
-/// Individual check run info
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CheckRunInfo {
-    pub name: String,
-    pub status: String,
-    pub conclusion: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    // Timing fields
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub elapsed_secs: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub average_secs: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub completion_percent: Option<u8>,
-}
 
 /// CI status for a branch
 #[derive(Debug, Clone, Serialize)]
@@ -286,10 +266,9 @@ pub fn run(
     };
 
     let rt = tokio::runtime::Runtime::new()?;
+    let _enter = rt.enter();
 
-    let client = rt.block_on(async {
-        GitHubClient::new(remote.owner(), &remote.repo, remote.api_base_url.clone())
-    })?;
+    let client = ForgeClient::new(&remote)?;
 
     if watch {
         return run_watch_mode(
@@ -330,7 +309,7 @@ pub fn run(
 pub fn fetch_ci_statuses(
     repo: &GitRepo,
     rt: &tokio::runtime::Runtime,
-    client: &GitHubClient,
+    client: &ForgeClient,
     stack: &Stack,
     branches_to_check: &[String],
 ) -> Result<Vec<BranchCiStatus>> {
@@ -345,7 +324,7 @@ pub fn fetch_ci_statuses(
         let sha_short = sha.chars().take(7).collect::<String>();
         let pr_number = stack.branches.get(branch).and_then(|b| b.pr_number);
 
-        let check_runs_result = rt.block_on(async { fetch_all_checks(repo, client, &sha).await });
+        let check_runs_result = rt.block_on(async { client.fetch_checks(repo, &sha).await });
 
         let (overall_status, check_runs) = match check_runs_result {
             Ok((status, runs)) => (status, runs),
@@ -819,7 +798,7 @@ fn all_checks_complete(statuses: &[BranchCiStatus]) -> bool {
 fn run_watch_mode(
     repo: &GitRepo,
     rt: &tokio::runtime::Runtime,
-    client: &GitHubClient,
+    client: &ForgeClient,
     stack: &Stack,
     branches_to_check: &[String],
     current: &str,
@@ -963,9 +942,9 @@ fn update_ci_cache(repo: &GitRepo, stack: &Stack, statuses: &[BranchCiStatus]) {
 }
 
 /// Fetch all checks (both check runs and commit statuses), deduplicated
-async fn fetch_all_checks(
+pub async fn fetch_github_checks(
     repo: &GitRepo,
-    client: &GitHubClient,
+    client: &crate::github::GitHubClient,
     commit_sha: &str,
 ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
     let (check_runs_overall, mut all_checks) = fetch_check_runs(repo, client, commit_sha).await?;
