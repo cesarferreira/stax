@@ -407,6 +407,7 @@ impl GitLabClient {
 
 /// Percent-encode a value for use in a URL query parameter.
 fn encode_query_value(value: &str) -> String {
+    use std::fmt::Write;
     let mut encoded = String::with_capacity(value.len());
     for byte in value.bytes() {
         match byte {
@@ -415,7 +416,8 @@ fn encode_query_value(value: &str) -> String {
                 encoded.push(byte as char);
             }
             _ => {
-                encoded.push_str(&format!("%{:02X}", byte));
+                // write! into a String is infallible
+                let _ = write!(encoded, "%{:02X}", byte);
             }
         }
     }
