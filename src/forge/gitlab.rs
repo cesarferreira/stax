@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{
-    build_http_client, ci_status_from_string, delete_empty, get_json, make_issue_comment,
-    mergeable_bool, post_json, put_json, stack_comment_body, AuthStyle, STACK_COMMENT_MARKER,
+    aggregate_ci_overall, build_http_client, ci_status_from_string, delete_empty, get_json,
+    make_issue_comment, mergeable_bool, post_json, put_json, stack_comment_body, AuthStyle,
+    STACK_COMMENT_MARKER,
 };
 use crate::ci::CheckRunInfo;
 use crate::github::pr::{MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
@@ -392,22 +393,13 @@ impl GitLabClient {
             })
             .collect::<Vec<_>>();
 
-        let overall = statuses
-            .iter()
-            .filter_map(|status| status.status.as_deref())
-            .find_map(|status| match status {
-                "failed" | "canceled" => Some("failure".to_string()),
-                "running" | "pending" | "created" => Some("pending".to_string()),
-                "success" => None,
-                _ => None,
-            })
-            .or_else(|| {
-                if statuses.is_empty() {
-                    None
-                } else {
-                    Some("success".to_string())
-                }
-            });
+        let overall = aggregate_ci_overall(
+            statuses
+                .iter()
+                .filter_map(|status| status.status.as_deref()),
+            |s| matches!(s, "failed" | "canceled"),
+            |s| matches!(s, "running" | "pending" | "created"),
+        );
 
         Ok((overall, checks))
     }
