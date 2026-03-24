@@ -84,8 +84,8 @@ struct UpdatePullRequest<'a> {
 
 #[derive(Serialize)]
 struct MergePullRequest<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    merge_title_field: Option<&'a str>,
+    #[serde(rename = "MergeTitleField", skip_serializing_if = "Option::is_none")]
+    merge_title: Option<&'a str>,
     #[serde(rename = "Do")]
     do_field: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -296,7 +296,7 @@ impl GiteaClient {
         sha: Option<&str>,
     ) -> Result<()> {
         let request = MergePullRequest {
-            merge_title_field: commit_title,
+            merge_title: commit_title,
             do_field: method.as_str(),
             head_commit_id: sha,
         };

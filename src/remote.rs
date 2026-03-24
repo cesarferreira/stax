@@ -103,7 +103,11 @@ fn detect_forge(host: &str, configured_base_url: &str) -> ForgeType {
 
     if host.contains("gitlab") || configured_base_url.contains("gitlab") {
         ForgeType::GitLab
-    } else if host.contains("gitea") || configured_base_url.contains("gitea") {
+    } else if host.contains("gitea")
+        || host.contains("forgejo")
+        || configured_base_url.contains("gitea")
+        || configured_base_url.contains("forgejo")
+    {
         ForgeType::Gitea
     } else {
         ForgeType::GitHub
@@ -523,6 +527,18 @@ mod tests {
         assert_eq!(
             detect_forge("github.example.com", "https://github.com"),
             ForgeType::GitHub
+        );
+    }
+
+    #[test]
+    fn test_detect_forge_recognizes_forgejo() {
+        assert_eq!(
+            detect_forge("forgejo.example.com", "https://github.com"),
+            ForgeType::Gitea
+        );
+        assert_eq!(
+            detect_forge("git.example.com", "https://forgejo.example.com"),
+            ForgeType::Gitea
         );
     }
 
