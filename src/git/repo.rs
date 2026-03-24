@@ -1109,10 +1109,8 @@ Use --auto-stash-pop or stash/commit changes first.",
             );
         }
 
-        let mut branch = self.repo.find_branch(name, BranchType::Local)?;
-        if force {
-            branch.delete()?;
-        } else {
+        if !force {
+            let branch = self.repo.find_branch(name, BranchType::Local)?;
             let branch_commit = branch.get().peel_to_commit()?;
             let mut candidate_bases = vec![self.trunk_branch()?];
 
@@ -1145,8 +1143,15 @@ Use --auto-stash-pop or stash/commit changes first.",
                     name
                 );
             }
+        }
 
-            branch.delete()?;
+        // Use git CLI instead of libgit2's branch.delete() to avoid issues
+        // with config cleanup on branch names containing slashes
+        let flag = if force { "-D" } else { "-d" };
+        let output = self.run_git(self.workdir()?, &["branch", flag, name])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Failed to delete branch '{}': {}", name, stderr.trim());
         }
         Ok(())
     }
