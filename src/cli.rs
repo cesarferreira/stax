@@ -249,7 +249,7 @@ enum Commands {
         /// Also restack branches after syncing
         #[arg(short, long)]
         restack: bool,
-        /// Prune stale remote-tracking refs during fetch
+        /// No-op: sync always prunes stale remote-tracking refs during fetch
         #[arg(long)]
         prune: bool,
         /// Don't delete merged branches
@@ -1127,11 +1127,14 @@ pub fn run() -> Result<()> {
     let _ = Config::ensure_exists();
 
     let cli = Cli::parse();
+    let stdin_is_terminal = std::io::stdin().is_terminal();
+    let stdout_is_terminal = std::io::stdout().is_terminal();
 
-    // No command = launch TUI
+    // Bare `st`/`stax` should only enter the TUI when both sides are interactive.
+    // In shells or wrappers without a usable TTY, fall back to the regular status view.
     let command = match cli.command {
         Some(cmd) => cmd,
-        None => {
+        None if should_launch_default_tui(stdin_is_terminal, stdout_is_terminal) => {
             // TUI requires initialized repo
             commands::init::ensure_initialized()?;
             let result = tui::run();
@@ -1139,6 +1142,13 @@ pub fn run() -> Result<()> {
             update::check_in_background();
             return result;
         }
+        None => Commands::Status {
+            json: false,
+            stack: None,
+            current: false,
+            compact: false,
+            quiet: false,
+        },
     };
 
     // Commands that don't need repo initialization
@@ -1657,7 +1667,15 @@ pub fn run() -> Result<()> {
     result
 }
 
+fn should_launch_default_tui(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
+    has_interactive_terminal(stdin_is_terminal, stdout_is_terminal)
+}
+
 fn should_launch_worktree_dashboard(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
+    has_interactive_terminal(stdin_is_terminal, stdout_is_terminal)
+}
+
+fn has_interactive_terminal(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
     stdin_is_terminal && stdout_is_terminal
 }
 
@@ -1674,7 +1692,10 @@ fn print_worktree_help() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_launch_worktree_dashboard, Cli, Commands, RestackSubmitAfter};
+    use super::{
+        has_interactive_terminal, should_launch_default_tui, should_launch_worktree_dashboard, Cli,
+        Commands, RestackSubmitAfter,
+    };
     use clap::Parser;
 
     #[test]
@@ -1682,6 +1703,22 @@ mod tests {
         assert!(should_launch_worktree_dashboard(true, true));
         assert!(!should_launch_worktree_dashboard(true, false));
         assert!(!should_launch_worktree_dashboard(false, true));
+    }
+
+    #[test]
+    fn default_tui_requires_interactive_terminal() {
+        assert!(should_launch_default_tui(true, true));
+        assert!(!should_launch_default_tui(true, false));
+        assert!(!should_launch_default_tui(false, true));
+        assert!(!should_launch_default_tui(false, false));
+    }
+
+    #[test]
+    fn interactive_terminal_requires_both_stdio_streams() {
+        assert!(has_interactive_terminal(true, true));
+        assert!(!has_interactive_terminal(true, false));
+        assert!(!has_interactive_terminal(false, true));
+        assert!(!has_interactive_terminal(false, false));
     }
 
     #[test]

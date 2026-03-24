@@ -595,11 +595,7 @@ impl GitRepo {
         // First check if trunk is stored
         if let Some(trunk) = super::refs::read_trunk(&self.repo)? {
             // Validate the stored trunk branch actually exists locally
-            if self
-                .repo
-                .find_branch(&trunk, BranchType::Local)
-                .is_ok()
-            {
+            if self.repo.find_branch(&trunk, BranchType::Local).is_ok() {
                 return Ok(trunk);
             }
             // Stored trunk doesn't exist, fall through to auto-detection
@@ -782,7 +778,23 @@ impl GitRepo {
             .collect())
     }
 
-    fn patch_ids_for_range(&self, cwd: &Path, range: &str) -> Result<HashSet<String>> {
+    /// Max commits in `merge_base..trunk` for patch-id provenance; beyond this we skip the
+    /// expensive `git log -p` path (see sync merged-branch detection).
+    pub(crate) const PATCH_ID_TRUNK_COMMIT_CAP: usize = 200;
+
+    pub(crate) fn rev_list_count(&self, cwd: &Path, range: &str) -> Result<usize> {
+        let output = self.run_git(cwd, &["rev-list", "--count", range])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git rev-list --count {} failed: {}", range, stderr);
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0))
+    }
+
+    pub(crate) fn patch_ids_for_range(&self, cwd: &Path, range: &str) -> Result<HashSet<String>> {
         let output = self.run_git(cwd, &["log", "--format=%H", "-p", "--no-merges", range])?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1282,6 +1294,24 @@ Use --auto-stash-pop or stash/commit changes first.",
             == branch_commit.id())
     }
 
+    /// Cheap merge-equivalence checks only (ancestor + identical tree). Returns `Some(())` if
+    /// merged by those signals, `None` if patch-id provenance may still be needed.
+    pub fn is_branch_merged_cheap(&self, branch: &str) -> Result<Option<()>> {
+        if self.is_branch_merged(branch).unwrap_or(false) {
+            return Ok(Some(()));
+        }
+
+        let trunk = self.trunk_branch()?;
+
+        // Tree-level diff: if the trees are identical the branch is fully merged,
+        // regardless of how many commits were squashed.
+        if self.refs_have_no_diff(&trunk, branch)? {
+            return Ok(Some(()));
+        }
+
+        Ok(None)
+    }
+
     /// Return true when two refs have no content diff.
     /// Check whether a branch is merged-equivalent to trunk.
     ///
@@ -1292,17 +1322,11 @@ Use --auto-stash-pop or stash/commit changes first.",
     /// 3. Patch-id provenance — catches single-commit squash/cherry-pick merges even
     ///    after trunk has advanced with unrelated commits
     pub fn is_branch_merged_equivalent_to_trunk(&self, branch: &str) -> Result<bool> {
-        if self.is_branch_merged(branch).unwrap_or(false) {
+        if self.is_branch_merged_cheap(branch)?.is_some() {
             return Ok(true);
         }
 
         let trunk = self.trunk_branch()?;
-
-        // Tree-level diff: if the trees are identical the branch is fully merged,
-        // regardless of how many commits were squashed.
-        if self.refs_have_no_diff(&trunk, branch)? {
-            return Ok(true);
-        }
 
         // Patch-id provenance: handles the case where trunk has advanced past the
         // merge point with unrelated commits (tree diff would show false negatives).
@@ -1311,14 +1335,20 @@ Use --auto-stash-pop or stash/commit changes first.",
             Err(_) => return Ok(false),
         };
 
+        let cwd = self.workdir()?;
         let branch_range = format!("{}..{}", merge_base, branch);
-        let branch_patch_ids = self.patch_ids_for_range(self.workdir()?, &branch_range)?;
+        let branch_patch_ids = self.patch_ids_for_range(cwd, &branch_range)?;
         if branch_patch_ids.is_empty() {
             return Ok(true);
         }
 
         let trunk_range = format!("{}..{}", merge_base, trunk);
-        let trunk_patch_ids = self.patch_ids_for_range(self.workdir()?, &trunk_range)?;
+        let trunk_count = self.rev_list_count(cwd, &trunk_range)?;
+        if trunk_count > Self::PATCH_ID_TRUNK_COMMIT_CAP {
+            return Ok(false);
+        }
+
+        let trunk_patch_ids = self.patch_ids_for_range(cwd, &trunk_range)?;
         if trunk_patch_ids.is_empty() {
             return Ok(false);
         }

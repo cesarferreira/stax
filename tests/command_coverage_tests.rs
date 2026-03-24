@@ -723,6 +723,16 @@ fn test_status_shows_branch_info() {
     output.assert_stdout_contains("feature");
 }
 
+#[test]
+fn test_bare_command_falls_back_to_status_noninteractive() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+
+    let output = repo.run_stax(&[]);
+    output.assert_success();
+    output.assert_stdout_contains("feature");
+}
+
 // =============================================================================
 // Merge Command Tests
 // =============================================================================
