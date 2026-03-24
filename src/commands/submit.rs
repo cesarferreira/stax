@@ -226,7 +226,7 @@ pub fn run(
                 "Base branch '{}' does not exist on the remote.\n\n\
                  This can happen if:\n  \
                  - This is a new repository that hasn't been pushed yet\n  \
-                 - The default branch has a different name on GitHub\n\n\
+                 - The default branch has a different name on the remote\n\n\
                  To fix this, push your base branch first:\n  \
                  git push -u {} {}",
                 stack.trunk,
@@ -956,9 +956,9 @@ pub fn run(
                     .context(format!(
                         "Failed to create PR for '{}' with base '{}'\n\
                          This may happen if:\n  \
-                         - The base branch '{}' doesn't exist on GitHub\n  \
+                         - The base branch '{}' doesn't exist on the remote\n  \
                          - The branch has no commits different from base\n  \
-                         - GitHub API request timed out (check network/VPN and retry)\n  \
+                         - API request timed out (check network/VPN and retry)\n  \
                          Try: git log {}..{} to see the commits",
                         plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
                     ))?;
@@ -1442,19 +1442,19 @@ fn print_verbose_network_summary(
     if let Some(stats) = client.and_then(|client| client.api_call_stats()) {
         println!(
             "  {:<28} {}",
-            "github.api.total",
+            "forge.api.total",
             stats.total_requests.to_string().cyan()
         );
         if stats.by_operation.is_empty() {
-            println!("  {}", "No GitHub API requests recorded".dimmed());
+            println!("  {}", "No forge API requests recorded".dimmed());
         } else {
             for (operation, count) in stats.by_operation {
                 println!("    {:<28} {}", operation, count);
             }
         }
     } else {
-        println!("  {:<28} {}", "github.api.total", "0".cyan());
-        println!("  {}", "No GitHub client available".dimmed());
+        println!("  {:<28} {}", "forge.api.total", "0".cyan());
+        println!("  {}", "No API stats available".dimmed());
     }
 
     println!();

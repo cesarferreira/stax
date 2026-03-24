@@ -254,16 +254,20 @@ pub fn run(
         return Ok(());
     }
 
-    // Check for GitHub token
-    if Config::github_token().is_none() {
+    let Some(remote) = remote_info else {
+        anyhow::bail!("Could not determine remote info. Check that a git remote is configured.");
+    };
+
+    if crate::forge::forge_token(remote.forge).is_none() {
         anyhow::bail!(
-            "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, `gh auth login`, or set `STAX_GITHUB_TOKEN`."
+            "{} auth not configured.\n\
+             Set the appropriate token for your forge:\n  \
+             - GitHub: `stax auth`, `stax auth --from-gh`, or set `STAX_GITHUB_TOKEN`\n  \
+             - GitLab: set `STAX_GITLAB_TOKEN` or `GITLAB_TOKEN`\n  \
+             - Gitea:  set `STAX_GITEA_TOKEN` or `GITEA_TOKEN`",
+            remote.forge
         );
     }
-
-    let Some(remote) = remote_info else {
-        anyhow::bail!("Could not determine GitHub remote info.");
-    };
 
     let rt = tokio::runtime::Runtime::new()?;
     let _enter = rt.enter();

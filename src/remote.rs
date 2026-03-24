@@ -12,6 +12,16 @@ pub enum ForgeType {
     Gitea,
 }
 
+impl std::fmt::Display for ForgeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GitHub => write!(f, "GitHub"),
+            Self::GitLab => write!(f, "GitLab"),
+            Self::Gitea => write!(f, "Gitea"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RemoteInfo {
     pub name: String,

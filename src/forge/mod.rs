@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
+use colored::Colorize;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
 use reqwest::Client;
 use serde::de::DeserializeOwned;
@@ -188,7 +189,15 @@ impl ForgeClient {
     pub async fn request_reviewers(&self, number: u64, reviewers: &[String]) -> Result<()> {
         match self {
             Self::GitHub(client) => client.request_reviewers(number, reviewers).await,
-            Self::GitLab(_) | Self::Gitea(_) => Ok(()),
+            Self::GitLab(_) | Self::Gitea(_) => {
+                if !reviewers.is_empty() {
+                    eprintln!(
+                        "{} Requesting reviewers is not yet supported for this forge — skipping.",
+                        "warn:".yellow()
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
@@ -202,14 +211,30 @@ impl ForgeClient {
     pub async fn add_labels(&self, number: u64, labels: &[String]) -> Result<()> {
         match self {
             Self::GitHub(client) => client.add_labels(number, labels).await,
-            Self::GitLab(_) | Self::Gitea(_) => Ok(()),
+            Self::GitLab(_) | Self::Gitea(_) => {
+                if !labels.is_empty() {
+                    eprintln!(
+                        "{} Adding labels is not yet supported for this forge — skipping.",
+                        "warn:".yellow()
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
     pub async fn add_assignees(&self, number: u64, assignees: &[String]) -> Result<()> {
         match self {
             Self::GitHub(client) => client.add_assignees(number, assignees).await,
-            Self::GitLab(_) | Self::Gitea(_) => Ok(()),
+            Self::GitLab(_) | Self::Gitea(_) => {
+                if !assignees.is_empty() {
+                    eprintln!(
+                        "{} Adding assignees is not yet supported for this forge — skipping.",
+                        "warn:".yellow()
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
