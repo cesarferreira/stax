@@ -45,10 +45,10 @@ The `--tmux` flag and the worktree dashboard's tmux session management assume a 
 
 ## Config path
 
-stax uses the `dirs` crate for platform-appropriate paths. On Windows the config directory is typically:
+stax uses `dirs::home_dir()` joined with `.config/stax`. On Windows the config directory is typically:
 
 ```text
-C:\Users\<you>\AppData\Roaming\stax\config\config.toml
+C:\Users\<you>\.config\stax\config.toml
 ```
 
-Credentials and shell integration files live under the same parent directory.
+Override with the `STAX_CONFIG_DIR` environment variable if needed. Credentials and shell integration files live under the same parent directory.

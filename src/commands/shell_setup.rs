@@ -265,7 +265,7 @@ pub fn is_installed() -> bool {
 /// offer to install it. Silent in non-interactive contexts.
 #[allow(dead_code)]
 pub fn prompt_if_missing() -> Result<()> {
-    if is_installed() {
+    if cfg!(target_os = "windows") || is_installed() {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {

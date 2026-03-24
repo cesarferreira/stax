@@ -19,7 +19,7 @@ const DEFAULT_WORKTREE_ROOT_MARKER: &str = ".stax-repo-root";
 
 /// Build a [`Command`] that runs a shell snippet on the current platform.
 /// Uses `sh -c` on Unix and `cmd /C` on Windows.
-fn platform_shell(command: &str) -> Command {
+pub(crate) fn platform_shell(command: &str) -> Command {
     if cfg!(target_os = "windows") {
         let mut cmd = Command::new("cmd");
         cmd.args(["/C", command]);

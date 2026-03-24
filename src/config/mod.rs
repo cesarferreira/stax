@@ -256,7 +256,8 @@ fn default_allow_github_token_env() -> bool {
 }
 
 impl Config {
-    /// Get the config directory (~/.config/stax on all platforms).
+    /// Get the config directory.
+    /// Default: `~/.config/stax` (Unix) or `C:\Users\<you>\.config\stax` (Windows).
     /// Override with `STAX_CONFIG_DIR` env var for testing or custom locations.
     pub fn dir() -> Result<PathBuf> {
         if let Ok(dir) = std::env::var("STAX_CONFIG_DIR") {
