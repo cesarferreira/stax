@@ -291,7 +291,7 @@ pub fn run(
                         found_pr = runtime
                             .block_on(async {
                                 forge_client
-                                    .find_open_pr_by_head(remote_info.owner(), branch)
+                                    .find_open_pr_by_head(branch)
                                     .await
                             })
                             .ok()
@@ -426,7 +426,7 @@ pub fn run(
                     let lookup_started_at = Instant::now();
                     existing_pr = runtime.block_on(async {
                         forge_client
-                            .find_open_pr_by_head(remote_info.owner(), branch)
+                            .find_open_pr_by_head(branch)
                             .await
                     })?;
                     timings.open_pr_discovery += lookup_started_at.elapsed();
