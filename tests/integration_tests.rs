@@ -5481,8 +5481,6 @@ mod forge_mock_tests {
         })
     }
 
-
-
     fn squash_merge_branch_on_fake_remote(remote_root: &TempDir, branch: &str) {
         let remote_repo = remote_root.path().join("test").join("repo.git");
         let clone_dir = super::test_tempdir();
@@ -8451,6 +8449,4 @@ mod forge_mock_tests {
         let merge_idx = find_request_index(&requests, "POST", "/repos/test/repo/pulls/201/merge");
         assert!(retarget_idx < merge_idx);
     }
-
-
 }

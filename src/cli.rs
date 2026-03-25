@@ -249,9 +249,12 @@ enum Commands {
         /// Also restack branches after syncing
         #[arg(short, long)]
         restack: bool,
-        /// No-op: sync always prunes stale remote-tracking refs during fetch
+        /// No-op: kept for CLI compatibility (use `--full` for fetch --prune of all remote-tracking refs)
         #[arg(long)]
         prune: bool,
+        /// Fetch all remote branches with `--prune` (slower; default is trunk-only fetch + ls-remote)
+        #[arg(long)]
+        full: bool,
         /// Don't delete merged branches
         #[arg(long)]
         no_delete: bool,
@@ -1296,6 +1299,7 @@ pub fn run() -> Result<()> {
         Commands::Sync {
             restack,
             prune,
+            full,
             no_delete,
             delete_upstream_gone,
             force,
@@ -1307,6 +1311,7 @@ pub fn run() -> Result<()> {
         } => commands::sync::run(
             restack,
             prune,
+            full,
             !no_delete,
             delete_upstream_gone,
             force,
