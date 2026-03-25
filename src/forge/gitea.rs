@@ -327,10 +327,11 @@ impl GiteaClient {
             .ok()
             .and_then(|(status, _)| status);
 
+        let state = normalize_gitea_state(&pr);
         Ok(PrMergeStatus {
             number: pr.number,
             title: pr.title,
-            state: pr.state.to_uppercase(),
+            state,
             is_draft: pr.draft.unwrap_or(false),
             mergeable: pr.mergeable.or_else(|| mergeable_bool(&mergeable_state)),
             mergeable_state,
@@ -400,10 +401,18 @@ fn normalize_gitea_conclusion(status: &str) -> String {
     }
 }
 
+fn normalize_gitea_state(pr: &GiteaPull) -> String {
+    if pr.merged.unwrap_or(false) {
+        "MERGED".to_string()
+    } else {
+        pr.state.to_uppercase()
+    }
+}
+
 fn pr_to_info(pr: &GiteaPull) -> PrInfo {
     PrInfo {
         number: pr.number,
-        state: pr.state.to_uppercase(),
+        state: normalize_gitea_state(pr),
         is_draft: pr.draft.unwrap_or(false),
         base: pr.base.ref_name.clone(),
     }

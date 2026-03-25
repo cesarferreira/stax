@@ -7679,6 +7679,7 @@ mod forge_mock_tests {
         assert!(retarget_idx < merge_idx);
     }
 
+    #[tokio::test]
     async fn test_submit_gitea_comment_mode_creates_pull_and_issue_comment() {
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
