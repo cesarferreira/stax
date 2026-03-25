@@ -77,10 +77,7 @@ impl ForgeClient {
     ///
     /// GitHub uses the stored owner for fork-aware lookup; other forges
     /// filter by source branch only.
-    pub async fn find_open_pr_by_head(
-        &self,
-        branch: &str,
-    ) -> Result<Option<PrInfoWithHead>> {
+    pub async fn find_open_pr_by_head(&self, branch: &str) -> Result<Option<PrInfoWithHead>> {
         match self {
             Self::GitHub(client) => client.find_open_pr_by_head(&client.owner, branch).await,
             Self::GitLab(client) => client.find_open_pr_by_head(branch).await,

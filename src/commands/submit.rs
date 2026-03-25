@@ -275,7 +275,9 @@ pub fn run(
 
             // Best-effort metadata refresh when no-pr is used.
             if !is_empty {
-                if let (Some(runtime), Some(forge_client)) = (runtime.as_ref(), forge_client.as_ref()) {
+                if let (Some(runtime), Some(forge_client)) =
+                    (runtime.as_ref(), forge_client.as_ref())
+                {
                     let mut found_pr: Option<PrInfoWithHead> = None;
 
                     if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
@@ -289,11 +291,7 @@ pub fn run(
                     if found_pr.is_none() {
                         let lookup_started_at = Instant::now();
                         found_pr = runtime
-                            .block_on(async {
-                                forge_client
-                                    .find_open_pr_by_head(branch)
-                                    .await
-                            })
+                            .block_on(async { forge_client.find_open_pr_by_head(branch).await })
                             .ok()
                             .flatten();
                         timings.open_pr_discovery += lookup_started_at.elapsed();
@@ -424,11 +422,8 @@ pub fn run(
 
                 if existing_pr.is_none() {
                     let lookup_started_at = Instant::now();
-                    existing_pr = runtime.block_on(async {
-                        forge_client
-                            .find_open_pr_by_head(branch)
-                            .await
-                    })?;
+                    existing_pr = runtime
+                        .block_on(async { forge_client.find_open_pr_by_head(branch).await })?;
                     timings.open_pr_discovery += lookup_started_at.elapsed();
                     if verbose && !quiet {
                         if let Some(found) = &existing_pr {
@@ -446,8 +441,8 @@ pub fn run(
                     }
                     if open_prs_by_head.is_none() {
                         let lookup_started_at = Instant::now();
-                        let prs =
-                            runtime.block_on(async { forge_client.list_open_prs_by_head().await })?;
+                        let prs = runtime
+                            .block_on(async { forge_client.list_open_prs_by_head().await })?;
                         timings.open_pr_discovery += lookup_started_at.elapsed();
                         if verbose && !quiet {
                             println!("      Cached {} open PRs", prs.len());

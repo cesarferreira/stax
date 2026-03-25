@@ -94,13 +94,10 @@ pub fn run(
     let rt = tokio::runtime::Runtime::new()?;
 
     // Try to create forge client (may fail if no remote or no token)
-    let client = remote_info
-        .as_ref()
-        .ok()
-        .and_then(|info| {
-            let _enter = rt.enter();
-            ForgeClient::new(info).ok()
-        });
+    let client = remote_info.as_ref().ok().and_then(|info| {
+        let _enter = rt.enter();
+        ForgeClient::new(info).ok()
+    });
 
     // For branches missing PR metadata, check the forge for existing PRs
     if let Some(ref client) = client {
@@ -588,6 +585,7 @@ pub fn run(
             if let Err(err) = crate::commands::sync::run(
                 false,      // restack
                 false,      // prune
+                false,      // full (fast trunk + ls-remote when deleting merged)
                 !no_delete, // delete merged branches unless explicitly kept
                 false,      // delete upstream-gone branches
                 true,       // force

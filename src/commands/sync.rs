@@ -12,7 +12,8 @@ use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,7 @@ use std::time::{Duration, Instant};
 pub fn run(
     restack: bool,
     #[allow(unused_variables)] prune: bool,
+    full: bool,
     delete_merged: bool,
     delete_upstream_gone: bool,
     force: bool,
@@ -83,17 +85,73 @@ pub fn run(
     }
 
     // 1. Fetch from remote
+    // Default: trunk-only fetch + `ls-remote --heads` in parallel (fast on large repos).
+    // `--full`: classic `fetch --prune --no-tags` for all remote-tracking refs.
     let fetch_timer = LiveTimer::maybe_new(!quiet, &format!("Fetch {}", remote_name));
 
     let fetch_started_at = Instant::now();
-    // Always prune so remote-tracking refs match GitHub after branch deletion (enables
-    // merged-branch detection). The CLI `--prune` flag is kept for compatibility.
-    let fetch_args: Vec<&str> = vec!["fetch", "--prune", "--no-tags", &remote_name];
-    let output = Command::new("git")
-        .args(&fetch_args)
-        .current_dir(&workdir)
-        .output()
-        .context("Failed to fetch")?;
+    let output;
+    // Remote branch names for merged detection (`None` when `--no-delete`: trunk-only fetch).
+    let remote_branches_for_merged: Option<HashSet<String>>;
+
+    if full {
+        let fetch_args: Vec<&str> = vec!["fetch", "--prune", "--no-tags", remote_name.as_str()];
+        output = Command::new("git")
+            .args(&fetch_args)
+            .current_dir(&workdir)
+            .output()
+            .context("Failed to fetch")?;
+        remote_branches_for_merged = if delete_merged {
+            Some(
+                repo.remote_branch_names(&remote_name)
+                    .context("Failed to read remote-tracking branches after fetch")?,
+            )
+        } else {
+            None
+        };
+    } else if delete_merged {
+        let workdir_fetch = workdir.clone();
+        let remote_fetch = remote_name.clone();
+        let trunk = stack.trunk.clone();
+        let workdir_ls = workdir.clone();
+        let remote_ls = remote_name.clone();
+
+        let fetch_handle = std::thread::spawn(move || {
+            Command::new("git")
+                .args(["fetch", "--no-tags", remote_fetch.as_str(), trunk.as_str()])
+                .current_dir(&workdir_fetch)
+                .output()
+        });
+
+        let ls_handle =
+            std::thread::spawn(move || ls_remote_heads(&workdir_ls, remote_ls.as_str()));
+
+        output = fetch_handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("fetch thread panicked"))?
+            .context("Failed to fetch")?;
+
+        let heads = ls_handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("git ls-remote thread panicked"))??;
+        if output.status.success() {
+            prune_stale_remote_tracking_refs(&workdir, remote_name.as_str(), &stack, &heads);
+        }
+        remote_branches_for_merged = Some(heads);
+    } else {
+        output = Command::new("git")
+            .args([
+                "fetch",
+                "--no-tags",
+                remote_name.as_str(),
+                stack.trunk.as_str(),
+            ])
+            .current_dir(&workdir)
+            .output()
+            .context("Failed to fetch")?;
+        remote_branches_for_merged = None;
+    }
+
     step_timings.push((format!("fetch {}", remote_name), fetch_started_at.elapsed()));
 
     if output.status.success() {
@@ -311,7 +369,15 @@ pub fn run(
     let repo = if delete_merged {
         let detect_merged_started_at = Instant::now();
         let detect_timer = LiveTimer::maybe_new(!quiet, "Detect merged branches");
-        let merged = find_merged_branches(&repo, &workdir, &stack, &remote_name)?;
+        let merged = find_merged_branches(
+            &repo,
+            &workdir,
+            &stack,
+            &remote_name,
+            remote_branches_for_merged
+                .as_ref()
+                .expect("remote branch list when deleting merged branches"),
+        )?;
         step_timings.push((
             "detect merged branches".to_string(),
             detect_merged_started_at.elapsed(),
@@ -1057,15 +1123,70 @@ pub fn run(
 }
 
 /// Find branches that have been merged into trunk or are orphaned (no longer exist locally/remotely)
+/// List remote branch names via `git ls-remote --heads` (ref names only; no object transfer).
+fn ls_remote_heads(workdir: &Path, remote: &str) -> Result<HashSet<String>> {
+    let output = Command::new("git")
+        .args(["ls-remote", "--heads", remote])
+        .current_dir(workdir)
+        .output()
+        .with_context(|| format!("Failed to run git ls-remote --heads {}", remote))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "git ls-remote --heads failed ({}): {}",
+            output.status,
+            stderr.trim()
+        );
+    }
+
+    let prefix = "refs/heads/";
+    let mut names = HashSet::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((_, refpart)) = line.split_once('\t') {
+            if let Some(name) = refpart.strip_prefix(prefix) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Drop stale `refs/remotes/<remote>/<branch>` for stax-tracked branches that no longer exist on the remote.
+fn prune_stale_remote_tracking_refs(
+    workdir: &Path,
+    remote_name: &str,
+    stack: &Stack,
+    remote_branches: &HashSet<String>,
+) {
+    for branch in stack.branches.keys() {
+        if branch == &stack.trunk {
+            continue;
+        }
+        if remote_branches.contains(branch.as_str()) {
+            continue;
+        }
+        let refname = format!("refs/remotes/{}/{}", remote_name, branch);
+        let _ = Command::new("git")
+            .args(["update-ref", "-d", &refname])
+            .current_dir(workdir)
+            .status();
+    }
+}
+
 fn find_merged_branches(
     repo: &GitRepo,
     workdir: &std::path::Path,
     stack: &Stack,
     remote_name: &str,
+    remote_branches: &HashSet<String>,
 ) -> Result<Vec<String>> {
     let mut merged = Vec::new();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
-    let remote_branches = repo.remote_branch_names(remote_name)?;
 
     // Method 1: git branch --merged (finds local branches merged into trunk)
     let output = Command::new("git")
