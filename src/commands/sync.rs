@@ -12,6 +12,7 @@ use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
+use std::collections::HashMap;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -19,7 +20,7 @@ use std::time::{Duration, Instant};
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     restack: bool,
-    prune: bool,
+    #[allow(unused_variables)] prune: bool,
     delete_merged: bool,
     delete_upstream_gone: bool,
     force: bool,
@@ -85,11 +86,9 @@ pub fn run(
     let fetch_timer = LiveTimer::maybe_new(!quiet, &format!("Fetch {}", remote_name));
 
     let fetch_started_at = Instant::now();
-    let fetch_args: Vec<&str> = if prune {
-        vec!["fetch", "--prune", "--no-tags", &remote_name]
-    } else {
-        vec!["fetch", "--no-tags", &remote_name]
-    };
+    // Always prune so remote-tracking refs match GitHub after branch deletion (enables
+    // merged-branch detection). The CLI `--prune` flag is kept for compatibility.
+    let fetch_args: Vec<&str> = vec!["fetch", "--prune", "--no-tags", &remote_name];
     let output = Command::new("git")
         .args(&fetch_args)
         .current_dir(&workdir)
@@ -1127,10 +1126,11 @@ fn find_merged_branches(
             continue;
         }
 
-        // Check if PR state is "merged" (case-insensitive)
+        // PR merged or closed without merge (cancelled) — both warrant cleanup offer.
         if matches!(
             info.pr_state.as_deref(),
-            Some(state) if state.eq_ignore_ascii_case("merged")
+            Some(state)
+                if state.eq_ignore_ascii_case("merged") || state.eq_ignore_ascii_case("closed")
         ) {
             merged.push(branch.clone());
         }
@@ -1198,15 +1198,88 @@ fn find_merged_branches(
     // when trunk has advanced past the merge point (where a simple tree diff
     // would show false negatives). Run this last so cheaper signals resolve
     // most cases before the provenance path touches more refs.
+    let trunk = stack.trunk.as_str();
+    let mut need_patch_id: Vec<(String, String)> = Vec::new();
+
     for branch in stack.branches.keys() {
         if branch == &stack.trunk || merged.contains(branch) {
             continue;
         }
-        if repo
-            .is_branch_merged_equivalent_to_trunk(branch)
-            .unwrap_or(false)
-        {
-            merged.push(branch.clone());
+        // Remote still exists -> not merged via squash-delete; skip expensive check.
+        if remote_branches.contains(branch.as_str()) {
+            continue;
+        }
+        match repo.is_branch_merged_cheap(branch) {
+            Ok(Some(())) => merged.push(branch.clone()),
+            Ok(None) => {
+                if let Ok(mb) = repo.merge_base(trunk, branch) {
+                    need_patch_id.push((branch.clone(), mb));
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    if !need_patch_id.is_empty() {
+        let mut by_merge_base: HashMap<String, Vec<String>> = HashMap::new();
+        for (branch, mb) in need_patch_id {
+            by_merge_base.entry(mb).or_default().push(branch);
+        }
+
+        for (merge_base, branches) in by_merge_base {
+            let trunk_range = format!("{}..{}", merge_base, trunk);
+            let trunk_count = match repo.rev_list_count(workdir, &trunk_range) {
+                Ok(c) => c,
+                Err(_) => {
+                    for branch in branches {
+                        if repo
+                            .is_branch_merged_equivalent_to_trunk(&branch)
+                            .unwrap_or(false)
+                        {
+                            merged.push(branch);
+                        }
+                    }
+                    continue;
+                }
+            };
+
+            if trunk_count > GitRepo::PATCH_ID_TRUNK_COMMIT_CAP {
+                for branch in branches {
+                    if repo
+                        .is_branch_merged_equivalent_to_trunk(&branch)
+                        .unwrap_or(false)
+                    {
+                        merged.push(branch);
+                    }
+                }
+                continue;
+            }
+
+            let trunk_patch_ids = match repo.patch_ids_for_range(workdir, &trunk_range) {
+                Ok(ids) => ids,
+                Err(_) => {
+                    for branch in branches {
+                        if repo
+                            .is_branch_merged_equivalent_to_trunk(&branch)
+                            .unwrap_or(false)
+                        {
+                            merged.push(branch);
+                        }
+                    }
+                    continue;
+                }
+            };
+
+            for branch in branches {
+                let branch_range = format!("{}..{}", merge_base, branch);
+                let branch_patch_ids = match repo.patch_ids_for_range(workdir, &branch_range) {
+                    Ok(ids) => ids,
+                    Err(_) => continue,
+                };
+                if branch_patch_ids.is_empty() || branch_patch_ids.is_subset(&trunk_patch_ids) {
+                    merged.push(branch);
+                }
+            }
         }
     }
 
