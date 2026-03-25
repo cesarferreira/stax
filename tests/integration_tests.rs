@@ -6822,6 +6822,7 @@ mod forge_mock_tests {
         assert_eq!(prs[0]["number"], 42);
     }
 
+    #[tokio::test]
     async fn test_submit_gitlab_comment_mode_creates_merge_request_and_stack_note() {
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
