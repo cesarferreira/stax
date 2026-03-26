@@ -13,8 +13,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SHELL_PATH_PREFIX: &str = "STAX_SHELL_PATH=";
-const SHELL_LAUNCH_PREFIX: &str = "STAX_SHELL_LAUNCH=";
 const DEFAULT_WORKTREE_ROOT_MARKER: &str = ".stax-repo-root";
 
 /// Build a [`Command`] that runs a shell snippet on the current platform.
@@ -701,11 +699,25 @@ pub fn list_tmux_sessions() -> Result<Vec<TmuxSession>> {
     parse_tmux_sessions_output(&String::from_utf8_lossy(&output.stdout))
 }
 
-pub fn emit_shell_payload(path: &Path, launch: Option<&LaunchSpec>) {
-    println!("{}{}", SHELL_PATH_PREFIX, path.display());
-    if let Some(launch) = launch {
-        println!("{}{}", SHELL_LAUNCH_PREFIX, launch.shell_command());
+/// Encode the shell navigation payload as a single JSON line.
+///
+/// JSON encoding ensures that paths or launch commands containing spaces,
+/// backslashes, or other shell-sensitive characters round-trip safely through
+/// command-substitution in both POSIX and Fish shells.
+pub fn format_shell_payload(path: &Path, launch: Option<&LaunchSpec>) -> String {
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "path".to_string(),
+        Value::String(path.display().to_string()),
+    );
+    if let Some(l) = launch {
+        obj.insert("launch".to_string(), Value::String(l.shell_command()));
     }
+    Value::Object(obj).to_string()
+}
+
+pub fn emit_shell_payload(path: &Path, launch: Option<&LaunchSpec>) {
+    println!("{}", format_shell_payload(path, launch));
 }
 
 pub fn status_labels(details: &WorktreeDetails) -> Vec<String> {
@@ -979,7 +991,9 @@ fn parse_tmux_sessions_output(output: &str) -> Result<Vec<TmuxSession>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_tmux_session_name, parse_tmux_sessions_output};
+    use super::{default_tmux_session_name, format_shell_payload, parse_tmux_sessions_output};
+    use crate::commands::worktree::shared::LaunchSpec;
+    use std::path::Path;
 
     #[test]
     fn default_tmux_session_name_sanitizes_invalid_chars() {
@@ -995,5 +1009,38 @@ mod tests {
         assert_eq!(sessions[0].attached_clients, 0);
         assert_eq!(sessions[1].name, "lane-b");
         assert_eq!(sessions[1].attached_clients, 2);
+    }
+
+    #[test]
+    fn format_shell_payload_path_only() {
+        let path = Path::new("/home/user/my projects/feature");
+        let json = format_shell_payload(path, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(parsed["path"], "/home/user/my projects/feature");
+        assert!(parsed.get("launch").is_none());
+    }
+
+    #[test]
+    fn format_shell_payload_with_launch_containing_spaces() {
+        let path = Path::new("/repo/worktrees/feat");
+        let launch = LaunchSpec::Shell {
+            command: "codex --model gpt-5 --some-flag".to_string(),
+            display: "codex".to_string(),
+        };
+        let json = format_shell_payload(path, Some(&launch));
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(parsed["path"], "/repo/worktrees/feat");
+        assert_eq!(parsed["launch"], "codex --model gpt-5 --some-flag");
+    }
+
+    #[test]
+    fn format_shell_payload_path_with_spaces_and_quotes() {
+        let path = Path::new("/home/user/my projects/branch with \"quotes\"");
+        let json = format_shell_payload(path, None);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(
+            parsed["path"],
+            "/home/user/my projects/branch with \"quotes\""
+        );
     }
 }

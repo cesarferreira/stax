@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 const INTEGRATION_MARKER: &str = "stax shell-setup";
 const POSIX_INTEGRATION_FILENAME: &str = "shell-setup.sh";
-const FISH_INTEGRATION_FILENAME: &str = "shell-setup.fish";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellKind {
@@ -51,7 +50,7 @@ __stax_insert_shell_output() {
 }
 
 __stax_run_worktree_shell() {
-  local raw
+  local json
   local path=""
   local launch=""
   local cmd=()
@@ -61,14 +60,15 @@ __stax_run_worktree_shell() {
     cmd+=("$item")
   done < <(__stax_insert_shell_output "$@")
 
-  raw=$(command stax "${cmd[@]}") || return $?
+  json=$(command stax "${cmd[@]}") || return $?
 
-  while IFS= read -r line; do
-    case "$line" in
-      STAX_SHELL_PATH=*) path="${line#STAX_SHELL_PATH=}" ;;
-      STAX_SHELL_LAUNCH=*) launch="${line#STAX_SHELL_LAUNCH=}" ;;
-    esac
-  done <<< "$raw"
+  if [[ -n "$json" ]]; then
+    local _out
+    _out=$(printf '%s' "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('path','')); print(d.get('launch',''))")
+    path="${_out%%$'\n'*}"
+    local _tail="${_out#*$'\n'}"
+    [[ "$_tail" != "$_out" ]] && launch="$_tail"
+  fi
 
   if [[ -n "$path" ]]; then
     builtin cd "$path" || return 1
@@ -155,18 +155,20 @@ function __stax_insert_shell_output
 end
 
 function __stax_run_worktree_shell
-    set -l path ""
-    set -l launch ""
     set -l cmd (__stax_insert_shell_output $argv)
-    set -l raw (command stax $cmd)
+    set -l json (command stax $cmd)
     or return $status
 
-    for line in $raw
-        switch $line
-            case 'STAX_SHELL_PATH=*'
-                set path (string replace 'STAX_SHELL_PATH=' '' -- $line)
-            case 'STAX_SHELL_LAUNCH=*'
-                set launch (string replace 'STAX_SHELL_LAUNCH=' '' -- $line)
+    set -l path ""
+    set -l launch ""
+
+    if test -n "$json"
+        set -l _out (printf '%s' $json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('path','')); print(d.get('launch',''))")
+        if test (count $_out) -ge 1
+            set path $_out[1]
+        end
+        if test (count $_out) -ge 2
+            set launch $_out[2]
         end
     end
 
@@ -300,6 +302,12 @@ pub fn prompt_if_missing() -> Result<()> {
 
 fn install_to_shell_config() -> Result<()> {
     let shell_kind = detect_shell_kind();
+
+    // Fish auto-sources all files in conf.d – no source line in config.fish needed.
+    if shell_kind == ShellKind::Fish {
+        return install_fish_conf_d();
+    }
+
     let config_path = detect_shell_config()?;
     let integration_path = shell_integration_path(shell_kind)?;
     let source_line = shell_source_line(&integration_path);
@@ -358,6 +366,49 @@ fn install_to_shell_config() -> Result<()> {
     Ok(())
 }
 
+fn install_fish_conf_d() -> Result<()> {
+    let integration_path = shell_integration_path(ShellKind::Fish)?;
+    let already_exists = integration_path.exists();
+
+    if already_exists {
+        write_integration_file(&integration_path, shell_snippet(ShellKind::Fish))?;
+        println!(
+            "{}  Shell integration already configured (auto-sourced from conf.d)",
+            "OK".green().bold()
+        );
+        println!("  Refreshed {}", integration_path.display());
+        return Ok(());
+    }
+
+    println!(
+        "Will write shell integration to {} (auto-sourced by fish).",
+        integration_path.display()
+    );
+    println!();
+
+    let proceed = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Proceed?")
+        .default(true)
+        .interact()?;
+
+    if !proceed {
+        println!("{}", "Aborted.".dimmed());
+        return Ok(());
+    }
+
+    write_integration_file(&integration_path, shell_snippet(ShellKind::Fish))?;
+
+    println!(
+        "{}  Wrote {}",
+        "Done.".green().bold(),
+        integration_path.display()
+    );
+    println!("  Fish will auto-source this file on next launch.");
+    println!("  Or reload now: {}", shell_source_cmd().cyan());
+
+    Ok(())
+}
+
 fn detect_shell_kind() -> ShellKind {
     let shell = std::env::var("SHELL").unwrap_or_default();
     if shell.ends_with("fish") {
@@ -394,14 +445,22 @@ fn detect_shell_config() -> Result<PathBuf> {
 }
 
 fn shell_integration_path(shell_kind: ShellKind) -> Result<PathBuf> {
-    let config_dir = crate::config::Config::dir()?;
-
-    let filename = match shell_kind {
-        ShellKind::Posix => POSIX_INTEGRATION_FILENAME,
-        ShellKind::Fish => FISH_INTEGRATION_FILENAME,
-    };
-
-    Ok(config_dir.join(filename))
+    match shell_kind {
+        ShellKind::Fish => {
+            // Fish auto-sources every file in conf.d, so we write directly there.
+            // This avoids adding a `source` line to config.fish.
+            let home = dirs::home_dir().context("Could not find home directory")?;
+            // Respect $XDG_CONFIG_HOME if set; fish always uses XDG conventions.
+            let config_base = std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".config"));
+            Ok(config_base.join("fish").join("conf.d").join("stax.fish"))
+        }
+        ShellKind::Posix => {
+            let config_dir = crate::config::Config::dir()?;
+            Ok(config_dir.join(POSIX_INTEGRATION_FILENAME))
+        }
+    }
 }
 
 fn shell_source_line(integration_path: &Path) -> String {
@@ -533,5 +592,31 @@ mod tests {
 
         assert!(!changed);
         assert_eq!(updated, existing);
+    }
+
+    #[test]
+    fn posix_snippet_uses_python3_for_json_parsing() {
+        let snippet = shell_snippet(ShellKind::Posix);
+        assert!(
+            snippet.contains("python3"),
+            "POSIX snippet should use python3 for JSON parsing"
+        );
+        assert!(
+            snippet.contains("json.load"),
+            "POSIX snippet should call json.load"
+        );
+    }
+
+    #[test]
+    fn fish_snippet_uses_python3_for_json_parsing() {
+        let snippet = shell_snippet(ShellKind::Fish);
+        assert!(
+            snippet.contains("python3"),
+            "Fish snippet should use python3 for JSON parsing"
+        );
+        assert!(
+            snippet.contains("json.load"),
+            "Fish snippet should call json.load"
+        );
     }
 }
