@@ -1130,8 +1130,7 @@ pub fn run() -> Result<()> {
     let _ = Config::ensure_exists();
 
     let cli = Cli::parse();
-    let stdin_is_terminal = std::io::stdin().is_terminal();
-    let stdout_is_terminal = std::io::stdout().is_terminal();
+    let (stdin_is_terminal, stdout_is_terminal) = detect_interactive_stdio();
 
     // Bare `st`/`stax` should only enter the TUI when both sides are interactive.
     // In shells or wrappers without a usable TTY, fall back to the regular status view.
@@ -1563,10 +1562,8 @@ pub fn run() -> Result<()> {
         Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
         Commands::Worktree { command } => match command {
             None => {
-                let interactive_terminal = check_interactive_terminal(
-                    std::io::stdin().is_terminal(),
-                    std::io::stdout().is_terminal(),
-                );
+                let interactive_terminal =
+                    check_interactive_terminal(stdin_is_terminal, stdout_is_terminal);
                 if interactive_terminal.available {
                     commands::init::ensure_initialized()?;
                     tui::worktree::run()
@@ -1689,6 +1686,19 @@ pub fn run() -> Result<()> {
     result
 }
 
+fn detect_interactive_stdio() -> (bool, bool) {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("STAX_TEST_FORCE_INTERACTIVE_TERMINAL").is_some() {
+        // Integration tests use this to drive the interactive fallback path without a real PTY.
+        return (true, true);
+    }
+
+    (
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    )
+}
+
 fn has_interactive_terminal(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
     stdin_is_terminal && stdout_is_terminal
 }
@@ -1704,6 +1714,12 @@ fn check_interactive_terminal(
     stdout_is_terminal: bool,
 ) -> InteractiveTerminalCheck {
     check_interactive_terminal_with_probe(stdin_is_terminal, stdout_is_terminal, || {
+        #[cfg(debug_assertions)]
+        if let Ok(reason) = std::env::var("STAX_TEST_FORCE_INPUT_READER_FAILURE") {
+            // Integration tests use this to exercise the interactive fallback path deterministically.
+            return Err(reason);
+        }
+
         crossterm::event::poll(Duration::from_millis(0))
             .map(|_| ())
             .map_err(|err| err.to_string())
@@ -1760,8 +1776,8 @@ fn print_worktree_help() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_interactive_terminal_with_probe, has_interactive_terminal, Cli, Commands,
-        InteractiveTerminalCheck, RestackSubmitAfter,
+        check_interactive_terminal_with_probe, detect_interactive_stdio, has_interactive_terminal,
+        Cli, Commands, InteractiveTerminalCheck, RestackSubmitAfter,
     };
     use clap::Parser;
     use std::cell::Cell;
@@ -1772,6 +1788,16 @@ mod tests {
         assert!(!has_interactive_terminal(true, false));
         assert!(!has_interactive_terminal(false, true));
         assert!(!has_interactive_terminal(false, false));
+    }
+
+    #[test]
+    fn interactive_stdio_can_be_forced_for_tests() {
+        #[cfg(debug_assertions)]
+        {
+            std::env::set_var("STAX_TEST_FORCE_INTERACTIVE_TERMINAL", "1");
+            assert_eq!(detect_interactive_stdio(), (true, true));
+            std::env::remove_var("STAX_TEST_FORCE_INTERACTIVE_TERMINAL");
+        }
     }
 
     #[test]

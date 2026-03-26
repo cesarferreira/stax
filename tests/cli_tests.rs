@@ -1,4 +1,8 @@
+mod common;
+
+use common::TestRepo;
 use std::process::Command;
+use tempfile::tempdir;
 
 /// Get path to compiled binary (built by cargo test)
 fn stax_bin() -> &'static str {
@@ -241,6 +245,49 @@ fn test_shell_setup_runs_outside_repo() {
         "shell-setup should not trigger repo init:\nstdout:\n{}\nstderr:\n{}",
         stdout,
         stderr
+    );
+}
+
+#[test]
+fn test_bare_worktree_command_falls_back_when_input_reader_probe_fails() {
+    let repo = TestRepo::new();
+    let home = tempdir().expect("temp home");
+
+    let output = repo.run_stax_with_env(
+        &["wt"],
+        &[
+            ("HOME", home.path().to_str().expect("home path")),
+            ("STAX_TEST_FORCE_INTERACTIVE_TERMINAL", "1"),
+            (
+                "STAX_TEST_FORCE_INPUT_READER_FAILURE",
+                "Failed to initialize input reader",
+            ),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+    assert!(
+        combined.contains("interactive worktree dashboard unavailable"),
+        "expected fallback warning, got:\n{}",
+        combined
+    );
+    assert!(
+        combined.contains("Failed to initialize input reader"),
+        "expected crossterm probe reason, got:\n{}",
+        combined
+    );
+    assert!(
+        combined.contains("Usage: worktree [COMMAND]"),
+        "expected worktree help output, got:\n{}",
+        combined
     );
 }
 
