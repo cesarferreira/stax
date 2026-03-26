@@ -115,9 +115,9 @@ fn restack_cleanup_skips_merged_branch_checked_out_in_worktree() {
         .assert_stdout_contains("Kept")
         .assert_stdout_contains("checked out in another worktree")
         .assert_stdout_contains("Run to remove that worktree:")
-        .assert_stdout_contains("st wt rm wt-a")
+        .assert_stdout_contains(&format!("st wt rm {}", a))
         .assert_stdout_contains("Or keep the worktree and free the branch:")
-        .assert_stdout_contains("git -C");
+        .assert_stdout_contains("switch main");
     assert!(
         !TestRepo::stderr(&output).contains("cannot locate local branch"),
         "restack should not fail cleanup when a merged branch is checked out elsewhere\nstdout: {}\nstderr: {}",
@@ -367,9 +367,12 @@ fn branch_delete_checked_out_in_worktree_shows_fix_commands() {
     output
         .assert_stderr_contains("linked worktree")
         .assert_stderr_contains("wt-a")
-        .assert_stderr_contains("run st wt rm wt-a to remove worktree 'wt-a'")
+        .assert_stderr_contains(&format!(
+            "run st wt rm {} to remove the linked worktree",
+            branch
+        ))
         .assert_stderr_contains("keep the worktree and free the branch")
-        .assert_stderr_contains("git -C");
+        .assert_stderr_contains("switch --detach");
 }
 
 #[test]
@@ -465,8 +468,54 @@ fn sync_reports_fix_commands_when_branch_delete_blocked_by_worktree() {
         .assert_stdout_contains("Run to remove that worktree:")
         .assert_stdout_contains("wt-a")
         .assert_stdout_contains("Or keep the worktree and free the branch:")
-        .assert_stdout_contains("st wt rm wt-a")
-        .assert_stdout_contains("git -C");
+        .assert_stdout_contains(&format!("st wt rm {}", branch))
+        .assert_stdout_contains("switch --detach");
+}
+
+#[test]
+fn sync_reports_unique_remove_command_when_worktree_basename_is_ambiguous() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["create", "A"]).assert_success();
+    let branch = repo.current_branch();
+    repo.create_file("a.txt", "A\n");
+    repo.commit("A commit");
+    repo.git(&["push", "-u", "origin", &branch])
+        .assert_success();
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let duplicate_a_parent = repo.path().join("codex-a");
+    let duplicate_b_parent = repo.path().join("codex-b");
+    fs::create_dir_all(&duplicate_a_parent).expect("create codex-a dir");
+    fs::create_dir_all(&duplicate_b_parent).expect("create codex-b dir");
+
+    let wt_a = duplicate_a_parent.join("stax");
+    repo.git(&["worktree", "add", wt_a.to_str().unwrap(), &branch])
+        .assert_success();
+
+    repo.git(&["branch", "side"]).assert_success();
+    let wt_side = duplicate_b_parent.join("stax");
+    repo.git(&["worktree", "add", wt_side.to_str().unwrap(), "side"])
+        .assert_success();
+
+    repo.git(&["merge", "--no-ff", &branch, "-m", "Merge A"])
+        .assert_success();
+    repo.git(&["push", "origin", "main"]).assert_success();
+    repo.git(&["push", "origin", "--delete", &branch])
+        .assert_success();
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    output
+        .assert_success()
+        .assert_stdout_contains("Run to remove that worktree:")
+        .assert_stdout_contains(&format!("st wt rm {}", branch));
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        !stdout.contains("st wt rm stax"),
+        "expected sync hint to avoid ambiguous basename selector, got:\n{}",
+        stdout
+    );
 }
 
 #[test]

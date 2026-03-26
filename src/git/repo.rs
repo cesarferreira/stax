@@ -67,9 +67,16 @@ pub struct WorktreeInfo {
 }
 
 #[derive(Debug, Clone)]
+pub enum BranchDeleteSwitchTarget {
+    Branch(String),
+    Detach,
+}
+
+#[derive(Debug, Clone)]
 pub struct BranchDeleteResolution {
     pub worktree: WorktreeInfo,
-    pub switch_target: String,
+    pub remove_worktree_selector: String,
+    pub switch_target: BranchDeleteSwitchTarget,
 }
 
 impl BranchDeleteResolution {
@@ -77,16 +84,21 @@ impl BranchDeleteResolution {
         if self.worktree.is_main {
             None
         } else {
-            Some(format!("st wt rm {}", self.worktree.name))
+            Some(format!("st wt rm {}", self.remove_worktree_selector))
         }
     }
 
     pub fn switch_branch_cmd(&self) -> String {
-        format!(
-            "git -C '{}' switch {}",
-            self.worktree.path.display(),
-            self.switch_target
-        )
+        match &self.switch_target {
+            BranchDeleteSwitchTarget::Branch(target) => format!(
+                "git -C '{}' switch {}",
+                self.worktree.path.display(),
+                target
+            ),
+            BranchDeleteSwitchTarget::Detach => {
+                format!("git -C '{}' switch --detach", self.worktree.path.display())
+            }
+        }
     }
 }
 
@@ -483,8 +495,23 @@ impl GitRepo {
             return Ok(None);
         };
 
-        let switch_target = self.trunk_branch().unwrap_or_else(|_| "main".to_string());
+        let switch_target = match self.trunk_branch() {
+            Ok(trunk)
+                if self
+                    .branch_worktree(&trunk)?
+                    .is_some_and(|target_worktree| target_worktree.path != worktree.path) =>
+            {
+                BranchDeleteSwitchTarget::Detach
+            }
+            Ok(trunk) => BranchDeleteSwitchTarget::Branch(trunk),
+            Err(_) => BranchDeleteSwitchTarget::Detach,
+        };
+
         Ok(Some(BranchDeleteResolution {
+            remove_worktree_selector: worktree
+                .branch
+                .clone()
+                .unwrap_or_else(|| worktree.path.display().to_string()),
             worktree,
             switch_target,
         }))
@@ -498,9 +525,8 @@ impl GitRepo {
         let switch_cmd = resolution.switch_branch_cmd();
         let hint = if let Some(remove_cmd) = resolution.remove_worktree_cmd() {
             format!(
-                "run {} to remove worktree '{}'; or run {} to keep the worktree and free the branch",
+                "run {} to remove the linked worktree; or run {} to keep the worktree and free the branch",
                 remove_cmd,
-                resolution.worktree.name,
                 switch_cmd
             )
         } else {
