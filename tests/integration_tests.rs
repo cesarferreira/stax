@@ -4944,6 +4944,100 @@ fn test_merge_help() {
     );
     assert!(stdout.contains("--yes"), "Expected --yes flag in help");
     assert!(stdout.contains("--quiet"), "Expected --quiet flag in help");
+    assert!(
+        stdout.contains("--remote"),
+        "Expected --remote flag in help"
+    );
+}
+
+#[test]
+fn test_merge_remote_on_trunk_shows_error() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["status"]);
+    assert!(output.status.success());
+    assert_eq!(repo.current_branch(), "main");
+
+    let output = repo.run_stax(&["merge", "--remote"]);
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    assert!(
+        combined.contains("trunk") || combined.contains("Checkout"),
+        "Expected message about being on trunk, got: {}",
+        combined
+    );
+}
+
+#[test]
+fn test_merge_remote_on_untracked_branch_shows_error() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["status"]);
+    repo.git(&["checkout", "-b", "untracked-remote"]);
+    repo.create_file("test.txt", "content");
+    repo.commit("Untracked commit");
+
+    let output = repo.run_stax(&["merge", "--remote"]);
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    assert!(
+        combined.contains("not tracked") || combined.contains("track"),
+        "Expected message about untracked branch, got: {}",
+        combined
+    );
+}
+
+#[test]
+fn test_merge_remote_without_pr_shows_error() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "feature-remote-no-pr"]);
+    repo.create_file("feature.txt", "content");
+    repo.commit("Feature commit");
+
+    let output = repo.run_stax(&["merge", "--remote", "--yes"]);
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    let combined = format!("{}{}", stdout, stderr);
+    assert!(
+        combined.contains("PR") || combined.contains("submit"),
+        "Expected message about missing PR, got: {}",
+        combined
+    );
+}
+
+#[test]
+fn test_merge_remote_conflicts_with_when_ready() {
+    let repo = TestRepo::new();
+    let output = repo.run_stax(&["merge", "--remote", "--when-ready"]);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        !output.status.success(),
+        "Expected non-success for conflicting flags"
+    );
+    assert!(
+        stderr.contains("cannot be used with") || stderr.contains("conflicts with"),
+        "Expected clap conflict error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_merge_remote_conflicts_with_dry_run() {
+    let repo = TestRepo::new();
+    let output = repo.run_stax(&["merge", "--remote", "--dry-run"]);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        !output.status.success(),
+        "Expected non-success for conflicting flags"
+    );
+    assert!(
+        stderr.contains("cannot be used with") || stderr.contains("conflicts with"),
+        "Expected clap conflict error, got: {}",
+        stderr
+    );
 }
 
 #[test]
@@ -6941,6 +7035,181 @@ mod forge_mock_tests {
                 .iter()
                 .map(|request| format!("{} {}", request.method, request.url.path()))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_remote_retargets_and_updates_branch_before_merging() {
+        let mock_server = MockServer::start().await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "mremote-a"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "mremote-b"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/301",
+                    "id": 301,
+                    "number": 301,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": branch_a, "sha": "sha-a", "label": "test:mremote-a" },
+                    "base": { "ref": "main", "sha": "main-sha" }
+                },
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/302",
+                    "id": 302,
+                    "number": 302,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": branch_b, "sha": "sha-b", "label": "test:mremote-b" },
+                    "base": { "ref": branch_a, "sha": "sha-a" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/301"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/301",
+                "id": 301,
+                "number": 301,
+                "state": "open",
+                "draft": false,
+                "merged_at": null,
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "title": "p",
+                "head": { "ref": branch_a, "sha": "sha-a", "label": "test:mremote-a" },
+                "base": { "ref": "main", "sha": "main-sha" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/302"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/302",
+                "id": 302,
+                "number": 302,
+                "state": "open",
+                "draft": false,
+                "merged_at": null,
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "title": "c",
+                "head": { "ref": branch_b, "sha": "sha-b", "label": "test:mremote-b" },
+                "base": { "ref": branch_a, "sha": "sha-a" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/302"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/302",
+                "id": 302,
+                "number": 302,
+                "state": "open",
+                "draft": false,
+                "head": { "ref": branch_b, "sha": "sha-b", "label": "test:mremote-b" },
+                "base": { "ref": "main", "sha": "main-sha" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test/repo/pulls/301/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "merge-a-commit",
+                "merged": true,
+                "message": "Pull Request successfully merged"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test/repo/pulls/302/update-branch"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "message": "Updating pull request branch.",
+                "url": "https://api.github.com/repos/test/repo/pulls/302"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test/repo/pulls/302/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "merge-b-commit",
+                "merged": true,
+                "message": "Pull Request successfully merged"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let merge_output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &[
+                "merge",
+                "--remote",
+                "--yes",
+                "--no-delete",
+                "--timeout",
+                "1",
+                "--interval",
+                "1",
+                "--no-sync",
+            ],
+        );
+        assert!(
+            merge_output.status.success(),
+            "merge --remote failed: {}\n{}",
+            TestRepo::stderr(&merge_output),
+            TestRepo::stdout(&merge_output)
+        );
+
+        let requests = mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        let patch_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/302");
+        let merge1_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/301/merge");
+        let update_idx =
+            find_request_index(&requests, "PUT", "/repos/test/repo/pulls/302/update-branch");
+        let merge2_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/302/merge");
+
+        assert!(
+            patch_idx < merge1_idx,
+            "Expected dependent PR retarget before parent merge"
+        );
+        assert!(
+            update_idx > merge1_idx,
+            "Expected update-branch after parent merge"
+        );
+        assert!(
+            update_idx < merge2_idx,
+            "Expected update-branch before child merge"
         );
     }
 

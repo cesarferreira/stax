@@ -25,6 +25,8 @@ st merge --method merge
 st merge --method rebase
 st merge --when-ready
 st merge --when-ready --interval 10
+st merge --remote
+st merge --remote --all
 st merge --no-wait
 st merge --no-delete
 st merge --no-sync
@@ -32,7 +34,23 @@ st merge --timeout 60
 st merge --yes
 ```
 
-`--when-ready` cannot be combined with `--dry-run` or `--no-wait`.
+`--when-ready` cannot be combined with `--dry-run`, `--no-wait`, or `--remote`.
+
+### `--remote` mode (GitHub only)
+
+`st merge --remote` merges the stack entirely via the GitHub API. No local git operations are performed (no checkout, rebase, or push) — you can keep working on other branches while it runs. Dependent PR head branches are updated on GitHub using the same mechanism as the **Update branch** button (REST `PUT .../pulls/{pull}/update-branch`).
+
+```bash
+st merge --remote
+st merge --remote --all
+st merge --remote --method squash
+st merge --remote --timeout 60
+st merge --remote --interval 10
+```
+
+After a successful run, run `st rs` to sync your local repository (delete merged local branches, reparent children, etc.). `--remote` uses `--interval` for CI polling, same as `--when-ready`.
+
+`--remote` cannot be combined with `--dry-run`, `--when-ready`, or `--no-wait`. Only **GitHub** is supported (not GitLab/Gitea).
 
 ### Partial stack merge
 

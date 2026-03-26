@@ -20,6 +20,7 @@ pub mod issue;
 pub mod log;
 pub mod merge;
 pub(crate) mod merge_rebase;
+pub mod merge_remote;
 pub mod merge_when_ready;
 pub mod modify;
 pub mod navigate;

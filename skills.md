@@ -169,7 +169,9 @@ stax merge --all                   # Merge whole stack
 stax merge --dry-run               # Preview merge plan only
 stax merge --method squash         # squash|merge|rebase
 stax merge --when-ready            # Wait for CI + approval before each merge
-stax merge --interval 30           # Poll interval in seconds for --when-ready
+stax merge --remote                # Merge via GitHub API only — no local checkout/rebase/push
+stax merge --remote --all          # Include full stack (GitHub only)
+stax merge --interval 30           # Poll interval in seconds for --when-ready / --remote
 stax merge --no-wait               # Fail fast if CI is pending
 stax merge --timeout 60            # Max wait minutes per PR
 stax merge --no-delete             # Keep branches after merge

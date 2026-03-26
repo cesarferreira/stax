@@ -506,6 +506,36 @@ impl GitHubClient {
         Ok(())
     }
 
+    /// Merge the pull request base branch into the head branch (GitHub "Update branch" button).
+    ///
+    /// See <https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch>.
+    pub async fn update_pr_branch(&self, pr_number: u64) -> Result<()> {
+        self.record_api_call("pulls.update-branch");
+        let route = format!(
+            "/repos/{}/{}/pulls/{}/update-branch",
+            self.owner, self.repo, pr_number
+        );
+        let result = self
+            .octocrab
+            .put::<serde_json::Value, _, serde_json::Value>(&route, Some(&serde_json::json!({})))
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                // 422 when head already includes base (nothing to merge)
+                if msg.contains("Update is not required")
+                    || msg.contains("There are no new commits")
+                {
+                    Ok(())
+                } else {
+                    Err(e).context("Failed to update PR branch")
+                }
+            }
+        }
+    }
+
     /// Update PR body text
     pub async fn update_pr_body(&self, pr_number: u64, body: &str) -> Result<()> {
         self.record_api_call("pulls.update.body");

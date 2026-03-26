@@ -116,6 +116,16 @@ impl ForgeClient {
         dispatch!(self, update_pr_base(number, new_base))
     }
 
+    /// GitHub only: merge the PR base into the head branch remotely ("Update branch").
+    pub async fn update_pr_branch(&self, number: u64) -> Result<()> {
+        match self {
+            Self::GitHub(client) => client.update_pr_branch(number).await,
+            Self::GitLab(_) | Self::Gitea(_) => {
+                bail!("`stax merge --remote` is currently only supported for GitHub")
+            }
+        }
+    }
+
     pub async fn update_pr_body(&self, number: u64, body: &str) -> Result<()> {
         dispatch!(self, update_pr_body(number, body))
     }
