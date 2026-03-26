@@ -7,6 +7,16 @@ Absolute times vary by repo and machine. These `hyperfine` samples were captured
 | `ls` | 45.5ms | 739.7ms | 457.7ms |
 | `rs` | 2.807s | 6.769s | — |
 
+```text
+  ls — mean execution time (lower is better)
+
+  stax       ███                                                45.5 ms
+  graphite   ███████████████████████████████                   457.7 ms
+  freephite  ██████████████████████████████████████████████████ 739.7 ms
+             ┬─────────┬─────────┬─────────┬─────────┬─────────┬
+             0        150       300       450       600       750 ms
+```
+
 `gt sync` was not included in this sample set, so the `rs` row does not include a Graphite comparison.
 
 Summary from the sample runs:
