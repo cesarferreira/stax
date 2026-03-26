@@ -14,7 +14,7 @@ use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Editor, Input, Select};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -178,8 +178,9 @@ pub fn run(
 
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
 
-    // Fetch to ensure we have latest remote refs (non-fatal if it fails)
-    let fetch_summary = if no_fetch {
+    // Fetch trunk + branches being submitted + (for narrow scope) parents used in validation.
+    // Run `git ls-remote --heads` in parallel for an up-to-date remote branch name set.
+    let (fetch_summary, remote_branches) = if no_fetch {
         if !quiet {
             println!(
                 "  {} {}",
@@ -187,11 +188,36 @@ pub fn run(
                 "(--no-fetch)".dimmed()
             );
         }
-        "skipped (--no-fetch)".to_string()
+        let rb = remote::get_remote_branches(repo.workdir()?, &remote_info.name)?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        ("skipped (--no-fetch)".to_string(), rb)
     } else {
+        let refs = branches_to_fetch_for_submit(&repo, &stack, scope, &branches_to_submit)?;
         let fetch_timer =
             LiveTimer::maybe_new(!quiet, &format!("Fetching from {}...", remote_info.name));
-        match remote::fetch_remote(repo.workdir()?, &remote_info.name) {
+        let workdir = repo.workdir()?.to_path_buf();
+        let remote_name = remote_info.name.clone();
+        let refs_clone = refs.clone();
+
+        let wd_fetch = workdir.clone();
+        let rn_fetch = remote_name.clone();
+        let fetch_handle = std::thread::spawn(move || {
+            remote::fetch_remote_refs(&wd_fetch, &rn_fetch, &refs_clone)
+        });
+
+        let wd_ls = workdir;
+        let rn_ls = remote_name.clone();
+        let ls_handle = std::thread::spawn(move || remote::ls_remote_heads(&wd_ls, &rn_ls));
+
+        let fetch_res = fetch_handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("submit fetch thread panicked"))?;
+        let ls_joined = ls_handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("submit ls-remote thread panicked"))?;
+
+        let summary = match fetch_res {
             Ok(()) => {
                 LiveTimer::maybe_finish_ok(fetch_timer, "done");
                 "ok".to_string()
@@ -200,11 +226,17 @@ pub fn run(
                 LiveTimer::maybe_finish_warn(fetch_timer, "skipped (continuing with local refs)");
                 "failed (continued with cached refs)".to_string()
             }
-        }
-    };
+        };
 
-    // Check which branches exist on remote
-    let remote_branches = remote::get_remote_branches(repo.workdir()?, &remote_info.name)?;
+        let rb = match ls_joined {
+            Ok(set) => set,
+            Err(_) => remote::get_remote_branches(repo.workdir()?, &remote_info.name)?
+                .into_iter()
+                .collect(),
+        };
+
+        (summary, rb)
+    };
 
     // Verify trunk exists on remote
     if !remote_branches.contains(&stack.trunk) {
@@ -1152,6 +1184,34 @@ fn resolve_branches_for_scope(stack: &Stack, current: &str, scope: SubmitScope) 
         .into_iter()
         .filter(|branch| branch != &stack.trunk)
         .collect()
+}
+
+/// Ref names to pass to `git fetch --no-tags <remote> ...` before submit (trunk, submitted branches,
+/// and parents required for narrow-scope validation).
+fn branches_to_fetch_for_submit(
+    repo: &GitRepo,
+    stack: &Stack,
+    scope: SubmitScope,
+    branches_to_submit: &[String],
+) -> Result<Vec<String>> {
+    let mut names = BTreeSet::new();
+    names.insert(stack.trunk.clone());
+    for b in branches_to_submit {
+        names.insert(b.clone());
+    }
+    if matches!(scope, SubmitScope::Branch | SubmitScope::Upstack) {
+        let submitted: HashSet<&str> = branches_to_submit.iter().map(String::as_str).collect();
+        for branch in branches_to_submit {
+            let meta = BranchMetadata::read(repo.inner(), branch)?
+                .with_context(|| format!("No metadata for branch {}", branch))?;
+            let parent = &meta.parent_branch_name;
+            if parent == &stack.trunk || submitted.contains(parent.as_str()) {
+                continue;
+            }
+            names.insert(parent.clone());
+        }
+    }
+    Ok(names.into_iter().collect())
 }
 
 fn validate_narrow_scope_submit(

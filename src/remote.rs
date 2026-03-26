@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use git2::{ConfigLevel, Repository};
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 
@@ -189,9 +190,50 @@ pub fn get_remote_branches(workdir: &Path, remote: &str) -> Result<Vec<String>> 
     Ok(branches)
 }
 
-pub fn fetch_remote(workdir: &Path, remote: &str) -> Result<()> {
+/// Remote branch names from `git ls-remote --heads` (no object transfer).
+pub fn ls_remote_heads(workdir: &Path, remote: &str) -> Result<HashSet<String>> {
     let output = Command::new("git")
-        .args(["fetch", remote])
+        .args(["ls-remote", "--heads", remote])
+        .current_dir(workdir)
+        .output()
+        .with_context(|| format!("Failed to run git ls-remote --heads {}", remote))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "git ls-remote --heads failed ({}): {}",
+            output.status,
+            stderr.trim()
+        );
+    }
+
+    let prefix = "refs/heads/";
+    let mut names = HashSet::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((_, refpart)) = line.split_once('\t') {
+            if let Some(name) = refpart.strip_prefix(prefix) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Fetch only the given branch tips from `remote` (plus any objects reachable from them).
+pub fn fetch_remote_refs(workdir: &Path, remote: &str, branches: &[String]) -> Result<()> {
+    if branches.is_empty() {
+        anyhow::bail!("fetch_remote_refs: no refs to fetch");
+    }
+
+    let output = Command::new("git")
+        .arg("fetch")
+        .arg("--no-tags")
+        .arg(remote)
+        .args(branches.iter().map(|s| s.as_str()))
         .current_dir(workdir)
         .output()
         .context("Failed to run git fetch")?;
@@ -203,10 +245,8 @@ pub fn fetch_remote(workdir: &Path, remote: &str) -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // git typically reports meaningful diagnostics on stderr (auth, network, DNS, etc.).
-    // Include both streams so users can self-diagnose without re-running manually.
     anyhow::bail!(
-        "Failed to fetch from {}.\n\ngit stdout:\n{}\n\ngit stderr:\n{}",
+        "Failed to fetch refs from {}.\n\ngit stdout:\n{}\n\ngit stderr:\n{}",
         remote,
         stdout.trim(),
         stderr.trim()

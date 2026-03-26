@@ -8,7 +8,7 @@ use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
-use crate::remote::RemoteInfo;
+use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -124,7 +124,7 @@ pub fn run(
         });
 
         let ls_handle =
-            std::thread::spawn(move || ls_remote_heads(&workdir_ls, remote_ls.as_str()));
+            std::thread::spawn(move || remote::ls_remote_heads(&workdir_ls, &remote_ls));
 
         output = fetch_handle
             .join()
@@ -1120,40 +1120,6 @@ pub fn run(
     }
 
     Ok(())
-}
-
-/// Find branches that have been merged into trunk or are orphaned (no longer exist locally/remotely)
-/// List remote branch names via `git ls-remote --heads` (ref names only; no object transfer).
-fn ls_remote_heads(workdir: &Path, remote: &str) -> Result<HashSet<String>> {
-    let output = Command::new("git")
-        .args(["ls-remote", "--heads", remote])
-        .current_dir(workdir)
-        .output()
-        .with_context(|| format!("Failed to run git ls-remote --heads {}", remote))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "git ls-remote --heads failed ({}): {}",
-            output.status,
-            stderr.trim()
-        );
-    }
-
-    let prefix = "refs/heads/";
-    let mut names = HashSet::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Some((_, refpart)) = line.split_once('\t') {
-            if let Some(name) = refpart.strip_prefix(prefix) {
-                names.insert(name.to_string());
-            }
-        }
-    }
-    Ok(names)
 }
 
 /// Drop stale `refs/remotes/<remote>/<branch>` for stax-tracked branches that no longer exist on the remote.
