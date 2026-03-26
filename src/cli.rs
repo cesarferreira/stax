@@ -1,7 +1,7 @@
 use crate::{commands, config::Config, tui, update};
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use std::io::IsTerminal;
+use std::{io::IsTerminal, time::Duration};
 
 const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
 
@@ -1137,21 +1137,32 @@ pub fn run() -> Result<()> {
     // In shells or wrappers without a usable TTY, fall back to the regular status view.
     let command = match cli.command {
         Some(cmd) => cmd,
-        None if should_launch_default_tui(stdin_is_terminal, stdout_is_terminal) => {
-            // TUI requires initialized repo
-            commands::init::ensure_initialized()?;
-            let result = tui::run();
-            update::show_update_notification();
-            update::check_in_background();
-            return result;
+        None => {
+            let interactive_terminal =
+                check_interactive_terminal(stdin_is_terminal, stdout_is_terminal);
+            if interactive_terminal.available {
+                // TUI requires initialized repo
+                commands::init::ensure_initialized()?;
+                let result = tui::run();
+                update::show_update_notification();
+                update::check_in_background();
+                return result;
+            }
+
+            print_interactive_fallback(
+                interactive_terminal.reason.as_deref(),
+                "dashboard",
+                "falling back to status view",
+            );
+
+            Commands::Status {
+                json: false,
+                stack: None,
+                current: false,
+                compact: false,
+                quiet: false,
+            }
         }
-        None => Commands::Status {
-            json: false,
-            stack: None,
-            current: false,
-            compact: false,
-            quiet: false,
-        },
     };
 
     // Commands that don't need repo initialization
@@ -1552,13 +1563,19 @@ pub fn run() -> Result<()> {
         Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
         Commands::Worktree { command } => match command {
             None => {
-                if should_launch_worktree_dashboard(
+                let interactive_terminal = check_interactive_terminal(
                     std::io::stdin().is_terminal(),
                     std::io::stdout().is_terminal(),
-                ) {
+                );
+                if interactive_terminal.available {
                     commands::init::ensure_initialized()?;
                     tui::worktree::run()
                 } else {
+                    print_interactive_fallback(
+                        interactive_terminal.reason.as_deref(),
+                        "worktree dashboard",
+                        "showing worktree help",
+                    );
                     print_worktree_help()
                 }
             }
@@ -1672,16 +1689,61 @@ pub fn run() -> Result<()> {
     result
 }
 
-fn should_launch_default_tui(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
-    has_interactive_terminal(stdin_is_terminal, stdout_is_terminal)
-}
-
-fn should_launch_worktree_dashboard(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
-    has_interactive_terminal(stdin_is_terminal, stdout_is_terminal)
-}
-
 fn has_interactive_terminal(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
     stdin_is_terminal && stdout_is_terminal
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InteractiveTerminalCheck {
+    available: bool,
+    reason: Option<String>,
+}
+
+fn check_interactive_terminal(
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+) -> InteractiveTerminalCheck {
+    check_interactive_terminal_with_probe(stdin_is_terminal, stdout_is_terminal, || {
+        crossterm::event::poll(Duration::from_millis(0))
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    })
+}
+
+fn check_interactive_terminal_with_probe<F>(
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+    probe_input_reader: F,
+) -> InteractiveTerminalCheck
+where
+    F: FnOnce() -> std::result::Result<(), String>,
+{
+    if !has_interactive_terminal(stdin_is_terminal, stdout_is_terminal) {
+        return InteractiveTerminalCheck {
+            available: false,
+            reason: None,
+        };
+    }
+
+    match probe_input_reader() {
+        Ok(()) => InteractiveTerminalCheck {
+            available: true,
+            reason: None,
+        },
+        Err(reason) => InteractiveTerminalCheck {
+            available: false,
+            reason: Some(reason),
+        },
+    }
+}
+
+fn print_interactive_fallback(reason: Option<&str>, dashboard: &str, fallback: &str) {
+    if let Some(reason) = reason {
+        eprintln!(
+            "stax: interactive {} unavailable ({}); {}.",
+            dashboard, reason, fallback
+        );
+    }
 }
 
 fn print_worktree_help() -> Result<()> {
@@ -1698,25 +1760,11 @@ fn print_worktree_help() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        has_interactive_terminal, should_launch_default_tui, should_launch_worktree_dashboard, Cli,
-        Commands, RestackSubmitAfter,
+        check_interactive_terminal_with_probe, has_interactive_terminal, Cli, Commands,
+        InteractiveTerminalCheck, RestackSubmitAfter,
     };
     use clap::Parser;
-
-    #[test]
-    fn worktree_dashboard_requires_interactive_terminal() {
-        assert!(should_launch_worktree_dashboard(true, true));
-        assert!(!should_launch_worktree_dashboard(true, false));
-        assert!(!should_launch_worktree_dashboard(false, true));
-    }
-
-    #[test]
-    fn default_tui_requires_interactive_terminal() {
-        assert!(should_launch_default_tui(true, true));
-        assert!(!should_launch_default_tui(true, false));
-        assert!(!should_launch_default_tui(false, true));
-        assert!(!should_launch_default_tui(false, false));
-    }
+    use std::cell::Cell;
 
     #[test]
     fn interactive_terminal_requires_both_stdio_streams() {
@@ -1724,6 +1772,51 @@ mod tests {
         assert!(!has_interactive_terminal(true, false));
         assert!(!has_interactive_terminal(false, true));
         assert!(!has_interactive_terminal(false, false));
+    }
+
+    #[test]
+    fn interactive_dashboard_skips_probe_without_a_tty() {
+        let probe_called = Cell::new(false);
+        let check = check_interactive_terminal_with_probe(true, false, || {
+            probe_called.set(true);
+            Ok(())
+        });
+
+        assert_eq!(
+            check,
+            InteractiveTerminalCheck {
+                available: false,
+                reason: None,
+            }
+        );
+        assert!(!probe_called.get());
+    }
+
+    #[test]
+    fn interactive_dashboard_requires_input_reader() {
+        let check =
+            check_interactive_terminal_with_probe(true, true, || Err("reader init failed".into()));
+
+        assert_eq!(
+            check,
+            InteractiveTerminalCheck {
+                available: false,
+                reason: Some("reader init failed".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn interactive_dashboard_launches_when_probe_succeeds() {
+        let check = check_interactive_terminal_with_probe(true, true, || Ok(()));
+
+        assert_eq!(
+            check,
+            InteractiveTerminalCheck {
+                available: true,
+                reason: None,
+            }
+        );
     }
 
     #[test]
