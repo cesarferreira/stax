@@ -1330,6 +1330,52 @@ fn test_modify_alias_m() {
     assert!(output.status.success());
 }
 
+#[test]
+fn test_modify_on_empty_branch_creates_new_commit() {
+    // Regression test: `stax m` on a freshly-created branch (no own commits)
+    // must NOT amend the parent branch's tip commit.  It should instead create
+    // a brand-new commit so that the parent branch is left untouched.
+    let repo = TestRepo::new();
+
+    // Record the parent (main) tip before creating a child branch.
+    let main_sha_before = repo.head_sha();
+
+    // Create a branch without an initial commit – this is the common case that
+    // triggered the bug: HEAD on the new branch still equals main's tip.
+    repo.run_stax(&["bc", "empty-branch"]);
+
+    // Verify the branch currently shares HEAD with main.
+    assert_eq!(
+        repo.head_sha(),
+        main_sha_before,
+        "Freshly-created branch should share HEAD with parent"
+    );
+
+    // Stage a new file and run `stax m` (modify).
+    repo.create_file("new_feature.txt", "hello");
+    let output = repo.run_stax(&["m", "-m", "add new feature"]);
+    assert!(
+        output.status.success(),
+        "stax m should succeed on empty branch: {}",
+        TestRepo::stderr(&output)
+    );
+
+    // The branch should now have a NEW commit (HEAD advanced).
+    let branch_sha_after = repo.head_sha();
+    assert_ne!(
+        branch_sha_after, main_sha_before,
+        "stax m on an empty branch should create a new commit, not amend the parent tip"
+    );
+
+    // Switch back to main and confirm its tip was NOT changed.
+    repo.git(&["checkout", "main"]);
+    let main_sha_after = repo.head_sha();
+    assert_eq!(
+        main_sha_after, main_sha_before,
+        "stax m on an empty branch must not modify the parent branch"
+    );
+}
+
 // =============================================================================
 // Restack Tests
 // =============================================================================
