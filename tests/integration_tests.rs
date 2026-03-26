@@ -1331,7 +1331,7 @@ fn test_modify_alias_m() {
 }
 
 #[test]
-fn test_modify_refuses_to_amend_inherited_parent_commit() {
+fn test_modify_on_fresh_branch_creates_first_commit_with_message() {
     let repo = TestRepo::new();
 
     hermetic_git_command()
@@ -1366,21 +1366,104 @@ fn test_modify_refuses_to_amend_inherited_parent_commit() {
 
     let output = repo.run_stax(&["modify", "-m", "Feature commit"]);
     assert!(
+        output.status.success(),
+        "modify should create the first branch commit: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Committed"),
+        "expected commit confirmation, got: {}",
+        stdout
+    );
+    let log_output = repo.git(&["log", "-1", "--format=%s%n%an <%ae>"]);
+    let log = String::from_utf8_lossy(&log_output.stdout);
+    let mut lines = log.lines();
+    assert_eq!(lines.next(), Some("Feature commit"));
+    assert_eq!(lines.next(), Some("Test User <test@test.com>"));
+    let head_after = repo.head_sha();
+    assert_ne!(
+        head_after, head_before,
+        "modify should create a new branch-local commit on a fresh branch"
+    );
+    let count_output = repo.git(&["rev-list", "--count", "main..HEAD"]);
+    assert_eq!(
+        String::from_utf8_lossy(&count_output.stdout).trim(),
+        "1",
+        "expected exactly one branch-local commit after the first modify"
+    );
+    repo.git(&["checkout", "main"]);
+    assert_eq!(repo.head_sha(), head_before, "main should remain untouched");
+}
+
+#[test]
+fn test_modify_on_fresh_branch_without_message_guides_user() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-no-message"]);
+    let head_before = repo.head_sha();
+    repo.create_file("feature.txt", "new branch work");
+
+    let output = repo.run_stax(&["modify"]);
+    assert!(
         !output.status.success(),
-        "modify should refuse to amend an inherited parent commit"
+        "modify without -m should fail on a fresh branch"
     );
 
     let stderr = TestRepo::stderr(&output);
     assert!(
-        stderr.contains("has no commits ahead of")
-            && stderr.contains("rewrite an inherited parent commit"),
-        "expected safety guidance, got: {}",
+        stderr.contains("has nothing to amend") && stderr.contains("Re-run with `-m <message>`"),
+        "expected guidance for creating the first commit, got: {}",
         stderr
     );
     assert_eq!(
         repo.head_sha(),
         head_before,
-        "modify should not rewrite the parent commit on a fresh branch"
+        "modify without -m should not rewrite the parent commit on a fresh branch"
+    );
+}
+
+#[test]
+fn test_modify_on_fresh_branch_still_creates_commit_after_parent_moves() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-parent-moved"]);
+    let feature_branch = repo.current_branch();
+    let shared_base = repo.head_sha();
+
+    repo.git(&["checkout", "main"]);
+    repo.create_file("main.txt", "main advanced");
+    repo.commit("Main advanced");
+    let main_after = repo.head_sha();
+    assert_ne!(main_after, shared_base, "main should have advanced");
+
+    repo.git(&["checkout", &feature_branch]);
+    assert_eq!(
+        repo.head_sha(),
+        shared_base,
+        "fresh branch should still point at the original parent boundary"
+    );
+
+    repo.create_file("feature.txt", "feature work");
+    let output = repo.run_stax(&["modify", "-m", "Feature commit"]);
+    assert!(
+        output.status.success(),
+        "modify should still create the first branch commit after parent moves: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let feature_after = repo.head_sha();
+    assert_ne!(
+        feature_after, shared_base,
+        "expected a new branch-local commit after modify"
+    );
+
+    repo.git(&["checkout", "main"]);
+    assert_eq!(
+        repo.head_sha(),
+        main_after,
+        "modify on the child branch must not rewrite the advanced parent branch"
     );
 }
 
