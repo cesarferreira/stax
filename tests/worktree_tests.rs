@@ -465,10 +465,10 @@ fn sync_reports_fix_commands_when_branch_delete_blocked_by_worktree() {
     output
         .assert_success()
         .assert_stdout_contains("not deleted locally (checked out in another worktree)")
-        .assert_stdout_contains("Run to remove that worktree:")
+        .assert_stdout_contains("Run to remove that worktree and delete the branch:")
         .assert_stdout_contains("wt-a")
         .assert_stdout_contains("Or keep the worktree and free the branch:")
-        .assert_stdout_contains(&format!("st wt rm {}", branch))
+        .assert_stdout_contains(&format!("st wt rm {} --delete-branch", branch))
         .assert_stdout_contains("switch --detach");
 }
 
@@ -507,13 +507,48 @@ fn sync_reports_unique_remove_command_when_worktree_basename_is_ambiguous() {
     let output = repo.run_stax(&["sync", "--force"]);
     output
         .assert_success()
-        .assert_stdout_contains("Run to remove that worktree:")
-        .assert_stdout_contains(&format!("st wt rm {}", branch));
+        .assert_stdout_contains("Run to remove that worktree and delete the branch:")
+        .assert_stdout_contains(&format!("st wt rm {} --delete-branch", branch));
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        !stdout.contains("st wt rm stax"),
+        !stdout.contains("st wt rm stax --delete-branch"),
         "expected sync hint to avoid ambiguous basename selector, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn wt_remove_reports_branch_name_when_worktree_basename_is_generic() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["create", "A"]).assert_success();
+    let branch = repo.current_branch();
+    repo.create_file("a.txt", "A\n");
+    repo.commit("A commit");
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let generic_parent = repo.path().join("codex-lane");
+    fs::create_dir_all(&generic_parent).expect("create generic worktree parent");
+
+    let generic_worktree = generic_parent.join("stax");
+    repo.git(&[
+        "worktree",
+        "add",
+        generic_worktree.to_str().unwrap(),
+        &branch,
+    ])
+    .assert_success();
+
+    let output = repo.run_stax(&["wt", "rm", &branch]);
+    output
+        .assert_success()
+        .assert_stdout_contains(&format!("worktree '{}'", branch));
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        !stdout.contains("worktree 'stax'"),
+        "expected remove output to use the branch name, got:\n{}",
         stdout
     );
 }

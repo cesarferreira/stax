@@ -671,11 +671,14 @@ pub fn run(
                                 );
                                 if let Ok(Some(resolution)) = repo.branch_delete_resolution(branch)
                                 {
-                                    if let Some(remove_cmd) = resolution.remove_worktree_cmd() {
+                                    if let Some(remove_cmd) =
+                                        resolution.remove_worktree_and_branch_cmd()
+                                    {
                                         println!(
                                             "    {} {}",
                                             "↷".yellow(),
-                                            "Run to remove that worktree:".dimmed()
+                                            "Run to remove that worktree and delete the branch:"
+                                                .dimmed()
                                         );
                                         println!("      {}", remove_cmd.cyan());
                                     }
@@ -858,11 +861,11 @@ pub fn run(
                             "not deleted locally (checked out in another worktree)".yellow()
                         );
                         if let Ok(Some(resolution)) = repo.branch_delete_resolution(branch) {
-                            if let Some(remove_cmd) = resolution.remove_worktree_cmd() {
+                            if let Some(remove_cmd) = resolution.remove_worktree_and_branch_cmd() {
                                 println!(
                                     "    {} {}",
                                     "↷".yellow(),
-                                    "Run to remove that worktree:".dimmed()
+                                    "Run to remove that worktree and delete the branch:".dimmed()
                                 );
                                 println!("      {}", remove_cmd.cyan());
                             }

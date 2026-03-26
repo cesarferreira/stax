@@ -654,6 +654,38 @@ fn wt_remove_without_name_removes_current_worktree() {
 }
 
 #[test]
+fn wt_remove_delete_branch_from_current_worktree_removes_branch_too() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+
+    repo.run_stax_with_env(&["wt", "c", "remove-branch"], &[("HOME", home.as_str())])
+        .assert_success();
+    let worktree_path = default_worktree_root(&repo, &home).join("remove-branch");
+
+    let out = repo.run_stax_in_with_env(
+        &worktree_path,
+        &["wt", "rm", "--delete-branch"],
+        &[("HOME", home.as_str())],
+    );
+    out.assert_success()
+        .assert_stdout_contains("Deleted branch 'remove-branch'")
+        .assert_stdout_contains("Removed  worktree 'remove-branch'");
+
+    assert!(
+        !worktree_path.exists(),
+        "expected current worktree directory to be removed"
+    );
+
+    let branch_ref = "refs/heads/remove-branch";
+    let show_ref = repo.git(&["show-ref", "--verify", "--quiet", branch_ref]);
+    assert!(
+        !show_ref.status.success(),
+        "expected branch '{}' to be deleted",
+        branch_ref
+    );
+}
+
+#[test]
 fn wt_restack_only_touches_stax_managed_worktrees() {
     let repo = TestRepo::new();
     let home = clean_home(&repo);
