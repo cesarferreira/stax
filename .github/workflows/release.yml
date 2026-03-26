@@ -42,6 +42,14 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install cargo-nextest
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        uses: taiki-e/install-action@nextest
+
+      - name: Run Windows tests
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo nextest run --lib --bins
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 

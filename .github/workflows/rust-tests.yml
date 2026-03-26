@@ -11,12 +11,8 @@ concurrency:
 
 jobs:
   unit-tests:
-    name: Unit Tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+    name: Unit Tests
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -27,7 +23,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.os }}
+          key: ubuntu-latest
       - name: Run unit tests
         run: cargo nextest run --lib --bins
 
