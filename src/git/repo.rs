@@ -88,6 +88,11 @@ impl BranchDeleteResolution {
         }
     }
 
+    pub fn remove_worktree_and_branch_cmd(&self) -> Option<String> {
+        self.remove_worktree_cmd()
+            .map(|command| format!("{command} --delete-branch"))
+    }
+
     pub fn switch_branch_cmd(&self) -> String {
         match &self.switch_target {
             BranchDeleteSwitchTarget::Branch(target) => format!(

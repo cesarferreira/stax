@@ -53,10 +53,11 @@ pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()>
 
     let branch = worktree.branch.clone();
     let path = worktree.path.clone();
-    let display_name = worktree.name.clone();
+    let display_name = branch.clone().unwrap_or_else(|| worktree.name.clone());
     repo.worktree_remove(&path, force)?;
 
     if delete_branch {
+        let repo = GitRepo::open_from_path(&main_workdir)?;
         if let Some(branch) = branch.as_deref() {
             match repo.delete_branch(branch, force) {
                 Ok(()) => {
