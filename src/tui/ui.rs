@@ -1,7 +1,5 @@
 use crate::tui::app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
-use crate::tui::widgets::{
-    render_details, render_diff, render_reorder_preview, render_stack_tree, render_worktrees,
-};
+use crate::tui::widgets::{render_details, render_diff, render_reorder_preview, render_stack_tree};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -16,47 +14,33 @@ pub fn render(f: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),    // Main content
-            Constraint::Length(3), // Status bar
+            Constraint::Length(4), // Status bar
         ])
         .split(f.area());
 
-    // Main content: left panel (stack + details) + right panel (diff)
+    // Main content: left panel (stack) + right panel (summary + diff/reorder preview)
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
         .split(chunks[0]);
 
-    // Left panel: stack tree + details (+ worktrees section when linked worktrees exist)
-    if app.worktrees.is_empty() {
-        let left_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(main_chunks[0]);
+    render_stack_tree(f, app, main_chunks[0]);
 
-        render_stack_tree(f, app, left_chunks[0]);
-        render_details(f, app, left_chunks[1]);
-    } else {
-        let left_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(50), // stack tree
-                Constraint::Percentage(30), // branch details
-                Constraint::Percentage(20), // linked worktrees
-            ])
-            .split(main_chunks[0]);
-
-        render_stack_tree(f, app, left_chunks[0]);
-        render_details(f, app, left_chunks[1]);
-        render_worktrees(f, app, left_chunks[2]);
-    }
-
-    // Show reorder preview panel in reorder mode, otherwise show diff
     if matches!(app.mode, Mode::Reorder)
         || matches!(app.mode, Mode::Confirm(ConfirmAction::ApplyReorder))
     {
         render_reorder_preview(f, app, main_chunks[1]);
     } else {
-        render_diff(f, app, main_chunks[1]);
+        let right_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(10), // branch summary
+                Constraint::Min(3),     // patch view
+            ])
+            .split(main_chunks[1]);
+
+        render_details(f, app, right_chunks[0]);
+        render_diff(f, app, right_chunks[1]);
     }
 
     // Status bar
@@ -73,7 +57,7 @@ pub fn render(f: &mut Frame, app: &App) {
 
 /// Render the bottom status bar with keybindings
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let content: Line = if let Some(msg) = &app.status_message {
+    let status_line = if let Some(msg) = &app.status_message {
         Line::from(Span::styled(
             msg.clone(),
             Style::default()
@@ -83,50 +67,35 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     } else {
         match app.mode {
             Mode::Normal => {
-                let (focus_label, focus_color) = match app.focused_pane {
-                    FocusedPane::Stack => ("◀ STACK", Color::Cyan),
-                    FocusedPane::Diff => ("DIFF ▶", Color::Green),
+                let (focus_label, focus_color, focus_hint) = match app.focused_pane {
+                    FocusedPane::Stack => (" STACK ", Color::Cyan, "browse branches"),
+                    FocusedPane::Diff => (" PATCH ", Color::Green, "scroll patch"),
                 };
+                let branch_count = app.branches.len();
                 Line::from(vec![
                     Span::styled(
-                        format!(" {} ", focus_label),
+                        focus_label,
                         Style::default()
                             .fg(Color::Black)
                             .bg(focus_color)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw("  "),
-                    Span::styled("Tab", Style::default().fg(Color::Cyan)),
-                    Span::raw(" switch  "),
-                    Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-                    Span::raw(" navigate  "),
-                    Span::styled("⏎", Style::default().fg(Color::Cyan)),
-                    Span::raw(" checkout  "),
-                    Span::styled("r", Style::default().fg(Color::Cyan)),
-                    Span::raw(" restack  "),
-                    Span::styled("s", Style::default().fg(Color::Cyan)),
-                    Span::raw(" submit  "),
-                    Span::styled("n", Style::default().fg(Color::Cyan)),
-                    Span::raw(" new  "),
-                    Span::styled("e", Style::default().fg(Color::Cyan)),
-                    Span::raw(" rename  "),
-                    Span::styled("o", Style::default().fg(Color::Cyan)),
-                    Span::raw(" reorder  "),
-                    Span::styled("/", Style::default().fg(Color::Cyan)),
-                    Span::raw(" search  "),
-                    Span::styled("?", Style::default().fg(Color::Cyan)),
-                    Span::raw(" help  "),
-                    Span::styled("q", Style::default().fg(Color::Cyan)),
-                    Span::raw(" quit"),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("{} branches", branch_count),
+                        Style::default().fg(Color::White),
+                    ),
+                    Span::styled(" • ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(focus_hint, Style::default().fg(Color::DarkGray)),
                 ])
             }
             Mode::Search => Line::from(vec![
-                Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-                Span::raw(" navigate  "),
-                Span::styled("⏎", Style::default().fg(Color::Cyan)),
-                Span::raw(" select  "),
+                Span::styled("/", Style::default().fg(Color::Cyan)),
+                Span::raw(" filtering branches  "),
+                Span::styled("Type", Style::default().fg(Color::Cyan)),
+                Span::raw(" to narrow  "),
                 Span::styled("Esc", Style::default().fg(Color::Cyan)),
-                Span::raw(" cancel  Type to filter..."),
+                Span::raw(" close search"),
             ]),
             Mode::Help => Line::from("Press any key to close"),
             Mode::Confirm(_) => Line::from(vec![
@@ -151,7 +120,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
                 ),
                 Span::raw("  "),
                 Span::styled("Shift+↑/↓", Style::default().fg(Color::Magenta)),
-                Span::raw(" move in stack  "),
+                Span::raw(" move branch in stack  "),
                 Span::styled("Enter", Style::default().fg(Color::Cyan)),
                 Span::raw(" apply  "),
                 Span::styled("Esc", Style::default().fg(Color::Cyan)),
@@ -160,9 +129,91 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let paragraph = Paragraph::new(content).block(Block::default().borders(Borders::ALL));
+    let shortcuts_line = match app.mode {
+        Mode::Normal => build_normal_shortcuts(app),
+        Mode::Search => Line::from(vec![
+            key_hint("↑↓", Color::Cyan),
+            Span::raw(" navigate  "),
+            key_hint("Enter", Color::Green),
+            Span::raw(" checkout  "),
+            key_hint("Esc", Color::Cyan),
+            Span::raw(" cancel"),
+        ]),
+        Mode::Help => Line::from(vec![Span::styled(
+            "? closes this dialog",
+            Style::default().fg(Color::DarkGray),
+        )]),
+        Mode::Confirm(_) => Line::from(vec![
+            key_hint("y", Color::Green),
+            Span::raw(" confirm  "),
+            key_hint("Esc", Color::Red),
+            Span::raw(" cancel"),
+        ]),
+        Mode::Input(_) => Line::from(vec![
+            key_hint("Enter", Color::Green),
+            Span::raw(" accept  "),
+            key_hint("Esc", Color::Red),
+            Span::raw(" cancel"),
+        ]),
+        Mode::Reorder => Line::from(vec![
+            key_hint("Shift+↑↓", Color::Magenta),
+            Span::raw(" move  "),
+            key_hint("Enter", Color::Green),
+            Span::raw(" apply  "),
+            key_hint("Esc", Color::Red),
+            Span::raw(" cancel"),
+        ]),
+    };
+
+    let paragraph = Paragraph::new(vec![status_line, shortcuts_line])
+        .block(Block::default().borders(Borders::ALL));
 
     f.render_widget(paragraph, area);
+}
+
+fn build_normal_shortcuts(app: &App) -> Line<'static> {
+    let mut spans = vec![
+        key_hint("↑↓", Color::Cyan),
+        Span::raw(" move  "),
+        key_hint("Tab", Color::Cyan),
+        Span::raw(" pane  "),
+    ];
+
+    if let Some(branch) = app.selected_branch() {
+        let (label, action, color) = if !branch.is_current {
+            ("Enter", "checkout", Color::Green)
+        } else if branch.is_trunk {
+            ("n", "new", Color::Green)
+        } else if branch.needs_restack {
+            ("r", "restack", Color::Yellow)
+        } else if branch.pr_number.is_some() {
+            ("p", "PR", Color::Cyan)
+        } else {
+            ("s", "submit", Color::Green)
+        };
+
+        spans.push(key_hint(label, color));
+        spans.push(Span::raw(format!(" {}  ", action)));
+    }
+
+    spans.push(key_hint("/", Color::Cyan));
+    spans.push(Span::raw(" search  "));
+    spans.push(key_hint("?", Color::Yellow));
+    spans.push(Span::raw(" help  "));
+    spans.push(key_hint("q", Color::Cyan));
+    spans.push(Span::raw(" quit"));
+
+    Line::from(spans)
+}
+
+fn key_hint(label: &str, color: Color) -> Span<'static> {
+    Span::styled(
+        format!(" {} ", label),
+        Style::default()
+            .fg(Color::Black)
+            .bg(color)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 /// Render help modal
@@ -184,6 +235,7 @@ fn render_help_modal(f: &mut Frame) {
         Line::from("  ↑/k      Move selection up"),
         Line::from("  ↓/j      Move selection down"),
         Line::from("  Enter    Checkout selected branch"),
+        Line::from("  Tab      Switch focus to patch scrolling"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Actions",

@@ -1,11 +1,8 @@
 use crate::cache::CiCache;
-use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
-use crate::remote::RemoteInfo;
 use anyhow::Result;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Instant;
 
 /// A line in a diff with its type
@@ -54,7 +51,6 @@ pub struct BranchDisplay {
     pub unpulled: usize, // commits behind remote (unpulled)
     pub pr_number: Option<u64>,
     pub pr_state: Option<String>,
-    pub pr_url: Option<String>,
     pub ci_state: Option<String>,
     pub commits: Vec<String>,
 }
@@ -130,23 +126,11 @@ pub struct ReorderState {
     pub preview: ReorderPreview,
 }
 
-/// A linked worktree entry for TUI display
-#[derive(Debug, Clone)]
-pub struct WorktreeDisplay {
-    pub name: String,
-    pub branch: String,
-    #[allow(dead_code)] // stored for future open-from-TUI action
-    pub path: PathBuf,
-    pub exists: bool,
-    pub is_current: bool,
-}
-
 /// Main application state
 pub struct App {
     pub stack: Stack,
     pub cache: CiCache,
     pub repo: GitRepo,
-    pub remote_info: Option<RemoteInfo>,
     pub current_branch: String,
     pub selected_index: usize,
     pub branches: Vec<BranchDisplay>,
@@ -164,7 +148,6 @@ pub struct App {
     pub should_quit: bool,
     pub needs_refresh: bool,
     pub reorder_state: Option<ReorderState>,
-    pub worktrees: Vec<WorktreeDisplay>,
     diff_cache: HashMap<String, CachedDiff>,
 }
 
@@ -175,16 +158,11 @@ impl App {
         let current_branch = repo.current_branch()?;
         let git_dir = repo.git_dir()?;
         let cache = CiCache::load(git_dir);
-        let config = Config::load()?;
-        let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
-
-        let worktrees = load_worktrees(&repo);
 
         let mut app = Self {
             stack,
             cache,
             repo,
-            remote_info,
             current_branch,
             selected_index: 0,
             branches: Vec::new(),
@@ -202,7 +180,6 @@ impl App {
             should_quit: false,
             needs_refresh: true,
             reorder_state: None,
-            worktrees,
             diff_cache: HashMap::new(),
         };
 
@@ -218,7 +195,6 @@ impl App {
         self.stack = Stack::load(&self.repo)?;
         self.current_branch = self.repo.current_branch()?;
         self.branches = self.build_branch_list()?;
-        self.worktrees = load_worktrees(&self.repo);
         self.diff_cache.clear();
         self.needs_refresh = false;
         self.update_diff();
@@ -348,7 +324,6 @@ impl App {
 
         let pr_number = info.and_then(|i| i.pr_number);
         let pr_state = info.and_then(|i| i.pr_state.clone());
-        let pr_url = pr_number.and_then(|n| self.remote_info.as_ref().map(|r| r.pr_url(n)));
         let parent = info.and_then(|i| i.parent.clone());
 
         // Get commits for this branch
@@ -379,7 +354,6 @@ impl App {
             unpulled,
             pr_number,
             pr_state,
-            pr_url,
             ci_state,
             commits,
         })
@@ -394,7 +368,7 @@ impl App {
 
     /// Get the currently selected branch
     pub fn selected_branch(&self) -> Option<&BranchDisplay> {
-        if self.mode == Mode::Search && !self.filtered_indices.is_empty() {
+        if self.mode == Mode::Search {
             self.filtered_indices
                 .get(self.selected_index)
                 .and_then(|&idx| self.branches.get(idx))
@@ -405,7 +379,7 @@ impl App {
 
     /// Move selection up
     pub fn select_previous(&mut self) {
-        let len = if self.mode == Mode::Search && !self.filtered_indices.is_empty() {
+        let len = if self.mode == Mode::Search {
             self.filtered_indices.len()
         } else {
             self.branches.len()
@@ -419,7 +393,7 @@ impl App {
 
     /// Move selection down
     pub fn select_next(&mut self) {
-        let len = if self.mode == Mode::Search && !self.filtered_indices.is_empty() {
+        let len = if self.mode == Mode::Search {
             self.filtered_indices.len()
         } else {
             self.branches.len()
@@ -514,13 +488,7 @@ impl App {
 
     /// Calculate total scrollable lines in diff view (stats header + diff content)
     pub fn total_diff_lines(&self) -> usize {
-        let stat_lines = if self.diff_stat.is_empty() {
-            0
-        } else {
-            // Summary line + blank + file lines + blank + separator + blank
-            4 + self.diff_stat.len()
-        };
-        stat_lines + self.selected_diff.len()
+        self.selected_diff.len()
     }
 
     /// Set a status message (auto-clears after timeout)
@@ -785,20 +753,4 @@ impl App {
     pub fn clear_reorder_state(&mut self) {
         self.reorder_state = None;
     }
-}
-
-/// Load linked worktrees from git (best-effort; returns empty list on error).
-fn load_worktrees(repo: &GitRepo) -> Vec<WorktreeDisplay> {
-    repo.list_worktrees()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|worktree| !worktree.is_main)
-        .map(|worktree| WorktreeDisplay {
-            name: worktree.name,
-            branch: worktree.branch.unwrap_or_else(|| "(detached)".to_string()),
-            path: worktree.path.clone(),
-            exists: worktree.path.exists(),
-            is_current: worktree.is_current,
-        })
-        .collect()
 }

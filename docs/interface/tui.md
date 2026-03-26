@@ -10,10 +10,13 @@ stax
 
 ## Features
 
-- Stack tree with PR status, sync indicators, and ahead/behind counts
-- Branch diff viewer
+- Full-height stack tree with PR status, sync indicators, and ahead/behind counts
+- Selected-branch summary with recommended next actions
+- Patch viewer with a compact diffstat header and scrollable patch body
 - Keyboard-driven checkout, restack, submit, create, rename, and delete
 - Reorder mode for branch reparenting
+
+The main `st` TUI is focused on stacks and patches. Worktree management lives in the dedicated `st wt` dashboard.
 
 ## Worktree Dashboard
 
@@ -44,7 +47,7 @@ Run `st wt` in an interactive terminal to open the worktree dashboard.
 | `e` | Rename current branch |
 | `d` | Delete branch |
 | `/` | Search/filter branches |
-| `Tab` | Toggle focus between stack and diff panes |
+| `Tab` | Toggle focus between stack and patch panes |
 | `?` | Show keybindings |
 | `q`/`Esc` | Quit |
 

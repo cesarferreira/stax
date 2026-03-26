@@ -1,6 +1,7 @@
 # Lessons
 
 - When changing the `stax co` UI, match the `stax ls` visual language (colors, tree/indentation) and confirm it visually. Do not ship a redesign without verifying the output looks like the `ls` tree and that selection emphasis is obvious.
+- TUI changes must be checked at standard terminal widths (around 80 columns); keep one-line summaries and footers compact, and prefer a single contextual action over listing every shortcut.
 - If interactive lists scroll the terminal on navigation, clear and position the cursor before invoking the dialog to avoid rendering into the lower viewport.
 - Bare commands that default to a TUI/dashboard must gate on both `stdin` and `stdout` being terminals and otherwise fall back to help or a non-interactive view; never assume `st`/`st wt` is launched from a full TTY.
 - When adding or changing CLI commands/flags, update both `README.md` and `docs/` command references in the same change and verify parity against `stax --help` before marking docs complete.

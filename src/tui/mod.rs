@@ -170,7 +170,7 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::Search => {
             app.mode = Mode::Search;
             app.search_query.clear();
-            app.filtered_indices.clear();
+            app.update_search();
         }
         KeyAction::Help => app.mode = Mode::Help,
         KeyAction::Restack => {

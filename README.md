@@ -184,7 +184,7 @@ Read more: [docs/safety/undo-redo.md](docs/safety/undo-redo.md)
 
 ### Interactive TUI
 
-Launch with no arguments to browse stacks, inspect diffs, and run common operations without leaving the terminal.
+Launch with no arguments to browse stacks, inspect the selected branch summary, scroll patches, and run common operations without leaving the terminal.
 
 ```bash
 st

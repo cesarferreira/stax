@@ -1,6 +1,6 @@
-use crate::tui::app::{App, DiffLineType, FocusedPane};
+use crate::tui::app::{App, BranchDisplay, DiffLineType, FocusedPane};
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -14,12 +14,12 @@ pub fn render_diff(f: &mut Frame, app: &App, area: Rect) {
 
     let title = if let Some(b) = branch {
         if let Some(parent) = &b.parent {
-            format!(" Diff: {} ← {} ", b.name, parent)
+            format!(" Patch: {} ← {} ", b.name, parent)
         } else {
             format!(" {} ", b.name)
         }
     } else {
-        " Diff ".to_string()
+        " Patch ".to_string()
     };
 
     let (border_color, title_style) = if is_focused {
@@ -33,131 +33,132 @@ pub fn render_diff(f: &mut Frame, app: &App, area: Rect) {
         (Color::DarkGray, Style::default().fg(Color::DarkGray))
     };
 
-    // Build all content first, then apply scroll to everything
-    let mut all_content: Vec<Line> = Vec::new();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(title, title_style))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    // Add diff stat summary at top
-    if !app.diff_stat.is_empty() {
-        let total_add: usize = app.diff_stat.iter().map(|s| s.additions).sum();
-        let total_del: usize = app.diff_stat.iter().map(|s| s.deletions).sum();
+    let header_lines = build_diff_header(app);
+    let header_height = header_lines.len().max(1) as u16;
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(header_height), Constraint::Min(1)])
+        .split(inner);
 
-        all_content.push(Line::from(vec![
+    f.render_widget(Paragraph::new(header_lines), chunks[0]);
+    f.render_widget(Paragraph::new(build_patch_lines(app, branch)), chunks[1]);
+}
+
+fn build_diff_header(app: &App) -> Vec<Line<'static>> {
+    if app.diff_stat.is_empty() {
+        return vec![Line::from(vec![Span::styled(
+            "No file summary available",
+            Style::default().fg(Color::DarkGray),
+        )])];
+    }
+
+    let total_add: usize = app.diff_stat.iter().map(|s| s.additions).sum();
+    let total_del: usize = app.diff_stat.iter().map(|s| s.deletions).sum();
+    let visible_stats = app.diff_stat.iter().take(4).collect::<Vec<_>>();
+    let max_file_len = visible_stats
+        .iter()
+        .map(|s| s.file.len())
+        .max()
+        .unwrap_or(20)
+        .min(36);
+
+    let mut lines = vec![
+        Line::from(vec![
             Span::styled(
-                format!("{} files changed, ", app.diff_stat.len()),
+                format!("{} files", app.diff_stat.len()),
                 Style::default().fg(Color::White),
             ),
+            Span::styled("  •  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("+{}", total_add), Style::default().fg(Color::Green)),
+            Span::styled("  •  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("-{}", total_del), Style::default().fg(Color::Red)),
+        ]),
+        Line::from(vec![Span::styled(
+            "Top changed files",
+            Style::default().fg(Color::DarkGray),
+        )]),
+    ];
+
+    for stat in &visible_stats {
+        let file = if stat.file.len() > max_file_len {
+            format!("...{}", &stat.file[stat.file.len() - max_file_len + 3..])
+        } else {
+            stat.file.clone()
+        };
+        let total_changes = stat.additions + stat.deletions;
+
+        lines.push(Line::from(vec![
             Span::styled(
-                format!("{} insertions(+)", total_add),
+                format!("{:width$}", file, width = max_file_len),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("{:>3}", total_changes),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled("  +", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                stat.additions.to_string(),
                 Style::default().fg(Color::Green),
             ),
-            Span::raw(", "),
-            Span::styled(
-                format!("{} deletions(-)", total_del),
-                Style::default().fg(Color::Red),
-            ),
+            Span::styled(" -", Style::default().fg(Color::DarkGray)),
+            Span::styled(stat.deletions.to_string(), Style::default().fg(Color::Red)),
         ]));
-        all_content.push(Line::from(""));
+    }
 
-        // Add file stats with +/- bars
-        let max_file_len = app
-            .diff_stat
-            .iter()
-            .map(|s| s.file.len())
-            .max()
-            .unwrap_or(20)
-            .min(40);
-
-        for stat in &app.diff_stat {
-            let file = if stat.file.len() > max_file_len {
-                format!("...{}", &stat.file[stat.file.len() - max_file_len + 3..])
-            } else {
-                stat.file.clone()
-            };
-
-            let total_changes = stat.additions + stat.deletions;
-            let bar_width = 30.min(total_changes);
-            let add_bars = if total_changes > 0 {
-                (stat.additions * bar_width) / total_changes
-            } else {
-                0
-            };
-            let del_bars = bar_width.saturating_sub(add_bars);
-
-            all_content.push(Line::from(vec![
-                Span::styled(
-                    format!("{:width$}", file, width = max_file_len),
-                    Style::default().fg(Color::White),
-                ),
-                Span::raw(" | "),
-                Span::styled(
-                    format!("{:>4}", total_changes),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::raw(" "),
-                Span::styled("+".repeat(add_bars), Style::default().fg(Color::Green)),
-                Span::styled("-".repeat(del_bars), Style::default().fg(Color::Red)),
-            ]));
-        }
-
-        all_content.push(Line::from(""));
-        all_content.push(Line::from(vec![Span::styled(
-            "─".repeat(60),
+    if app.diff_stat.len() > visible_stats.len() {
+        lines.push(Line::from(vec![Span::styled(
+            format!(
+                "+{} more files in patch",
+                app.diff_stat.len() - visible_stats.len()
+            ),
             Style::default().fg(Color::DarkGray),
         )]));
-        all_content.push(Line::from(""));
     }
 
-    // Add diff content
+    lines
+}
+
+fn build_patch_lines(app: &App, branch: Option<&BranchDisplay>) -> Vec<Line<'static>> {
     if app.selected_diff.is_empty() {
         if branch.map(|b| b.is_trunk).unwrap_or(true) {
-            all_content.push(Line::from(Span::styled(
-                "No diff for trunk",
+            return vec![Line::from(Span::styled(
+                "No patch for trunk",
                 Style::default().fg(Color::DarkGray),
-            )));
-        } else if app.diff_stat.is_empty() {
-            all_content.push(Line::from(Span::styled(
-                "No changes",
-                Style::default().fg(Color::DarkGray),
-            )));
+            ))];
         }
-    } else {
-        let diff_lines: Vec<Line> = app
-            .selected_diff
-            .iter()
-            .map(|diff_line| {
-                let style = match diff_line.line_type {
-                    DiffLineType::Addition => Style::default().fg(Color::Green),
-                    DiffLineType::Deletion => Style::default().fg(Color::Red),
-                    DiffLineType::Hunk => Style::default().fg(Color::Cyan),
-                    DiffLineType::Header => Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                    DiffLineType::Context => Style::default().fg(Color::White),
-                };
 
-                Line::from(Span::styled(diff_line.content.clone(), style))
-            })
-            .collect();
-
-        all_content.extend(diff_lines);
+        if app.diff_stat.is_empty() {
+            return vec![Line::from(Span::styled(
+                "No changes in this branch",
+                Style::default().fg(Color::DarkGray),
+            ))];
+        }
     }
 
-    // Apply scroll to all content (file stats + diff together)
-    let content: Vec<Line> = all_content.into_iter().skip(app.diff_scroll).collect();
+    app.selected_diff
+        .iter()
+        .skip(app.diff_scroll)
+        .map(|diff_line| {
+            let style = match diff_line.line_type {
+                DiffLineType::Addition => Style::default().fg(Color::Green),
+                DiffLineType::Deletion => Style::default().fg(Color::Red),
+                DiffLineType::Hunk => Style::default().fg(Color::Cyan),
+                DiffLineType::Header => Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+                DiffLineType::Context => Style::default().fg(Color::White),
+            };
 
-    // Add scroll indicator if needed
-    let title_with_scroll = if !app.selected_diff.is_empty() && app.diff_scroll > 0 {
-        format!("{} [line {}]", title, app.diff_scroll + 1)
-    } else {
-        title
-    };
-
-    let paragraph = Paragraph::new(content).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(Span::styled(title_with_scroll, title_style))
-            .border_style(Style::default().fg(border_color)),
-    );
-
-    f.render_widget(paragraph, area);
+            Line::from(Span::styled(diff_line.content.clone(), style))
+        })
+        .collect()
 }
