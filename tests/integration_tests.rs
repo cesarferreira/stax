@@ -1330,6 +1330,60 @@ fn test_modify_alias_m() {
     assert!(output.status.success());
 }
 
+#[test]
+fn test_modify_refuses_to_amend_inherited_parent_commit() {
+    let repo = TestRepo::new();
+
+    hermetic_git_command()
+        .args(["config", "user.name", "Parent Author"])
+        .current_dir(repo.path())
+        .output()
+        .expect("Failed to set parent author");
+    hermetic_git_command()
+        .args(["config", "user.email", "parent@example.com"])
+        .current_dir(repo.path())
+        .output()
+        .expect("Failed to set parent email");
+
+    repo.create_file("shared.txt", "parent change");
+    repo.commit("Parent commit");
+
+    hermetic_git_command()
+        .args(["config", "user.name", "Test User"])
+        .current_dir(repo.path())
+        .output()
+        .expect("Failed to restore test author");
+    hermetic_git_command()
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(repo.path())
+        .output()
+        .expect("Failed to restore test email");
+
+    repo.run_stax(&["bc", "feature-first-commit"]);
+
+    let head_before = repo.head_sha();
+    repo.create_file("feature.txt", "new branch work");
+
+    let output = repo.run_stax(&["modify", "-m", "Feature commit"]);
+    assert!(
+        !output.status.success(),
+        "modify should refuse to amend an inherited parent commit"
+    );
+
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("has no commits ahead of")
+            && stderr.contains("rewrite an inherited parent commit"),
+        "expected safety guidance, got: {}",
+        stderr
+    );
+    assert_eq!(
+        repo.head_sha(),
+        head_before,
+        "modify should not rewrite the parent commit on a fresh branch"
+    );
+}
+
 // =============================================================================
 // Restack Tests
 // =============================================================================

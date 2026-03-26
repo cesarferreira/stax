@@ -35,7 +35,7 @@
 | Command | Alias | Description |
 |---|---|---|
 | `st create <name>` | `c`, `bc` | Create stacked branch |
-| `st modify` | `m` | Stage all and amend current commit |
+| `st modify` | `m` | Stage all and amend current commit (refuses before the branch has its own commit) |
 | `st rename` | | Rename current branch |
 | `st branch track` | | Track existing branch |
 | `st branch track --all-prs` | | Track all open PRs |

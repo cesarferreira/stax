@@ -358,7 +358,7 @@ enum Commands {
     /// Abort an in-progress rebase/conflict resolution
     Abort,
 
-    /// Stage all changes and amend them to the current commit
+    /// Stage all changes and amend the current branch tip
     #[command(visible_alias = "m")]
     Modify {
         /// New commit message (keeps existing if not provided)

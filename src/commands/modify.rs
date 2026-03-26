@@ -1,9 +1,10 @@
+use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use std::process::Command;
 
-/// Stage all changes and amend them to the current commit
+/// Stage all changes and amend the current branch tip.
 pub fn run(message: Option<String>, quiet: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?;
@@ -16,6 +17,8 @@ pub fn run(message: Option<String>, quiet: bool) -> Result<()> {
         }
         return Ok(());
     }
+
+    refuse_shared_parent_amend(&repo, &current)?;
 
     // Stage all changes
     let add_status = Command::new("git")
@@ -62,4 +65,32 @@ pub fn run(message: Option<String>, quiet: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn refuse_shared_parent_amend(repo: &GitRepo, current: &str) -> Result<()> {
+    let Some(meta) = BranchMetadata::read(repo.inner(), current)? else {
+        return Ok(());
+    };
+
+    let parent = meta.parent_branch_name.trim();
+    if parent.is_empty() || parent == current {
+        return Ok(());
+    }
+
+    let (ahead, _) = match repo.commits_ahead_behind(parent, current) {
+        Ok(counts) => counts,
+        Err(_) => return Ok(()),
+    };
+
+    if ahead > 0 {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "`stax modify` only amends commits that already belong to the current branch.\n\
+         Branch '{}' has no commits ahead of '{}', so amending now would rewrite an inherited parent commit and keep that commit's author.\n\
+         Create the first branch-local commit with `git commit` instead, or use `stax create -m <message>` when starting a new branch.",
+        current,
+        parent,
+    );
 }
