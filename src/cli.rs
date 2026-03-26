@@ -336,6 +336,9 @@ enum Commands {
         /// Jump to child branch by index (1-based)
         #[arg(long)]
         child: Option<usize>,
+        /// Internal: emit shell control lines for shell integration.
+        #[arg(long, hide = true)]
+        shell_output: bool,
     },
 
     /// Continue after resolving conflicts
@@ -852,6 +855,9 @@ enum BranchCommands {
         /// Jump to child branch by index (1-based)
         #[arg(long)]
         child: Option<usize>,
+        /// Internal: emit shell control lines for shell integration.
+        #[arg(long, hide = true)]
+        shell_output: bool,
     },
 
     /// Track an existing branch (set its parent)
@@ -1361,7 +1367,8 @@ pub fn run() -> Result<()> {
             trunk,
             parent,
             child,
-        } => commands::checkout::run(branch, trunk, parent, child),
+            shell_output,
+        } => commands::checkout::run(branch, trunk, parent, child, shell_output),
         Commands::Continue => commands::continue_cmd::run_and_resume_restack(),
         Commands::Resolve {
             agent,
@@ -1380,7 +1387,7 @@ pub fn run() -> Result<()> {
             if let Some(name) = branch {
                 commands::set_trunk::run(&name)
             } else {
-                commands::checkout::run(None, true, false, None)
+                commands::checkout::run(None, true, false, None, false)
             }
         }
         Commands::Up { count } => commands::navigate::up(count),
@@ -1505,7 +1512,8 @@ pub fn run() -> Result<()> {
                 trunk,
                 parent,
                 child,
-            } => commands::checkout::run(branch, trunk, parent, child),
+                shell_output,
+            } => commands::checkout::run(branch, trunk, parent, child, shell_output),
             BranchCommands::Track { parent, all_prs } => {
                 commands::branch::track::run(parent, all_prs)
             }

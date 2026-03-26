@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SHELL_PATH_PREFIX: &str = "STAX_SHELL_PATH=";
 const SHELL_LAUNCH_PREFIX: &str = "STAX_SHELL_LAUNCH=";
+const SHELL_MESSAGE_PREFIX: &str = "STAX_SHELL_MESSAGE=";
 const DEFAULT_WORKTREE_ROOT_MARKER: &str = ".stax-repo-root";
 
 /// Build a [`Command`] that runs a shell snippet on the current platform.
@@ -706,6 +707,10 @@ pub fn emit_shell_payload(path: &Path, launch: Option<&LaunchSpec>) {
     if let Some(launch) = launch {
         println!("{}{}", SHELL_LAUNCH_PREFIX, launch.shell_command());
     }
+}
+
+pub fn emit_shell_message(message: &str) {
+    println!("{}{}", SHELL_MESSAGE_PREFIX, message);
 }
 
 pub fn status_labels(details: &WorktreeDetails) -> Vec<String> {

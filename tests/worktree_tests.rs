@@ -114,7 +114,9 @@ fn restack_cleanup_skips_merged_branch_checked_out_in_worktree() {
         .assert_success()
         .assert_stdout_contains("Kept")
         .assert_stdout_contains("checked out in another worktree")
+        .assert_stdout_contains("Run to remove that worktree:")
         .assert_stdout_contains("st wt rm wt-a")
+        .assert_stdout_contains("Or keep the worktree and free the branch:")
         .assert_stdout_contains("git -C");
     assert!(
         !TestRepo::stderr(&output).contains("cannot locate local branch"),
@@ -365,8 +367,73 @@ fn branch_delete_checked_out_in_worktree_shows_fix_commands() {
     output
         .assert_stderr_contains("linked worktree")
         .assert_stderr_contains("wt-a")
-        .assert_stderr_contains("remove it with: st wt rm wt-a; or switch worktree 'wt-a'")
+        .assert_stderr_contains("run st wt rm wt-a to remove worktree 'wt-a'")
+        .assert_stderr_contains("keep the worktree and free the branch")
         .assert_stderr_contains("git -C");
+}
+
+#[test]
+fn checkout_branch_checked_out_in_worktree_routes_to_it() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["create", "A"]).assert_success();
+    let branch = repo.current_branch();
+    repo.create_file("a.txt", "A\n");
+    repo.commit("A commit");
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let wt_a = repo.path().join("wt-a");
+    repo.git(&["worktree", "add", wt_a.to_str().unwrap(), &branch])
+        .assert_success();
+
+    let output = repo.run_stax(&["checkout", &branch]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("routing there instead"),
+        "expected routing notice, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Current shell did not move automatically."),
+        "expected worktree go fallback message, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains(wt_a.to_string_lossy().as_ref()),
+        "expected target worktree path in output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn checkout_branch_checked_out_in_worktree_emits_shell_route_payload() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["create", "A"]).assert_success();
+    let branch = repo.current_branch();
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let wt_a = repo.path().join("wt-a");
+    repo.git(&["worktree", "add", wt_a.to_str().unwrap(), &branch])
+        .assert_success();
+
+    let output = repo.run_stax(&["checkout", &branch, "--shell-output"]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    let canonical_wt_a = std::fs::canonicalize(&wt_a).expect("canonicalize wt-a");
+    assert!(
+        stdout.contains(&format!("STAX_SHELL_PATH={}", canonical_wt_a.display())),
+        "expected shell path payload, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("STAX_SHELL_MESSAGE=Routed checkout to worktree 'wt-a'"),
+        "expected shell message payload, got:\n{}",
+        stdout
+    );
 }
 
 #[test]
@@ -395,8 +462,10 @@ fn sync_reports_fix_commands_when_branch_delete_blocked_by_worktree() {
     output
         .assert_success()
         .assert_stdout_contains("not deleted locally (checked out in another worktree)")
+        .assert_stdout_contains("Run to remove that worktree:")
         .assert_stdout_contains("wt-a")
-        .assert_stdout_contains("remove it with: st wt rm wt-a; or switch worktree 'wt-a'")
+        .assert_stdout_contains("Or keep the worktree and free the branch:")
+        .assert_stdout_contains("st wt rm wt-a")
         .assert_stdout_contains("git -C");
 }
 

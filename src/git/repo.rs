@@ -66,6 +66,30 @@ pub struct WorktreeInfo {
     pub prunable_reason: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct BranchDeleteResolution {
+    pub worktree: WorktreeInfo,
+    pub switch_target: String,
+}
+
+impl BranchDeleteResolution {
+    pub fn remove_worktree_cmd(&self) -> Option<String> {
+        if self.worktree.is_main {
+            None
+        } else {
+            Some(format!("st wt rm {}", self.worktree.name))
+        }
+    }
+
+    pub fn switch_branch_cmd(&self) -> String {
+        format!(
+            "git -C '{}' switch {}",
+            self.worktree.path.display(),
+            self.switch_target
+        )
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BranchParentMetadata {
@@ -453,33 +477,37 @@ impl GitRepo {
         Ok(self.branch_worktree(branch)?.map(|worktree| worktree.path))
     }
 
-    pub fn branch_delete_resolution_hint(&self, branch: &str) -> Result<Option<String>> {
+    pub fn branch_delete_resolution(&self, branch: &str) -> Result<Option<BranchDeleteResolution>> {
         let branch = normalize_local_branch_name(branch);
         let Some(worktree) = self.branch_worktree(branch)? else {
             return Ok(None);
         };
 
         let switch_target = self.trunk_branch().unwrap_or_else(|_| "main".to_string());
-        let switch_cmd = format!(
-            "git -C '{}' switch {}",
-            worktree.path.display(),
-            switch_target
-        );
+        Ok(Some(BranchDeleteResolution {
+            worktree,
+            switch_target,
+        }))
+    }
 
-        let hint = if worktree.is_main {
+    pub fn branch_delete_resolution_hint(&self, branch: &str) -> Result<Option<String>> {
+        let Some(resolution) = self.branch_delete_resolution(branch)? else {
+            return Ok(None);
+        };
+
+        let switch_cmd = resolution.switch_branch_cmd();
+        let hint = if let Some(remove_cmd) = resolution.remove_worktree_cmd() {
             format!(
-                "switch worktree '{}' at '{}' to another branch first, for example: {}",
-                worktree.name,
-                worktree.path.display(),
+                "run {} to remove worktree '{}'; or run {} to keep the worktree and free the branch",
+                remove_cmd,
+                resolution.worktree.name,
                 switch_cmd
             )
         } else {
             format!(
-                "remove it with: st wt rm {}; or switch worktree '{}' at '{}' to another branch first, for example: {}",
-                worktree.name,
-                worktree.name,
-                worktree.path.display(),
-                switch_cmd
+                "run {} to free the branch in main worktree '{}'",
+                switch_cmd,
+                resolution.worktree.path.display()
             )
         };
 

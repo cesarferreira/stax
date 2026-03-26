@@ -54,6 +54,8 @@ __stax_run_worktree_shell() {
   local raw
   local path=""
   local launch=""
+  local message=""
+  local passthrough=()
   local cmd=()
   local item
 
@@ -67,6 +69,8 @@ __stax_run_worktree_shell() {
     case "$line" in
       STAX_SHELL_PATH=*) path="${line#STAX_SHELL_PATH=}" ;;
       STAX_SHELL_LAUNCH=*) launch="${line#STAX_SHELL_LAUNCH=}" ;;
+      STAX_SHELL_MESSAGE=*) message="${line#STAX_SHELL_MESSAGE=}" ;;
+      *) passthrough+=("$line") ;;
     esac
   done <<< "$raw"
 
@@ -74,9 +78,17 @@ __stax_run_worktree_shell() {
     builtin cd "$path" || return 1
   fi
 
+  if [[ ${#passthrough[@]} -gt 0 ]]; then
+    printf '%s\n' "${passthrough[@]}"
+  fi
+
+  if [[ -n "$message" ]]; then
+    echo "$message"
+  fi
+
   if [[ -n "$launch" ]]; then
     eval "$launch"
-  elif [[ -n "$path" ]]; then
+  elif [[ -n "$path" && -z "$message" ]]; then
     echo "$(tput bold)$(tput setaf 6)~$(tput sgr0) $(basename "$path")"
   fi
 }
@@ -100,12 +112,21 @@ __stax_dispatch() {
       __stax_run_worktree_shell worktree go "${@:2}" ;;
     wtc)
       __stax_run_worktree_shell worktree create "${@:2}" ;;
+    checkout|co|bco)
+      __stax_run_worktree_shell "$@" ;;
     wtrm)
       if [[ -z "$2" || "$2" == -* ]]; then
         __stax_remove_current_worktree worktree remove "${@:2}"
       else
         command stax "$@"
       fi ;;
+    branch|b)
+      case "$2" in
+        checkout|co)
+          __stax_run_worktree_shell "$@" ;;
+        *)
+          command stax "$@" ;;
+      esac ;;
     worktree|wt)
       case "$2" in
         go|create|c)
@@ -157,6 +178,8 @@ end
 function __stax_run_worktree_shell
     set -l path ""
     set -l launch ""
+    set -l message ""
+    set -l passthrough
     set -l cmd (__stax_insert_shell_output $argv)
     set -l raw (command stax $cmd)
     or return $status
@@ -167,6 +190,10 @@ function __stax_run_worktree_shell
                 set path (string replace 'STAX_SHELL_PATH=' '' -- $line)
             case 'STAX_SHELL_LAUNCH=*'
                 set launch (string replace 'STAX_SHELL_LAUNCH=' '' -- $line)
+            case 'STAX_SHELL_MESSAGE=*'
+                set message (string replace 'STAX_SHELL_MESSAGE=' '' -- $line)
+            case '*'
+                set -a passthrough $line
         end
     end
 
@@ -174,9 +201,17 @@ function __stax_run_worktree_shell
         cd "$path"; or return 1
     end
 
+    if test (count $passthrough) -gt 0
+        printf '%s\n' $passthrough
+    end
+
+    if test -n "$message"
+        printf '%s\n' "$message"
+    end
+
     if test -n "$launch"
         eval "$launch"
-    else if test -n "$path"
+    else if test -n "$path"; and test -z "$message"
         printf '~ %s\n' (basename "$path")
     end
 end
@@ -198,11 +233,20 @@ function __stax_dispatch
             __stax_run_worktree_shell worktree go $argv[2..-1]
         case wtc
             __stax_run_worktree_shell worktree create $argv[2..-1]
+        case checkout co bco
+            __stax_run_worktree_shell $argv
         case wtrm
             if test (count $argv) -lt 2; or string match -qr '^-' -- "$argv[2]"
                 __stax_remove_current_worktree worktree remove $argv[2..-1]
             else
                 command stax $argv
+            end
+        case branch b
+            switch "$argv[2]"
+                case checkout co
+                    __stax_run_worktree_shell $argv
+                case '*'
+                    command stax $argv
             end
         case worktree wt
             switch "$argv[2]"

@@ -669,12 +669,26 @@ pub fn run(
                                     "not deleted locally (checked out in another worktree)"
                                         .yellow()
                                 );
-                                if let Ok(Some(hint)) = repo.branch_delete_resolution_hint(branch) {
+                                if let Ok(Some(resolution)) = repo.branch_delete_resolution(branch)
+                                {
+                                    if let Some(remove_cmd) = resolution.remove_worktree_cmd() {
+                                        println!(
+                                            "    {} {}",
+                                            "↷".yellow(),
+                                            "Run to remove that worktree:".dimmed()
+                                        );
+                                        println!("      {}", remove_cmd.cyan());
+                                    }
                                     println!(
                                         "    {} {}",
                                         "↷".yellow(),
-                                        format!("To remove it, {}", hint).dimmed()
+                                        if resolution.worktree.is_main {
+                                            "Run to free the branch in the main worktree:".dimmed()
+                                        } else {
+                                            "Or keep the worktree and free the branch:".dimmed()
+                                        }
                                     );
+                                    println!("      {}", resolution.switch_branch_cmd().cyan());
                                 }
                             } else {
                                 println!("    {} {}", branch.bright_black(), "skipped".dimmed());
@@ -843,12 +857,25 @@ pub fn run(
                             branch.bright_black(),
                             "not deleted locally (checked out in another worktree)".yellow()
                         );
-                        if let Ok(Some(hint)) = repo.branch_delete_resolution_hint(branch) {
+                        if let Ok(Some(resolution)) = repo.branch_delete_resolution(branch) {
+                            if let Some(remove_cmd) = resolution.remove_worktree_cmd() {
+                                println!(
+                                    "    {} {}",
+                                    "↷".yellow(),
+                                    "Run to remove that worktree:".dimmed()
+                                );
+                                println!("      {}", remove_cmd.cyan());
+                            }
                             println!(
                                 "    {} {}",
                                 "↷".yellow(),
-                                format!("To remove it, {}", hint).dimmed()
+                                if resolution.worktree.is_main {
+                                    "Run to free the branch in the main worktree:".dimmed()
+                                } else {
+                                    "Or keep the worktree and free the branch:".dimmed()
+                                }
                             );
+                            println!("      {}", resolution.switch_branch_cmd().cyan());
                         }
                     } else {
                         println!("    {} {}", branch.bright_black(), "skipped".dimmed());

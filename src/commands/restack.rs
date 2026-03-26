@@ -567,12 +567,25 @@ fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> R
                 )
                 .dimmed()
             );
-            if let Ok(Some(hint)) = repo.branch_delete_resolution_hint(branch) {
+            if let Ok(Some(resolution)) = repo.branch_delete_resolution(branch) {
+                if let Some(remove_cmd) = resolution.remove_worktree_cmd() {
+                    println!(
+                        "  {} {}",
+                        "↷".yellow(),
+                        "Run to remove that worktree:".dimmed()
+                    );
+                    println!("    {}", remove_cmd.cyan());
+                }
                 println!(
                     "  {} {}",
                     "↷".yellow(),
-                    format!("To remove it, {}", hint).dimmed()
+                    if resolution.worktree.is_main {
+                        "Run to free the branch in the main worktree:".dimmed()
+                    } else {
+                        "Or keep the worktree and free the branch:".dimmed()
+                    }
                 );
+                println!("    {}", resolution.switch_branch_cmd().cyan());
             }
             println!(
                 "  {} {}",

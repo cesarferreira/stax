@@ -1,3 +1,4 @@
+use crate::commands::worktree::{go, shared::emit_shell_message};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::{checkout_branch_in, refs, GitRepo};
@@ -7,6 +8,7 @@ use console::truncate_str;
 use crossterm::terminal;
 use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 use std::collections::HashSet;
+use std::path::Path;
 
 // Colors for different columns (matching status.rs)
 const COLUMN_COLORS: &[Color] = &[
@@ -32,7 +34,13 @@ struct CheckoutRow {
     display: String,
 }
 
-pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usize>) -> Result<()> {
+pub fn run(
+    branch: Option<String>,
+    trunk: bool,
+    parent: bool,
+    child: Option<usize>,
+    shell_output: bool,
+) -> Result<()> {
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?.to_path_buf();
     let current = repo.current_branch()?;
@@ -135,18 +143,79 @@ pub fn run(branch: Option<String>, trunk: bool, parent: bool, child: Option<usiz
         }
     };
 
-    if target == current {
-        println!("Already on '{}'", target);
+    if let Some(worktree_name) = route_checkout_to_worktree(&repo, &workdir, &target, shell_output)?
+    {
+        if shell_output {
+            emit_shell_message(&format!(
+                "Routed checkout to worktree '{}' for branch '{}'",
+                worktree_name, target
+            ));
+        } else {
+            println!(
+                "{}",
+                format!(
+                    "Branch '{}' is already checked out in worktree '{}' - routing there instead.",
+                    target, worktree_name
+                )
+                .yellow()
+            );
+        }
+        drop(repo);
+        go::run_go(
+            Some(worktree_name),
+            false,
+            shell_output,
+            None,
+            None,
+            None,
+            false,
+            None,
+            Vec::new(),
+        )?;
+    } else if target == current {
+        if shell_output {
+            emit_shell_message(&format!("Already on '{}'", target));
+        } else {
+            println!("Already on '{}'", target);
+        }
     } else {
         drop(repo);
         if let Err(e) = refs::write_prev_branch_at(&workdir, &current) {
             eprintln!("Warning: failed to save previous branch: {}", e);
         }
         checkout_branch_in(&workdir, &target)?;
-        println!("Switched to branch '{}'", target);
+        if shell_output {
+            emit_shell_message(&format!("Switched to branch '{}'", target));
+        } else {
+            println!("Switched to branch '{}'", target);
+        }
     }
 
     Ok(())
+}
+
+fn route_checkout_to_worktree(
+    repo: &GitRepo,
+    workdir: &Path,
+    target: &str,
+    shell_output: bool,
+) -> Result<Option<String>> {
+    let Some(worktree) = repo.branch_worktree(target)? else {
+        return Ok(None);
+    };
+
+    let current_path = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    let target_path =
+        std::fs::canonicalize(&worktree.path).unwrap_or_else(|_| worktree.path.clone());
+    if current_path == target_path {
+        return Ok(None);
+    }
+
+    if !shell_output {
+        println!();
+    }
+
+    Ok(Some(worktree.name))
 }
 
 fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<Vec<CheckoutRow>> {
