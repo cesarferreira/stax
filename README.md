@@ -307,10 +307,10 @@ Shared skill/instruction file used across agents: [skills.md](skills.md)
 
 ## Performance & Compatibility
 
-Absolute times vary by repo and machine. In the current `hyperfine` sample for this repo:
+Absolute times vary by repo and machine. Recent `hyperfine` samples:
 
-- `st ls` ran about 16.25x faster than [freephite](https://github.com/bradymadden97/freephite) and 10.05x faster than [Graphite](https://github.com/withgraphite/graphite-cli).
-- `st rs` ran about 2.41x faster than [freephite](https://github.com/bradymadden97/freephite).
+- In `project-x` on `main`, `st ls` ran about 14.84x faster than [freephite](https://github.com/bradymadden97/freephite) and 3.88x faster than [Graphite](https://github.com/withgraphite/graphite-cli).
+- In a separate sample, `st rs` ran about 2.41x faster than [freephite](https://github.com/bradymadden97/freephite).
 - stax is freephite/graphite compatible for common stacked-branch workflows.
 
 Details:

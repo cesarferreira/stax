@@ -1,62 +1,64 @@
 # Benchmarks
 
-Absolute times vary by repo and machine. These `hyperfine` samples were captured in this repo.
+Absolute times vary by repo and machine. Each row below comes from a separate `hyperfine` sample; see the section notes for the exact context.
 
-| Command | [stax](https://github.com/cesarferreira/stax) | [freephite](https://github.com/bradymadden97/freephite) | [graphite](https://github.com/withgraphite/graphite-cli) |
-|---|---:|---:|---:|
-| `ls` | 45.5ms | 739.7ms | 457.7ms |
-| `rs` | 2.807s | 6.769s | — |
+| Sample | Command | [stax](https://github.com/cesarferreira/stax) | [freephite](https://github.com/bradymadden97/freephite) | [graphite](https://github.com/withgraphite/graphite-cli) |
+|---|---|---:|---:|---:|
+| `project-x` on `main` | `ls` | 830.5ms | 12.327s | 3.221s |
+| Separate sample | `rs` | 2.807s | 6.769s | — |
 
 ```text
-  ls — mean execution time (lower is better)
+  ls on project-x/main — mean execution time (lower is better)
 
-  stax       ███                                                45.5 ms
-  graphite   ███████████████████████████████                   457.7 ms
-  freephite  ██████████████████████████████████████████████████ 739.7 ms
+  stax       ███                                                830.5 ms
+  graphite   █████████████                                      3.221 s
+  freephite  ██████████████████████████████████████████████████ 12.327 s
              ┬─────────┬─────────┬─────────┬─────────┬─────────┬
-             0        150       300       450       600       750 ms
+             0        2.5       5.0       7.5      10.0     12.5 s
 ```
 
-`gt sync` was not included in this sample set, so the `rs` row does not include a Graphite comparison.
+`gt sync` was not included in the `rs` sample, so that row does not include a Graphite comparison.
 
 Summary from the sample runs:
 
-- `st ls` was ~16.25x faster than `fp ls`
-- `st ls` was ~10.05x faster than `gt ls`
-- `st rs` was ~2.41x faster than `fp rs`
+- `st ls` on `project-x`/`main` was ~14.84x faster than `fp ls`
+- `st ls` on `project-x`/`main` was ~3.88x faster than `gt ls`
+- `st rs` in a separate sample was ~2.41x faster than `fp rs`
 
 ## `ls`
+
+Sample context: `project-x` on `main`.
 
 Command:
 
 ```bash
-hyperfine 'stax ls' 'fp ls' 'gt ls' --warmup 2
+hyperfine 'stax ls' 'fp ls' 'gt ls' --warmup 5
 ```
 
 Raw output:
 
 ```text
 Benchmark 1: stax ls
-  Time (mean ± σ):      45.5 ms ±   6.9 ms    [User: 10.0 ms, System: 12.0 ms]
-  Range (min … max):    40.3 ms …  89.5 ms    59 runs
-
-  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
+  Time (mean ± σ):     830.5 ms ± 119.8 ms    [User: 28.5 ms, System: 39.3 ms]
+  Range (min … max):   711.7 ms … 1109.1 ms    10 runs
 
 Benchmark 2: fp ls
-  Time (mean ± σ):     739.7 ms ±  23.9 ms    [User: 353.1 ms, System: 208.9 ms]
-  Range (min … max):   705.2 ms … 769.8 ms    10 runs
+  Time (mean ± σ):     12.327 s ±  0.250 s    [User: 0.593 s, System: 0.509 s]
+  Range (min … max):   11.967 s … 12.724 s    10 runs
 
 Benchmark 3: gt ls
-  Time (mean ± σ):     457.7 ms ±  96.8 ms    [User: 239.3 ms, System: 88.4 ms]
-  Range (min … max):   355.0 ms … 647.4 ms    10 runs
+  Time (mean ± σ):      3.221 s ±  0.121 s    [User: 0.312 s, System: 0.130 s]
+  Range (min … max):    3.098 s …  3.430 s    10 runs
 
 Summary
   stax ls ran
-   10.05 ± 2.61 times faster than gt ls
-   16.25 ± 2.50 times faster than fp ls
+    3.88 ± 0.58 times faster than gt ls
+   14.84 ± 2.16 times faster than fp ls
 ```
 
 ## `rs`
+
+Sample context: separate benchmark run.
 
 Command:
 
