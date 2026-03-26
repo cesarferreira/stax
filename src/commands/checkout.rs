@@ -143,8 +143,9 @@ pub fn run(
         }
     };
 
-    if let Some(worktree_name) = route_checkout_to_worktree(&repo, &workdir, &target, shell_output)?
-    {
+    drop(repo);
+
+    if let Some(worktree_name) = route_checkout_to_worktree(&workdir, &target, shell_output)? {
         if shell_output {
             emit_shell_message(&format!(
                 "Routed checkout to worktree '{}' for branch '{}'",
@@ -160,7 +161,6 @@ pub fn run(
                 .yellow()
             );
         }
-        drop(repo);
         go::run_go(
             Some(worktree_name),
             false,
@@ -179,7 +179,6 @@ pub fn run(
             println!("Already on '{}'", target);
         }
     } else {
-        drop(repo);
         if let Err(e) = refs::write_prev_branch_at(&workdir, &current) {
             eprintln!("Warning: failed to save previous branch: {}", e);
         }
@@ -195,12 +194,11 @@ pub fn run(
 }
 
 fn route_checkout_to_worktree(
-    repo: &GitRepo,
     workdir: &Path,
     target: &str,
     shell_output: bool,
 ) -> Result<Option<String>> {
-    let Some(worktree) = repo.branch_worktree(target)? else {
+    let Some(worktree) = GitRepo::branch_worktree_in(workdir, target)? else {
         return Ok(None);
     };
 

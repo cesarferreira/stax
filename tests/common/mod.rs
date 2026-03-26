@@ -51,6 +51,11 @@ fn test_tempdir() -> TempDir {
 
 fn sanitized_stax_command() -> Command {
     let mut cmd = Command::new(stax_bin());
+    apply_sanitized_test_env(&mut cmd);
+    cmd
+}
+
+fn apply_sanitized_test_env(cmd: &mut Command) {
     let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
     // Keep tests hermetic and avoid accidentally hitting real GitHub APIs.
     cmd.env_remove("GITHUB_TOKEN")
@@ -60,7 +65,33 @@ fn sanitized_stax_command() -> Command {
         .env("GIT_CONFIG_GLOBAL", null_path)
         .env("GIT_CONFIG_SYSTEM", null_path)
         .env("STAX_DISABLE_UPDATE_CHECK", "1");
-    cmd
+}
+
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+pub fn run_stax_in_script(cwd: &Path, args: &[&str], input_script: &str) -> Output {
+    let stax_bin = stax_bin();
+    let command = std::iter::once(stax_bin.to_string_lossy().into_owned())
+        .chain(args.iter().map(|arg| (*arg).to_string()))
+        .map(|part| sh_quote(&part))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let shell_script = if cfg!(target_os = "macos") {
+        format!("({input_script}) | script -q /dev/null {command}")
+    } else {
+        format!(
+            "({input_script}) | script -qefc {} /dev/null",
+            sh_quote(&command)
+        )
+    };
+
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", &shell_script]).current_dir(cwd);
+    apply_sanitized_test_env(&mut cmd);
+    cmd.output().expect("Failed to run stax inside script")
 }
 
 fn hermetic_git_command() -> Command {

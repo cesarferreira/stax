@@ -440,6 +440,39 @@ fn checkout_branch_checked_out_in_worktree_emits_shell_route_payload() {
 }
 
 #[test]
+fn interactive_checkout_selector_routes_to_worktree() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["create", "A"]).assert_success();
+    let branch = repo.current_branch();
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let wt_a = repo.path().join("wt-a");
+    repo.git(&["worktree", "add", wt_a.to_str().unwrap(), &branch])
+        .assert_success();
+
+    let output = common::run_stax_in_script(
+        &repo.path(),
+        &["checkout"],
+        "printf '\\033[A'; sleep 1; printf '\\r'",
+    );
+
+    assert!(
+        output.status.success(),
+        "interactive checkout failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("routing there instead"),
+        "expected routing notice, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn sync_reports_fix_commands_when_branch_delete_blocked_by_worktree() {
     let repo = TestRepo::new_with_remote();
 

@@ -6,7 +6,6 @@
 mod common;
 
 use common::{OutputAssertions, TestRepo};
-use std::process::Command;
 
 /// Test that `stax create <name>` works (TUI InputAction::NewBranch)
 #[test]
@@ -78,18 +77,7 @@ fn test_tui_delete_branch_via_dashboard() {
     let branch_name = repo.current_branch();
     repo.run_stax(&["checkout", "main"]).assert_success();
 
-    let stax_bin = common::stax_bin();
-    let script = format!(
-        "(printf 'kdy'; sleep 1; printf 'q') | script -q /dev/null {}",
-        stax_bin.to_str().expect("stax binary path")
-    );
-
-    let output = Command::new("sh")
-        .args(["-c", &script])
-        .current_dir(repo.path())
-        .env("STAX_DISABLE_UPDATE_CHECK", "1")
-        .output()
-        .expect("Failed to collect scripted TUI output");
+    let output = common::run_stax_in_script(&repo.path(), &[], "printf 'kdy'; sleep 1; printf 'q'");
     assert!(
         output.status.success(),
         "Scripted TUI session failed: {}",

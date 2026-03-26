@@ -21,6 +21,14 @@ fn parse_branch_vv_worktree_path(line: &str) -> Option<PathBuf> {
     Some(PathBuf::from(&rest[..end]))
 }
 
+fn run_git_in(cwd: &Path, args: &[&str]) -> Result<Output> {
+    Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .with_context(|| format!("Failed to run git {}", args.join(" ")))
+}
+
 pub fn checkout_branch_in(workdir: &Path, branch: &str) -> Result<()> {
     let output = Command::new("git")
         .args(["checkout", branch])
@@ -249,7 +257,11 @@ impl GitRepo {
     }
 
     pub fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
-        let output = self.run_git(self.workdir()?, &["worktree", "list", "--porcelain"])?;
+        Self::list_worktrees_in(self.workdir()?)
+    }
+
+    pub fn list_worktrees_in(cwd: &Path) -> Result<Vec<WorktreeInfo>> {
+        let output = run_git_in(cwd, &["worktree", "list", "--porcelain"])?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             anyhow::bail!("git worktree list failed: {}", stderr);
@@ -468,10 +480,14 @@ impl GitRepo {
     }
 
     pub fn branch_worktree(&self, branch: &str) -> Result<Option<WorktreeInfo>> {
-        let branch = normalize_local_branch_name(branch);
-        let worktrees = self.list_worktrees()?;
+        Self::branch_worktree_in(self.workdir()?, branch)
+    }
 
-        let output = self.run_git(self.workdir()?, &["branch", "-vv", "--list", branch])?;
+    pub fn branch_worktree_in(cwd: &Path, branch: &str) -> Result<Option<WorktreeInfo>> {
+        let branch = normalize_local_branch_name(branch);
+        let worktrees = Self::list_worktrees_in(cwd)?;
+
+        let output = run_git_in(cwd, &["branch", "-vv", "--list", branch])?;
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Some(path) = stdout.lines().find_map(parse_branch_vv_worktree_path) {
