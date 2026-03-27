@@ -8,3 +8,5 @@ Cargo.lock
 /.docker-cache
 .worktrees/
 .claude
+.serena
+docs/plans/

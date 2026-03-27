@@ -1,6 +1,7 @@
 mod app;
 mod event;
 pub mod split;
+pub mod split_hunk;
 mod ui;
 mod widgets;
 pub mod worktree;

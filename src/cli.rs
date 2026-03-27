@@ -541,7 +541,10 @@ enum Commands {
     },
 
     /// Split the current branch into multiple stacked branches (interactive)
-    Split,
+    Split {
+        #[arg(long, short = 'H')]
+        hunk: bool,
+    },
 
     /// Copy branch name or PR URL to clipboard
     Copy {
@@ -1436,7 +1439,7 @@ pub fn run() -> Result<()> {
             interval,
             verbose,
         } => commands::ci::run(all, stack, json, refresh, watch, interval, verbose),
-        Commands::Split => commands::split::run(),
+        Commands::Split { hunk } => commands::split::run(hunk),
         Commands::Copy { pr } => {
             let target = if pr {
                 commands::copy::CopyTarget::Pr
