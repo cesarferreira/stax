@@ -81,13 +81,14 @@ fn render_file_list(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
                     let s = hunk
                         .lines
                         .iter()
-                        .find(|l| l.starts_with('+') || l.starts_with('-'))
-                        .map(|l| {
-                            let trimmed = l[1..].trim();
-                            if trimmed.len() > 40 {
-                                format!("{}...", &trimmed[..37])
+                        .filter(|l| l.starts_with('+') || l.starts_with('-'))
+                        .map(|l| l[1..].trim())
+                        .find(|t| !t.is_empty())
+                        .map(|t| {
+                            if t.len() > 40 {
+                                format!("{}...", &t[..37])
                             } else {
-                                trimmed.to_string()
+                                t.to_string()
                             }
                         })
                         .unwrap_or_else(|| r.clone());
