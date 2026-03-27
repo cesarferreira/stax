@@ -184,14 +184,18 @@ function __stax_run_worktree_shell
     set -l raw (command stax $cmd)
     or return $status
 
-    for line in $raw
+    # Split on newlines only: `for line in $raw` would split paths/commands on spaces.
+    for line in (string split \n -- $raw)
+        if test -z "$line"
+            continue
+        end
         switch $line
             case 'STAX_SHELL_PATH=*'
-                set path (string replace 'STAX_SHELL_PATH=' '' -- $line)
+                set path (string replace -- 'STAX_SHELL_PATH=' '' $line)
             case 'STAX_SHELL_LAUNCH=*'
-                set launch (string replace 'STAX_SHELL_LAUNCH=' '' -- $line)
+                set launch (string replace -- 'STAX_SHELL_LAUNCH=' '' $line)
             case 'STAX_SHELL_MESSAGE=*'
-                set message (string replace 'STAX_SHELL_MESSAGE=' '' -- $line)
+                set message (string replace -- 'STAX_SHELL_MESSAGE=' '' $line)
             case '*'
                 set -a passthrough $line
         end
