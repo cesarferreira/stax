@@ -400,7 +400,7 @@ impl HunkSplitApp {
     /// Uses the transaction system for undo support and crash recovery.
     pub fn finalize(&mut self) -> Result<()> {
         let split_tip = git(&self.workdir, &["rev-parse", "HEAD"])?;
-        git(&self.workdir, &["checkout", &self.original_branch])?;
+        git(&self.workdir, &["checkout", &self.parent_branch])?;
         let repo = GitRepo::open_from_path(&self.workdir)?;
 
         let mut affected: Vec<String> = self.created_branches.clone();
