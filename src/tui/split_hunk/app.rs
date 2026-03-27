@@ -539,3 +539,106 @@ fn remove_committed_hunks(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::split_hunk::diff_parser::DiffHunk;
+
+    fn make_hunk(start: u32, count: u32) -> DiffHunk {
+        DiffHunk {
+            header: format!("@@ -1,1 +{},{} @@", start, count),
+            lines: vec![format!("+line at {}", start)],
+            new_start: start,
+            new_count: count,
+        }
+    }
+
+    fn make_file(path: &str, num_hunks: usize) -> DiffFile {
+        DiffFile {
+            path: path.to_string(),
+            header_lines: vec![format!("diff --git a/{path} b/{path}")],
+            is_new: false,
+            is_deleted: false,
+            hunks: (0..num_hunks)
+                .map(|i| make_hunk((i * 10 + 1) as u32, 3))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn test_build_flat_items_structure() {
+        let files = vec![make_file("a.rs", 2), make_file("b.rs", 1)];
+        let items = build_flat_items(&files);
+
+        assert_eq!(items.len(), 5);
+        assert!(matches!(items[0], FlatItem::FileHeader { file_idx: 0 }));
+        assert!(matches!(
+            items[1],
+            FlatItem::Hunk {
+                file_idx: 0,
+                hunk_idx: 0
+            }
+        ));
+        assert!(matches!(
+            items[2],
+            FlatItem::Hunk {
+                file_idx: 0,
+                hunk_idx: 1
+            }
+        ));
+        assert!(matches!(items[3], FlatItem::FileHeader { file_idx: 1 }));
+        assert!(matches!(
+            items[4],
+            FlatItem::Hunk {
+                file_idx: 1,
+                hunk_idx: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn test_build_flat_items_empty() {
+        let items = build_flat_items(&[]);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_remove_committed_hunks_partial() {
+        let mut files = vec![make_file("a.rs", 3), make_file("b.rs", 2)];
+        let mut selected = vec![vec![true, false, true], vec![false, true]];
+
+        let selections = vec![(0, vec![0, 2])];
+        remove_committed_hunks(&mut files, &mut selected, &selections);
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].hunks.len(), 1);
+        assert_eq!(files[0].hunks[0].new_start, 11);
+        assert_eq!(selected[0], vec![false]);
+    }
+
+    #[test]
+    fn test_remove_committed_hunks_removes_empty_file() {
+        let mut files = vec![make_file("a.rs", 1), make_file("b.rs", 1)];
+        let mut selected = vec![vec![true], vec![false]];
+
+        let selections = vec![(0, vec![0])];
+        remove_committed_hunks(&mut files, &mut selected, &selections);
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "b.rs");
+        assert_eq!(selected.len(), 1);
+    }
+
+    #[test]
+    fn test_remove_committed_hunks_all() {
+        let mut files = vec![make_file("a.rs", 2)];
+        let mut selected = vec![vec![true, true]];
+
+        let selections = vec![(0, vec![0, 1])];
+        remove_committed_hunks(&mut files, &mut selected, &selections);
+
+        assert!(files.is_empty());
+        assert!(selected.is_empty());
+    }
+}

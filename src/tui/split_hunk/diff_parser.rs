@@ -297,4 +297,60 @@ index 0000000..abc1234
         assert!(patch_both.contains("@@ -1,4 +1,5 @@"));
         assert!(patch_both.contains("@@ -20,6 +21,7 @@"));
     }
+
+    #[test]
+    fn test_parse_empty_diff() {
+        assert!(parse_diff("").is_empty());
+        assert!(parse_diff("\n\n").is_empty());
+    }
+
+    #[test]
+    fn test_parse_deleted_file() {
+        let diff = "\
+diff --git a/src/old.rs b/src/old.rs
+deleted file mode 100644
+index abc1234..0000000
+--- a/src/old.rs
++++ /dev/null
+@@ -1,3 +0,0 @@
+-fn old() {
+-    // removed
+-}";
+        let files = parse_diff(diff);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].is_deleted);
+        assert!(!files[0].is_new);
+        assert_eq!(files[0].hunks.len(), 1);
+        assert_eq!(files[0].hunks[0].lines.len(), 3);
+    }
+
+    #[test]
+    fn test_reconstruct_full_patch_multiple_files() {
+        let files = parse_diff(MULTIPLE_FILES);
+        let selections = vec![(0, vec![0]), (1, vec![0])];
+        let patch = reconstruct_full_patch(&files, &selections);
+
+        assert!(patch.contains("diff --git a/src/a.rs"));
+        assert!(patch.contains("diff --git a/src/b.rs"));
+        assert!(patch.contains("+    // a"));
+        assert!(patch.contains("+    // b"));
+    }
+
+    #[test]
+    fn test_reconstruct_full_patch_selective() {
+        let files = parse_diff(MULTIPLE_FILES);
+        let selections = vec![(0, vec![0])];
+        let patch = reconstruct_full_patch(&files, &selections);
+
+        assert!(patch.contains("diff --git a/src/a.rs"));
+        assert!(!patch.contains("diff --git a/src/b.rs"));
+    }
+
+    #[test]
+    fn test_reconstruct_full_patch_empty_selections() {
+        let files = parse_diff(MULTIPLE_FILES);
+        let selections: Vec<(usize, Vec<usize>)> = vec![];
+        let patch = reconstruct_full_patch(&files, &selections);
+        assert!(patch.is_empty());
+    }
 }
