@@ -71,22 +71,35 @@ fn render_file_list(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
             FlatItem::Hunk { file_idx, hunk_idx } => {
                 let selected = app.selected[*file_idx][*hunk_idx];
                 let checkbox = if selected { "\u{2611}" } else { "\u{2610}" };
-                let hunk = &app.files[*file_idx].hunks[*hunk_idx];
-                let range = format!("@@ +{},{}", hunk.new_start, hunk.new_count);
+                let file = &app.files[*file_idx];
+                let hunk = &file.hunks[*hunk_idx];
 
-                let snippet = hunk
-                    .lines
-                    .iter()
-                    .find(|l| l.starts_with('+') || l.starts_with('-'))
-                    .map(|l| {
-                        let trimmed = l[1..].trim();
-                        if trimmed.len() > 40 {
-                            format!("{}...", &trimmed[..37])
-                        } else {
-                            trimmed.to_string()
-                        }
-                    })
-                    .unwrap_or_else(|| range.clone());
+                let (snippet, range) = if hunk.header.is_empty() {
+                    let label = if file.is_new {
+                        "new file".to_string()
+                    } else if file.is_deleted {
+                        "deleted file".to_string()
+                    } else {
+                        "empty change".to_string()
+                    };
+                    (label, String::new())
+                } else {
+                    let r = format!("@@ +{},{}", hunk.new_start, hunk.new_count);
+                    let s = hunk
+                        .lines
+                        .iter()
+                        .find(|l| l.starts_with('+') || l.starts_with('-'))
+                        .map(|l| {
+                            let trimmed = l[1..].trim();
+                            if trimmed.len() > 40 {
+                                format!("{}...", &trimmed[..37])
+                            } else {
+                                trimmed.to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| r.clone());
+                    (s, r)
+                };
 
                 let cursor_indicator = if is_cursor { "  ▸ " } else { "    " };
                 let line = Line::from(vec![
@@ -152,13 +165,39 @@ fn render_diff_preview(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
 
     let lines = match app.current_item() {
         Some(FlatItem::Hunk { file_idx, hunk_idx }) => {
-            let hunk = &app.files[*file_idx].hunks[*hunk_idx];
-            let mut result = vec![Line::from(Span::styled(
-                hunk.header.clone(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ))];
+            let file = &app.files[*file_idx];
+            let hunk = &file.hunks[*hunk_idx];
+            let mut result = Vec::new();
+            if hunk.header.is_empty() {
+                result.push(Line::from(Span::styled(
+                    file.path.clone(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                let label = if file.is_new {
+                    "new file"
+                } else if file.is_deleted {
+                    "deleted file"
+                } else {
+                    "empty change"
+                };
+                result.push(Line::from(Span::styled(
+                    label,
+                    Style::default().fg(if file.is_new {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    }),
+                )));
+            } else {
+                result.push(Line::from(Span::styled(
+                    hunk.header.clone(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
             for line in &hunk.lines {
                 let style = if line.starts_with('+') {
                     Style::default().fg(Color::Green)

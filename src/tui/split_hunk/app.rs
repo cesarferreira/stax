@@ -123,7 +123,7 @@ impl HunkSplitApp {
             )?;
         }
 
-        let parent_sha = repo.branch_commit(&parent)?;
+        let parent_sha = repo.merge_base(&parent, &current)?;
         drop(repo);
 
         let tip = git(&workdir, &["rev-parse", "HEAD"])?;

@@ -81,6 +81,15 @@ pub fn parse_diff(diff_text: &str) -> Vec<DiffFile> {
             }
         }
 
+        if hunks.is_empty() && (is_new || is_deleted) {
+            hunks.push(DiffHunk {
+                header: String::new(),
+                lines: Vec::new(),
+                new_start: 0,
+                new_count: 0,
+            });
+        }
+
         files.push(DiffFile {
             path,
             header_lines,
@@ -139,8 +148,10 @@ pub fn reconstruct_patch(file: &DiffFile, hunk_indices: &[usize]) -> String {
 
     for &idx in hunk_indices {
         if let Some(hunk) = file.hunks.get(idx) {
-            out.push_str(&hunk.header);
-            out.push('\n');
+            if !hunk.header.is_empty() {
+                out.push_str(&hunk.header);
+                out.push('\n');
+            }
             for line in &hunk.lines {
                 out.push_str(line);
                 out.push('\n');
