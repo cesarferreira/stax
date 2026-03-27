@@ -1,3 +1,4 @@
+use crate::commands::open::open_url_in_browser;
 use crate::config::{Config, StackLinksMode};
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
@@ -1104,7 +1105,7 @@ pub fn run(
         if !quiet {
             println!("Opening {} in browser...", pr_url.cyan());
         }
-        open_in_browser(&pr_url);
+        open_url_in_browser(&pr_url);
     } else if open && !quiet {
         eprintln!(
             "  {} No PR found for current branch {}; nothing to open.",
@@ -1144,23 +1145,6 @@ fn push_branch(workdir: &std::path::Path, remote: &str, branch: &str) -> Result<
         anyhow::bail!("Failed to push branch {}", branch);
     }
     Ok(())
-}
-
-fn open_in_browser(url: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        Command::new("open").arg(url).spawn().ok();
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        Command::new("xdg-open").arg(url).spawn().ok();
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        Command::new("cmd").args(["/c", "start", url]).spawn().ok();
-    }
 }
 
 fn resolve_branches_for_scope(stack: &Stack, current: &str, scope: SubmitScope) -> Vec<String> {
