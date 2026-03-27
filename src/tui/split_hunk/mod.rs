@@ -82,6 +82,8 @@ fn run_app(
             let branch_name = app.input_buffer.trim().to_string();
             app.input_buffer.clear();
             app.input_cursor = 0;
+            app.status_message = Some(format!("Committing '{}'...", branch_name));
+            terminal.draw(|f| ui::render(f, app))?;
             let has_remaining = app.commit_round(&branch_name)?;
             if has_remaining {
                 app.mode = HunkSplitMode::List;
