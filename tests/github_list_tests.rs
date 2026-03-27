@@ -149,7 +149,7 @@ async fn test_issue_list_human_output() {
         .and(query_param("state", "open"))
         .and(query_param("sort", "updated"))
         .and(query_param("direction", "desc"))
-        .and(query_param("per_page", "30"))
+        .and(query_param("per_page", "60"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "number": 113,

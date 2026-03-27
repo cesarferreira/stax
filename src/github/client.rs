@@ -566,9 +566,12 @@ impl GitHubClient {
     pub async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
         self.record_api_call("issues.list");
         let per_page = limit.clamp(1, 100);
+        // GitHub returns PRs in this listing; we filter client-side. Request up to 2× so a
+        // PR-heavy first page does not underfill after filtering (capped at API max).
+        let fetch_per_page = (usize::from(per_page) * 2).min(100) as u8;
         let url = format!(
             "/repos/{}/{}/issues?state=open&sort=updated&direction=desc&per_page={}",
-            self.owner, self.repo, per_page
+            self.owner, self.repo, fetch_per_page
         );
 
         let response: Vec<RepoListIssue> = self
@@ -580,7 +583,7 @@ impl GitHubClient {
         Ok(response
             .into_iter()
             .filter(|issue| issue.pull_request.is_none())
-            .take(per_page as usize)
+            .take(usize::from(per_page))
             .map(|issue| RepoIssueListItem {
                 number: issue.number,
                 title: issue.title,
@@ -1082,7 +1085,7 @@ mod tests {
             .and(query_param("state", "open"))
             .and(query_param("sort", "updated"))
             .and(query_param("direction", "desc"))
-            .and(query_param("per_page", "30"))
+            .and(query_param("per_page", "60"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {
                     "number": 113,
@@ -1126,6 +1129,67 @@ mod tests {
         assert!(issues[0].labels.is_empty());
         assert_eq!(issues[1].number, 77);
         assert_eq!(issues[1].labels, vec!["help wanted", "integration"]);
+    }
+
+    #[tokio::test]
+    async fn test_list_open_issues_overfetches_to_fill_after_pr_pollution() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .and(query_param("state", "open"))
+            .and(query_param("sort", "updated"))
+            .and(query_param("direction", "desc"))
+            .and(query_param("per_page", "4"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 201,
+                    "title": "PR one",
+                    "html_url": "https://github.com/test-owner/test-repo/pull/201",
+                    "user": { "login": "u" },
+                    "labels": [],
+                    "updated_at": "2026-03-15T12:00:00Z",
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/test-owner/test-repo/pulls/201"
+                    }
+                },
+                {
+                    "number": 202,
+                    "title": "PR two",
+                    "html_url": "https://github.com/test-owner/test-repo/pull/202",
+                    "user": { "login": "u" },
+                    "labels": [],
+                    "updated_at": "2026-03-15T11:00:00Z",
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/test-owner/test-repo/pulls/202"
+                    }
+                },
+                {
+                    "number": 10,
+                    "title": "Real issue A",
+                    "html_url": "https://github.com/test-owner/test-repo/issues/10",
+                    "user": { "login": "u" },
+                    "labels": [],
+                    "updated_at": "2026-03-14T10:00:00Z"
+                },
+                {
+                    "number": 11,
+                    "title": "Real issue B",
+                    "html_url": "https://github.com/test-owner/test-repo/issues/11",
+                    "user": { "login": "u" },
+                    "labels": [],
+                    "updated_at": "2026-03-14T09:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let issues = client.list_open_issues(2).await.unwrap();
+
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].number, 10);
+        assert_eq!(issues[1].number, 11);
     }
 
     #[tokio::test]
