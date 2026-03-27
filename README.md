@@ -17,6 +17,8 @@
 
 Ship small, reviewable PR stacks quickly without giving up safety.
 
+More than stacked branches: `stax` can merge an entire stack when CI turns green, resolve in-progress rebase conflicts with AI guardrails, run parallel AI worktree lanes as normal tracked branches, and generate PR bodies or standup summaries from the work you actually shipped.
+
 `stax` installs both binaries: `stax` and the short alias `st`. This README uses `st`.
 
 - Live docs: [cesarferreira.github.io/stax](https://cesarferreira.github.io/stax/)
@@ -26,11 +28,12 @@ Ship small, reviewable PR stacks quickly without giving up safety.
 
 - Replace one giant PR with a clean stack of small, focused PRs
 - Keep shipping while lower-stack PRs are still in review
+- Merge from the bottom automatically when PRs are ready, locally or remotely (`st merge --when-ready`, `st merge --remote`)
+- Resolve in-progress rebase conflicts with AI, limited to the conflicted files (`st resolve`)
+- Recover from risky restacks and rewrites immediately (`st undo`, `st redo`)
+- Run parallel AI worktree lanes as normal tracked branches (`st wt c ... --agent codex`)
+- Generate PR bodies and spoken standup summaries with your preferred AI agent
 - Navigate the full stack and diffs from an interactive TUI
-- Restack/merge with transactional safety and fast recovery (`st undo`, `st redo`)
-- Run stack-aware merge/cascade workflows with CI/readiness checks
-- Generate PR bodies and standup summaries with your preferred AI agent
-- Work across multiple worktrees, including parallel AI worktree lanes
 
 ## Install
 
@@ -136,11 +139,13 @@ Next steps:
 | `st ss` | Submit full stack and create/update PRs |
 | `st merge` | Merge PRs from stack bottom to current |
 | `st merge --when-ready` | Wait/poll until mergeable, then merge |
+| `st merge --remote` | Merge the stack remotely on GitHub while you keep working locally |
 | `st rs` | Sync trunk and clean merged branches (no rebasing) |
 | `st rs --restack` | Sync trunk, clean merged branches, then rebase stack |
 | `st restack` | Rebase current stack onto parents locally (`--stop-here` skips descendants) |
 | `st cascade` | Restack, push, and create/update PRs |
 | `st undo` / `st redo` | Recover or re-apply risky operations |
+| `st resolve` | Resolve an in-progress rebase conflict with AI and continue automatically |
 | `st standup` | Summarize recent engineering activity |
 | `st pr` | Open the current branch PR in the browser |
 | `st pr list` | Show open pull requests in the current repo |
@@ -181,6 +186,22 @@ st redo
 ```
 
 Read more: [docs/safety/undo-redo.md](docs/safety/undo-redo.md)
+
+### AI Conflict Resolution
+
+When a restack or merge stops on a rebase conflict, `st resolve` sends only the currently conflicted text files to your configured AI agent, applies the returned resolutions, and continues the rebase automatically.
+
+```bash
+# Resolve the current rebase conflict with your configured AI agent
+st resolve
+
+# Or override the agent/model for one run
+st resolve --agent codex --model gpt-5.3-codex
+```
+
+If the AI returns invalid output, touches a non-conflicted file, or leaves more conflicts behind than allowed, stax stops and keeps the rebase in progress so you can inspect or continue manually.
+
+Read more: [docs/commands/core.md](docs/commands/core.md) and [docs/commands/reference.md](docs/commands/reference.md)
 
 ### Interactive TUI
 
