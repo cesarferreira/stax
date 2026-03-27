@@ -399,6 +399,8 @@ impl HunkSplitApp {
     /// Create branch pointers and stax metadata for the split branches.
     /// Uses the transaction system for undo support and crash recovery.
     pub fn finalize(&mut self) -> Result<()> {
+        let split_tip = git(&self.workdir, &["rev-parse", "HEAD"])?;
+        git(&self.workdir, &["checkout", &self.original_branch])?;
         let repo = GitRepo::open_from_path(&self.workdir)?;
 
         let mut affected: Vec<String> = self.created_branches.clone();
@@ -422,7 +424,7 @@ impl HunkSplitApp {
         let num_branches = self.created_branches.len();
         for (i, name) in self.created_branches.iter().enumerate() {
             let offset = num_branches - i;
-            let rev = format!("HEAD~{}", offset);
+            let rev = format!("{}~{}", split_tip, offset);
             if name == &self.original_branch {
                 git(&self.workdir, &["branch", "-f", name, &rev])?;
             } else {
