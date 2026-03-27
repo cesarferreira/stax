@@ -472,9 +472,13 @@ impl HunkSplitApp {
     /// Rollback: restore the original branch state
     pub fn rollback(&self) {
         let _ = git(&self.workdir, &["checkout", "-f", &self.original_branch]);
+        let repo = GitRepo::open_from_path(&self.workdir).ok();
         for name in &self.created_branches {
             if name != &self.original_branch {
                 let _ = git(&self.workdir, &["branch", "-D", name]);
+                if let Some(ref repo) = repo {
+                    let _ = BranchMetadata::delete(repo.inner(), name);
+                }
             }
         }
         if self.stashed {
