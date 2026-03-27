@@ -67,10 +67,14 @@ fn apply_sanitized_test_env(cmd: &mut Command) {
         .env("STAX_DISABLE_UPDATE_CHECK", "1");
 }
 
+// Used by `tui_commands_tests` and `worktree_tests`; other integration test crates
+// also compile `common` and would otherwise warn about this helper pair.
+#[allow(dead_code)]
 fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+#[allow(dead_code)]
 pub fn run_stax_in_script(cwd: &Path, args: &[&str], input_script: &str) -> Output {
     let stax_bin = stax_bin();
     let command = std::iter::once(stax_bin.to_string_lossy().into_owned())
