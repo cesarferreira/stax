@@ -75,14 +75,7 @@ fn render_file_list(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
                 let hunk = &file.hunks[*hunk_idx];
 
                 let (snippet, range) = if hunk.header.is_empty() {
-                    let label = if file.is_new {
-                        "new file".to_string()
-                    } else if file.is_deleted {
-                        "deleted file".to_string()
-                    } else {
-                        "empty change".to_string()
-                    };
-                    (label, String::new())
+                    (file.synthetic_label().to_string(), String::new())
                 } else {
                     let r = format!("@@ +{},{}", hunk.new_start, hunk.new_count);
                     let s = hunk
@@ -175,15 +168,8 @@ fn render_diff_preview(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 )));
-                let label = if file.is_new {
-                    "new file"
-                } else if file.is_deleted {
-                    "deleted file"
-                } else {
-                    "empty change"
-                };
                 result.push(Line::from(Span::styled(
-                    label,
+                    file.synthetic_label(),
                     Style::default().fg(if file.is_new {
                         Color::Green
                     } else {

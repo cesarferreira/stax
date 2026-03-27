@@ -114,7 +114,7 @@ impl HunkSplitApp {
         let workdir = repo.workdir()?.to_path_buf();
         let existing_branches = repo.list_branches()?;
 
-        let stashed = has_dirty_workdir(&workdir);
+        let stashed = repo.is_dirty()?;
         if stashed {
             git(&workdir, &["add", "-A"])?;
             git(
@@ -490,17 +490,6 @@ impl HunkSplitApp {
     /// Total hunk count for a specific file
     pub fn file_hunk_count(&self, file_idx: usize) -> usize {
         self.selected[file_idx].len()
-    }
-}
-
-fn has_dirty_workdir(workdir: &Path) -> bool {
-    let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(workdir)
-        .output();
-    match output {
-        Ok(o) => !String::from_utf8_lossy(&o.stdout).trim().is_empty(),
-        Err(_) => false,
     }
 }
 

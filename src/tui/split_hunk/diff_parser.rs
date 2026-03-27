@@ -15,6 +15,18 @@ pub struct DiffHunk {
     pub new_count: u32,
 }
 
+impl DiffFile {
+    pub fn synthetic_label(&self) -> &'static str {
+        if self.is_new {
+            "new file"
+        } else if self.is_deleted {
+            "deleted file"
+        } else {
+            "empty change"
+        }
+    }
+}
+
 pub fn parse_diff(diff_text: &str) -> Vec<DiffFile> {
     let mut files: Vec<DiffFile> = Vec::new();
     let lines: Vec<&str> = diff_text.lines().collect();
