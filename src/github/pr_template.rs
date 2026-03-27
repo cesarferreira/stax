@@ -21,8 +21,10 @@ pub struct PrTemplate {
 /// 1. .github/PULL_REQUEST_TEMPLATE/ directory - scan for all .md files
 /// 2. .github/PULL_REQUEST_TEMPLATE.md - single template (named "Default")
 /// 3. .github/pull_request_template.md - lowercase variant
-/// 4. docs/PULL_REQUEST_TEMPLATE.md
-/// 5. docs/pull_request_template.md
+/// 4. PULL_REQUEST_TEMPLATE.md at repository root (GitHub-supported)
+/// 5. pull_request_template.md at repository root
+/// 6. docs/PULL_REQUEST_TEMPLATE.md
+/// 7. docs/pull_request_template.md
 #[allow(dead_code)] // Will be used in future tasks
 pub fn discover_pr_templates(workdir: &Path) -> Result<Vec<PrTemplate>> {
     let mut templates = Vec::new();
@@ -71,6 +73,8 @@ pub fn discover_pr_templates(workdir: &Path) -> Result<Vec<PrTemplate>> {
     let single_template_candidates = [
         ".github/PULL_REQUEST_TEMPLATE.md",
         ".github/pull_request_template.md",
+        "PULL_REQUEST_TEMPLATE.md",
+        "pull_request_template.md",
         "docs/PULL_REQUEST_TEMPLATE.md",
         "docs/pull_request_template.md",
     ];
@@ -149,6 +153,21 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_discover_root_level_template() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("PULL_REQUEST_TEMPLATE.md"),
+            "# Root template",
+        )
+        .unwrap();
+
+        let templates = discover_pr_templates(dir.path()).unwrap();
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].name, "Default");
+        assert!(templates[0].content.contains("Root template"));
+    }
 
     #[test]
     fn test_discover_single_template() {
