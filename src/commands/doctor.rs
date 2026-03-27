@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
-use crate::remote;
+use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
 use colored::Colorize;
 
@@ -53,13 +53,26 @@ pub fn run() -> Result<()> {
         }
     }
 
+    let forge_label = match RemoteInfo::from_repo(&repo, &config) {
+        Ok(info) => info.forge.to_string(),
+        Err(_) => "Forge".to_string(),
+    };
+
     if Config::github_token().is_some() {
-        println!("{} {}", "✓".green(), "GitHub auth available".dimmed());
+        println!(
+            "{} {}",
+            "✓".green(),
+            format!("{} API token available", forge_label).dimmed()
+        );
     } else {
         println!(
             "{} {}",
             "⚠".yellow(),
-            "GitHub auth missing (PR creation disabled)".yellow()
+            format!(
+                "{} API token missing (run `stax auth` — needed for PR/submit against this remote)",
+                forge_label
+            )
+            .yellow()
         );
     }
 

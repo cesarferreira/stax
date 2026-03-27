@@ -39,7 +39,7 @@ fn test_auth_status_command() {
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("GitHub Auth Status"),
+        stdout.contains("Auth status"),
         "Expected auth status header, got: {}",
         stdout
     );

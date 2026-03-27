@@ -10,12 +10,17 @@ pub fn run(token: Option<String>, from_gh: bool) -> Result<()> {
         match token {
             Some(t) => t,
             None => {
-                println!("Enter your GitHub personal access token.");
                 println!(
-                    "Create one at: {}",
+                    "Enter a personal access token for your forge (GitHub, GitLab, or Gitea)."
+                );
+                println!(
+                    "It is stored once and reused for whichever host your `origin` remote uses."
+                );
+                println!(
+                    "Examples: {} (GitHub), or your GitLab/Gitea instance token settings.",
                     "https://github.com/settings/tokens".cyan()
                 );
-                println!("Required scopes: repo, read:org");
+                println!("Use a token with API scopes that allow reading/writing merge requests or pull requests.");
                 println!();
 
                 Password::with_theme(&ColorfulTheme::default())
@@ -27,7 +32,7 @@ pub fn run(token: Option<String>, from_gh: bool) -> Result<()> {
 
     Config::set_github_token(&token)?;
 
-    println!("{}", "✓ GitHub token saved!".green());
+    println!("{}", "✓ API token saved!".green());
     if from_gh {
         println!("{}", "Imported from `gh auth token`.".dimmed());
     }
@@ -51,7 +56,11 @@ pub fn run(token: Option<String>, from_gh: bool) -> Result<()> {
 pub fn status() -> Result<()> {
     let status = Config::github_auth_status();
 
-    println!("{}", "GitHub Auth Status".bold());
+    println!("{}", "Auth status".bold());
+    println!(
+        "{}",
+        "(One saved token is used for GitHub, GitLab, and Gitea API calls.)".dimmed()
+    );
     if let Some(source) = status.active_source {
         println!(
             "{} {}",
