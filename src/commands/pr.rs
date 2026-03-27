@@ -2,6 +2,7 @@ use crate::commands::github_list::{
     format_relative_time, print_table, split_flexible_width, terminal_width, CellTone, TableCell,
     TableColumn, TruncationMode,
 };
+use crate::commands::open::open_url_in_browser;
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
@@ -48,7 +49,7 @@ pub fn run_open() -> Result<()> {
     let pr_url = remote_info.pr_url(pr_number.unwrap());
 
     println!("Opening {} in browser...", pr_url.cyan());
-    open_in_browser(&pr_url);
+    open_url_in_browser(&pr_url);
     Ok(())
 }
 
@@ -201,24 +202,4 @@ fn print_pr_table(repo_label: &str, prs: &[RepoPrListItem]) {
         &columns,
         &rows,
     );
-}
-
-fn open_in_browser(url: &str) {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open").arg(url).spawn().ok();
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open").arg(url).spawn().ok();
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", url])
-            .spawn()
-            .ok();
-    }
 }
