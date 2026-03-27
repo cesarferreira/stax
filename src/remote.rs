@@ -275,7 +275,13 @@ fn parse_remote_url(url: &str) -> Result<(String, String)> {
             .trim_end_matches(".git")
             .to_string();
 
-        let host = host_part.split('@').nth(1).unwrap_or(host_part).to_string();
+        let host_with_user = host_part.split('@').nth(1).unwrap_or(host_part);
+        // SSH listen port (e.g. :2222) is not the HTTPS/web port; omit it from host.
+        let host = host_with_user
+            .split(':')
+            .next()
+            .unwrap_or(host_with_user)
+            .to_string();
         return Ok((host, path));
     }
 
@@ -364,6 +370,14 @@ mod tests {
         let (host, path) = parse_remote_url("ssh://git@github.com/owner/repo.git").unwrap();
         assert_eq!(host, "github.com");
         assert_eq!(path, "owner/repo");
+    }
+
+    #[test]
+    fn test_parse_ssh_scheme_url_with_explicit_port() {
+        let (host, path) =
+            parse_remote_url("ssh://git@gitlab.example.com:2222/org/project.git").unwrap();
+        assert_eq!(host, "gitlab.example.com");
+        assert_eq!(path, "org/project");
     }
 
     #[test]
