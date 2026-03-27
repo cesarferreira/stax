@@ -542,7 +542,8 @@ enum Commands {
 
     /// Split the current branch into multiple stacked branches (interactive)
     Split {
-        #[arg(long, short = 'H')]
+        /// Split by selecting individual hunks instead of by commit
+        #[arg(long)]
         hunk: bool,
     },
 

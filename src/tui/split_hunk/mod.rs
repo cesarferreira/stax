@@ -1,5 +1,5 @@
-pub mod app;
-pub mod diff_parser;
+mod app;
+mod diff_parser;
 mod ui;
 
 use anyhow::Result;
@@ -13,6 +13,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::Duration;
 
+/// Run the hunk-based split TUI
 pub fn run() -> Result<()> {
     let mut app = HunkSplitApp::new()?;
 

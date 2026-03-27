@@ -1,10 +1,13 @@
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
+use crate::ops::receipt::{OpKind, PlanSummary};
+use crate::ops::tx::{self, Transaction};
 use crate::tui::split_hunk::diff_parser::{parse_diff, reconstruct_full_patch, DiffFile};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Interaction mode for the hunk split TUI
 #[derive(Debug, Clone, PartialEq)]
 pub enum HunkSplitMode {
     List,
@@ -14,7 +17,8 @@ pub enum HunkSplitMode {
     Help,
 }
 
-#[derive(Debug, Clone)]
+/// An item in the flat navigation list (file header or individual hunk)
+#[derive(Debug, Clone, Copy)]
 pub enum FlatItem {
     FileHeader { file_idx: usize },
     Hunk { file_idx: usize, hunk_idx: usize },
@@ -33,6 +37,7 @@ enum UndoAction {
     },
 }
 
+/// Main application state for hunk-based split TUI
 pub struct HunkSplitApp {
     pub workdir: PathBuf,
     pub original_branch: String,
@@ -79,6 +84,7 @@ fn git_ok(workdir: &Path, args: &[&str]) -> bool {
 }
 
 impl HunkSplitApp {
+    /// Initialize the hunk split: validate state, flatten branch, parse diff.
     pub fn new() -> Result<Self> {
         let repo = GitRepo::open()?;
         let stack = Stack::load(&repo)?;
@@ -119,7 +125,6 @@ impl HunkSplitApp {
 
         let parent_sha = repo.branch_commit(&parent)?;
         drop(repo);
-        drop(stack);
 
         let tip = git(&workdir, &["rev-parse", "HEAD"])?;
         git(&workdir, &["switch", "-d", &tip])?;
@@ -160,24 +165,28 @@ impl HunkSplitApp {
         })
     }
 
+    /// Get the item at the current cursor position
     pub fn current_item(&self) -> Option<&FlatItem> {
         self.flat_items.get(self.cursor)
     }
 
+    /// Move cursor up one item
     pub fn move_cursor_up(&mut self) {
         if self.cursor > 0 {
             self.cursor -= 1;
         }
     }
 
+    /// Move cursor down one item
     pub fn move_cursor_down(&mut self) {
         if self.cursor < self.flat_items.len().saturating_sub(1) {
             self.cursor += 1;
         }
     }
 
+    /// Toggle selection of the hunk at cursor
     pub fn toggle_current(&mut self) {
-        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().cloned() {
+        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().copied() {
             let was = self.selected[file_idx][hunk_idx];
             self.selected[file_idx][hunk_idx] = !was;
             self.undo_stack.push(UndoAction::ToggleHunk {
@@ -188,6 +197,7 @@ impl HunkSplitApp {
         }
     }
 
+    /// Toggle all hunks in the file at cursor
     pub fn toggle_file(&mut self) {
         let file_idx = match self.current_item() {
             Some(FlatItem::FileHeader { file_idx }) => *file_idx,
@@ -207,6 +217,7 @@ impl HunkSplitApp {
         });
     }
 
+    /// Undo the last toggle operation
     pub fn undo(&mut self) {
         if let Some(action) = self.undo_stack.pop() {
             match action {
@@ -227,8 +238,9 @@ impl HunkSplitApp {
         }
     }
 
+    /// Select the current hunk and advance to the next (sequential mode)
     pub fn accept_and_advance(&mut self) {
-        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().cloned() {
+        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().copied() {
             if !self.selected[file_idx][hunk_idx] {
                 self.selected[file_idx][hunk_idx] = true;
                 self.undo_stack.push(UndoAction::ToggleHunk {
@@ -241,8 +253,9 @@ impl HunkSplitApp {
         self.advance_to_next_hunk();
     }
 
+    /// Skip the current hunk and advance to the next (sequential mode)
     pub fn skip_and_advance(&mut self) {
-        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().cloned() {
+        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().copied() {
             if self.selected[file_idx][hunk_idx] {
                 self.selected[file_idx][hunk_idx] = false;
                 self.undo_stack.push(UndoAction::ToggleHunk {
@@ -270,6 +283,7 @@ impl HunkSplitApp {
         }
     }
 
+    /// Advance cursor past all hunks in the current file
     pub fn advance_past_current_file(&mut self) {
         let current_file_idx = match self.current_item() {
             Some(FlatItem::FileHeader { file_idx }) => *file_idx,
@@ -279,16 +293,13 @@ impl HunkSplitApp {
 
         let start = self.cursor + 1;
         for i in start..self.flat_items.len() {
-            match &self.flat_items[i] {
-                FlatItem::FileHeader { file_idx } if *file_idx != current_file_idx => {
-                    self.cursor = i;
-                    return;
-                }
-                FlatItem::Hunk { file_idx, .. } if *file_idx != current_file_idx => {
-                    self.cursor = i;
-                    return;
-                }
-                _ => continue,
+            let item_file_idx = match self.flat_items[i] {
+                FlatItem::FileHeader { file_idx } => file_idx,
+                FlatItem::Hunk { file_idx, .. } => file_idx,
+            };
+            if item_file_idx != current_file_idx {
+                self.cursor = i;
+                return;
             }
         }
         if self.selected_count() > 0 {
@@ -298,6 +309,7 @@ impl HunkSplitApp {
         }
     }
 
+    /// Count of currently selected hunks
     pub fn selected_count(&self) -> usize {
         self.selected
             .iter()
@@ -306,10 +318,12 @@ impl HunkSplitApp {
             .count()
     }
 
+    /// Total number of hunks across all files
     pub fn total_hunk_count(&self) -> usize {
         self.selected.iter().map(|v| v.len()).sum()
     }
 
+    /// Auto-suggest a branch name for the current round
     pub fn suggest_branch_name(&self) -> String {
         if self.selected_count() == self.total_hunk_count() && !self.created_branches.is_empty() {
             return self.original_branch.clone();
@@ -317,6 +331,7 @@ impl HunkSplitApp {
         format!("{}_split_{}", self.original_branch, self.round)
     }
 
+    /// Validate a proposed branch name
     pub fn validate_branch_name(&self, name: &str) -> Result<(), String> {
         if name.trim().is_empty() {
             return Err("Branch name cannot be empty".to_string());
@@ -330,6 +345,8 @@ impl HunkSplitApp {
         Ok(())
     }
 
+    /// Stage and commit the selected hunks for this round.
+    /// Returns `Ok(true)` if there are remaining hunks for another round.
     pub fn commit_round(&mut self, branch_name: &str) -> Result<bool> {
         let mut selections: Vec<(usize, Vec<usize>)> = Vec::new();
         for (fi, file_sel) in self.selected.iter().enumerate() {
@@ -379,8 +396,28 @@ impl HunkSplitApp {
         Ok(has_remaining)
     }
 
+    /// Create branch pointers and stax metadata for the split branches.
+    /// Uses the transaction system for undo support and crash recovery.
     pub fn finalize(&mut self) -> Result<()> {
         let repo = GitRepo::open_from_path(&self.workdir)?;
+
+        let mut affected: Vec<String> = self.created_branches.clone();
+        affected.push(self.original_branch.clone());
+
+        let mut tx = Transaction::begin(OpKind::Split, &repo, false)?;
+        tx.plan_branches(&repo, &affected)?;
+
+        let summary = PlanSummary {
+            branches_to_rebase: 0,
+            branches_to_push: 0,
+            description: vec![format!(
+                "Hunk split into {} new branches",
+                self.created_branches.len()
+            )],
+        };
+        tx::print_plan(tx.kind(), &summary, false);
+        tx.set_plan_summary(summary);
+        tx.snapshot()?;
 
         let num_branches = self.created_branches.len();
         for (i, name) in self.created_branches.iter().enumerate() {
@@ -404,7 +441,10 @@ impl HunkSplitApp {
         let original_reused = self.created_branches.contains(&self.original_branch);
 
         for child in &self.children {
-            let last_branch = self.created_branches.last().unwrap();
+            let last_branch = self
+                .created_branches
+                .last()
+                .expect("at least one branch created");
             if let Some(mut meta) = BranchMetadata::read(repo.inner(), child)? {
                 let parent_rev = repo.branch_commit(last_branch)?;
                 meta.parent_branch_name = last_branch.clone();
@@ -417,12 +457,19 @@ impl HunkSplitApp {
             let _ = BranchMetadata::delete(repo.inner(), &self.original_branch);
         }
 
-        let checkout_target = self.created_branches.last().unwrap().clone();
+        let checkout_target = self
+            .created_branches
+            .last()
+            .expect("at least one branch created")
+            .clone();
         git(&self.workdir, &["checkout", &checkout_target])?;
+
+        tx.finish_ok()?;
 
         Ok(())
     }
 
+    /// Rollback: restore the original branch state
     pub fn rollback(&self) {
         let _ = git(&self.workdir, &["checkout", "-f", &self.original_branch]);
         for name in &self.created_branches {
@@ -435,10 +482,12 @@ impl HunkSplitApp {
         }
     }
 
+    /// Count of selected hunks in a specific file
     pub fn file_selected_count(&self, file_idx: usize) -> usize {
         self.selected[file_idx].iter().filter(|&&s| s).count()
     }
 
+    /// Total hunk count for a specific file
     pub fn file_hunk_count(&self, file_idx: usize) -> usize {
         self.selected[file_idx].len()
     }

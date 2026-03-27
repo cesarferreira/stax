@@ -74,6 +74,20 @@ fn render_file_list(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
                 let hunk = &app.files[*file_idx].hunks[*hunk_idx];
                 let range = format!("@@ +{},{}", hunk.new_start, hunk.new_count);
 
+                let snippet = hunk
+                    .lines
+                    .iter()
+                    .find(|l| l.starts_with('+') || l.starts_with('-'))
+                    .map(|l| {
+                        let trimmed = l[1..].trim();
+                        if trimmed.len() > 40 {
+                            format!("{}...", &trimmed[..37])
+                        } else {
+                            trimmed.to_string()
+                        }
+                    })
+                    .unwrap_or_else(|| range.clone());
+
                 let cursor_indicator = if is_cursor { "  ▸ " } else { "    " };
                 let line = Line::from(vec![
                     Span::styled(
@@ -92,11 +106,8 @@ fn render_file_list(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
                             Color::DarkGray
                         }),
                     ),
-                    Span::styled(
-                        format!("hunk {} ", hunk_idx + 1),
-                        Style::default().fg(Color::White),
-                    ),
-                    Span::styled(range, Style::default().fg(Color::DarkGray)),
+                    Span::styled(snippet, Style::default().fg(Color::White)),
+                    Span::styled(format!(" {}", range), Style::default().fg(Color::DarkGray)),
                 ]);
                 let mut item = ListItem::new(line);
                 if is_cursor {
