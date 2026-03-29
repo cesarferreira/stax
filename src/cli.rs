@@ -364,13 +364,16 @@ enum Commands {
     /// Abort an in-progress rebase/conflict resolution
     Abort,
 
-    /// Stage all changes and amend the current branch tip
+    /// Stage and amend changes into the current branch tip
     /// Creates the first branch-local commit when run with -m on a fresh tracked branch
     #[command(visible_alias = "m")]
     Modify {
         /// New commit message (keeps existing if not provided)
         #[arg(short, long)]
         message: Option<String>,
+        /// Stage all changes (like git commit --all)
+        #[arg(short, long)]
+        all: bool,
         /// Suppress extra output
         #[arg(long)]
         quiet: bool,
@@ -1395,7 +1398,7 @@ pub fn run() -> Result<()> {
             max_rounds,
         } => commands::resolve::run(agent, model, max_rounds),
         Commands::Abort => commands::abort::run(),
-        Commands::Modify { message, quiet } => commands::modify::run(message, quiet),
+        Commands::Modify { message, all, quiet } => commands::modify::run(message, all, quiet),
         Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Config { .. } => unreachable!(), // Handled above
         Commands::Init { .. } => unreachable!(), // Handled above

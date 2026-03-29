@@ -2,6 +2,8 @@ use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
+use console::Term;
+use dialoguer::{theme::ColorfulTheme, Confirm};
 use std::process::Command;
 
 enum ModifyTarget {
@@ -9,14 +11,16 @@ enum ModifyTarget {
     CreateFirstCommit { parent: String },
 }
 
-/// Stage all changes and amend the current branch tip.
+/// Amend staged changes into the current branch tip.
+/// When files are already staged, only those files are committed.
+/// When nothing is staged, prompts to stage all (or use `-a`).
 /// On a fresh tracked branch, `-m` creates the first branch-local commit safely.
-pub fn run(message: Option<String>, quiet: bool) -> Result<()> {
+pub fn run(message: Option<String>, all: bool, quiet: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?;
     let current = repo.current_branch()?;
 
-    // Check if there are any changes to stage
+    // Check if there are any changes at all
     if !repo.is_dirty()? {
         if !quiet {
             println!("{}", "No changes to amend.".dimmed());
@@ -26,15 +30,58 @@ pub fn run(message: Option<String>, quiet: bool) -> Result<()> {
 
     let target = modify_target(&repo, &current)?;
 
-    // Stage all changes
-    let add_status = Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(workdir)
-        .status()
-        .context("Failed to stage changes")?;
+    if all {
+        // Explicit --all: stage everything (old behavior)
+        let add_status = Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(workdir)
+            .status()
+            .context("Failed to stage changes")?;
 
-    if !add_status.success() {
-        anyhow::bail!("Failed to stage changes");
+        if !add_status.success() {
+            anyhow::bail!("Failed to stage changes");
+        }
+    } else {
+        // Check whether anything is already staged
+        let has_staged = Command::new("git")
+            .args(["diff", "--cached", "--quiet"])
+            .current_dir(workdir)
+            .status()
+            .context("Failed to check staged changes")?;
+
+        if has_staged.success() {
+            // Nothing staged — ask the user (or bail in non-interactive mode)
+            if Term::stderr().is_term() {
+                let stage_all = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("No files staged. Stage all changes?")
+                    .default(true)
+                    .interact()?;
+
+                if !stage_all {
+                    println!(
+                        "{}",
+                        "Aborted. Stage files with `git add` first, or use `stax modify -a`."
+                            .dimmed()
+                    );
+                    return Ok(());
+                }
+            } else {
+                anyhow::bail!(
+                    "No files staged. Stage files with `git add` first, or use `stax modify -a`."
+                );
+            }
+
+            let add_status = Command::new("git")
+                .args(["add", "-A"])
+                .current_dir(workdir)
+                .status()
+                .context("Failed to stage changes")?;
+
+            if !add_status.success() {
+                anyhow::bail!("Failed to stage changes");
+            }
+        }
+        // else: staged changes exist — proceed with them as-is
     }
 
     match target {
