@@ -1257,8 +1257,8 @@ fn test_modify_amend() {
     // Make changes
     repo.create_file("feature.txt", "modified content");
 
-    // Amend using modify
-    let output = repo.run_stax(&["modify"]);
+    // Amend using modify (stage all with -a since nothing is pre-staged)
+    let output = repo.run_stax(&["modify", "-a"]);
     assert!(
         output.status.success(),
         "Failed: {}",
@@ -1282,7 +1282,7 @@ fn test_modify_with_message() {
 
     // Make changes and amend with new message
     repo.create_file("feature.txt", "new content");
-    let output = repo.run_stax(&["modify", "-m", "New commit message"]);
+    let output = repo.run_stax(&["modify", "-a", "-m", "New commit message"]);
     assert!(
         output.status.success(),
         "Failed: {}",
@@ -1326,7 +1326,7 @@ fn test_modify_alias_m() {
     repo.commit("Feature");
 
     repo.create_file("feature.txt", "modified");
-    let output = repo.run_stax(&["m"]);
+    let output = repo.run_stax(&["m", "-a"]);
     assert!(output.status.success());
 }
 
@@ -1364,7 +1364,7 @@ fn test_modify_on_fresh_branch_creates_first_commit_with_message() {
     let head_before = repo.head_sha();
     repo.create_file("feature.txt", "new branch work");
 
-    let output = repo.run_stax(&["modify", "-m", "Feature commit"]);
+    let output = repo.run_stax(&["modify", "-a", "-m", "Feature commit"]);
     assert!(
         output.status.success(),
         "modify should create the first branch commit: {}",
@@ -1405,7 +1405,7 @@ fn test_modify_on_fresh_branch_without_message_guides_user() {
     let head_before = repo.head_sha();
     repo.create_file("feature.txt", "new branch work");
 
-    let output = repo.run_stax(&["modify"]);
+    let output = repo.run_stax(&["modify", "-a"]);
     assert!(
         !output.status.success(),
         "modify without -m should fail on a fresh branch"
@@ -1446,7 +1446,7 @@ fn test_modify_on_fresh_branch_still_creates_commit_after_parent_moves() {
     );
 
     repo.create_file("feature.txt", "feature work");
-    let output = repo.run_stax(&["modify", "-m", "Feature commit"]);
+    let output = repo.run_stax(&["modify", "-a", "-m", "Feature commit"]);
     assert!(
         output.status.success(),
         "modify should still create the first branch commit after parent moves: {}",
@@ -3129,9 +3129,9 @@ fn test_force_push_after_amend() {
 
     let sha_before = repo.head_sha();
 
-    // Amend the commit
+    // Amend the commit (stage all with -a since nothing is pre-staged)
     repo.create_file("f.txt", "amended");
-    repo.run_stax(&["modify"]);
+    repo.run_stax(&["modify", "-a"]);
 
     let sha_after = repo.head_sha();
     assert_ne!(sha_before, sha_after, "SHA should change after amend");
