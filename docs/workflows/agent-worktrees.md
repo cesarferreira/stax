@@ -214,7 +214,7 @@ Install once:
 st shell-setup --install
 ```
 
-This writes a static shell snippet under `~/.config/stax/` and sources it from your shell config instead of executing `stax` during shell startup.
+This writes a static shell snippet under `~/.config/stax/` and sources it from your shell config instead of executing `stax` during shell startup. When that generated file already exists, newer `stax` versions refresh it automatically on later runs, so your shell config can stay as the single `source ...` line.
 
 After that, `st wt c` and `st wt go` change the parent shell directory directly, and `st wt rm` can safely relocate the shell before removing the current worktree.
 
