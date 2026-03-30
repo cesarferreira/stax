@@ -59,7 +59,8 @@ pub fn status() -> Result<()> {
     println!("{}", "Auth status".bold());
     println!(
         "{}",
-        "(One saved token is used for GitHub, GitLab, and Gitea API calls.)".dimmed()
+        "(The saved credentials-file token is reused for GitHub, GitLab, and Gitea API calls.)"
+            .dimmed()
     );
     if let Some(source) = status.active_source {
         println!(

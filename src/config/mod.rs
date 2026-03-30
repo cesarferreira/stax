@@ -337,6 +337,14 @@ impl Config {
         Self::resolve_github_auth_with_config(&auth_config).map(|(_, token)| token)
     }
 
+    /// Get the saved credentials-file token written by `stax auth`.
+    ///
+    /// This stored token is forge-agnostic and can be reused across GitHub,
+    /// GitLab, and Gitea when forge-specific env vars are not set.
+    pub fn saved_forge_token() -> Option<String> {
+        Self::token_from_credentials_file()
+    }
+
     pub fn github_auth_status() -> GitHubAuthStatus {
         let auth_config = Self::load().map(|c| c.auth).unwrap_or_default();
 
@@ -376,7 +384,7 @@ impl Config {
         }
     }
 
-    /// Set GitHub token (to credentials file)
+    /// Set the saved API token (to credentials file)
     pub fn set_github_token(token: &str) -> Result<()> {
         let path = Self::credentials_path()?;
         if let Some(parent) = path.parent() {

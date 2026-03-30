@@ -263,8 +263,8 @@ pub fn run(
             "{} auth not configured.\n\
              Set the appropriate token for your forge:\n  \
              - GitHub: `stax auth`, `stax auth --from-gh`, or set `STAX_GITHUB_TOKEN`\n  \
-             - GitLab: set `STAX_GITLAB_TOKEN` or `GITLAB_TOKEN`\n  \
-             - Gitea:  set `STAX_GITEA_TOKEN` or `GITEA_TOKEN`",
+             - GitLab: `stax auth`, or set `STAX_GITLAB_TOKEN`, `GITLAB_TOKEN`, or `STAX_FORGE_TOKEN`\n  \
+             - Gitea:  `stax auth`, or set `STAX_GITEA_TOKEN`, `GITEA_TOKEN`, or `STAX_FORGE_TOKEN`",
             remote.forge
         );
     }

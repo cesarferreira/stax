@@ -269,10 +269,12 @@ pub fn forge_token(forge: ForgeType) -> Option<String> {
         ForgeType::GitHub => Config::github_token(),
         ForgeType::GitLab => read_env_token("STAX_GITLAB_TOKEN")
             .or_else(|| read_env_token("GITLAB_TOKEN"))
-            .or_else(|| read_env_token("STAX_FORGE_TOKEN")),
+            .or_else(|| read_env_token("STAX_FORGE_TOKEN"))
+            .or_else(Config::saved_forge_token),
         ForgeType::Gitea => read_env_token("STAX_GITEA_TOKEN")
             .or_else(|| read_env_token("GITEA_TOKEN"))
-            .or_else(|| read_env_token("STAX_FORGE_TOKEN")),
+            .or_else(|| read_env_token("STAX_FORGE_TOKEN"))
+            .or_else(Config::saved_forge_token),
     }
 }
 
@@ -421,6 +423,21 @@ fn make_issue_comment(id: u64, body: String, user: String, created_at: DateTime<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+    use std::fs;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn restore_env(var: &str, value: Option<String>) {
+        match value {
+            Some(value) => env::set_var(var, value),
+            None => env::remove_var(var),
+        }
+    }
 
     fn is_failure(s: &str) -> bool {
         matches!(s, "failed" | "canceled" | "failure" | "error")
@@ -462,5 +479,75 @@ mod tests {
         let statuses: [&str; 0] = [];
         let result = aggregate_ci_overall(statuses.iter().copied(), is_failure, is_pending);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn gitlab_forge_token_falls_back_to_saved_credentials_token() {
+        let _guard = env_lock();
+
+        let orig_home = env::var("HOME").ok();
+        let orig_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+        let orig_stax_gitlab = env::var("STAX_GITLAB_TOKEN").ok();
+        let orig_gitlab = env::var("GITLAB_TOKEN").ok();
+        let orig_stax_forge = env::var("STAX_FORGE_TOKEN").ok();
+
+        let temp_dir =
+            env::temp_dir().join(format!("stax-forge-token-gitlab-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        env::set_var("HOME", &temp_dir);
+        env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
+        env::remove_var("STAX_GITLAB_TOKEN");
+        env::remove_var("GITLAB_TOKEN");
+        env::remove_var("STAX_FORGE_TOKEN");
+
+        Config::set_github_token("saved-token").unwrap();
+
+        assert_eq!(
+            forge_token(ForgeType::GitLab),
+            Some("saved-token".to_string())
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        restore_env("HOME", orig_home);
+        restore_env("STAX_CONFIG_DIR", orig_stax_config_dir);
+        restore_env("STAX_GITLAB_TOKEN", orig_stax_gitlab);
+        restore_env("GITLAB_TOKEN", orig_gitlab);
+        restore_env("STAX_FORGE_TOKEN", orig_stax_forge);
+    }
+
+    #[test]
+    fn gitea_forge_token_falls_back_to_saved_credentials_token() {
+        let _guard = env_lock();
+
+        let orig_home = env::var("HOME").ok();
+        let orig_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+        let orig_stax_gitea = env::var("STAX_GITEA_TOKEN").ok();
+        let orig_gitea = env::var("GITEA_TOKEN").ok();
+        let orig_stax_forge = env::var("STAX_FORGE_TOKEN").ok();
+
+        let temp_dir =
+            env::temp_dir().join(format!("stax-forge-token-gitea-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        env::set_var("HOME", &temp_dir);
+        env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
+        env::remove_var("STAX_GITEA_TOKEN");
+        env::remove_var("GITEA_TOKEN");
+        env::remove_var("STAX_FORGE_TOKEN");
+
+        Config::set_github_token("saved-token").unwrap();
+
+        assert_eq!(
+            forge_token(ForgeType::Gitea),
+            Some("saved-token".to_string())
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        restore_env("HOME", orig_home);
+        restore_env("STAX_CONFIG_DIR", orig_stax_config_dir);
+        restore_env("STAX_GITEA_TOKEN", orig_stax_gitea);
+        restore_env("GITEA_TOKEN", orig_gitea);
+        restore_env("STAX_FORGE_TOKEN", orig_stax_forge);
     }
 }
