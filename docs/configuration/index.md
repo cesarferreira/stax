@@ -21,6 +21,7 @@ Main config path: `~/.config/stax/config.toml`
 # name = "origin"
 # base_url = "https://github.com"
 # api_base_url = "https://github.company.com/api/v3"
+# forge = "github" # "github" | "gitlab" | "gitea" — override auto-detection
 
 [submit]
 # stack_links = "comment" # "comment" | "body" | "both" | "off"

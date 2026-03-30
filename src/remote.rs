@@ -39,7 +39,7 @@ impl RemoteInfo {
         let name = config.remote_name().to_string();
         let url = get_remote_url(repo.workdir()?, &name)?;
         let (host, path) = parse_remote_url(&url)?;
-        let forge = detect_forge(&host, config.remote_base_url());
+        let forge = detect_forge(&host, config.remote_base_url(), config.remote_forge_override());
         let (namespace, repo_name) = split_namespace_repo(&path)?;
 
         let configured_base = config.remote_base_url().trim_end_matches('/');
@@ -98,7 +98,16 @@ impl RemoteInfo {
     }
 }
 
-fn detect_forge(host: &str, configured_base_url: &str) -> ForgeType {
+fn detect_forge(host: &str, configured_base_url: &str, forge_override: Option<&str>) -> ForgeType {
+    if let Some(f) = forge_override {
+        match f.to_ascii_lowercase().as_str() {
+            "gitlab" => return ForgeType::GitLab,
+            "gitea" | "forgejo" => return ForgeType::Gitea,
+            "github" => return ForgeType::GitHub,
+            _ => {} // unrecognised value – fall through to auto-detection
+        }
+    }
+
     let host = host.to_ascii_lowercase();
     let configured_base_url = configured_base_url.to_ascii_lowercase();
 
@@ -571,15 +580,15 @@ mod tests {
     #[test]
     fn test_detect_forge_prefers_host() {
         assert_eq!(
-            detect_forge("gitlab.com", "https://github.com"),
+            detect_forge("gitlab.com", "https://github.com", None),
             ForgeType::GitLab
         );
         assert_eq!(
-            detect_forge("gitea.example.com", "https://github.com"),
+            detect_forge("gitea.example.com", "https://github.com", None),
             ForgeType::Gitea
         );
         assert_eq!(
-            detect_forge("github.example.com", "https://github.com"),
+            detect_forge("github.example.com", "https://github.com", None),
             ForgeType::GitHub
         );
     }
@@ -587,12 +596,38 @@ mod tests {
     #[test]
     fn test_detect_forge_recognizes_forgejo() {
         assert_eq!(
-            detect_forge("forgejo.example.com", "https://github.com"),
+            detect_forge("forgejo.example.com", "https://github.com", None),
             ForgeType::Gitea
         );
         assert_eq!(
-            detect_forge("git.example.com", "https://forgejo.example.com"),
+            detect_forge("git.example.com", "https://forgejo.example.com", None),
             ForgeType::Gitea
+        );
+    }
+
+    #[test]
+    fn test_detect_forge_explicit_override() {
+        // Override should win over hostname-based detection
+        assert_eq!(
+            detect_forge("github.com", "https://github.com", Some("gitlab")),
+            ForgeType::GitLab
+        );
+        assert_eq!(
+            detect_forge("git.mycompany.com", "https://git.mycompany.com", Some("gitlab")),
+            ForgeType::GitLab
+        );
+        assert_eq!(
+            detect_forge("gitlab.com", "https://gitlab.com", Some("github")),
+            ForgeType::GitHub
+        );
+        assert_eq!(
+            detect_forge("git.example.com", "https://git.example.com", Some("gitea")),
+            ForgeType::Gitea
+        );
+        // Unknown override value falls through to auto-detection
+        assert_eq!(
+            detect_forge("gitlab.com", "https://gitlab.com", Some("bogus")),
+            ForgeType::GitLab
         );
     }
 
