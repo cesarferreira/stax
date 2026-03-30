@@ -40,7 +40,7 @@ pub fn run(message: Option<String>, all: bool, quiet: bool) -> Result<()> {
 
         if !has_staged {
             // Nothing staged — prompt in interactive mode, bail otherwise
-            if !quiet && Term::stderr().is_term() {
+            if Term::stderr().is_term() {
                 let change_count = count_uncommitted_changes(workdir);
                 let prompt = if change_count > 0 {
                     format!(
