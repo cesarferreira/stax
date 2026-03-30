@@ -109,6 +109,7 @@ After installation, both `st` and `stax` transparently handle:
 | `st wt ll` | Rich worktree status: managed, dirty, rebase/conflicts, marker, prunable, locked. |
 | `st wt rm [name]` | Remove a worktree. With no name, remove the current lane. |
 | `st wt prune` | Run safe `git worktree prune` housekeeping only. |
+| `st wt cleanup` | Bulk-remove detached worktrees and stax-managed merged lanes, and prune stale bookkeeping first. Add `--dry-run` to preview only. |
 | `st wt restack` / `st wt rs` | Restack stax-managed worktrees only. |
 
 ### Managed vs unmanaged worktrees

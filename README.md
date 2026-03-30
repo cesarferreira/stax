@@ -276,6 +276,8 @@ st wt go review-pass --agent codex --tmux
 
 # Rich status + cleanup
 st wt ll
+st wt cleanup --dry-run
+st wt cleanup
 st wt prune
 st wt rm auth-refresh --delete-branch
 ```
@@ -384,7 +386,7 @@ stax builds and runs on Windows (x86_64) with pre-built binaries available from 
 - The `sw` quick alias is not available.
 - `st wt rm` (with no argument, to remove the current worktree) cannot relocate the shell automatically. Specify the worktree name explicitly: `st wt rm <name>`.
 
-**Worktree commands still work.** `st wt c`, `st wt go`, `st wt ls`, `st wt ll`, `st wt rm <name>`, `st wt prune`, and `st wt restack` all function normally — only the shell-level directory change is missing.
+**Worktree commands still work.** `st wt c`, `st wt go`, `st wt ls`, `st wt ll`, `st wt cleanup`, `st wt rm <name>`, `st wt prune`, and `st wt restack` all function normally — only the shell-level directory change is missing.
 
 **tmux integration requires WSL or a Unix-like environment.** The `--tmux` flag and the worktree dashboard's tmux session management assume a Unix tmux binary is available.
 

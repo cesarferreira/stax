@@ -129,6 +129,7 @@
 | `st worktree path <name>` | | Print absolute path of a worktree (for scripting) |
 | `st worktree remove [name]` | `wt rm`, `wtrm` | Remove a worktree (`wt rm` with no name removes the current lane) |
 | `st worktree prune` | `wt prune`, `wtprune` | Clean stale git worktree bookkeeping only |
+| `st worktree cleanup` | `wt cleanup`, `wt clean` | Prune stale bookkeeping, remove detached linked worktrees, and remove stax-managed worktrees already merged into trunk (`--dry-run` previews only) |
 | `st worktree restack` | `wt rs`, `wtrs` | Restack all stax-managed worktrees |
 | `st shell-setup` | | Print shell integration snippet for manual install |
 | `st shell-setup --install` | | Write shell integration under `~/.config/stax/` and source it from your shell config |

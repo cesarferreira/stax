@@ -93,6 +93,8 @@ st wt go review-pass --agent codex --tmux
 
 # Rich status + cleanup
 st wt ll
+st wt cleanup --dry-run
+st wt cleanup
 st wt prune
 st wt rm auth-refresh --delete-branch
 ```
@@ -194,11 +196,15 @@ NAME   BRANCH   PATH
 
 This keeps third-party or ad-hoc worktrees visible without making `restack` dangerous.
 
-## Prune vs remove
+## Cleanup vs prune vs remove
 
-Use `st wt rm` when you want to delete a live worktree.
+Use `st wt cleanup` when you want a conservative bulk cleanup pass. It prunes stale bookkeeping first, removes detached linked worktrees, and removes stax-managed worktrees whose branches are already merged into trunk. It skips current, locked, dirty, or in-progress worktrees unless you explicitly force dirty removal.
 
-Use `st wt prune` when Git still remembers a dead worktree path that no longer exists on disk. `prune` is safe housekeeping only; it does not bulk-delete merged branches or guess what should disappear.
+Add `--dry-run` to preview the prune/remove plan without changing anything.
+
+Use `st wt rm` when you want to delete one specific live worktree.
+
+Use `st wt prune` when Git still remembers a dead worktree path that no longer exists on disk. `prune` is bookkeeping only; it does not remove live worktree directories.
 
 ## Shell integration
 

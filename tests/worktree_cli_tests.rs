@@ -637,6 +637,205 @@ fn wt_prune_cleans_stale_git_worktree_entries() {
 }
 
 #[test]
+fn wt_cleanup_prunes_and_removes_safe_candidates() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+
+    repo.run_stax_with_env(&["wt", "c", "merged-lane"], &[("HOME", home.as_str())])
+        .assert_success();
+    repo.run_stax_with_env(&["wt", "c", "prune-me"], &[("HOME", home.as_str())])
+        .assert_success();
+
+    let worktree_root = default_worktree_root(&repo, &home);
+    let merged_path = worktree_root.join("merged-lane");
+    let prune_path = worktree_root.join("prune-me");
+    fs::remove_dir_all(&prune_path).expect("manually delete prune-me worktree");
+
+    let detached_path = repo.path().join("detached-raw");
+    repo.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        detached_path.to_str().unwrap(),
+        "main",
+    ])
+    .assert_success();
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    repo.git(&["merge", "--no-ff", "merged-lane", "-m", "Merge merged-lane"])
+        .assert_success();
+
+    let out = repo.run_stax_with_env(&["wt", "cleanup", "--yes"], &[("HOME", home.as_str())]);
+    out.assert_success()
+        .assert_stdout_contains("Pruned")
+        .assert_stdout_contains("Found 2 cleanup candidates:")
+        .assert_stdout_contains("Removed  worktree 'merged-lane'")
+        .assert_stdout_contains("Removed  worktree 'detached-raw'");
+
+    assert!(
+        !merged_path.exists(),
+        "expected merged managed worktree to be removed"
+    );
+    assert!(
+        !detached_path.exists(),
+        "expected detached worktree to be removed"
+    );
+
+    let show_ref = repo.git(&["show-ref", "--verify", "--quiet", "refs/heads/merged-lane"]);
+    assert!(
+        show_ref.status.success(),
+        "cleanup should not delete merged branch refs by default"
+    );
+
+    let ls = repo.run_stax_with_env(&["wt", "ls"], &[("HOME", home.as_str())]);
+    ls.assert_success();
+    let stdout = TestRepo::stdout(&ls);
+    assert!(
+        !stdout.contains("merged-lane"),
+        "expected merged-lane worktree to disappear from ls"
+    );
+    assert!(
+        !stdout.contains("detached-raw"),
+        "expected detached worktree to disappear from ls"
+    );
+    assert!(
+        !stdout.contains("prune-me"),
+        "expected stale worktree bookkeeping to be pruned"
+    );
+}
+
+#[test]
+fn wt_cleanup_dry_run_previews_without_applying() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+
+    repo.run_stax_with_env(&["wt", "c", "merged-lane"], &[("HOME", home.as_str())])
+        .assert_success();
+    repo.run_stax_with_env(&["wt", "c", "prune-me"], &[("HOME", home.as_str())])
+        .assert_success();
+
+    let worktree_root = default_worktree_root(&repo, &home);
+    let merged_path = worktree_root.join("merged-lane");
+    let prune_path = worktree_root.join("prune-me");
+    fs::remove_dir_all(&prune_path).expect("manually delete prune-me worktree");
+
+    let detached_path = repo.path().join("detached-raw");
+    repo.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        detached_path.to_str().unwrap(),
+        "main",
+    ])
+    .assert_success();
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    repo.git(&["merge", "--no-ff", "merged-lane", "-m", "Merge merged-lane"])
+        .assert_success();
+
+    let out = repo.run_stax_with_env(&["wt", "cleanup", "--dry-run"], &[("HOME", home.as_str())]);
+    out.assert_success()
+        .assert_stdout_contains("Would prune 1 stale entry:")
+        .assert_stdout_contains("Found 2 cleanup candidates:")
+        .assert_stdout_contains("Dry run only. No changes made.");
+
+    assert!(
+        merged_path.exists(),
+        "dry-run should not remove merged managed worktree"
+    );
+    assert!(
+        !prune_path.exists(),
+        "fixture should keep the stale path absent on disk"
+    );
+    assert!(
+        detached_path.exists(),
+        "dry-run should not remove detached worktree"
+    );
+
+    let ll = repo.run_stax_with_env(&["wt", "ll"], &[("HOME", home.as_str())]);
+    ll.assert_success();
+    let stdout = TestRepo::stdout(&ll);
+    assert!(
+        stdout.contains("merged-lane"),
+        "dry-run should leave merged-lane worktree registered"
+    );
+    assert!(
+        stdout.contains("detached-raw"),
+        "dry-run should leave detached worktree registered"
+    );
+    assert!(
+        stdout.contains("prune-me"),
+        "dry-run should leave stale bookkeeping registered"
+    );
+}
+
+#[test]
+fn wt_cleanup_skips_dirty_and_current_candidates_without_force() {
+    let repo = TestRepo::new();
+
+    let dirty_path = repo.path().join("dirty-detached");
+    repo.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        dirty_path.to_str().unwrap(),
+        "main",
+    ])
+    .assert_success();
+    fs::write(dirty_path.join("scratch.txt"), "dirty\n").expect("write dirty scratch file");
+
+    let current_path = repo.path().join("current-detached");
+    repo.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        current_path.to_str().unwrap(),
+        "main",
+    ])
+    .assert_success();
+
+    let out = repo.run_stax_in(&current_path, &["wt", "cleanup", "--yes"]);
+    out.assert_success()
+        .assert_stdout_contains("Skipping 2 unsafe candidates:")
+        .assert_stdout_contains("dirty")
+        .assert_stdout_contains("current");
+
+    assert!(
+        dirty_path.exists(),
+        "dirty detached worktree should be preserved without --force"
+    );
+    assert!(
+        current_path.exists(),
+        "current detached worktree should never be removed"
+    );
+}
+
+#[test]
+fn wt_cleanup_force_removes_dirty_detached_candidates() {
+    let repo = TestRepo::new();
+
+    let dirty_path = repo.path().join("force-detached");
+    repo.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        dirty_path.to_str().unwrap(),
+        "main",
+    ])
+    .assert_success();
+    fs::write(dirty_path.join("scratch.txt"), "dirty\n").expect("write dirty scratch file");
+
+    let out = repo.run_stax(&["wt", "cleanup", "--force", "--yes"]);
+    out.assert_success()
+        .assert_stdout_contains("Removed  worktree 'force-detached'");
+
+    assert!(
+        !dirty_path.exists(),
+        "expected --force cleanup to remove dirty detached worktree"
+    );
+}
+
+#[test]
 fn wt_remove_without_name_removes_current_worktree() {
     let repo = TestRepo::new();
     let home = clean_home(&repo);

@@ -22,7 +22,7 @@ All core stax features work on Windows without modification:
 - Undo/redo safety: `st undo`, `st redo`
 - Interactive TUI: `st` (no arguments)
 - AI generation: `st generate --pr-body`, `st standup --summary`
-- Worktree management: `st wt c`, `st wt go`, `st wt ls`, `st wt ll`, `st wt rm <name>`, `st wt prune`, `st wt restack`
+- Worktree management: `st wt c`, `st wt go`, `st wt ls`, `st wt ll`, `st wt cleanup`, `st wt rm <name>`, `st wt prune`, `st wt restack`
 - Browser opening: `st pr`, `st open` (uses `cmd /c start`)
 - Auth: `st auth`, `st auth --from-gh`, `STAX_GITHUB_TOKEN` env var
 
@@ -37,7 +37,7 @@ All core stax features work on Windows without modification:
 | `st wt rm` (no argument, remove current worktree) | relocates shell, then removes | use `st wt rm <name>` with an explicit name instead |
 | `STAX_SHELL_INTEGRATION` env var | set by shell function | not set |
 
-Worktree commands themselves (`create`, `go`, `ls`, `ll`, `rm <name>`, `prune`, `restack`) work identically — only the parent-shell directory change is missing.
+Worktree commands themselves (`create`, `go`, `ls`, `ll`, `cleanup`, `rm <name>`, `prune`, `restack`) work identically — only the parent-shell directory change is missing.
 
 ## tmux
 
