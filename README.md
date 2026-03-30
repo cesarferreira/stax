@@ -144,6 +144,7 @@ Next steps:
 | `st rs --restack` | Sync trunk, clean merged branches, then rebase stack |
 | `st restack` | Rebase current stack onto parents locally (`--stop-here` skips descendants) |
 | `st cascade` | Restack, push, and create/update PRs |
+| `st split` | Split branch into stacked branches (by commit or `--hunk`) |
 | `st undo` / `st redo` | Recover or re-apply risky operations |
 | `st resolve` | Resolve an in-progress rebase conflict with AI and continue automatically |
 | `st standup` | Summarize recent engineering activity |

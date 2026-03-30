@@ -54,10 +54,11 @@
 
 ## Interactive
 
-| Command | Description |
-|---|---|
-| `st` | Launch TUI |
-| `st split` | Split branch into stacked branches |
+| Command | Alias | Description |
+|---|---|---|
+| `st` | | Launch TUI |
+| `st split` | | Split branch into stacked branches (commit-based; needs 2+ commits) |
+| `st split --hunk` | | Split a single commit into stacked branches by selecting individual diff hunks |
 
 ## Recovery
 

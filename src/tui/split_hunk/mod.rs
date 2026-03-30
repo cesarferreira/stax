@@ -30,12 +30,17 @@ pub fn run() -> Result<()> {
     terminal.show_cursor()?;
 
     match result {
-        Ok(true) => {
-            app.finalize()?;
-            println!("Split complete! Created {} branches.", app.round);
-            println!("Use `stax ls` to see the new stack structure.");
-            Ok(())
-        }
+        Ok(true) => match app.finalize() {
+            Ok(()) => {
+                println!("Split complete! Created {} branches.", app.round);
+                println!("Use `stax ls` to see the new stack structure.");
+                Ok(())
+            }
+            Err(e) => {
+                app.rollback();
+                Err(e)
+            }
+        },
         Ok(false) => {
             app.rollback();
             println!("Split aborted.");
