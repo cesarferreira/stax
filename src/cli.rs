@@ -1142,6 +1142,7 @@ pub fn run() -> Result<()> {
 
     // Ensure config exists (creates default on first run)
     let _ = Config::ensure_exists();
+    let _ = commands::shell_setup::refresh_installed_snippets();
 
     let cli = Cli::parse();
     let (stdin_is_terminal, stdout_is_terminal) = detect_interactive_stdio();

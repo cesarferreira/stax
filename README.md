@@ -229,6 +229,7 @@ st wt
 
 # One-time shell integration setup
 st shell-setup --install   # writes ~/.config/stax/shell-setup.sh and sources it from ~/.zshrc
+# Later stax upgrades refresh the generated shell-setup file automatically
 
 # Create a fresh random lane or a named lane
 st worktree create
