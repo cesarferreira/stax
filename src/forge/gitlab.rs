@@ -102,7 +102,7 @@ impl GitLabClient {
         }
 
         let token = super::forge_token(ForgeType::GitLab).context(
-            "GitLab auth not configured. Set `STAX_GITLAB_TOKEN`, `GITLAB_TOKEN`, or `STAX_FORGE_TOKEN`.",
+            "GitLab auth not configured. Use `stax auth` or set `STAX_GITLAB_TOKEN`, `GITLAB_TOKEN`, or `STAX_FORGE_TOKEN`.",
         )?;
 
         Ok(Self {

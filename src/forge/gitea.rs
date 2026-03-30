@@ -104,7 +104,7 @@ impl GiteaClient {
         }
 
         let token = super::forge_token(ForgeType::Gitea).context(
-            "Gitea auth not configured. Set `STAX_GITEA_TOKEN`, `GITEA_TOKEN`, or `STAX_FORGE_TOKEN`.",
+            "Gitea auth not configured. Use `stax auth` or set `STAX_GITEA_TOKEN`, `GITEA_TOKEN`, or `STAX_FORGE_TOKEN`.",
         )?;
 
         Ok(Self {

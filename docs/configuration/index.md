@@ -103,11 +103,13 @@ When omitted, auto-detection is used: hostnames containing `gitlab` → GitLab, 
 
 ### Auth tokens by forge
 
-| Forge  | Environment variables (checked in order)                        |
-|--------|-----------------------------------------------------------------|
-| GitHub | `STAX_GITHUB_TOKEN`, credentials file, `gh` CLI, `GITHUB_TOKEN`|
-| GitLab | `STAX_GITLAB_TOKEN`, `GITLAB_TOKEN`, `STAX_FORGE_TOKEN`        |
-| Gitea  | `STAX_GITEA_TOKEN`, `GITEA_TOKEN`, `STAX_FORGE_TOKEN`          |
+| Forge  | Auth sources (checked in order)                                                    |
+|--------|-------------------------------------------------------------------------------------|
+| GitHub | `STAX_GITHUB_TOKEN`, credentials file, `gh` CLI, `GITHUB_TOKEN`                    |
+| GitLab | `STAX_GITLAB_TOKEN`, `GITLAB_TOKEN`, `STAX_FORGE_TOKEN`, credentials file          |
+| Gitea  | `STAX_GITEA_TOKEN`, `GITEA_TOKEN`, `STAX_FORGE_TOKEN`, credentials file            |
+
+`stax auth` writes the shared credentials file at `~/.config/stax/.credentials`. That saved token is reused for GitHub, GitLab, and Gitea when forge-specific environment variables are not set.
 
 ## GitHub auth resolution order
 
