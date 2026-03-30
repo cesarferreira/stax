@@ -6,10 +6,12 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ForgeType {
     GitHub,
     GitLab,
+    #[serde(alias = "forgejo")]
     Gitea,
 }
 
@@ -98,14 +100,9 @@ impl RemoteInfo {
     }
 }
 
-fn detect_forge(host: &str, configured_base_url: &str, forge_override: Option<&str>) -> ForgeType {
-    if let Some(f) = forge_override {
-        match f.to_ascii_lowercase().as_str() {
-            "gitlab" => return ForgeType::GitLab,
-            "gitea" | "forgejo" => return ForgeType::Gitea,
-            "github" => return ForgeType::GitHub,
-            _ => {} // unrecognised value – fall through to auto-detection
-        }
+fn detect_forge(host: &str, configured_base_url: &str, forge_override: Option<ForgeType>) -> ForgeType {
+    if let Some(forge) = forge_override {
+        return forge;
     }
 
     let host = host.to_ascii_lowercase();
@@ -609,25 +606,42 @@ mod tests {
     fn test_detect_forge_explicit_override() {
         // Override should win over hostname-based detection
         assert_eq!(
-            detect_forge("github.com", "https://github.com", Some("gitlab")),
+            detect_forge("github.com", "https://github.com", Some(ForgeType::GitLab)),
             ForgeType::GitLab
         );
         assert_eq!(
-            detect_forge("git.mycompany.com", "https://git.mycompany.com", Some("gitlab")),
+            detect_forge("git.mycompany.com", "https://git.mycompany.com", Some(ForgeType::GitLab)),
             ForgeType::GitLab
         );
         assert_eq!(
-            detect_forge("gitlab.com", "https://gitlab.com", Some("github")),
+            detect_forge("gitlab.com", "https://gitlab.com", Some(ForgeType::GitHub)),
             ForgeType::GitHub
         );
         assert_eq!(
-            detect_forge("git.example.com", "https://git.example.com", Some("gitea")),
+            detect_forge("git.example.com", "https://git.example.com", Some(ForgeType::Gitea)),
             ForgeType::Gitea
         );
-        // Unknown override value falls through to auto-detection
+    }
+
+    #[test]
+    fn test_forge_type_serde_roundtrip() {
+        // Lowercase names deserialize correctly
         assert_eq!(
-            detect_forge("gitlab.com", "https://gitlab.com", Some("bogus")),
+            serde_json::from_str::<ForgeType>(r#""github""#).unwrap(),
+            ForgeType::GitHub
+        );
+        assert_eq!(
+            serde_json::from_str::<ForgeType>(r#""gitlab""#).unwrap(),
             ForgeType::GitLab
+        );
+        assert_eq!(
+            serde_json::from_str::<ForgeType>(r#""gitea""#).unwrap(),
+            ForgeType::Gitea
+        );
+        // "forgejo" alias maps to Gitea
+        assert_eq!(
+            serde_json::from_str::<ForgeType>(r#""forgejo""#).unwrap(),
+            ForgeType::Gitea
         );
     }
 

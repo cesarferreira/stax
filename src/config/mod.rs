@@ -4,6 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::remote::ForgeType;
+
 /// Main config (safe to commit to dotfiles)
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -64,10 +66,10 @@ pub struct RemoteConfig {
     /// API base URL (GitHub Enterprise), e.g., https://github.company.com/api/v3
     #[serde(default)]
     pub api_base_url: Option<String>,
-    /// Explicit forge type override: "github", "gitlab", or "gitea".
+    /// Explicit forge type override: "github", "gitlab", or "gitea" / "forgejo".
     /// When set, skips auto-detection from the remote hostname.
     #[serde(default)]
-    pub forge: Option<String>,
+    pub forge: Option<ForgeType>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -648,8 +650,8 @@ impl Config {
         self.remote.base_url.as_str()
     }
 
-    pub fn remote_forge_override(&self) -> Option<&str> {
-        self.remote.forge.as_deref()
+    pub fn remote_forge_override(&self) -> Option<ForgeType> {
+        self.remote.forge
     }
 }
 

@@ -87,6 +87,28 @@ stack_links = "body"
 
 When body output is enabled, stax appends a managed block to the bottom of the PR body and only rewrites that managed block on future submits.
 
+## Forge type override
+
+By default stax detects the forge type (GitHub, GitLab, or Gitea/Forgejo) from the remote hostname. If your self-hosted instance has a generic hostname like `git.mycompany.com`, the auto-detection will fall back to GitHub. Override it explicitly:
+
+```toml
+[remote]
+base_url = "https://git.mycompany.com"
+forge = "gitlab"
+```
+
+Accepted values: `"github"`, `"gitlab"`, `"gitea"`, `"forgejo"` (`"forgejo"` is treated as Gitea).
+
+When omitted, auto-detection is used: hostnames containing `gitlab` → GitLab, `gitea`/`forgejo` → Gitea, everything else → GitHub.
+
+### Auth tokens by forge
+
+| Forge  | Environment variables (checked in order)                        |
+|--------|-----------------------------------------------------------------|
+| GitHub | `STAX_GITHUB_TOKEN`, credentials file, `gh` CLI, `GITHUB_TOKEN`|
+| GitLab | `STAX_GITLAB_TOKEN`, `GITLAB_TOKEN`, `STAX_FORGE_TOKEN`        |
+| Gitea  | `STAX_GITEA_TOKEN`, `GITEA_TOKEN`, `STAX_FORGE_TOKEN`          |
+
 ## GitHub auth resolution order
 
 1. `STAX_GITHUB_TOKEN`
