@@ -128,15 +128,22 @@ impl HunkSplitApp {
 
         let tip = git(&workdir, &["rev-parse", "HEAD"])?;
         git(&workdir, &["switch", "-d", &tip])?;
-        git(&workdir, &["reset", "-Nq", &parent_sha])?;
 
-        let diff_output = git(&workdir, &["diff"])?;
-        let files = parse_diff(&diff_output);
-
-        if files.is_empty() {
-            git(&workdir, &["checkout", "-f", &current])?;
-            bail!("No diff hunks found between parent and branch tip.");
-        }
+        let files = match (|| -> Result<Vec<DiffFile>> {
+            git(&workdir, &["reset", "-Nq", &parent_sha])?;
+            let diff_output = git(&workdir, &["diff"])?;
+            let files = parse_diff(&diff_output);
+            if files.is_empty() {
+                bail!("No diff hunks found between parent and branch tip.");
+            }
+            Ok(files)
+        })() {
+            Ok(files) => files,
+            Err(e) => {
+                let _ = git(&workdir, &["checkout", "-f", &current]);
+                return Err(e);
+            }
+        };
 
         let selected: Vec<Vec<bool>> = files.iter().map(|f| vec![false; f.hunks.len()]).collect();
         let flat_items = build_flat_items(&files);
@@ -419,11 +426,10 @@ impl HunkSplitApp {
         };
         tx::print_plan(tx.kind(), &summary, false);
         tx.set_plan_summary(summary);
-        tx.snapshot()?;
 
         let num_branches = self.created_branches.len();
         for (i, name) in self.created_branches.iter().enumerate() {
-            let offset = num_branches - i;
+            let offset = num_branches - 1 - i;
             let rev = format!("{}~{}", split_tip, offset);
             if name == &self.original_branch {
                 git(&self.workdir, &["branch", "-f", name, &rev])?;
@@ -466,6 +472,7 @@ impl HunkSplitApp {
             .clone();
         git(&self.workdir, &["checkout", &checkout_target])?;
 
+        tx.snapshot()?;
         tx.finish_ok()?;
 
         Ok(())
