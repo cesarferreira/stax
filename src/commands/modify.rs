@@ -2,6 +2,9 @@ use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
+use console::Term;
+use dialoguer::{theme::ColorfulTheme, Confirm};
+use std::path::Path;
 use std::process::Command;
 
 enum ModifyTarget {
@@ -9,14 +12,16 @@ enum ModifyTarget {
     CreateFirstCommit { parent: String },
 }
 
-/// Stage all changes and amend the current branch tip.
+/// Amend staged changes into the current branch tip.
+/// When files are already staged, only those files are committed.
+/// When nothing is staged, prompts to stage all (or use `-a`).
 /// On a fresh tracked branch, `-m` creates the first branch-local commit safely.
-pub fn run(message: Option<String>, quiet: bool) -> Result<()> {
+pub fn run(message: Option<String>, all: bool, quiet: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?;
     let current = repo.current_branch()?;
 
-    // Check if there are any changes to stage
+    // Check if there are any changes at all
     if !repo.is_dirty()? {
         if !quiet {
             println!("{}", "No changes to amend.".dimmed());
@@ -26,15 +31,48 @@ pub fn run(message: Option<String>, quiet: bool) -> Result<()> {
 
     let target = modify_target(&repo, &current)?;
 
-    // Stage all changes
-    let add_status = Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(workdir)
-        .status()
-        .context("Failed to stage changes")?;
+    if all {
+        // Explicit --all: stage everything (old behavior)
+        stage_all(workdir)?;
+    } else {
+        // Check whether anything is already staged
+        let has_staged = !is_staging_area_empty(workdir)?;
 
-    if !add_status.success() {
-        anyhow::bail!("Failed to stage changes");
+        if !has_staged {
+            // Nothing staged — prompt in interactive mode, bail otherwise
+            if Term::stderr().is_term() {
+                let change_count = count_uncommitted_changes(workdir);
+                let prompt = if change_count > 0 {
+                    format!(
+                        "No files staged. Stage all changes ({} files modified)?",
+                        change_count
+                    )
+                } else {
+                    "No files staged. Stage all changes?".to_string()
+                };
+
+                let should_stage = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt(prompt)
+                    .default(true)
+                    .interact()?;
+
+                if !should_stage {
+                    println!(
+                        "{}",
+                        "Aborted. Stage files with `git add` first, or use `stax modify -a`."
+                            .dimmed()
+                    );
+                    return Ok(());
+                }
+            } else {
+                anyhow::bail!(
+                    "No files staged. Stage files with `git add` first, or use `stax modify -a`."
+                );
+            }
+
+            stage_all(workdir)?;
+        }
+        // else: staged changes exist — proceed with them as-is
     }
 
     match target {
@@ -100,6 +138,45 @@ pub fn run(message: Option<String>, quiet: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run `git add -A` to stage all changes (tracked, modified, untracked).
+fn stage_all(workdir: &Path) -> Result<()> {
+    let status = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(workdir)
+        .status()
+        .context("Failed to stage changes")?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to stage changes");
+    }
+    Ok(())
+}
+
+/// Returns true when the staging area has no changes relative to HEAD.
+fn is_staging_area_empty(workdir: &Path) -> Result<bool> {
+    let status = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(workdir)
+        .status()
+        .context("Failed to check staged changes")?;
+    Ok(status.success())
+}
+
+/// Count files with uncommitted changes (staged + unstaged + untracked).
+fn count_uncommitted_changes(workdir: &Path) -> usize {
+    Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(workdir)
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 fn modify_target(repo: &GitRepo, current: &str) -> Result<ModifyTarget> {
