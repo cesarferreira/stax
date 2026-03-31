@@ -38,7 +38,7 @@
 | `st modify` | `m` | Amend staged changes into current commit; prompts when nothing is staged (`-a` to stage all); on a fresh tracked branch, `-m` creates the first commit safely |
 | `st rename` | | Rename current branch |
 | `st branch track` | | Track existing branch |
-| `st branch track --all-prs` | | Track all open PRs |
+| `st branch track --all-prs` | | Track all open PRs (GitHub, GitLab, Gitea) |
 | `st branch untrack` | `ut` | Remove stax metadata |
 | `st branch reparent` | | Change parent |
 | `st branch submit` | `bs` | Submit current branch only |

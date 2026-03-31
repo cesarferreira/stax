@@ -279,21 +279,11 @@ impl ForgeClient {
     }
 
     pub async fn get_current_user(&self) -> Result<String> {
-        match self {
-            Self::GitHub(client) => client.get_current_user().await,
-            Self::GitLab(_) | Self::Gitea(_) => {
-                bail!("`stax branch track --all-prs` is currently only supported for GitHub")
-            }
-        }
+        dispatch!(self, get_current_user())
     }
 
     pub async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
-        match self {
-            Self::GitHub(client) => client.get_user_open_prs(username).await,
-            Self::GitLab(_) | Self::Gitea(_) => {
-                bail!("`stax branch track --all-prs` is currently only supported for GitHub")
-            }
-        }
+        dispatch!(self, get_user_open_prs(username))
     }
 }
 

@@ -10,6 +10,7 @@ use super::{
     RepoIssueListItem, RepoPrListItem, STACK_COMMENT_MARKER,
 };
 use crate::ci::CheckRunInfo;
+use crate::github::client::OpenPrInfo;
 use crate::github::pr::{MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
 use crate::remote::{ForgeType, RemoteInfo};
 
@@ -466,6 +467,31 @@ impl GitLabClient {
             })
             .collect())
     }
+
+    pub async fn get_current_user(&self) -> Result<String> {
+        let url = format!("{}/user", self.api_base_url);
+        let user: GitLabUser = get_json(&self.client, &url).await?;
+        Ok(user.username)
+    }
+
+    pub async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
+        let url = format!(
+            "{}?state=opened&author_username={}&per_page=100",
+            self.project_url("/merge_requests"),
+            encode_query_value(username)
+        );
+        let mrs: Vec<GitLabMr> = get_json(&self.client, &url).await?;
+        Ok(mrs
+            .into_iter()
+            .map(|mr| OpenPrInfo {
+                number: mr.iid,
+                head_branch: mr.source_branch,
+                base_branch: mr.target_branch,
+                state: normalize_gitlab_state(&mr.state),
+                is_draft: mr.draft,
+            })
+            .collect())
+    }
 }
 
 /// Percent-encode a value for use in a URL query parameter.
@@ -689,5 +715,58 @@ mod tests {
         assert_eq!(issues[0].title, "Bug in login");
         assert_eq!(issues[0].author, "bob");
         assert_eq!(issues[0].labels, vec!["bug", "urgent"]);
+    }
+
+    #[tokio::test]
+    async fn test_get_current_user() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .and(path("/user"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "username": "alice" })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let user = client.get_current_user().await.unwrap();
+        assert_eq!(user, "alice");
+    }
+
+    #[tokio::test]
+    async fn test_get_user_open_prs() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("author_username", "alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "iid": 15,
+                    "title": "My MR",
+                    "state": "opened",
+                    "draft": false,
+                    "source_branch": "feature-y",
+                    "target_branch": "main",
+                    "description": "desc"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let prs = client.get_user_open_prs("alice").await.unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 15);
+        assert_eq!(prs[0].head_branch, "feature-y");
+        assert_eq!(prs[0].base_branch, "main");
+        assert_eq!(prs[0].state, "OPEN");
     }
 }

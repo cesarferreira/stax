@@ -10,6 +10,7 @@ use super::{
     RepoIssueListItem, RepoPrListItem, STACK_COMMENT_MARKER,
 };
 use crate::ci::CheckRunInfo;
+use crate::github::client::OpenPrInfo;
 use crate::github::pr::{MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
 use crate::remote::{ForgeType, RemoteInfo};
 
@@ -457,6 +458,35 @@ impl GiteaClient {
             })
             .collect())
     }
+
+    pub async fn get_current_user(&self) -> Result<String> {
+        let url = format!("{}/user", self.api_base_url);
+        let user: GiteaUser = get_json(&self.client, &url).await?;
+        Ok(user.login)
+    }
+
+    pub async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
+        let url = format!("{}?state=open&limit=50", self.repo_url("/pulls"));
+        let prs: Vec<GiteaPull> = get_json(&self.client, &url).await?;
+        Ok(prs
+            .into_iter()
+            .filter_map(|pr| {
+                let is_author = pr.user.as_ref().is_some_and(|u| u.login == username);
+                if !is_author {
+                    return None;
+                }
+                let state = normalize_gitea_state(&pr);
+                let is_draft = pr.draft.unwrap_or(false);
+                Some(OpenPrInfo {
+                    number: pr.number,
+                    head_branch: pr.head.ref_name,
+                    base_branch: pr.base.ref_name,
+                    state,
+                    is_draft,
+                })
+            })
+            .collect())
+    }
 }
 
 fn normalize_gitea_state_str(state: &str, merged: Option<bool>) -> String {
@@ -657,5 +687,66 @@ mod tests {
         assert_eq!(issues[0].title, "Fix timeout");
         assert_eq!(issues[0].author, "dave");
         assert_eq!(issues[0].labels, vec!["bug"]);
+    }
+
+    #[tokio::test]
+    async fn test_get_current_user() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("Authorization", "token test-token"))
+            .and(path("/user"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "login": "carol" })),
+            )
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let user = client.get_current_user().await.unwrap();
+        assert_eq!(user, "carol");
+    }
+
+    #[tokio::test]
+    async fn test_get_user_open_prs_filters_by_author() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("Authorization", "token test-token"))
+            .and(path("/repos/org/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 1,
+                    "state": "open",
+                    "title": "Carol's PR",
+                    "draft": false,
+                    "merged": false,
+                    "head": { "ref": "carol-feature", "sha": "aaa" },
+                    "base": { "ref": "main", "sha": "bbb" },
+                    "user": { "login": "carol" }
+                },
+                {
+                    "number": 2,
+                    "state": "open",
+                    "title": "Dave's PR",
+                    "draft": true,
+                    "merged": false,
+                    "head": { "ref": "dave-feature", "sha": "ccc" },
+                    "base": { "ref": "main", "sha": "ddd" },
+                    "user": { "login": "dave" }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let prs = client.get_user_open_prs("carol").await.unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 1);
+        assert_eq!(prs[0].head_branch, "carol-feature");
     }
 }
