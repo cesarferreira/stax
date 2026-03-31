@@ -2,7 +2,7 @@ use crate::commands::generate;
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
-use crate::github::{GitHubClient, PrActivity, ReviewActivity};
+use crate::forge::{ForgeClient, PrActivity, ReviewActivity};
 use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{bail, Context, Result};
@@ -115,7 +115,7 @@ fn collect_standup_data(all: bool, hours: i64) -> Result<StandupData> {
     };
 
     let (merged_prs, opened_prs, reviews_received, reviews_given) =
-        fetch_github_activity(&remote_info, hours);
+        fetch_forge_activity(&remote_info, hours);
 
     let recent_pushes = get_recent_pushes(&repo, &branches_to_show, hours);
     let needs_attention =
@@ -956,7 +956,7 @@ fn print_jit_section(jit: &JitSummary) {
     println!();
 }
 
-fn fetch_github_activity(
+fn fetch_forge_activity(
     remote_info: &Option<RemoteInfo>,
     hours: i64,
 ) -> (
@@ -969,7 +969,7 @@ fn fetch_github_activity(
         return (vec![], vec![], vec![], vec![]);
     };
 
-    if Config::github_token().is_none() {
+    if crate::forge::forge_token(remote.forge).is_none() {
         return (vec![], vec![], vec![], vec![]);
     }
 
@@ -978,9 +978,7 @@ fn fetch_github_activity(
         Err(_) => return (vec![], vec![], vec![], vec![]),
     };
 
-    let client = match rt.block_on(async {
-        GitHubClient::new(remote.owner(), &remote.repo, remote.api_base_url.clone())
-    }) {
+    let client = match rt.block_on(async { ForgeClient::new(remote) }) {
         Ok(client) => client,
         Err(_) => return (vec![], vec![], vec![], vec![]),
     };
@@ -994,7 +992,6 @@ fn fetch_github_activity(
         return (vec![], vec![], vec![], vec![]);
     }
 
-    // Fetch all activity - using search API filtered by user (fast)
     let merged_prs = rt
         .block_on(async { client.get_recent_merged_prs(hours, &username).await })
         .unwrap_or_default();

@@ -3,14 +3,14 @@ use chrono::{DateTime, Utc};
 use octocrab::params::repos::Reference;
 use octocrab::service::middleware::retry::RetryConfig;
 use octocrab::Octocrab;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::forge::{RepoIssueListItem, RepoPrListItem};
+use crate::forge::{PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity};
 
 const GITHUB_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const GITHUB_API_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -89,26 +89,6 @@ struct CheckRun {
     name: String,
     status: String,
     conclusion: Option<String>,
-}
-
-/// PR activity for standup reports
-#[derive(Debug, Clone, Serialize)]
-pub struct PrActivity {
-    pub number: u64,
-    pub title: String,
-    pub timestamp: DateTime<Utc>,
-    pub url: String,
-}
-
-/// Review activity for standup reports
-#[derive(Debug, Clone, Serialize)]
-pub struct ReviewActivity {
-    pub pr_number: u64,
-    pub pr_title: String,
-    pub reviewer: String,
-    pub state: String,
-    pub timestamp: DateTime<Utc>,
-    pub is_received: bool, // true = received on your PR, false = given by you
 }
 
 /// Open PR info for tracking command

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::{
     aggregate_ci_overall, build_http_client, ci_status_from_string, delete_empty, get_json,
     make_issue_comment, mergeable_bool, post_json, put_json, stack_comment_body, AuthStyle,
-    RepoIssueListItem, RepoPrListItem, STACK_COMMENT_MARKER,
+    PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity, STACK_COMMENT_MARKER,
 };
 use crate::ci::CheckRunInfo;
 use crate::github::client::OpenPrInfo;
@@ -37,6 +37,8 @@ struct GitLabMr {
     sha: Option<String>,
     author: Option<GitLabUser>,
     created_at: Option<DateTime<Utc>>,
+    merged_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +76,17 @@ struct GitLabIssue {
     author: Option<GitLabUser>,
     labels: Vec<String>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitLabApproval {
+    user: GitLabUser,
+    created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitLabApprovals {
+    approved_by: Vec<GitLabApproval>,
 }
 
 #[derive(Serialize)]
@@ -492,6 +505,120 @@ impl GitLabClient {
             })
             .collect())
     }
+
+    pub async fn get_recent_merged_prs(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<PrActivity>> {
+        let since = Utc::now() - chrono::Duration::hours(hours);
+        let url = format!(
+            "{}?state=merged&author_username={}&updated_after={}&per_page=30&order_by=updated_at&sort=desc",
+            self.project_url("/merge_requests"),
+            encode_query_value(username),
+            since.to_rfc3339()
+        );
+        let mrs: Vec<GitLabMr> = get_json(&self.client, &url).await?;
+        Ok(mrs
+            .into_iter()
+            .filter_map(|mr| {
+                let ts = mr.merged_at.or(mr.updated_at)?;
+                if ts < since {
+                    return None;
+                }
+                Some(PrActivity {
+                    number: mr.iid,
+                    title: mr.title,
+                    timestamp: ts,
+                    url: mr.web_url.unwrap_or_default(),
+                })
+            })
+            .collect())
+    }
+
+    pub async fn get_recent_opened_prs(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<PrActivity>> {
+        let since = Utc::now() - chrono::Duration::hours(hours);
+        let url = format!(
+            "{}?author_username={}&created_after={}&per_page=30&order_by=created_at&sort=desc",
+            self.project_url("/merge_requests"),
+            encode_query_value(username),
+            since.to_rfc3339()
+        );
+        let mrs: Vec<GitLabMr> = get_json(&self.client, &url).await?;
+        Ok(mrs
+            .into_iter()
+            .filter_map(|mr| {
+                let ts = mr.created_at?;
+                if ts < since {
+                    return None;
+                }
+                Some(PrActivity {
+                    number: mr.iid,
+                    title: mr.title,
+                    timestamp: ts,
+                    url: mr.web_url.unwrap_or_default(),
+                })
+            })
+            .collect())
+    }
+
+    pub async fn get_reviews_received(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        let since = Utc::now() - chrono::Duration::hours(hours);
+        let url = format!(
+            "{}?state=opened&author_username={}&per_page=20",
+            self.project_url("/merge_requests"),
+            encode_query_value(username)
+        );
+        let mrs: Vec<GitLabMr> = get_json(&self.client, &url).await?;
+
+        let mut reviews = Vec::new();
+        for mr in mrs {
+            let approvals_url =
+                self.project_url(&format!("/merge_requests/{}/approvals", mr.iid));
+            let approvals: GitLabApprovals =
+                match get_json(&self.client, &approvals_url).await {
+                    Ok(a) => a,
+                    Err(_) => continue,
+                };
+            for approval in approvals.approved_by {
+                if approval.user.username == username {
+                    continue; // skip self-approvals
+                }
+                let Some(ts) = approval.created_at else {
+                    continue;
+                };
+                if ts >= since {
+                    reviews.push(ReviewActivity {
+                        pr_number: mr.iid,
+                        pr_title: mr.title.clone(),
+                        reviewer: approval.user.username,
+                        state: "APPROVED".to_string(),
+                        timestamp: ts,
+                        is_received: true,
+                    });
+                }
+            }
+        }
+        Ok(reviews)
+    }
+
+    pub async fn get_reviews_given(
+        &self,
+        _hours: i64,
+        _username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        // Not implemented: GitLab has no efficient way to query "reviews given by user"
+        // across all MRs. Would require iterating all open MRs and checking approvals.
+        Ok(vec![])
+    }
 }
 
 /// Percent-encode a value for use in a URL query parameter.
@@ -768,5 +895,119 @@ mod tests {
         assert_eq!(prs[0].head_branch, "feature-y");
         assert_eq!(prs[0].base_branch, "main");
         assert_eq!(prs[0].state, "OPEN");
+    }
+
+    #[tokio::test]
+    async fn test_get_recent_merged_prs() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .and(query_param("state", "merged"))
+            .and(query_param("author_username", "alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "iid": 20,
+                    "title": "Merged MR",
+                    "state": "merged",
+                    "draft": false,
+                    "source_branch": "feat-z",
+                    "target_branch": "main",
+                    "web_url": "https://gitlab.example.com/g/s/r/-/merge_requests/20",
+                    "merged_at": "2099-01-01T12:00:00Z",
+                    "updated_at": "2099-01-01T12:00:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let prs = client.get_recent_merged_prs(9999, "alice").await.unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 20);
+        assert_eq!(prs[0].title, "Merged MR");
+    }
+
+    #[tokio::test]
+    async fn test_get_recent_opened_prs() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .and(query_param("author_username", "alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "iid": 21,
+                    "title": "New MR",
+                    "state": "opened",
+                    "draft": false,
+                    "source_branch": "feat-new",
+                    "target_branch": "main",
+                    "web_url": "https://gitlab.example.com/g/s/r/-/merge_requests/21",
+                    "created_at": "2099-01-01T10:00:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let prs = client.get_recent_opened_prs(9999, "alice").await.unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 21);
+        assert_eq!(prs[0].title, "New MR");
+    }
+
+    #[tokio::test]
+    async fn test_get_reviews_received() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        // Mock: user's open MRs
+        Mock::given(method("GET"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("author_username", "alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "iid": 30,
+                    "title": "My MR",
+                    "state": "opened",
+                    "draft": false,
+                    "source_branch": "feat",
+                    "target_branch": "main"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        // Mock: approvals on MR 30
+        Mock::given(method("GET"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/30/approvals",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "approved_by": [
+                    {
+                        "user": { "username": "bob" },
+                        "created_at": "2099-01-01T09:00:00Z"
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let reviews = client.get_reviews_received(9999, "alice").await.unwrap();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].reviewer, "bob");
+        assert_eq!(reviews[0].state, "APPROVED");
+        assert_eq!(reviews[0].pr_number, 30);
+        assert!(reviews[0].is_received);
     }
 }

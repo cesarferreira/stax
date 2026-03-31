@@ -12,6 +12,11 @@ st standup --json            # Raw activity data as JSON
 ![Standup summary](../assets/standup.png)
 
 Shows merged PRs, opened PRs, recent pushes, and items that need attention.
+Works with GitHub, GitLab, and Gitea repositories.
+
+> **Note:** "Reviews given" data is not yet available on any forge. Efficiently
+> querying reviews authored by a user requires GraphQL (GitHub) or iterating
+> every open PR (GitLab/Gitea), which is too slow for large repositories.
 
 ## AI standup summary
 

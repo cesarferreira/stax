@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::{
     aggregate_ci_overall, build_http_client, ci_status_from_string, delete_empty, get_json,
     make_issue_comment, mergeable_bool, patch_json, post_json, stack_comment_body, AuthStyle,
-    RepoIssueListItem, RepoPrListItem, STACK_COMMENT_MARKER,
+    PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity, STACK_COMMENT_MARKER,
 };
 use crate::ci::CheckRunInfo;
 use crate::github::client::OpenPrInfo;
@@ -37,6 +37,7 @@ struct GiteaPull {
     user: Option<GiteaUser>,
     html_url: Option<String>,
     created_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,6 +83,13 @@ struct GiteaIssue {
 #[derive(Debug, Deserialize)]
 struct GiteaLabel {
     name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GiteaReview {
+    user: Option<GiteaUser>,
+    state: Option<String>,
+    submitted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -487,6 +495,105 @@ impl GiteaClient {
             })
             .collect())
     }
+
+    pub async fn get_recent_merged_prs(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<PrActivity>> {
+        let since = Utc::now() - chrono::Duration::hours(hours);
+        let url = format!("{}?state=closed&sort=recentupdate&limit=30", self.repo_url("/pulls"));
+        let prs: Vec<GiteaPull> = get_json(&self.client, &url).await?;
+        Ok(prs
+            .into_iter()
+            .filter(|pr| {
+                pr.merged == Some(true)
+                    && pr.user.as_ref().is_some_and(|u| u.login == username)
+                    && pr.updated_at.is_some_and(|t| t >= since)
+            })
+            .map(|pr| PrActivity {
+                number: pr.number,
+                title: pr.title,
+                timestamp: pr.updated_at.unwrap_or_default(),
+                url: pr.html_url.unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    pub async fn get_recent_opened_prs(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<PrActivity>> {
+        let since = Utc::now() - chrono::Duration::hours(hours);
+        let url = format!("{}?state=open&sort=newest&limit=30", self.repo_url("/pulls"));
+        let prs: Vec<GiteaPull> = get_json(&self.client, &url).await?;
+        Ok(prs
+            .into_iter()
+            .filter(|pr| {
+                pr.user.as_ref().is_some_and(|u| u.login == username)
+                    && pr.created_at.is_some_and(|t| t >= since)
+            })
+            .map(|pr| PrActivity {
+                number: pr.number,
+                title: pr.title,
+                timestamp: pr.created_at.unwrap_or_default(),
+                url: pr.html_url.unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    pub async fn get_reviews_received(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        let since = Utc::now() - chrono::Duration::hours(hours);
+        // Get user's open PRs, then fetch reviews on each
+        let prs_url = format!("{}?state=open&limit=20", self.repo_url("/pulls"));
+        let prs: Vec<GiteaPull> = get_json(&self.client, &prs_url).await?;
+
+        let mut reviews = Vec::new();
+        for pr in prs {
+            if pr.user.as_ref().is_none_or(|u| u.login != username) {
+                continue;
+            }
+            let reviews_url = self.repo_url(&format!("/pulls/{}/reviews", pr.number));
+            let pr_reviews: Vec<GiteaReview> = match get_json(&self.client, &reviews_url).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            for review in pr_reviews {
+                let reviewer = match &review.user {
+                    Some(u) if u.login != username => u.login.clone(),
+                    _ => continue,
+                };
+                if let Some(ts) = review.submitted_at {
+                    if ts >= since {
+                        reviews.push(ReviewActivity {
+                            pr_number: pr.number,
+                            pr_title: pr.title.clone(),
+                            reviewer,
+                            state: review.state.unwrap_or_else(|| "COMMENTED".to_string()),
+                            timestamp: ts,
+                            is_received: true,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(reviews)
+    }
+
+    pub async fn get_reviews_given(
+        &self,
+        _hours: i64,
+        _username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        // Not implemented: Gitea has no efficient way to query "reviews given by user".
+        // Would require iterating all open PRs and checking reviews on each.
+        Ok(vec![])
+    }
 }
 
 fn normalize_gitea_state_str(state: &str, merged: Option<bool>) -> String {
@@ -748,5 +855,141 @@ mod tests {
         assert_eq!(prs.len(), 1);
         assert_eq!(prs[0].number, 1);
         assert_eq!(prs[0].head_branch, "carol-feature");
+    }
+
+    #[tokio::test]
+    async fn test_get_recent_merged_prs() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("Authorization", "token test-token"))
+            .and(path("/repos/org/repo/pulls"))
+            .and(query_param("state", "closed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 10,
+                    "state": "closed",
+                    "title": "Merged PR",
+                    "merged": true,
+                    "head": { "ref": "feat-a", "sha": "aaa" },
+                    "base": { "ref": "main", "sha": "bbb" },
+                    "user": { "login": "carol" },
+                    "html_url": "https://gitea.example.com/org/repo/pulls/10",
+                    "updated_at": "2099-01-01T12:00:00Z"
+                },
+                {
+                    "number": 11,
+                    "state": "closed",
+                    "title": "Closed not merged",
+                    "merged": false,
+                    "head": { "ref": "feat-b", "sha": "ccc" },
+                    "base": { "ref": "main", "sha": "ddd" },
+                    "user": { "login": "carol" },
+                    "updated_at": "2099-01-01T12:00:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let prs = client.get_recent_merged_prs(9999, "carol").await.unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 10);
+        assert_eq!(prs[0].title, "Merged PR");
+    }
+
+    #[tokio::test]
+    async fn test_get_recent_opened_prs() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("Authorization", "token test-token"))
+            .and(path("/repos/org/repo/pulls"))
+            .and(query_param("state", "open"))
+            .and(query_param("sort", "newest"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 20,
+                    "state": "open",
+                    "title": "New PR",
+                    "merged": false,
+                    "head": { "ref": "feat-new", "sha": "eee" },
+                    "base": { "ref": "main", "sha": "fff" },
+                    "user": { "login": "carol" },
+                    "created_at": "2099-01-01T10:00:00Z"
+                },
+                {
+                    "number": 21,
+                    "state": "open",
+                    "title": "Other user PR",
+                    "merged": false,
+                    "head": { "ref": "other", "sha": "ggg" },
+                    "base": { "ref": "main", "sha": "hhh" },
+                    "user": { "login": "dave" },
+                    "created_at": "2099-01-01T10:00:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let prs = client.get_recent_opened_prs(9999, "carol").await.unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 20);
+        assert_eq!(prs[0].title, "New PR");
+    }
+
+    #[tokio::test]
+    async fn test_get_reviews_received() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        // Mock: user's open PRs
+        Mock::given(method("GET"))
+            .and(header("Authorization", "token test-token"))
+            .and(path("/repos/org/repo/pulls"))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 30,
+                    "state": "open",
+                    "title": "Carol's PR",
+                    "merged": false,
+                    "head": { "ref": "feat", "sha": "aaa" },
+                    "base": { "ref": "main", "sha": "bbb" },
+                    "user": { "login": "carol" }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        // Mock: reviews on PR 30
+        Mock::given(method("GET"))
+            .and(header("Authorization", "token test-token"))
+            .and(path("/repos/org/repo/pulls/30/reviews"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "user": { "login": "dave" },
+                    "state": "APPROVED",
+                    "submitted_at": "2099-01-01T09:00:00Z"
+                },
+                {
+                    "user": { "login": "carol" },
+                    "state": "COMMENTED",
+                    "submitted_at": "2099-01-01T09:30:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let reviews = client.get_reviews_received(9999, "carol").await.unwrap();
+        // carol's self-review should be excluded
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].reviewer, "dave");
+        assert_eq!(reviews[0].state, "APPROVED");
+        assert!(reviews[0].is_received);
     }
 }

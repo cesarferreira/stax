@@ -16,6 +16,26 @@ use crate::github::pr::{
 };
 use crate::remote::{ForgeType, RemoteInfo};
 
+/// PR activity for standup reports.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrActivity {
+    pub number: u64,
+    pub title: String,
+    pub timestamp: DateTime<Utc>,
+    pub url: String,
+}
+
+/// Review activity for standup reports.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReviewActivity {
+    pub pr_number: u64,
+    pub pr_title: String,
+    pub reviewer: String,
+    pub state: String,
+    pub timestamp: DateTime<Utc>,
+    pub is_received: bool,
+}
+
 /// Open pull request info for repo-level listing commands.
 #[derive(Debug, Clone, Serialize)]
 pub struct RepoPrListItem {
@@ -284,6 +304,38 @@ impl ForgeClient {
 
     pub async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
         dispatch!(self, get_user_open_prs(username))
+    }
+
+    pub async fn get_recent_merged_prs(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<PrActivity>> {
+        dispatch!(self, get_recent_merged_prs(hours, username))
+    }
+
+    pub async fn get_recent_opened_prs(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<PrActivity>> {
+        dispatch!(self, get_recent_opened_prs(hours, username))
+    }
+
+    pub async fn get_reviews_received(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        dispatch!(self, get_reviews_received(hours, username))
+    }
+
+    pub async fn get_reviews_given(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        dispatch!(self, get_reviews_given(hours, username))
     }
 }
 
