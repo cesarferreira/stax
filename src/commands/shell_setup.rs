@@ -36,18 +36,36 @@ unalias sw 2>/dev/null || true
 export STAX_SHELL_INTEGRATION=1
 __STAX_BIN=""
 
+__stax_lookup_path() {
+  local name="$1"
+  local resolved=""
+
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    resolved=$(whence -p "$name" 2>/dev/null)
+  else
+    resolved=$(type -P "$name" 2>/dev/null)
+  fi
+
+  if [[ -n "$resolved" ]]; then
+    printf '%s\n' "$resolved"
+    return 0
+  fi
+
+  return 1
+}
+
 __stax_resolve_bin() {
   if [[ -n "${__STAX_BIN:-}" && -x "$__STAX_BIN" ]]; then
     printf '%s\n' "$__STAX_BIN"
     return 0
   fi
 
-  if __STAX_BIN=$(type -P stax 2>/dev/null); then
+  if __STAX_BIN=$(__stax_lookup_path stax); then
     printf '%s\n' "$__STAX_BIN"
     return 0
   fi
 
-  if __STAX_BIN=$(type -P st 2>/dev/null); then
+  if __STAX_BIN=$(__stax_lookup_path st); then
     printf '%s\n' "$__STAX_BIN"
     return 0
   fi
@@ -747,7 +765,7 @@ mod tests {
         refresh_generated_integration_file, shell_snippet, shell_source_line,
         update_shell_config_contents, ShellKind, INTEGRATION_MARKER,
     };
-    use std::{fs, path::Path};
+    use std::{fs, io::ErrorKind, os::unix::fs::PermissionsExt, path::Path, process::Command};
     use tempfile::tempdir;
 
     #[test]
@@ -770,9 +788,68 @@ mod tests {
     fn posix_shell_snippet_resolves_stax_or_st_binary() {
         let snippet = shell_snippet(ShellKind::Posix);
 
-        assert!(snippet.contains("type -P stax"));
-        assert!(snippet.contains("type -P st"));
+        assert!(snippet.contains("__stax_lookup_path()"));
+        assert!(snippet.contains("whence -p"));
+        assert!(snippet.contains("type -P"));
         assert!(snippet.contains("__stax_exec()"));
+    }
+
+    #[test]
+    fn posix_shell_snippet_resolves_real_binary_in_zsh() {
+        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+            if err.kind() == ErrorKind::NotFound {
+                return;
+            }
+            panic!("failed to probe zsh: {err}");
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+        let fake_stax = bin_dir.join("stax");
+        fs::write(
+            &fake_stax,
+            "#!/bin/sh\nprintf 'resolved:%s\\n' \"$0\"\nprintf 'args:%s\\n' \"$*\"\n",
+        )
+        .expect("write fake stax");
+        let mut perms = fs::metadata(&fake_stax)
+            .expect("fake stax metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_stax, perms).expect("chmod fake stax");
+
+        let snippet_path = dir.path().join("shell-setup.sh");
+        fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let path_env = format!("{}:{original_path}", bin_dir.display());
+        let command = format!("source \"{}\"; st config", snippet_path.display());
+        let output = Command::new("zsh")
+            .arg("-lc")
+            .arg(&command)
+            .env("PATH", path_env)
+            .output()
+            .expect("run zsh shell snippet");
+
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("resolved:{}", fake_stax.display())),
+            "expected zsh wrapper to resolve fake stax binary, got:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("args:config"),
+            "expected wrapper to forward command args, got:\n{}",
+            stdout
+        );
     }
 
     #[test]
