@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::{
     aggregate_ci_overall, build_http_client, ci_status_from_string, delete_empty, get_json,
     make_issue_comment, mergeable_bool, patch_json, post_json, stack_comment_body, AuthStyle,
-    STACK_COMMENT_MARKER,
+    RepoIssueListItem, RepoPrListItem, STACK_COMMENT_MARKER,
 };
 use crate::ci::CheckRunInfo;
 use crate::github::pr::{MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
@@ -33,6 +33,9 @@ struct GiteaPull {
     merged: Option<bool>,
     head: GiteaBranchRef,
     base: GiteaBranchRef,
+    user: Option<GiteaUser>,
+    html_url: Option<String>,
+    created_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +66,21 @@ struct GiteaCommitStatus {
     target_url: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GiteaIssue {
+    number: u64,
+    title: String,
+    html_url: Option<String>,
+    user: Option<GiteaUser>,
+    labels: Vec<GiteaLabel>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GiteaLabel {
+    name: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -384,6 +402,69 @@ impl GiteaClient {
 
         Ok((overall, checks))
     }
+
+    pub async fn list_open_pull_requests(&self, limit: u8) -> Result<Vec<RepoPrListItem>> {
+        let limit = limit.clamp(1, 50);
+        let url = format!(
+            "{}?state=open&sort=newest&limit={}",
+            self.repo_url("/pulls"),
+            limit
+        );
+        let prs: Vec<GiteaPull> = get_json(&self.client, &url).await?;
+        Ok(prs
+            .into_iter()
+            .map(|pr| RepoPrListItem {
+                number: pr.number,
+                title: pr.title,
+                url: pr.html_url.unwrap_or_default(),
+                author: pr
+                    .user
+                    .map(|u| u.login)
+                    .unwrap_or_else(|| "unknown".to_string()),
+                head_branch: pr.head.ref_name,
+                base_branch: pr.base.ref_name,
+                state: normalize_gitea_state_str(&pr.state, pr.merged),
+                is_draft: pr.draft.unwrap_or(false),
+                created_at: pr.created_at.unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    pub async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
+        let limit = limit.clamp(1, 50);
+        let url = format!(
+            "{}?state=open&type=issues&sort=updated&limit={}",
+            self.repo_url("/issues"),
+            limit
+        );
+        let issues: Vec<GiteaIssue> = get_json(&self.client, &url).await?;
+        Ok(issues
+            .into_iter()
+            .map(|issue| RepoIssueListItem {
+                number: issue.number,
+                title: issue.title,
+                url: issue.html_url.unwrap_or_default(),
+                author: issue
+                    .user
+                    .map(|u| u.login)
+                    .unwrap_or_else(|| "unknown".to_string()),
+                labels: issue
+                    .labels
+                    .into_iter()
+                    .filter_map(|l| l.name)
+                    .collect(),
+                updated_at: issue.updated_at,
+            })
+            .collect())
+    }
+}
+
+fn normalize_gitea_state_str(state: &str, merged: Option<bool>) -> String {
+    if merged.unwrap_or(false) {
+        "MERGED".to_string()
+    } else {
+        state.to_uppercase()
+    }
 }
 
 fn normalize_gitea_status(status: Option<&str>) -> String {
@@ -402,11 +483,7 @@ fn normalize_gitea_conclusion(status: &str) -> String {
 }
 
 fn normalize_gitea_state(pr: &GiteaPull) -> String {
-    if pr.merged.unwrap_or(false) {
-        "MERGED".to_string()
-    } else {
-        pr.state.to_uppercase()
-    }
+    normalize_gitea_state_str(&pr.state, pr.merged)
 }
 
 fn pr_to_info(pr: &GiteaPull) -> PrInfo {
@@ -509,5 +586,76 @@ mod tests {
         assert_eq!(overall.as_deref(), Some("pending"));
         assert_eq!(checks.len(), 2);
         assert_eq!(checks[0].status, "in_progress");
+    }
+
+    #[tokio::test]
+    async fn test_list_open_pull_requests() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("Authorization", "token test-token"))
+            .and(path("/repos/org/repo/pulls"))
+            .and(query_param("state", "open"))
+            .and(query_param("sort", "newest"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 5,
+                    "state": "open",
+                    "title": "Add widget",
+                    "body": "description",
+                    "draft": false,
+                    "mergeable": true,
+                    "merged": false,
+                    "head": { "ref": "add-widget", "sha": "aaa111" },
+                    "base": { "ref": "main", "sha": "bbb222" },
+                    "user": { "login": "carol" },
+                    "html_url": "https://gitea.example.com/org/repo/pulls/5",
+                    "created_at": "2024-07-01T10:00:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let prs = client.list_open_pull_requests(30).await.unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 5);
+        assert_eq!(prs[0].title, "Add widget");
+        assert_eq!(prs[0].author, "carol");
+        assert_eq!(prs[0].head_branch, "add-widget");
+        assert_eq!(prs[0].base_branch, "main");
+    }
+
+    #[tokio::test]
+    async fn test_list_open_issues() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("Authorization", "token test-token"))
+            .and(path("/repos/org/repo/issues"))
+            .and(query_param("state", "open"))
+            .and(query_param("type", "issues"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 12,
+                    "title": "Fix timeout",
+                    "html_url": "https://gitea.example.com/org/repo/issues/12",
+                    "user": { "login": "dave" },
+                    "labels": [{ "name": "bug" }],
+                    "updated_at": "2024-07-10T14:00:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GiteaClient::new(&remote_info(&server)).unwrap();
+        let issues = client.list_open_issues(30).await.unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].number, 12);
+        assert_eq!(issues[0].title, "Fix timeout");
+        assert_eq!(issues[0].author, "dave");
+        assert_eq!(issues[0].labels, vec!["bug"]);
     }
 }

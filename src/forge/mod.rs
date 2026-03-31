@@ -16,6 +16,31 @@ use crate::github::pr::{
 };
 use crate::remote::{ForgeType, RemoteInfo};
 
+/// Open pull request info for repo-level listing commands.
+#[derive(Debug, Clone, Serialize)]
+pub struct RepoPrListItem {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub author: String,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Open issue info for repo-level listing commands.
+#[derive(Debug, Clone, Serialize)]
+pub struct RepoIssueListItem {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub author: String,
+    pub labels: Vec<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
 mod gitea;
 mod gitlab;
 
@@ -91,6 +116,14 @@ impl ForgeClient {
 
     pub async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfoWithHead>> {
         dispatch!(self, list_open_prs_by_head())
+    }
+
+    pub async fn list_open_pull_requests(&self, limit: u8) -> Result<Vec<RepoPrListItem>> {
+        dispatch!(self, list_open_pull_requests(limit))
+    }
+
+    pub async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
+        dispatch!(self, list_open_issues(limit))
     }
 
     pub async fn create_pr(

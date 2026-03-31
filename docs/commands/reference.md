@@ -96,8 +96,8 @@
 | `st continue` | Continue after conflicts |
 | `st pr` | Open current branch PR |
 | `st pr open` | Explicit form of `st pr` |
-| `st pr list` | List open pull requests in the current repo |
-| `st issue list` | List open issues in the current repo |
+| `st pr list` | List open pull requests in the current repo (GitHub, GitLab, Gitea) |
+| `st issue list` | List open issues in the current repo (GitHub, GitLab, Gitea) |
 | `st open` | Open repository in browser |
 | `st ci` | Show CI status for current branch (full per-check table with ETA) |
 | `st ci --stack` | Show CI status for all branches in current stack |

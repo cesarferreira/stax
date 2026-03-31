@@ -3,8 +3,8 @@ use crate::commands::github_list::{
     TableColumn, TruncationMode,
 };
 use crate::config::Config;
+use crate::forge::{ForgeClient, RepoIssueListItem};
 use crate::git::GitRepo;
-use crate::github::{GitHubClient, RepoIssueListItem};
 use crate::remote::RemoteInfo;
 use anyhow::Result;
 
@@ -19,14 +19,10 @@ pub fn run_list(limit: u8, json: bool) -> Result<()> {
     let repo_label = format!("{}/{}", remote_info.namespace, remote_info.repo);
 
     let rt = tokio::runtime::Runtime::new()?;
-    let client = rt.block_on(async {
-        GitHubClient::new(
-            remote_info.owner(),
-            &remote_info.repo,
-            remote_info.api_base_url.clone(),
-        )
+    let issues = rt.block_on(async {
+        let client = ForgeClient::new(&remote_info)?;
+        client.list_open_issues(limit).await
     })?;
-    let issues = rt.block_on(async { client.list_open_issues(limit).await })?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&issues)?);

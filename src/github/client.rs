@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::forge::{RepoIssueListItem, RepoPrListItem};
 
 const GITHUB_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const GITHUB_API_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -120,30 +121,6 @@ pub struct OpenPrInfo {
     pub is_draft: bool,
 }
 
-/// Open pull request info for repo-level listing commands
-#[derive(Debug, Clone, Serialize)]
-pub struct RepoPrListItem {
-    pub number: u64,
-    pub title: String,
-    pub url: String,
-    pub author: String,
-    pub head_branch: String,
-    pub base_branch: String,
-    pub state: String,
-    pub is_draft: bool,
-    pub created_at: DateTime<Utc>,
-}
-
-/// Open issue info for repo-level listing commands
-#[derive(Debug, Clone, Serialize)]
-pub struct RepoIssueListItem {
-    pub number: u64,
-    pub title: String,
-    pub url: String,
-    pub author: String,
-    pub labels: Vec<String>,
-    pub updated_at: DateTime<Utc>,
-}
 
 #[derive(Debug, Deserialize)]
 struct ReviewUser {

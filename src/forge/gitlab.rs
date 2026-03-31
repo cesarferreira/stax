@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::{
     aggregate_ci_overall, build_http_client, ci_status_from_string, delete_empty, get_json,
     make_issue_comment, mergeable_bool, post_json, put_json, stack_comment_body, AuthStyle,
-    STACK_COMMENT_MARKER,
+    RepoIssueListItem, RepoPrListItem, STACK_COMMENT_MARKER,
 };
 use crate::ci::CheckRunInfo;
 use crate::github::pr::{MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus};
@@ -34,6 +34,8 @@ struct GitLabMr {
     web_url: Option<String>,
     head_pipeline: Option<GitLabPipeline>,
     sha: Option<String>,
+    author: Option<GitLabUser>,
+    created_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +63,16 @@ struct GitLabCommitStatus {
     target_url: Option<String>,
     started_at: Option<String>,
     finished_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitLabIssue {
+    iid: u64,
+    title: String,
+    web_url: Option<String>,
+    author: Option<GitLabUser>,
+    labels: Vec<String>,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Serialize)]
@@ -403,6 +415,57 @@ impl GitLabClient {
 
         Ok((overall, checks))
     }
+
+    pub async fn list_open_pull_requests(&self, limit: u8) -> Result<Vec<RepoPrListItem>> {
+        let per_page = limit.clamp(1, 100);
+        let url = format!(
+            "{}?state=opened&per_page={}&order_by=created_at&sort=desc",
+            self.project_url("/merge_requests"),
+            per_page
+        );
+        let mrs: Vec<GitLabMr> = get_json(&self.client, &url).await?;
+        Ok(mrs
+            .into_iter()
+            .map(|mr| RepoPrListItem {
+                number: mr.iid,
+                title: mr.title,
+                url: mr.web_url.unwrap_or_default(),
+                author: mr
+                    .author
+                    .map(|a| a.username)
+                    .unwrap_or_else(|| "unknown".to_string()),
+                head_branch: mr.source_branch,
+                base_branch: mr.target_branch,
+                state: normalize_gitlab_state(&mr.state),
+                is_draft: mr.draft,
+                created_at: mr.created_at.unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    pub async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
+        let per_page = limit.clamp(1, 100);
+        let url = format!(
+            "{}?state=opened&per_page={}&order_by=updated_at&sort=desc",
+            self.project_url("/issues"),
+            per_page
+        );
+        let issues: Vec<GitLabIssue> = get_json(&self.client, &url).await?;
+        Ok(issues
+            .into_iter()
+            .map(|issue| RepoIssueListItem {
+                number: issue.iid,
+                title: issue.title,
+                url: issue.web_url.unwrap_or_default(),
+                author: issue
+                    .author
+                    .map(|a| a.username)
+                    .unwrap_or_else(|| "unknown".to_string()),
+                labels: issue.labels,
+                updated_at: issue.updated_at,
+            })
+            .collect())
+    }
 }
 
 /// Percent-encode a value for use in a URL query parameter.
@@ -553,5 +616,78 @@ mod tests {
         assert_eq!(overall.as_deref(), Some("pending"));
         assert_eq!(checks.len(), 2);
         assert_eq!(checks[0].status, "in_progress");
+    }
+
+    #[tokio::test]
+    async fn test_list_open_pull_requests() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/merge_requests"))
+            .and(query_param("state", "opened"))
+            .and(query_param("order_by", "created_at"))
+            .and(query_param("sort", "desc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "iid": 10,
+                    "title": "Add feature X",
+                    "state": "opened",
+                    "draft": true,
+                    "source_branch": "feature-x",
+                    "target_branch": "main",
+                    "description": "body",
+                    "web_url": "https://gitlab.example.com/group/subgroup/repo/-/merge_requests/10",
+                    "author": { "username": "alice" },
+                    "created_at": "2024-06-01T12:00:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let prs = client.list_open_pull_requests(30).await.unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 10);
+        assert_eq!(prs[0].title, "Add feature X");
+        assert_eq!(prs[0].author, "alice");
+        assert_eq!(prs[0].head_branch, "feature-x");
+        assert_eq!(prs[0].base_branch, "main");
+        assert!(prs[0].is_draft);
+        assert_eq!(prs[0].state, "OPEN");
+    }
+
+    #[tokio::test]
+    async fn test_list_open_issues() {
+        let server = MockServer::start().await;
+        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+
+        Mock::given(method("GET"))
+            .and(header("PRIVATE-TOKEN", "test-token"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo/issues"))
+            .and(query_param("state", "opened"))
+            .and(query_param("order_by", "updated_at"))
+            .and(query_param("sort", "desc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "iid": 42,
+                    "title": "Bug in login",
+                    "web_url": "https://gitlab.example.com/group/subgroup/repo/-/issues/42",
+                    "author": { "username": "bob" },
+                    "labels": ["bug", "urgent"],
+                    "updated_at": "2024-06-15T08:30:00Z"
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let client = GitLabClient::new(&remote_info(&server)).unwrap();
+        let issues = client.list_open_issues(30).await.unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].number, 42);
+        assert_eq!(issues[0].title, "Bug in login");
+        assert_eq!(issues[0].author, "bob");
+        assert_eq!(issues[0].labels, vec!["bug", "urgent"]);
     }
 }
