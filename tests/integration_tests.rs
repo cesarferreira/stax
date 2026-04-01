@@ -1015,6 +1015,89 @@ fn test_checkout_alias_co() {
     assert!(repo.current_branch_contains("feature-1"));
 }
 
+#[test]
+fn test_checkout_routes_to_existing_worktree_with_duplicate_leaf_name() {
+    let repo = TestRepo::new();
+
+    let routed_branch = "feature-route";
+    let sibling_branch = "other-route";
+    let routed_worktree = repo.path().join("lanes/a/WayveCode");
+    let sibling_worktree = repo.path().join("lanes/b/WayveCode");
+
+    let create_routed_branch = repo.git(&["branch", routed_branch]);
+    assert!(
+        create_routed_branch.status.success(),
+        "Failed to create routed branch: {}",
+        TestRepo::stderr(&create_routed_branch)
+    );
+
+    let routed_parent = routed_worktree
+        .parent()
+        .expect("routed worktree path should have a parent");
+    fs::create_dir_all(routed_parent).expect("Failed to create routed worktree parent dirs");
+    let routed_add = repo.git(&[
+        "worktree",
+        "add",
+        routed_worktree.to_str().expect("utf8 routed worktree path"),
+        routed_branch,
+    ]);
+    assert!(
+        routed_add.status.success(),
+        "Failed to add routed worktree: {}",
+        TestRepo::stderr(&routed_add)
+    );
+
+    let create_sibling_branch = repo.git(&["branch", sibling_branch]);
+    assert!(
+        create_sibling_branch.status.success(),
+        "Failed to create sibling branch: {}",
+        TestRepo::stderr(&create_sibling_branch)
+    );
+
+    let sibling_parent = sibling_worktree
+        .parent()
+        .expect("sibling worktree path should have a parent");
+    fs::create_dir_all(sibling_parent).expect("Failed to create sibling worktree parent dirs");
+    let sibling_add = repo.git(&[
+        "worktree",
+        "add",
+        sibling_worktree
+            .to_str()
+            .expect("utf8 sibling worktree path"),
+        sibling_branch,
+    ]);
+    assert!(
+        sibling_add.status.success(),
+        "Failed to add sibling worktree: {}",
+        TestRepo::stderr(&sibling_add)
+    );
+
+    let output = repo.run_stax(&["checkout", routed_branch]);
+    assert!(
+        output.status.success(),
+        "Checkout routing failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stdout.contains("routing there instead"),
+        "Expected routed checkout message, got: {}",
+        stdout
+    );
+    assert!(
+        !stderr.contains("Multiple worktrees match"),
+        "Expected checkout to avoid ambiguous worktree lookup, got: {}",
+        stderr
+    );
+    assert_eq!(
+        repo.current_branch(),
+        "main",
+        "Routing to an existing worktree should not switch the current checkout"
+    );
+}
+
 // =============================================================================
 // Branch Management Tests
 // =============================================================================

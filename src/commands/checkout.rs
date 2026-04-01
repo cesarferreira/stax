@@ -1,6 +1,7 @@
 use crate::commands::worktree::{go, shared::emit_shell_message};
 use crate::config::Config;
 use crate::engine::Stack;
+use crate::git::repo::WorktreeInfo;
 use crate::git::{checkout_branch_in, refs, GitRepo};
 use anyhow::Result;
 use colored::Colorize;
@@ -173,24 +174,24 @@ pub fn run(
 
     drop(repo);
 
-    if let Some(worktree_name) = route_checkout_to_worktree(&workdir, &target, shell_output)? {
+    if let Some(worktree) = route_checkout_to_worktree(&workdir, &target, shell_output)? {
         if shell_output {
             emit_shell_message(&format!(
                 "Routed checkout to worktree '{}' for branch '{}'",
-                worktree_name, target
+                worktree.name, target
             ));
         } else {
             println!(
                 "{}",
                 format!(
                     "Branch '{}' is already checked out in worktree '{}' - routing there instead.",
-                    target, worktree_name
+                    target, worktree.name
                 )
                 .yellow()
             );
         }
-        go::run_go(
-            Some(worktree_name),
+        go::run_go_on_worktree(
+            &worktree,
             false,
             shell_output,
             None,
@@ -225,7 +226,7 @@ fn route_checkout_to_worktree(
     workdir: &Path,
     target: &str,
     shell_output: bool,
-) -> Result<Option<String>> {
+) -> Result<Option<WorktreeInfo>> {
     let Some(worktree) = GitRepo::branch_worktree_in(workdir, target)? else {
         return Ok(None);
     };
@@ -241,7 +242,7 @@ fn route_checkout_to_worktree(
         println!();
     }
 
-    Ok(Some(worktree.name))
+    Ok(Some(worktree))
 }
 
 fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<Vec<CheckoutRow>> {

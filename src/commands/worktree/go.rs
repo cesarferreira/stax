@@ -4,6 +4,7 @@ use super::shared::{
 };
 use crate::commands::shell_setup;
 use crate::config::Config;
+use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
 use anyhow::{bail, Result};
 use colored::Colorize;
@@ -29,13 +30,37 @@ pub fn run_go(
     args: Vec<String>,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
-    let config = Config::load()?;
     let worktree = match name {
         Some(name) => find_worktree(&repo, &name)?
             .ok_or_else(|| anyhow::anyhow!("No worktree named '{}'", name))?,
         None => pick_worktree_interactively(&repo)?,
     };
 
+    run_go_on_worktree(
+        &worktree,
+        no_verify,
+        shell_output,
+        agent,
+        model,
+        run,
+        tmux,
+        tmux_session,
+        args,
+    )
+}
+
+pub(crate) fn run_go_on_worktree(
+    worktree: &WorktreeInfo,
+    no_verify: bool,
+    shell_output: bool,
+    agent: Option<String>,
+    model: Option<String>,
+    run: Option<String>,
+    tmux: bool,
+    tmux_session: Option<String>,
+    args: Vec<String>,
+) -> Result<()> {
+    let config = Config::load()?;
     let launch = build_launch_spec(
         &config,
         &LaunchOptions {
