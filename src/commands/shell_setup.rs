@@ -102,7 +102,7 @@ __stax_insert_shell_output() {
 
 __stax_run_worktree_shell() {
   local raw
-  local path=""
+  local target_path=""
   local launch=""
   local message=""
   local passthrough=()
@@ -117,15 +117,15 @@ __stax_run_worktree_shell() {
 
   while IFS= read -r line; do
     case "$line" in
-      STAX_SHELL_PATH=*) path="${line#STAX_SHELL_PATH=}" ;;
+      STAX_SHELL_PATH=*) target_path="${line#STAX_SHELL_PATH=}" ;;
       STAX_SHELL_LAUNCH=*) launch="${line#STAX_SHELL_LAUNCH=}" ;;
       STAX_SHELL_MESSAGE=*) message="${line#STAX_SHELL_MESSAGE=}" ;;
       *) passthrough+=("$line") ;;
     esac
   done <<< "$raw"
 
-  if [[ -n "$path" ]]; then
-    builtin cd "$path" || return 1
+  if [[ -n "$target_path" ]]; then
+    builtin cd "$target_path" || return 1
   fi
 
   if [[ ${#passthrough[@]} -gt 0 ]]; then
@@ -138,8 +138,8 @@ __stax_run_worktree_shell() {
 
   if [[ -n "$launch" ]]; then
     eval "$launch"
-  elif [[ -n "$path" && -z "$message" ]]; then
-    echo "$(tput bold)$(tput setaf 6)~$(tput sgr0) $(basename "$path")"
+  elif [[ -n "$target_path" && -z "$message" ]]; then
+    echo "$(tput bold)$(tput setaf 6)~$(tput sgr0) $(basename "$target_path")"
   fi
 }
 
@@ -855,6 +855,67 @@ mod tests {
         assert!(
             stdout.contains("args:config"),
             "expected wrapper to forward command args, got:\n{}",
+            stdout
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_shell_snippet_keeps_path_for_shell_wrapped_commands_in_zsh() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+            if err.kind() == ErrorKind::NotFound {
+                return;
+            }
+            panic!("failed to probe zsh: {err}");
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+        let fake_stax = bin_dir.join("stax");
+        fs::write(
+            &fake_stax,
+            "#!/bin/sh\nprintf 'resolved:%s\\n' \"$0\"\nprintf 'args:%s\\n' \"$*\"\n",
+        )
+        .expect("write fake stax");
+        let mut perms = fs::metadata(&fake_stax)
+            .expect("fake stax metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_stax, perms).expect("chmod fake stax");
+
+        let snippet_path = dir.path().join("shell-setup.sh");
+        fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let path_env = format!("{}:{original_path}", bin_dir.display());
+        let command = format!("source \"{}\"; st bco", snippet_path.display());
+        let output = Command::new("zsh")
+            .arg("-lc")
+            .arg(&command)
+            .env("PATH", path_env)
+            .output()
+            .expect("run zsh shell snippet");
+
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("resolved:{}", fake_stax.display())),
+            "expected zsh wrapper to resolve fake stax binary for shell-wrapped commands, got:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("args:bco --shell-output"),
+            "expected shell-wrapped command to preserve PATH and inject --shell-output, got:\n{}",
             stdout
         );
     }
