@@ -1,6 +1,7 @@
 # Lessons
 
 - When changing the `stax co` UI, match the `stax ls` visual language (colors, tree/indentation) and confirm it visually. Do not ship a redesign without verifying the output looks like the `ls` tree and that selection emphasis is obvious.
+- Interactive prompts rendered on `stderr` must style item text against `stderr` too; stdout-based color detection breaks when shell integration captures stdout for `--shell-output`.
 - TUI changes must be checked at standard terminal widths (around 80 columns); keep one-line summaries and footers compact, and prefer a single contextual action over listing every shortcut.
 - If interactive lists scroll the terminal on navigation, clear and position the cursor before invoking the dialog to avoid rendering into the lower viewport.
 - Bare commands that default to a TUI/dashboard must gate on both `stdin` and `stdout` being terminals and otherwise fall back to help or a non-interactive view; never assume `st`/`st wt` is launched from a full TTY.
@@ -12,6 +13,7 @@
 - Shared bash/zsh shell snippets must use shell-specific command lookup (`whence -p` in zsh, `type -P` in bash) when they need the real binary path; bash-only flags in shared wrappers can break every `st`/`stax` invocation on zsh.
 - Shared bash/zsh shell snippets must not use zsh-special parameter names like `path` for local scratch variables inside wrappers; localizing `path` in zsh also localizes `PATH` and breaks nested command lookup.
 - `shell-setup --install` must replace legacy inline/eval shell integration blocks instead of appending a new source line, and later runs should refresh existing generated shell-setup files after upgrades; stale pasted wrappers or stale generated snippets both leave users with duplicate or broken shell behavior.
+- Shell integration should special-case only commands that require shell-side directory changes (`wt go/create` and removing the current worktree); route all other commands straight to the binary without injecting `--shell-output`.
 - Commands intended for first-run/setup flows (for example `shell-setup`) must bypass repo initialization in `src/cli.rs`; otherwise running them outside a configured repo can accidentally trigger `init` and break shell startup or onboarding.
 - When sync reparents children off merged branches, never clear `parent_branch_revision`; preserve the old-base boundary (or merged parent tip) so restack can run `git rebase --onto <new> <old>` and avoid replaying already-integrated commits.
 - Integration tests that shell out to `git`/`stax` must be hermetic: strip GitHub token env, user-specific `stax` env such as `STAX_SHELL_INTEGRATION`, and force `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to null so contributor-specific git config and shell setup cannot change behavior or add large runtime overhead.
