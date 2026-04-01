@@ -117,7 +117,9 @@
 | `st generate --pr-body [--no-prompt]` | Generate PR body with AI |
 | `st demo` | Interactive tutorial (no auth/repo needed) |
 
-## Developer worktrees
+## Worktrees
+
+Full guide: [Worktrees](../worktrees/index.md)
 
 | Command | Alias | Description |
 |---------|-------|-------------|

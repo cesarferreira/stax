@@ -16,7 +16,7 @@ stax
 - Keyboard-driven checkout, restack, submit, create, rename, and delete
 - Reorder mode for branch reparenting
 
-The main `st` TUI is focused on stacks and patches. Worktree management lives in the dedicated `st wt` dashboard.
+The main `st` TUI is focused on stacks and patches. Worktree management lives in the dedicated [`st wt` dashboard](../worktrees/index.md).
 
 ## Worktree Dashboard
 

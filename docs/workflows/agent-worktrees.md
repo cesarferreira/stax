@@ -1,31 +1,25 @@
-# Worktree Lanes For AI
+# AI Worktree Lanes
 
-`st wt` lets you run multiple AI coding sessions in parallel while keeping them inside stax's normal branch model. In an interactive terminal, bare `st wt` opens the worktree dashboard so you can browse lanes and re-enter tmux-backed sessions quickly.
+`st wt` lets you run multiple AI coding sessions in parallel while keeping them inside stax's normal branch model.
 
-This is the important part: these lanes are not a separate subsystem and they are not hidden scratch directories. When stax creates the branch for a lane, it writes normal stax metadata, so the lane behaves like a first-class branch in your stack.
+This page focuses on the AI workflow. For the full `st worktree` / `st wt` command reference, dashboard behavior, cleanup semantics, shell integration, and configuration, see [Worktrees](../worktrees/index.md).
 
-That means you can:
+## Why Use AI Lanes
 
-- see it in `st ls`
-- restack it safely when trunk or a parent moves
-- jump back into it with `st wt go`
-- inspect it with `st wt ll`
-- clean it up with `st wt rm`
-- keep several lanes alive at once without them touching the same checkout
+Worktree lanes solve a specific problem: you want several active coding sessions at once without making them invisible to the rest of your stack.
 
-## Why this is powerful
+With stax lanes you can:
 
-Raw `git worktree` gives you extra directories. This feature gives you a parallel workflow:
+- isolate each agent session to its own worktree and branch
+- keep those branches visible in `st ls`
+- restack them safely when trunk or a parent moves
+- jump back into them with `st wt go`
+- inspect them with `st wt ll`
+- clean them up with normal stax worktree commands
 
-- create a lane and immediately start Claude/Codex/Gemini/OpenCode inside it
-- keep each session isolated to its own working tree and branch
-- let those branches stay visible to stax instead of disappearing into ad-hoc directories
-- recover cleanly when trunk moves by restacking all managed lanes together
-- come back hours later and resume any lane without remembering where you left it
+That is the difference between "a pile of terminals" and "several active branches that stax still understands."
 
-If you are working with multiple coding tools at once, this is the difference between "a pile of terminals" and "several active branches that stax still understands."
-
-## The workflow in one example
+## Example Workflow
 
 ```bash
 # Start three parallel lanes
@@ -51,193 +45,73 @@ st wt ll
 st wt rm auth-refresh --delete-branch
 ```
 
-## What `st wt c` actually gives you
-
-`st wt c` is intentionally convenience-first:
-
-- with no name, it creates a new lane with a random funny slug
-- with a new name, it creates a new branch + worktree and takes you there
-- with an existing branch, it creates a worktree for that branch
-- with an existing worktree target, it reuses it instead of duplicating it
-
-So the command is less "make a raw worktree" and more "make sure this lane exists and put me in it."
-
-## First-class branch behavior
-
-When stax creates a new branch for the lane, it writes normal branch metadata. That is why the lane participates in the usual stax flows:
-
-- `st ls` shows the branch in the stack
-- `st restack`, `st sync --restack`, and `st wt rs` can reason about it
-- undo/redo still operate on the branch history
-- the TUI keeps showing the stack while the separate worktrees panel shows the linked directories
-
-Tracking nuance:
-
-- new lane name via `st wt c foo`: tracked by stax
-- existing already-tracked branch via `st wt c some-branch`: still tracked
-- existing plain Git branch via `st wt c some-branch`: worktree exists, but the branch stays untracked until you run `st branch track`
-
-## Quick start
-
-```bash
-# Fastest possible scratch lane
-st wt c --agent codex -- "fix flaky tests"
-
-# Create or reuse a named lane
-st wt c auth-refresh
-
-# Re-enter a lane and relaunch the tool there
-st wt go auth-refresh --agent claude
-st wt c review-pass --agent codex --tmux -- "address the open PR comments"
-st wt go review-pass --agent codex --tmux
-
-# Rich status + cleanup
-st wt ll
-st wt cleanup --dry-run
-st wt cleanup
-st wt prune
-st wt rm auth-refresh --delete-branch
-```
-
-## Why the command shape feels native to stax
-
-stax already had strong verbs for this workflow:
-
-- `create` means "make the thing and take me there"
-- `go` means "jump to the existing thing"
-- `ls` means "show me the inventory"
-- `ll` means "show me the richer view"
-
-The AI launch is an option on top of those verbs, not a separate command family.
-
-## Random no-arg creation
-
-`st wt c` with no arguments generates a funny two-word slug from bundled word lists and uses it for the lane name:
-
-```bash
-st wt c
-# creates something like:
-#   ~/.stax/worktrees/stax/cheeky-bagel
-#   branch cheeky-bagel (or your configured branch.format variant)
-```
-
-This is the fastest way to spin up an isolated scratch lane.
-
-## Agent launch
-
-`--agent` launches a supported interactive CLI inside the target worktree after creation or navigation.
+## Launch Patterns
 
 ```bash
 st wt c api-tests --agent codex -- "write the missing integration tests"
 st wt go api-tests --agent gemini
 st wt go api-tests --agent opencode -- "--resume"
+st wt go api-tests --run "cursor ."
+st wt c review-pass --agent codex --tmux -- "address the open PR comments"
+st wt go review-pass --agent codex --tmux
 ```
 
-Supported values:
+Supported `--agent` values are:
 
 - `claude`
 - `codex`
 - `gemini`
 - `opencode`
 
-Use `--model` with `--agent` when you want an explicit override.
+Use `--model` with `--agent` when you want an explicit model override.
 
-Use `--run` when you want an arbitrary launcher instead:
+Use `--run` when you want a non-agent launcher such as an editor.
+
+Use `--tmux` when you want each lane to resume the same terminal session on re-entry instead of relaunching the command. If the session already exists, stax reattaches or switches to it; inside tmux, it switches the current client instead of nesting tmux.
+
+## Why The Lanes Stay First-Class
+
+When stax creates a new branch for the lane, it writes normal stax metadata. That is why the lane participates in normal stax flows:
+
+- `st ls` shows the branch in the stack
+- `st restack`, `st sync --restack`, and `st wt rs` can reason about it
+- undo/redo still operate on the branch history
+- the stack TUI and the worktree dashboard both understand the lane
+
+Tracking nuance:
+
+- a new lane created by `st wt c foo` is stax-managed
+- an already tracked branch stays managed when you open a worktree for it
+- an existing plain Git branch gets a worktree, but it stays unmanaged until `st branch track`
+
+## Recommended Loop
 
 ```bash
-st wt go api-tests --run "cursor ."
+# Start a scratch lane fast
+st wt c --agent codex -- "fix flaky tests"
+
+# Re-enter it later
+st wt go flaky-tests --agent codex
+
+# Trunk moved while the lane was in flight
+st wt rs
+
+# Inspect operational state
+st wt ll
+
+# Clean up after merge
+st wt cleanup --dry-run
+st wt rm flaky-tests --delete-branch
 ```
 
-Add `--tmux` if you want the lane to create or attach to a tmux session named after the worktree:
+If you prefer ephemeral names for scratch work, `st wt c` with no arguments generates a random two-word slug automatically.
 
-```bash
-st wt c api-tests --agent codex --tmux -- "write the missing integration tests"
-st wt go api-tests --agent codex --tmux
-```
+## Setup Once
 
-Behavior:
-
-- first entry creates the tmux session and launches the requested command there
-- later entries attach to the existing session instead of relaunching the command
-- inside an existing tmux client, stax switches to the lane's session instead of nesting tmux
-
-## Base branch behavior
-
-For new branches:
-
-- `--from <branch>` explicitly sets the base branch
-- otherwise, if the current branch is already tracked by stax, the new lane stacks on the current branch
-- otherwise, the new lane starts from trunk
-
-## Status views
-
-`st wt ls` stays intentionally simple:
-
-```text
-NAME   BRANCH   PATH
-```
-
-`st wt ll` adds the richer operational state:
-
-- managed vs unmanaged
-- dirty state
-- rebase/merge/conflict state
-- optional marker
-- locked/prunable state
-- stack parent/base
-
-## Restacking lanes
-
-`st wt rs` restacks only stax-managed worktrees. It skips:
-
-- detached worktrees
-- stale prunable entries
-- worktrees created outside stax that do not have branch metadata
-
-This keeps third-party or ad-hoc worktrees visible without making `restack` dangerous.
-
-## Cleanup vs prune vs remove
-
-Use `st wt cleanup` when you want a conservative bulk cleanup pass. It prunes stale bookkeeping first, removes detached linked worktrees, and removes stax-managed worktrees whose branches are already merged into trunk. It skips current, locked, dirty, or in-progress worktrees unless you explicitly force dirty removal.
-
-Add `--dry-run` to preview the prune/remove plan without changing anything.
-
-Use `st wt rm` when you want to delete one specific live worktree.
-
-Use `st wt prune` when Git still remembers a dead worktree path that no longer exists on disk. `prune` is bookkeeping only; it does not remove live worktree directories.
-
-## Shell integration
-
-Install once:
+Install shell integration if you want `create` and `go` to move the parent shell automatically:
 
 ```bash
 st shell-setup --install
 ```
 
-This writes a static shell snippet under `~/.config/stax/` and sources it from your shell config instead of executing `stax` during shell startup. When that generated file already exists, newer `stax` versions refresh it automatically on later runs, so your shell config can stay as the single `source ...` line.
-
-After that, `st wt c` and `st wt go` change the parent shell directory directly, and `st wt rm` can safely relocate the shell before removing the current worktree.
-
-!!! note "Windows"
-    Shell integration and `--tmux` require a Unix shell (bash/zsh/fish) and tmux. On Windows, worktree commands work but auto-`cd` and tmux session management are unavailable. See [Windows notes](../reference/windows.md).
-
-## Hooks
-
-Worktree hooks live under `[worktree.hooks]` in `~/.config/stax/config.toml`:
-
-```toml
-[worktree]
-# Leave unset/empty for the default external root (~/.stax/worktrees/<repo>)
-# root_dir = ""
-# Or opt back into repo-local lanes:
-# root_dir = ".worktrees"
-
-[worktree.hooks]
-post_create = ""
-post_start = ""
-post_go = ""
-pre_remove = ""
-post_remove = ""
-```
-
-Use these for lightweight local automation such as dependency bootstrap or editor/session setup.
+For shell integration details, cleanup semantics, hooks, dashboard behavior, and Windows limitations, use the canonical [Worktrees](../worktrees/index.md) page.
