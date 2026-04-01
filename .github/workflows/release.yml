@@ -59,14 +59,14 @@ jobs:
         if: matrix.target != 'x86_64-pc-windows-msvc'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../stax-${{ matrix.target }}.tar.gz stax
+          tar czf ../../../stax-${{ matrix.target }}.tar.gz stax st
           cd ../../..
 
       - name: Package (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/stax.exe" -DestinationPath "stax-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/stax.exe","target/${{ matrix.target }}/release/st.exe" -DestinationPath "stax-${{ matrix.target }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6

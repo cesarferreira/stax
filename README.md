@@ -57,16 +57,15 @@ curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x
 # Linux (x86_64)
 curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-unknown-linux-gnu.tar.gz | tar xz
 
-# Move binary to ~/.local/bin and symlink `st` alias
+# Move both binaries to ~/.local/bin
 mkdir -p ~/.local/bin
-mv stax ~/.local/bin/
-ln -s ~/.local/bin/stax ~/.local/bin/st
+mv stax st ~/.local/bin/
 
 # If ~/.local/bin is not on your PATH, add it:
 # echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
 ```
 
-**Windows (x86_64):** download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/cesarferreira/stax/releases), extract `stax.exe`, and place it in a directory on your `PATH`. See [Windows notes](#windows-notes) for shell and worktree limitations.
+**Windows (x86_64):** download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/cesarferreira/stax/releases), extract both `stax.exe` and `st.exe`, and place them in a directory on your `PATH`. See [Windows notes](#windows-notes) for shell and worktree limitations.
 
 Verify install:
 

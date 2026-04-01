@@ -4,13 +4,7 @@ stax ships pre-built Windows binaries (`x86_64-pc-windows-msvc`) starting from t
 
 ## Install
 
-Download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/cesarferreira/stax/releases/latest), extract `stax.exe`, and place it in a directory on your `PATH`.
-
-To create the `st` short alias, copy the binary:
-
-```powershell
-Copy-Item stax.exe st.exe
-```
+Download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/cesarferreira/stax/releases/latest), extract both `stax.exe` and `st.exe`, and place them in a directory on your `PATH`.
 
 ## What works
 
