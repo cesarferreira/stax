@@ -158,6 +158,15 @@ __stax_remove_current_worktree() {
 
 __stax_dispatch() {
   case "$1" in
+    checkout|co|bco)
+      __stax_run_worktree_shell "$@" ;;
+    branch|b)
+      case "$2" in
+        checkout|co)
+          __stax_run_worktree_shell "$@" ;;
+        *)
+          __stax_exec "$@" ;;
+      esac ;;
     wtgo)
       __stax_run_worktree_shell worktree go "${@:2}" ;;
     wtc)
@@ -301,6 +310,15 @@ end
 
 function __stax_dispatch
     switch "$argv[1]"
+        case checkout co bco
+            __stax_run_worktree_shell $argv
+        case branch b
+            switch "$argv[2]"
+                case checkout co
+                    __stax_run_worktree_shell $argv
+                case '*'
+                    __stax_exec $argv
+            end
         case wtgo
             __stax_run_worktree_shell worktree go $argv[2..-1]
         case wtc
@@ -904,7 +922,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn posix_shell_snippet_does_not_wrap_checkout_commands_in_zsh() {
+    fn posix_shell_snippet_wraps_checkout_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
         if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
@@ -953,17 +971,12 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             stdout.contains(&format!("resolved:{}", fake_stax.display())),
-            "expected zsh wrapper to resolve fake stax binary for passthrough checkout commands, got:\n{}",
+            "expected zsh wrapper to resolve fake stax binary for checkout commands, got:\n{}",
             stdout
         );
         assert!(
-            stdout.contains("args:bco feature"),
-            "expected checkout command to pass through unchanged, got:\n{}",
-            stdout
-        );
-        assert!(
-            !stdout.contains("--shell-output"),
-            "expected checkout command to avoid shell-output injection, got:\n{}",
+            stdout.contains("args:bco feature --shell-output"),
+            "expected checkout command to be wrapped with --shell-output, got:\n{}",
             stdout
         );
     }
