@@ -65,10 +65,12 @@ nav:
       - Full Reference: commands/reference.md
       - Navigation: commands/navigation.md
       - Stack Health: commands/stack-health.md
+  - Worktrees:
+      - Worktree Command: worktrees/index.md
+      - Multi-Worktree Behavior: workflows/multi-worktree.md
+      - AI Worktree Lanes: workflows/agent-worktrees.md
   - Workflows:
       - Merge and Cascade: workflows/merge-and-cascade.md
-      - Multi-Worktree: workflows/multi-worktree.md
-      - Agent Worktrees: workflows/agent-worktrees.md
       - Standup and Changelog: workflows/reporting.md
   - Safety:
       - Undo and Redo: safety/undo-redo.md
