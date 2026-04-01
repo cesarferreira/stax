@@ -2,9 +2,13 @@ use crate::commands::worktree::shared::{
     compute_worktree_details, default_tmux_session_name, list_tmux_sessions, status_labels,
     TmuxSession, WorktreeDetails,
 };
+use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
 use anyhow::Result;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashboardMode {
@@ -16,18 +20,69 @@ pub enum DashboardMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TmuxState {
+    Loading,
     Unavailable,
     Missing,
     Detached,
     Attached(usize),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TmuxAvailability {
+    Loading,
+    Available,
+    Unavailable,
+}
+
+#[derive(Debug)]
+enum LoaderUpdate {
+    TmuxProbe(Result<Vec<TmuxSession>, String>),
+    Details {
+        index: usize,
+        details: WorktreeDetails,
+        status_labels: Vec<String>,
+    },
+    DetailError {
+        index: usize,
+        error: String,
+    },
+    Done,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorktreeRecord {
-    pub details: WorktreeDetails,
+    pub info: WorktreeInfo,
+    pub branch_label: String,
+    pub details: Option<WorktreeDetails>,
+    pub load_error: Option<String>,
     pub tmux_session: String,
     pub tmux_state: TmuxState,
     pub status_labels: Vec<String>,
+}
+
+impl WorktreeRecord {
+    fn new(info: WorktreeInfo) -> Self {
+        let branch_label = info
+            .branch
+            .clone()
+            .unwrap_or_else(|| "(detached)".to_string());
+        let tmux_session =
+            default_tmux_session_name(&info.name).unwrap_or_else(|_| info.name.clone());
+
+        Self {
+            info,
+            branch_label,
+            details: None,
+            load_error: None,
+            tmux_session,
+            tmux_state: TmuxState::Loading,
+            status_labels: vec!["loading".to_string()],
+        }
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.details.is_none() && self.load_error.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,8 +112,6 @@ impl PendingCommand {
 }
 
 pub struct WorktreeApp {
-    #[allow(dead_code)]
-    pub repo: GitRepo,
     pub records: Vec<WorktreeRecord>,
     pub selected_index: usize,
     pub mode: DashboardMode,
@@ -67,7 +120,8 @@ pub struct WorktreeApp {
     pub status_message: Option<String>,
     pub should_quit: bool,
     pub pending_command: Option<PendingCommand>,
-    pub tmux_available: bool,
+    tmux_availability: TmuxAvailability,
+    loader: Option<Receiver<LoaderUpdate>>,
 }
 
 impl WorktreeApp {
@@ -76,11 +130,23 @@ impl WorktreeApp {
         preferred_selection: Option<String>,
     ) -> Result<Self> {
         let repo = GitRepo::open()?;
-        let (records, tmux_available) = load_records(&repo)?;
+        let repo_path = repo.git_dir()?.to_path_buf();
+        let worktrees = repo.list_worktrees()?;
+        let records = worktrees
+            .into_iter()
+            .map(WorktreeRecord::new)
+            .collect::<Vec<_>>();
         let selected_index = default_selection(&records, preferred_selection.as_deref());
+        let loader = if records.is_empty() {
+            None
+        } else {
+            Some(spawn_loader(
+                repo_path,
+                records.iter().map(|record| record.info.clone()).collect(),
+            ))
+        };
 
         Ok(Self {
-            repo,
             records,
             selected_index,
             mode: DashboardMode::Normal,
@@ -89,7 +155,8 @@ impl WorktreeApp {
             status_message: initial_status,
             should_quit: false,
             pending_command: None,
-            tmux_available,
+            tmux_availability: TmuxAvailability::Loading,
+            loader,
         })
     }
 
@@ -118,25 +185,40 @@ impl WorktreeApp {
             return;
         };
 
-        if !self.tmux_available {
-            self.set_status("tmux not available; install tmux or use the CLI directly");
-            return;
+        match self.tmux_availability {
+            TmuxAvailability::Loading => {
+                self.set_status("Still probing tmux; try again in a moment");
+                return;
+            }
+            TmuxAvailability::Unavailable => {
+                self.set_status("tmux not available; install tmux or use the CLI directly");
+                return;
+            }
+            TmuxAvailability::Available => {}
         }
-        if record.details.info.is_prunable || !record.details.info.path.exists() {
+
+        if record.info.is_prunable || !record.info.path.exists() {
             self.set_status("Worktree path is missing; run `st wt prune` first");
             return;
         }
 
         self.pending_command = Some(PendingCommand::Go {
-            name: record.details.info.name.clone(),
+            name: record.info.name.clone(),
         });
         self.should_quit = true;
     }
 
     pub fn request_create(&mut self) {
-        if !self.tmux_available {
-            self.set_status("tmux not available; install tmux or use `st wt c` manually");
-            return;
+        match self.tmux_availability {
+            TmuxAvailability::Loading => {
+                self.set_status("Still probing tmux; try again in a moment");
+                return;
+            }
+            TmuxAvailability::Unavailable => {
+                self.set_status("tmux not available; install tmux or use `st wt c` manually");
+                return;
+            }
+            TmuxAvailability::Available => {}
         }
         self.input_buffer.clear();
         self.input_cursor = 0;
@@ -156,15 +238,15 @@ impl WorktreeApp {
             return;
         };
 
-        if record.details.info.is_main {
+        if record.info.is_main {
             self.set_status("Cannot remove the main worktree");
             return;
         }
-        if record.details.info.is_current {
+        if record.info.is_current {
             self.set_status("Cannot remove the current worktree from the dashboard");
             return;
         }
-        if record.details.info.is_prunable || !record.details.info.path.exists() {
+        if record.info.is_prunable || !record.info.path.exists() {
             self.set_status("Missing worktree entries should be cleaned with `st wt prune`");
             return;
         }
@@ -175,51 +257,180 @@ impl WorktreeApp {
     pub fn confirm_delete(&mut self) {
         if let Some(record) = self.selected() {
             self.pending_command = Some(PendingCommand::Remove {
-                name: record.details.info.name.clone(),
+                name: record.info.name.clone(),
             });
             self.should_quit = true;
         }
     }
 
     pub fn request_restack(&mut self) {
-        if !self.records.iter().any(|record| record.details.is_managed) {
-            self.set_status("No stax-managed worktrees to restack");
+        if self.records.iter().any(|record| {
+            record
+                .details
+                .as_ref()
+                .is_some_and(|details| details.is_managed)
+        }) {
+            self.pending_command = Some(PendingCommand::Restack);
+            self.should_quit = true;
             return;
         }
 
-        self.pending_command = Some(PendingCommand::Restack);
-        self.should_quit = true;
+        if self.records.iter().any(WorktreeRecord::is_loading) {
+            self.set_status("Still loading stack metadata; try again in a moment");
+            return;
+        }
+
+        if self
+            .records
+            .iter()
+            .any(|record| record.load_error.as_ref().is_some())
+        {
+            self.set_status("Some worktree metadata failed to load; use the CLI directly");
+            return;
+        }
+
+        if !self.records.iter().any(|record| {
+            record
+                .details
+                .as_ref()
+                .is_some_and(|details| details.is_managed)
+        }) {
+            self.set_status("No stax-managed worktrees to restack");
+            return;
+        }
+    }
+
+    pub fn refresh_background(&mut self) {
+        loop {
+            let update = match self.loader.as_ref() {
+                Some(loader) => match loader.try_recv() {
+                    Ok(update) => Some(update),
+                    Err(TryRecvError::Empty) => None,
+                    Err(TryRecvError::Disconnected) => {
+                        self.loader = None;
+                        None
+                    }
+                },
+                None => None,
+            };
+
+            let Some(update) = update else {
+                break;
+            };
+            self.apply_loader_update(update);
+        }
+    }
+
+    pub fn is_loading(&self) -> bool {
+        matches!(self.tmux_availability, TmuxAvailability::Loading)
+            || self.records.iter().any(WorktreeRecord::is_loading)
+    }
+
+    pub fn loading_summary(&self) -> Option<String> {
+        if !self.is_loading() {
+            return None;
+        }
+
+        let loaded = self
+            .records
+            .iter()
+            .filter(|record| !record.is_loading())
+            .count();
+        Some(format!(
+            "Loading worktree details... ({}/{})",
+            loaded,
+            self.records.len()
+        ))
+    }
+
+    fn apply_loader_update(&mut self, update: LoaderUpdate) {
+        match update {
+            LoaderUpdate::TmuxProbe(Ok(sessions)) => {
+                let tmux_map = sessions
+                    .into_iter()
+                    .map(|session| (session.name.clone(), session))
+                    .collect::<HashMap<_, _>>();
+                self.tmux_availability = TmuxAvailability::Available;
+                for record in &mut self.records {
+                    record.tmux_state = tmux_state_for(true, &tmux_map, &record.tmux_session);
+                }
+            }
+            LoaderUpdate::TmuxProbe(Err(_)) => {
+                self.tmux_availability = TmuxAvailability::Unavailable;
+                for record in &mut self.records {
+                    record.tmux_state = TmuxState::Unavailable;
+                }
+            }
+            LoaderUpdate::Details {
+                index,
+                details,
+                status_labels,
+            } => {
+                if let Some(record) = self.records.get_mut(index) {
+                    record.details = Some(details);
+                    record.load_error = None;
+                    record.status_labels = status_labels;
+                }
+            }
+            LoaderUpdate::DetailError { index, error } => {
+                if let Some(record) = self.records.get_mut(index) {
+                    record.load_error = Some(error);
+                    record.status_labels = vec!["error".to_string()];
+                }
+            }
+            LoaderUpdate::Done => {
+                self.loader = None;
+            }
+        }
     }
 }
 
-fn load_records(repo: &GitRepo) -> Result<(Vec<WorktreeRecord>, bool)> {
-    let tmux_sessions = list_tmux_sessions().ok();
-    let tmux_available = tmux_sessions.is_some();
-    let tmux_map = tmux_sessions
-        .unwrap_or_default()
-        .into_iter()
-        .map(|session| (session.name.clone(), session))
-        .collect::<HashMap<_, _>>();
+fn spawn_loader(repo_path: PathBuf, worktrees: Vec<WorktreeInfo>) -> Receiver<LoaderUpdate> {
+    let (sender, receiver) = mpsc::channel();
 
-    let records = repo
-        .list_worktrees()?
-        .into_iter()
-        .map(|worktree| {
-            let details = compute_worktree_details(repo, worktree)?;
-            let tmux_session = default_tmux_session_name(&details.info.name)
-                .unwrap_or_else(|_| details.info.name.clone());
-            let tmux_state = tmux_state_for(tmux_available, &tmux_map, &tmux_session);
-            let status_labels = status_labels(&details);
-            Ok(WorktreeRecord {
-                details,
-                tmux_session,
-                tmux_state,
-                status_labels,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    thread::spawn(move || {
+        let repo = match GitRepo::open_from_path(&repo_path) {
+            Ok(repo) => repo,
+            Err(error) => {
+                for index in 0..worktrees.len() {
+                    let _ = sender.send(LoaderUpdate::DetailError {
+                        index,
+                        error: format!("Failed to open repository: {error}"),
+                    });
+                }
+                let _ = sender.send(LoaderUpdate::TmuxProbe(Err(error.to_string())));
+                let _ = sender.send(LoaderUpdate::Done);
+                return;
+            }
+        };
 
-    Ok((records, tmux_available))
+        let _ = sender.send(LoaderUpdate::TmuxProbe(
+            list_tmux_sessions().map_err(|error| error.to_string()),
+        ));
+
+        for (index, worktree) in worktrees.into_iter().enumerate() {
+            match compute_worktree_details(&repo, worktree) {
+                Ok(details) => {
+                    let labels = status_labels(&details);
+                    let _ = sender.send(LoaderUpdate::Details {
+                        index,
+                        details,
+                        status_labels: labels,
+                    });
+                }
+                Err(error) => {
+                    let _ = sender.send(LoaderUpdate::DetailError {
+                        index,
+                        error: error.to_string(),
+                    });
+                }
+            }
+        }
+
+        let _ = sender.send(LoaderUpdate::Done);
+    });
+
+    receiver
 }
 
 fn tmux_state_for(
@@ -244,7 +455,7 @@ pub fn default_selection(records: &[WorktreeRecord], preferred: Option<&str>) ->
     if let Some(preferred) = preferred {
         if let Some(index) = records
             .iter()
-            .position(|record| record.details.info.name == preferred)
+            .position(|record| record.info.name == preferred)
         {
             return index;
         }
@@ -252,43 +463,49 @@ pub fn default_selection(records: &[WorktreeRecord], preferred: Option<&str>) ->
 
     records
         .iter()
-        .position(|record| record.details.info.is_current)
+        .position(|record| record.info.is_current)
         .unwrap_or(0)
 }
 
 pub fn worktree_badges(record: &WorktreeRecord) -> Vec<String> {
     let mut badges = Vec::new();
 
-    if record.details.info.is_current {
+    if record.info.is_current {
         badges.push("current".to_string());
     }
-    if record.details.info.is_main {
+    if record.info.is_main {
         badges.push("main".to_string());
     }
-    if record.details.info.branch.is_none() {
+    if record.info.branch.is_none() {
         badges.push("detached".to_string());
     }
-    if record.details.is_managed {
-        badges.push("managed".to_string());
+    if let Some(details) = record.details.as_ref() {
+        if details.is_managed {
+            badges.push("managed".to_string());
+        } else {
+            badges.push("unmanaged".to_string());
+        }
+        if details.dirty {
+            badges.push("dirty".to_string());
+        }
+        if details.rebase_in_progress {
+            badges.push("rebase".to_string());
+        }
+        if details.merge_in_progress {
+            badges.push("merge".to_string());
+        }
+        if details.has_conflicts {
+            badges.push("conflicts".to_string());
+        }
+    } else if record.load_error.is_some() {
+        badges.push("error".to_string());
     } else {
-        badges.push("unmanaged".to_string());
+        badges.push("loading".to_string());
     }
-    if record.details.dirty {
-        badges.push("dirty".to_string());
-    }
-    if record.details.rebase_in_progress {
-        badges.push("rebase".to_string());
-    }
-    if record.details.merge_in_progress {
-        badges.push("merge".to_string());
-    }
-    if record.details.has_conflicts {
-        badges.push("conflicts".to_string());
-    }
-    if record.details.info.is_locked {
+    if record.info.is_locked {
         badges.push("locked".to_string());
     }
-    if record.details.info.is_prunable {
+    if record.info.is_prunable {
         badges.push("prunable".to_string());
     }
 
@@ -298,39 +515,23 @@ pub fn worktree_badges(record: &WorktreeRecord) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{default_selection, worktree_badges, PendingCommand, TmuxState, WorktreeRecord};
-    use crate::commands::worktree::shared::WorktreeDetails;
     use crate::git::repo::WorktreeInfo;
     use std::path::PathBuf;
 
     fn record(name: &str) -> WorktreeRecord {
-        WorktreeRecord {
-            details: WorktreeDetails {
-                info: WorktreeInfo {
-                    name: name.to_string(),
-                    path: PathBuf::from(format!("/tmp/{}", name)),
-                    branch: Some(name.to_string()),
-                    is_main: false,
-                    is_current: false,
-                    is_locked: false,
-                    lock_reason: None,
-                    is_prunable: false,
-                    prunable_reason: None,
-                },
-                branch_label: name.to_string(),
-                is_managed: true,
-                stack_parent: Some("main".to_string()),
-                dirty: false,
-                rebase_in_progress: false,
-                merge_in_progress: false,
-                has_conflicts: false,
-                marker: None,
-                ahead: Some(1),
-                behind: Some(0),
-            },
-            tmux_session: name.to_string(),
-            tmux_state: TmuxState::Missing,
-            status_labels: vec!["managed".to_string()],
-        }
+        let mut record = WorktreeRecord::new(WorktreeInfo {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/tmp/{}", name)),
+            branch: Some(name.to_string()),
+            is_main: false,
+            is_current: false,
+            is_locked: false,
+            lock_reason: None,
+            is_prunable: false,
+            prunable_reason: None,
+        });
+        record.tmux_state = TmuxState::Missing;
+        record
     }
 
     #[test]
@@ -354,25 +555,22 @@ mod tests {
     #[test]
     fn default_selection_prefers_named_worktree() {
         let mut first = record("alpha");
-        first.details.info.is_current = true;
+        first.info.is_current = true;
         let second = record("beta");
         assert_eq!(default_selection(&[first, second], Some("beta")), 1);
     }
 
     #[test]
-    fn worktree_badges_cover_unmanaged_prunable_detached_dirty_current() {
+    fn worktree_badges_show_loading_before_details_arrive() {
         let mut record = record("lane");
-        record.details.info.is_current = true;
-        record.details.info.branch = None;
-        record.details.is_managed = false;
-        record.details.dirty = true;
-        record.details.info.is_prunable = true;
+        record.info.is_current = true;
+        record.info.branch = None;
+        record.info.is_prunable = true;
 
         let badges = worktree_badges(&record);
         assert!(badges.contains(&"current".to_string()));
         assert!(badges.contains(&"detached".to_string()));
-        assert!(badges.contains(&"unmanaged".to_string()));
-        assert!(badges.contains(&"dirty".to_string()));
+        assert!(badges.contains(&"loading".to_string()));
         assert!(badges.contains(&"prunable".to_string()));
     }
 }

@@ -62,6 +62,7 @@ fn run_app(
     app: &mut WorktreeApp,
 ) -> Result<DashboardOutcome> {
     loop {
+        app.refresh_background();
         terminal.draw(|f| ui::render(f, app))?;
 
         if event::poll(Duration::from_millis(100))? {
@@ -69,6 +70,7 @@ fn run_app(
                 handle_key(app, key.code, key.modifiers)?;
             }
         }
+        app.refresh_background();
 
         if app.should_quit {
             if let Some(command) = app.pending_command.take() {

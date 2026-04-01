@@ -39,11 +39,10 @@ fn render_worktree_list(f: &mut Frame, app: &WorktreeApp, area: Rect) {
             let selected = index == app.selected_index;
             let indicator = if selected { "► " } else { "  " };
             let branch = record
-                .details
                 .branch_label
                 .split('/')
                 .next_back()
-                .unwrap_or(&record.details.branch_label);
+                .unwrap_or(&record.branch_label);
 
             let mut spans = vec![
                 Span::styled(
@@ -55,8 +54,8 @@ fn render_worktree_list(f: &mut Frame, app: &WorktreeApp, area: Rect) {
                     },
                 ),
                 Span::styled(
-                    format!("{:<18}", record.details.info.name),
-                    if record.details.info.is_current {
+                    format!("{:<18}", record.info.name),
+                    if record.info.is_current {
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD)
@@ -69,6 +68,10 @@ fn render_worktree_list(f: &mut Frame, app: &WorktreeApp, area: Rect) {
             ];
 
             match record.tmux_state {
+                TmuxState::Loading => spans.push(Span::styled(
+                    "  tmux:...",
+                    Style::default().fg(Color::DarkGray),
+                )),
                 TmuxState::Attached(_) => spans.push(Span::styled(
                     "  tmux:attached",
                     Style::default().fg(Color::Green),
@@ -114,11 +117,35 @@ fn render_details(f: &mut Frame, app: &WorktreeApp, area: Rect) {
         return;
     };
 
+    let base_text = match record.details.as_ref() {
+        Some(details) => details
+            .stack_parent
+            .clone()
+            .unwrap_or_else(|| "—".to_string()),
+        None if record.load_error.is_some() => "failed to load".to_string(),
+        None => "loading...".to_string(),
+    };
+    let ahead_behind_text = match record.details.as_ref() {
+        Some(details) => format!(
+            "{} / {}",
+            details
+                .ahead
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "—".to_string()),
+            details
+                .behind
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "—".to_string())
+        ),
+        None if record.load_error.is_some() => "failed to load".to_string(),
+        None => "loading...".to_string(),
+    };
+
     let mut lines = vec![
         Line::from(vec![
             Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
-                &record.details.info.name,
+                &record.info.name,
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -126,22 +153,16 @@ fn render_details(f: &mut Frame, app: &WorktreeApp, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("Branch: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(record.details.branch_label.clone()),
+            Span::raw(record.branch_label.clone()),
         ]),
         Line::from(vec![
             Span::styled("Base: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(
-                record
-                    .details
-                    .stack_parent
-                    .clone()
-                    .unwrap_or_else(|| "—".to_string()),
-            ),
+            Span::raw(base_text),
         ]),
         Line::from(vec![
             Span::styled("Path: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
-                record.details.info.path.display().to_string(),
+                record.info.path.display().to_string(),
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
@@ -150,19 +171,7 @@ fn render_details(f: &mut Frame, app: &WorktreeApp, area: Rect) {
                 "Ahead/Behind: ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!(
-                "{} / {}",
-                record
-                    .details
-                    .ahead
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "—".to_string()),
-                record
-                    .details
-                    .behind
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "—".to_string())
-            )),
+            Span::raw(ahead_behind_text),
         ]),
         Line::from(vec![
             Span::styled("Tmux: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -188,11 +197,13 @@ fn render_details(f: &mut Frame, app: &WorktreeApp, area: Rect) {
         .collect::<Vec<_>>();
     lines.push(Line::from(badge_line));
 
-    if let Some(marker) = &record.details.marker {
-        lines.push(Line::from(vec![
-            Span::styled("Marker: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(marker.clone(), Style::default().fg(Color::Yellow)),
-        ]));
+    if let Some(details) = record.details.as_ref() {
+        if let Some(marker) = &details.marker {
+            lines.push(Line::from(vec![
+                Span::styled("Marker: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(marker.clone(), Style::default().fg(Color::Yellow)),
+            ]));
+        }
     }
 
     lines.push(Line::from(vec![
@@ -200,12 +211,18 @@ fn render_details(f: &mut Frame, app: &WorktreeApp, area: Rect) {
         Span::raw(record.status_labels.join(", ")),
     ]));
 
-    if record.details.info.is_locked {
+    if let Some(error) = &record.load_error {
+        lines.push(Line::from(vec![
+            Span::styled("Load: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(error.clone(), Style::default().fg(Color::Red)),
+        ]));
+    }
+
+    if record.info.is_locked {
         lines.push(Line::from(vec![
             Span::styled("Lock: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(
                 record
-                    .details
                     .info
                     .lock_reason
                     .clone()
@@ -214,12 +231,11 @@ fn render_details(f: &mut Frame, app: &WorktreeApp, area: Rect) {
         ]));
     }
 
-    if record.details.info.is_prunable {
+    if record.info.is_prunable {
         lines.push(Line::from(vec![
             Span::styled("Prune: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(
                 record
-                    .details
                     .info
                     .prunable_reason
                     .clone()
@@ -229,8 +245,13 @@ fn render_details(f: &mut Frame, app: &WorktreeApp, area: Rect) {
     }
 
     lines.push(Line::from(""));
+    let footer = if app.is_loading() {
+        "Details load incrementally after the first paint; tmux and stack status fill in as they arrive."
+    } else {
+        "Tmux-first workflow: Enter attaches/switches to the derived session, or creates it on demand."
+    };
     lines.push(Line::from(vec![Span::styled(
-        "Tmux-first workflow: Enter attaches/switches to the derived session, or creates it on demand.",
+        footer,
         Style::default().fg(Color::DarkGray),
     )]));
 
@@ -246,6 +267,8 @@ fn render_status_bar(f: &mut Frame, app: &WorktreeApp, area: Rect) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ))
+    } else if let Some(message) = app.loading_summary() {
+        Line::from(Span::styled(message, Style::default().fg(Color::DarkGray)))
     } else {
         Line::from(Span::styled(
             "Tmux-first dashboard: browse lanes here, enter the session in tmux when ready.",
@@ -345,7 +368,7 @@ fn render_delete_modal(f: &mut Frame, app: &WorktreeApp) {
     f.render_widget(Clear, area);
     let name = app
         .selected()
-        .map(|record| record.details.info.name.clone())
+        .map(|record| record.info.name.clone())
         .unwrap_or_else(|| "this worktree".to_string());
     let lines = vec![
         Line::from(""),
@@ -388,6 +411,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 
 fn tmux_label(state: &TmuxState) -> String {
     match state {
+        TmuxState::Loading => "probing tmux...".to_string(),
         TmuxState::Unavailable => "unavailable".to_string(),
         TmuxState::Missing => "no session yet".to_string(),
         TmuxState::Detached => "ready to attach".to_string(),
@@ -401,6 +425,7 @@ fn tmux_label(state: &TmuxState) -> String {
 
 fn tmux_style(state: &TmuxState) -> Style {
     match state {
+        TmuxState::Loading => Style::default().fg(Color::DarkGray),
         TmuxState::Unavailable => Style::default().fg(Color::Red),
         TmuxState::Missing => Style::default().fg(Color::DarkGray),
         TmuxState::Detached => Style::default().fg(Color::Blue),
@@ -419,7 +444,8 @@ fn badge_style(label: &str) -> Style {
         "dirty" | "prunable" => Style::default().fg(Color::Yellow),
         "rebase" | "merge" | "conflicts" => Style::default().fg(Color::Red),
         "locked" => Style::default().fg(Color::Magenta),
-        "detached" => Style::default().fg(Color::DarkGray),
+        "detached" | "loading" => Style::default().fg(Color::DarkGray),
+        "error" => Style::default().fg(Color::Red),
         _ => Style::default().fg(Color::White),
     }
 }
