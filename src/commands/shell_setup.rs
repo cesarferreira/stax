@@ -16,9 +16,9 @@ enum ShellKind {
 }
 
 /// The shell function block that users source in their shell config.
-/// It intercepts worktree create/go flows for both `st` and `stax`, performs
-/// the actual `cd` in the calling shell process, and can safely relocate the
-/// shell before removing the current worktree.
+/// It intercepts worktree commands that need shell-side directory changes,
+/// performs the actual `cd` in the calling shell process, and can safely
+/// relocate the shell before removing the current worktree.
 fn shell_snippet(shell_kind: ShellKind) -> &'static str {
     match shell_kind {
         ShellKind::Posix => posix_shell_snippet(),
@@ -162,21 +162,12 @@ __stax_dispatch() {
       __stax_run_worktree_shell worktree go "${@:2}" ;;
     wtc)
       __stax_run_worktree_shell worktree create "${@:2}" ;;
-    checkout|co|bco)
-      __stax_run_worktree_shell "$@" ;;
     wtrm)
       if [[ -z "$2" || "$2" == -* ]]; then
         __stax_remove_current_worktree worktree remove "${@:2}"
       else
         __stax_exec "$@"
       fi ;;
-    branch|b)
-      case "$2" in
-        checkout|co)
-          __stax_run_worktree_shell "$@" ;;
-        *)
-          __stax_exec "$@" ;;
-      esac ;;
     worktree|wt)
       case "$2" in
         go|create|c)
@@ -314,20 +305,11 @@ function __stax_dispatch
             __stax_run_worktree_shell worktree go $argv[2..-1]
         case wtc
             __stax_run_worktree_shell worktree create $argv[2..-1]
-        case checkout co bco
-            __stax_run_worktree_shell $argv
         case wtrm
             if test (count $argv) -lt 2; or string match -qr '^-' -- "$argv[2]"
                 __stax_remove_current_worktree worktree remove $argv[2..-1]
             else
                 __stax_exec $argv
-            end
-        case branch b
-            switch "$argv[2]"
-                case checkout co
-                    __stax_run_worktree_shell $argv
-                case '*'
-                    __stax_exec $argv
             end
         case worktree wt
             switch "$argv[2]"
@@ -861,7 +843,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn posix_shell_snippet_keeps_path_for_shell_wrapped_commands_in_zsh() {
+    fn posix_shell_snippet_keeps_path_for_worktree_shell_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
         if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
@@ -892,7 +874,7 @@ mod tests {
 
         let original_path = std::env::var("PATH").unwrap_or_default();
         let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st bco", snippet_path.display());
+        let command = format!("source \"{}\"; st wtgo demo-lane", snippet_path.display());
         let output = Command::new("zsh")
             .arg("-lc")
             .arg(&command)
@@ -910,12 +892,78 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             stdout.contains(&format!("resolved:{}", fake_stax.display())),
-            "expected zsh wrapper to resolve fake stax binary for shell-wrapped commands, got:\n{}",
+            "expected zsh wrapper to resolve fake stax binary for worktree shell commands, got:\n{}",
             stdout
         );
         assert!(
-            stdout.contains("args:bco --shell-output"),
-            "expected shell-wrapped command to preserve PATH and inject --shell-output, got:\n{}",
+            stdout.contains("args:worktree go demo-lane --shell-output"),
+            "expected worktree shell command to preserve PATH and inject --shell-output, got:\n{}",
+            stdout
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_shell_snippet_does_not_wrap_checkout_commands_in_zsh() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+            if err.kind() == ErrorKind::NotFound {
+                return;
+            }
+            panic!("failed to probe zsh: {err}");
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+        let fake_stax = bin_dir.join("stax");
+        fs::write(
+            &fake_stax,
+            "#!/bin/sh\nprintf 'resolved:%s\\n' \"$0\"\nprintf 'args:%s\\n' \"$*\"\n",
+        )
+        .expect("write fake stax");
+        let mut perms = fs::metadata(&fake_stax)
+            .expect("fake stax metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_stax, perms).expect("chmod fake stax");
+
+        let snippet_path = dir.path().join("shell-setup.sh");
+        fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let path_env = format!("{}:{original_path}", bin_dir.display());
+        let command = format!("source \"{}\"; st bco feature", snippet_path.display());
+        let output = Command::new("zsh")
+            .arg("-lc")
+            .arg(&command)
+            .env("PATH", path_env)
+            .output()
+            .expect("run zsh shell snippet");
+
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("resolved:{}", fake_stax.display())),
+            "expected zsh wrapper to resolve fake stax binary for passthrough checkout commands, got:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("args:bco feature"),
+            "expected checkout command to pass through unchanged, got:\n{}",
+            stdout
+        );
+        assert!(
+            !stdout.contains("--shell-output"),
+            "expected checkout command to avoid shell-output injection, got:\n{}",
             stdout
         );
     }

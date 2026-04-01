@@ -3,25 +3,40 @@ use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::{checkout_branch_in, refs, GitRepo};
 use anyhow::Result;
-use colored::{Color, Colorize};
-use console::truncate_str;
+use colored::Colorize;
+use console::{truncate_str, Color, Style};
 use crossterm::terminal;
 use dialoguer::{theme::ColorfulTheme, FuzzySelect};
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::path::Path;
 
 // Colors for different columns (matching status.rs)
-const COLUMN_COLORS: &[Color] = &[
-    Color::Cyan,
-    Color::Green,
-    Color::Magenta,
-    Color::Blue,
-    Color::BrightCyan,
-    Color::BrightGreen,
-    Color::BrightMagenta,
-    Color::BrightBlue,
+const COLUMN_COLORS: &[CheckoutColor] = &[
+    CheckoutColor::new(Color::Cyan, false),
+    CheckoutColor::new(Color::Green, false),
+    CheckoutColor::new(Color::Magenta, false),
+    CheckoutColor::new(Color::Blue, false),
+    CheckoutColor::new(Color::Cyan, true),
+    CheckoutColor::new(Color::Green, true),
+    CheckoutColor::new(Color::Magenta, true),
+    CheckoutColor::new(Color::Blue, true),
 ];
 const LINKED_WORKTREE_GLYPH: &str = "↳";
+const BRIGHT_BLUE: CheckoutColor = CheckoutColor::new(Color::Blue, true);
+const BRIGHT_CYAN: CheckoutColor = CheckoutColor::new(Color::Cyan, true);
+
+#[derive(Clone, Copy)]
+struct CheckoutColor {
+    color: Color,
+    bright: bool,
+}
+
+impl CheckoutColor {
+    const fn new(color: Color, bright: bool) -> Self {
+        Self { color, bright }
+    }
+}
 
 /// Represents a branch in the display with its column position
 struct DisplayBranch {
@@ -32,6 +47,19 @@ struct DisplayBranch {
 struct CheckoutRow {
     branch: String,
     display: String,
+}
+
+fn checkout_style(spec: CheckoutColor) -> Style {
+    let style = Style::new().for_stderr().fg(spec.color);
+    if spec.bright {
+        style.bright()
+    } else {
+        style
+    }
+}
+
+fn render_stderr<T: Display>(value: T, style: Style) -> String {
+    format!("{}", style.apply_to(value))
 }
 
 pub fn run(
@@ -283,14 +311,15 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
             let col_color = COLUMN_COLORS[col % COLUMN_COLORS.len()];
             if col == db.column {
                 let circle = if is_current { "◉" } else { "○" };
-                tree.push_str(&format!("{}", circle.color(col_color)));
+                tree.push_str(&render_stderr(circle, checkout_style(col_color)));
                 visual_width += 1;
                 if needs_corner {
-                    tree.push_str(&format!("{}", "─┘".color(col_color)));
+                    tree.push_str(&render_stderr("─┘", checkout_style(col_color)));
                     visual_width += 2;
                 }
             } else {
-                tree.push_str(&format!("{} ", "│".color(col_color)));
+                tree.push_str(&render_stderr("│", checkout_style(col_color)));
+                tree.push(' ');
                 visual_width += 2;
             }
         }
@@ -305,9 +334,9 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
 
         let branch_color = COLUMN_COLORS[db.column % COLUMN_COLORS.len()];
         if is_current {
-            info_str.push_str(&format!("{}", branch.color(branch_color).bold()));
+            info_str.push_str(&render_stderr(branch, checkout_style(branch_color).bold()));
         } else {
-            info_str.push_str(&format!("{}", branch.color(branch_color)));
+            info_str.push_str(&render_stderr(branch, checkout_style(branch_color)));
         }
 
         if ahead > 0 || behind > 0 {
@@ -341,16 +370,16 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
     let mut trunk_visual_width = 0;
     let trunk_circle = if is_trunk_current { "◉" } else { "○" };
     let trunk_color = COLUMN_COLORS[0];
-    trunk_tree.push_str(&format!("{}", trunk_circle.color(trunk_color)));
+    trunk_tree.push_str(&render_stderr(trunk_circle, checkout_style(trunk_color)));
     trunk_visual_width += 1;
 
     if trunk_child_max_col >= 1 {
         for col in 1..=trunk_child_max_col {
             let col_color = COLUMN_COLORS[col % COLUMN_COLORS.len()];
             if col < trunk_child_max_col {
-                trunk_tree.push_str(&format!("{}", "─┴".color(col_color)));
+                trunk_tree.push_str(&render_stderr("─┴", checkout_style(col_color)));
             } else {
-                trunk_tree.push_str(&format!("{}", "─┘".color(col_color)));
+                trunk_tree.push_str(&render_stderr("─┘", checkout_style(col_color)));
             }
             trunk_visual_width += 2;
         }
@@ -367,9 +396,12 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
         linked_worktrees_by_branch.contains(&stack.trunk),
     );
     if is_trunk_current {
-        trunk_info.push_str(&format!("{}", stack.trunk.color(trunk_color).bold()));
+        trunk_info.push_str(&render_stderr(
+            &stack.trunk,
+            checkout_style(trunk_color).bold(),
+        ));
     } else {
-        trunk_info.push_str(&format!("{}", stack.trunk.color(trunk_color)));
+        trunk_info.push_str(&render_stderr(&stack.trunk, checkout_style(trunk_color)));
     }
 
     let (ahead, behind) = repo
@@ -404,14 +436,19 @@ fn render_presence_markers(
     let mut info_str = String::new();
     info_str.push(' ');
     if has_remote {
-        info_str.push_str(&format!("{} ", "☁️".bright_blue()));
+        info_str.push_str(&render_stderr("☁️", checkout_style(BRIGHT_BLUE)));
+        info_str.push(' ');
     } else {
         info_str.push_str("   ");
     }
 
     if show_worktree_column {
         if has_linked_worktree {
-            info_str.push_str(&format!("{} ", LINKED_WORKTREE_GLYPH.bright_cyan()));
+            info_str.push_str(&render_stderr(
+                LINKED_WORKTREE_GLYPH,
+                checkout_style(BRIGHT_CYAN),
+            ));
+            info_str.push(' ');
         } else {
             info_str.push_str("  ");
         }
@@ -634,6 +671,17 @@ mod tests {
             .expect("valid ANSI regex")
             .replace_all(s, "")
             .into_owned()
+    }
+
+    #[test]
+    fn test_checkout_style_uses_stderr_color_channel() {
+        let previous = console::colors_enabled_stderr();
+        console::set_colors_enabled_stderr(true);
+
+        let styled = render_stderr("branch", checkout_style(COLUMN_COLORS[0]).bold());
+
+        console::set_colors_enabled_stderr(previous);
+        assert!(styled.contains("\x1b["));
     }
 
     #[test]
