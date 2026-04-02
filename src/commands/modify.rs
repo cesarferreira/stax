@@ -16,7 +16,7 @@ enum ModifyTarget {
 /// When files are already staged, only those files are committed.
 /// When nothing is staged, prompts to stage all (or use `-a`).
 /// On a fresh tracked branch, `-m` creates the first branch-local commit safely.
-pub fn run(message: Option<String>, all: bool, quiet: bool) -> Result<()> {
+pub fn run(message: Option<String>, all: bool, quiet: bool, no_verify: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?;
     let current = repo.current_branch()?;
@@ -32,14 +32,15 @@ pub fn run(message: Option<String>, all: bool, quiet: bool) -> Result<()> {
     let target = modify_target(&repo, &current)?;
 
     if all {
-        // Explicit --all: stage everything (old behavior)
+        // Explicit --all: force-stage everything, even when some files are
+        // already selectively staged.
         stage_all(workdir)?;
     } else {
         // Check whether anything is already staged
         let has_staged = !is_staging_area_empty(workdir)?;
 
         if !has_staged {
-            // Nothing staged — prompt in interactive mode, bail otherwise
+            // Nothing staged — prompt interactively, bail otherwise
             if Term::stderr().is_term() {
                 let change_count = count_uncommitted_changes(workdir);
                 let prompt = if change_count > 0 {
@@ -78,6 +79,10 @@ pub fn run(message: Option<String>, all: bool, quiet: bool) -> Result<()> {
     match target {
         ModifyTarget::Amend => {
             let mut amend_args = vec!["commit", "--amend"];
+
+            if no_verify {
+                amend_args.push("--no-verify");
+            }
 
             if let Some(ref msg) = message {
                 amend_args.push("-m");
@@ -121,8 +126,13 @@ pub fn run(message: Option<String>, all: bool, quiet: bool) -> Result<()> {
                 )
             })?;
 
+            let mut commit_args = vec!["commit", "-m", commit_message];
+            if no_verify {
+                commit_args.push("--no-verify");
+            }
+
             let commit_status = Command::new("git")
-                .args(["commit", "-m", commit_message])
+                .args(&commit_args)
                 .current_dir(workdir)
                 .status()
                 .context("Failed to create commit")?;
@@ -163,6 +173,7 @@ fn is_staging_area_empty(workdir: &Path) -> Result<bool> {
         .context("Failed to check staged changes")?;
     Ok(status.success())
 }
+
 
 /// Count files with uncommitted changes (staged + unstaged + untracked).
 fn count_uncommitted_changes(workdir: &Path) -> usize {
