@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::engine::Stack;
+use crate::forge;
 use crate::git::GitRepo;
 use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
@@ -53,12 +54,18 @@ pub fn run() -> Result<()> {
         }
     }
 
-    let forge_label = match RemoteInfo::from_repo(&repo, &config) {
-        Ok(info) => info.forge.to_string(),
-        Err(_) => "Forge".to_string(),
-    };
+    let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
+    let forge_label = remote_info
+        .as_ref()
+        .map(|info| info.forge.to_string())
+        .unwrap_or_else(|| "Forge".to_string());
 
-    if Config::github_token().is_some() {
+    let has_token = remote_info
+        .as_ref()
+        .map(|info| forge::forge_token(info.forge).is_some())
+        .unwrap_or_else(|| Config::github_token().is_some());
+
+    if has_token {
         println!(
             "{} {}",
             "✓".green(),
