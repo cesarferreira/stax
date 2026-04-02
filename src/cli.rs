@@ -377,6 +377,9 @@ enum Commands {
         /// Suppress extra output
         #[arg(long)]
         quiet: bool,
+        /// Skip pre-commit and commit-msg hooks
+        #[arg(long = "no-verify", short = 'n')]
+        no_verify: bool,
     },
 
     /// Authenticate with GitHub
@@ -1431,7 +1434,8 @@ pub fn run() -> Result<()> {
             message,
             all,
             quiet,
-        } => commands::modify::run(message, all, quiet),
+            no_verify,
+        } => commands::modify::run(message, all, quiet, no_verify),
         Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Config { .. } => unreachable!(), // Handled above
         Commands::Init { .. } => unreachable!(), // Handled above
