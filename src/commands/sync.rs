@@ -17,6 +17,29 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+#[derive(Debug, Default)]
+struct SyncStats {
+    trunk: Option<TrunkSummary>,
+    merged_branches_cleaned: usize,
+    restacked_branches: usize,
+}
+
+#[derive(Debug)]
+enum TrunkSummary {
+    UpToDate {
+        branch: String,
+    },
+    Pulled {
+        branch: String,
+        commits: usize,
+        additions: usize,
+        deletions: usize,
+    },
+    Updated {
+        branch: String,
+    },
+}
+
 /// Sync repo: pull trunk from remote, delete merged branches, optionally restack
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -34,12 +57,14 @@ pub fn run(
 ) -> Result<()> {
     let sync_started_at = Instant::now();
     let mut step_timings: Vec<(String, Duration)> = Vec::new();
+    let mut stats = SyncStats::default();
 
     let repo = GitRepo::open()?;
     let stack = Stack::load(&repo)?;
     let current = repo.current_branch()?;
     let workdir = repo.workdir()?.to_path_buf();
     let reopen_repo_path = repo.git_dir()?.to_path_buf();
+    let trunk_branch = stack.trunk.clone();
     let config = Config::load()?;
     let remote_name = config.remote_name().to_string();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
@@ -176,6 +201,9 @@ pub fn run(
             }
         }
     }
+
+    let local_trunk_before_sync = resolve_ref_oid(&workdir, &stack.trunk);
+    let remote_trunk_after_fetch = resolve_ref_oid(&workdir, &remote_trunk_ref);
 
     // 2. Update trunk branch (before merged branch detection, so detection works correctly)
     // Note: If we're not on trunk, we use a refspec fetch which may fail if local trunk
@@ -635,6 +663,10 @@ pub fn run(
                         false
                     };
 
+                    if metadata_deleted {
+                        stats.merged_branches_cleaned += 1;
+                    }
+
                     if !quiet {
                         if local_deleted && remote_deleted {
                             println!(
@@ -1031,6 +1063,7 @@ pub fn run(
             tx.snapshot()?;
 
             let mut summary: Vec<(String, String)> = Vec::new();
+            let mut restacked_branches = 0usize;
 
             for (index, branch) in scope_order.iter().enumerate() {
                 let live_stack = Stack::load(&repo)?;
@@ -1068,6 +1101,7 @@ pub fn run(
                         tx.record_after(&repo, branch)?;
 
                         LiveTimer::maybe_finish_timed(restack_timer);
+                        restacked_branches += 1;
                         summary.push((branch.clone(), "ok".to_string()));
                     }
                     RebaseResult::Conflict => {
@@ -1108,6 +1142,7 @@ pub fn run(
 
             // Finish transaction successfully
             tx.finish_ok()?;
+            stats.restacked_branches = restacked_branches;
 
             if !quiet && !summary.is_empty() {
                 println!();
@@ -1131,6 +1166,13 @@ pub fn run(
         }
     }
 
+    stats.trunk = summarize_trunk_sync(
+        &workdir,
+        &trunk_branch,
+        local_trunk_before_sync.as_deref(),
+        remote_trunk_after_fetch.as_deref(),
+    );
+
     if verbose && !quiet {
         println!();
         println!("{}", "Sync timing summary:".bold());
@@ -1147,6 +1189,10 @@ pub fn run(
     if !quiet {
         println!();
         println!("{}", "Sync complete!".green().bold());
+        println!(
+            "  {}",
+            render_sync_footer(&stats, sync_started_at.elapsed())
+        );
     }
 
     Ok(())
@@ -1536,4 +1582,150 @@ fn record_ci_history_for_merged(
 
 fn format_duration(duration: Duration) -> String {
     format!("{:.3}s", duration.as_secs_f64())
+}
+
+fn render_sync_footer(stats: &SyncStats, total_duration: Duration) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(trunk) = &stats.trunk {
+        match trunk {
+            TrunkSummary::UpToDate { branch } => {
+                parts.push(format!("{} up to date", branch));
+            }
+            TrunkSummary::Pulled {
+                branch,
+                commits,
+                additions,
+                deletions,
+            } => {
+                parts.push(format!(
+                    "{} +{} commit{}",
+                    branch,
+                    commits,
+                    if *commits == 1 { "" } else { "s" }
+                ));
+                parts.push(format!("+{} -{}", additions, deletions));
+            }
+            TrunkSummary::Updated { branch } => {
+                parts.push(format!("{} updated", branch));
+            }
+        }
+    }
+
+    if stats.merged_branches_cleaned > 0 {
+        parts.push(format!("cleaned {} merged", stats.merged_branches_cleaned));
+    }
+
+    if stats.restacked_branches > 0 {
+        parts.push(format!("restacked {}", stats.restacked_branches));
+    }
+
+    parts.push(format_duration(total_duration));
+    parts.join(" | ")
+}
+
+fn summarize_trunk_sync(
+    workdir: &Path,
+    branch: &str,
+    local_before: Option<&str>,
+    remote_after_fetch: Option<&str>,
+) -> Option<TrunkSummary> {
+    let local_after = resolve_ref_oid(workdir, branch)?;
+
+    if let Some(remote_after_fetch) = remote_after_fetch {
+        if local_after == remote_after_fetch {
+            if let Some(local_before) = local_before {
+                if local_before == local_after {
+                    return Some(TrunkSummary::UpToDate {
+                        branch: branch.to_string(),
+                    });
+                }
+
+                if is_ancestor(workdir, local_before, &local_after) {
+                    let commits = count_commits_between(workdir, local_before, &local_after)?;
+                    let (additions, deletions) =
+                        diff_line_stats_between(workdir, local_before, &local_after)?;
+                    return Some(TrunkSummary::Pulled {
+                        branch: branch.to_string(),
+                        commits,
+                        additions,
+                        deletions,
+                    });
+                }
+            }
+
+            return Some(TrunkSummary::Updated {
+                branch: branch.to_string(),
+            });
+        }
+    }
+
+    None
+}
+
+fn resolve_ref_oid(workdir: &Path, reference: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", reference])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn is_ancestor(workdir: &Path, ancestor: &str, descendant: &str) -> bool {
+    Command::new("git")
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .current_dir(workdir)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn count_commits_between(workdir: &Path, base: &str, head: &str) -> Option<usize> {
+    let output = Command::new("git")
+        .args(["rev-list", "--count", &format!("{}..{}", base, head)])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+fn diff_line_stats_between(workdir: &Path, base: &str, head: &str) -> Option<(usize, usize)> {
+    let output = Command::new("git")
+        .args(["diff", "--numstat", &format!("{}..{}", base, head)])
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 2 {
+            if let Ok(add) = parts[0].parse::<usize>() {
+                additions += add;
+            }
+            if let Ok(del) = parts[1].parse::<usize>() {
+                deletions += del;
+            }
+        }
+    }
+
+    Some((additions, deletions))
 }

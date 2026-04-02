@@ -2629,6 +2629,17 @@ fn test_sync_pulls_trunk_updates() {
         "Failed: {}",
         TestRepo::stderr(&output)
     );
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("main +1 commit"),
+        "Expected trunk commit count in sync footer, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("+1 -0"),
+        "Expected trunk diff stats in sync footer, got: {}",
+        stdout
+    );
 
     // Now the file should exist locally
     assert!(
@@ -2714,6 +2725,17 @@ fn test_sync_with_restack_flag() {
         output.status.success(),
         "Failed: {}",
         TestRepo::stderr(&output)
+    );
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("main +1 commit"),
+        "Expected trunk commit count in sync footer, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("restacked 1"),
+        "Expected restack count in sync footer, got: {}",
+        stdout
     );
 
     // Should still be on our feature branch
@@ -4463,6 +4485,11 @@ fn test_sync_updates_trunk_after_branch_deletion_checkout() {
     assert!(
         stdout.contains("Update main"),
         "Expected trunk update message. Got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("cleaned 1 merged"),
+        "Expected merged cleanup count in sync footer. Got:\n{}",
         stdout
     );
 
