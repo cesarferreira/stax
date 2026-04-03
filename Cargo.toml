@@ -20,6 +20,10 @@ path = "src/main.rs"
 name = "st"
 path = "src/bin/st.rs"
 
+[features]
+default = []
+vendored-openssl = ["git2/vendored-openssl"]
+
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -49,9 +53,6 @@ anyhow = "1"
 
 # Clipboard
 arboard = "3"
-
-# Vendored OpenSSL for cross-compilation
-openssl = { version = "0.10", features = ["vendored"] }
 
 # Regex
 regex = "1"
