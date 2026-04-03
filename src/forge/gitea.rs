@@ -498,7 +498,10 @@ impl GiteaClient {
         username: &str,
     ) -> Result<Vec<PrActivity>> {
         let since = Utc::now() - chrono::Duration::hours(hours);
-        let url = format!("{}?state=closed&sort=recentupdate&limit=30", self.repo_url("/pulls"));
+        let url = format!(
+            "{}?state=closed&sort=recentupdate&limit=30",
+            self.repo_url("/pulls")
+        );
         let prs: Vec<GiteaPull> = get_json(&self.client, &url).await?;
         Ok(prs
             .into_iter()
@@ -522,7 +525,10 @@ impl GiteaClient {
         username: &str,
     ) -> Result<Vec<PrActivity>> {
         let since = Utc::now() - chrono::Duration::hours(hours);
-        let url = format!("{}?state=open&sort=newest&limit=30", self.repo_url("/pulls"));
+        let url = format!(
+            "{}?state=open&sort=newest&limit=30",
+            self.repo_url("/pulls")
+        );
         let prs: Vec<GiteaPull> = get_json(&self.client, &url).await?;
         Ok(prs
             .into_iter()

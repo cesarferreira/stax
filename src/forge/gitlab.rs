@@ -581,13 +581,11 @@ impl GitLabClient {
 
         let mut reviews = Vec::new();
         for mr in mrs {
-            let approvals_url =
-                self.project_url(&format!("/merge_requests/{}/approvals", mr.iid));
-            let approvals: GitLabApprovals =
-                match get_json(&self.client, &approvals_url).await {
-                    Ok(a) => a,
-                    Err(_) => continue,
-                };
+            let approvals_url = self.project_url(&format!("/merge_requests/{}/approvals", mr.iid));
+            let approvals: GitLabApprovals = match get_json(&self.client, &approvals_url).await {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
             for approval in approvals.approved_by {
                 if approval.user.username == username {
                     continue; // skip self-approvals

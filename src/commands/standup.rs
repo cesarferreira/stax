@@ -1,8 +1,8 @@
 use crate::commands::generate;
 use crate::config::Config;
 use crate::engine::Stack;
-use crate::git::GitRepo;
 use crate::forge::{ForgeClient, PrActivity, ReviewActivity};
+use crate::git::GitRepo;
 use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{bail, Context, Result};

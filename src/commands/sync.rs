@@ -1188,9 +1188,9 @@ pub fn run(
 
     if !quiet {
         println!();
-        println!("{}", "Sync complete!".green().bold());
         println!(
-            "  {}",
+            "{} {}",
+            "Sync complete!".green().bold(),
             render_sync_footer(&stats, sync_started_at.elapsed())
         );
     }
@@ -1590,7 +1590,11 @@ fn render_sync_footer(stats: &SyncStats, total_duration: Duration) -> String {
     if let Some(trunk) = &stats.trunk {
         match trunk {
             TrunkSummary::UpToDate { branch } => {
-                parts.push(format!("{} up to date", branch));
+                parts.push(format!(
+                    "{} {}",
+                    branch.cyan().bold(),
+                    "up to date".dimmed()
+                ));
             }
             TrunkSummary::Pulled {
                 branch,
@@ -1599,29 +1603,46 @@ fn render_sync_footer(stats: &SyncStats, total_duration: Duration) -> String {
                 deletions,
             } => {
                 parts.push(format!(
-                    "{} +{} commit{}",
-                    branch,
-                    commits,
-                    if *commits == 1 { "" } else { "s" }
+                    "{} {}",
+                    branch.cyan().bold(),
+                    format!(
+                        "+{} commit{}",
+                        commits,
+                        if *commits == 1 { "" } else { "s" }
+                    )
+                    .green()
                 ));
-                parts.push(format!("+{} -{}", additions, deletions));
+                parts.push(format!(
+                    "{} {}",
+                    format!("+{}", additions).green(),
+                    format!("-{}", deletions).red()
+                ));
             }
             TrunkSummary::Updated { branch } => {
-                parts.push(format!("{} updated", branch));
+                parts.push(format!("{} {}", branch.cyan().bold(), "updated".yellow()));
             }
         }
     }
 
     if stats.merged_branches_cleaned > 0 {
-        parts.push(format!("cleaned {} merged", stats.merged_branches_cleaned));
+        parts.push(format!(
+            "{} {} {}",
+            "cleaned".dimmed(),
+            stats.merged_branches_cleaned.to_string().cyan().bold(),
+            "merged".dimmed()
+        ));
     }
 
     if stats.restacked_branches > 0 {
-        parts.push(format!("restacked {}", stats.restacked_branches));
+        parts.push(format!(
+            "{} {}",
+            "restacked".dimmed(),
+            stats.restacked_branches.to_string().cyan().bold()
+        ));
     }
 
-    parts.push(format_duration(total_duration));
-    parts.join(" | ")
+    parts.push(format!("{}", format_duration(total_duration).cyan()));
+    parts.join(&format!("{}", " | ".dimmed()))
 }
 
 fn summarize_trunk_sync(
@@ -1728,4 +1749,63 @@ fn diff_line_stats_between(workdir: &Path, base: &str, head: &str) -> Option<(us
     }
 
     Some((additions, deletions))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use colored::control;
+
+    #[test]
+    fn render_sync_footer_is_colored_and_compact() {
+        control::set_override(true);
+
+        let footer = render_sync_footer(
+            &SyncStats {
+                trunk: Some(TrunkSummary::Pulled {
+                    branch: "main".to_string(),
+                    commits: 1,
+                    additions: 434,
+                    deletions: 22,
+                }),
+                merged_branches_cleaned: 2,
+                restacked_branches: 1,
+            },
+            Duration::from_millis(14_022),
+        );
+
+        control::unset_override();
+
+        assert!(footer.contains("main"));
+        assert!(footer.contains("+1 commit"));
+        assert!(footer.contains("+434"));
+        assert!(footer.contains("-22"));
+        assert!(footer.contains("cleaned"));
+        assert!(footer.contains("restacked"));
+        assert!(footer.contains("14.022s"));
+        assert!(footer.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn render_sync_footer_handles_up_to_date_branch() {
+        control::set_override(true);
+
+        let footer = render_sync_footer(
+            &SyncStats {
+                trunk: Some(TrunkSummary::UpToDate {
+                    branch: "main".to_string(),
+                }),
+                merged_branches_cleaned: 0,
+                restacked_branches: 0,
+            },
+            Duration::from_secs(2),
+        );
+
+        control::unset_override();
+
+        assert!(footer.contains("main"));
+        assert!(footer.contains("up to date"));
+        assert!(footer.contains("2.000s"));
+        assert!(footer.contains('\u{1b}'));
+    }
 }

@@ -174,7 +174,6 @@ fn is_staging_area_empty(workdir: &Path) -> Result<bool> {
     Ok(status.success())
 }
 
-
 /// Count files with uncommitted changes (staged + unstaged + untracked).
 fn count_uncommitted_changes(workdir: &Path) -> usize {
     Command::new("git")
