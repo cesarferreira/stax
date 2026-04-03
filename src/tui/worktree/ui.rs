@@ -48,14 +48,16 @@ fn render_worktree_list(f: &mut Frame, app: &WorktreeApp, area: Rect) {
                 Span::styled(
                     indicator,
                     if selected {
-                        Style::default().fg(Color::Yellow)
+                        selected_row_style().fg(Color::Yellow)
                     } else {
                         Style::default()
                     },
                 ),
                 Span::styled(
                     format!("{:<18}", record.info.name),
-                    if record.info.is_current {
+                    if selected {
+                        selected_name_style(record.info.is_current)
+                    } else if record.info.is_current {
                         Style::default()
                             .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD)
@@ -64,34 +66,35 @@ fn render_worktree_list(f: &mut Frame, app: &WorktreeApp, area: Rect) {
                     },
                 ),
                 Span::raw(" "),
-                Span::styled(branch.to_string(), Style::default().fg(Color::DarkGray)),
+                Span::styled(branch.to_string(), muted_row_text_style(selected)),
             ];
 
             match record.tmux_state {
                 TmuxState::Loading => spans.push(Span::styled(
                     "  tmux:...",
-                    Style::default().fg(Color::DarkGray),
+                    compact_tmux_style(&record.tmux_state, selected),
                 )),
                 TmuxState::Attached(_) => spans.push(Span::styled(
                     "  tmux:attached",
-                    Style::default().fg(Color::Green),
+                    compact_tmux_style(&record.tmux_state, selected),
                 )),
                 TmuxState::Detached => spans.push(Span::styled(
                     "  tmux:ready",
-                    Style::default().fg(Color::Blue),
+                    compact_tmux_style(&record.tmux_state, selected),
                 )),
                 TmuxState::Missing => spans.push(Span::styled(
                     "  tmux:new",
-                    Style::default().fg(Color::DarkGray),
+                    compact_tmux_style(&record.tmux_state, selected),
                 )),
-                TmuxState::Unavailable => {
-                    spans.push(Span::styled("  tmux:off", Style::default().fg(Color::Red)))
-                }
+                TmuxState::Unavailable => spans.push(Span::styled(
+                    "  tmux:off",
+                    compact_tmux_style(&record.tmux_state, selected),
+                )),
             }
 
             let mut item = ListItem::new(Line::from(spans));
             if selected {
-                item = item.style(Style::default().bg(Color::DarkGray));
+                item = item.style(selected_row_style());
             }
             item
         })
@@ -433,6 +436,50 @@ fn tmux_style(state: &TmuxState) -> Style {
     }
 }
 
+fn selected_row_style() -> Style {
+    Style::default().fg(Color::White).bg(Color::DarkGray)
+}
+
+fn selected_name_style(is_current: bool) -> Style {
+    let style = selected_row_style().fg(if is_current {
+        Color::Yellow
+    } else {
+        Color::Cyan
+    });
+    if is_current {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
+}
+
+fn muted_row_text_style(selected: bool) -> Style {
+    if selected {
+        selected_row_style().fg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
+}
+
+fn compact_tmux_style(state: &TmuxState, selected: bool) -> Style {
+    if selected {
+        return match state {
+            TmuxState::Loading | TmuxState::Missing => selected_row_style().fg(Color::White),
+            TmuxState::Unavailable => selected_row_style().fg(Color::Red),
+            TmuxState::Detached => selected_row_style().fg(Color::Cyan),
+            TmuxState::Attached(_) => selected_row_style().fg(Color::Green),
+        };
+    }
+
+    match state {
+        TmuxState::Loading => Style::default().fg(Color::DarkGray),
+        TmuxState::Unavailable => Style::default().fg(Color::Red),
+        TmuxState::Missing => Style::default().fg(Color::DarkGray),
+        TmuxState::Detached => Style::default().fg(Color::Blue),
+        TmuxState::Attached(_) => Style::default().fg(Color::Green),
+    }
+}
+
 fn badge_style(label: &str) -> Style {
     match label {
         "current" => Style::default()
@@ -458,4 +505,51 @@ fn key_hint(label: &str, color: Color) -> Span<'static> {
             .bg(color)
             .add_modifier(Modifier::BOLD),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        compact_tmux_style, muted_row_text_style, selected_name_style, selected_row_style,
+    };
+    use crate::tui::worktree::app::TmuxState;
+    use ratatui::style::{Color, Modifier, Style};
+
+    #[test]
+    fn selected_row_uses_light_foreground_on_highlight() {
+        assert_eq!(
+            selected_row_style(),
+            Style::default().fg(Color::White).bg(Color::DarkGray)
+        );
+        assert_eq!(
+            muted_row_text_style(true),
+            selected_row_style().fg(Color::White)
+        );
+    }
+
+    #[test]
+    fn selected_name_style_keeps_current_entry_emphasis() {
+        assert_eq!(
+            selected_name_style(true),
+            selected_row_style()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        );
+        assert_eq!(
+            selected_name_style(false),
+            selected_row_style().fg(Color::Cyan)
+        );
+    }
+
+    #[test]
+    fn selected_tmux_styles_avoid_dark_gray_on_highlight() {
+        assert_eq!(
+            compact_tmux_style(&TmuxState::Missing, true),
+            selected_row_style().fg(Color::White)
+        );
+        assert_eq!(
+            compact_tmux_style(&TmuxState::Detached, true),
+            selected_row_style().fg(Color::Cyan)
+        );
+    }
 }

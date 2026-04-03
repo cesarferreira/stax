@@ -62,6 +62,28 @@ fn linked_worktree_dirs_default(repo: &TestRepo, home: &str) -> Vec<PathBuf> {
     linked_worktree_dirs(&root)
 }
 
+fn listed_worktree_names(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .skip(2)
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+
+            let mut parts = trimmed.split_whitespace();
+            let name = if trimmed.starts_with('*') {
+                parts.nth(1)
+            } else {
+                parts.next()
+            };
+
+            name.map(|value| value.to_string())
+        })
+        .collect()
+}
+
 fn setup_fake_tmux_env(repo: &TestRepo) -> (PathBuf, String, String, String) {
     let bin_dir = repo.path().join("fake-bin");
     fs::create_dir_all(&bin_dir).expect("create fake bin");
@@ -579,6 +601,104 @@ fn wt_ls_stays_compact_and_wt_ll_shows_status() {
     let ll_stdout = TestRepo::stdout(&ll);
     assert!(ll_stdout.contains("STATUS"));
     assert!(ll_stdout.contains("managed"));
+}
+
+#[test]
+fn wt_ls_disambiguates_duplicate_leaf_names_with_branch_labels() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["create", "A"]).assert_success();
+    let branch_a = repo.current_branch();
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let duplicate_a_parent = repo.path().join("codex-a");
+    let duplicate_b_parent = repo.path().join("codex-b");
+    fs::create_dir_all(&duplicate_a_parent).expect("create codex-a dir");
+    fs::create_dir_all(&duplicate_b_parent).expect("create codex-b dir");
+
+    let wt_a = duplicate_a_parent.join("stax");
+    repo.git(&["worktree", "add", wt_a.to_str().unwrap(), &branch_a])
+        .assert_success();
+
+    repo.git(&["branch", "side"]).assert_success();
+    let wt_side = duplicate_b_parent.join("stax");
+    repo.git(&["worktree", "add", wt_side.to_str().unwrap(), "side"])
+        .assert_success();
+
+    let ls = repo.run_stax(&["wt", "ls"]);
+    ls.assert_success();
+
+    let names = listed_worktree_names(&TestRepo::stdout(&ls));
+    assert!(
+        names.iter().any(|name| name == "A"),
+        "expected branch leaf label for duplicate worktree, got {:?}",
+        names
+    );
+    assert!(
+        names.iter().any(|name| name == "side"),
+        "expected second branch leaf label for duplicate worktree, got {:?}",
+        names
+    );
+    assert_eq!(
+        names.iter().filter(|name| name.as_str() == "stax").count(),
+        0,
+        "duplicate linked worktrees should not collapse to the repo basename: {:?}",
+        names
+    );
+}
+
+#[test]
+fn wt_remove_accepts_disambiguated_path_suffix_for_detached_duplicates() {
+    let repo = TestRepo::new();
+
+    let duplicate_a_parent = repo.path().join("codex-a");
+    let duplicate_b_parent = repo.path().join("codex-b");
+    fs::create_dir_all(&duplicate_a_parent).expect("create codex-a dir");
+    fs::create_dir_all(&duplicate_b_parent).expect("create codex-b dir");
+
+    let wt_a = duplicate_a_parent.join("stax");
+    repo.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        wt_a.to_str().unwrap(),
+        "main",
+    ])
+    .assert_success();
+
+    let wt_b = duplicate_b_parent.join("stax");
+    repo.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        wt_b.to_str().unwrap(),
+        "main",
+    ])
+    .assert_success();
+
+    let ls = repo.run_stax(&["wt", "ls"]);
+    ls.assert_success();
+    let names = listed_worktree_names(&TestRepo::stdout(&ls));
+    assert!(
+        names.iter().any(|name| name == "codex-a/stax"),
+        "expected detached duplicate worktree to expose a path suffix label, got {:?}",
+        names
+    );
+    assert!(
+        names.iter().any(|name| name == "codex-b/stax"),
+        "expected detached duplicate worktree to expose a second path suffix label, got {:?}",
+        names
+    );
+
+    let out = repo.run_stax(&["wt", "rm", "codex-a/stax"]);
+    out.assert_success()
+        .assert_stdout_contains("Removed  worktree 'codex-a/stax'");
+
+    assert!(
+        !wt_a.exists(),
+        "expected selected detached worktree to be removed"
+    );
+    assert!(wt_b.exists(), "expected other detached worktree to remain");
 }
 
 #[test]

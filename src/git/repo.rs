@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use git2::{BranchType, Repository};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 
 pub struct GitRepo {
@@ -19,6 +19,142 @@ fn parse_branch_vv_worktree_path(line: &str) -> Option<PathBuf> {
     let rest = &line[start + 2..];
     let end = rest.find(')')?;
     Some(PathBuf::from(&rest[..end]))
+}
+
+fn worktree_basename(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn branch_leaf(branch: &str) -> String {
+    branch.rsplit('/').next().unwrap_or(branch).to_string()
+}
+
+fn path_components(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+            Component::Prefix(value) => Some(value.as_os_str().to_string_lossy().into_owned()),
+            Component::RootDir | Component::CurDir | Component::ParentDir => None,
+        })
+        .collect()
+}
+
+fn path_suffix_label(path: &Path, depth: usize) -> String {
+    let components = path_components(path);
+    let start = components.len().saturating_sub(depth);
+    components[start..].join("/")
+}
+
+fn minimal_unique_path_suffix(
+    path: &Path,
+    all_paths: &[PathBuf],
+    reserved: &HashSet<String>,
+) -> String {
+    let component_count = path_components(path).len();
+    for depth in 1..=component_count {
+        let candidate = path_suffix_label(path, depth);
+        if reserved.contains(&candidate) {
+            continue;
+        }
+
+        let matches = all_paths
+            .iter()
+            .filter(|other| path_suffix_label(other, depth) == candidate)
+            .count();
+        if matches == 1 {
+            return candidate;
+        }
+    }
+
+    path.display().to_string()
+}
+
+#[derive(Debug, Clone)]
+struct WorktreeLabelCandidate {
+    is_main: bool,
+    path: PathBuf,
+    basename: String,
+    branch: Option<String>,
+}
+
+fn assign_unique_label_stage<F>(
+    labels: &mut [Option<String>],
+    reserved: &mut HashSet<String>,
+    candidates: &[WorktreeLabelCandidate],
+    mut label_for: F,
+) where
+    F: FnMut(&WorktreeLabelCandidate) -> Option<String>,
+{
+    let mut counts = HashMap::new();
+    for (idx, candidate) in candidates.iter().enumerate() {
+        if labels[idx].is_some() {
+            continue;
+        }
+
+        if let Some(label) = label_for(candidate) {
+            if !reserved.contains(&label) {
+                *counts.entry(label).or_insert(0usize) += 1;
+            }
+        }
+    }
+
+    for (idx, candidate) in candidates.iter().enumerate() {
+        if labels[idx].is_some() {
+            continue;
+        }
+
+        let Some(label) = label_for(candidate) else {
+            continue;
+        };
+
+        if reserved.contains(&label) || counts.get(&label).copied() != Some(1) {
+            continue;
+        }
+
+        reserved.insert(label.clone());
+        labels[idx] = Some(label);
+    }
+}
+
+fn derive_worktree_names(candidates: &[WorktreeLabelCandidate]) -> Vec<String> {
+    let mut labels = vec![None; candidates.len()];
+    let mut reserved = HashSet::new();
+
+    for (idx, candidate) in candidates.iter().enumerate() {
+        if candidate.is_main {
+            labels[idx] = Some("main".to_string());
+            reserved.insert("main".to_string());
+        }
+    }
+
+    assign_unique_label_stage(&mut labels, &mut reserved, candidates, |candidate| {
+        (!candidate.is_main).then(|| candidate.basename.clone())
+    });
+    assign_unique_label_stage(&mut labels, &mut reserved, candidates, |candidate| {
+        candidate.branch.as_deref().map(branch_leaf)
+    });
+    assign_unique_label_stage(&mut labels, &mut reserved, candidates, |candidate| {
+        candidate.branch.clone()
+    });
+
+    let all_paths = candidates
+        .iter()
+        .map(|candidate| candidate.path.clone())
+        .collect::<Vec<_>>();
+    for (idx, candidate) in candidates.iter().enumerate() {
+        if labels[idx].is_none() {
+            let label = minimal_unique_path_suffix(&candidate.path, &all_paths, &reserved);
+            reserved.insert(label.clone());
+            labels[idx] = Some(label);
+        }
+    }
+
+    labels
+        .into_iter()
+        .map(|label| label.expect("every worktree should get a label"))
+        .collect()
 }
 
 fn run_git_in(cwd: &Path, args: &[&str]) -> Result<Output> {
@@ -56,7 +192,8 @@ pub fn local_branch_exists_in(workdir: &Path, branch: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct WorktreeInfo {
-    /// Short display name: "main" for the main worktree, last path segment for others
+    /// Short display/selector label: "main" for the main worktree, otherwise a unique label
+    /// derived from the basename, branch, or path suffix.
     pub name: String,
     pub path: PathBuf,
     pub branch: Option<String>,
@@ -368,6 +505,22 @@ impl GitRepo {
             &mut current_prunable_reason,
         );
 
+        let label_candidates = raw_entries
+            .iter()
+            .enumerate()
+            .map(|(idx, (path, branch, _, _, _, _))| WorktreeLabelCandidate {
+                is_main: idx == 0,
+                path: path.clone(),
+                basename: if idx == 0 {
+                    "main".to_string()
+                } else {
+                    worktree_basename(path)
+                },
+                branch: branch.clone(),
+            })
+            .collect::<Vec<_>>();
+        let labels = derive_worktree_names(&label_candidates);
+
         let worktrees = raw_entries
             .into_iter()
             .enumerate()
@@ -375,15 +528,8 @@ impl GitRepo {
                 |(idx, (path, branch, is_locked, lock_reason, is_prunable, prunable_reason))| {
                     let is_main = idx == 0;
                     let is_current = path == cwd_normalized;
-                    let name = if is_main {
-                        "main".to_string()
-                    } else {
-                        path.file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "unknown".to_string())
-                    };
                     WorktreeInfo {
-                        name,
+                        name: labels[idx].clone(),
                         path,
                         branch,
                         is_main,
@@ -2088,5 +2234,57 @@ mod tests {
         repo.delete_branch("child", false)
             .expect("delete should succeed without force");
         assert!(repo.repo.find_branch("child", BranchType::Local).is_err());
+    }
+
+    #[test]
+    fn derive_worktree_names_prefers_branch_leaf_for_duplicate_basenames() {
+        let names = derive_worktree_names(&[
+            WorktreeLabelCandidate {
+                is_main: true,
+                path: PathBuf::from("/tmp/repo"),
+                basename: "main".to_string(),
+                branch: Some("main".to_string()),
+            },
+            WorktreeLabelCandidate {
+                is_main: false,
+                path: PathBuf::from("/tmp/a/stax"),
+                basename: "stax".to_string(),
+                branch: Some("codex/fix-zsh".to_string()),
+            },
+            WorktreeLabelCandidate {
+                is_main: false,
+                path: PathBuf::from("/tmp/b/stax"),
+                basename: "stax".to_string(),
+                branch: Some("codex/docs".to_string()),
+            },
+        ]);
+
+        assert_eq!(names, vec!["main", "fix-zsh", "docs"]);
+    }
+
+    #[test]
+    fn derive_worktree_names_falls_back_to_path_suffix_for_detached_duplicates() {
+        let names = derive_worktree_names(&[
+            WorktreeLabelCandidate {
+                is_main: true,
+                path: PathBuf::from("/tmp/repo"),
+                basename: "main".to_string(),
+                branch: Some("main".to_string()),
+            },
+            WorktreeLabelCandidate {
+                is_main: false,
+                path: PathBuf::from("/tmp/00cb/stax"),
+                basename: "stax".to_string(),
+                branch: None,
+            },
+            WorktreeLabelCandidate {
+                is_main: false,
+                path: PathBuf::from("/tmp/073a/stax"),
+                basename: "stax".to_string(),
+                branch: None,
+            },
+        ]);
+
+        assert_eq!(names, vec!["main", "00cb/stax", "073a/stax"]);
     }
 }
