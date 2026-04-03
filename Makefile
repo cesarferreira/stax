@@ -18,7 +18,7 @@ release:
 
 # Install to ~/.cargo/bin
 install:
-	cargo install --path . --bin stax --bin st --force
+	cargo install --path . --locked --bins --debug
 	STAX_DISABLE_UPDATE_CHECK=1 "$${CARGO_HOME:-$$HOME/.cargo}/bin/stax" shell-setup --refresh
 
 # Clean build artifacts
