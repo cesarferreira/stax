@@ -1543,7 +1543,7 @@ mod tests {
     }
 
     fn ensure_crypto_provider() {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = rustls::crypto::ring::default_provider().install_default();
     }
 
     async fn create_test_client(server: &MockServer) -> GitHubClient {

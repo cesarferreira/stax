@@ -648,6 +648,10 @@ mod tests {
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    fn ensure_crypto_provider() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
     fn remote_info(server: &MockServer) -> RemoteInfo {
         RemoteInfo {
             name: "origin".to_string(),
@@ -662,6 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_open_prs_by_head() {
+        ensure_crypto_provider();
         let server = MockServer::start().await;
         std::env::set_var("STAX_GITEA_TOKEN", "test-token");
 
@@ -695,6 +700,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_checks_maps_gitea_statuses() {
+        ensure_crypto_provider();
         let server = MockServer::start().await;
         std::env::set_var("STAX_GITEA_TOKEN", "test-token");
 
@@ -729,6 +735,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_open_pull_requests() {
+        ensure_crypto_provider();
         let server = MockServer::start().await;
         std::env::set_var("STAX_GITEA_TOKEN", "test-token");
 
@@ -768,6 +775,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_open_issues() {
+        ensure_crypto_provider();
         let server = MockServer::start().await;
         std::env::set_var("STAX_GITEA_TOKEN", "test-token");
 
@@ -800,6 +808,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_current_user() {
+        ensure_crypto_provider();
         let server = MockServer::start().await;
         std::env::set_var("STAX_GITEA_TOKEN", "test-token");
 
@@ -819,6 +828,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_open_prs_filters_by_author() {
+        ensure_crypto_provider();
         let server = MockServer::start().await;
         std::env::set_var("STAX_GITEA_TOKEN", "test-token");
 
@@ -860,6 +870,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_recent_merged_prs() {
+        ensure_crypto_provider();
         let server = MockServer::start().await;
         std::env::set_var("STAX_GITEA_TOKEN", "test-token");
 
@@ -902,6 +913,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_recent_opened_prs() {
+        ensure_crypto_provider();
         let server = MockServer::start().await;
         std::env::set_var("STAX_GITEA_TOKEN", "test-token");
 
@@ -944,6 +956,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_reviews_received() {
+        ensure_crypto_provider();
         let server = MockServer::start().await;
         std::env::set_var("STAX_GITEA_TOKEN", "test-token");
 

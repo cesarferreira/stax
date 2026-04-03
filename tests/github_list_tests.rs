@@ -8,6 +8,10 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+fn ensure_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 fn write_test_config(home: &Path, api_base_url: &str) {
     let config_dir = home.join(".config").join("stax");
     fs::create_dir_all(&config_dir).expect("Failed to create config dir");
@@ -48,6 +52,7 @@ fn env_with_auth<'a>(home: &'a TempDir) -> [(&'a str, &'a str); 2] {
 
 #[tokio::test]
 async fn test_pr_list_human_output() {
+    ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = TempDir::new().unwrap();
     let repo = setup_repo(home.path(), &mock_server.uri());
@@ -98,6 +103,7 @@ async fn test_pr_list_human_output() {
 
 #[tokio::test]
 async fn test_pr_list_json_output() {
+    ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = TempDir::new().unwrap();
     let repo = setup_repo(home.path(), &mock_server.uri());
@@ -140,6 +146,7 @@ async fn test_pr_list_json_output() {
 
 #[tokio::test]
 async fn test_issue_list_human_output() {
+    ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = TempDir::new().unwrap();
     let repo = setup_repo(home.path(), &mock_server.uri());
@@ -183,6 +190,7 @@ async fn test_issue_list_human_output() {
 
 #[tokio::test]
 async fn test_issue_list_json_output() {
+    ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = TempDir::new().unwrap();
     let repo = setup_repo(home.path(), &mock_server.uri());
@@ -220,6 +228,7 @@ async fn test_issue_list_json_output() {
 
 #[tokio::test]
 async fn test_pr_list_empty_state() {
+    ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = TempDir::new().unwrap();
     let repo = setup_repo(home.path(), &mock_server.uri());
@@ -239,6 +248,7 @@ async fn test_pr_list_empty_state() {
 
 #[tokio::test]
 async fn test_issue_list_empty_state() {
+    ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = TempDir::new().unwrap();
     let repo = setup_repo(home.path(), &mock_server.uri());

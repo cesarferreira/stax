@@ -1170,7 +1170,7 @@ fn print_subcommand_help(name: &str) -> Result<()> {
 }
 
 pub fn run() -> Result<()> {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let cli = Cli::parse();
 

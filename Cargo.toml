@@ -28,8 +28,8 @@ vendored-openssl = ["git2/vendored-openssl"]
 # CLI
 clap = { version = "4", features = ["derive"] }
 
-# Git
-git2 = "0.20"
+# Git (no ssh — we use HTTPS + token auth exclusively)
+git2 = { version = "0.20", default-features = false, features = ["https"] }
 
 # GitHub API
 octocrab = "0.49"
@@ -51,8 +51,8 @@ termimad = "0.34"
 # Error handling
 anyhow = "1"
 
-# Clipboard
-arboard = "3"
+# Clipboard (text-only — skip image support to avoid pulling in the image crate)
+arboard = { version = "3", default-features = false }
 
 # Regex
 regex = "1"
@@ -67,10 +67,10 @@ update-informer = "1"
 
 # Temp files
 tempfile = "3"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 
 # TLS crypto provider (needed to install default provider for tests using octocrab)
-rustls = { version = "0.23", features = ["aws_lc_rs"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 
 [dev-dependencies]
 tempfile = "3"
