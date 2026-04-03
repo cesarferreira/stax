@@ -1,0 +1,3 @@
+# Use Apple's faster linker for debug builds on macOS
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/ld"]

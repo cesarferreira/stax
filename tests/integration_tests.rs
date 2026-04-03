@@ -5596,7 +5596,7 @@ mod forge_mock_tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn ensure_crypto_provider() {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = rustls::crypto::ring::default_provider().install_default();
     }
 
     fn write_test_config(home: &Path, api_base_url: &str) {
@@ -5931,6 +5931,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_mock_server_setup() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         // Verify mock server is running
@@ -5978,6 +5979,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_persists_pr_info_for_existing_pr() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
@@ -6037,6 +6039,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_does_not_persist_pr_info_for_fork() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
@@ -6096,6 +6099,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_default_comment_mode_updates_comment_and_removes_body_block() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config(home.path(), &mock_server.uri());
@@ -6186,6 +6190,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_body_mode_removes_comment_and_writes_body_block() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config_with_submit(home.path(), &mock_server.uri(), Some("body"));
@@ -6274,6 +6279,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_both_mode_updates_comment_and_body() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config_with_submit(home.path(), &mock_server.uri(), Some("both"));
@@ -6367,6 +6373,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_off_mode_removes_comment_and_body_block() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
@@ -6452,6 +6459,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_merge_already_merged_pr_still_rebases_next_branch_and_reparents_metadata() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         // Resolve PRs for both stack branches during merge scope validation.
@@ -6647,6 +6655,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_merge_retargets_next_pr_before_merging_parent_pr() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
@@ -6794,6 +6803,7 @@ mod forge_mock_tests {
     #[tokio::test]
     async fn test_merge_when_ready_already_merged_pr_still_rebases_next_branch_and_reparents_metadata(
     ) {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         let repo = TestRepo::new();
@@ -6994,6 +7004,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_merge_when_ready_retargets_next_pr_before_merging_parent_pr() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         let home = super::test_tempdir();
@@ -7150,6 +7161,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_merge_remote_retargets_and_updates_branch_before_merging() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         let home = super::test_tempdir();
@@ -7379,6 +7391,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_gitlab_comment_mode_creates_merge_request_and_stack_note() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config(home.path(), &mock_server.uri());
@@ -7484,6 +7497,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_gitlab_body_mode_updates_merge_request_body() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config_with_submit(home.path(), &mock_server.uri(), Some("body"));
@@ -7598,6 +7612,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_gitlab_both_mode_updates_stack_note_and_body() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config_with_submit(home.path(), &mock_server.uri(), Some("both"));
@@ -7715,6 +7730,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_gitlab_off_mode_removes_stack_note_and_body_block() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
@@ -7815,6 +7831,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_merge_gitlab_retargets_next_mr_before_merging_parent_mr() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         let home = super::test_tempdir();
@@ -8007,6 +8024,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_merge_when_ready_gitlab_retargets_next_mr_before_merging_parent_mr() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         let home = super::test_tempdir();
@@ -8195,6 +8213,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_gitea_comment_mode_creates_pull_and_issue_comment() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config(home.path(), &mock_server.uri());
@@ -8296,6 +8315,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_gitea_body_mode_updates_pull_body() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config_with_submit(home.path(), &mock_server.uri(), Some("body"));
@@ -8406,6 +8426,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_gitea_both_mode_updates_issue_comment_and_body() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config_with_submit(home.path(), &mock_server.uri(), Some("both"));
@@ -8523,6 +8544,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_submit_gitea_off_mode_removes_issue_comment_and_body_block() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
         write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
@@ -8622,6 +8644,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_merge_gitea_retargets_next_pr_before_merging_parent_pr() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         let home = super::test_tempdir();
@@ -8797,6 +8820,7 @@ mod forge_mock_tests {
 
     #[tokio::test]
     async fn test_merge_when_ready_gitea_retargets_next_pr_before_merging_parent_pr() {
+        ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
         let home = super::test_tempdir();
