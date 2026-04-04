@@ -46,11 +46,17 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.target == 'x86_64-pc-windows-msvc'
+        id: install-nextest
+        continue-on-error: true
         uses: taiki-e/install-action@nextest
 
-      - name: Run Windows tests
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+      - name: Run Windows tests (with nextest)
+        if: matrix.target == 'x86_64-pc-windows-msvc' && steps.install-nextest.outcome == 'success'
         run: cargo nextest run --lib --bins
+
+      - name: Run Windows tests (fallback)
+        if: matrix.target == 'x86_64-pc-windows-msvc' && steps.install-nextest.outcome != 'success'
+        run: cargo test --lib --bins
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} --features vendored-openssl
