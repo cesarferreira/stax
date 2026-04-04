@@ -84,6 +84,48 @@ pub fn run(
     let branch_name =
         resolve_branch_name_conflicts(&branch_name, &existing_branches, generated_from_message)?;
 
+    // Before creating the branch, check if we need to prompt about staging.
+    // Doing this early means declining is a clean no-op (no orphaned branch).
+    let needs_stage_all = if stage_mode == StageMode::ExistingOnly {
+        let workdir = repo.workdir()?;
+        if is_staging_area_empty(workdir) && has_uncommitted_changes(workdir) {
+            if Term::stderr().is_term() {
+                let change_count = count_uncommitted_changes(workdir);
+                let prompt = if change_count > 0 {
+                    format!(
+                        "No files staged. Stage all changes ({} files modified)?",
+                        change_count
+                    )
+                } else {
+                    "No files staged. Stage all changes?".to_string()
+                };
+
+                let should_stage = Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt(prompt)
+                    .default(true)
+                    .interact()?;
+
+                if !should_stage {
+                    println!(
+                        "{}",
+                        "Aborted. Stage files with `git add` first, or use `stax create -a -m \"message\"`."
+                            .dimmed()
+                    );
+                    return Ok(());
+                }
+                true
+            } else {
+                bail!(
+                    "No files staged. Stage files with `git add` first, or use `stax create -a -m \"message\"`."
+                );
+            }
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
     // Create the branch
     if parent_branch == current {
         repo.create_branch(&branch_name)?;
@@ -121,49 +163,14 @@ pub fn run(
     );
 
     // Stage/commit behavior:
-    // - StageMode::All => explicit stage all (`-a` or wizard choice)
-    // - StageMode::ExistingOnly => respect index; prompt when empty (used by `-m` default)
-    // - StageMode::None => no staging/committing changes
+    // - StageMode::All / needs_stage_all => run `git add -A`
+    // - StageMode::ExistingOnly (files already staged) => keep current index
+    // - StageMode::None => no staging/committing
     if stage_mode != StageMode::None {
         let workdir = repo.workdir()?;
 
-        if stage_mode == StageMode::All {
+        if stage_mode == StageMode::All || needs_stage_all {
             stage_all(workdir)?;
-        } else if stage_mode == StageMode::ExistingOnly && is_staging_area_empty(workdir) {
-            // Nothing staged — prompt interactively (like `stax modify`)
-            if has_uncommitted_changes(workdir) {
-                if Term::stderr().is_term() {
-                    let change_count = count_uncommitted_changes(workdir);
-                    let prompt = if change_count > 0 {
-                        format!(
-                            "No files staged. Stage all changes ({} files modified)?",
-                            change_count
-                        )
-                    } else {
-                        "No files staged. Stage all changes?".to_string()
-                    };
-
-                    let should_stage = Confirm::with_theme(&ColorfulTheme::default())
-                        .with_prompt(prompt)
-                        .default(true)
-                        .interact()?;
-
-                    if should_stage {
-                        stage_all(workdir)?;
-                    } else {
-                        println!(
-                            "{}",
-                            "Aborted. Stage files with `git add` first, or use `stax create -a -m \"message\"`."
-                                .dimmed()
-                        );
-                        return Ok(());
-                    }
-                } else {
-                    bail!(
-                        "No files staged. Stage files with `git add` first, or use `stax create -a -m \"message\"`."
-                    );
-                }
-            }
         }
 
         // Only commit if -m was provided
