@@ -107,6 +107,15 @@ log="${STAX_TMUX_LOG:?}"
 state="${STAX_TMUX_STATE_DIR:?}"
 printf 'cmd=%s args=%s\n' "$cmd" "$*" >> "$log"
 case "$cmd" in
+  list-sessions)
+    for entry in "$state"/*; do
+      if [ ! -f "$entry" ]; then
+        continue
+      fi
+      session=$(basename "$entry")
+      printf '%s\t0\n' "$session"
+    done
+    ;;
   has-session)
     if [ "${1:-}" = "-t" ]; then
       session="${2:-}"
@@ -121,11 +130,16 @@ case "$cmd" in
   new-session)
     detached=0
     session=""
+    cwd=""
     while [ "$#" -gt 0 ]; do
       case "$1" in
         -d)
           detached=1
           shift
+          ;;
+        -c)
+          cwd="$2"
+          shift 2
           ;;
         -s)
           session="$2"
@@ -136,10 +150,43 @@ case "$cmd" in
           ;;
       esac
     done
+    : "${session:?missing tmux session name}"
     : > "$state/$session"
-    printf 'new=%s detached=%s\n' "$session" "$detached" >> "$log"
+    printf 'new=%s detached=%s cwd=%s\n' "$session" "$detached" "$cwd" >> "$log"
     if [ "$#" -gt 0 ]; then
-      "$@"
+      if [ -n "$cwd" ]; then
+        (cd "$cwd" && "$@")
+      else
+        "$@"
+      fi
+    fi
+    ;;
+  new-window)
+    session=""
+    cwd=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -t)
+          session="$2"
+          shift 2
+          ;;
+        -c)
+          cwd="$2"
+          shift 2
+          ;;
+        *)
+          break
+          ;;
+      esac
+    done
+    : "${session:?missing tmux target session name}"
+    printf 'window=%s cwd=%s\n' "$session" "$cwd" >> "$log"
+    if [ "$#" -gt 0 ]; then
+      if [ -n "$cwd" ]; then
+        (cd "$cwd" && "$@")
+      else
+        "$@"
+      fi
     fi
     ;;
   attach-session)
@@ -462,6 +509,69 @@ fn wt_tmux_switches_client_when_already_inside_tmux() {
         tmux_log_contents.contains("switch=inside-tmux"),
         "expected switch-client inside tmux, got:\n{}",
         tmux_log_contents
+    );
+}
+
+#[test]
+fn lane_existing_tmux_session_with_prompt_opens_new_window() {
+    let repo = TestRepo::new();
+    let home = clean_home(&repo);
+    let (_bin_dir, path_env, tmux_log, agent_log) = setup_fake_tmux_env(&repo);
+    let tmux_state = repo.path().join("tmux-state");
+    let tmux_state_str = tmux_state.to_string_lossy().into_owned();
+
+    let out = repo.run_stax_with_env(
+        &["lane", "review-pass", "--agent", "codex", "first task"],
+        &[
+            ("HOME", home.as_str()),
+            ("PATH", path_env.as_str()),
+            ("STAX_TMUX_LOG", tmux_log.as_str()),
+            ("STAX_TMUX_STATE_DIR", tmux_state_str.as_str()),
+            ("STAX_AGENT_LOG", agent_log.as_str()),
+        ],
+    );
+    out.assert_success();
+
+    let out = repo.run_stax_with_env(
+        &["lane", "review-pass", "--agent", "codex", "follow up"],
+        &[
+            ("HOME", home.as_str()),
+            ("PATH", path_env.as_str()),
+            ("STAX_TMUX_LOG", tmux_log.as_str()),
+            ("STAX_TMUX_STATE_DIR", tmux_state_str.as_str()),
+            ("STAX_AGENT_LOG", agent_log.as_str()),
+        ],
+    );
+    out.assert_success();
+
+    let tmux_log_contents = fs::read_to_string(&tmux_log).expect("read tmux log");
+    assert!(
+        tmux_log_contents.contains("new=review-pass"),
+        "expected initial tmux session creation, got:\n{}",
+        tmux_log_contents
+    );
+    assert!(
+        tmux_log_contents.contains("window=review-pass"),
+        "expected a new tmux window for the second prompted launch, got:\n{}",
+        tmux_log_contents
+    );
+
+    let agent_log_contents = fs::read_to_string(&agent_log).expect("read agent log");
+    assert_eq!(
+        agent_log_contents.matches("cwd=").count(),
+        2,
+        "expected prompted lane relaunch to start the agent twice, got:\n{}",
+        agent_log_contents
+    );
+    assert!(
+        agent_log_contents.contains("arg=first task"),
+        "expected first lane prompt to reach the agent, got:\n{}",
+        agent_log_contents
+    );
+    assert!(
+        agent_log_contents.contains("arg=follow up"),
+        "expected second lane prompt to reach the agent, got:\n{}",
+        agent_log_contents
     );
 }
 
