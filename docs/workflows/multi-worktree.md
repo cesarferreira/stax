@@ -9,6 +9,7 @@ This page is about repo-wide behavior across linked checkouts. For the `st workt
 - `st restack` and `st sync --restack` run `git rebase` in the target worktree when needed.
 - `st cascade` fast-forwards trunk before restacking, even if trunk is checked out elsewhere.
 - `st sync` updates trunk in whichever worktree currently has trunk checked out.
+- If a merged or upstream-gone branch is still checked out in another worktree, `st sync` removes that linked worktree when cleanup is confirmed and the lane is safe to remove; dirty/locked/in-progress lanes are kept with follow-up cleanup commands instead.
 - Metadata (`refs/branch-metadata/*`) is shared across all worktrees automatically.
 
 ## Dirty worktrees

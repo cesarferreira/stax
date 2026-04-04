@@ -1,9 +1,14 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
+use crate::commands::worktree::{
+    remove::remove_worktree_with_hooks,
+    shared::{compute_worktree_details, worktree_removal_blockers},
+};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
+use crate::git::repo::BranchDeleteResolution;
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
@@ -38,6 +43,50 @@ enum TrunkSummary {
     Updated {
         branch: String,
     },
+}
+
+#[derive(Debug, Clone)]
+struct BlockingWorktreeCleanup {
+    resolution: BranchDeleteResolution,
+    blockers: Vec<&'static str>,
+}
+
+impl BlockingWorktreeCleanup {
+    fn can_remove_during_sync(&self) -> bool {
+        !self.resolution.worktree.is_main && self.blockers.is_empty()
+    }
+
+    fn blocker_summary(&self) -> Option<String> {
+        if self.resolution.worktree.is_main {
+            return Some("it is the main worktree".to_string());
+        }
+
+        if self.blockers.is_empty() {
+            return None;
+        }
+
+        let reasons = self
+            .blockers
+            .iter()
+            .map(|blocker| match *blocker {
+                "current" => "it is the current worktree",
+                "dirty" => "it has uncommitted changes",
+                "locked" => "it is locked",
+                "rebase" => "a rebase is in progress",
+                "merge" => "a merge is in progress",
+                "conflicts" => "it has unresolved conflicts",
+                other => other,
+            })
+            .collect::<Vec<_>>();
+
+        Some(reasons.join(", "))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LocalBranchDeleteOutcome {
+    deleted: bool,
+    worktree_blocked: bool,
 }
 
 /// Sync repo: pull trunk from remote, delete merged branches, optionally restack
@@ -455,6 +504,11 @@ pub fn run(
 
             for branch in &merged {
                 let is_current_branch = branch == &current;
+                let blocking_worktree_cleanup = if is_current_branch {
+                    None
+                } else {
+                    plan_blocking_worktree_cleanup(&repo, branch)?
+                };
 
                 // Resolve parent branch for checkout/reparent.
                 // Metadata can reference a deleted branch; in that case fall back to trunk.
@@ -493,11 +547,16 @@ pub fn run(
                     continue;
                 }
 
-                let prompt = if is_current_branch {
-                    format!("Delete '{}' and checkout '{}'?", branch, parent_branch)
-                } else {
-                    format!("Delete '{}'?", branch)
-                };
+                let prompt = sync_delete_prompt(
+                    branch,
+                    if is_current_branch {
+                        Some(parent_branch.as_str())
+                    } else {
+                        None
+                    },
+                    None,
+                    blocking_worktree_cleanup.as_ref(),
+                );
 
                 let confirm = if auto_confirm {
                     true
@@ -629,19 +688,16 @@ pub fn run(
                         }
                     }
 
-                    // Delete local branch (force delete since we confirmed)
-                    let local_output = Command::new("git")
-                        .args(["branch", "-D", branch])
-                        .current_dir(&workdir)
-                        .output();
-
-                    let (local_deleted, local_worktree_blocked) = match local_output {
-                        Ok(out) => {
-                            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                            (out.status.success(), stderr.contains("used by worktree"))
-                        }
-                        Err(_) => (false, false),
-                    };
+                    let local_delete = delete_local_branch_for_sync(
+                        &repo,
+                        &config,
+                        &workdir,
+                        branch,
+                        blocking_worktree_cleanup.as_ref(),
+                        quiet,
+                    )?;
+                    let local_deleted = local_delete.deleted;
+                    let local_worktree_blocked = local_delete.worktree_blocked;
 
                     // Delete remote branch
                     let remote_status = Command::new("git")
@@ -695,36 +751,10 @@ pub fn run(
                             }
                         } else {
                             if local_worktree_blocked {
-                                println!(
-                                    "    {} {}",
-                                    branch.bright_black(),
-                                    "not deleted locally (checked out in another worktree)"
-                                        .yellow()
+                                print_blocked_branch_delete_recovery(
+                                    branch,
+                                    blocking_worktree_cleanup.as_ref(),
                                 );
-                                if let Ok(Some(resolution)) = repo.branch_delete_resolution(branch)
-                                {
-                                    if let Some(remove_cmd) =
-                                        resolution.remove_worktree_and_branch_cmd()
-                                    {
-                                        println!(
-                                            "    {} {}",
-                                            "↷".yellow(),
-                                            "Run to remove that worktree and delete the branch:"
-                                                .dimmed()
-                                        );
-                                        println!("      {}", remove_cmd.cyan());
-                                    }
-                                    println!(
-                                        "    {} {}",
-                                        "↷".yellow(),
-                                        if resolution.worktree.is_main {
-                                            "Run to free the branch in the main worktree:".dimmed()
-                                        } else {
-                                            "Or keep the worktree and free the branch:".dimmed()
-                                        }
-                                    );
-                                    println!("      {}", resolution.switch_branch_cmd().cyan());
-                                }
                             } else {
                                 println!("    {} {}", branch.bright_black(), "skipped".dimmed());
                             }
@@ -799,15 +829,22 @@ pub fn run(
                 }
 
                 let is_current_branch = branch == &current_after_deletions;
-                let fallback_parent = &stack.trunk;
-                let prompt = if is_current_branch {
-                    format!(
-                        "Delete '{}' (upstream gone) and checkout '{}'?",
-                        branch, fallback_parent
-                    )
+                let blocking_worktree_cleanup = if is_current_branch {
+                    None
                 } else {
-                    format!("Delete '{}' (upstream gone)?", branch)
+                    plan_blocking_worktree_cleanup(&repo, branch)?
                 };
+                let fallback_parent = &stack.trunk;
+                let prompt = sync_delete_prompt(
+                    branch,
+                    if is_current_branch {
+                        Some(fallback_parent.as_str())
+                    } else {
+                        None
+                    },
+                    Some("upstream gone"),
+                    blocking_worktree_cleanup.as_ref(),
+                );
 
                 let confirm = if auto_confirm {
                     true
@@ -856,18 +893,16 @@ pub fn run(
                     }
                 }
 
-                let local_output = Command::new("git")
-                    .args(["branch", "-D", branch])
-                    .current_dir(&workdir)
-                    .output();
-
-                let (local_deleted, local_worktree_blocked) = match local_output {
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                        (out.status.success(), stderr.contains("used by worktree"))
-                    }
-                    Err(_) => (false, false),
-                };
+                let local_delete = delete_local_branch_for_sync(
+                    &repo,
+                    &config,
+                    &workdir,
+                    branch,
+                    blocking_worktree_cleanup.as_ref(),
+                    quiet,
+                )?;
+                let local_deleted = local_delete.deleted;
+                let local_worktree_blocked = local_delete.worktree_blocked;
 
                 // Only delete metadata if branch no longer exists locally.
                 let local_still_exists = local_branch_exists(&workdir, branch);
@@ -887,31 +922,10 @@ pub fn run(
                             "deleted (local only)".green()
                         );
                     } else if local_worktree_blocked {
-                        println!(
-                            "    {} {}",
-                            branch.bright_black(),
-                            "not deleted locally (checked out in another worktree)".yellow()
+                        print_blocked_branch_delete_recovery(
+                            branch,
+                            blocking_worktree_cleanup.as_ref(),
                         );
-                        if let Ok(Some(resolution)) = repo.branch_delete_resolution(branch) {
-                            if let Some(remove_cmd) = resolution.remove_worktree_and_branch_cmd() {
-                                println!(
-                                    "    {} {}",
-                                    "↷".yellow(),
-                                    "Run to remove that worktree and delete the branch:".dimmed()
-                                );
-                                println!("      {}", remove_cmd.cyan());
-                            }
-                            println!(
-                                "    {} {}",
-                                "↷".yellow(),
-                                if resolution.worktree.is_main {
-                                    "Run to free the branch in the main worktree:".dimmed()
-                                } else {
-                                    "Or keep the worktree and free the branch:".dimmed()
-                                }
-                            );
-                            println!("      {}", resolution.switch_branch_cmd().cyan());
-                        }
                     } else {
                         println!("    {} {}", branch.bright_black(), "skipped".dimmed());
                     }
@@ -1491,6 +1505,194 @@ fn local_branch_exists(workdir: &std::path::Path, branch: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn plan_blocking_worktree_cleanup(
+    repo: &GitRepo,
+    branch: &str,
+) -> Result<Option<BlockingWorktreeCleanup>> {
+    let Some(resolution) = repo.branch_delete_resolution(branch)? else {
+        return Ok(None);
+    };
+
+    if resolution.worktree.is_main {
+        return Ok(Some(BlockingWorktreeCleanup {
+            resolution,
+            blockers: Vec::new(),
+        }));
+    }
+
+    let details = compute_worktree_details(repo, resolution.worktree.clone())?;
+    Ok(Some(BlockingWorktreeCleanup {
+        resolution,
+        blockers: worktree_removal_blockers(&details),
+    }))
+}
+
+fn delete_local_branch_for_sync(
+    repo: &GitRepo,
+    config: &Config,
+    workdir: &std::path::Path,
+    branch: &str,
+    blocking_worktree_cleanup: Option<&BlockingWorktreeCleanup>,
+    quiet: bool,
+) -> Result<LocalBranchDeleteOutcome> {
+    let mut outcome = attempt_local_branch_delete(workdir, branch);
+    if outcome.deleted || !outcome.worktree_blocked {
+        return Ok(outcome);
+    }
+
+    let Some(cleanup) = blocking_worktree_cleanup else {
+        return Ok(outcome);
+    };
+
+    if !cleanup.can_remove_during_sync() {
+        return Ok(outcome);
+    }
+
+    let removed_worktree =
+        remove_worktree_with_hooks(repo, config, &cleanup.resolution.worktree, false);
+    match removed_worktree {
+        Ok(display_name) => {
+            if !quiet {
+                println!(
+                    "    {} removed linked worktree {}",
+                    "→".cyan(),
+                    display_name.cyan()
+                );
+            }
+            outcome = attempt_local_branch_delete(workdir, branch);
+            Ok(outcome)
+        }
+        Err(error) => {
+            if !quiet {
+                println!(
+                    "    {} {}",
+                    "↷".yellow(),
+                    format!(
+                        "couldn't remove linked worktree '{}': {}",
+                        cleanup.resolution.worktree.name, error
+                    )
+                    .dimmed()
+                );
+            }
+            Ok(outcome)
+        }
+    }
+}
+
+fn attempt_local_branch_delete(
+    workdir: &std::path::Path,
+    branch: &str,
+) -> LocalBranchDeleteOutcome {
+    let local_output = Command::new("git")
+        .args(["branch", "-D", branch])
+        .current_dir(workdir)
+        .output();
+
+    match local_output {
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            LocalBranchDeleteOutcome {
+                deleted: out.status.success(),
+                worktree_blocked: stderr.contains("used by worktree"),
+            }
+        }
+        Err(_) => LocalBranchDeleteOutcome::default(),
+    }
+}
+
+fn sync_delete_prompt(
+    branch: &str,
+    checkout_target: Option<&str>,
+    reason: Option<&str>,
+    blocking_worktree_cleanup: Option<&BlockingWorktreeCleanup>,
+) -> String {
+    if let Some(target) = checkout_target {
+        if let Some(reason) = reason {
+            return format!("Delete '{}' ({reason}) and checkout '{}'?", branch, target);
+        }
+
+        return format!("Delete '{}' and checkout '{}'?", branch, target);
+    }
+
+    if let Some(cleanup) = blocking_worktree_cleanup {
+        if cleanup.can_remove_during_sync() {
+            if let Some(reason) = reason {
+                return format!(
+                    "Delete '{}' ({reason}) and remove linked worktree '{}'?",
+                    branch, cleanup.resolution.worktree.name
+                );
+            }
+
+            return format!(
+                "Delete '{}' and remove linked worktree '{}'?",
+                branch, cleanup.resolution.worktree.name
+            );
+        }
+
+        if let Some(reason) = reason {
+            return format!(
+                "Delete '{}' ({reason}; keep linked worktree '{}')?",
+                branch, cleanup.resolution.worktree.name
+            );
+        }
+
+        return format!(
+            "Delete '{}' (keep linked worktree '{}')?",
+            branch, cleanup.resolution.worktree.name
+        );
+    }
+
+    if let Some(reason) = reason {
+        format!("Delete '{}' ({reason})?", branch)
+    } else {
+        format!("Delete '{}'?", branch)
+    }
+}
+
+fn print_blocked_branch_delete_recovery(
+    branch: &str,
+    blocking_worktree_cleanup: Option<&BlockingWorktreeCleanup>,
+) {
+    println!(
+        "    {} {}",
+        branch.bright_black(),
+        "not deleted locally (checked out in another worktree)".yellow()
+    );
+    if let Some(cleanup) = blocking_worktree_cleanup {
+        if let Some(reason) = cleanup.blocker_summary() {
+            println!(
+                "    {} {}",
+                "↷".yellow(),
+                format!(
+                    "sync kept linked worktree '{}' because {}",
+                    cleanup.resolution.worktree.name, reason
+                )
+                .dimmed()
+            );
+        }
+
+        let resolution = &cleanup.resolution;
+        if let Some(remove_cmd) = resolution.remove_worktree_and_branch_cmd() {
+            println!(
+                "    {} {}",
+                "↷".yellow(),
+                "Run to remove that worktree and delete the branch:".dimmed()
+            );
+            println!("      {}", remove_cmd.cyan());
+        }
+        println!(
+            "    {} {}",
+            "↷".yellow(),
+            if resolution.worktree.is_main {
+                "Run to free the branch in the main worktree:".dimmed()
+            } else {
+                "Or keep the worktree and free the branch:".dimmed()
+            }
+        );
+        println!("      {}", resolution.switch_branch_cmd().cyan());
+    }
+}
+
 fn checkout_branch_for_cleanup(
     repo: &GitRepo,
     workdir: &std::path::Path,
@@ -1755,6 +1957,28 @@ fn diff_line_stats_between(workdir: &Path, base: &str, head: &str) -> Option<(us
 mod tests {
     use super::*;
     use colored::control;
+    use std::path::PathBuf;
+
+    fn linked_worktree_cleanup(blockers: &[&'static str]) -> BlockingWorktreeCleanup {
+        BlockingWorktreeCleanup {
+            resolution: crate::git::repo::BranchDeleteResolution {
+                worktree: crate::git::repo::WorktreeInfo {
+                    name: "review-pass".to_string(),
+                    path: PathBuf::from("/tmp/review-pass"),
+                    branch: Some("cesar/review-pass".to_string()),
+                    is_main: false,
+                    is_current: false,
+                    is_locked: false,
+                    lock_reason: None,
+                    is_prunable: false,
+                    prunable_reason: None,
+                },
+                remove_worktree_selector: "cesar/review-pass".to_string(),
+                switch_target: crate::git::repo::BranchDeleteSwitchTarget::Detach,
+            },
+            blockers: blockers.to_vec(),
+        }
+    }
 
     #[test]
     fn render_sync_footer_is_colored_and_compact() {
@@ -1807,5 +2031,50 @@ mod tests {
         assert!(footer.contains("up to date"));
         assert!(footer.contains("2.000s"));
         assert!(footer.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn sync_delete_prompt_mentions_removed_linked_worktree_for_safe_non_current_branch() {
+        let prompt = sync_delete_prompt(
+            "cesar/review-pass",
+            None,
+            None,
+            Some(&linked_worktree_cleanup(&[])),
+        );
+
+        assert_eq!(
+            prompt,
+            "Delete 'cesar/review-pass' and remove linked worktree 'review-pass'?"
+        );
+    }
+
+    #[test]
+    fn sync_delete_prompt_prefers_checkout_wording_for_current_branch() {
+        let prompt = sync_delete_prompt(
+            "cesar/review-pass",
+            Some("main"),
+            Some("upstream gone"),
+            Some(&linked_worktree_cleanup(&[])),
+        );
+
+        assert_eq!(
+            prompt,
+            "Delete 'cesar/review-pass' (upstream gone) and checkout 'main'?"
+        );
+    }
+
+    #[test]
+    fn sync_delete_prompt_mentions_kept_linked_worktree_when_unsafe() {
+        let prompt = sync_delete_prompt(
+            "cesar/review-pass",
+            None,
+            Some("upstream gone"),
+            Some(&linked_worktree_cleanup(&["dirty"])),
+        );
+
+        assert_eq!(
+            prompt,
+            "Delete 'cesar/review-pass' (upstream gone; keep linked worktree 'review-pass')?"
+        );
     }
 }

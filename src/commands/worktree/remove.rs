@@ -3,10 +3,49 @@ use super::shared::{
 };
 use crate::config::Config;
 use crate::engine::BranchMetadata;
+use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
 use anyhow::{bail, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
+
+pub(crate) fn remove_worktree_with_hooks(
+    repo: &GitRepo,
+    config: &Config,
+    worktree: &WorktreeInfo,
+    force: bool,
+) -> Result<String> {
+    if worktree.is_main {
+        bail!("Cannot remove the main worktree.");
+    }
+
+    if !worktree.path.exists() {
+        bail!(
+            "Worktree path '{}' no longer exists. Run `stax worktree prune`.",
+            worktree.path.display()
+        );
+    }
+
+    let main_workdir = repo.main_repo_workdir()?;
+    run_blocking_hook(
+        config.worktree.hooks.pre_remove.as_deref(),
+        &main_workdir,
+        "pre_remove",
+    )?;
+
+    repo.worktree_remove(&worktree.path, force)?;
+
+    spawn_background_hook(
+        config.worktree.hooks.post_remove.as_deref(),
+        &main_workdir,
+        "post_remove",
+    )?;
+
+    Ok(worktree
+        .branch
+        .clone()
+        .unwrap_or_else(|| worktree.name.clone()))
+}
 
 pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()> {
     let repo = GitRepo::open()?;
@@ -44,17 +83,9 @@ pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()>
         }
     }
 
-    let main_workdir = repo.main_repo_workdir()?;
-    run_blocking_hook(
-        config.worktree.hooks.pre_remove.as_deref(),
-        &main_workdir,
-        "pre_remove",
-    )?;
-
     let branch = worktree.branch.clone();
-    let path = worktree.path.clone();
-    let display_name = branch.clone().unwrap_or_else(|| worktree.name.clone());
-    repo.worktree_remove(&path, force)?;
+    let main_workdir = repo.main_repo_workdir()?;
+    let display_name = remove_worktree_with_hooks(&repo, &config, &worktree, force)?;
 
     if delete_branch {
         let repo = GitRepo::open_from_path(&main_workdir)?;
@@ -79,12 +110,6 @@ pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()>
             );
         }
     }
-
-    spawn_background_hook(
-        config.worktree.hooks.post_remove.as_deref(),
-        &main_workdir,
-        "post_remove",
-    )?;
 
     println!(
         "{}  worktree '{}'",

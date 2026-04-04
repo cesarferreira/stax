@@ -1,4 +1,7 @@
-use super::{remove, shared::compute_worktree_details};
+use super::{
+    remove,
+    shared::{compute_worktree_details, worktree_removal_blockers_for_cleanup},
+};
 use crate::git::GitRepo;
 use anyhow::{bail, Result};
 use colored::Colorize;
@@ -228,7 +231,7 @@ fn build_plan(repo: &GitRepo, force: bool, dry_run: bool) -> Result<CleanupPlan>
             path: detail.info.path.clone(),
             dirty: detail.dirty,
         };
-        let blockers = candidate_blockers(&detail, force);
+        let blockers = worktree_removal_blockers_for_cleanup(&detail, force);
 
         if blockers.is_empty() {
             candidates.push(candidate);
@@ -286,34 +289,6 @@ fn classify_candidate(
     } else {
         Ok(None)
     }
-}
-
-fn candidate_blockers(
-    detail: &crate::commands::worktree::shared::WorktreeDetails,
-    force: bool,
-) -> Vec<&'static str> {
-    let mut blockers = Vec::new();
-
-    if detail.info.is_current {
-        blockers.push("current");
-    }
-    if detail.info.is_locked {
-        blockers.push("locked");
-    }
-    if detail.rebase_in_progress {
-        blockers.push("rebase");
-    }
-    if detail.merge_in_progress {
-        blockers.push("merge");
-    }
-    if detail.has_conflicts {
-        blockers.push("conflicts");
-    }
-    if detail.dirty && !force {
-        blockers.push("dirty");
-    }
-
-    blockers
 }
 
 fn print_candidate(candidate: &CleanupCandidate) {
