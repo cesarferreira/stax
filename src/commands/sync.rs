@@ -1277,7 +1277,9 @@ fn find_merged_branches(
         }
     }
 
-    // Method 2: Check PR state from metadata - if PR is merged, branch should be deleted
+    // Method 2: Check PR state from metadata - only PRs explicitly marked as
+    // merged should be deleted. Closed-but-unmerged PRs may represent abandoned
+    // review attempts while the branch still contains unmerged work.
     for (branch, info) in &stack.branches {
         // Skip trunk
         if branch == &stack.trunk {
@@ -1289,11 +1291,9 @@ fn find_merged_branches(
             continue;
         }
 
-        // PR merged or closed without merge (cancelled) — both warrant cleanup offer.
         if matches!(
             info.pr_state.as_deref(),
-            Some(state)
-                if state.eq_ignore_ascii_case("merged") || state.eq_ignore_ascii_case("closed")
+            Some(state) if state.eq_ignore_ascii_case("merged")
         ) {
             merged.push(branch.clone());
         }
