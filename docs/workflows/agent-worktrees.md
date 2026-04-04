@@ -23,17 +23,17 @@ That is the difference between "a pile of terminals" and "several active branche
 
 ```bash
 # Start three parallel lanes
-st wt c auth-refresh --agent claude -- "fix token refresh edge cases"
-st wt c flaky-tests --agent codex -- "stabilize the flaky test suite"
+st lane auth-refresh "fix token refresh edge cases"
+st lane flaky-tests "stabilize the flaky test suite"
 st wt c ui-polish --run "cursor ."
-st wt c review-pass --agent codex --tmux -- "address the open PR comments"
+st lane review-pass "address the open PR comments"
 
 # They are normal stax branches
 st ls
 
 # Jump back into any lane later
-st wt go flaky-tests --agent codex
-st wt go review-pass --agent codex --tmux
+st lane flaky-tests
+st lane
 
 # Trunk moved while those sessions were in flight
 st wt rs
@@ -45,16 +45,29 @@ st wt ll
 st wt rm auth-refresh --delete-branch
 ```
 
-## Launch Patterns
+## Primary Commands
 
 ```bash
-st wt c api-tests --agent codex -- "write the missing integration tests"
-st wt go api-tests --agent gemini
-st wt go api-tests --agent opencode -- "--resume"
-st wt go api-tests --run "cursor ."
-st wt c review-pass --agent codex --tmux -- "address the open PR comments"
-st wt go review-pass --agent codex --tmux
+st lane api-tests "write the missing integration tests"
+st lane api-tests --agent gemini
+st lane api-tests --agent opencode --model opencode/gpt-5.1-codex
+st lane review-pass "address the open PR comments"
+st lane
 ```
+
+`st lane <name> [prompt]` is the canonical explicit form:
+
+- create or reuse the named lane
+- default to your configured AI agent
+- default to tmux when available
+- use `--no-tmux` when you want a direct terminal launch instead
+
+`st lane` also supports the interactive path:
+
+- `st lane` opens an interactive picker of stax-managed lanes
+- `st lane <name> [prompt]` is the short explicit form
+- if a lane already has a tmux session, stax reattaches to it
+- if you pass a new prompt to an existing tmux-backed lane, stax opens a fresh tmux window in that session
 
 Supported `--agent` values are:
 
@@ -65,9 +78,19 @@ Supported `--agent` values are:
 
 Use `--model` with `--agent` when you want an explicit model override.
 
-Use `--run` when you want a non-agent launcher such as an editor.
+Use `--no-tmux` when you want each AI lane to launch directly in the terminal instead of tmux.
 
-Use `--tmux` when you want each lane to resume the same terminal session on re-entry instead of relaunching the command. If the session already exists, stax reattaches or switches to it; inside tmux, it switches the current client instead of nesting tmux.
+## Advanced Patterns
+
+The older worktree launch flags still exist for lower-level or non-AI use cases:
+
+```bash
+st wt c ui-polish --run "cursor ."
+st wt c review-pass --agent codex --tmux -- "address the open PR comments"
+st wt go review-pass --agent codex --tmux
+```
+
+Use `--run` when you want a non-agent launcher such as an editor.
 
 ## Why The Lanes Stay First-Class
 
@@ -88,10 +111,13 @@ Tracking nuance:
 
 ```bash
 # Start a scratch lane fast
-st wt c --agent codex -- "fix flaky tests"
+st lane flaky-tests "fix flaky tests"
 
 # Re-enter it later
-st wt go flaky-tests --agent codex
+st lane flaky-tests
+
+# Or browse your active lanes first
+st lane
 
 # Trunk moved while the lane was in flight
 st wt rs
@@ -103,8 +129,6 @@ st wt ll
 st wt cleanup --dry-run
 st wt rm flaky-tests --delete-branch
 ```
-
-If you prefer ephemeral names for scratch work, `st wt c` with no arguments generates a random two-word slug automatically.
 
 ## Setup Once
 

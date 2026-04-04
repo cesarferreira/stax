@@ -171,6 +171,8 @@ __stax_dispatch() {
       __stax_run_worktree_shell worktree go "${@:2}" ;;
     wtc)
       __stax_run_worktree_shell worktree create "${@:2}" ;;
+    lane)
+      __stax_run_worktree_shell "$@" ;;
     wtrm)
       if [[ -z "$2" || "$2" == -* ]]; then
         __stax_remove_current_worktree worktree remove "${@:2}"
@@ -323,6 +325,8 @@ function __stax_dispatch
             __stax_run_worktree_shell worktree go $argv[2..-1]
         case wtc
             __stax_run_worktree_shell worktree create $argv[2..-1]
+        case lane
+            __stax_run_worktree_shell $argv
         case wtrm
             if test (count $argv) -lt 2; or string match -qr '^-' -- "$argv[2]"
                 __stax_remove_current_worktree worktree remove $argv[2..-1]
@@ -916,6 +920,67 @@ mod tests {
         assert!(
             stdout.contains("args:worktree go demo-lane --shell-output"),
             "expected worktree shell command to preserve PATH and inject --shell-output, got:\n{}",
+            stdout
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_shell_snippet_wraps_lane_commands_in_zsh() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+            if err.kind() == ErrorKind::NotFound {
+                return;
+            }
+            panic!("failed to probe zsh: {err}");
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+        let fake_stax = bin_dir.join("stax");
+        fs::write(
+            &fake_stax,
+            "#!/bin/sh\nprintf 'resolved:%s\\n' \"$0\"\nprintf 'args:%s\\n' \"$*\"\n",
+        )
+        .expect("write fake stax");
+        let mut perms = fs::metadata(&fake_stax)
+            .expect("fake stax metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_stax, perms).expect("chmod fake stax");
+
+        let snippet_path = dir.path().join("shell-setup.sh");
+        fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let path_env = format!("{}:{original_path}", bin_dir.display());
+        let command = format!("source \"{}\"; st lane review-pass", snippet_path.display());
+        let output = Command::new("zsh")
+            .arg("-lc")
+            .arg(&command)
+            .env("PATH", path_env)
+            .output()
+            .expect("run zsh shell snippet");
+
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("resolved:{}", fake_stax.display())),
+            "expected zsh wrapper to resolve fake stax binary for lane commands, got:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("args:lane review-pass --shell-output"),
+            "expected lane command to preserve PATH and inject --shell-output, got:\n{}",
             stdout
         );
     }

@@ -108,6 +108,22 @@ struct WorktreeLaunchArgs {
     args: Vec<String>,
 }
 
+#[derive(Args, Clone, Default)]
+struct AiLaneArgs {
+    /// AI agent override (claude, codex, gemini, opencode)
+    #[arg(long)]
+    agent: Option<String>,
+    /// Model override for the selected AI agent
+    #[arg(long, requires = "agent")]
+    model: Option<String>,
+    /// Launch directly in the terminal instead of tmux
+    #[arg(long)]
+    no_tmux: bool,
+    /// Override the tmux session name (defaults to the lane name)
+    #[arg(long, conflicts_with = "no_tmux")]
+    tmux_session: Option<String>,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Show all stacks (simple tree view)
@@ -736,6 +752,22 @@ enum Commands {
     Worktree {
         #[command(subcommand)]
         command: Option<WorktreeCommands>,
+    },
+
+    /// Resume or start an AI worktree lane
+    Lane {
+        /// Lane name (omit to open the interactive lane picker)
+        name: Option<String>,
+        /// Optional prompt passed to the launched AI agent
+        #[arg(allow_hyphen_values = true)]
+        prompt: Option<String>,
+        /// Skip worktree hooks
+        #[arg(long = "no-verify")]
+        no_verify: bool,
+        #[arg(long, hide = true)]
+        shell_output: bool,
+        #[command(flatten)]
+        ai: AiLaneArgs,
     },
 
     /// Output shell integration snippet for manual install or use `--install`
@@ -1701,6 +1733,22 @@ pub fn run() -> Result<()> {
         Commands::ShellSetup { .. } => {
             unreachable!("shell-setup returns before repo initialization")
         }
+        Commands::Lane {
+            name,
+            prompt,
+            no_verify,
+            shell_output,
+            ai,
+        } => commands::worktree::ai::run(
+            name,
+            prompt,
+            no_verify,
+            shell_output,
+            ai.agent,
+            ai.model,
+            ai.no_tmux,
+            ai.tmux_session,
+        ),
         // Hidden worktree shortcuts
         Commands::W => commands::worktree::list::run(false),
         Commands::Wtc {
@@ -1955,6 +2003,62 @@ mod tests {
                 })
             })
         ));
+    }
+
+    #[test]
+    fn lane_command_parses_without_name_for_picker() {
+        let cli = Cli::try_parse_from(["stax", "lane"]).expect("parse lane picker");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Lane {
+                name: None,
+                prompt: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn lane_command_parses_explicit_name_and_prompt() {
+        let cli = Cli::try_parse_from(["stax", "lane", "review-pass", "fix macOS build"])
+            .expect("parse explicit lane");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Lane {
+                name: Some(name),
+                prompt: Some(prompt),
+                ..
+            }) if name == "review-pass" && prompt == "fix macOS build"
+        ));
+    }
+
+    #[test]
+    fn lane_command_accepts_hidden_shell_output_after_prompt() {
+        let cli = Cli::try_parse_from([
+            "stax",
+            "lane",
+            "review-pass",
+            "fix macOS build",
+            "--shell-output",
+        ])
+        .expect("parse lane with hidden shell output");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Lane {
+                name: Some(name),
+                prompt: Some(prompt),
+                shell_output: true,
+                ..
+            }) if name == "review-pass" && prompt == "fix macOS build"
+        ));
+    }
+
+    #[test]
+    fn lane_requires_agent_when_model_is_set() {
+        match Cli::try_parse_from(["stax", "lane", "review-pass", "--model", "gpt-5.4"]) {
+            Ok(_) => panic!("expected clap error"),
+            Err(err) => assert!(err.to_string().contains("--agent")),
+        }
     }
 
     #[test]

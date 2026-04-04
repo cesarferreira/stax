@@ -77,6 +77,7 @@ Use `--no-verify` on `create` or `go` to skip worktree hooks for that entry.
 |---|---|---|
 | `st worktree` | `st wt` | Open the interactive dashboard when stdin/stdout are TTYs; otherwise print worktree help |
 | `st wt c [name]` | `st worktree create`, `st wtc` | Create or reuse a lane; supports `--from`, `--pick`, `--name`, `--agent`, `--run`, `--tmux`, `--no-verify` |
+| `st lane [name] [prompt]` | | Fast AI-lane entrypoint: bare `st lane` opens the lane picker, and `st lane <name> [prompt]` is the short explicit form |
 | `st wt go [name]` | `st worktree go`, `st wtgo` | Enter an existing worktree; with no name, open a picker; supports `--agent`, `--run`, `--tmux`, `--no-verify` |
 | `st wt ls` | `st worktree list`, `st w`, `st wtls` | Compact `NAME / BRANCH / PATH` inventory; add `--json` for scripting |
 | `st wt ll` | `st worktree ll`, `st wtll` | Rich status view with managed/dirty/rebase/conflicts/marker/prunable state; add `--json` for scripting |
@@ -86,14 +87,33 @@ Use `--no-verify` on `create` or `go` to skip worktree hooks for that entry.
 | `st wt cleanup` | `st worktree cleanup`, `st wt clean` | Prune stale bookkeeping, then bulk-remove safe detached or managed-and-merged lanes; supports `--dry-run`, `--yes`, and `-f/--force` |
 | `st wt restack` | `st worktree restack`, `st wtrs`, `st wt rs` | Restack all stax-managed worktrees |
 
-## Launch A Tool Inside The Lane
+## AI Lanes
 
-You can enter a lane and immediately launch a tool there:
+The recommended AI workflow is:
 
 ```bash
-st wt c auth-refresh --agent codex -- "fix the flaky tests"
-st wt go auth-refresh --agent claude
-st wt go ui-polish --run "cursor ."
+st lane auth-refresh "fix the flaky tests"
+st lane review-pass "address the open PR comments"
+st lane auth-refresh
+st lane
+```
+
+Behavior:
+
+- `--agent` supports `claude`, `codex`, `gemini`, and `opencode`
+- `--model` requires `--agent`
+- `st lane <name> [prompt]` defaults to tmux when available; use `--no-tmux` to launch directly in the terminal
+- `st lane` with no arguments opens a picker of stax-managed lanes
+- if a lane already has a tmux session, stax reattaches or switches to it
+- if you pass a new prompt to an existing tmux-backed lane, stax opens a fresh tmux window in that session
+- `--tmux-session` overrides the derived session name when you use the explicit `st lane <name>` form
+
+## Launch Other Tools Inside The Lane
+
+The lower-level `create` / `go` launch flags still exist for non-AI tools or more manual flows:
+
+```bash
+st wt c ui-polish --run "cursor ."
 st wt c review-pass --agent codex --tmux -- "address the open PR comments"
 st wt go review-pass --agent codex --tmux
 ```
@@ -155,6 +175,7 @@ After installation:
 
 - `st wt c ...` changes the parent shell into the new lane
 - `st wt go ...` changes the parent shell into the selected lane
+- `st lane ...` changes the parent shell into the selected lane
 - `st wt rm` can relocate the shell before removing the current worktree
 - `sw <name>` becomes a quick alias for `st wt go <name>`
 

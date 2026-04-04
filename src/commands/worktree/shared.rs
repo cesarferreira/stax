@@ -166,6 +166,12 @@ impl LaunchSpec {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExistingTmuxSessionBehavior {
+    Attach,
+    NewWindow,
+}
+
 pub fn managed_worktrees_dir(repo: &GitRepo, config: &Config) -> Result<PathBuf> {
     let configured = config.worktree.root_dir.trim();
     if configured.is_empty() {
@@ -663,10 +669,51 @@ pub fn build_launch_spec(
             .tmux_session
             .as_deref()
             .unwrap_or(default_tmux_session);
-        return Ok(Some(build_tmux_launch_spec(session, base_launch.as_ref())?));
+        return Ok(Some(build_tmux_launch_spec(
+            session,
+            base_launch.as_ref(),
+            ExistingTmuxSessionBehavior::Attach,
+        )?));
     }
 
     Ok(base_launch)
+}
+
+pub fn build_agent_launch_spec(
+    agent: &str,
+    model: Option<String>,
+    passthrough_args: Vec<String>,
+) -> Result<LaunchSpec> {
+    generate::validate_agent_name(agent)?;
+    let model = model.filter(|value| !value.trim().is_empty());
+
+    let mut args = Vec::new();
+    match agent {
+        "claude" | "codex" | "opencode" => {
+            if let Some(ref model) = model {
+                args.extend(["--model".to_string(), model.clone()]);
+            }
+        }
+        "gemini" => {
+            if let Some(ref model) = model {
+                args.extend(["-m".to_string(), model.clone()]);
+            }
+        }
+        _ => bail!("Unsupported AI agent: {}", agent),
+    }
+    args.extend(passthrough_args);
+
+    let display = if let Some(model) = model {
+        format!("{} ({})", agent, model)
+    } else {
+        agent.to_string()
+    };
+
+    Ok(LaunchSpec::Process {
+        program: agent.to_string(),
+        args,
+        display,
+    })
 }
 
 pub fn default_tmux_session_name(value: &str) -> Result<String> {
@@ -895,48 +942,87 @@ fn ensure_tmux_available() -> Result<()> {
     }
 }
 
-fn build_tmux_launch_spec(session_name: &str, inner: Option<&LaunchSpec>) -> Result<LaunchSpec> {
+pub fn build_tmux_launch_spec(
+    session_name: &str,
+    inner: Option<&LaunchSpec>,
+    existing_behavior: ExistingTmuxSessionBehavior,
+) -> Result<LaunchSpec> {
     let session = default_tmux_session_name(session_name)?;
 
     let session_escaped = shell_escape(&session);
     let new_session_cmd = if let Some(inner) = inner {
         format!(
-            "tmux new-session -s {session} sh -c {command}",
+            "tmux new-session -c \"$PWD\" -s {session} sh -c {command}",
             session = session_escaped,
             command = shell_escape(&inner.shell_command())
         )
     } else {
-        format!("tmux new-session -s {}", session_escaped)
+        format!("tmux new-session -c \"$PWD\" -s {}", session_escaped)
     };
     let new_session_detached_cmd = if let Some(inner) = inner {
         format!(
-            "tmux new-session -d -s {session} sh -c {command}",
+            "tmux new-session -d -c \"$PWD\" -s {session} sh -c {command}",
             session = session_escaped,
             command = shell_escape(&inner.shell_command())
         )
     } else {
-        format!("tmux new-session -d -s {}", session_escaped)
+        format!("tmux new-session -d -c \"$PWD\" -s {}", session_escaped)
+    };
+    let new_window_cmd = if matches!(existing_behavior, ExistingTmuxSessionBehavior::NewWindow) {
+        inner.map(|inner| {
+            format!(
+                "tmux new-window -t {session} -c \"$PWD\" sh -c {command}",
+                session = session_escaped,
+                command = shell_escape(&inner.shell_command())
+            )
+        })
+    } else {
+        None
     };
 
-    let command = format!(
-        "if tmux has-session -t {session} 2>/dev/null; then \
-            if [ -n \"${{TMUX:-}}\" ]; then \
-                exec tmux switch-client -t {session}; \
+    let command = if let Some(new_window) = new_window_cmd {
+        format!(
+            "if tmux has-session -t {session} 2>/dev/null; then \
+                {new_window} || exit $?; \
+                if [ -n \"${{TMUX:-}}\" ]; then \
+                    exec tmux switch-client -t {session}; \
+                else \
+                    exec tmux attach-session -t {session}; \
+                fi; \
             else \
-                exec tmux attach-session -t {session}; \
-            fi; \
-        else \
-            if [ -n \"${{TMUX:-}}\" ]; then \
-                {new_detached} || exit $?; \
-                exec tmux switch-client -t {session}; \
+                if [ -n \"${{TMUX:-}}\" ]; then \
+                    {new_detached} || exit $?; \
+                    exec tmux switch-client -t {session}; \
+                else \
+                    exec {new_attached}; \
+                fi; \
+            fi",
+            session = session_escaped,
+            new_window = new_window,
+            new_detached = new_session_detached_cmd,
+            new_attached = new_session_cmd,
+        )
+    } else {
+        format!(
+            "if tmux has-session -t {session} 2>/dev/null; then \
+                if [ -n \"${{TMUX:-}}\" ]; then \
+                    exec tmux switch-client -t {session}; \
+                else \
+                    exec tmux attach-session -t {session}; \
+                fi; \
             else \
-                exec {new_attached}; \
-            fi; \
-        fi",
-        session = session_escaped,
-        new_detached = new_session_detached_cmd,
-        new_attached = new_session_cmd,
-    );
+                if [ -n \"${{TMUX:-}}\" ]; then \
+                    {new_detached} || exit $?; \
+                    exec tmux switch-client -t {session}; \
+                else \
+                    exec {new_attached}; \
+                fi; \
+            fi",
+            session = session_escaped,
+            new_detached = new_session_detached_cmd,
+            new_attached = new_session_cmd,
+        )
+    };
 
     let display = if let Some(inner) = inner {
         format!("tmux:{} -> {}", session, inner.display())
@@ -984,7 +1070,10 @@ fn parse_tmux_sessions_output(output: &str) -> Result<Vec<TmuxSession>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_tmux_session_name, parse_tmux_sessions_output};
+    use super::{
+        build_agent_launch_spec, build_tmux_launch_spec, default_tmux_session_name,
+        parse_tmux_sessions_output, ExistingTmuxSessionBehavior, LaunchSpec,
+    };
 
     #[test]
     fn default_tmux_session_name_sanitizes_invalid_chars() {
@@ -1000,5 +1089,58 @@ mod tests {
         assert_eq!(sessions[0].attached_clients, 0);
         assert_eq!(sessions[1].name, "lane-b");
         assert_eq!(sessions[1].attached_clients, 2);
+    }
+
+    #[test]
+    fn build_agent_launch_spec_adds_agent_specific_model_flag() {
+        let launch = build_agent_launch_spec(
+            "gemini",
+            Some("gemini-2.5-flash".to_string()),
+            vec!["fix flaky tests".to_string()],
+        )
+        .expect("agent launch");
+
+        match launch {
+            LaunchSpec::Process {
+                program,
+                args,
+                display,
+            } => {
+                assert_eq!(program, "gemini");
+                assert_eq!(
+                    args,
+                    vec![
+                        "-m".to_string(),
+                        "gemini-2.5-flash".to_string(),
+                        "fix flaky tests".to_string(),
+                    ]
+                );
+                assert_eq!(display, "gemini (gemini-2.5-flash)");
+            }
+            LaunchSpec::Shell { .. } => panic!("expected process launch"),
+        }
+    }
+
+    #[test]
+    fn build_tmux_launch_spec_uses_new_window_for_existing_prompted_sessions() {
+        let inner = LaunchSpec::Process {
+            program: "claude".to_string(),
+            args: vec!["fix macOS build".to_string()],
+            display: "claude".to_string(),
+        };
+        let launch = build_tmux_launch_spec(
+            "review-pass",
+            Some(&inner),
+            ExistingTmuxSessionBehavior::NewWindow,
+        )
+        .expect("tmux launch");
+
+        match launch {
+            LaunchSpec::Shell { command, .. } => {
+                assert!(command.contains("tmux new-window -t review-pass"));
+                assert!(command.contains("-c \"$PWD\""));
+            }
+            LaunchSpec::Process { .. } => panic!("expected shell launch"),
+        }
     }
 }

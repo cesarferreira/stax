@@ -125,6 +125,7 @@ Full guide: [Worktrees](../worktrees/index.md)
 |---------|-------|-------------|
 | `st worktree` | `wt` | Open the interactive worktree dashboard in a TTY; otherwise print worktree help |
 | `st worktree create [name]` | `wt c`, `wtc` | Create or reuse a worktree lane (`wt c` with no args generates a random lane name) |
+| `st lane [name] [prompt]` | | Open the interactive lane picker, or use the explicit AI-lane shortcut when `name` is provided |
 | `st worktree list` | `wt ls`, `w`, `wtls` | List all worktrees |
 | `st worktree ll` | `wt ll` | Show richer worktree status, including managed/prunable/conflict state |
 | `st worktree go [name]` | `wt go`, `wtgo` | Navigate to a worktree (picker if no name; requires shell integration for transparent `cd`) |
@@ -137,8 +138,8 @@ Full guide: [Worktrees](../worktrees/index.md)
 | `st shell-setup --install` | | Write shell integration under `~/.config/stax/` and source it from your shell config |
 
 Worktree launch examples:
-- `st wt c review-pass --agent codex --tmux -- "address PR comments"`
-- `st wt go review-pass --agent codex --tmux`
+- `st lane`
+- `st lane review-pass "address PR comments"`
 - `st wt go ui-polish --run "cursor ." --tmux`
 
 ## Common flags

@@ -31,7 +31,7 @@ More than stacked branches: `stax` can merge an entire stack when CI turns green
 - Merge from the bottom automatically when PRs are ready, locally or remotely (`st merge --when-ready`, `st merge --remote`)
 - Resolve in-progress rebase conflicts with AI, limited to the conflicted files (`st resolve`)
 - Recover from risky restacks and rewrites immediately (`st undo`, `st redo`)
-- Run parallel AI worktree lanes as normal tracked branches (`st wt c ... --agent codex`)
+- Run parallel AI worktree lanes as normal tracked branches (`st lane ...`)
 - Generate PR bodies and spoken standup summaries with your preferred AI agent
 - Navigate the full stack and diffs from an interactive TUI
 
@@ -259,10 +259,10 @@ Each lane is an isolated Git worktree with a real branch behind it. When stax cr
 
 ```bash
 # Spin up three lanes in parallel
-st wt c auth-refresh --agent claude -- "fix token refresh edge cases"
-st wt c flaky-tests --agent codex -- "stabilize the flaky test suite"
+st lane auth-refresh "fix token refresh edge cases"
+st lane flaky-tests "stabilize the flaky test suite"
 st wt c ui-polish --run "cursor ."
-st wt c review-pass --agent codex --tmux -- "address the open PR comments"
+st lane review-pass "address the open PR comments"
 
 # They are normal stax branches, not hidden scratch dirs
 st ls
@@ -270,9 +270,9 @@ st ls
 # Trunk moved while they were running? Restack every managed lane
 st wt rs
 
-# Jump back into any lane and continue exactly where you left off
-st wt go flaky-tests --agent codex
-st wt go review-pass --agent codex --tmux
+# Re-enter any lane explicitly or open the lane picker
+st lane flaky-tests
+st lane
 
 # Rich status + cleanup
 st wt ll
