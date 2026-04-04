@@ -87,6 +87,42 @@ pub struct WorktreeDetails {
     pub behind: Option<usize>,
 }
 
+pub fn worktree_removal_blockers(detail: &WorktreeDetails) -> Vec<&'static str> {
+    let mut blockers = Vec::new();
+
+    if detail.info.is_current {
+        blockers.push("current");
+    }
+    if detail.info.is_locked {
+        blockers.push("locked");
+    }
+    if detail.rebase_in_progress {
+        blockers.push("rebase");
+    }
+    if detail.merge_in_progress {
+        blockers.push("merge");
+    }
+    if detail.has_conflicts {
+        blockers.push("conflicts");
+    }
+    if detail.dirty {
+        blockers.push("dirty");
+    }
+
+    blockers
+}
+
+pub fn worktree_removal_blockers_for_cleanup(
+    detail: &WorktreeDetails,
+    force: bool,
+) -> Vec<&'static str> {
+    let mut blockers = worktree_removal_blockers(detail);
+    if force {
+        blockers.retain(|blocker| *blocker != "dirty");
+    }
+    blockers
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TmuxSession {
     pub name: String,

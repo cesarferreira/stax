@@ -10,7 +10,7 @@
 | `st submit` | `ss` | Submit full current stack |
 | `st merge` | | Merge PRs bottom -> current with provenance-aware descendant rebases, then sync local repo (`--no-sync` to skip); `st merge --remote` merges via GitHub API only (no local git; GitHub-only) |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
-| `st sync` | `rs` | Pull trunk from remote, detect and delete merged branches (incl. squash merges), reparent their children — **no rebasing** |
+| `st sync` | `rs` | Pull trunk from remote, detect and delete merged branches (incl. squash merges), reparent their children — **no rebasing; confirmed cleanup can also remove a safe linked worktree that still owns the branch** |
 | `st sync --restack` | `rs --restack` | Everything `sync` does, **then** rebase the current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
 | `st restack` | | Rebase current stack onto parents (local only, no fetch/delete) — auto-normalizes missing or merged parents before rebasing; `--stop-here` limits scope to ancestors + current |
