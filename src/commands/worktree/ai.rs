@@ -279,8 +279,17 @@ fn prepare_ai_launch_with_tmux_probe(
     Ok(PreparedAiLaunch { launch, messages })
 }
 
+fn has_lane_picker_terminal(stdin_is_terminal: bool, stderr_is_terminal: bool) -> bool {
+    stdin_is_terminal && stderr_is_terminal
+}
+
 fn pick_lane_interactively(repo: &GitRepo) -> Result<LaneSelection> {
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+    // dialoguer renders lane picker prompts on stderr, so shell-output wrappers
+    // can still host the interactive flow even when stdout is captured.
+    if !has_lane_picker_terminal(
+        std::io::stdin().is_terminal(),
+        std::io::stderr().is_terminal(),
+    ) {
         bail!("`st lane` with no name requires an interactive terminal");
     }
 
@@ -420,10 +429,18 @@ fn normalize_prompt(prompt: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_ai_launch_with_tmux_probe, AiLaneRequest};
+    use super::{has_lane_picker_terminal, prepare_ai_launch_with_tmux_probe, AiLaneRequest};
     use crate::commands::worktree::shared::LaunchSpec;
     use crate::config::Config;
     use anyhow::anyhow;
+
+    #[test]
+    fn lane_picker_requires_stdin_and_stderr_terminals() {
+        assert!(has_lane_picker_terminal(true, true));
+        assert!(!has_lane_picker_terminal(true, false));
+        assert!(!has_lane_picker_terminal(false, true));
+        assert!(!has_lane_picker_terminal(false, false));
+    }
 
     #[test]
     fn prepare_ai_launch_ignores_configured_model_for_ai_lanes() {
