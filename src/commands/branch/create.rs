@@ -28,8 +28,8 @@ pub fn run(
 
     // Get the branch name from either name or message
     // When using -m, the message is used for both branch name and commit message.
-    // IMPORTANT: `stax create -m` should commit only already-staged changes.
-    // Use -a/--all for the old explicit "stage everything" behavior.
+    // `stax create -m` respects already-staged changes. When nothing is staged
+    // it prompts interactively (or bails in non-TTY). Use -a/--all to skip the prompt.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum StageMode {
         None,
@@ -122,20 +122,13 @@ pub fn run(
 
     // Stage/commit behavior:
     // - StageMode::All => explicit stage all (`-a` or wizard choice)
-    // - StageMode::ExistingOnly => keep current index as-is (used by `-m` default)
+    // - StageMode::ExistingOnly => respect index; prompt when empty (used by `-m` default)
     // - StageMode::None => no staging/committing changes
     if stage_mode != StageMode::None {
         let workdir = repo.workdir()?;
 
         if stage_mode == StageMode::All {
-            let add_status = Command::new("git")
-                .args(["add", "-A"])
-                .current_dir(workdir)
-                .status()?;
-
-            if !add_status.success() {
-                bail!("Failed to stage changes");
-            }
+            stage_all(workdir)?;
         } else if stage_mode == StageMode::ExistingOnly && is_staging_area_empty(workdir) {
             // Nothing staged — prompt interactively (like `stax modify`)
             if has_uncommitted_changes(workdir) {
@@ -156,14 +149,7 @@ pub fn run(
                         .interact()?;
 
                     if should_stage {
-                        let add_status = Command::new("git")
-                            .args(["add", "-A"])
-                            .current_dir(workdir)
-                            .status()?;
-
-                        if !add_status.success() {
-                            bail!("Failed to stage changes");
-                        }
+                        stage_all(workdir)?;
                     } else {
                         println!(
                             "{}",
@@ -362,6 +348,18 @@ fn run_wizard(workdir: &Path, parent_branch: &str) -> Result<(String, Option<Str
 
     println!();
     Ok((name, commit_message, should_stage))
+}
+
+/// Run `git add -A` to stage all changes (tracked, modified, untracked).
+fn stage_all(workdir: &Path) -> Result<()> {
+    let status = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(workdir)
+        .status()?;
+    if !status.success() {
+        bail!("Failed to stage changes");
+    }
+    Ok(())
 }
 
 /// Returns true when the staging area has no changes relative to HEAD.
