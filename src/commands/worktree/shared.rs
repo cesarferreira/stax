@@ -584,7 +584,7 @@ pub fn compute_worktree_details(repo: &GitRepo, worktree: WorktreeInfo) -> Resul
 }
 
 pub fn build_launch_spec(
-    config: &Config,
+    _config: &Config,
     options: &LaunchOptions,
     default_tmux_session: &str,
 ) -> Result<Option<LaunchSpec>> {
@@ -603,7 +603,6 @@ pub fn build_launch_spec(
         let model = options
             .model
             .clone()
-            .or_else(|| config.ai.model.clone())
             .filter(|value| !value.trim().is_empty());
 
         let mut args = Vec::new();
@@ -1072,8 +1071,10 @@ fn parse_tmux_sessions_output(output: &str) -> Result<Vec<TmuxSession>> {
 mod tests {
     use super::{
         build_agent_launch_spec, build_tmux_launch_spec, default_tmux_session_name,
-        parse_tmux_sessions_output, ExistingTmuxSessionBehavior, LaunchSpec,
+        build_launch_spec, parse_tmux_sessions_output, ExistingTmuxSessionBehavior, LaunchOptions,
+        LaunchSpec,
     };
+    use crate::config::Config;
 
     #[test]
     fn default_tmux_session_name_sanitizes_invalid_chars() {
@@ -1122,6 +1123,36 @@ mod tests {
     }
 
     #[test]
+    fn build_launch_spec_ignores_configured_model_for_worktree_agents() {
+        let mut config = Config::default();
+        config.ai.model = Some("gpt-5.4".to_string());
+
+        let launch = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                agent: Some("claude".to_string()),
+                ..LaunchOptions::default()
+            },
+            "review-pass",
+        )
+        .expect("launch spec");
+
+        let launch = launch.expect("process launch");
+        match launch {
+            LaunchSpec::Process {
+                program,
+                args,
+                display,
+            } => {
+                assert_eq!(program, "claude");
+                assert!(args.is_empty());
+                assert_eq!(display, "claude");
+            }
+            LaunchSpec::Shell { .. } => panic!("expected process launch"),
+        }
+    }
+
+    #[test]
     fn build_tmux_launch_spec_uses_new_window_for_existing_prompted_sessions() {
         let inner = LaunchSpec::Process {
             program: "claude".to_string(),
@@ -1141,6 +1172,43 @@ mod tests {
                 assert!(command.contains("-c \"$PWD\""));
             }
             LaunchSpec::Process { .. } => panic!("expected shell launch"),
+        }
+    }
+
+    #[test]
+    fn build_launch_spec_keeps_explicit_cli_model_for_worktree_agents() {
+        let mut config = Config::default();
+        config.ai.model = Some("gpt-5.4".to_string());
+
+        let launch = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                agent: Some("claude".to_string()),
+                model: Some("claude-sonnet-4-5-20250929".to_string()),
+                ..LaunchOptions::default()
+            },
+            "review-pass",
+        )
+        .expect("launch spec");
+
+        let launch = launch.expect("process launch");
+        match launch {
+            LaunchSpec::Process {
+                program,
+                args,
+                display,
+            } => {
+                assert_eq!(program, "claude");
+                assert_eq!(
+                    args,
+                    vec![
+                        "--model".to_string(),
+                        "claude-sonnet-4-5-20250929".to_string(),
+                    ]
+                );
+                assert_eq!(display, "claude (claude-sonnet-4-5-20250929)");
+            }
+            LaunchSpec::Shell { .. } => panic!("expected process launch"),
         }
     }
 }
