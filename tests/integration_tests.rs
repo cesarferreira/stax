@@ -4146,6 +4146,76 @@ fn test_sync_does_not_delete_untracked_upstream_gone_by_default() {
 }
 
 #[test]
+fn test_sync_does_not_treat_closed_unmerged_pr_as_merged() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "feature-closed-pr"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    let main_sha = repo.get_commit_sha("main");
+    let metadata = serde_json::json!({
+        "parentBranchName": "main",
+        "parentBranchRevision": main_sha,
+        "prInfo": {
+            "number": 198,
+            "state": "CLOSED",
+            "isDraft": false
+        }
+    });
+    let metadata_json = metadata.to_string();
+
+    let mut hash_cmd = hermetic_git_command();
+    let metadata_oid_output = hash_cmd
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repo.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child
+                .stdin
+                .as_mut()
+                .expect("stdin")
+                .write_all(metadata_json.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("Failed to write metadata blob");
+    assert!(
+        metadata_oid_output.status.success(),
+        "Failed to hash metadata: {}",
+        TestRepo::stderr(&metadata_oid_output)
+    );
+    let metadata_oid = TestRepo::stdout(&metadata_oid_output).trim().to_string();
+
+    let metadata_ref = format!("refs/branch-metadata/{}", branch_name);
+    let update_ref = repo.git(&["update-ref", &metadata_ref, &metadata_oid]);
+    assert!(
+        update_ref.status.success(),
+        "Failed to update metadata ref: {}",
+        TestRepo::stderr(&update_ref)
+    );
+
+    repo.run_stax(&["t"]);
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == &branch_name),
+        "Expected closed-but-unmerged PR branch to remain after sync"
+    );
+}
+
+#[test]
 fn test_sync_delete_upstream_gone_deletes_untracked_local_branch() {
     let repo = TestRepo::new_with_remote();
 
