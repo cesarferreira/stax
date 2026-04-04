@@ -73,6 +73,32 @@ Verify install:
 st --version
 ```
 
+### Building from Source
+
+If you want to build from source using `cargo install` or `make install`:
+
+**Prerequisites:**
+- Debian/Ubuntu: `sudo apt-get install libssl-dev pkg-config`
+- Fedora/RHEL: `sudo dnf install openssl-devel`
+- Arch Linux: `sudo pacman -S openssl pkg-config`
+- macOS: (OpenSSL included by default)
+
+Then build with:
+
+```bash
+# Using cargo
+cargo install --path . --locked
+
+# Or using make
+make install
+```
+
+Alternatively, you can build without system OpenSSL dependencies using the vendored feature (slower first build):
+
+```bash
+cargo install --path . --locked --features vendored-openssl
+```
+
 <a id="quick-start"></a>
 ## 60-Second Quick Start
 
