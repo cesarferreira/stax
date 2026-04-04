@@ -1291,7 +1291,10 @@ fn find_merged_branches(
         }
     }
 
-    // Method 2: Check PR state from metadata - if PR is merged, branch should be deleted
+    // Method 2: Check PR state from metadata.
+    // Only an explicitly merged PR is a strong enough signal for cleanup here.
+    // Closed-but-unmerged PRs must be preserved unless some other merge/deletion
+    // heuristic below proves the branch is safe to clean up.
     for (branch, info) in &stack.branches {
         // Skip trunk
         if branch == &stack.trunk {
@@ -1303,11 +1306,9 @@ fn find_merged_branches(
             continue;
         }
 
-        // PR merged or closed without merge (cancelled) — both warrant cleanup offer.
         if matches!(
             info.pr_state.as_deref(),
-            Some(state)
-                if state.eq_ignore_ascii_case("merged") || state.eq_ignore_ascii_case("closed")
+            Some(state) if state.eq_ignore_ascii_case("merged")
         ) {
             merged.push(branch.clone());
         }
