@@ -5,7 +5,7 @@ use crate::remote;
 use anyhow::{bail, Result};
 use colored::Colorize;
 use console::Term;
-use dialoguer::{theme::ColorfulTheme, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use std::path::Path;
 use std::process::Command;
 
@@ -135,6 +135,48 @@ pub fn run(
 
             if !add_status.success() {
                 bail!("Failed to stage changes");
+            }
+        } else if stage_mode == StageMode::ExistingOnly && is_staging_area_empty(workdir) {
+            // Nothing staged — prompt interactively (like `stax modify`)
+            if has_uncommitted_changes(workdir) {
+                if Term::stderr().is_term() {
+                    let change_count = count_uncommitted_changes(workdir);
+                    let prompt = if change_count > 0 {
+                        format!(
+                            "No files staged. Stage all changes ({} files modified)?",
+                            change_count
+                        )
+                    } else {
+                        "No files staged. Stage all changes?".to_string()
+                    };
+
+                    let should_stage = Confirm::with_theme(&ColorfulTheme::default())
+                        .with_prompt(prompt)
+                        .default(true)
+                        .interact()?;
+
+                    if should_stage {
+                        let add_status = Command::new("git")
+                            .args(["add", "-A"])
+                            .current_dir(workdir)
+                            .status()?;
+
+                        if !add_status.success() {
+                            bail!("Failed to stage changes");
+                        }
+                    } else {
+                        println!(
+                            "{}",
+                            "Aborted. Stage files with `git add` first, or use `stax create -a -m \"message\"`."
+                                .dimmed()
+                        );
+                        return Ok(());
+                    }
+                } else {
+                    bail!(
+                        "No files staged. Stage files with `git add` first, or use `stax create -a -m \"message\"`."
+                    );
+                }
             }
         }
 
@@ -320,6 +362,16 @@ fn run_wizard(workdir: &Path, parent_branch: &str) -> Result<(String, Option<Str
 
     println!();
     Ok((name, commit_message, should_stage))
+}
+
+/// Returns true when the staging area has no changes relative to HEAD.
+fn is_staging_area_empty(workdir: &Path) -> bool {
+    Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(workdir)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(true)
 }
 
 /// Check if there are uncommitted changes in the working directory
