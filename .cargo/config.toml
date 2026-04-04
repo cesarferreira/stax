@@ -1,3 +1,9 @@
 # Use Apple's faster linker for debug builds on macOS
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/ld"]
+
+# Increase stack size for Windows to avoid stack overflow in CLI parsing tests
+# Default Windows stack is 1MB, we increase to 8MB to match Linux/macOS defaults
+# This is needed because clap's derive macro generates deeply nested code for our large CLI
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/STACK:8388608"]
