@@ -206,6 +206,24 @@ fn resolve_agent(cli_flag: Option<&str>, config: &mut Config, no_prompt: bool) -
     Ok(agent)
 }
 
+pub(crate) fn resolve_agent_non_interactive(
+    cli_flag: Option<&str>,
+    config: &Config,
+) -> Result<String> {
+    if let Some(agent) = cli_flag {
+        validate_agent_name(agent)?;
+        return Ok(agent.to_string());
+    }
+
+    if let Some(ref agent) = config.ai.agent {
+        if !agent.is_empty() {
+            return Ok(agent.clone());
+        }
+    }
+
+    auto_detect_agent(&detect_available_agents())
+}
+
 pub(crate) fn validate_agent_name(agent: &str) -> Result<()> {
     if !SUPPORTED_AGENTS.contains(&agent) {
         bail!(

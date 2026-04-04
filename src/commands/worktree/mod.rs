@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod cleanup;
 pub mod create;
 pub mod go;
