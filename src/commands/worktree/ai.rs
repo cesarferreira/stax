@@ -13,8 +13,10 @@ use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
+use console::{Color, Style, Term};
 use dialoguer::{theme::ColorfulTheme, FuzzySelect, Input};
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -329,22 +331,41 @@ fn pick_lane_interactively(repo: &GitRepo) -> Result<LaneSelection> {
         .max()
         .unwrap_or(6)
         .max(6);
+    let tmux_labels = managed
+        .iter()
+        .map(|details| lane_tmux_label(details, &tmux_sessions, tmux_available))
+        .collect::<Vec<_>>();
+    let status_labels = managed.iter().map(lane_status_summary).collect::<Vec<_>>();
+    let tmux_width = tmux_labels
+        .iter()
+        .map(|label| label.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let status_width = status_labels
+        .iter()
+        .map(|label| label.len())
+        .max()
+        .unwrap_or(6)
+        .max(6);
 
-    let mut items = vec!["+ Create new lane...".to_string()];
-    items.extend(managed.iter().map(|details| {
-        let tmux = lane_tmux_label(details, &tmux_sessions, tmux_available);
-        let status = lane_status_summary(details);
-        format!(
-            "{} {:<name_width$}  {:<branch_width$}  {:<13}  {}",
-            if details.info.is_current { "*" } else { " " },
-            details.info.name,
-            details.branch_label,
-            tmux,
-            status,
-            name_width = name_width,
-            branch_width = branch_width,
-        )
-    }));
+    let mut items = vec![create_new_lane_item()];
+    items.extend(
+        managed
+            .iter()
+            .zip(tmux_labels.iter().zip(status_labels.iter()))
+            .map(|(details, (tmux, status))| {
+                format_lane_picker_item(
+                    details,
+                    tmux,
+                    status,
+                    name_width,
+                    branch_width,
+                    tmux_width,
+                    status_width,
+                )
+            }),
+    );
 
     let default_idx = managed
         .iter()
@@ -352,10 +373,24 @@ fn pick_lane_interactively(repo: &GitRepo) -> Result<LaneSelection> {
         .map(|idx| idx + 1)
         .unwrap_or(0);
 
-    let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select lane")
+    let theme = lane_picker_theme();
+    let term = Term::stderr();
+    if term.is_term() {
+        let _ = term.clear_screen();
+        let _ = term.move_cursor_to(0, 0);
+    }
+
+    let selection = FuzzySelect::with_theme(&theme)
+        .with_prompt(lane_picker_prompt(
+            name_width,
+            branch_width,
+            tmux_width,
+            status_width,
+        ))
         .items(&items)
         .default(default_idx)
+        // ANSI-styled rows already distinguish the columns.
+        .highlight_matches(false)
         .interact()?;
 
     if selection == 0 {
@@ -392,15 +427,15 @@ fn lane_tmux_label(
     tmux_available: bool,
 ) -> String {
     if !tmux_available {
-        return "tmux:off".to_string();
+        return "off".to_string();
     }
 
     let session_name =
         default_tmux_session_name(&details.info.name).unwrap_or_else(|_| details.info.name.clone());
     match sessions.get(&session_name) {
-        Some(session) if session.attached_clients > 0 => "tmux:attached".to_string(),
-        Some(_) => "tmux:ready".to_string(),
-        None => "tmux:new".to_string(),
+        Some(session) if session.attached_clients > 0 => "attached".to_string(),
+        Some(_) => "ready".to_string(),
+        None => "new".to_string(),
     }
 }
 
@@ -427,12 +462,125 @@ fn normalize_prompt(prompt: Option<String>) -> Option<String> {
     })
 }
 
+fn lane_picker_theme() -> ColorfulTheme {
+    ColorfulTheme {
+        active_item_prefix: console::style("›".to_string()).for_stderr().green().bold(),
+        inactive_item_prefix: console::style(" ".to_string()).for_stderr(),
+        ..ColorfulTheme::default()
+    }
+}
+
+fn lane_picker_prompt(
+    name_width: usize,
+    branch_width: usize,
+    tmux_width: usize,
+    status_width: usize,
+) -> String {
+    format!(
+        "Select lane (* = current)\n  {:<lane_width$}  {:<branch_width$}  {:<tmux_width$}  {:<status_width$}\nFilter",
+        "LANE",
+        "BRANCH",
+        "TMUX",
+        "STATUS",
+        lane_width = name_width + 2,
+        branch_width = branch_width,
+        tmux_width = tmux_width,
+        status_width = status_width,
+    )
+}
+
+fn create_new_lane_item() -> String {
+    format!(
+        "{} {}",
+        render_stderr("+", lane_picker_style(Color::Green).bold()),
+        render_stderr("Create new lane...", lane_picker_style(Color::Green))
+    )
+}
+
+fn format_lane_picker_item(
+    details: &super::shared::WorktreeDetails,
+    tmux: &str,
+    status: &str,
+    name_width: usize,
+    branch_width: usize,
+    tmux_width: usize,
+    status_width: usize,
+) -> String {
+    let marker = if details.info.is_current {
+        render_stderr("*", lane_picker_style(Color::Yellow).bold())
+    } else {
+        " ".to_string()
+    };
+    let name = format!("{:<width$}", details.info.name, width = name_width);
+    let branch = format!("{:<width$}", details.branch_label, width = branch_width);
+    let tmux = format!("{:<width$}", tmux, width = tmux_width);
+    let status = format!("{:<width$}", status, width = status_width);
+
+    format!(
+        "{} {}  {}  {}  {}",
+        marker,
+        render_stderr(
+            &name,
+            if details.info.is_current {
+                lane_picker_style(Color::Cyan).bold()
+            } else {
+                lane_picker_style(Color::Cyan)
+            }
+        ),
+        render_stderr(&branch, lane_picker_style(Color::Green)),
+        render_stderr(&tmux, lane_tmux_style(tmux.trim_end())),
+        render_stderr(&status, lane_status_style(details, status.trim_end())),
+    )
+}
+
+fn lane_tmux_style(tmux: &str) -> Style {
+    match tmux {
+        "attached" => lane_picker_style(Color::Magenta).bold(),
+        "ready" => lane_picker_style(Color::Cyan),
+        "new" => lane_picker_style(Color::Blue),
+        "off" => lane_picker_style(Color::Yellow).dim(),
+        _ => lane_picker_style(Color::White),
+    }
+}
+
+fn lane_status_style(details: &super::shared::WorktreeDetails, status: &str) -> Style {
+    if details.has_conflicts || details.merge_in_progress || details.rebase_in_progress {
+        lane_picker_style(Color::Red).bold()
+    } else if details.dirty || details.info.is_prunable || details.info.is_locked {
+        lane_picker_style(Color::Yellow)
+    } else if status == "clean" {
+        lane_picker_style(Color::Green)
+    } else {
+        lane_picker_style(Color::Blue)
+    }
+}
+
+fn lane_picker_style(color: Color) -> Style {
+    Style::new().for_stderr().fg(color)
+}
+
+#[cfg(not(test))]
+fn render_stderr<T: Display>(value: T, style: Style) -> String {
+    format!("{}", style.apply_to(value))
+}
+
+#[cfg(test)]
+fn render_stderr<T: Display>(value: T, style: Style) -> String {
+    format!("{}", style.apply_to(value).force_styling(true))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{has_lane_picker_terminal, prepare_ai_launch_with_tmux_probe, AiLaneRequest};
+    use super::{
+        format_lane_picker_item, has_lane_picker_terminal, lane_picker_prompt, lane_tmux_label,
+        prepare_ai_launch_with_tmux_probe, AiLaneRequest,
+    };
     use crate::commands::worktree::shared::LaunchSpec;
     use crate::config::Config;
+    use crate::git::repo::WorktreeInfo;
     use anyhow::anyhow;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
 
     #[test]
     fn lane_picker_requires_stdin_and_stderr_terminals() {
@@ -564,6 +712,81 @@ mod tests {
         match prepared.launch {
             LaunchSpec::Process { program, .. } => assert_eq!(program, "claude"),
             LaunchSpec::Shell { .. } => panic!("expected direct process launch"),
+        }
+    }
+
+    #[test]
+    fn lane_picker_prompt_includes_column_headers() {
+        let prompt = lane_picker_prompt(12, 18, 8, 6);
+        assert!(prompt.contains("Select lane (* = current)"));
+        assert!(prompt.contains("LANE"));
+        assert!(prompt.contains("BRANCH"));
+        assert!(prompt.contains("TMUX"));
+        assert!(prompt.contains("STATUS"));
+        assert!(prompt.ends_with("Filter"));
+    }
+
+    #[test]
+    fn lane_tmux_label_uses_concise_states() {
+        let details = sample_lane_details();
+        assert_eq!(lane_tmux_label(&details, &HashMap::new(), false), "off");
+        assert_eq!(lane_tmux_label(&details, &HashMap::new(), true), "new");
+
+        let ready_sessions = HashMap::from([(
+            "lane".to_string(),
+            crate::commands::worktree::shared::TmuxSession {
+                name: "lane".to_string(),
+                attached_clients: 0,
+            },
+        )]);
+        assert_eq!(lane_tmux_label(&details, &ready_sessions, true), "ready");
+
+        let attached_sessions = HashMap::from([(
+            "lane".to_string(),
+            crate::commands::worktree::shared::TmuxSession {
+                name: "lane".to_string(),
+                attached_clients: 1,
+            },
+        )]);
+        assert_eq!(
+            lane_tmux_label(&details, &attached_sessions, true),
+            "attached"
+        );
+    }
+
+    #[test]
+    fn lane_picker_items_are_ansi_styled_and_labeled() {
+        let item = format_lane_picker_item(&sample_lane_details(), "ready", "clean", 8, 12, 8, 6);
+        assert!(item.contains("\u{1b}["));
+        assert!(item.contains("lane"));
+        assert!(item.contains("feature/lane"));
+        assert!(item.contains("ready"));
+        assert!(item.contains("clean"));
+    }
+
+    fn sample_lane_details() -> crate::commands::worktree::shared::WorktreeDetails {
+        crate::commands::worktree::shared::WorktreeDetails {
+            info: WorktreeInfo {
+                name: "lane".to_string(),
+                path: PathBuf::from("/tmp/lane"),
+                branch: Some("feature/lane".to_string()),
+                is_main: false,
+                is_current: true,
+                is_locked: false,
+                lock_reason: None,
+                is_prunable: false,
+                prunable_reason: None,
+            },
+            branch_label: "feature/lane".to_string(),
+            is_managed: true,
+            stack_parent: Some("main".to_string()),
+            dirty: false,
+            rebase_in_progress: false,
+            merge_in_progress: false,
+            has_conflicts: false,
+            marker: None,
+            ahead: None,
+            behind: None,
         }
     }
 }
