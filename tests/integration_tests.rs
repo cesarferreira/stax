@@ -2891,6 +2891,60 @@ fn test_sync_preserves_unmerged_branches() {
 }
 
 #[test]
+fn test_sync_does_not_treat_closed_pr_metadata_as_merged_branch() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "feature-closed-pr"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "content\n");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    let metadata = serde_json::json!({
+        "parentBranchName": "main",
+        "parentBranchRevision": repo.get_commit_sha("main"),
+        "prInfo": {
+            "number": 123,
+            "state": "closed",
+            "isDraft": false
+        }
+    });
+    let metadata_path = repo.path().join(".stax-test-closed-pr-metadata.json");
+    fs::write(&metadata_path, metadata.to_string()).expect("Failed to write metadata fixture");
+    let metadata_blob = repo.git(&[
+        "hash-object",
+        "-w",
+        metadata_path
+            .to_str()
+            .expect("metadata path should be valid UTF-8"),
+    ]);
+    assert!(
+        metadata_blob.status.success(),
+        "Failed to write metadata blob: {}",
+        TestRepo::stderr(&metadata_blob)
+    );
+    let metadata_sha = TestRepo::stdout(&metadata_blob).trim().to_string();
+    let metadata_ref = format!("refs/branch-metadata/{}", branch_name);
+    let update_ref = repo.git(&["update-ref", &metadata_ref, &metadata_sha]);
+    assert!(
+        update_ref.status.success(),
+        "Failed to update metadata ref: {}",
+        TestRepo::stderr(&update_ref)
+    );
+
+    repo.run_stax(&["t"]);
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == &branch_name),
+        "Expected closed-but-unmerged branch to remain after sync"
+    );
+}
+
+#[test]
 fn test_submit_without_remote_fails_gracefully() {
     let repo = TestRepo::new(); // No remote
 
