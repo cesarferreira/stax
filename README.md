@@ -56,6 +56,8 @@ curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-a
 curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-apple-darwin.tar.gz | tar xz
 # Linux (x86_64)
 curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-unknown-linux-gnu.tar.gz | tar xz
+# Linux (arm64 / aarch64, e.g. Raspberry Pi)
+curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-aarch64-unknown-linux-gnu.tar.gz | tar xz
 
 # Move both binaries to ~/.local/bin
 mkdir -p ~/.local/bin

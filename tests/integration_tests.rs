@@ -5590,7 +5590,7 @@ fn test_merge_combined_flags() {
 mod forge_mock_tests {
     use super::*;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
     use wiremock::matchers::{method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -5632,6 +5632,18 @@ mod forge_mock_tests {
             .env("GIT_CONFIG_SYSTEM", &gitconfig)
             .output()
             .expect("Failed to run git command")
+    }
+
+    fn git_in_dir_with_env(cwd: &Path, home: &Path, args: &[&str]) -> Output {
+        let gitconfig = ensure_empty_gitconfig(home);
+        hermetic_git_command()
+            .args(args)
+            .current_dir(cwd)
+            .env("HOME", home)
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env("GIT_CONFIG_SYSTEM", &gitconfig)
+            .output()
+            .expect("Failed to run git command in custom cwd")
     }
 
     fn setup_fake_github_remote(repo: &TestRepo, home: &Path) -> TempDir {
@@ -5856,6 +5868,10 @@ mod forge_mock_tests {
         run_stax_with_token_env(repo, home, "STAX_GITHUB_TOKEN", args)
     }
 
+    fn run_stax_in_dir_with_env(cwd: &Path, home: &Path, args: &[&str]) -> Output {
+        run_stax_in_dir_with_token_env(cwd, home, "STAX_GITHUB_TOKEN", args)
+    }
+
     fn run_stax_with_token_env(
         repo: &TestRepo,
         home: &Path,
@@ -5873,6 +5889,47 @@ mod forge_mock_tests {
             .env(token_env, "mock-token")
             .env("STAX_DISABLE_UPDATE_CHECK", "1");
         command.output().expect("Failed to execute stax")
+    }
+
+    fn run_stax_in_dir_with_token_env(
+        cwd: &Path,
+        home: &Path,
+        token_env: &str,
+        args: &[&str],
+    ) -> Output {
+        let gitconfig = ensure_empty_gitconfig(home);
+        let mut command = Command::new(stax_bin());
+        command
+            .args(args)
+            .current_dir(cwd)
+            .env("HOME", home)
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env("GIT_CONFIG_SYSTEM", &gitconfig)
+            .env(token_env, "mock-token")
+            .env("STAX_DISABLE_UPDATE_CHECK", "1");
+        command
+            .output()
+            .expect("Failed to execute stax in custom cwd")
+    }
+
+    fn worktree_path(repo: &TestRepo, home: &Path, lane_name: &str) -> PathBuf {
+        let output = run_stax_with_env(repo, home, &["wt", "path", lane_name]);
+        assert!(
+            output.status.success(),
+            "Failed to resolve worktree path: {}",
+            TestRepo::stderr(&output)
+        );
+        PathBuf::from(TestRepo::stdout(&output).trim())
+    }
+
+    fn git_current_branch(cwd: &Path, home: &Path) -> String {
+        let output = git_in_dir_with_env(cwd, home, &["rev-parse", "--abbrev-ref", "HEAD"]);
+        assert!(
+            output.status.success(),
+            "Failed to read current branch: {}",
+            TestRepo::stderr(&output)
+        );
+        TestRepo::stdout(&output).trim().to_string()
     }
 
     fn setup_branch_with_remote(home: &Path, branch: &str) -> TestRepo {
@@ -5974,6 +6031,180 @@ mod forge_mock_tests {
         assert!(
             mock_server.received_requests().await.is_none()
                 || mock_server.received_requests().await.unwrap().is_empty()
+        );
+    }
+
+    #[test]
+    fn test_managed_lane_branch_submit_no_pr_pushes_lane_branch_only() {
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "sibling-scope"]);
+        assert!(
+            output.status.success(),
+            "Failed to create sibling branch: {}",
+            TestRepo::stderr(&output)
+        );
+        repo.create_file("sibling.txt", "sibling\n");
+        repo.commit("Sibling commit");
+
+        let output = run_stax_with_env(&repo, home.path(), &["t"]);
+        assert!(
+            output.status.success(),
+            "Failed to return to trunk: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["wt", "c", "lane-submit", "--no-verify"],
+        );
+        assert!(
+            output.status.success(),
+            "Failed to create lane: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let lane_path = worktree_path(&repo, home.path(), "lane-submit");
+        fs::write(lane_path.join("lane.txt"), "lane\n").expect("Failed to write lane file");
+        let add = git_in_dir_with_env(&lane_path, home.path(), &["add", "-A"]);
+        assert!(add.status.success(), "{}", TestRepo::stderr(&add));
+        let commit = git_in_dir_with_env(&lane_path, home.path(), &["commit", "-m", "Lane commit"]);
+        assert!(commit.status.success(), "{}", TestRepo::stderr(&commit));
+
+        let lane_branch = git_current_branch(&lane_path, home.path());
+        let output = run_stax_in_dir_with_env(&lane_path, home.path(), &["bs", "--no-pr", "--yes"]);
+        assert!(
+            output.status.success(),
+            "Lane branch submit failed: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let remote_repo = remote_root.path().join("test").join("repo.git");
+        let heads = hermetic_git_command()
+            .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+            .current_dir(remote_repo)
+            .output()
+            .expect("Failed to list remote heads");
+        assert!(heads.status.success(), "{}", TestRepo::stderr(&heads));
+        let remote_heads = TestRepo::stdout(&heads);
+        assert!(
+            remote_heads.lines().any(|head| head == lane_branch),
+            "Expected lane branch on remote, got:\n{}",
+            remote_heads
+        );
+        assert!(
+            !remote_heads
+                .lines()
+                .any(|head| head.contains("sibling-scope")),
+            "Sibling branch should not be submitted by lane-scoped `bs`, got:\n{}",
+            remote_heads
+        );
+    }
+
+    #[tokio::test]
+    async fn test_managed_lane_branch_submit_creates_pr_on_mock_github() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_env(&repo, home.path(), &["wt", "c", "lane-pr", "--no-verify"]);
+        assert!(
+            output.status.success(),
+            "Failed to create lane: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let lane_path = worktree_path(&repo, home.path(), "lane-pr");
+        fs::write(lane_path.join("lane.txt"), "lane\n").expect("Failed to write lane file");
+        let add = git_in_dir_with_env(&lane_path, home.path(), &["add", "-A"]);
+        assert!(add.status.success(), "{}", TestRepo::stderr(&add));
+        let commit =
+            git_in_dir_with_env(&lane_path, home.path(), &["commit", "-m", "Lane PR commit"]);
+        assert!(commit.status.success(), "{}", TestRepo::stderr(&commit));
+
+        let lane_branch = git_current_branch(&lane_path, home.path());
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/77",
+                "id": 77,
+                "number": 77,
+                "state": "open",
+                "draft": true,
+                "body": "",
+                "head": { "ref": lane_branch.clone(), "sha": "aaaa", "label": format!("test:{}", lane_branch) },
+                "base": { "ref": "main", "sha": "bbbb" },
+                "html_url": "https://github.com/test/repo/pull/77"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/77/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/77"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/77",
+                "id": 77,
+                "number": 77,
+                "state": "open",
+                "draft": true,
+                "body": "",
+                "head": { "ref": lane_branch.clone(), "sha": "aaaa", "label": format!("test:{}", lane_branch) },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output =
+            run_stax_in_dir_with_env(&lane_path, home.path(), &["bs", "--yes", "--no-prompt"]);
+        assert!(
+            output.status.success(),
+            "Lane branch PR submit failed: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let pr_create = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "POST" && request.url.path() == "/repos/test/repo/pulls"
+            })
+            .expect("missing PR create request");
+        let payload: serde_json::Value = serde_json::from_slice(&pr_create.body).unwrap();
+        assert_eq!(payload["head"], lane_branch);
+        assert_eq!(payload["base"], "main");
+        assert_eq!(payload["draft"], true);
+
+        let metadata_ref = format!("refs/branch-metadata/{}", lane_branch);
+        let output = repo.git(&["show", &metadata_ref]);
+        assert!(
+            output.status.success(),
+            "Failed to read lane metadata: {}",
+            TestRepo::stderr(&output)
+        );
+        let metadata = TestRepo::stdout(&output);
+        assert!(
+            metadata.contains("\"number\":77"),
+            "Expected lane PR number in metadata, got: {}",
+            metadata
         );
     }
 
