@@ -325,7 +325,13 @@ st generate --pr-body --no-prompt
 st standup --summary
 ```
 
-Read more: [docs/integrations/pr-templates-and-ai.md](docs/integrations/pr-templates-and-ai.md) and [docs/workflows/reporting.md](docs/workflows/reporting.md)
+Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different agent and model. On first use stax prompts you to pick one and saves it. To configure or change at any time:
+
+```bash
+st config --set-ai
+```
+
+Read more: [docs/integrations/pr-templates-and-ai.md](docs/integrations/pr-templates-and-ai.md), [docs/workflows/reporting.md](docs/workflows/reporting.md), and [docs/configuration/index.md](docs/configuration/index.md)
 
 ## Docs Map
 

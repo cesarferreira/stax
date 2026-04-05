@@ -35,8 +35,25 @@ Main config path: `~/.config/stax/config.toml`
 # tips = true
 
 [ai]
-# agent = "claude" # or "codex" / "gemini" / "opencode"
-# model = "claude-sonnet-4-5-20250929"
+# agent = "claude" # or "codex" / "gemini" / "opencode" — global default
+# model = "claude-sonnet-4-5-20250929"  # global default model
+
+# Per-feature overrides — each section is optional and falls back to [ai] above
+[ai.generate]   # st generate --pr-body
+# agent = "codex"
+# model = "o4-mini"
+
+[ai.standup]    # st standup --summary
+# agent = "gemini"
+# model = "gemini-2.5-pro"
+
+[ai.resolve]    # st resolve
+# agent = "claude"
+# model = "claude-opus-4-5"
+
+[ai.lane]       # st lane / st worktree create --ai
+# agent = "claude"
+# (model is intentionally not inherited from [ai] for interactive lanes)
 
 [worktree]
 # root_dir = "" # default: ~/.stax/worktrees/<repo>
@@ -49,7 +66,45 @@ Main config path: `~/.config/stax/config.toml`
 # post_remove = "" # background hook run after removal
 ```
 
-## Reset saved AI defaults
+## AI configuration
+
+### Pick agent + model interactively
+
+Run the interactive picker to choose an agent and model for any feature (or as the global default):
+
+```bash
+st config --set-ai
+```
+
+You'll be asked which feature to configure (`generate`, `standup`, `resolve`, `lane`, or global default), then prompted to pick an agent and model. The selection is written to the appropriate `[ai.*]` section in `~/.config/stax/config.toml`.
+
+### First-use prompting
+
+If no agent is configured for a feature the first time you run it (e.g. `st standup --summary` with no `[ai.standup]` block), stax opens the same interactive picker automatically and persists your choice for future runs — no manual config editing required.
+
+### Resolution order
+
+For every AI-powered command the agent and model are resolved in this order:
+
+| Priority | Source |
+|----------|--------|
+| 1 | CLI flag (`--agent`, `--model`) |
+| 2 | Per-feature config (`[ai.generate]`, `[ai.standup]`, etc.) |
+| 3 | Global config (`[ai]`) |
+| 4 | Interactive first-use prompt (persisted automatically) |
+
+> **Note:** `[ai.lane]` intentionally does not fall back to `[ai].model`. Interactive coding agents are a different workload from one-shot generation tasks; a cheap model set for `st generate` should not silently apply to a long-running `st lane` session.
+
+### "Using …" confirmation
+
+Whenever stax invokes an AI agent it prints a confirmation line to stderr:
+
+```
+  Using claude with model claude-opus-4-5
+  Using codex
+```
+
+### Reset saved AI defaults
 
 Reset the saved `[ai]` defaults and immediately choose a new agent/model pair:
 
@@ -57,7 +112,7 @@ Reset the saved `[ai]` defaults and immediately choose a new agent/model pair:
 st config --reset-ai
 ```
 
-This clears `ai.agent` and `ai.model` from `~/.config/stax/config.toml`, then reopens the interactive picker in a real terminal and saves the new selection.
+This clears `ai.agent`, `ai.model`, and all per-feature overrides from `~/.config/stax/config.toml`, then reopens the interactive picker in a real terminal and saves the new selection.
 
 If you only want to clear the saved pairing without prompting:
 
