@@ -421,6 +421,9 @@ enum Commands {
         /// Skip confirmation when used with --reset-ai
         #[arg(short, long, requires = "reset_ai")]
         yes: bool,
+        /// Interactively set AI agent/model for a specific feature (or global default)
+        #[arg(long, conflicts_with = "reset_ai")]
+        set_ai: bool,
     },
 
     /// Initialize stax or reconfigure the repo trunk branch
@@ -661,6 +664,9 @@ enum Commands {
         /// AI agent to use (claude, codex, gemini, opencode). Defaults to config or auto-detect
         #[arg(long)]
         agent: Option<String>,
+        /// Model to use with the AI agent. Defaults to config or agent's default
+        #[arg(long)]
+        model: Option<String>,
         /// Output plain text with no colors or spinner (useful for piping)
         #[arg(long)]
         plain_text: bool,
@@ -1273,8 +1279,9 @@ pub fn run() -> Result<()> {
             reset_ai,
             no_prompt,
             yes,
+            set_ai,
         } => {
-            let result = commands::config::run(*reset_ai, *no_prompt, *yes);
+            let result = commands::config::run(*reset_ai, *no_prompt, *yes, *set_ai);
             update::show_update_notification();
             update::check_in_background();
             return result;
@@ -1545,8 +1552,9 @@ pub fn run() -> Result<()> {
             summary,
             jit,
             agent,
+            model,
             plain_text,
-        } => commands::standup::run(json, all, hours, summary, jit, agent, plain_text),
+        } => commands::standup::run(json, all, hours, summary, jit, agent, model, plain_text),
         Commands::Generate {
             pr_body,
             edit,

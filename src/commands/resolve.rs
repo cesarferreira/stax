@@ -6,6 +6,7 @@ use colored::Colorize;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::IsTerminal;
 
 #[derive(Debug, Deserialize)]
 struct ResolveResponse {
@@ -34,9 +35,9 @@ pub fn run(
     }
 
     let (agent, model) = resolve_agent_and_model(agent_flag, model_flag)?;
+    generate::print_using_agent(&agent, model.as_deref());
     println!(
-        "Resolving rebase conflicts with {} (max rounds: {})",
-        agent.cyan().bold(),
+        "  Resolving rebase conflicts (max rounds: {})",
         max_rounds.to_string().cyan()
     );
 
@@ -90,21 +91,30 @@ fn resolve_agent_and_model(
     agent_flag: Option<String>,
     model_flag: Option<String>,
 ) -> Result<(String, Option<String>)> {
-    let config = Config::load()?;
-    let agent = agent_flag
-        .or(config.ai.agent)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .context(
+    let mut config = Config::load()?;
+
+    let agent = if let Some(a) = agent_flag.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+        generate::validate_agent_name(&a)?;
+        a
+    } else if let Some(a) = config.ai.agent_for("resolve") {
+        a.to_string()
+    } else if std::io::stdin().is_terminal() {
+        // First-use: prompt and persist to [ai.resolve]
+        let (a, _) = generate::prompt_for_feature_ai(&mut config, "resolve")?;
+        a
+    } else {
+        return Err(anyhow::anyhow!(
             "No AI agent configured. Add [ai] agent = \"claude\" (or \"codex\" / \"gemini\" / \"opencode\") \
 to ~/.config/stax/config.toml, or pass --agent <name>.",
-        )?;
+        ));
+    };
+
     generate::validate_agent_name(&agent)?;
 
     let model = model_flag
-        .or(config.ai.model)
         .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .or_else(|| config.ai.model_for("resolve").map(String::from));
 
     Ok((agent, model))
 }
