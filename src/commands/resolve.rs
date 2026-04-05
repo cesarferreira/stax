@@ -96,12 +96,17 @@ fn resolve_agent_and_model(
     let agent = if let Some(a) = agent_flag.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
         generate::validate_agent_name(&a)?;
         a
-    } else if let Some(a) = config.ai.agent_for("resolve") {
-        a.to_string()
+    } else if config.ai.resolve.agent.is_some() {
+        // Per-feature config is set — use it directly
+        config.ai.agent_for("resolve").unwrap().to_string()
     } else if std::io::stdin().is_terminal() {
-        // First-use: prompt and persist to [ai.resolve]
+        // No per-feature config — prompt even if a global default exists,
+        // so the user can set a resolve-specific preference
         let (a, _) = generate::prompt_for_feature_ai(&mut config, "resolve")?;
         a
+    } else if let Some(a) = config.ai.agent_for("resolve") {
+        // Non-interactive fallback: use global silently
+        a.to_string()
     } else {
         return Err(anyhow::anyhow!(
             "No AI agent configured. Add [ai] agent = \"claude\" (or \"codex\" / \"gemini\" / \"opencode\") \

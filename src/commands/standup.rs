@@ -522,12 +522,17 @@ fn generate_summary(
 
     let agent = if let Some(a) = agent_flag {
         a.to_string()
-    } else if let Some(a) = config.ai.agent_for("standup") {
-        a.to_string()
+    } else if config.ai.standup.agent.is_some() {
+        // Per-feature config is set — use it directly
+        config.ai.agent_for("standup").unwrap().to_string()
     } else if std::io::stdin().is_terminal() {
-        // First-use: prompt and persist to [ai.standup]
+        // No per-feature config — prompt even if a global default exists,
+        // so the user can set a standup-specific preference
         let (a, _) = generate::prompt_for_feature_ai(&mut config, "standup")?;
         a
+    } else if let Some(a) = config.ai.agent_for("standup") {
+        // Non-interactive fallback: use global silently
+        a.to_string()
     } else {
         return Err(anyhow::anyhow!(
             "No AI agent configured. Add [ai] agent = \"claude\" (or \"codex\" / \"gemini\" / \"opencode\") \

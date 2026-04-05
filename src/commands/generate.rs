@@ -179,12 +179,17 @@ fn resolve_agent(cli_flag: Option<&str>, config: &mut Config, no_prompt: bool) -
         return Ok(agent.to_string());
     }
 
-    // 2. Per-feature config, then global config
-    if let Some(agent) = config.ai.agent_for("generate") {
-        return Ok(agent.to_string());
+    // 2. Per-feature config is set — use it (no prompt needed)
+    if config.ai.generate.agent.is_some() {
+        return Ok(config.ai.agent_for("generate").unwrap().to_string());
     }
 
+    // No per-feature config yet
     if no_prompt {
+        // Non-interactive path: use global silently, or auto-detect as last resort
+        if let Some(agent) = config.ai.agent_for("generate") {
+            return Ok(agent.to_string());
+        }
         let agent = auto_detect_agent(&detect_available_agents())?;
         println!(
             "  {} {}",
@@ -194,7 +199,7 @@ fn resolve_agent(cli_flag: Option<&str>, config: &mut Config, no_prompt: bool) -
         return Ok(agent);
     }
 
-    // First-use: prompt and persist to [ai.generate]
+    // First-use: prompt and persist to [ai.generate], even if a global default exists
     let (agent, _) = prompt_for_feature_ai(config, "generate")?;
     Ok(agent)
 }

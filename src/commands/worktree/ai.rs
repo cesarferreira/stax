@@ -62,8 +62,9 @@ pub fn run(
     let repo = GitRepo::open()?;
     let mut config = Config::load()?;
 
-    // First-use: if no agent is configured for lane (and no CLI override), prompt once and persist.
-    if agent.is_none() && config.ai.agent_for("lane").is_none() && std::io::stdin().is_terminal() {
+    // First-use: prompt if no per-feature lane agent is set (even if a global default exists),
+    // so the user can configure a lane-specific agent.
+    if agent.is_none() && config.ai.lane.agent.is_none() && std::io::stdin().is_terminal() {
         generate::prompt_for_feature_ai(&mut config, "lane")?;
     }
 
