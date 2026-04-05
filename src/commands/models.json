@@ -1,0 +1,21 @@
+{
+  "claude": [
+    { "id": "claude-sonnet-4-5-20250929", "description": "Sonnet 4.5 · balanced · recommended" },
+    { "id": "claude-haiku-4-5-20251001",  "description": "Haiku 4.5 · fastest · cheapest" },
+    { "id": "claude-opus-4-6",            "description": "Opus 4.6 · most capable · slower" },
+    { "id": "claude-sonnet-4-20250514",   "description": "Sonnet 4 · previous gen" }
+  ],
+  "codex": [
+    { "id": "gpt-5.4",       "description": "GPT-5.4 · latest · balanced" },
+    { "id": "gpt-5.4-pro",   "description": "GPT-5.4 Pro · most capable · premium" },
+    { "id": "gpt-5.3-codex", "description": "GPT-5.3 Codex · code-focused · prev gen" },
+    { "id": "gpt-4.1-mini",  "description": "GPT-4.1 Mini · fast · cheap" }
+  ],
+  "gemini": [
+    { "id": "gemini-2.5-pro",   "description": "Gemini 2.5 Pro · most capable" },
+    { "id": "gemini-2.5-flash", "description": "Gemini 2.5 Flash · fast · cheap" }
+  ],
+  "opencode": [
+    { "id": "opencode/gpt-5.1-codex", "description": "GPT-5.1 Codex via OpenCode" }
+  ]
+}

@@ -14,32 +14,26 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 // ---------------------------------------------------------------------------
-// Known models per agent (for validation and interactive picker)
+// Known models per agent — loaded from models.json at compile time.
+// To add/update models edit src/commands/models.json; no Rust changes needed.
 // ---------------------------------------------------------------------------
 
-const CLAUDE_MODELS: &[(&str, &str)] = &[
-    ("claude-sonnet-4-5-20250929", "Sonnet 4.5 · balanced · recommended"),
-    ("claude-haiku-4-5-20251001", "Haiku 4.5 · fastest · cheapest"),
-    ("claude-opus-4-6", "Opus 4.6 · most capable · slower"),
-    ("claude-sonnet-4-20250514", "Sonnet 4 · previous gen"),
-];
+const MODELS_JSON: &str = include_str!("models.json");
 
-const CODEX_MODELS: &[(&str, &str)] = &[
-    ("gpt-5.4", "GPT-5.4 · latest · balanced"),
-    ("gpt-5.4-pro", "GPT-5.4 Pro · most capable · premium"),
-    ("gpt-5.3-codex", "GPT-5.3 Codex · code-focused · prev gen"),
-    ("gpt-4.1-mini", "GPT-4.1 Mini · fast · cheap"),
-];
+#[derive(Deserialize)]
+struct ModelsFile {
+    claude: Vec<ModelOption>,
+    codex: Vec<ModelOption>,
+    gemini: Vec<ModelOption>,
+    opencode: Vec<ModelOption>,
+}
 
-const GEMINI_MODELS: &[(&str, &str)] = &[
-    ("gemini-2.5-pro", "Gemini 2.5 Pro · most capable"),
-    ("gemini-2.5-flash", "Gemini 2.5 Flash · fast · cheap"),
-];
-
-const OPENCODE_MODELS: &[(&str, &str)] = &[(
-    "opencode/gpt-5.1-codex",
-    "GPT-5.1 Codex via OpenCode",
-)];
+fn models_file() -> &'static ModelsFile {
+    static PARSED: std::sync::OnceLock<ModelsFile> = std::sync::OnceLock::new();
+    PARSED.get_or_init(|| {
+        serde_json::from_str(MODELS_JSON).expect("src/commands/models.json is invalid JSON")
+    })
+}
 
 const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
 
@@ -332,7 +326,7 @@ fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
 fn validate_model_soft(agent: &str, model: &str) {
     let models = known_models_for(agent);
     if !models.is_empty()
-        && !models.iter().any(|(id, _)| *id == model)
+        && !models.iter().any(|m| m.id == model)
         && !model_matches_agent_family(agent, model)
     {
         eprintln!(
@@ -344,20 +338,21 @@ fn validate_model_soft(agent: &str, model: &str) {
     }
 }
 
-fn known_models_for(agent: &str) -> &'static [(&'static str, &'static str)] {
+fn known_models_for(agent: &str) -> Vec<ModelOption> {
+    let f = models_file();
     match agent {
-        "claude" => CLAUDE_MODELS,
-        "codex" => CODEX_MODELS,
-        "gemini" => GEMINI_MODELS,
-        "opencode" => OPENCODE_MODELS,
-        _ => &[],
+        "claude" => f.claude.clone(),
+        "codex" => f.codex.clone(),
+        "gemini" => f.gemini.clone(),
+        "opencode" => f.opencode.clone(),
+        _ => vec![],
     }
 }
 
 fn known_agent_for_model(model: &str) -> Option<&'static str> {
     ["claude", "gemini", "opencode"]
         .into_iter()
-        .find(|agent| known_models_for(agent).iter().any(|(id, _)| *id == model))
+        .find(|agent| known_models_for(agent).iter().any(|m| m.id == model))
         .or_else(|| {
             if model_matches_agent_family("codex", model) {
                 Some("codex")
@@ -531,7 +526,7 @@ pub(crate) fn print_using_agent(agent: &str, model: Option<&str>) {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 struct ModelOption {
     id: String,
     description: String,
@@ -545,14 +540,7 @@ fn available_models_for(agent: &str) -> Vec<ModelOption> {
             }
         }
     }
-
     known_models_for(agent)
-        .iter()
-        .map(|(id, description)| ModelOption {
-            id: (*id).to_string(),
-            description: (*description).to_string(),
-        })
-        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -892,14 +880,14 @@ mod tests {
     #[test]
     fn known_models_include_gemini_defaults() {
         let models = known_models_for("gemini");
-        assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-pro"));
-        assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-flash"));
+        assert!(models.iter().any(|m| m.id == "gemini-2.5-pro"));
+        assert!(models.iter().any(|m| m.id == "gemini-2.5-flash"));
     }
 
     #[test]
     fn known_models_include_opencode_defaults() {
         let models = known_models_for("opencode");
-        assert!(models.iter().any(|(id, _)| *id == "opencode/gpt-5.1-codex"));
+        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.1-codex"));
     }
 
     #[test]
