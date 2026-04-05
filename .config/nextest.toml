@@ -1,3 +1,3 @@
 [profile.default]
 # The Commands enum in cli.rs is large; increase thread stack to avoid overflow on Linux CI.
-test-thread-stack-size = 8388608  # 8 MiB
+test-thread-stack-size = 4194304  # 4 MiB (Linux default is 2 MiB; the large Commands enum needs headroom)
