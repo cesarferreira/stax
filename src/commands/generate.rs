@@ -18,30 +18,27 @@ use std::process::{Command, Stdio};
 // ---------------------------------------------------------------------------
 
 const CLAUDE_MODELS: &[(&str, &str)] = &[
-    (
-        "claude-sonnet-4-5-20250929",
-        "Sonnet 4.5 (default, balanced)",
-    ),
-    ("claude-haiku-4-5-20251001", "Haiku 4.5 (fastest, cheapest)"),
-    ("claude-opus-4-6", "Opus 4.6 (most capable)"),
-    ("claude-sonnet-4-20250514", "Sonnet 4"),
+    ("claude-sonnet-4-5-20250929", "Sonnet 4.5 · balanced · recommended"),
+    ("claude-haiku-4-5-20251001", "Haiku 4.5 · fastest · cheapest"),
+    ("claude-opus-4-6", "Opus 4.6 · most capable · slower"),
+    ("claude-sonnet-4-20250514", "Sonnet 4 · previous gen"),
 ];
 
 const CODEX_MODELS: &[(&str, &str)] = &[
-    ("gpt-5.4", "GPT-5.4"),
-    ("gpt-5.4-pro", "GPT-5.4 Pro"),
-    ("gpt-5.3-codex", "GPT-5.3 Codex"),
-    ("gpt-4.1-mini", "GPT-4.1 Mini"),
+    ("gpt-5.4", "GPT-5.4 · latest · balanced"),
+    ("gpt-5.4-pro", "GPT-5.4 Pro · most capable · premium"),
+    ("gpt-5.3-codex", "GPT-5.3 Codex · code-focused · prev gen"),
+    ("gpt-4.1-mini", "GPT-4.1 Mini · fast · cheap"),
 ];
 
 const GEMINI_MODELS: &[(&str, &str)] = &[
-    ("gemini-2.5-pro", "Gemini 2.5 Pro (default)"),
-    ("gemini-2.5-flash", "Gemini 2.5 Flash (faster, cheaper)"),
+    ("gemini-2.5-pro", "Gemini 2.5 Pro · most capable"),
+    ("gemini-2.5-flash", "Gemini 2.5 Flash · fast · cheap"),
 ];
 
 const OPENCODE_MODELS: &[(&str, &str)] = &[(
     "opencode/gpt-5.1-codex",
-    "GPT-5.1 Codex via OpenCode (default)",
+    "GPT-5.1 Codex via OpenCode",
 )];
 
 const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
@@ -310,10 +307,14 @@ fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let items: Vec<String> = models
-        .iter()
-        .map(|model| format!("{} — {}", model.id, model.description))
-        .collect();
+    // "Default" is always item 0 — selecting it saves model=None so the agent
+    // picks its own default rather than pinning a specific version.
+    let mut items = vec!["Default — let the agent decide".to_string()];
+    items.extend(
+        models
+            .iter()
+            .map(|m| format!("{} — {}", m.id, m.description)),
+    );
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Select model for {}", agent))
@@ -321,7 +322,11 @@ fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
         .default(0)
         .interact()?;
 
-    Ok(Some(models[selection].id.clone()))
+    if selection == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(models[selection - 1].id.clone()))
+    }
 }
 
 fn validate_model_soft(agent: &str, model: &str) {
