@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use colored::Colorize;
 use regex::Regex;
 use serde::Serialize;
+use std::io::IsTerminal;
 use std::process::Command;
 
 /// JSON output structure for standup
@@ -134,6 +135,7 @@ fn collect_standup_data(all: bool, hours: i64) -> Result<StandupData> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     json: bool,
     all: bool,
@@ -141,6 +143,7 @@ pub fn run(
     summary: bool,
     jit: bool,
     agent_flag: Option<String>,
+    model_flag: Option<String>,
     plain_text: bool,
 ) -> Result<()> {
     if plain_text && !summary {
@@ -160,7 +163,7 @@ pub fn run(
     if summary {
         // --summary --json → {"summary": "..."}
         if json {
-            let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), true)?;
+            let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), model_flag.as_deref(), true)?;
             let mut out = serde_json::json!({ "summary": raw.trim() });
             if jit {
                 out["jit"] = serde_json::to_value(&jit_summary)?;
@@ -171,7 +174,7 @@ pub fn run(
         }
         // --summary --plain-text → raw text, no spinner, no colors
         if plain_text {
-            let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), true)?;
+            let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), model_flag.as_deref(), true)?;
             println!("{}", raw.trim());
             return Ok(());
         }
@@ -184,7 +187,7 @@ pub fn run(
             println!();
         }
         // --summary alone → spinner + card with colors
-        let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), false)?;
+        let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), model_flag.as_deref(), false)?;
         print_summary_card(raw.trim());
         return Ok(());
     }
@@ -512,26 +515,34 @@ fn generate_summary(
     data: &StandupData,
     jit: Option<&JitSummary>,
     agent_flag: Option<&str>,
+    model_flag: Option<&str>,
     quiet: bool,
 ) -> Result<String> {
-    let config = Config::load()?;
+    let mut config = Config::load()?;
 
     let agent = if let Some(a) = agent_flag {
         a.to_string()
+    } else if config.ai.standup.agent.is_some() {
+        // Per-feature config is set — use it directly
+        config.ai.agent_for("standup").unwrap().to_string()
+    } else if std::io::stdin().is_terminal() {
+        // No per-feature config — prompt even if a global default exists,
+        // so the user can set a standup-specific preference
+        let (a, _) = generate::prompt_for_feature_ai(&mut config, "standup")?;
+        a
+    } else if let Some(a) = config.ai.agent_for("standup") {
+        // Non-interactive fallback: use global silently
+        a.to_string()
     } else {
-        config
-            .ai
-            .agent
-            .as_deref()
-            .filter(|a| !a.is_empty())
-            .context(
-                "No AI agent configured. Add [ai] agent = \"claude\" (or \"codex\" / \"gemini\" / \"opencode\") \
-                 to ~/.config/stax/config.toml, or pass --agent <name>",
-            )?
-            .to_string()
+        return Err(anyhow::anyhow!(
+            "No AI agent configured. Add [ai] agent = \"claude\" (or \"codex\" / \"gemini\" / \"opencode\") \
+             to ~/.config/stax/config.toml, or pass --agent <name>",
+        ));
     };
 
-    let model = config.ai.model.clone();
+    let model = model_flag
+        .map(String::from)
+        .or_else(|| config.ai.model_for("standup").map(String::from));
     let prompt = build_standup_prompt(data, jit);
 
     if quiet {
@@ -539,7 +550,8 @@ fn generate_summary(
         return Ok(raw);
     }
 
-    let timer = LiveTimer::new(&format!("Generating standup summary with {}", agent));
+    generate::print_using_agent(&agent, model.as_deref());
+    let timer = LiveTimer::new("Generating standup summary...");
     let result = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt);
     timer.finish_timed();
     result

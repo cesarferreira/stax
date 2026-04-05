@@ -26,12 +26,12 @@ More than stacked branches: `stax` can merge an entire stack when CI turns green
 
 ## Why stax
 
+- Run parallel AI coding agents on isolated branches, all tracked as a normal stack (`st lane ...`)
 - Replace one giant PR with a clean stack of small, focused PRs
 - Keep shipping while lower-stack PRs are still in review
 - Merge from the bottom automatically when PRs are ready, locally or remotely (`st merge --when-ready`, `st merge --remote`)
 - Resolve in-progress rebase conflicts with AI, limited to the conflicted files (`st resolve`)
 - Recover from risky restacks and rewrites immediately (`st undo`, `st redo`)
-- Run parallel AI worktree lanes as normal tracked branches (`st lane ...`)
 - Generate PR bodies and spoken standup summaries with your preferred AI agent
 - Navigate the full stack and diffs from an interactive TUI
 
@@ -185,6 +185,53 @@ For complete command and flag reference: [docs/commands/core.md](docs/commands/c
 
 ## Key Capabilities
 
+<a id="worktree-lanes"></a>
+### Parallel AI Worktree Lanes (`st lane`)
+
+You have three things to ship today. Spin up three AI agents, each on its own isolated branch, all tracked as normal stax branches.
+
+```bash
+# Three tasks, three agents, zero shared state
+st lane fix-auth-refresh   "Fix the token refresh edge case from issue #142"
+st lane stabilize-ci       "Stabilize the 3 flaky tests in the checkout flow"
+st lane api-docs           "Update API docs for the new /users endpoint"
+```
+
+While the agents run, you keep working in your main checkout. When you're ready to review:
+
+```bash
+# All three lanes show up in the normal stack view
+st ls
+# ◉  main
+# ○  fix-auth-refresh     (claude, running)
+# ○  stabilize-ci         (claude, running)
+# ○  api-docs             (claude, running)
+
+# Re-enter any lane — re-attaches to its tmux session
+st lane fix-auth-refresh
+
+# Trunk moved while they were running? Restack every lane at once
+st wt rs
+
+# Submit PRs for the ones that are ready
+st ss
+
+# Open the worktree dashboard to see and manage all lanes at a glance
+st wt
+```
+
+Each lane is a real Git worktree with a real branch and normal stax metadata — it shows in `st ls`, participates in restack/sync/undo, and can be reopened at any time. No hidden scratch directories, no lost work.
+
+```bash
+# Rich status, cleanup
+st wt ll
+st wt cleanup --dry-run
+st wt cleanup
+st wt rm fix-auth-refresh --delete-branch
+```
+
+Read more: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md)
+
 <a id="cascade-stack-merge"></a>
 ### Cascade Stack Merge
 
@@ -278,42 +325,6 @@ Shortcuts: `st w` (list), `st wtc [branch]` (create), `st wtgo <name>` (go), `st
 
 Read more: [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
 
-<a id="worktree-lanes"></a>
-### Worktree Lanes For AI
-
-Run 2, 3, or 8 AI coding sessions in parallel without sharing one working directory.
-
-Each lane is an isolated Git worktree with a real branch behind it. When stax creates the branch for a lane, it also writes normal stax metadata, so that lane shows up in `st ls`, participates in restack/sync/undo, and can be reopened instantly with `st wt go` or `st lane`.
-
-`st lane` is the fast AI path: it creates or reuses the lane, launches your configured agent, prefers tmux when available, reattaches to existing sessions, and opens a fresh tmux window when you pass a new prompt into an already-running lane.
-
-```bash
-# Spin up three lanes in parallel
-st lane auth-refresh "fix token refresh edge cases"
-st lane flaky-tests "stabilize the flaky test suite"
-st wt c ui-polish --run "cursor ."
-st lane review-pass "address the open PR comments"
-
-# They are normal stax branches, not hidden scratch dirs
-st ls
-
-# Trunk moved while they were running? Restack every managed lane
-st wt rs
-
-# Re-enter any lane explicitly or open the lane picker
-st lane flaky-tests
-st lane
-
-# Rich status + cleanup
-st wt ll
-st wt cleanup --dry-run
-st wt cleanup
-st wt prune
-st wt rm auth-refresh --delete-branch
-```
-
-Read more: [docs/workflows/agent-worktrees.md](docs/workflows/agent-worktrees.md)
-
 ### AI PR Body + Standup Summary
 
 Use your configured AI agent to draft PR bodies and generate daily standup summaries.
@@ -329,7 +340,13 @@ st generate --pr-body --no-prompt
 st standup --summary
 ```
 
-Read more: [docs/integrations/pr-templates-and-ai.md](docs/integrations/pr-templates-and-ai.md) and [docs/workflows/reporting.md](docs/workflows/reporting.md)
+Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different agent and model. On first use stax prompts you to pick one and saves it. To configure or change at any time:
+
+```bash
+st config --set-ai
+```
+
+Read more: [docs/integrations/pr-templates-and-ai.md](docs/integrations/pr-templates-and-ai.md), [docs/workflows/reporting.md](docs/workflows/reporting.md), and [docs/configuration/index.md](docs/configuration/index.md)
 
 ## Docs Map
 

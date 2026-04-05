@@ -96,6 +96,14 @@ pub struct UiConfig {
     pub tips: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct AiFeatureConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AiConfig {
     /// AI agent to use: "claude", "codex", "gemini", or "opencode" (default: auto-detect)
@@ -104,6 +112,70 @@ pub struct AiConfig {
     /// Model to use with the AI agent (default: agent's own default)
     #[serde(default)]
     pub model: Option<String>,
+    /// Per-feature overrides for PR body generation (`stax generate`, `stax submit --ai-body`)
+    #[serde(default, skip_serializing_if = "AiFeatureConfig::is_empty")]
+    pub generate: AiFeatureConfig,
+    /// Per-feature overrides for standup summaries (`stax standup --summary`)
+    #[serde(default, skip_serializing_if = "AiFeatureConfig::is_empty")]
+    pub standup: AiFeatureConfig,
+    /// Per-feature overrides for conflict resolution (`stax resolve`)
+    #[serde(default, skip_serializing_if = "AiFeatureConfig::is_empty")]
+    pub resolve: AiFeatureConfig,
+    /// Per-feature overrides for interactive AI lanes (`stax lane`)
+    #[serde(default, skip_serializing_if = "AiFeatureConfig::is_empty")]
+    pub lane: AiFeatureConfig,
+}
+
+impl AiFeatureConfig {
+    pub fn is_empty(&self) -> bool {
+        self.agent.is_none() && self.model.is_none()
+    }
+}
+
+impl AiConfig {
+    /// Return a mutable reference to the per-feature config for `feature`.
+    /// Returns `None` for unknown feature keys.
+    pub fn feature_config_mut(&mut self, feature: &str) -> Option<&mut AiFeatureConfig> {
+        match feature {
+            "generate" => Some(&mut self.generate),
+            "standup" => Some(&mut self.standup),
+            "resolve" => Some(&mut self.resolve),
+            "lane" => Some(&mut self.lane),
+            _ => None,
+        }
+    }
+
+    /// Resolve the agent for a given feature, falling back to the global default.
+    pub fn agent_for(&self, feature: &str) -> Option<&str> {
+        let feature_cfg = match feature {
+            "generate" => &self.generate,
+            "standup" => &self.standup,
+            "resolve" => &self.resolve,
+            "lane" => &self.lane,
+            _ => return self.agent.as_deref(),
+        };
+        feature_cfg
+            .agent
+            .as_deref()
+            .filter(|a| !a.is_empty())
+            .or(self.agent.as_deref())
+    }
+
+    /// Resolve the model for a given feature, falling back to the global default.
+    pub fn model_for(&self, feature: &str) -> Option<&str> {
+        let feature_cfg = match feature {
+            "generate" => &self.generate,
+            "standup" => &self.standup,
+            "resolve" => &self.resolve,
+            "lane" => &self.lane,
+            _ => return self.model.as_deref(),
+        };
+        feature_cfg
+            .model
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .or(self.model.as_deref())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -320,9 +392,18 @@ impl Config {
 
     /// Clear any saved AI agent/model defaults so interactive commands can re-prompt.
     pub fn clear_ai_defaults(&mut self) -> bool {
-        let had_saved_defaults = self.ai.agent.is_some() || self.ai.model.is_some();
+        let had_saved_defaults = self.ai.agent.is_some()
+            || self.ai.model.is_some()
+            || !self.ai.generate.is_empty()
+            || !self.ai.standup.is_empty()
+            || !self.ai.resolve.is_empty()
+            || !self.ai.lane.is_empty();
         self.ai.agent = None;
         self.ai.model = None;
+        self.ai.generate = AiFeatureConfig::default();
+        self.ai.standup = AiFeatureConfig::default();
+        self.ai.resolve = AiFeatureConfig::default();
+        self.ai.lane = AiFeatureConfig::default();
         had_saved_defaults
     }
 

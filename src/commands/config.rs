@@ -2,13 +2,16 @@ use crate::commands::generate;
 use crate::config::Config;
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{theme::ColorfulTheme, Confirm, Select};
 use std::fs;
 use std::io::IsTerminal;
 
-pub fn run(reset_ai: bool, no_prompt: bool, yes: bool) -> Result<()> {
+pub fn run(reset_ai: bool, no_prompt: bool, yes: bool, set_ai: bool) -> Result<()> {
     if reset_ai {
         return reset_ai_defaults(no_prompt, yes);
+    }
+    if set_ai {
+        return set_ai_interactive();
     }
 
     let path = Config::path()?;
@@ -30,6 +33,39 @@ pub fn run(reset_ai: bool, no_prompt: bool, yes: bool) -> Result<()> {
     println!("  [submit]");
     println!(r#"  stack_links = "comment"  # "comment" | "body" | "both" | "off""#);
     println!(r#"  # Example: stack_links = "body""#);
+
+    println!();
+    println!("{}", "Per-feature AI overrides:".blue().bold());
+    println!(r#"  [ai.generate]  # PR body generation (stax generate, stax submit --ai-body)"#);
+    println!(r#"  [ai.standup]   # standup summaries (stax standup --summary)"#);
+    println!(r#"  [ai.resolve]   # conflict resolution (stax resolve)"#);
+    println!(r#"  [ai.lane]      # interactive AI lanes (stax lane)"#);
+    println!(r#"  # Each accepts optional `agent` and `model` keys."#);
+    println!(r#"  # Omitted keys fall back to [ai] global defaults."#);
+
+    Ok(())
+}
+
+fn set_ai_interactive() -> Result<()> {
+    const FEATURES: &[(&str, &str)] = &[
+        ("global", "Global default  (used when no feature override is set)"),
+        ("generate", "generate        (PR body — stax generate, stax submit --ai-body)"),
+        ("standup", "standup         (standup summary — stax standup --summary)"),
+        ("resolve", "resolve         (conflict resolution — stax resolve)"),
+        ("lane", "lane            (interactive coding agent — stax lane)"),
+    ];
+
+    let items: Vec<&str> = FEATURES.iter().map(|(_, label)| *label).collect();
+
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Configure AI agent/model for which feature?")
+        .items(&items)
+        .default(0)
+        .interact()?;
+
+    let (feature, _) = FEATURES[selection];
+    let mut config = Config::load()?;
+    generate::prompt_for_feature_ai(&mut config, feature)?;
 
     Ok(())
 }

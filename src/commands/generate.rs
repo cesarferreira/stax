@@ -14,35 +14,26 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 // ---------------------------------------------------------------------------
-// Known models per agent (for validation and interactive picker)
+// Known models per agent — loaded from models.json at compile time.
+// To add/update models edit src/commands/models.json; no Rust changes needed.
 // ---------------------------------------------------------------------------
 
-const CLAUDE_MODELS: &[(&str, &str)] = &[
-    (
-        "claude-sonnet-4-5-20250929",
-        "Sonnet 4.5 (default, balanced)",
-    ),
-    ("claude-haiku-4-5-20251001", "Haiku 4.5 (fastest, cheapest)"),
-    ("claude-opus-4-6", "Opus 4.6 (most capable)"),
-    ("claude-sonnet-4-20250514", "Sonnet 4"),
-];
+const MODELS_JSON: &str = include_str!("models.json");
 
-const CODEX_MODELS: &[(&str, &str)] = &[
-    ("gpt-5.4", "GPT-5.4"),
-    ("gpt-5.4-pro", "GPT-5.4 Pro"),
-    ("gpt-5.3-codex", "GPT-5.3 Codex"),
-    ("gpt-4.1-mini", "GPT-4.1 Mini"),
-];
+#[derive(Deserialize)]
+struct ModelsFile {
+    claude: Vec<ModelOption>,
+    codex: Vec<ModelOption>,
+    gemini: Vec<ModelOption>,
+    opencode: Vec<ModelOption>,
+}
 
-const GEMINI_MODELS: &[(&str, &str)] = &[
-    ("gemini-2.5-pro", "Gemini 2.5 Pro (default)"),
-    ("gemini-2.5-flash", "Gemini 2.5 Flash (faster, cheaper)"),
-];
-
-const OPENCODE_MODELS: &[(&str, &str)] = &[(
-    "opencode/gpt-5.1-codex",
-    "GPT-5.1 Codex via OpenCode (default)",
-)];
+fn models_file() -> &'static ModelsFile {
+    static PARSED: std::sync::OnceLock<ModelsFile> = std::sync::OnceLock::new();
+    PARSED.get_or_init(|| {
+        serde_json::from_str(MODELS_JSON).expect("src/commands/models.json is invalid JSON")
+    })
+}
 
 const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
 
@@ -87,7 +78,7 @@ pub fn run(
     // Resolve AI agent and model (interactive if needed)
     let mut config = config;
     let agent = resolve_agent(agent_flag.as_deref(), &mut config, no_prompt)?;
-    let model = resolve_model(model_flag.as_deref(), &config, &agent)?;
+    let model = resolve_model(model_flag.as_deref(), &config, &agent, "generate")?;
 
     // Collect context for the prompt
     println!("{}", "Collecting context...".dimmed());
@@ -105,13 +96,7 @@ pub fn run(
     let prompt = build_ai_prompt(&diff_stat, &diff, &commits, template_content);
 
     // Invoke AI agent
-    let model_display = model.as_deref().unwrap_or("default");
-    println!(
-        "  {} {} (model: {})...",
-        "Generating PR body with".dimmed(),
-        agent.cyan().bold(),
-        model_display.dimmed()
-    );
+    print_using_agent(&agent, model.as_deref());
 
     let generated_body = invoke_ai_agent(&agent, model.as_deref(), &prompt)?;
 
@@ -185,14 +170,17 @@ fn resolve_agent(cli_flag: Option<&str>, config: &mut Config, no_prompt: bool) -
         return Ok(agent.to_string());
     }
 
-    // 2. Config value
-    if let Some(ref agent) = config.ai.agent {
-        if !agent.is_empty() {
-            return Ok(agent.clone());
-        }
+    // 2. Per-feature config is set — use it (no prompt needed)
+    if config.ai.generate.agent.is_some() {
+        return Ok(config.ai.agent_for("generate").unwrap().to_string());
     }
 
+    // No per-feature config yet
     if no_prompt {
+        // Non-interactive path: use global silently, or auto-detect as last resort
+        if let Some(agent) = config.ai.agent_for("generate") {
+            return Ok(agent.to_string());
+        }
         let agent = auto_detect_agent(&detect_available_agents())?;
         println!(
             "  {} {}",
@@ -202,23 +190,23 @@ fn resolve_agent(cli_flag: Option<&str>, config: &mut Config, no_prompt: bool) -
         return Ok(agent);
     }
 
-    let (agent, _) = prompt_for_agent_and_model(config, true)?;
+    // First-use: prompt and persist to [ai.generate], even if a global default exists
+    let (agent, _) = prompt_for_feature_ai(config, "generate")?;
     Ok(agent)
 }
 
 pub(crate) fn resolve_agent_non_interactive(
     cli_flag: Option<&str>,
     config: &Config,
+    feature: &str,
 ) -> Result<String> {
     if let Some(agent) = cli_flag {
         validate_agent_name(agent)?;
         return Ok(agent.to_string());
     }
 
-    if let Some(ref agent) = config.ai.agent {
-        if !agent.is_empty() {
-            return Ok(agent.clone());
-        }
+    if let Some(agent) = config.ai.agent_for(feature) {
+        return Ok(agent.to_string());
     }
 
     auto_detect_agent(&detect_available_agents())
@@ -271,33 +259,36 @@ fn which_exists(command: &str) -> bool {
 // Model resolution
 // ---------------------------------------------------------------------------
 
-fn resolve_model(cli_flag: Option<&str>, config: &Config, agent: &str) -> Result<Option<String>> {
+fn resolve_model(
+    cli_flag: Option<&str>,
+    config: &Config,
+    agent: &str,
+    feature: &str,
+) -> Result<Option<String>> {
     // 1. CLI flag takes priority
     if let Some(model) = cli_flag {
         validate_model_soft(agent, model);
         return Ok(Some(model.to_string()));
     }
 
-    // 2. Config value
-    if let Some(ref model) = config.ai.model {
-        if !model.is_empty() {
-            // If config model is a known model for a different agent, ignore it and
-            // fall back to the selected agent default.
-            if let Some(model_agent) = known_agent_for_model(model) {
-                if model_agent != agent {
-                    eprintln!(
-                        "  {} Configured model '{}' is for agent '{}', but current agent is '{}'. Using agent default.",
-                        "⚠".yellow(),
-                        model.yellow(),
-                        model_agent,
-                        agent
-                    );
-                    return Ok(None);
-                }
+    // 2. Per-feature config, then global config
+    if let Some(model) = config.ai.model_for(feature) {
+        // If resolved model is a known model for a different agent, ignore it and
+        // fall back to the selected agent default.
+        if let Some(model_agent) = known_agent_for_model(model) {
+            if model_agent != agent {
+                eprintln!(
+                    "  {} Configured model '{}' is for agent '{}', but current agent is '{}'. Using agent default.",
+                    "⚠".yellow(),
+                    model.yellow(),
+                    model_agent,
+                    agent
+                );
+                return Ok(None);
             }
-            validate_model_soft(agent, model);
-            return Ok(Some(model.clone()));
         }
+        validate_model_soft(agent, model);
+        return Ok(Some(model.to_string()));
     }
 
     // 3. No model specified — let agent use its own default
@@ -310,10 +301,14 @@ fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let items: Vec<String> = models
-        .iter()
-        .map(|model| format!("{} — {}", model.id, model.description))
-        .collect();
+    // "Default" is always item 0 — selecting it saves model=None so the agent
+    // picks its own default rather than pinning a specific version.
+    let mut items = vec!["Default — let the agent decide".to_string()];
+    items.extend(
+        models
+            .iter()
+            .map(|m| format!("{} — {}", m.id, m.description)),
+    );
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Select model for {}", agent))
@@ -321,13 +316,17 @@ fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
         .default(0)
         .interact()?;
 
-    Ok(Some(models[selection].id.clone()))
+    if selection == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(models[selection - 1].id.clone()))
+    }
 }
 
 fn validate_model_soft(agent: &str, model: &str) {
     let models = known_models_for(agent);
     if !models.is_empty()
-        && !models.iter().any(|(id, _)| *id == model)
+        && !models.iter().any(|m| m.id == model)
         && !model_matches_agent_family(agent, model)
     {
         eprintln!(
@@ -339,20 +338,21 @@ fn validate_model_soft(agent: &str, model: &str) {
     }
 }
 
-fn known_models_for(agent: &str) -> &'static [(&'static str, &'static str)] {
+fn known_models_for(agent: &str) -> Vec<ModelOption> {
+    let f = models_file();
     match agent {
-        "claude" => CLAUDE_MODELS,
-        "codex" => CODEX_MODELS,
-        "gemini" => GEMINI_MODELS,
-        "opencode" => OPENCODE_MODELS,
-        _ => &[],
+        "claude" => f.claude.clone(),
+        "codex" => f.codex.clone(),
+        "gemini" => f.gemini.clone(),
+        "opencode" => f.opencode.clone(),
+        _ => vec![],
     }
 }
 
 fn known_agent_for_model(model: &str) -> Option<&'static str> {
     ["claude", "gemini", "opencode"]
         .into_iter()
-        .find(|agent| known_models_for(agent).iter().any(|(id, _)| *id == model))
+        .find(|agent| known_models_for(agent).iter().any(|m| m.id == model))
         .or_else(|| {
             if model_matches_agent_family("codex", model) {
                 Some("codex")
@@ -439,7 +439,94 @@ fn persist_prompt_selection(
     Ok(())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Interactively pick agent+model for a specific feature and persist to `[ai.<feature>]`.
+/// Falls back to persisting to global `[ai]` when `feature` is "global" or unknown.
+pub(crate) fn prompt_for_feature_ai(
+    config: &mut Config,
+    feature: &str,
+) -> Result<(String, Option<String>)> {
+    let available = detect_available_agents();
+
+    let agent = match available.len() {
+        0 => auto_detect_agent(&available)?,
+        1 => {
+            let agent = available[0].clone();
+            println!(
+                "  {} {}",
+                "Detected AI agent:".dimmed(),
+                agent.cyan().bold()
+            );
+            agent
+        }
+        _ => {
+            let items: Vec<String> = available
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    if i == 0 {
+                        format!("{} (default)", name)
+                    } else {
+                        name.to_string()
+                    }
+                })
+                .collect();
+
+            let selection = Select::with_theme(&ColorfulTheme::default())
+                .with_prompt(format!("Select AI agent for {}", feature))
+                .items(&items)
+                .default(0)
+                .interact()?;
+
+            available[selection].clone()
+        }
+    };
+
+    let model = pick_model_interactive(&agent)?;
+
+    // Persist to feature-specific config, or global if feature is "global"/unknown.
+    if let Some(feat_cfg) = config.ai.feature_config_mut(feature) {
+        feat_cfg.agent = Some(agent.clone());
+        feat_cfg.model = model.clone();
+        config.save()?;
+        let model_display = model.as_deref().unwrap_or("agent default");
+        println!(
+            "  {} Saved [ai.{}] agent = \"{}\", model = \"{}\"",
+            "✓".green().bold(),
+            feature,
+            agent,
+            model_display
+        );
+    } else {
+        // "global" or unknown feature — write to top-level [ai]
+        config.ai.agent = Some(agent.clone());
+        config.ai.model = model.clone();
+        config.save()?;
+        let model_display = model.as_deref().unwrap_or("agent default");
+        println!(
+            "  {} Saved ai.agent = \"{}\", ai.model = \"{}\"",
+            "✓".green().bold(),
+            agent,
+            model_display
+        );
+    }
+
+    Ok((agent, model))
+}
+
+/// Print a consistent "Using <agent> [with model <model>]" line before an AI call.
+/// Uses stderr so it doesn't pollute captured stdout (e.g. `--json` flows).
+pub(crate) fn print_using_agent(agent: &str, model: Option<&str>) {
+    match model {
+        Some(m) => eprintln!(
+            "  {} {}",
+            format!("Using {} with model", agent).dimmed(),
+            m.cyan()
+        ),
+        None => eprintln!("  {}", format!("Using {}", agent).dimmed()),
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 struct ModelOption {
     id: String,
     description: String,
@@ -453,14 +540,7 @@ fn available_models_for(agent: &str) -> Vec<ModelOption> {
             }
         }
     }
-
     known_models_for(agent)
-        .iter()
-        .map(|(id, description)| ModelOption {
-            id: (*id).to_string(),
-            description: (*description).to_string(),
-        })
-        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -800,14 +880,14 @@ mod tests {
     #[test]
     fn known_models_include_gemini_defaults() {
         let models = known_models_for("gemini");
-        assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-pro"));
-        assert!(models.iter().any(|(id, _)| *id == "gemini-2.5-flash"));
+        assert!(models.iter().any(|m| m.id == "gemini-2.5-pro"));
+        assert!(models.iter().any(|m| m.id == "gemini-2.5-flash"));
     }
 
     #[test]
     fn known_models_include_opencode_defaults() {
         let models = known_models_for("opencode");
-        assert!(models.iter().any(|(id, _)| *id == "opencode/gpt-5.1-codex"));
+        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.1-codex"));
     }
 
     #[test]
@@ -844,7 +924,7 @@ mod tests {
         let mut config = Config::default();
         config.ai.model = Some("gpt-5.3-codex".to_string());
 
-        let resolved = resolve_model(None, &config, "gemini").unwrap();
+        let resolved = resolve_model(None, &config, "gemini", "generate").unwrap();
         assert_eq!(resolved, None);
     }
 
@@ -853,7 +933,7 @@ mod tests {
         let mut config = Config::default();
         config.ai.model = Some("my-custom-model".to_string());
 
-        let resolved = resolve_model(None, &config, "gemini").unwrap();
+        let resolved = resolve_model(None, &config, "gemini", "generate").unwrap();
         assert_eq!(resolved, Some("my-custom-model".to_string()));
     }
 
@@ -862,8 +942,27 @@ mod tests {
         let mut config = Config::default();
         config.ai.model = Some("opencode/gpt-5.1-codex".to_string());
 
-        let resolved = resolve_model(None, &config, "claude").unwrap();
+        let resolved = resolve_model(None, &config, "claude", "generate").unwrap();
         assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn resolve_model_prefers_per_feature_over_global() {
+        let mut config = Config::default();
+        config.ai.model = Some("global-model".to_string());
+        config.ai.generate.model = Some("generate-model".to_string());
+
+        let resolved = resolve_model(None, &config, "claude", "generate").unwrap();
+        assert_eq!(resolved, Some("generate-model".to_string()));
+    }
+
+    #[test]
+    fn resolve_model_falls_back_to_global_when_feature_unset() {
+        let mut config = Config::default();
+        config.ai.model = Some("global-model".to_string());
+
+        let resolved = resolve_model(None, &config, "claude", "generate").unwrap();
+        assert_eq!(resolved, Some("global-model".to_string()));
     }
 
     #[test]
@@ -886,5 +985,56 @@ mod tests {
         let err = auto_detect_agent(&[]).unwrap_err();
 
         assert!(err.to_string().contains("No AI agent found on PATH"));
+    }
+
+    // ---------------------------------------------------------------------------
+    // resolve_agent — first-use prompt behaviour
+    //
+    // The interactive branch (no_prompt=false) calls dialoguer and cannot be
+    // exercised in unit tests. The no_prompt=true path covers the non-interactive
+    // fallback (scripts, pipes) and proves the resolution order is correct.
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn resolve_agent_cli_flag_overrides_all_config() {
+        let mut config = Config::default();
+        config.ai.agent = Some("codex".to_string());
+        config.ai.generate.agent = Some("gemini".to_string());
+
+        let result = resolve_agent(Some("claude"), &mut config, true).unwrap();
+        assert_eq!(result, "claude");
+    }
+
+    #[test]
+    fn resolve_agent_uses_per_feature_when_set_no_prompt() {
+        let mut config = Config::default();
+        config.ai.agent = Some("codex".to_string()); // global
+        config.ai.generate.agent = Some("claude".to_string()); // per-feature
+
+        let result = resolve_agent(None, &mut config, true).unwrap();
+        assert_eq!(result, "claude");
+    }
+
+    #[test]
+    fn resolve_agent_falls_back_to_global_when_no_feature_config_no_prompt() {
+        // This is the scenario that was broken: global config exists, no per-feature
+        // config. With no_prompt=true (non-interactive), we should use the global
+        // agent silently instead of blocking on a prompt or erroring.
+        let mut config = Config::default();
+        config.ai.agent = Some("codex".to_string()); // global only, no [ai.generate]
+
+        let result = resolve_agent(None, &mut config, true).unwrap();
+        assert_eq!(result, "codex");
+    }
+
+    #[test]
+    fn resolve_agent_per_feature_takes_priority_over_global_no_prompt() {
+        // Even in no_prompt mode the per-feature slot wins over global.
+        let mut config = Config::default();
+        config.ai.agent = Some("gemini".to_string());
+        config.ai.generate.agent = Some("opencode".to_string());
+
+        let result = resolve_agent(None, &mut config, true).unwrap();
+        assert_eq!(result, "opencode");
     }
 }

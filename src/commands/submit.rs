@@ -1542,16 +1542,16 @@ fn generate_ai_body(
     let config = Config::load()?;
     let agent = config
         .ai
-        .agent
-        .as_deref()
-        .filter(|a| !a.is_empty())
+        .agent_for("generate")
         .context(
             "No AI agent configured. Run `stax generate --pr-body` first to set up, \
              or add [ai] agent = \"claude\" (or \"codex\" / \"gemini\" / \"opencode\") to ~/.config/stax/config.toml",
         )?
         .to_string();
 
-    let model = config.ai.model.clone();
+    let model = config.ai.model_for("generate").map(String::from);
+
+    generate::print_using_agent(&agent, model.as_deref());
 
     let diff_stat = generate::get_diff_stat(workdir, parent, branch);
     let diff = generate::get_full_diff(workdir, parent, branch);

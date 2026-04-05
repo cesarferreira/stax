@@ -125,6 +125,89 @@ fn test_clear_ai_defaults_reports_noop_when_unset() {
 }
 
 #[test]
+fn test_clear_ai_defaults_also_clears_per_feature_configs() {
+    let mut config = Config::default();
+    config.ai.agent = Some("codex".to_string());
+    config.ai.standup.agent = Some("claude".to_string());
+    config.ai.generate.model = Some("o4-mini".to_string());
+
+    assert!(config.clear_ai_defaults());
+    assert_eq!(config.ai.agent, None);
+    assert_eq!(config.ai.standup.agent, None);
+    assert_eq!(config.ai.generate.model, None);
+}
+
+// ---------------------------------------------------------------------------
+// AiConfig resolution invariants
+// The commands use `config.ai.<feature>.agent.is_none()` (not `agent_for`)
+// to decide whether to prompt. These tests pin that invariant so a refactor
+// cannot silently break the first-use prompt logic.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ai_config_agent_for_includes_global_fallback() {
+    // agent_for("standup") must return the global agent when no feature-specific
+    // agent is set. This is the correct behaviour for normal resolution.
+    let mut config = Config::default();
+    config.ai.agent = Some("codex".to_string());
+    // No [ai.standup] set
+
+    assert_eq!(config.ai.agent_for("standup"), Some("codex"));
+}
+
+#[test]
+fn ai_config_feature_slot_is_none_when_only_global_is_set() {
+    // This is the invariant the first-use prompt relies on: even though
+    // agent_for("standup") returns the global agent, the standup slot itself
+    // is still None, which triggers the per-feature prompt.
+    let mut config = Config::default();
+    config.ai.agent = Some("codex".to_string());
+
+    assert!(config.ai.standup.agent.is_none());
+    assert!(config.ai.generate.agent.is_none());
+    assert!(config.ai.resolve.agent.is_none());
+    assert!(config.ai.lane.agent.is_none());
+}
+
+#[test]
+fn ai_config_feature_slot_is_some_after_per_feature_is_set() {
+    let mut config = Config::default();
+    config.ai.agent = Some("codex".to_string()); // global
+    config.ai.standup.agent = Some("claude".to_string()); // per-feature
+
+    // The slot check is Some — no prompt should fire
+    assert!(config.ai.standup.agent.is_some());
+    // agent_for still returns the per-feature value
+    assert_eq!(config.ai.agent_for("standup"), Some("claude"));
+}
+
+#[test]
+fn ai_config_agent_for_prefers_per_feature_over_global() {
+    let mut config = Config::default();
+    config.ai.agent = Some("codex".to_string());
+    config.ai.generate.agent = Some("claude".to_string());
+
+    assert_eq!(config.ai.agent_for("generate"), Some("claude"));
+}
+
+#[test]
+fn ai_config_model_for_falls_back_to_global_when_feature_unset() {
+    let mut config = Config::default();
+    config.ai.model = Some("gpt-5.4".to_string());
+
+    assert_eq!(config.ai.model_for("standup"), Some("gpt-5.4"));
+}
+
+#[test]
+fn ai_config_model_for_prefers_per_feature_over_global() {
+    let mut config = Config::default();
+    config.ai.model = Some("gpt-5.4".to_string());
+    config.ai.standup.model = Some("claude-opus-4-5".to_string());
+
+    assert_eq!(config.ai.model_for("standup"), Some("claude-opus-4-5"));
+}
+
+#[test]
 fn test_format_branch_name_no_prefix() {
     let config = Config::default();
     assert_eq!(config.format_branch_name("my-feature"), "my-feature");
