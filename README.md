@@ -281,7 +281,9 @@ Read more: [docs/workflows/multi-worktree.md](docs/workflows/multi-worktree.md)
 
 Run 2, 3, or 8 AI coding sessions in parallel without sharing one working directory.
 
-Each lane is an isolated Git worktree with a real branch behind it. When stax creates the branch for a lane, it also writes normal stax metadata, so that lane shows up in `st ls`, participates in restack/sync/undo, and can be reopened instantly with `st wt go`.
+Each lane is an isolated Git worktree with a real branch behind it. When stax creates the branch for a lane, it also writes normal stax metadata, so that lane shows up in `st ls`, participates in restack/sync/undo, and can be reopened instantly with `st wt go` or `st lane`.
+
+`st lane` is the fast AI path: it creates or reuses the lane, launches your configured agent, prefers tmux when available, reattaches to existing sessions, and opens a fresh tmux window when you pass a new prompt into an already-running lane.
 
 ```bash
 # Spin up three lanes in parallel
