@@ -477,7 +477,7 @@ fn test_branch_create_with_message() {
     // Create a file to commit
     repo.create_file("new_feature.rs", "fn main() {}");
 
-    let output = repo.run_stax(&["bc", "-m", "Add new feature"]);
+    let output = repo.run_stax(&["bc", "-a", "-m", "Add new feature"]);
     assert!(
         output.status.success(),
         "Failed: {}",
