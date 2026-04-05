@@ -993,4 +993,55 @@ mod tests {
 
         assert!(err.to_string().contains("No AI agent found on PATH"));
     }
+
+    // ---------------------------------------------------------------------------
+    // resolve_agent — first-use prompt behaviour
+    //
+    // The interactive branch (no_prompt=false) calls dialoguer and cannot be
+    // exercised in unit tests. The no_prompt=true path covers the non-interactive
+    // fallback (scripts, pipes) and proves the resolution order is correct.
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn resolve_agent_cli_flag_overrides_all_config() {
+        let mut config = Config::default();
+        config.ai.agent = Some("codex".to_string());
+        config.ai.generate.agent = Some("gemini".to_string());
+
+        let result = resolve_agent(Some("claude"), &mut config, true).unwrap();
+        assert_eq!(result, "claude");
+    }
+
+    #[test]
+    fn resolve_agent_uses_per_feature_when_set_no_prompt() {
+        let mut config = Config::default();
+        config.ai.agent = Some("codex".to_string()); // global
+        config.ai.generate.agent = Some("claude".to_string()); // per-feature
+
+        let result = resolve_agent(None, &mut config, true).unwrap();
+        assert_eq!(result, "claude");
+    }
+
+    #[test]
+    fn resolve_agent_falls_back_to_global_when_no_feature_config_no_prompt() {
+        // This is the scenario that was broken: global config exists, no per-feature
+        // config. With no_prompt=true (non-interactive), we should use the global
+        // agent silently instead of blocking on a prompt or erroring.
+        let mut config = Config::default();
+        config.ai.agent = Some("codex".to_string()); // global only, no [ai.generate]
+
+        let result = resolve_agent(None, &mut config, true).unwrap();
+        assert_eq!(result, "codex");
+    }
+
+    #[test]
+    fn resolve_agent_per_feature_takes_priority_over_global_no_prompt() {
+        // Even in no_prompt mode the per-feature slot wins over global.
+        let mut config = Config::default();
+        config.ai.agent = Some("gemini".to_string());
+        config.ai.generate.agent = Some("opencode".to_string());
+
+        let result = resolve_agent(None, &mut config, true).unwrap();
+        assert_eq!(result, "opencode");
+    }
 }
