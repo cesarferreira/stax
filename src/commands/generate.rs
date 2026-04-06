@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
-use crate::github::pr_template::discover_pr_templates;
+use crate::github::pr_template::{discover_pr_templates, select_template_interactive};
 use crate::remote;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
@@ -46,6 +46,8 @@ pub fn run(
     no_prompt: bool,
     agent_flag: Option<String>,
     model_flag: Option<String>,
+    template_flag: Option<String>,
+    no_template: bool,
 ) -> Result<()> {
     let config = Config::load()?;
     let repo = GitRepo::open()?;
@@ -85,8 +87,43 @@ pub fn run(
     let diff_stat = get_diff_stat(&workdir, parent, &current_branch);
     let diff = get_full_diff(&workdir, parent, &current_branch);
     let commits = collect_commit_messages(&workdir, parent, &current_branch);
-    let templates = discover_pr_templates(&workdir).unwrap_or_default();
-    let template_content = templates.first().map(|t| t.content.as_str());
+
+    // Discover and select PR template using the same logic as `submit`
+    let discovered_templates = if no_template {
+        Vec::new()
+    } else {
+        discover_pr_templates(&workdir).unwrap_or_default()
+    };
+
+    let selected_template = if no_template {
+        None
+    } else if let Some(ref template_name) = template_flag {
+        // --template flag: find by name
+        let found = discovered_templates
+            .iter()
+            .find(|t| t.name == *template_name)
+            .cloned();
+        if found.is_none() {
+            eprintln!(
+                "  {} Template '{}' not found, using no template",
+                "!".yellow(),
+                template_name
+            );
+        }
+        found
+    } else if no_prompt {
+        // --no-prompt: use first template if exactly one exists
+        if discovered_templates.len() == 1 {
+            Some(discovered_templates[0].clone())
+        } else {
+            None
+        }
+    } else {
+        // Interactive selection (handles empty list, single template, and multiple)
+        select_template_interactive(&discovered_templates)?
+    };
+
+    let template_content = selected_template.as_ref().map(|t| t.content.as_str());
 
     if diff.trim().is_empty() && commits.is_empty() {
         bail!("No changes found between {} and {}", parent, current_branch);

@@ -689,6 +689,12 @@ enum Commands {
         /// Model to use with the AI agent. Defaults to config or agent's default
         #[arg(long)]
         model: Option<String>,
+        /// PR template name to use (e.g. feature, bugfix). Skips template selection prompt
+        #[arg(long)]
+        template: Option<String>,
+        /// Skip PR template entirely
+        #[arg(long)]
+        no_template: bool,
     },
 
     /// Generate changelog between two refs
@@ -1561,11 +1567,13 @@ pub fn run() -> Result<()> {
             no_prompt,
             agent,
             model,
+            template,
+            no_template,
         } => {
             if !pr_body {
                 anyhow::bail!("Please specify what to generate. Usage: stax generate --pr-body");
             }
-            commands::generate::run(edit, no_prompt, agent, model)
+            commands::generate::run(edit, no_prompt, agent, model, template, no_template)
         }
         Commands::Changelog {
             from,

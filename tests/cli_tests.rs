@@ -375,6 +375,8 @@ fn test_generate_help_includes_no_prompt_flag() {
     assert!(stdout.contains("--pr-body"));
     assert!(stdout.contains("--no-prompt"));
     assert!(stdout.contains("--edit"));
+    assert!(stdout.contains("--template"));
+    assert!(stdout.contains("--no-template"));
 }
 
 #[test]
