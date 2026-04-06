@@ -97,7 +97,6 @@ pub fn discover_pr_templates(workdir: &Path) -> Result<Vec<PrTemplate>> {
 }
 
 /// Build selection options list: ["No template", ...template names sorted]
-#[allow(dead_code)] // Will be used in future tasks
 pub fn build_template_options(templates: &[PrTemplate]) -> Vec<String> {
     let mut options = vec!["No template".to_string()];
     let mut names: Vec<_> = templates.iter().map(|t| t.name.clone()).collect();
@@ -107,7 +106,6 @@ pub fn build_template_options(templates: &[PrTemplate]) -> Vec<String> {
 }
 
 /// For single templates, return automatically without prompting
-#[allow(dead_code)] // Will be used in future tasks
 pub fn select_template_auto(templates: &[PrTemplate]) -> Option<PrTemplate> {
     if templates.len() == 1 {
         Some(templates[0].clone())
@@ -118,7 +116,6 @@ pub fn select_template_auto(templates: &[PrTemplate]) -> Option<PrTemplate> {
 
 /// Show interactive fuzzy-search template picker
 /// Returns None if "No template" selected, Some(template) otherwise
-#[allow(dead_code)] // Will be used in future tasks
 pub fn select_template_interactive(templates: &[PrTemplate]) -> Result<Option<PrTemplate>> {
     if templates.is_empty() {
         return Ok(None);

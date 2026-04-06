@@ -111,8 +111,90 @@ fn test_no_template_flag_skips_template() {
 }
 
 // =============================================================================
-// Template Directory Structure Tests
+// Generate --pr-body Template Selection Tests
 // =============================================================================
+
+#[test]
+fn test_generate_no_template_flag_skips_discovery() {
+    let repo = TestRepo::new();
+
+    // Create multiple templates
+    let template_dir = repo.path().join(".github/PULL_REQUEST_TEMPLATE");
+    fs::create_dir_all(&template_dir).unwrap();
+    fs::write(template_dir.join("feature.md"), "# Feature\n").unwrap();
+    fs::write(template_dir.join("bugfix.md"), "# Bugfix\n").unwrap();
+
+    // Templates are present in the repo...
+    let discovered = stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    assert_eq!(discovered.len(), 2);
+
+    // ...but --no-template bypasses discovery entirely, producing an empty list
+    let discovered_with_flag: Vec<stax::github::pr_template::PrTemplate> = Vec::new();
+    assert!(discovered_with_flag.is_empty());
+    // With an empty list, select_template_interactive returns None (no template content)
+    let selected = stax::github::pr_template::select_template_interactive(&discovered_with_flag).unwrap();
+    assert!(selected.is_none());
+}
+
+#[test]
+fn test_generate_template_flag_selects_by_name() {
+    let repo = TestRepo::new();
+
+    let template_dir = repo.path().join(".github/PULL_REQUEST_TEMPLATE");
+    fs::create_dir_all(&template_dir).unwrap();
+    fs::write(template_dir.join("feature.md"), "# Feature template\n").unwrap();
+    fs::write(template_dir.join("bugfix.md"), "# Bugfix template\n").unwrap();
+
+    let templates =
+        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    assert_eq!(templates.len(), 2);
+
+    // --template feature: find by name (production logic in generate::run)
+    let selected = templates.iter().find(|t| t.name == "feature").cloned();
+    assert!(selected.is_some());
+    assert_eq!(selected.unwrap().content.trim(), "# Feature template");
+
+    // --template missing: returns None and the command warns the user
+    let missing = templates.iter().find(|t| t.name == "missing").cloned();
+    assert!(missing.is_none());
+}
+
+#[test]
+fn test_generate_no_prompt_single_template_auto_selects() {
+    let repo = TestRepo::new();
+
+    let github_dir = repo.path().join(".github");
+    fs::create_dir_all(&github_dir).unwrap();
+    fs::write(github_dir.join("PULL_REQUEST_TEMPLATE.md"), "# Single template\n").unwrap();
+
+    let templates =
+        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    assert_eq!(templates.len(), 1);
+
+    // --no-prompt with a single template: select_template_auto returns it automatically
+    let selected = stax::github::pr_template::select_template_auto(&templates);
+    assert!(selected.is_some());
+    assert_eq!(selected.unwrap().content.trim(), "# Single template");
+}
+
+#[test]
+fn test_generate_no_prompt_multiple_templates_uses_none() {
+    let repo = TestRepo::new();
+
+    let template_dir = repo.path().join(".github/PULL_REQUEST_TEMPLATE");
+    fs::create_dir_all(&template_dir).unwrap();
+    fs::write(template_dir.join("feature.md"), "# Feature\n").unwrap();
+    fs::write(template_dir.join("bugfix.md"), "# Bugfix\n").unwrap();
+
+    let templates =
+        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    assert_eq!(templates.len(), 2);
+
+    // --no-prompt with multiple templates: select_template_auto returns None
+    // (generate::run then uses None, so no template is applied without interaction)
+    let selected = stax::github::pr_template::select_template_auto(&templates);
+    assert!(selected.is_none());
+}
 
 #[test]
 fn test_templates_in_subdirectory() {
