@@ -114,7 +114,7 @@
 | `st standup --summary` | AI-generated spoken standup update |
 | `st standup --summary --jit` | Include Jira `jit` context for in-flight and next-up work ([jit repo](https://github.com/cesarferreira/jit)) |
 | `st changelog [from] [to]` | Generate changelog (auto-resolves last tag if `from` omitted) |
-| `st generate --pr-body [--no-prompt]` | Generate PR body with AI |
+| `st generate --pr-body [--no-prompt] [--template <name>] [--no-template]` | Generate PR body with AI |
 | `st demo` | Interactive tutorial (no auth/repo needed) |
 
 ## Worktrees
@@ -202,6 +202,8 @@ Worktree launch examples:
 - `st standup --summary --jit`
 - `st pr list --limit 50 --json`
 - `st issue list --limit 50 --json`
+- `st generate --pr-body --template <name>`
+- `st generate --pr-body --no-template`
 - `st changelog --tag-prefix release/ios`
 - `st changelog --json`
 - `st changelog --path src/`

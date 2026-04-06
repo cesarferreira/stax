@@ -54,12 +54,33 @@ st ss
 st generate --pr-body
 ```
 
+### Template flags for `generate`
+
+`generate --pr-body` uses the same template selection logic as `submit`:
+
+| Scenario | Behavior |
+|---|---|
+| `--no-template` | Skip template entirely |
+| `--template <name>` | Use the named template; warns and falls back to no template if not found |
+| `--no-prompt` + single template | Auto-selects the single available template |
+| `--no-prompt` + multiple templates | No template used (avoids silent arbitrary pick) |
+| Interactive (default) + single template | Auto-selects the single available template |
+| Interactive (default) + multiple templates | Fuzzy picker to choose template |
+
+```bash
+st generate --pr-body --template feature
+st generate --pr-body --no-template
+st generate --pr-body --no-prompt   # auto-selects single template, or no template
+```
+
 ### Options
 
 - `--agent <name>` override configured agent for one run
 - `--model <name>` override model for one run
 - `--no-prompt` skip AI picker/review prompts and use defaults
 - `--edit` review/edit generated body before update
+- `--template <name>` use a specific PR template by name
+- `--no-template` skip PR template entirely
 - Supported agents: `claude`, `codex`, `gemini`, `opencode`
 
 When `codex` is selected, stax will try OpenAI's live Models API first (using `OPENAI_API_KEY`) before falling back to its local Codex defaults.
@@ -92,4 +113,6 @@ st generate --pr-body --agent gemini --model gemini-2.5-flash
 st generate --pr-body --agent opencode
 st generate --pr-body --no-prompt
 st generate --pr-body --edit
+st generate --pr-body --template feature
+st generate --pr-body --no-template
 ```

@@ -197,6 +197,61 @@ fn test_generate_no_prompt_multiple_templates_uses_none() {
 }
 
 #[test]
+fn test_build_template_options_sorts_alphabetically() {
+    let repo = TestRepo::new();
+
+    let template_dir = repo.path().join(".github/PULL_REQUEST_TEMPLATE");
+    fs::create_dir_all(&template_dir).unwrap();
+    fs::write(template_dir.join("zebra.md"), "# Zebra\n").unwrap();
+    fs::write(template_dir.join("alpha.md"), "# Alpha\n").unwrap();
+    fs::write(template_dir.join("middle.md"), "# Middle\n").unwrap();
+
+    let templates =
+        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    assert_eq!(templates.len(), 3);
+
+    let options = stax::github::pr_template::build_template_options(&templates);
+
+    // First option is always "No template"
+    assert_eq!(options[0], "No template");
+    // Remaining names are sorted alphabetically
+    assert_eq!(options[1], "alpha");
+    assert_eq!(options[2], "middle");
+    assert_eq!(options[3], "zebra");
+}
+
+#[test]
+fn test_build_template_options_empty_returns_only_no_template() {
+    let empty: Vec<stax::github::pr_template::PrTemplate> = Vec::new();
+    let options = stax::github::pr_template::build_template_options(&empty);
+    assert_eq!(options.len(), 1);
+    assert_eq!(options[0], "No template");
+}
+
+#[test]
+fn test_generate_template_content_used_in_prompt() {
+    let repo = TestRepo::new();
+
+    let template_dir = repo.path().join(".github/PULL_REQUEST_TEMPLATE");
+    fs::create_dir_all(&template_dir).unwrap();
+    fs::write(
+        template_dir.join("feature.md"),
+        "## Summary\n\n## Testing\n",
+    )
+    .unwrap();
+
+    let templates =
+        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+
+    // When a template is selected by name, its content is available for use in the AI prompt
+    let selected = templates.iter().find(|t| t.name == "feature").cloned();
+    assert!(selected.is_some());
+    let content = selected.unwrap().content;
+    assert!(content.contains("## Summary"));
+    assert!(content.contains("## Testing"));
+}
+
+#[test]
 fn test_templates_in_subdirectory() {
     let repo = TestRepo::new();
 
