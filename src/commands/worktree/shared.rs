@@ -1041,9 +1041,9 @@ pub fn build_tmux_launch_spec(
                 {in_tmux}; \
             elif tmux has-session -t {session} 2>/dev/null; then \
                 {new_window} || exit $?; \
-                exec tmux attach-session -t {session}; \
+                tmux attach-session -t {session}; \
             else \
-                exec {new_attached}; \
+                {new_attached}; \
             fi",
             in_tmux = in_tmux_cmd,
             session = session_escaped,
@@ -1055,9 +1055,9 @@ pub fn build_tmux_launch_spec(
             "if [ -n \"${{TMUX:-}}\" ]; then \
                 {in_tmux}; \
             elif tmux has-session -t {session} 2>/dev/null; then \
-                exec tmux attach-session -t {session}; \
+                tmux attach-session -t {session}; \
             else \
-                exec {new_attached}; \
+                {new_attached}; \
             fi",
             in_tmux = in_tmux_cmd,
             session = session_escaped,
@@ -1289,6 +1289,35 @@ mod tests {
                 );
             }
             LaunchSpec::Process { .. } => panic!("expected shell launch"),
+        }
+    }
+
+    #[test]
+    fn build_tmux_launch_spec_outside_tmux_no_process_replacement() {
+        // Outside tmux the shell command must not replace the process so that
+        // the user's shell survives after detaching from the tmux session.
+        for behavior in [
+            ExistingTmuxSessionBehavior::Attach,
+            ExistingTmuxSessionBehavior::NewWindow,
+        ] {
+            let inner = LaunchSpec::Process {
+                program: "claude".to_string(),
+                args: vec![],
+                display: "claude".to_string(),
+            };
+            let launch =
+                build_tmux_launch_spec("my-lane", Some(&inner), behavior).expect("tmux launch");
+            match launch {
+                LaunchSpec::Shell { command, .. } => {
+                    assert!(
+                        command.contains("tmux attach-session")
+                            || command.contains("tmux new-session"),
+                        "outside-tmux path must use attach or new-session \
+                         (behavior={behavior:?}): {command}"
+                    );
+                }
+                LaunchSpec::Process { .. } => panic!("expected shell launch"),
+            }
         }
     }
 
