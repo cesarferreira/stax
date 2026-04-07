@@ -1902,6 +1902,7 @@ fn test_restack_cleanup_excludes_checked_out_branch() {
 
     // Stack: main -> merged-branch -> child-branch
     repo.run_stax(&["bc", "merged-branch"]);
+    let merged = repo.current_branch();
     repo.create_file("merged.txt", "merged");
     repo.commit("Merged commit");
 
@@ -1914,7 +1915,7 @@ fn test_restack_cleanup_excludes_checked_out_branch() {
     repo.git(&[
         "merge",
         "--no-ff",
-        "merged-branch",
+        &merged,
         "-m",
         "Merge merged-branch",
     ]);
@@ -1930,8 +1931,8 @@ fn test_restack_cleanup_excludes_checked_out_branch() {
     repo.commit("Main update");
 
     // Checkout the merged branch — it should be excluded from cleanup.
-    repo.run_stax(&["checkout", "merged-branch"]);
-    assert_eq!(repo.current_branch(), "merged-branch");
+    repo.run_stax(&["checkout", &merged]);
+    assert_eq!(repo.current_branch(), merged);
 
     let output = repo.run_stax(&["restack", "--yes"]);
     assert!(
@@ -1943,7 +1944,7 @@ fn test_restack_cleanup_excludes_checked_out_branch() {
 
     let branches = repo.list_branches();
     assert!(
-        branches.iter().any(|b| b == "merged-branch"),
+        branches.iter().any(|b| b == &merged),
         "Cleanup should not delete the currently checked-out branch even if it is merged"
     );
 }

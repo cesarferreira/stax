@@ -1924,6 +1924,21 @@ mod tests {
     use clap::Parser;
     use std::cell::Cell;
 
+    fn try_parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        std::thread::Builder::new()
+            .name("cli-parse".into())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || Cli::try_parse_from(args))
+            .expect("spawn parse thread")
+            .join()
+            .expect("join parse thread")
+    }
+
+    fn parse_cli(args: &[&str]) -> Cli {
+        try_parse_cli(args).expect("parse CLI")
+    }
+
     #[test]
     fn interactive_terminal_requires_both_stdio_streams() {
         assert!(has_interactive_terminal(true, true));
@@ -1989,7 +2004,7 @@ mod tests {
 
     #[test]
     fn bare_worktree_command_parses_without_subcommand() {
-        let cli = Cli::try_parse_from(["stax", "wt"]).expect("parse bare worktree");
+        let cli = parse_cli(&["stax", "wt"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Worktree { command: None })
@@ -1998,7 +2013,7 @@ mod tests {
 
     #[test]
     fn explicit_worktree_subcommand_still_parses() {
-        let cli = Cli::try_parse_from(["stax", "wt", "ls"]).expect("parse worktree list");
+        let cli = parse_cli(&["stax", "wt", "ls"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Worktree { command: Some(_) })
@@ -2007,8 +2022,7 @@ mod tests {
 
     #[test]
     fn worktree_cleanup_subcommand_parses() {
-        let cli = Cli::try_parse_from(["stax", "wt", "cleanup", "--force", "--dry-run", "--yes"])
-            .expect("parse worktree cleanup");
+        let cli = parse_cli(&["stax", "wt", "cleanup", "--force", "--dry-run", "--yes"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Worktree {
@@ -2023,7 +2037,7 @@ mod tests {
 
     #[test]
     fn lane_command_parses_without_name_for_picker() {
-        let cli = Cli::try_parse_from(["stax", "lane"]).expect("parse lane picker");
+        let cli = parse_cli(&["stax", "lane"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Lane {
@@ -2036,8 +2050,7 @@ mod tests {
 
     #[test]
     fn lane_command_parses_explicit_name_and_prompt() {
-        let cli = Cli::try_parse_from(["stax", "lane", "review-pass", "fix macOS build"])
-            .expect("parse explicit lane");
+        let cli = parse_cli(&["stax", "lane", "review-pass", "fix macOS build"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Lane {
@@ -2050,14 +2063,13 @@ mod tests {
 
     #[test]
     fn lane_command_accepts_hidden_shell_output_after_prompt() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "stax",
             "lane",
             "review-pass",
             "fix macOS build",
             "--shell-output",
-        ])
-        .expect("parse lane with hidden shell output");
+        ]);
         assert!(matches!(
             cli.command,
             Some(Commands::Lane {
@@ -2071,7 +2083,7 @@ mod tests {
 
     #[test]
     fn lane_requires_agent_when_model_is_set() {
-        match Cli::try_parse_from(["stax", "lane", "review-pass", "--model", "gpt-5.4"]) {
+        match try_parse_cli(&["stax", "lane", "review-pass", "--model", "gpt-5.4"]) {
             Ok(_) => panic!("expected clap error"),
             Err(err) => assert!(err.to_string().contains("--agent")),
         }
@@ -2079,7 +2091,7 @@ mod tests {
 
     #[test]
     fn restack_defaults_to_not_submitting_after_success() {
-        let cli = Cli::try_parse_from(["stax", "restack"]).expect("parse restack");
+        let cli = parse_cli(&["stax", "restack"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Restack {
@@ -2092,8 +2104,7 @@ mod tests {
 
     #[test]
     fn restack_parses_stop_here_flag() {
-        let cli = Cli::try_parse_from(["stax", "restack", "--stop-here"])
-            .expect("parse restack --stop-here");
+        let cli = parse_cli(&["stax", "restack", "--stop-here"]);
         assert!(matches!(
             cli.command,
             Some(Commands::Restack {
