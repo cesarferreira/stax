@@ -3,7 +3,7 @@ use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictC
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::commands::worktree::{
     remove::remove_worktree_with_hooks,
-    shared::{compute_worktree_details, worktree_removal_blockers},
+    shared::{compute_worktree_details, worktree_removal_blockers_for_cleanup},
 };
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
@@ -508,7 +508,7 @@ pub fn run(
                 let blocking_worktree_cleanup = if is_current_branch {
                     None
                 } else {
-                    plan_blocking_worktree_cleanup(&repo, branch)?
+                    plan_blocking_worktree_cleanup(&repo, branch, force)?
                 };
 
                 // Resolve parent branch for checkout/reparent.
@@ -695,6 +695,7 @@ pub fn run(
                         &workdir,
                         branch,
                         blocking_worktree_cleanup.as_ref(),
+                        force,
                         quiet,
                     )?;
                     let local_deleted = local_delete.deleted;
@@ -833,7 +834,7 @@ pub fn run(
                 let blocking_worktree_cleanup = if is_current_branch {
                     None
                 } else {
-                    plan_blocking_worktree_cleanup(&repo, branch)?
+                    plan_blocking_worktree_cleanup(&repo, branch, force)?
                 };
                 let fallback_parent = &stack.trunk;
                 let prompt = sync_delete_prompt(
@@ -900,6 +901,7 @@ pub fn run(
                     &workdir,
                     branch,
                     blocking_worktree_cleanup.as_ref(),
+                    force,
                     quiet,
                 )?;
                 let local_deleted = local_delete.deleted;
@@ -1510,6 +1512,7 @@ fn local_branch_exists(workdir: &std::path::Path, branch: &str) -> bool {
 fn plan_blocking_worktree_cleanup(
     repo: &GitRepo,
     branch: &str,
+    force: bool,
 ) -> Result<Option<BlockingWorktreeCleanup>> {
     let Some(resolution) = repo.branch_delete_resolution(branch)? else {
         return Ok(None);
@@ -1525,7 +1528,7 @@ fn plan_blocking_worktree_cleanup(
     let details = compute_worktree_details(repo, resolution.worktree.clone())?;
     Ok(Some(BlockingWorktreeCleanup {
         resolution,
-        blockers: worktree_removal_blockers(&details),
+        blockers: worktree_removal_blockers_for_cleanup(&details, force),
     }))
 }
 
@@ -1535,6 +1538,7 @@ fn delete_local_branch_for_sync(
     workdir: &std::path::Path,
     branch: &str,
     blocking_worktree_cleanup: Option<&BlockingWorktreeCleanup>,
+    force: bool,
     quiet: bool,
 ) -> Result<LocalBranchDeleteOutcome> {
     let mut outcome = attempt_local_branch_delete(workdir, branch);
@@ -1551,7 +1555,7 @@ fn delete_local_branch_for_sync(
     }
 
     let removed_worktree =
-        remove_worktree_with_hooks(repo, config, &cleanup.resolution.worktree, false);
+        remove_worktree_with_hooks(repo, config, &cleanup.resolution.worktree, force);
     match removed_worktree {
         Ok(display_name) => {
             if !quiet {
