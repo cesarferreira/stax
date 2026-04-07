@@ -1026,14 +1026,14 @@ pub fn build_tmux_launch_spec(
             "if tmux has-session -t {session} 2>/dev/null; then \
                 {new_window} || exit $?; \
                 if [ -n \"${{TMUX:-}}\" ]; then \
-                    exec tmux switch-client -t {session}; \
+                    tmux switch-client -t {session}; \
                 else \
                     exec tmux attach-session -t {session}; \
                 fi; \
             else \
                 if [ -n \"${{TMUX:-}}\" ]; then \
                     {new_detached} || exit $?; \
-                    exec tmux switch-client -t {session}; \
+                    tmux switch-client -t {session}; \
                 else \
                     exec {new_attached}; \
                 fi; \
@@ -1047,14 +1047,14 @@ pub fn build_tmux_launch_spec(
         format!(
             "if tmux has-session -t {session} 2>/dev/null; then \
                 if [ -n \"${{TMUX:-}}\" ]; then \
-                    exec tmux switch-client -t {session}; \
+                    tmux switch-client -t {session}; \
                 else \
                     exec tmux attach-session -t {session}; \
                 fi; \
             else \
                 if [ -n \"${{TMUX:-}}\" ]; then \
                     {new_detached} || exit $?; \
-                    exec tmux switch-client -t {session}; \
+                    tmux switch-client -t {session}; \
                 else \
                     exec {new_attached}; \
                 fi; \
@@ -1231,6 +1231,39 @@ mod tests {
                 assert!(command.contains("-c \"$PWD\""));
             }
             LaunchSpec::Process { .. } => panic!("expected shell launch"),
+        }
+    }
+
+    #[test]
+    fn build_tmux_launch_spec_switch_client_not_exec_d_for_inside_tmux_path() {
+        // When already inside tmux the generated command must use plain
+        // `tmux switch-client`, NOT `exec tmux switch-client`. Using exec
+        // would replace the user's shell process, killing their original pane
+        // and closing the terminal when they detach from the lane session.
+        for behavior in [
+            ExistingTmuxSessionBehavior::Attach,
+            ExistingTmuxSessionBehavior::NewWindow,
+        ] {
+            let inner = LaunchSpec::Process {
+                program: "claude".to_string(),
+                args: vec![],
+                display: "claude".to_string(),
+            };
+            let launch =
+                build_tmux_launch_spec("my-lane", Some(&inner), behavior).expect("tmux launch");
+            match launch {
+                LaunchSpec::Shell { command, .. } => {
+                    assert!(
+                        !command.contains("exec tmux switch-client"),
+                        "switch-client must not be exec'd (behavior={behavior:?}): {command}"
+                    );
+                    assert!(
+                        command.contains("tmux switch-client"),
+                        "switch-client must still appear (behavior={behavior:?}): {command}"
+                    );
+                }
+                LaunchSpec::Process { .. } => panic!("expected shell launch"),
+            }
         }
     }
 
