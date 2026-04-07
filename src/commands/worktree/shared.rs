@@ -991,6 +991,26 @@ pub fn build_tmux_launch_spec(
     let session = default_tmux_session_name(session_name)?;
 
     let session_escaped = shell_escape(&session);
+
+    // Inside tmux: open a new window in the CURRENT session instead of
+    // creating a separate session and switching to it.  switch-client moves
+    // the entire tmux client to a different session; when the user later
+    // detaches, the client exits and the terminal closes.  A new window
+    // keeps the user in their existing session so detach behaves normally.
+    let in_tmux_cmd = if let Some(inner) = inner {
+        format!(
+            "tmux new-window -n {session} -c \"$PWD\" sh -c {command}",
+            session = session_escaped,
+            command = shell_escape(&inner.shell_command())
+        )
+    } else {
+        format!(
+            "tmux new-window -n {session} -c \"$PWD\"",
+            session = session_escaped
+        )
+    };
+
+    // Outside tmux: create a brand-new foreground session (creates + attaches).
     let new_session_cmd = if let Some(inner) = inner {
         format!(
             "tmux new-session -c \"$PWD\" -s {session} sh -c {command}",
@@ -1000,67 +1020,47 @@ pub fn build_tmux_launch_spec(
     } else {
         format!("tmux new-session -c \"$PWD\" -s {}", session_escaped)
     };
-    let new_session_detached_cmd = if let Some(inner) = inner {
-        format!(
-            "tmux new-session -d -c \"$PWD\" -s {session} sh -c {command}",
-            session = session_escaped,
-            command = shell_escape(&inner.shell_command())
-        )
-    } else {
-        format!("tmux new-session -d -c \"$PWD\" -s {}", session_escaped)
-    };
-    let new_window_cmd = if matches!(existing_behavior, ExistingTmuxSessionBehavior::NewWindow) {
-        inner.map(|inner| {
-            format!(
-                "tmux new-window -t {session} -c \"$PWD\" sh -c {command}",
-                session = session_escaped,
-                command = shell_escape(&inner.shell_command())
-            )
-        })
-    } else {
-        None
-    };
 
-    let command = if let Some(new_window) = new_window_cmd {
+    // Outside tmux, session already exists and caller wants a new window in it.
+    let new_window_in_session_cmd =
+        if matches!(existing_behavior, ExistingTmuxSessionBehavior::NewWindow) {
+            inner.map(|inner| {
+                format!(
+                    "tmux new-window -t {session} -c \"$PWD\" sh -c {command}",
+                    session = session_escaped,
+                    command = shell_escape(&inner.shell_command())
+                )
+            })
+        } else {
+            None
+        };
+
+    let command = if let Some(new_window) = new_window_in_session_cmd {
         format!(
-            "if tmux has-session -t {session} 2>/dev/null; then \
+            "if [ -n \"${{TMUX:-}}\" ]; then \
+                {in_tmux}; \
+            elif tmux has-session -t {session} 2>/dev/null; then \
                 {new_window} || exit $?; \
-                if [ -n \"${{TMUX:-}}\" ]; then \
-                    tmux switch-client -t {session}; \
-                else \
-                    exec tmux attach-session -t {session}; \
-                fi; \
+                exec tmux attach-session -t {session}; \
             else \
-                if [ -n \"${{TMUX:-}}\" ]; then \
-                    {new_detached} || exit $?; \
-                    tmux switch-client -t {session}; \
-                else \
-                    exec {new_attached}; \
-                fi; \
+                exec {new_attached}; \
             fi",
+            in_tmux = in_tmux_cmd,
             session = session_escaped,
             new_window = new_window,
-            new_detached = new_session_detached_cmd,
             new_attached = new_session_cmd,
         )
     } else {
         format!(
-            "if tmux has-session -t {session} 2>/dev/null; then \
-                if [ -n \"${{TMUX:-}}\" ]; then \
-                    tmux switch-client -t {session}; \
-                else \
-                    exec tmux attach-session -t {session}; \
-                fi; \
+            "if [ -n \"${{TMUX:-}}\" ]; then \
+                {in_tmux}; \
+            elif tmux has-session -t {session} 2>/dev/null; then \
+                exec tmux attach-session -t {session}; \
             else \
-                if [ -n \"${{TMUX:-}}\" ]; then \
-                    {new_detached} || exit $?; \
-                    tmux switch-client -t {session}; \
-                else \
-                    exec {new_attached}; \
-                fi; \
+                exec {new_attached}; \
             fi",
+            in_tmux = in_tmux_cmd,
             session = session_escaped,
-            new_detached = new_session_detached_cmd,
             new_attached = new_session_cmd,
         )
     };
@@ -1235,11 +1235,12 @@ mod tests {
     }
 
     #[test]
-    fn build_tmux_launch_spec_switch_client_not_exec_d_for_inside_tmux_path() {
-        // When already inside tmux the generated command must use plain
-        // `tmux switch-client`, NOT `exec tmux switch-client`. Using exec
-        // would replace the user's shell process, killing their original pane
-        // and closing the terminal when they detach from the lane session.
+    fn build_tmux_launch_spec_inside_tmux_uses_new_window_in_current_session() {
+        // When already inside tmux, the generated command must open a new
+        // window in the CURRENT session (new-window -n) instead of creating a
+        // separate session and using switch-client.  switch-client moves the
+        // tmux client to a different session; detaching then kills the
+        // terminal window because the client exits entirely.
         for behavior in [
             ExistingTmuxSessionBehavior::Attach,
             ExistingTmuxSessionBehavior::NewWindow,
@@ -1254,16 +1255,40 @@ mod tests {
             match launch {
                 LaunchSpec::Shell { command, .. } => {
                     assert!(
-                        !command.contains("exec tmux switch-client"),
-                        "switch-client must not be exec'd (behavior={behavior:?}): {command}"
+                        !command.contains("switch-client"),
+                        "must not use switch-client (behavior={behavior:?}): {command}"
                     );
                     assert!(
-                        command.contains("tmux switch-client"),
-                        "switch-client must still appear (behavior={behavior:?}): {command}"
+                        command.contains("tmux new-window -n my-lane"),
+                        "inside-tmux path must open a window in current session \
+                         (behavior={behavior:?}): {command}"
                     );
                 }
                 LaunchSpec::Process { .. } => panic!("expected shell launch"),
             }
+        }
+    }
+
+    #[test]
+    fn build_tmux_launch_spec_inside_tmux_no_agent_opens_shell_window() {
+        let launch = build_tmux_launch_spec(
+            "my-lane",
+            None,
+            ExistingTmuxSessionBehavior::Attach,
+        )
+        .expect("tmux launch");
+        match launch {
+            LaunchSpec::Shell { command, .. } => {
+                assert!(
+                    command.contains("tmux new-window -n my-lane -c \"$PWD\""),
+                    "should open a shell window named after the lane: {command}"
+                );
+                assert!(
+                    !command.contains("sh -c"),
+                    "no agent, so no sh -c wrapper expected in the TMUX path: {command}"
+                );
+            }
+            LaunchSpec::Process { .. } => panic!("expected shell launch"),
         }
     }
 
