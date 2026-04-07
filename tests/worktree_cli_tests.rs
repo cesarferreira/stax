@@ -163,11 +163,16 @@ case "$cmd" in
     ;;
   new-window)
     session=""
+    winname=""
     cwd=""
     while [ "$#" -gt 0 ]; do
       case "$1" in
         -t)
           session="$2"
+          shift 2
+          ;;
+        -n)
+          winname="$2"
           shift 2
           ;;
         -c)
@@ -179,8 +184,9 @@ case "$cmd" in
           ;;
       esac
     done
-    : "${session:?missing tmux target session name}"
-    printf 'window=%s cwd=%s\n' "$session" "$cwd" >> "$log"
+    label="${session:-${winname:-}}"
+    : "${label:?missing tmux target session or window name}"
+    printf 'window=%s cwd=%s\n' "$label" "$cwd" >> "$log"
     if [ "$#" -gt 0 ]; then
       if [ -n "$cwd" ]; then
         (cd "$cwd" && "$@")
@@ -501,13 +507,13 @@ fn wt_tmux_switches_client_when_already_inside_tmux() {
 
     let tmux_log_contents = fs::read_to_string(&tmux_log).expect("read tmux log");
     assert!(
-        tmux_log_contents.contains("new=inside-tmux detached=1"),
-        "expected detached session creation inside tmux, got:\n{}",
+        tmux_log_contents.contains("window=inside-tmux"),
+        "expected new-window in current session inside tmux, got:\n{}",
         tmux_log_contents
     );
     assert!(
-        tmux_log_contents.contains("switch=inside-tmux"),
-        "expected switch-client inside tmux, got:\n{}",
+        !tmux_log_contents.contains("switch="),
+        "should not use switch-client when inside tmux, got:\n{}",
         tmux_log_contents
     );
 }
