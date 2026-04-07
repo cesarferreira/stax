@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::GitHubClient;
-use crate::remote::RemoteInfo;
+use crate::remote::{ForgeType, RemoteInfo};
 
 const STACK_COMMENT_MARKER: &str = "<!-- stax-stack-comment -->";
 const STACK_LINKS_BODY_START_MARKER: &str = "<!-- stax-stack-links:start -->";
@@ -950,8 +950,6 @@ pub fn generate_stack_links_markdown(
     remote: &RemoteInfo,
     trunk: &str,
 ) -> String {
-    use crate::remote::ForgeType;
-
     let mr_label = match remote.forge {
         ForgeType::GitLab => "MR",
         _ => "PR",
