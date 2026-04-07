@@ -1,7 +1,7 @@
 <div align="center">
   <h1>stax</h1>
   <p>
-    <strong>A modern CLI for stacked Git branches and PRs.</strong>
+    <strong>Ship small PR stacks without the bookkeeping.</strong>
   </p>
 
   <p>
@@ -15,91 +15,53 @@
   <img src="assets/screenshot.png" width="900" alt="stax screenshot">
 </div>
 
-Ship small, reviewable PR stacks quickly without giving up safety.
+Stacked branches are great until the bookkeeping starts.
 
-More than stacked branches: `stax` can merge an entire stack when CI turns green, resolve in-progress rebase conflicts with AI guardrails, run parallel AI worktree lanes as normal tracked branches, and generate PR bodies or standup summaries from the work you actually shipped.
+`stax` automates the annoying parts: creating the next branch in the stack, submitting linked PRs, restacking after merges, merging bottom-up safely, and recovering instantly when a rewrite goes sideways. It also treats AI worktree lanes as normal tracked branches instead of special scratch state.
 
-`stax` installs both binaries: `stax` and the short alias `st`. This README uses `st`.
+Install gives you both binaries: `stax` and the short alias `st`. This README uses `st`.
 
 - Live docs: [cesarferreira.github.io/stax](https://cesarferreira.github.io/stax/)
 - Docs index in this repo: [docs/index.md](docs/index.md)
 
+The core loop is simple:
+
+```bash
+st create auth-api
+st create auth-ui
+st ss
+st rs --restack
+```
+
+Create the next branch, submit the stack, then clean up and rebase after the bottom PR lands.
+
 ## Why stax
 
-- Run parallel AI coding agents on isolated branches, all tracked as a normal stack (`st lane ...`)
-- Replace one giant PR with a clean stack of small, focused PRs
+- Keep PRs small without hand-editing PR bases or babysitting branch metadata
+- Submit or update a whole stack in one command (`st ss`)
 - Keep shipping while lower-stack PRs are still in review
-- Merge from the bottom automatically when PRs are ready, locally or remotely (`st merge --when-ready`, `st merge --remote`)
-- Resolve in-progress rebase conflicts with AI, limited to the conflicted files (`st resolve`)
-- Recover from risky restacks and rewrites immediately (`st undo`, `st redo`)
-- Generate PR bodies and spoken standup summaries with your preferred AI agent
-- Navigate the full stack and diffs from an interactive TUI
+- Merge from the bottom safely when PRs are ready, locally or remotely (`st merge --when-ready`, `st merge --remote`)
+- Recover immediately from risky restacks and rewrites (`st undo`, `st redo`)
+- Resolve in-progress rebase conflicts with AI, scoped to the conflicted files (`st resolve`)
+- Run parallel AI coding lanes on isolated worktrees, all tracked as normal branches (`st lane ...`)
+- Navigate the full stack and diffs from an interactive TUI (`st`)
 
 ## Install
 
 ```bash
-# Homebrew (macOS/Linux)
+# macOS / Linux
 brew install cesarferreira/tap/stax
 
-# Or cargo-binstall
+# Or with cargo-binstall
 cargo binstall stax
-```
 
-### Prebuilt binaries (no package manager needed)
-
-Download the latest binary from [GitHub Releases](https://github.com/cesarferreira/stax/releases):
-
-```bash
-# macOS (Apple Silicon)
-curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-aarch64-apple-darwin.tar.gz | tar xz
-# macOS (Intel)
-curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-apple-darwin.tar.gz | tar xz
-# Linux (x86_64)
-curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-unknown-linux-gnu.tar.gz | tar xz
-# Linux (arm64 / aarch64, e.g. Raspberry Pi)
-curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-aarch64-unknown-linux-gnu.tar.gz | tar xz
-
-# Move both binaries to ~/.local/bin
-mkdir -p ~/.local/bin
-mv stax st ~/.local/bin/
-
-# If ~/.local/bin is not on your PATH, add it:
-# echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
-```
-
-**Windows (x86_64):** download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/cesarferreira/stax/releases), extract both `stax.exe` and `st.exe`, and place them in a directory on your `PATH`. See [Windows notes](#windows-notes) for shell and worktree limitations.
-
-Verify install:
-
-```bash
+# Verify
 st --version
 ```
 
-### Building from Source
+That installs both `stax` and `st`.
 
-If you want to build from source using `cargo install` or `make install`:
-
-**Prerequisites:**
-- Debian/Ubuntu: `sudo apt-get install libssl-dev pkg-config`
-- Fedora/RHEL: `sudo dnf install openssl-devel`
-- Arch Linux: `sudo pacman -S openssl pkg-config`
-- macOS: (OpenSSL included by default)
-
-Then build with:
-
-```bash
-# Using cargo
-cargo install --path . --locked
-
-# Or using make
-make install
-```
-
-Alternatively, you can build without system OpenSSL dependencies using the vendored feature (slower first build):
-
-```bash
-cargo install --path . --locked --features vendored-openssl
-```
+Need a manual binary, Windows build, or source install? See the [full install guide](docs/getting-started/install.md) and [GitHub Releases](https://github.com/cesarferreira/stax/releases/latest).
 
 <a id="quick-start"></a>
 ## 60-Second Quick Start

@@ -1,11 +1,16 @@
 # Install
 
+Fastest path:
+
 ```bash
 # Homebrew (macOS/Linux)
 brew install cesarferreira/tap/stax
 
 # Or with cargo binstall
 cargo binstall stax
+
+# Verify
+st --version
 ```
 
 Both `stax` and `st` (short alias) are installed automatically.
@@ -32,8 +37,29 @@ Download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github
 
 See [Windows notes](../reference/windows.md) for shell and worktree limitations.
 
-## Verify
+## Build from source
+
+If you want to install from the repo:
+
+Prerequisites:
+
+- Debian/Ubuntu: `sudo apt-get install libssl-dev pkg-config`
+- Fedora/RHEL: `sudo dnf install openssl-devel`
+- Arch Linux: `sudo pacman -S openssl pkg-config`
+- macOS: OpenSSL is available by default
+
+Then build with:
 
 ```bash
-stax --version
+# Using cargo
+cargo install --path . --locked
+
+# Or using make
+make install
+```
+
+If you want to avoid system OpenSSL dependencies, use the vendored feature instead. The first build is slower, but it is self-contained:
+
+```bash
+cargo install --path . --locked --features vendored-openssl
 ```
