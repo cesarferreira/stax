@@ -329,8 +329,6 @@ pub fn run(
                 &format!("Rebasing {} onto {}...", next_branch.branch, scope.trunk),
             );
 
-            repo.checkout(&next_branch.branch)?;
-
             let rebase_result = rebase_descendant_onto_remote_trunk_with_provenance(
                 &repo,
                 &next_branch.branch,
@@ -342,10 +340,12 @@ pub fn run(
                     LiveTimer::maybe_finish_ok(rebase_timer, "done");
                 }
                 RebaseResult::Conflict => {
-                    // Abort rebase on conflict to preserve existing merge flow behavior.
+                    let abort_dir = repo
+                        .branch_worktree_path(&next_branch.branch)?
+                        .unwrap_or(repo.workdir()?.to_path_buf());
                     let _ = Command::new("git")
                         .args(["rebase", "--abort"])
-                        .current_dir(repo.workdir()?)
+                        .current_dir(&abort_dir)
                         .output();
 
                     LiveTimer::maybe_finish_err(rebase_timer, "conflict");
@@ -412,7 +412,6 @@ pub fn run(
                 &format!("Rebasing {} onto {}...", remaining.branch, parent_branch),
             );
 
-            repo.checkout(&remaining.branch)?;
             let rebase_result = if parent_is_trunk {
                 rebase_descendant_onto_remote_trunk_with_provenance(
                     &repo,
@@ -432,14 +431,12 @@ pub fn run(
 
             match rebase_result {
                 Ok(RebaseResult::Success) => {
-                    // Update PR base to the actual parent in the preserved chain.
                     if let Some(pr_num) = remaining.pr_number {
                         let _ = rt.block_on(async {
                             client.update_pr_base(pr_num, &parent_branch).await
                         });
                     }
 
-                    // Push
                     let _ = Command::new("git")
                         .args(["push", "-f", &remote_info.name, &remaining.branch])
                         .current_dir(repo.workdir()?)
@@ -448,9 +445,12 @@ pub fn run(
                     LiveTimer::maybe_finish_ok(remaining_timer, "done");
                 }
                 Ok(RebaseResult::Conflict) => {
+                    let abort_dir = repo
+                        .branch_worktree_path(&remaining.branch)?
+                        .unwrap_or(repo.workdir()?.to_path_buf());
                     let _ = Command::new("git")
                         .args(["rebase", "--abort"])
-                        .current_dir(repo.workdir()?)
+                        .current_dir(&abort_dir)
                         .output();
                     LiveTimer::maybe_finish_warn(remaining_timer, "conflict (skipped)");
                 }

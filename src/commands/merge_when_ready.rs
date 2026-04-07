@@ -364,7 +364,6 @@ pub fn run(
                 &format!("Rebasing {} onto {}...", next_branch_name, scope.trunk),
             );
 
-            repo.checkout(&next_branch_name)?;
             let rebase_result = rebase_descendant_onto_remote_trunk_with_provenance(
                 &repo,
                 &next_branch_name,
@@ -376,10 +375,12 @@ pub fn run(
                     LiveTimer::maybe_finish_ok(rebase_timer, "done");
                 }
                 RebaseResult::Conflict => {
-                    // Abort rebase on conflict to preserve existing merge flow behavior.
+                    let abort_dir = repo
+                        .branch_worktree_path(&next_branch_name)?
+                        .unwrap_or(repo.workdir()?.to_path_buf());
                     let _ = Command::new("git")
                         .args(["rebase", "--abort"])
-                        .current_dir(repo.workdir()?)
+                        .current_dir(&abort_dir)
                         .output();
 
                     LiveTimer::maybe_finish_err(rebase_timer, "conflict");
@@ -430,7 +431,6 @@ pub fn run(
             let remaining_timer =
                 LiveTimer::maybe_new(!quiet, &format!("Rebasing {}...", remaining.branch));
 
-            repo.checkout(&remaining.branch)?;
             let rebase_result = rebase_descendant_onto_remote_trunk_with_provenance(
                 &repo,
                 &remaining.branch,
@@ -453,9 +453,12 @@ pub fn run(
                     LiveTimer::maybe_finish_ok(remaining_timer, "done");
                 }
                 Ok(RebaseResult::Conflict) => {
+                    let abort_dir = repo
+                        .branch_worktree_path(&remaining.branch)?
+                        .unwrap_or(repo.workdir()?.to_path_buf());
                     let _ = Command::new("git")
                         .args(["rebase", "--abort"])
-                        .current_dir(repo.workdir()?)
+                        .current_dir(&abort_dir)
                         .output();
                     LiveTimer::maybe_finish_warn(remaining_timer, "conflict (skipped)");
                 }
