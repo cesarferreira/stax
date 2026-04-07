@@ -775,13 +775,19 @@ pub fn list_tmux_sessions() -> Result<Vec<TmuxSession>> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("no server running") || stderr.contains("failed to connect to server") {
+        if is_tmux_no_server_error(&stderr) {
             return Ok(Vec::new());
         }
         bail!("tmux list-sessions failed: {}", stderr.trim());
     }
 
     parse_tmux_sessions_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn is_tmux_no_server_error(stderr: &str) -> bool {
+    stderr.contains("no server running")
+        || stderr.contains("failed to connect to server")
+        || (stderr.contains("error connecting to") && stderr.contains("No such file or directory"))
 }
 
 pub fn emit_shell_payload(path: &Path, launch: Option<&LaunchSpec>) {
@@ -1106,9 +1112,9 @@ fn parse_tmux_sessions_output(output: &str) -> Result<Vec<TmuxSession>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_agent_launch_spec, build_tmux_launch_spec, default_tmux_session_name,
-        build_launch_spec, parse_tmux_sessions_output, ExistingTmuxSessionBehavior, LaunchOptions,
-        LaunchSpec,
+        build_agent_launch_spec, build_launch_spec, build_tmux_launch_spec,
+        default_tmux_session_name, is_tmux_no_server_error, parse_tmux_sessions_output,
+        ExistingTmuxSessionBehavior, LaunchOptions, LaunchSpec,
     };
     use crate::config::Config;
 
@@ -1126,6 +1132,23 @@ mod tests {
         assert_eq!(sessions[0].attached_clients, 0);
         assert_eq!(sessions[1].name, "lane-b");
         assert_eq!(sessions[1].attached_clients, 2);
+    }
+
+    #[test]
+    fn tmux_no_server_errors_are_not_unavailable_tmux_errors() {
+        assert!(is_tmux_no_server_error(
+            "no server running on /tmp/tmux-501/default"
+        ));
+        assert!(is_tmux_no_server_error("failed to connect to server"));
+        assert!(is_tmux_no_server_error(
+            "error connecting to /private/tmp/tmux-501/default (No such file or directory)"
+        ));
+        assert!(!is_tmux_no_server_error(
+            "error connecting to /private/tmp/tmux-501/default (Permission denied)"
+        ));
+        assert!(!is_tmux_no_server_error(
+            "permission denied opening tmux socket"
+        ));
     }
 
     #[test]
