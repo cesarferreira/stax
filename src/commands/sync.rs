@@ -56,6 +56,12 @@ impl BlockingWorktreeCleanup {
         !self.resolution.worktree.is_main && self.blockers.is_empty()
     }
 
+    fn can_force_remove_dirty_worktree_during_sync(&self) -> bool {
+        !self.resolution.worktree.is_main
+            && !self.blockers.is_empty()
+            && self.blockers.iter().all(|blocker| *blocker == "dirty")
+    }
+
     fn blocker_summary(&self) -> Option<String> {
         if self.resolution.worktree.is_main {
             return Some("it is the main worktree".to_string());
@@ -569,6 +575,10 @@ pub fn run(
                         .default(true)
                         .interact()?
                 };
+                let confirmed_dirty_worktree_removal = confirm
+                    && blocking_worktree_cleanup.as_ref().is_some_and(
+                        BlockingWorktreeCleanup::can_force_remove_dirty_worktree_during_sync,
+                    );
 
                 if confirm {
                     // If we're on this branch, checkout parent first
@@ -696,6 +706,7 @@ pub fn run(
                         branch,
                         blocking_worktree_cleanup.as_ref(),
                         force,
+                        confirmed_dirty_worktree_removal,
                         quiet,
                     )?;
                     let local_deleted = local_delete.deleted;
@@ -858,6 +869,10 @@ pub fn run(
                         .default(true)
                         .interact()?
                 };
+                let confirmed_dirty_worktree_removal = confirm
+                    && blocking_worktree_cleanup.as_ref().is_some_and(
+                        BlockingWorktreeCleanup::can_force_remove_dirty_worktree_during_sync,
+                    );
 
                 if !confirm {
                     if !quiet {
@@ -902,6 +917,7 @@ pub fn run(
                     branch,
                     blocking_worktree_cleanup.as_ref(),
                     force,
+                    confirmed_dirty_worktree_removal,
                     quiet,
                 )?;
                 let local_deleted = local_delete.deleted;
@@ -1539,6 +1555,7 @@ fn delete_local_branch_for_sync(
     branch: &str,
     blocking_worktree_cleanup: Option<&BlockingWorktreeCleanup>,
     force: bool,
+    confirmed_dirty_worktree_removal: bool,
     quiet: bool,
 ) -> Result<LocalBranchDeleteOutcome> {
     let mut outcome = attempt_local_branch_delete(workdir, branch);
@@ -1550,12 +1567,19 @@ fn delete_local_branch_for_sync(
         return Ok(outcome);
     };
 
-    if !cleanup.can_remove_during_sync() {
+    let force_remove_linked_worktree = force
+        || (confirmed_dirty_worktree_removal
+            && cleanup.can_force_remove_dirty_worktree_during_sync());
+    if !cleanup.can_remove_during_sync() && !force_remove_linked_worktree {
         return Ok(outcome);
     }
 
-    let removed_worktree =
-        remove_worktree_with_hooks(repo, config, &cleanup.resolution.worktree, force);
+    let removed_worktree = remove_worktree_with_hooks(
+        repo,
+        config,
+        &cleanup.resolution.worktree,
+        force_remove_linked_worktree,
+    );
     match removed_worktree {
         Ok(display_name) => {
             if !quiet {
@@ -1631,6 +1655,20 @@ fn sync_delete_prompt(
 
             return format!(
                 "Delete '{}' and remove linked worktree '{}'?",
+                branch, cleanup.resolution.worktree.name
+            );
+        }
+
+        if cleanup.can_force_remove_dirty_worktree_during_sync() {
+            if let Some(reason) = reason {
+                return format!(
+                    "Delete '{}' ({reason}) and force-remove dirty linked worktree '{}'?",
+                    branch, cleanup.resolution.worktree.name
+                );
+            }
+
+            return format!(
+                "Delete '{}' and force-remove dirty linked worktree '{}'?",
                 branch, cleanup.resolution.worktree.name
             );
         }
@@ -2070,12 +2108,27 @@ mod tests {
     }
 
     #[test]
-    fn sync_delete_prompt_mentions_kept_linked_worktree_when_unsafe() {
+    fn sync_delete_prompt_mentions_force_removed_dirty_linked_worktree_when_confirmable() {
         let prompt = sync_delete_prompt(
             "cesar/review-pass",
             None,
             Some("upstream gone"),
             Some(&linked_worktree_cleanup(&["dirty"])),
+        );
+
+        assert_eq!(
+            prompt,
+            "Delete 'cesar/review-pass' (upstream gone) and force-remove dirty linked worktree 'review-pass'?"
+        );
+    }
+
+    #[test]
+    fn sync_delete_prompt_mentions_kept_linked_worktree_when_still_unsafe() {
+        let prompt = sync_delete_prompt(
+            "cesar/review-pass",
+            None,
+            Some("upstream gone"),
+            Some(&linked_worktree_cleanup(&["dirty", "locked"])),
         );
 
         assert_eq!(
