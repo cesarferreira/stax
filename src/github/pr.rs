@@ -947,13 +947,24 @@ pub struct StackPrInfo {
 pub fn generate_stack_links_markdown(
     prs: &[StackPrInfo],
     current_pr_number: u64,
-    _remote: &RemoteInfo,
+    remote: &RemoteInfo,
     trunk: &str,
 ) -> String {
+    use crate::remote::ForgeType;
+
+    let mr_label = match remote.forge {
+        ForgeType::GitLab => "MR",
+        _ => "PR",
+    };
+    let mr_prefix = match remote.forge {
+        ForgeType::GitLab => "!",
+        _ => "#",
+    };
+
     let mut lines = vec![
         "## Stack Links".to_string(),
         "".to_string(),
-        "This PR is part of a stacked series:".to_string(),
+        format!("This {} is part of a stacked series:", mr_label),
         "".to_string(),
         format!("* `{}`", trunk),
     ];
@@ -965,7 +976,16 @@ pub fn generate_stack_links_markdown(
         let pointer = if is_current { " 👈" } else { "" };
 
         let pr_text = match pr_info.pr_number {
-            Some(num) => format!("**PR #{}**{}", num, pointer),
+            Some(num) => {
+                let label = format!("{} {}{}", mr_label, mr_prefix, num);
+                match remote.forge {
+                    // GitHub auto-links #N references; other forges need full URLs
+                    ForgeType::GitHub => format!("**{}**{}", label, pointer),
+                    _ => {
+                        format!("[**{}**]({}){}", label, remote.pr_url(num), pointer)
+                    }
+                }
+            }
             None => format!("`{}`{}", pr_info.branch, pointer),
         };
 
@@ -1407,8 +1427,8 @@ mod tests {
         assert!(comment.contains("PR #1"));
         assert!(comment.contains("PR #2"));
         assert!(comment.contains("PR #3"));
-        // Only PR #2 should have the pointer (format is **PR #2** 👈)
-        assert!(comment.contains("#2** 👈"));
+        // Only PR #2 should have the pointer
+        assert!(comment.contains("PR #2** 👈"));
     }
 
     #[test]
@@ -1438,6 +1458,85 @@ mod tests {
 
         assert!(comment.contains("PR #1"));
         assert!(comment.contains("`feature-b`")); // Branch name in backticks
+    }
+
+    #[test]
+    fn test_generate_stack_comment_gitlab_uses_full_urls() {
+        let remote = crate::remote::RemoteInfo {
+            name: "origin".to_string(),
+            forge: crate::remote::ForgeType::GitLab,
+            host: "gitlab.com".to_string(),
+            namespace: "user".to_string(),
+            repo: "repo".to_string(),
+            base_url: "https://gitlab.com".to_string(),
+            api_base_url: Some("https://gitlab.com/api/v4".to_string()),
+        };
+
+        let prs = vec![
+            StackPrInfo {
+                branch: "feature-a".to_string(),
+                pr_number: Some(10),
+            },
+            StackPrInfo {
+                branch: "feature-b".to_string(),
+                pr_number: Some(11),
+            },
+        ];
+
+        let comment = generate_stack_comment(&prs, 11, &remote, "main");
+
+        // GitLab uses MR terminology and !N prefix
+        assert!(comment.contains("This MR is part of a stacked series:"));
+        assert!(comment.contains("[**MR !10**](https://gitlab.com/user/repo/-/merge_requests/10)"));
+        assert!(comment.contains("[**MR !11**](https://gitlab.com/user/repo/-/merge_requests/11) 👈"));
+    }
+
+    #[test]
+    fn test_generate_stack_comment_gitea_uses_full_urls() {
+        let remote = crate::remote::RemoteInfo {
+            name: "origin".to_string(),
+            forge: crate::remote::ForgeType::Gitea,
+            host: "gitea.example.com".to_string(),
+            namespace: "org".to_string(),
+            repo: "project".to_string(),
+            base_url: "https://gitea.example.com".to_string(),
+            api_base_url: Some("https://gitea.example.com/api/v1".to_string()),
+        };
+
+        let prs = vec![StackPrInfo {
+            branch: "feature".to_string(),
+            pr_number: Some(5),
+        }];
+
+        let comment = generate_stack_comment(&prs, 5, &remote, "main");
+
+        // Gitea uses PR terminology but needs full URLs
+        assert!(comment.contains("This PR is part of a stacked series:"));
+        assert!(comment.contains("[**PR #5**](https://gitea.example.com/org/project/pulls/5) 👈"));
+    }
+
+    #[test]
+    fn test_generate_stack_comment_gitlab_nested_namespace() {
+        let remote = crate::remote::RemoteInfo {
+            name: "origin".to_string(),
+            forge: crate::remote::ForgeType::GitLab,
+            host: "gitlab.com".to_string(),
+            namespace: "group/subgroup".to_string(),
+            repo: "repo".to_string(),
+            base_url: "https://gitlab.com".to_string(),
+            api_base_url: Some("https://gitlab.com/api/v4".to_string()),
+        };
+
+        let prs = vec![StackPrInfo {
+            branch: "feature".to_string(),
+            pr_number: Some(42),
+        }];
+
+        let comment = generate_stack_comment(&prs, 42, &remote, "main");
+
+        assert!(comment.contains(
+            "[**MR !42**](https://gitlab.com/group/subgroup/repo/-/merge_requests/42) 👈"
+        ));
     }
 
     #[test]
