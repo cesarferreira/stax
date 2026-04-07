@@ -291,6 +291,62 @@ fn restack_auto_stash_pop_succeeds_and_restores_changes() {
 }
 
 #[test]
+fn restack_auto_stash_pop_handles_both_worktrees_dirty() {
+    let (repo, _a, _b, wt_a, wt_b) = setup_stack_with_worktrees(false);
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    repo.create_file("main-update.txt", "main update\n");
+    repo.commit("Main update");
+
+    fs::write(wt_a.join("dirty-a.txt"), "dirty in A\n").expect("write dirty file in wt_a");
+    fs::write(wt_b.join("dirty-b.txt"), "dirty in B\n").expect("write dirty file in wt_b");
+
+    let output = repo.run_stax_in(&wt_b, &["restack", "--all", "--quiet", "--auto-stash-pop"]);
+    output.assert_success();
+
+    let status_a = repo.git_in(&wt_a, &["status", "--porcelain"]);
+    assert!(
+        TestRepo::stdout(&status_a).contains("dirty-a.txt"),
+        "Expected dirty changes restored in wt_a"
+    );
+
+    let status_b = repo.git_in(&wt_b, &["status", "--porcelain"]);
+    assert!(
+        TestRepo::stdout(&status_b).contains("dirty-b.txt"),
+        "Expected dirty changes restored in wt_b"
+    );
+}
+
+#[test]
+fn restack_interactive_stash_propagates_to_target_worktree() {
+    let (repo, _a, _b, wt_a, wt_b) = setup_stack_with_worktrees(false);
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    repo.create_file("main-update.txt", "main update\n");
+    repo.commit("Main update");
+
+    fs::write(wt_a.join("dirty-a.txt"), "dirty in A\n").expect("write dirty file in wt_a");
+    fs::write(wt_b.join("dirty-b.txt"), "dirty in B\n").expect("write dirty file in wt_b");
+
+    // Simulate interactive "yes" to the stash prompt via a pseudo-TTY.
+    // Before the fix, this failed because the interactive stash only cleaned wt_b
+    // but didn't enable auto_stash_pop for the rebase layer, so wt_a's dirty state
+    // caused: "Cannot restack: worktree has uncommitted changes".
+    let output = common::run_stax_in_script(
+        &wt_b,
+        &["restack", "--all"],
+        "printf 'y\\n'; sleep 10",
+    );
+    assert!(
+        output.status.success(),
+        "Interactive restack should succeed when target worktree is also dirty.\n\
+         stdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output),
+    );
+}
+
+#[test]
 fn sync_updates_trunk_when_trunk_checked_out_in_other_worktree() {
     let (repo, _a, _b, _wt_a, wt_b) = setup_stack_with_worktrees(true);
 

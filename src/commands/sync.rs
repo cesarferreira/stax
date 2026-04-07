@@ -102,7 +102,7 @@ pub fn run(
     r#continue: bool,
     quiet: bool,
     verbose: bool,
-    auto_stash_pop: bool,
+    mut auto_stash_pop: bool,
 ) -> Result<()> {
     let sync_started_at = Instant::now();
     let mut step_timings: Vec<(String, Duration)> = Vec::new();
@@ -144,6 +144,7 @@ pub fn run(
         if stash {
             let stash_started_at = Instant::now();
             stashed = repo.stash_push()?;
+            auto_stash_pop = true;
             step_timings.push(("stash working tree".to_string(), stash_started_at.elapsed()));
             if !quiet {
                 println!("{}", "✓ Stashed working tree changes.".green());

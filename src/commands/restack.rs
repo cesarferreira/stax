@@ -80,7 +80,7 @@ fn run_impl(
     dry_run: bool,
     yes: bool,
     quiet: bool,
-    auto_stash_pop: bool,
+    mut auto_stash_pop: bool,
     submit_after: SubmitAfterRestack,
     skip_prediction: bool,
     restore_branch: Option<String>,
@@ -106,6 +106,7 @@ fn run_impl(
 
             if stash {
                 stashed = repo.stash_push()?;
+                auto_stash_pop = true;
                 println!("{}", "✓ Stashed working tree changes.".green());
             } else {
                 println!("{}", "Aborted.".red());
