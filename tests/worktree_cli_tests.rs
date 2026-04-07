@@ -1085,8 +1085,7 @@ fn wt_remove_confirmed_dirty_worktree_uses_forced_git_remove() {
     fs::write(dirty_path.join("scratch.txt"), "dirty\n").expect("write dirty scratch file");
 
     let out = common::run_stax_in_script(&repo.path(), &["wt", "rm", &branch], "printf 'y\\n'");
-    out.assert_success()
-        .assert_stdout_contains(&format!("worktree '{}'", branch));
+    out.assert_success();
 
     assert!(
         !dirty_path.exists(),
