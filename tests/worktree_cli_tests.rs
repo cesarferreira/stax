@@ -1072,6 +1072,28 @@ fn wt_cleanup_force_removes_dirty_detached_candidates() {
 }
 
 #[test]
+fn wt_remove_confirmed_dirty_worktree_uses_forced_git_remove() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["create", "dirty-remove"]).assert_success();
+    let branch = repo.current_branch();
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let dirty_path = repo.path().join("wt-dirty-remove");
+    repo.git(&["worktree", "add", dirty_path.to_str().unwrap(), &branch])
+        .assert_success();
+    fs::write(dirty_path.join("scratch.txt"), "dirty\n").expect("write dirty scratch file");
+
+    let out = common::run_stax_in_script(&repo.path(), &["wt", "rm", &branch], "printf 'y\\n'");
+    out.assert_success();
+
+    assert!(
+        !dirty_path.exists(),
+        "expected confirmed dirty removal to force git worktree remove"
+    );
+}
+
+#[test]
 fn wt_remove_without_name_removes_current_worktree() {
     let repo = TestRepo::new();
     let home = clean_home(&repo);

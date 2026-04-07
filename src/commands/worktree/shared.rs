@@ -1114,9 +1114,38 @@ mod tests {
     use super::{
         build_agent_launch_spec, build_launch_spec, build_tmux_launch_spec,
         default_tmux_session_name, is_tmux_no_server_error, parse_tmux_sessions_output,
-        ExistingTmuxSessionBehavior, LaunchOptions, LaunchSpec,
+        worktree_removal_blockers_for_cleanup, ExistingTmuxSessionBehavior, LaunchOptions,
+        LaunchSpec, WorktreeDetails,
     };
     use crate::config::Config;
+    use crate::git::repo::WorktreeInfo;
+    use std::path::PathBuf;
+
+    fn sample_worktree_details() -> WorktreeDetails {
+        WorktreeDetails {
+            info: WorktreeInfo {
+                name: "lane-a".to_string(),
+                path: PathBuf::from("/tmp/lane-a"),
+                branch: Some("feature-a".to_string()),
+                is_main: false,
+                is_current: false,
+                is_locked: false,
+                lock_reason: None,
+                is_prunable: false,
+                prunable_reason: None,
+            },
+            branch_label: "feature-a".to_string(),
+            is_managed: true,
+            stack_parent: None,
+            dirty: true,
+            rebase_in_progress: false,
+            merge_in_progress: false,
+            has_conflicts: false,
+            marker: None,
+            ahead: None,
+            behind: None,
+        }
+    }
 
     #[test]
     fn default_tmux_session_name_sanitizes_invalid_chars() {
@@ -1149,6 +1178,23 @@ mod tests {
         assert!(!is_tmux_no_server_error(
             "permission denied opening tmux socket"
         ));
+    }
+
+    #[test]
+    fn cleanup_force_allows_dirty_worktree_removal() {
+        let detail = sample_worktree_details();
+        assert!(worktree_removal_blockers_for_cleanup(&detail, true).is_empty());
+    }
+
+    #[test]
+    fn cleanup_force_keeps_non_dirty_blockers() {
+        let mut detail = sample_worktree_details();
+        detail.info.is_locked = true;
+
+        assert_eq!(
+            worktree_removal_blockers_for_cleanup(&detail, true),
+            vec!["locked"]
+        );
     }
 
     #[test]

@@ -9,6 +9,10 @@ use anyhow::{bail, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 
+fn effective_remove_force(force: bool, confirmed_dirty_removal: bool) -> bool {
+    force || confirmed_dirty_removal
+}
+
 pub(crate) fn remove_worktree_with_hooks(
     repo: &GitRepo,
     config: &Config,
@@ -67,6 +71,7 @@ pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()>
         );
     }
 
+    let mut confirmed_dirty_removal = false;
     if !force && repo.is_dirty_at(&worktree.path)? {
         eprintln!(
             "{} Worktree '{}' has uncommitted changes.",
@@ -81,11 +86,14 @@ pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()>
             println!("{}", "Aborted.".dimmed());
             return Ok(());
         }
+
+        confirmed_dirty_removal = true;
     }
 
     let branch = worktree.branch.clone();
     let main_workdir = repo.main_repo_workdir()?;
-    let display_name = remove_worktree_with_hooks(&repo, &config, &worktree, force)?;
+    let remove_force = effective_remove_force(force, confirmed_dirty_removal);
+    let display_name = remove_worktree_with_hooks(&repo, &config, &worktree, remove_force)?;
 
     if delete_branch {
         let repo = GitRepo::open_from_path(&main_workdir)?;
@@ -118,4 +126,24 @@ pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()>
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_remove_force;
+
+    #[test]
+    fn confirmed_dirty_removal_upgrades_to_force() {
+        assert!(effective_remove_force(false, true));
+    }
+
+    #[test]
+    fn force_flag_stays_enabled_without_extra_confirmation() {
+        assert!(effective_remove_force(true, false));
+    }
+
+    #[test]
+    fn clean_non_forced_removal_stays_non_forced() {
+        assert!(!effective_remove_force(false, false));
+    }
 }
