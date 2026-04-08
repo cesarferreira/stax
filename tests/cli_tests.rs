@@ -38,12 +38,19 @@ fn test_help() {
 }
 
 #[test]
-fn test_status_alias_s() {
-    // Both aliases should work
+fn test_status_alias_ls() {
     let output1 = stax(&["status", "--help"]);
-    let output2 = stax(&["s", "--help"]);
+    let output2 = stax(&["ls", "--help"]);
     assert!(output1.status.success());
     assert!(output2.status.success());
+}
+
+#[test]
+fn test_stack_alias_s() {
+    let output = stax(&["s", "--help"]);
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("submit") || String::from_utf8_lossy(&output.stdout).contains("submit"));
 }
 
 #[test]

@@ -45,7 +45,10 @@ brew install cesarferreira/tap/stax
 cargo binstall stax
 ```
 
-### Prebuilt binaries (no package manager needed)
+<details>
+<summary>Other installation methods (Linux, Windows, prebuilt binaries, build from source)</summary>
+
+### Prebuilt binaries
 
 Download the latest binary from [GitHub Releases](https://github.com/cesarferreira/stax/releases):
 
@@ -68,12 +71,6 @@ mv stax st ~/.local/bin/
 ```
 
 **Windows (x86_64):** download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/cesarferreira/stax/releases), extract both `stax.exe` and `st.exe`, and place them in a directory on your `PATH`. See [Windows notes](#windows-notes) for shell and worktree limitations.
-
-Verify install:
-
-```bash
-st --version
-```
 
 ### Building from Source
 
@@ -99,6 +96,14 @@ Alternatively, you can build without system OpenSSL dependencies using the vendo
 
 ```bash
 cargo install --path . --locked --features vendored-openssl
+```
+
+</details>
+
+Verify install:
+
+```bash
+st --version
 ```
 
 <a id="quick-start"></a>

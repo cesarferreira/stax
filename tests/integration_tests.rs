@@ -840,14 +840,28 @@ fn test_status_compact_output() {
 }
 
 #[test]
-fn test_status_alias_s() {
+fn test_status_alias_ls() {
     let repo = TestRepo::new();
 
     let output1 = repo.run_stax(&["status"]);
-    let output2 = repo.run_stax(&["s"]);
+    let output2 = repo.run_stax(&["ls"]);
 
     assert!(output1.status.success());
     assert!(output2.status.success());
+}
+
+#[test]
+fn test_stack_alias_s() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["s", "--help"]);
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("submit"));
+    assert!(combined.contains("restack"));
 }
 
 #[test]
