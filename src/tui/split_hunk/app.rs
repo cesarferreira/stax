@@ -4,6 +4,7 @@ use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::tui::split_hunk::diff_parser::{parse_diff, reconstruct_full_patch, DiffFile};
 use anyhow::{bail, Context, Result};
+use ratatui::widgets::ListState;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -48,6 +49,7 @@ pub struct HunkSplitApp {
     pub selected: Vec<Vec<bool>>,
     pub flat_items: Vec<FlatItem>,
     pub cursor: usize,
+    pub list_state: ListState,
     pub mode: HunkSplitMode,
     pub round: usize,
     created_branches: Vec<String>,
@@ -158,6 +160,7 @@ impl HunkSplitApp {
             selected,
             flat_items,
             cursor: 0,
+            list_state: ListState::default(),
             mode: HunkSplitMode::List,
             round: 1,
             created_branches: Vec::new(),

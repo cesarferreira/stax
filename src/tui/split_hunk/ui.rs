@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-pub fn render(f: &mut Frame, app: &HunkSplitApp) {
+pub fn render(f: &mut Frame, app: &mut HunkSplitApp) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(2)])
@@ -30,7 +30,7 @@ pub fn render(f: &mut Frame, app: &HunkSplitApp) {
     }
 }
 
-fn render_file_list(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
+fn render_file_list(f: &mut Frame, app: &mut HunkSplitApp, area: Rect) {
     let mut items: Vec<ListItem> = Vec::new();
 
     for (i, flat_item) in app.flat_items.iter().enumerate() {
@@ -145,7 +145,8 @@ fn render_file_list(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
         .border_style(Style::default().fg(Color::Blue));
 
     let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    app.list_state.select(Some(app.cursor));
+    f.render_stateful_widget(list, area, &mut app.list_state);
 }
 
 fn render_diff_preview(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
