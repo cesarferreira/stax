@@ -137,6 +137,11 @@ fn run_split_hunk(repo: &TestRepo, rounds: usize) {
     );
 }
 
+fn file_content(repo: &TestRepo, branch: &str, path: &str) -> String {
+    let output = repo.git(&["show", &format!("{}:{}", branch, path)]);
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
 #[test]
 fn test_split_hunk_two_files_into_two_branches() {
     let repo = TestRepo::new();
@@ -296,4 +301,147 @@ fn test_split_hunk_abort_with_dirty_workdir_preserves_changes() {
     );
     let content = std::fs::read_to_string(&dirty_path).unwrap();
     assert_eq!(content, "dirty content\n");
+}
+
+// =============================================================================
+// Regression tests: same-file multi-hunk splits (stale offset bug)
+// =============================================================================
+
+#[test]
+fn test_split_hunk_same_file_two_hunks() {
+    let repo = TestRepo::new();
+
+    let base_content: String = (1..=30).map(|i| format!("line {}\n", i)).collect();
+    repo.create_file("shared.txt", &base_content);
+    repo.commit("add shared file");
+
+    let output = repo.run_stax(&["bc", "same-file-split"]);
+    assert!(
+        output.status.success(),
+        "bc failed: {}",
+        TestRepo::stderr(&output)
+    );
+    let original = repo.current_branch();
+
+    let modified: String = (1..=30)
+        .map(|i| match i {
+            3 => "line 3 MODIFIED\n".to_string(),
+            25 => "line 25 MODIFIED\n".to_string(),
+            _ => format!("line {}\n", i),
+        })
+        .collect();
+    repo.create_file("shared.txt", &modified);
+    repo.commit("modify shared file in two places");
+
+    run_split_hunk(&repo, 2);
+
+    let split_1 = format!("{}_split_1", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    let parents = parent_map(&repo);
+    assert_eq!(parents.get(&split_1).map(String::as_str), Some("main"));
+    assert_eq!(
+        parents.get(&original).map(String::as_str),
+        Some(split_1.as_str())
+    );
+
+    let s1_content = file_content(&repo, &split_1, "shared.txt");
+    assert!(
+        s1_content.contains("line 3 MODIFIED"),
+        "split_1 should have line 3 modification"
+    );
+    assert!(
+        !s1_content.contains("line 25 MODIFIED"),
+        "split_1 should NOT have line 25 modification"
+    );
+
+    let final_content = file_content(&repo, &original, "shared.txt");
+    assert!(
+        final_content.contains("line 3 MODIFIED"),
+        "final branch should have line 3 modification"
+    );
+    assert!(
+        final_content.contains("line 25 MODIFIED"),
+        "final branch should have line 25 modification"
+    );
+}
+
+#[test]
+fn test_split_hunk_same_file_three_hunks() {
+    let repo = TestRepo::new();
+
+    let base_content: String = (1..=40).map(|i| format!("line {}\n", i)).collect();
+    repo.create_file("shared.txt", &base_content);
+    repo.commit("add shared file");
+
+    let output = repo.run_stax(&["bc", "three-way-split"]);
+    assert!(
+        output.status.success(),
+        "bc failed: {}",
+        TestRepo::stderr(&output)
+    );
+    let original = repo.current_branch();
+
+    let modified: String = (1..=40)
+        .map(|i| match i {
+            3 => "line 3 MODIFIED\n".to_string(),
+            20 => "line 20 MODIFIED\n".to_string(),
+            37 => "line 37 MODIFIED\n".to_string(),
+            _ => format!("line {}\n", i),
+        })
+        .collect();
+    repo.create_file("shared.txt", &modified);
+    repo.commit("modify shared file in three places");
+
+    run_split_hunk(&repo, 3);
+
+    let split_1 = format!("{}_split_1", original);
+    let split_2 = format!("{}_split_2", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&split_2),
+        "Missing {split_2}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    let parents = parent_map(&repo);
+    assert_eq!(parents.get(&split_1).map(String::as_str), Some("main"));
+    assert_eq!(
+        parents.get(&split_2).map(String::as_str),
+        Some(split_1.as_str())
+    );
+    assert_eq!(
+        parents.get(&original).map(String::as_str),
+        Some(split_2.as_str())
+    );
+
+    let s1_content = file_content(&repo, &split_1, "shared.txt");
+    assert!(s1_content.contains("line 3 MODIFIED"));
+    assert!(!s1_content.contains("line 20 MODIFIED"));
+    assert!(!s1_content.contains("line 37 MODIFIED"));
+
+    let s2_content = file_content(&repo, &split_2, "shared.txt");
+    assert!(s2_content.contains("line 3 MODIFIED"));
+    assert!(s2_content.contains("line 20 MODIFIED"));
+    assert!(!s2_content.contains("line 37 MODIFIED"));
+
+    let final_content = file_content(&repo, &original, "shared.txt");
+    assert!(final_content.contains("line 3 MODIFIED"));
+    assert!(final_content.contains("line 20 MODIFIED"));
+    assert!(final_content.contains("line 37 MODIFIED"));
 }
