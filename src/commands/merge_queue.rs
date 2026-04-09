@@ -1,7 +1,8 @@
-//! Enqueue a stack into GitHub's merge queue — no polling, no local git.
+//! Enqueue a stack into the forge's merge queue — no polling, no local git.
 //!
-//! Retargets all stack PRs to trunk, then enqueues them via the
-//! `enqueuePullRequest` GraphQL mutation.  GitHub handles CI and merging.
+//! Retargets all stack PRs to trunk, then enqueues them via the forge's
+//! merge queue API (GitHub GraphQL `enqueuePullRequest`, GitLab merge
+//! trains REST API).  The forge handles CI and merging.
 
 use crate::config::Config;
 use crate::engine::Stack;
@@ -51,16 +52,18 @@ pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
 
     let remote_info = RemoteInfo::from_repo(&repo, &config)
         .context("Failed to read git remote configuration")?;
-    if remote_info.forge != ForgeType::GitHub {
+    if remote_info.forge == ForgeType::Gitea {
         anyhow::bail!(
-            "`stax merge --queue` is only supported for GitHub remotes (found {})",
-            remote_info.forge
+            "`stax merge --queue` is not supported for Gitea/Forgejo — \
+             Gitea does not have a merge queue feature.\n\
+             Tip: use `stax merge` or `stax merge --when-ready` instead."
         );
     }
 
     let client = ForgeClient::new(&remote_info).context(
         "Failed to connect to the configured forge. Check your token and remote configuration.",
     )?;
+    let forge_name = remote_info.forge.to_string();
 
     let rt = tokio::runtime::Runtime::new()?;
     let _enter = rt.enter();
@@ -133,7 +136,11 @@ pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
         println!();
         println!(
             "{}",
-            "GitHub will run CI on the combined changes and merge automatically.".dimmed()
+            format!(
+                "{} will run CI on the combined changes and merge automatically.",
+                forge_name
+            )
+            .dimmed()
         );
     }
 
@@ -278,8 +285,11 @@ pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
         println!();
         println!(
             "{}",
-            "GitHub will run CI and merge automatically. Run `stax rs` to sync once merged."
-                .dimmed()
+            format!(
+                "{} will run CI and merge automatically. Run `stax rs` to sync once merged.",
+                forge_name
+            )
+            .dimmed()
         );
     }
 

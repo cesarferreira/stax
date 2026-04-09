@@ -117,6 +117,14 @@ struct MergeMrRequest<'a> {
 }
 
 #[derive(Serialize)]
+struct AddToMergeTrainRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_merge: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    squash: Option<bool>,
+}
+
+#[derive(Serialize)]
 struct CreateNoteRequest<'a> {
     body: &'a str,
 }
@@ -319,6 +327,34 @@ impl GitLabClient {
             .collect::<Vec<_>>();
         comments.sort_by_key(|comment| comment.created_at());
         Ok(comments)
+    }
+
+    /// Add an MR to GitLab's merge train.
+    ///
+    /// Uses `auto_merge: true` so the MR is scheduled to enter the merge train
+    /// once its pipeline succeeds. Requires GitLab Premium/Ultimate and merge
+    /// trains enabled in the project CI/CD settings.
+    pub async fn add_to_merge_train(
+        &self,
+        number: u64,
+    ) -> Result<crate::github::pr::EnqueueResult> {
+        let request = AddToMergeTrainRequest {
+            auto_merge: Some(true),
+            squash: None,
+        };
+        let _: serde_json::Value = post_json(
+            &self.client,
+            &self.project_url(&format!("/merge_trains/merge_requests/{}", number)),
+            &request,
+        )
+        .await
+        .context(
+            "Failed to add MR to merge train. Ensure merge trains are enabled \
+             (GitLab Premium/Ultimate) and merge request pipelines are configured.",
+        )?;
+        Ok(crate::github::pr::EnqueueResult {
+            merge_queue_entry: Some(crate::github::pr::MergeQueueEntry { position: None }),
+        })
     }
 
     pub async fn merge_pr(

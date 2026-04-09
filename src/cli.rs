@@ -219,8 +219,8 @@ enum Commands {
         /// Merge via GitHub API only (no local checkout/rebase/push); GitHub updates branches remotely
         #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "queue"])]
         remote: bool,
-        /// Enqueue PRs into GitHub's merge queue instead of merging one-by-one.
-        /// Requires merge queue enabled in branch protection rules (GitHub Team/Enterprise, or public repos).
+        /// Enqueue PRs into the forge's merge queue instead of merging one-by-one.
+        /// Supported on GitHub (merge queue) and GitLab (merge trains). Not available on Gitea.
         #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote"])]
         queue: bool,
         /// Polling interval in seconds for --when-ready and --remote
