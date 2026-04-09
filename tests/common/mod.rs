@@ -76,6 +76,15 @@ fn sh_quote(value: &str) -> String {
 
 #[allow(dead_code)]
 pub fn run_stax_in_script(cwd: &Path, args: &[&str], input_script: &str) -> Output {
+    run_stax_in_script_with_env(cwd, args, input_script, &[])
+}
+
+pub fn run_stax_in_script_with_env(
+    cwd: &Path,
+    args: &[&str],
+    input_script: &str,
+    env: &[(&str, &str)],
+) -> Output {
     let stax_bin = stax_bin();
     let command = std::iter::once(stax_bin.to_string_lossy().into_owned())
         .chain(args.iter().map(|arg| (*arg).to_string()))
@@ -95,6 +104,9 @@ pub fn run_stax_in_script(cwd: &Path, args: &[&str], input_script: &str) -> Outp
     let mut cmd = Command::new("sh");
     cmd.args(["-c", &shell_script]).current_dir(cwd);
     apply_sanitized_test_env(&mut cmd);
+    for (key, val) in env {
+        cmd.env(key, val);
+    }
     cmd.output().expect("Failed to run stax inside script")
 }
 

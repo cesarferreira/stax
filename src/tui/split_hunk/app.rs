@@ -406,14 +406,19 @@ impl HunkSplitApp {
         let patch = reconstruct_full_patch(&self.files, &selections);
 
         let debug = std::env::var("STAX_SPLIT_DEBUG").is_ok();
+        let debug_log_path = std::env::temp_dir().join("stax-split-debug.log");
         if debug {
-            let log_path = self.workdir.join(".stax-split-debug.log");
-            let mut log = format!(
+            let mut log = if self.round == 1 {
+                String::new()
+            } else {
+                std::fs::read_to_string(&debug_log_path).unwrap_or_default()
+            };
+            log.push_str(&format!(
                 "=== Round {} commit ===\nBranch: {}\nSelected: {}/{}\nSelections: {:?}\n",
                 self.round, branch_name, selected_count, total_count, selections,
-            );
+            ));
             log.push_str(&format!("--- patch ---\n{}\n--- end patch ---\n", patch));
-            let _ = std::fs::write(&log_path, &log);
+            let _ = std::fs::write(&debug_log_path, &log);
         }
 
         git(&self.workdir, &["reset"])?;
@@ -437,8 +442,7 @@ impl HunkSplitApp {
         let has_remaining = !files.is_empty();
 
         if debug {
-            let log_path = self.workdir.join(".stax-split-debug.log");
-            let mut log = std::fs::read_to_string(&log_path).unwrap_or_default();
+            let mut log = std::fs::read_to_string(&debug_log_path).unwrap_or_default();
             log.push_str(&format!(
                 "--- post-commit diff ({} files remaining) ---\n{}\n--- end diff ---\n",
                 files.len(),
@@ -451,7 +455,7 @@ impl HunkSplitApp {
             if selected_count < total_count && !has_remaining {
                 log.push_str("!!! BUG: partial selection but no remaining hunks !!!\n");
             }
-            let _ = std::fs::write(&log_path, &log);
+            let _ = std::fs::write(&debug_log_path, &log);
         }
 
         if has_remaining {
