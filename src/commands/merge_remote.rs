@@ -258,11 +258,28 @@ pub fn run(
                 }
             }
 
+            let merge_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Merging ({})...", method.as_str()));
+
+            match rt.block_on(async { client.merge_pr(pr_number, method, None, None).await }) {
+                Ok(()) => {
+                    LiveTimer::maybe_finish_ok(merge_timer, "done");
+                    merged_prs.push((branch_name.clone(), pr_number));
+                    record_ci_history_for_branch(&repo, &rt, &client, &stack, &branch_name);
+                }
+                Err(e) => {
+                    LiveTimer::maybe_finish_err(merge_timer, "failed");
+                    failed_pr = Some((branch_name, pr_number, e.to_string()));
+                    break;
+                }
+            }
+
+            // Retarget next PR to trunk after successful merge
             if let Some(ref next_branch) = next_branch {
                 let update_base_timer = LiveTimer::maybe_new(
                     !quiet,
                     &format!(
-                        "Retargeting #{} to {} before merge...",
+                        "Retargeting #{} to {}...",
                         next_branch.pr_number, scope.trunk
                     ),
                 );
@@ -285,22 +302,6 @@ pub fn run(
                         ));
                         break;
                     }
-                }
-            }
-
-            let merge_timer =
-                LiveTimer::maybe_new(!quiet, &format!("Merging ({})...", method.as_str()));
-
-            match rt.block_on(async { client.merge_pr(pr_number, method, None, None).await }) {
-                Ok(()) => {
-                    LiveTimer::maybe_finish_ok(merge_timer, "done");
-                    merged_prs.push((branch_name.clone(), pr_number));
-                    record_ci_history_for_branch(&repo, &rt, &client, &stack, &branch_name);
-                }
-                Err(e) => {
-                    LiveTimer::maybe_finish_err(merge_timer, "failed");
-                    failed_pr = Some((branch_name, pr_number, e.to_string()));
-                    break;
                 }
             }
         }
