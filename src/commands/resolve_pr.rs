@@ -13,7 +13,8 @@ use anyhow::Result;
 /// 3. Persists the discovered PR number to branch metadata so future
 ///    commands skip the network round-trip.
 ///
-/// Returns `None` only when no PR exists either locally or remotely.
+/// Returns `None` when no PR exists locally or remotely, or when the
+/// forge is unreachable (missing token, network error, etc.).
 pub fn resolve_pr_number(
     repo: &GitRepo,
     stack: &Stack,
@@ -27,37 +28,35 @@ pub fn resolve_pr_number(
         }
     }
 
-    // Fall back to forge lookup (non-fatal on client creation failure)
+    // Fall back to forge lookup — all failures are non-fatal so that
+    // missing tokens, network errors, etc. degrade gracefully.
     let remote_info = match RemoteInfo::from_repo(repo, config) {
         Ok(info) => info,
         Err(_) => return Ok(None),
     };
     let rt = tokio::runtime::Runtime::new()?;
-    let client = match {
-        let _enter = rt.enter();
-        ForgeClient::new(&remote_info)
-    } {
+    let _enter = rt.enter();
+    let client = match ForgeClient::new(&remote_info) {
         Ok(c) => c,
         Err(_) => return Ok(None),
     };
 
-    let pr_number = rt
-        .block_on(async { client.find_pr(branch).await })?
-        .map(|pr_info| pr_info.number);
+    let pr_number = match rt.block_on(async { client.find_pr(branch).await }) {
+        Ok(Some(pr_info)) => pr_info.number,
+        _ => return Ok(None),
+    };
 
     // Persist discovered PR number to metadata
-    if let Some(number) = pr_number {
-        if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch) {
-            if meta.pr_info.is_none() {
-                meta.pr_info = Some(crate::engine::metadata::PrInfo {
-                    number,
-                    state: "open".to_string(),
-                    is_draft: None,
-                });
-                let _ = meta.write(repo.inner(), branch);
-            }
+    if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch) {
+        if meta.pr_info.is_none() {
+            meta.pr_info = Some(crate::engine::metadata::PrInfo {
+                number: pr_number,
+                state: "open".to_string(),
+                is_draft: None,
+            });
+            let _ = meta.write(repo.inner(), branch);
         }
     }
 
-    Ok(pr_number)
+    Ok(Some(pr_number))
 }

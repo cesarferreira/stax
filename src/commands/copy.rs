@@ -47,6 +47,7 @@ pub fn run(target: CopyTarget) -> Result<()> {
                     "stax submit".cyan()
                 );
             }
+
             let pr_number = pr_number.unwrap();
             let remote_info = RemoteInfo::from_repo(&repo, &config)?;
             remote_info.pr_url(pr_number)

@@ -30,7 +30,7 @@ pub mod range_diff;
 pub mod redo;
 pub mod reorder;
 pub mod resolve;
-pub mod resolve_pr;
+pub(crate) mod resolve_pr;
 pub mod restack;
 pub(crate) mod restack_conflict;
 pub(crate) mod restack_parent;
