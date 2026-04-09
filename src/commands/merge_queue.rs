@@ -64,6 +64,10 @@ pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
         "Failed to connect to the configured forge. Check your token and remote configuration.",
     )?;
     let forge_name = remote_info.forge.to_string();
+    let queue_term = match remote_info.forge {
+        ForgeType::GitLab => "merge train",
+        _ => "merge queue",
+    };
 
     let rt = tokio::runtime::Runtime::new()?;
     let _enter = rt.enter();
@@ -115,14 +119,15 @@ pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
 
     if !quiet {
         println!();
-        print_header("Merge Queue");
+        print_header(&capitalize(queue_term));
         println!();
         let pr_word = if branches.len() == 1 { "PR" } else { "PRs" };
         println!(
-            "Will retarget and enqueue {} {} into {}'s merge queue:",
+            "Will retarget and enqueue {} {} into {}'s {}:",
             branches.len().to_string().bold(),
             pr_word,
-            trunk.cyan()
+            trunk.cyan(),
+            queue_term,
         );
         println!();
         for (idx, branch) in branches.iter().enumerate() {
@@ -240,7 +245,7 @@ pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
     println!();
 
     if let Some((branch, pr, reason)) = &failed {
-        print_header_error("Merge Queue Failed");
+        print_header_error(&format!("{} Failed", capitalize(queue_term)));
         println!();
         println!("Progress:");
         for (queued_branch, queued_pr, _) in &enqueued {
@@ -255,7 +260,7 @@ pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
         println!();
         println!(
             "{}",
-            "Already enqueued PRs remain in the merge queue.".dimmed()
+            format!("Already enqueued PRs remain in the {}.", queue_term).dimmed()
         );
         println!(
             "{}",
@@ -269,10 +274,11 @@ pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
         print_header_success("Stack Enqueued");
         println!();
         println!(
-            "Enqueued {} {} into {}'s merge queue:",
+            "Enqueued {} {} into {}'s {}:",
             enqueued.len(),
             if enqueued.len() == 1 { "PR" } else { "PRs" },
-            trunk.cyan()
+            trunk.cyan(),
+            queue_term,
         );
         for (branch, pr, position) in &enqueued {
             let pos_str = match position {
@@ -307,6 +313,14 @@ fn calculate_queue_scope(stack: &Stack, current: &str, all: bool) -> (Vec<String
     }
 
     (to_queue, stack.trunk.clone())
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+    }
 }
 
 // --- Display helpers (same as merge_remote.rs) ---

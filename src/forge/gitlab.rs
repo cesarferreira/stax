@@ -118,10 +118,7 @@ struct MergeMrRequest<'a> {
 
 #[derive(Serialize)]
 struct AddToMergeTrainRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    auto_merge: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    squash: Option<bool>,
+    auto_merge: bool,
 }
 
 #[derive(Serialize)]
@@ -339,8 +336,7 @@ impl GitLabClient {
         number: u64,
     ) -> Result<crate::github::pr::EnqueueResult> {
         let request = AddToMergeTrainRequest {
-            auto_merge: Some(true),
-            squash: None,
+            auto_merge: true,
         };
         let _: serde_json::Value = post_json(
             &self.client,
