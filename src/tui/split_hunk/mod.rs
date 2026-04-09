@@ -129,6 +129,8 @@ fn handle_list_key(app: &mut HunkSplitApp, code: KeyCode) {
             app.status_message = Some("Sequential mode: y/n to accept/skip hunks".to_string());
         }
         KeyCode::Enter => try_finish_round(app),
+        KeyCode::Char('J') => app.scroll_diff_down(),
+        KeyCode::Char('K') => app.scroll_diff_up(),
         KeyCode::Char('q') | KeyCode::Esc => app.mode = HunkSplitMode::ConfirmAbort,
         KeyCode::Char('?') => app.mode = HunkSplitMode::Help,
         _ => {}
@@ -149,6 +151,8 @@ fn handle_sequential_key(app: &mut HunkSplitApp, code: KeyCode) {
             app.status_message = Some("List mode".to_string());
         }
         KeyCode::Enter => try_finish_round(app),
+        KeyCode::Char('J') => app.scroll_diff_down(),
+        KeyCode::Char('K') => app.scroll_diff_up(),
         KeyCode::Char('q') | KeyCode::Esc => app.mode = HunkSplitMode::ConfirmAbort,
         KeyCode::Char('?') => app.mode = HunkSplitMode::Help,
         _ => {}

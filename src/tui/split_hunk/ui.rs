@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -149,7 +149,7 @@ fn render_file_list(f: &mut Frame, app: &mut HunkSplitApp, area: Rect) {
     f.render_stateful_widget(list, area, &mut app.list_state);
 }
 
-fn render_diff_preview(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
+fn render_diff_preview(f: &mut Frame, app: &mut HunkSplitApp, area: Rect) {
     let block = Block::default()
         .title(" Diff Preview ")
         .borders(Borders::ALL)
@@ -230,17 +230,19 @@ fn render_diff_preview(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
         ))],
     };
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    app.diff_line_count = lines.len() as u16;
+    app.diff_viewport_height = inner.height;
+    let paragraph = Paragraph::new(lines).scroll((app.diff_scroll, 0));
     f.render_widget(paragraph, inner);
 }
 
 fn render_status_bar(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
     let help_line = match app.mode {
         HunkSplitMode::List => {
-            "j/k:nav  Space:toggle  a:file  Tab:sequential  Enter:commit  u:undo  ?:help  q:quit"
+            "j/k:nav  J/K:scroll diff  Space:toggle  a:file  Tab:sequential  Enter:commit  u:undo  ?:help  q:quit"
         }
         HunkSplitMode::Sequential => {
-            "y:accept  n:skip  a:toggle file  Tab:list  Enter:commit  u:undo  ?:help  q:quit"
+            "y:accept  n:skip  a:toggle file  J/K:scroll diff  Tab:list  Enter:commit  u:undo  ?:help  q:quit"
         }
         HunkSplitMode::Naming => "Enter:confirm  Esc:cancel",
         HunkSplitMode::ConfirmAbort => "y:quit  n:cancel",
@@ -374,6 +376,7 @@ fn render_help_dialog(f: &mut Frame) {
             "General",
             Style::default().add_modifier(Modifier::BOLD),
         )),
+        Line::from("  J/K        Scroll diff preview"),
         Line::from("  ?          Toggle help"),
         Line::from("  q/Esc      Quit (abort split)"),
         Line::from("  Ctrl-C     Force quit"),

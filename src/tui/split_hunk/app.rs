@@ -50,6 +50,9 @@ pub struct HunkSplitApp {
     pub flat_items: Vec<FlatItem>,
     pub cursor: usize,
     pub list_state: ListState,
+    pub diff_scroll: u16,
+    pub diff_line_count: u16,
+    pub diff_viewport_height: u16,
     pub mode: HunkSplitMode,
     pub round: usize,
     created_branches: Vec<String>,
@@ -161,6 +164,9 @@ impl HunkSplitApp {
             flat_items,
             cursor: 0,
             list_state: ListState::default(),
+            diff_scroll: 0,
+            diff_line_count: 0,
+            diff_viewport_height: 0,
             mode: HunkSplitMode::List,
             round: 1,
             created_branches: Vec::new(),
@@ -185,6 +191,7 @@ impl HunkSplitApp {
         if self.cursor > 0 {
             self.cursor -= 1;
         }
+        self.diff_scroll = 0;
     }
 
     /// Move cursor down one item
@@ -192,6 +199,7 @@ impl HunkSplitApp {
         if self.cursor < self.flat_items.len().saturating_sub(1) {
             self.cursor += 1;
         }
+        self.diff_scroll = 0;
     }
 
     /// Toggle selection of the hunk at cursor
@@ -248,6 +256,21 @@ impl HunkSplitApp {
         }
     }
 
+    pub fn scroll_diff_down(&mut self) {
+        let max = self
+            .diff_line_count
+            .saturating_sub(self.diff_viewport_height);
+        if self.diff_scroll < max {
+            self.diff_scroll += 1;
+        }
+    }
+
+    pub fn scroll_diff_up(&mut self) {
+        if self.diff_scroll > 0 {
+            self.diff_scroll -= 1;
+        }
+    }
+
     /// Select the current hunk and advance to the next (sequential mode)
     pub fn accept_and_advance(&mut self) {
         if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().copied() {
@@ -261,6 +284,7 @@ impl HunkSplitApp {
             }
         }
         self.advance_to_next_hunk();
+        self.diff_scroll = 0;
     }
 
     /// Skip the current hunk and advance to the next (sequential mode)
@@ -276,6 +300,7 @@ impl HunkSplitApp {
             }
         }
         self.advance_to_next_hunk();
+        self.diff_scroll = 0;
     }
 
     fn advance_to_next_hunk(&mut self) {
