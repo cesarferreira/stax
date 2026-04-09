@@ -239,10 +239,10 @@ fn render_diff_preview(f: &mut Frame, app: &mut HunkSplitApp, area: Rect) {
 fn render_status_bar(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
     let help_line = match app.mode {
         HunkSplitMode::List => {
-            "j/k:nav  J/K:scroll diff  Space:toggle  a:file  Tab:sequential  Enter:commit  u:undo  ?:help  q:quit"
+            "j/k:nav  Shift+j/k:scroll diff  Space:toggle  a:file  Tab:sequential  Enter:commit  u:undo  ?:help  q:quit"
         }
         HunkSplitMode::Sequential => {
-            "y:accept  n:skip  a:toggle file  J/K:scroll diff  Tab:list  Enter:commit  u:undo  ?:help  q:quit"
+            "y:accept  n:skip  a:toggle file  Shift+j/k:scroll diff  Tab:list  Enter:commit  u:undo  ?:help  q:quit"
         }
         HunkSplitMode::Naming => "Enter:confirm  Esc:cancel",
         HunkSplitMode::ConfirmAbort => "y:quit  n:cancel",
@@ -376,7 +376,8 @@ fn render_help_dialog(f: &mut Frame) {
             "General",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from("  J/K        Scroll diff preview"),
+        Line::from("  Shift+j/k  Scroll diff preview"),
+        Line::from("  PgUp/PgDn  Scroll diff preview"),
         Line::from("  ?          Toggle help"),
         Line::from("  q/Esc      Quit (abort split)"),
         Line::from("  Ctrl-C     Force quit"),
