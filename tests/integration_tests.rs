@@ -6956,7 +6956,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_retargets_next_pr_before_merging_parent_pr() {
+    async fn test_merge_retargets_next_pr_after_merging_parent_pr() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
@@ -7093,8 +7093,8 @@ mod forge_mock_tests {
         let patch_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/102");
         let merge_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/101/merge");
         assert!(
-            patch_idx < merge_idx,
-            "Expected dependent PR retarget before parent merge, requests were: {:?}",
+            patch_idx > merge_idx,
+            "Expected dependent PR retarget after parent merge, requests were: {:?}",
             requests
                 .iter()
                 .map(|request| format!("{} {}", request.method, request.url.path()))
@@ -7305,7 +7305,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_when_ready_retargets_next_pr_before_merging_parent_pr() {
+    async fn test_merge_when_ready_retargets_next_pr_after_merging_parent_pr() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
@@ -7452,8 +7452,8 @@ mod forge_mock_tests {
         let patch_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/202");
         let merge_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/201/merge");
         assert!(
-            patch_idx < merge_idx,
-            "Expected dependent PR retarget before parent merge, requests were: {:?}",
+            patch_idx > merge_idx,
+            "Expected dependent PR retarget after parent merge, requests were: {:?}",
             requests
                 .iter()
                 .map(|request| format!("{} {}", request.method, request.url.path()))
@@ -7462,7 +7462,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_remote_retargets_and_updates_branch_before_merging() {
+    async fn test_merge_remote_retargets_and_updates_branch_after_merging() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
@@ -7624,8 +7624,8 @@ mod forge_mock_tests {
         let merge2_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/302/merge");
 
         assert!(
-            patch_idx < merge1_idx,
-            "Expected dependent PR retarget before parent merge"
+            patch_idx > merge1_idx,
+            "Expected dependent PR retarget after parent merge"
         );
         assert!(
             update_idx > merge1_idx,
@@ -8132,7 +8132,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_gitlab_retargets_next_mr_before_merging_parent_mr() {
+    async fn test_merge_gitlab_retargets_next_mr_after_merging_parent_mr() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
@@ -8307,7 +8307,7 @@ mod forge_mock_tests {
             "PUT",
             "/projects/test%2Frepo/merge_requests/101/merge",
         );
-        assert!(retarget_idx < merge_idx);
+        assert!(retarget_idx > merge_idx);
         let retarget = requests
             .iter()
             .find(|request| {
@@ -8325,7 +8325,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_when_ready_gitlab_retargets_next_mr_before_merging_parent_mr() {
+    async fn test_merge_when_ready_gitlab_retargets_next_mr_after_merging_parent_mr() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
@@ -8510,7 +8510,7 @@ mod forge_mock_tests {
             "PUT",
             "/projects/test%2Frepo/merge_requests/201/merge",
         );
-        assert!(retarget_idx < merge_idx);
+        assert!(retarget_idx > merge_idx);
     }
 
     #[tokio::test]
@@ -8945,7 +8945,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_gitea_retargets_next_pr_before_merging_parent_pr() {
+    async fn test_merge_gitea_retargets_next_pr_after_merging_parent_pr() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
@@ -9103,7 +9103,7 @@ mod forge_mock_tests {
             .expect("request recording enabled");
         let retarget_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/102");
         let merge_idx = find_request_index(&requests, "POST", "/repos/test/repo/pulls/101/merge");
-        assert!(retarget_idx < merge_idx);
+        assert!(retarget_idx > merge_idx);
         let retarget = requests
             .iter()
             .find(|request| {
@@ -9121,7 +9121,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_when_ready_gitea_retargets_next_pr_before_merging_parent_pr() {
+    async fn test_merge_when_ready_gitea_retargets_next_pr_after_merging_parent_pr() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
@@ -9289,6 +9289,6 @@ mod forge_mock_tests {
             .expect("request recording enabled");
         let retarget_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/202");
         let merge_idx = find_request_index(&requests, "POST", "/repos/test/repo/pulls/201/merge");
-        assert!(retarget_idx < merge_idx);
+        assert!(retarget_idx > merge_idx);
     }
 }
