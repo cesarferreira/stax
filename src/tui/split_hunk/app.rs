@@ -417,6 +417,7 @@ impl HunkSplitApp {
             self.existing_branches.push(branch_name.to_string());
         }
 
+        git(&self.workdir, &["add", "-N", "."])?;
         let diff_output = git(&self.workdir, &["diff"])?;
         let files = parse_diff(&diff_output);
         let has_remaining = !files.is_empty();
