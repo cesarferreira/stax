@@ -64,6 +64,7 @@ pub struct HunkSplitApp {
     pub round_complete: bool,
     pub all_done: bool,
     existing_branches: Vec<String>,
+    no_verify: bool,
 }
 
 fn git(workdir: &Path, args: &[&str]) -> Result<String> {
@@ -90,7 +91,7 @@ fn git_ok(workdir: &Path, args: &[&str]) -> bool {
 
 impl HunkSplitApp {
     /// Initialize the hunk split: validate state, flatten branch, parse diff.
-    pub fn new() -> Result<Self> {
+    pub fn new(no_verify: bool) -> Result<Self> {
         let repo = GitRepo::open()?;
         let stack = Stack::load(&repo)?;
         let current = repo.current_branch()?;
@@ -122,10 +123,11 @@ impl HunkSplitApp {
         let stashed = repo.is_dirty()?;
         if stashed {
             git(&workdir, &["add", "-A"])?;
-            git(
-                &workdir,
-                &["commit", "-m", "WIP: uncommitted changes for split"],
-            )?;
+            let mut commit_args = vec!["commit", "-m", "WIP: uncommitted changes for split"];
+            if no_verify {
+                commit_args.push("--no-verify");
+            }
+            git(&workdir, &commit_args)?;
         }
 
         let parent_sha = repo.merge_base(&parent, &current)?;
@@ -178,6 +180,7 @@ impl HunkSplitApp {
             round_complete: false,
             all_done: false,
             existing_branches,
+            no_verify,
         })
     }
 
@@ -429,7 +432,11 @@ impl HunkSplitApp {
 
         let patch_str = patch_path.to_string_lossy().to_string();
         git(&self.workdir, &["apply", "--cached", &patch_str])?;
-        git(&self.workdir, &["commit", "-m", branch_name])?;
+        let mut commit_args = vec!["commit", "-m", branch_name];
+        if self.no_verify {
+            commit_args.push("--no-verify");
+        }
+        git(&self.workdir, &commit_args)?;
 
         self.created_branches.push(branch_name.to_string());
         if branch_name != self.original_branch {

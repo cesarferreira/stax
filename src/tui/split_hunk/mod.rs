@@ -14,8 +14,8 @@ use std::io;
 use std::time::Duration;
 
 /// Run the hunk-based split TUI
-pub fn run() -> Result<()> {
-    let mut app = HunkSplitApp::new()?;
+pub fn run(no_verify: bool) -> Result<()> {
+    let mut app = HunkSplitApp::new(no_verify)?;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();

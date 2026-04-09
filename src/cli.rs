@@ -570,6 +570,10 @@ enum Commands {
         /// Split by selecting individual hunks instead of by commit
         #[arg(long)]
         hunk: bool,
+
+        /// Skip pre-commit hooks when committing split branches
+        #[arg(long)]
+        no_verify: bool,
     },
 
     /// Copy branch name or PR URL to clipboard
@@ -1525,7 +1529,7 @@ pub fn run() -> Result<()> {
             interval,
             verbose,
         } => commands::ci::run(all, stack, json, refresh, watch, interval, verbose),
-        Commands::Split { hunk } => commands::split::run(hunk),
+        Commands::Split { hunk, no_verify } => commands::split::run(hunk, no_verify),
         Commands::Copy { pr } => {
             let target = if pr {
                 commands::copy::CopyTarget::Pr
