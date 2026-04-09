@@ -25,8 +25,9 @@ pub fn run(plain: bool) -> Result<()> {
         );
     }
 
-    // Check if branch has a PR
-    let pr_number = branch_info.and_then(|b| b.pr_number);
+    // Resolve PR number (local metadata or forge fallback)
+    let pr_number =
+        super::resolve_pr::resolve_pr_number(&repo, &stack, &current, &config)?;
     if pr_number.is_none() {
         anyhow::bail!(
             "No PR found for branch '{}'. Use {} to create one.",
@@ -34,7 +35,6 @@ pub fn run(plain: bool) -> Result<()> {
             "stax submit".cyan()
         );
     }
-
     let pr_number = pr_number.unwrap();
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
 
