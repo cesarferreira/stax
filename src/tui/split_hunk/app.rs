@@ -383,6 +383,9 @@ impl HunkSplitApp {
     /// Stage and commit the selected hunks for this round.
     /// Returns `Ok(true)` if there are remaining hunks for another round.
     pub fn commit_round(&mut self, branch_name: &str) -> Result<bool> {
+        let selected_count = self.selected_count();
+        let total_count = self.total_hunk_count();
+
         let mut selections: Vec<(usize, Vec<usize>)> = Vec::new();
         for (fi, file_sel) in self.selected.iter().enumerate() {
             let hunks: Vec<usize> = file_sel
@@ -401,6 +404,17 @@ impl HunkSplitApp {
         }
 
         let patch = reconstruct_full_patch(&self.files, &selections);
+
+        let debug = std::env::var("STAX_SPLIT_DEBUG").is_ok();
+        if debug {
+            let log_path = self.workdir.join(".stax-split-debug.log");
+            let mut log = format!(
+                "=== Round {} commit ===\nBranch: {}\nSelected: {}/{}\nSelections: {:?}\n",
+                self.round, branch_name, selected_count, total_count, selections,
+            );
+            log.push_str(&format!("--- patch ---\n{}\n--- end patch ---\n", patch));
+            let _ = std::fs::write(&log_path, &log);
+        }
 
         git(&self.workdir, &["reset"])?;
 
@@ -421,6 +435,24 @@ impl HunkSplitApp {
         let diff_output = git(&self.workdir, &["diff"])?;
         let files = parse_diff(&diff_output);
         let has_remaining = !files.is_empty();
+
+        if debug {
+            let log_path = self.workdir.join(".stax-split-debug.log");
+            let mut log = std::fs::read_to_string(&log_path).unwrap_or_default();
+            log.push_str(&format!(
+                "--- post-commit diff ({} files remaining) ---\n{}\n--- end diff ---\n",
+                files.len(),
+                if diff_output.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    diff_output.clone()
+                },
+            ));
+            if selected_count < total_count && !has_remaining {
+                log.push_str("!!! BUG: partial selection but no remaining hunks !!!\n");
+            }
+            let _ = std::fs::write(&log_path, &log);
+        }
 
         if has_remaining {
             self.selected = files.iter().map(|f| vec![false; f.hunks.len()]).collect();

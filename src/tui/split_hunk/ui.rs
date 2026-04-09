@@ -270,8 +270,13 @@ fn render_naming_dialog(f: &mut Frame, app: &HunkSplitApp) {
     let area = centered_rect(50, 20, f.area());
     f.render_widget(Clear, area);
 
+    let title = format!(
+        " Enter branch name ({}/{} hunks) ",
+        app.selected_count(),
+        app.total_hunk_count()
+    );
     let block = Block::default()
-        .title(" Enter branch name ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
 

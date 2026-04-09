@@ -445,3 +445,221 @@ fn test_split_hunk_same_file_three_hunks() {
     assert!(final_content.contains("line 20 MODIFIED"));
     assert!(final_content.contains("line 37 MODIFIED"));
 }
+
+#[test]
+fn test_split_hunk_line_additions_partial_select() {
+    let repo = TestRepo::new();
+
+    // Create base file with enough lines for 4 hunks (lines 8 apart minimum)
+    let base: String = (1..=60).map(|i| format!("line {}\n", i)).collect();
+    repo.create_file("main.txt", &base);
+    repo.commit("add base file");
+
+    let output = repo.run_stax(&["bc", "add-lines-split"]);
+    assert!(
+        output.status.success(),
+        "bc failed: {}",
+        TestRepo::stderr(&output)
+    );
+    let original = repo.current_branch();
+
+    // ADD new lines (not modify) at 4 locations — this shifts offsets between hunks
+    let modified: String = (1..=60)
+        .flat_map(|i| {
+            let mut lines = vec![format!("line {}\n", i)];
+            match i {
+                5 => {
+                    lines.push("ADDED AFTER 5a\n".to_string());
+                    lines.push("ADDED AFTER 5b\n".to_string());
+                }
+                18 => {
+                    lines.push("ADDED AFTER 18a\n".to_string());
+                    lines.push("ADDED AFTER 18b\n".to_string());
+                    lines.push("ADDED AFTER 18c\n".to_string());
+                }
+                35 => {
+                    lines.push("ADDED AFTER 35a\n".to_string());
+                }
+                50 => {
+                    lines.push("ADDED AFTER 50a\n".to_string());
+                    lines.push("ADDED AFTER 50b\n".to_string());
+                }
+                _ => {}
+            }
+            lines
+        })
+        .collect();
+    repo.create_file("main.txt", &modified);
+    repo.commit("add lines at 4 locations");
+
+    // Flat list:
+    //   [0] FileHeader(main.txt)
+    //   [1] Hunk 0 (adds 2 lines after line 5)
+    //   [2] Hunk 1 (adds 3 lines after line 18)
+    //   [3] Hunk 2 (adds 1 line after line 35)
+    //   [4] Hunk 3 (adds 2 lines after line 50)
+    //
+    // Round 1: select hunk 0 only (j, space, Enter, Enter)
+    // Round 2: select hunk 1 only (j, space, Enter, Enter)
+    // Round 3: select hunks 2 and 3 (j, space, j, space, Enter, Enter)
+
+    let script = [
+        "sleep 1",
+        "printf 'j \\r\\r'",
+        "sleep 3",
+        "printf 'j \\r\\r'",
+        "sleep 3",
+        "printf 'j j \\r\\r'",
+        "sleep 2",
+    ]
+    .join("; ");
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
+    assert!(
+        output.status.success(),
+        "Split TUI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let split_1 = format!("{}_split_1", original);
+    let split_2 = format!("{}_split_2", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&split_2),
+        "Missing {split_2}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    // Verify split_1 only has hunk 0
+    let s1 = file_content(&repo, &split_1, "main.txt");
+    assert!(s1.contains("ADDED AFTER 5a"), "split_1 should have hunk 0");
+    assert!(
+        !s1.contains("ADDED AFTER 18a"),
+        "split_1 should NOT have hunk 1"
+    );
+
+    // Verify split_2 has hunks 0+1
+    let s2 = file_content(&repo, &split_2, "main.txt");
+    assert!(s2.contains("ADDED AFTER 5a"));
+    assert!(s2.contains("ADDED AFTER 18a"));
+    assert!(!s2.contains("ADDED AFTER 35a"));
+
+    // Final branch has everything
+    let fin = file_content(&repo, &original, "main.txt");
+    assert!(fin.contains("ADDED AFTER 5a"));
+    assert!(fin.contains("ADDED AFTER 18a"));
+    assert!(fin.contains("ADDED AFTER 35a"));
+    assert!(fin.contains("ADDED AFTER 50a"));
+}
+
+#[test]
+fn test_split_hunk_partial_file_selection_gets_second_round() {
+    let repo = TestRepo::new();
+
+    // Create a base file on main with enough lines for 4 well-separated hunks
+    let base_a: String = (1..=50).map(|i| format!("a line {}\n", i)).collect();
+    repo.create_file("file_a.txt", &base_a);
+    let base_b: String = (1..=20).map(|i| format!("b line {}\n", i)).collect();
+    repo.create_file("file_b.txt", &base_b);
+    repo.commit("add base files");
+
+    let output = repo.run_stax(&["bc", "partial-select"]);
+    assert!(
+        output.status.success(),
+        "bc failed: {}",
+        TestRepo::stderr(&output)
+    );
+    let original = repo.current_branch();
+
+    // Modify file_a in 4 well-separated locations (4 hunks)
+    let mod_a: String = (1..=50)
+        .map(|i| match i {
+            3 => "a line 3 MODIFIED\n".to_string(),
+            15 => "a line 15 MODIFIED\n".to_string(),
+            30 => "a line 30 MODIFIED\n".to_string(),
+            45 => "a line 45 MODIFIED\n".to_string(),
+            _ => format!("a line {}\n", i),
+        })
+        .collect();
+    repo.create_file("file_a.txt", &mod_a);
+
+    // Modify file_b in 2 well-separated locations (2 hunks)
+    let mod_b: String = (1..=20)
+        .map(|i| match i {
+            3 => "b line 3 MODIFIED\n".to_string(),
+            15 => "b line 15 MODIFIED\n".to_string(),
+            _ => format!("b line {}\n", i),
+        })
+        .collect();
+    repo.create_file("file_b.txt", &mod_b);
+    repo.commit("modify both files");
+
+    // Flat list:
+    //   [0] FileHeader(file_a.txt)
+    //   [1] Hunk(A, 0) - line 3
+    //   [2] Hunk(A, 1) - line 15
+    //   [3] Hunk(A, 2) - line 30
+    //   [4] Hunk(A, 3) - line 45
+    //   [5] FileHeader(file_b.txt)
+    //   [6] Hunk(B, 0) - line 3
+    //   [7] Hunk(B, 1) - line 15
+    //
+    // Round 1: select A:0, A:1, and all of B (skip A:2, A:3)
+    //   j=A:0, space=select, j=A:1, space=select, j=A:2, j=A:3, j=FileHeader(B), a=select-all-B
+    //   Enter=commit, Enter=accept name
+    //
+    // Round 2: should have A:2, A:3 remaining
+    //   j=A:2(now idx 0), space=select, j=A:3(now idx 1), space=select
+    //   Enter=commit, Enter=accept name
+
+    let script = "sleep 1; printf 'j j jjja\\r\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
+    assert!(
+        output.status.success(),
+        "Split hunk TUI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let split_1 = format!("{}_split_1", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    // split_1 should have A:0, A:1 + all of B
+    let s1_a = file_content(&repo, &split_1, "file_a.txt");
+    assert!(s1_a.contains("a line 3 MODIFIED"));
+    assert!(s1_a.contains("a line 15 MODIFIED"));
+    assert!(
+        !s1_a.contains("a line 30 MODIFIED"),
+        "split_1 should NOT have A hunk 2"
+    );
+    assert!(
+        !s1_a.contains("a line 45 MODIFIED"),
+        "split_1 should NOT have A hunk 3"
+    );
+
+    // original should have all modifications
+    let final_a = file_content(&repo, &original, "file_a.txt");
+    assert!(final_a.contains("a line 3 MODIFIED"));
+    assert!(final_a.contains("a line 15 MODIFIED"));
+    assert!(
+        final_a.contains("a line 30 MODIFIED"),
+        "final branch should have A hunk 2"
+    );
+    assert!(
+        final_a.contains("a line 45 MODIFIED"),
+        "final branch should have A hunk 3"
+    );
+}
