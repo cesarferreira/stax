@@ -1,8 +1,9 @@
-//! Enqueue a stack into the forge's merge queue — no polling, no local git.
+//! Enqueue a stack into the forge's merge queue, wait for completion, and sync.
 //!
-//! Retargets all stack PRs to trunk, then enqueues them via the forge's
-//! merge queue API (GitHub GraphQL `enqueuePullRequest`, GitLab merge
-//! trains REST API).  The forge handles CI and merging.
+//! Retargets all stack PRs to trunk, enqueues them via the forge's merge
+//! queue API (GitHub `enqueuePullRequest`, GitLab merge trains), then
+//! polls until all PRs are merged.  Finishes with auto-sync and a desktop
+//! notification — the same "land and walk away" experience as Graphite.
 
 use crate::config::Config;
 use crate::engine::Stack;
@@ -13,6 +14,8 @@ use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
+use std::process::Command;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 struct QueueBranchInfo {
@@ -20,7 +23,7 @@ struct QueueBranchInfo {
     pr_number: u64,
 }
 
-pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
+pub fn run(all: bool, timeout: u64, interval: u64, no_sync: bool, yes: bool, quiet: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -266,37 +269,170 @@ pub fn run(all: bool, yes: bool, quiet: bool) -> Result<()> {
             "{}",
             "Fix the issue and run 'stax merge --queue' to continue.".dimmed()
         );
-    } else if enqueued.is_empty() {
+        return Ok(());
+    }
+
+    if enqueued.is_empty() {
         if !quiet {
             println!("{}", "All PRs were already merged.".dimmed());
         }
-    } else {
-        print_header_success("Stack Enqueued");
-        println!();
-        println!(
-            "Enqueued {} {} into {}'s {}:",
-            enqueued.len(),
-            if enqueued.len() == 1 { "PR" } else { "PRs" },
-            trunk.cyan(),
-            queue_term,
-        );
-        for (branch, pr, position) in &enqueued {
-            let pos_str = match position {
-                Some(pos) => format!(" (position {})", pos),
-                None => String::new(),
-            };
-            println!("  {} #{} {}{}", "✓".green(), pr, branch, pos_str.dimmed());
-        }
+        return Ok(());
+    }
 
-        println!();
+    // --- Wait for the merge queue/train to process ---
+
+    if !quiet {
         println!(
             "{}",
             format!(
-                "{} will run CI and merge automatically. Run `stax rs` to sync once merged.",
-                forge_name
+                "Enqueued {} {}. Waiting for {} to merge...",
+                enqueued.len(),
+                if enqueued.len() == 1 { "PR" } else { "PRs" },
+                queue_term,
             )
             .dimmed()
         );
+        println!();
+    }
+
+    let timeout_duration = Duration::from_secs(timeout * 60);
+    let poll_interval = Duration::from_secs(interval);
+    let start = Instant::now();
+    let mut pending: Vec<(String, u64)> = enqueued
+        .iter()
+        .map(|(b, pr, _)| (b.clone(), *pr))
+        .collect();
+    let mut timed_out = false;
+
+    while !pending.is_empty() {
+        std::thread::sleep(poll_interval);
+
+        let elapsed = start.elapsed();
+        if elapsed > timeout_duration {
+            timed_out = true;
+            break;
+        }
+
+        let mut still_pending = Vec::new();
+        for (branch, pr) in &pending {
+            match rt.block_on(async { client.is_pr_merged(*pr).await }) {
+                Ok(true) => {
+                    if !quiet {
+                        println!(
+                            "  {} #{} {} merged  {}",
+                            "✓".green(),
+                            pr,
+                            branch,
+                            format!("({}s)", elapsed.as_secs()).dimmed()
+                        );
+                    }
+                }
+                Ok(false) => still_pending.push((branch.clone(), *pr)),
+                Err(_) => still_pending.push((branch.clone(), *pr)),
+            }
+        }
+        pending = still_pending;
+
+        if !pending.is_empty() && !quiet {
+            let names: Vec<String> = pending.iter().map(|(_, pr)| format!("#{}", pr)).collect();
+            print!(
+                "\r  {} {}  {}",
+                "⏳",
+                names.join(", "),
+                format!("({}s)", elapsed.as_secs()).dimmed()
+            );
+            // Flush without newline so the line updates in-place
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
+    }
+
+    // Clear any in-place status line
+    if !quiet && !timed_out {
+        print!("\r{}\r", " ".repeat(72));
+    }
+    println!();
+
+    if timed_out {
+        if !quiet {
+            println!(
+                "{} {}",
+                "warning:".yellow().bold(),
+                format!(
+                    "Timed out after {} min waiting for {} to finish.",
+                    timeout, queue_term
+                )
+                .yellow()
+            );
+            println!(
+                "{}",
+                "Run `stax rs` manually to sync once merged.".dimmed()
+            );
+        }
+        return Ok(());
+    }
+
+    // --- All merged ---
+
+    print_header_success("Stack Merged");
+    println!();
+    println!(
+        "Merged {} {} into {} via {}:",
+        enqueued.len(),
+        if enqueued.len() == 1 { "PR" } else { "PRs" },
+        trunk.cyan(),
+        queue_term,
+    );
+    for (branch, pr, _) in &enqueued {
+        println!("  {} #{} {}", "✓".green(), pr, branch);
+    }
+
+    send_notification(
+        "stax merge --queue",
+        &format!(
+            "Merged {} {} into {}",
+            enqueued.len(),
+            if enqueued.len() == 1 { "PR" } else { "PRs" },
+            trunk
+        ),
+    );
+
+    if !no_sync {
+        if !quiet {
+            println!();
+            println!("{}", "Running post-merge sync...".dimmed());
+        }
+
+        // Release handles before sync opens a fresh repo view.
+        drop(rt);
+        drop(client);
+        drop(repo);
+
+        if let Err(err) = crate::commands::sync::run(
+            false, // restack
+            false, // prune
+            false, // full
+            true,  // delete merged branches
+            false, // delete upstream-gone
+            true,  // force
+            false, // safe
+            false, // continue
+            quiet, false, // verbose
+            false, // auto_stash_pop
+        ) {
+            if !quiet {
+                println!();
+                println!(
+                    "{} {}",
+                    "warning:".yellow().bold(),
+                    format!("post-merge sync failed: {}", err).yellow()
+                );
+                println!(
+                    "{}",
+                    "Run 'stax rs --force' manually to sync local state.".dimmed()
+                );
+            }
+        }
     }
 
     Ok(())
@@ -313,6 +449,17 @@ fn calculate_queue_scope(stack: &Stack, current: &str, all: bool) -> (Vec<String
     }
 
     (to_queue, stack.trunk.clone())
+}
+
+fn send_notification(title: &str, message: &str) {
+    if cfg!(target_os = "macos") {
+        let script = format!(
+            r#"display notification "{}" with title "{}""#,
+            message.replace('"', "\\\""),
+            title.replace('"', "\\\""),
+        );
+        let _ = Command::new("osascript").args(["-e", &script]).output();
+    }
 }
 
 fn capitalize(s: &str) -> String {

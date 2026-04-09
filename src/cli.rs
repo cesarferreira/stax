@@ -223,7 +223,7 @@ enum Commands {
         /// Supported on GitHub (merge queue) and GitLab (merge trains). Not available on Gitea.
         #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote"])]
         queue: bool,
-        /// Polling interval in seconds for --when-ready and --remote
+        /// Polling interval in seconds for --when-ready, --remote, and --queue
         #[arg(long, default_value = "15")]
         interval: u64,
         /// Skip post-merge sync (`stax rs`)
@@ -1360,7 +1360,7 @@ pub fn run() -> Result<()> {
         } => {
             let merge_method = method.parse().unwrap_or_default();
             if queue {
-                commands::merge_queue::run(all, yes, quiet)
+                commands::merge_queue::run(all, timeout, interval, no_sync, yes, quiet)
             } else if remote {
                 commands::merge_remote::run(
                     all,

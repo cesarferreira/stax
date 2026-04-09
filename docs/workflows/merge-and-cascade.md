@@ -66,9 +66,11 @@ st merge --queue --yes
 
 1. All stack PRs/MRs are retargeted to trunk
 2. Each PR/MR is enqueued into the merge queue via the forge API
-3. The forge handles CI validation and merging automatically
+3. stax polls until all PRs are merged (respects `--timeout` and `--interval`)
+4. Automatically runs `st rs` to clean up merged branches (unless `--no-sync`)
+5. Sends a desktop notification when complete
 
-Once the forge finishes merging, `st rs` (sync) will automatically detect the merged branches and clean up — just like any other merge path. No extra steps required beyond your normal workflow.
+This gives a "land and walk away" experience — enqueue, wait for CI, auto-cleanup — similar to Graphite's merge flow.
 
 #### GitHub
 
