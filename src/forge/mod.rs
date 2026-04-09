@@ -169,6 +169,19 @@ impl ForgeClient {
         dispatch!(self, update_pr_base(number, new_base))
     }
 
+    /// GitHub only: enqueue a PR into GitHub's merge queue.
+    pub async fn enqueue_pr(
+        &self,
+        number: u64,
+    ) -> Result<crate::github::pr::EnqueueResult> {
+        match self {
+            Self::GitHub(client) => client.enqueue_pr(number).await,
+            Self::GitLab(_) | Self::Gitea(_) => {
+                bail!("`stax merge --queue` is only supported for GitHub repos with merge queue enabled")
+            }
+        }
+    }
+
     /// GitHub only: merge the PR base into the head branch remotely ("Update branch").
     pub async fn update_pr_branch(&self, number: u64) -> Result<()> {
         match self {

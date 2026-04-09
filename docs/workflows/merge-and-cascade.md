@@ -52,6 +52,31 @@ After a successful run, run `st rs` to sync your local repository (delete merged
 
 `--remote` cannot be combined with `--dry-run`, `--when-ready`, or `--no-wait`. Only **GitHub** is supported (not GitLab/Gitea).
 
+### `--queue` mode (GitHub only)
+
+`st merge --queue` enqueues your stack PRs into [GitHub's merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue). Instead of merging PRs one-by-one (each waiting for CI), the merge queue batches them so CI runs once on the combined result. This is significantly faster for stacks with slow CI pipelines.
+
+```bash
+st merge --queue
+st merge --queue --all
+st merge --queue --yes
+```
+
+**What happens:**
+
+1. All stack PRs are retargeted to trunk
+2. Each PR is enqueued into the merge queue via the GitHub GraphQL API
+3. GitHub handles CI validation and merging automatically
+
+Once GitHub finishes merging, `st rs` (sync) will automatically detect the merged branches and clean up — just like any other merge path. No extra steps required beyond your normal workflow.
+
+> **Note:** GitHub merge queues require the repository to have merge queue enabled
+> in its branch protection rules. This feature is available on **GitHub Team and
+> Enterprise Cloud** plans, or on **public repositories** on any plan.
+> See [GitHub's merge queue documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue) for setup instructions.
+
+`--queue` cannot be combined with `--dry-run`, `--when-ready`, `--remote`, or `--no-wait`. Only **GitHub** is supported (not GitLab/Gitea).
+
 ### Partial stack merge
 
 ```bash

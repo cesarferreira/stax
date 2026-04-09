@@ -214,11 +214,15 @@ enum Commands {
         #[arg(long, default_value = "30")]
         timeout: u64,
         /// Wait for each PR to be ready (CI + approval) before merging
-        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "remote"])]
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "remote", "queue"])]
         when_ready: bool,
         /// Merge via GitHub API only (no local checkout/rebase/push); GitHub updates branches remotely
-        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready"])]
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "queue"])]
         remote: bool,
+        /// Enqueue PRs into GitHub's merge queue instead of merging one-by-one.
+        /// Requires merge queue enabled in branch protection rules (GitHub Team/Enterprise, or public repos).
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote"])]
+        queue: bool,
         /// Polling interval in seconds for --when-ready and --remote
         #[arg(long, default_value = "15")]
         interval: u64,
@@ -1348,13 +1352,16 @@ pub fn run() -> Result<()> {
             timeout,
             when_ready,
             remote,
+            queue,
             interval,
             no_sync,
             yes,
             quiet,
         } => {
             let merge_method = method.parse().unwrap_or_default();
-            if remote {
+            if queue {
+                commands::merge_queue::run(all, yes, quiet)
+            } else if remote {
                 commands::merge_remote::run(
                     all,
                     merge_method,
