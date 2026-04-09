@@ -417,15 +417,20 @@ impl HunkSplitApp {
             self.existing_branches.push(branch_name.to_string());
         }
 
-        remove_committed_hunks(&mut self.files, &mut self.selected, &selections);
-
-        let has_remaining = self.files.iter().any(|f| !f.hunks.is_empty());
+        let diff_output = git(&self.workdir, &["diff"])?;
+        let files = parse_diff(&diff_output);
+        let has_remaining = !files.is_empty();
 
         if has_remaining {
+            self.selected = files.iter().map(|f| vec![false; f.hunks.len()]).collect();
+            self.files = files;
             self.flat_items = build_flat_items(&self.files);
             self.cursor = 0;
+            self.diff_scroll = 0;
             self.undo_stack.clear();
             self.round += 1;
+        } else {
+            self.files = files;
         }
 
         Ok(has_remaining)
@@ -548,28 +553,6 @@ fn build_flat_items(files: &[DiffFile]) -> Vec<FlatItem> {
     items
 }
 
-fn remove_committed_hunks(
-    files: &mut Vec<DiffFile>,
-    selected: &mut Vec<Vec<bool>>,
-    selections: &[(usize, Vec<usize>)],
-) {
-    for (fi, hunk_indices) in selections.iter().rev() {
-        for hi in hunk_indices.iter().rev() {
-            files[*fi].hunks.remove(*hi);
-            selected[*fi].remove(*hi);
-        }
-    }
-
-    let mut i = files.len();
-    while i > 0 {
-        i -= 1;
-        if files[i].hunks.is_empty() {
-            files.remove(i);
-            selected.remove(i);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,44 +614,5 @@ mod tests {
     fn test_build_flat_items_empty() {
         let items = build_flat_items(&[]);
         assert!(items.is_empty());
-    }
-
-    #[test]
-    fn test_remove_committed_hunks_partial() {
-        let mut files = vec![make_file("a.rs", 3), make_file("b.rs", 2)];
-        let mut selected = vec![vec![true, false, true], vec![false, true]];
-
-        let selections = vec![(0, vec![0, 2])];
-        remove_committed_hunks(&mut files, &mut selected, &selections);
-
-        assert_eq!(files.len(), 2);
-        assert_eq!(files[0].hunks.len(), 1);
-        assert_eq!(files[0].hunks[0].new_start, 11);
-        assert_eq!(selected[0], vec![false]);
-    }
-
-    #[test]
-    fn test_remove_committed_hunks_removes_empty_file() {
-        let mut files = vec![make_file("a.rs", 1), make_file("b.rs", 1)];
-        let mut selected = vec![vec![true], vec![false]];
-
-        let selections = vec![(0, vec![0])];
-        remove_committed_hunks(&mut files, &mut selected, &selections);
-
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].path, "b.rs");
-        assert_eq!(selected.len(), 1);
-    }
-
-    #[test]
-    fn test_remove_committed_hunks_all() {
-        let mut files = vec![make_file("a.rs", 2)];
-        let mut selected = vec![vec![true, true]];
-
-        let selections = vec![(0, vec![0, 1])];
-        remove_committed_hunks(&mut files, &mut selected, &selections);
-
-        assert!(files.is_empty());
-        assert!(selected.is_empty());
     }
 }
