@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Parameterized `make release` target with configurable version bump level (minor/patch/major)
 
-## [0.46.0] - 2025-01-XX
+## [0.46.0] - 2026-04-10
 
 ### Summary
 This release focuses on improving PR workflows with better metadata handling, smarter merge behavior, and expanded support for GitHub merge queues and GitLab merge trains. The `modify` command now supports automatic restacking, and the split TUI received important bug fixes.
@@ -29,7 +29,7 @@ This release focuses on improving PR workflows with better metadata handling, sm
 ### Changed
 - Collapsed non-macOS install instructions in README for better readability
 
-## [0.45.0] - 2025-01-XX
+## [0.45.0] - 2026-04-08
 
 ### Summary
 A maintenance release focused on improving sync command reliability, particularly around worktree cleanup and handling of closed PRs. Also enhances cross-forge compatibility with better markdown link handling.
@@ -40,7 +40,7 @@ A maintenance release focused on improving sync command reliability, particularl
 - Use full markdown links for stack comments on GitLab and Gitea for better compatibility (#226)
 - Ignore closed unmerged PRs during sync cleanup to avoid stale state (#207)
 
-## [0.44.2] - 2025-01-XX
+## [0.44.2] - 2026-04-07
 
 ### Summary
 Quick patch release addressing tmux integration issues that affected the lanes workflow.
@@ -49,7 +49,7 @@ Quick patch release addressing tmux integration issues that affected the lanes w
 - Don't exec switch-client inside tmux, preserving user's shell on detach (#224)
 - Handle tmux no-server state gracefully for lanes (#223)
 
-## [0.44.1] - 2025-01-XX
+## [0.44.1] - 2026-04-07
 
 ### Summary
 This release improves the `generate` command's PR body handling and adds a quality-of-life feature for the `create` command.
@@ -62,7 +62,7 @@ This release improves the `generate` command's PR body handling and adds a quali
 - Fixed dirty check logic
 - Fixed broken tests
 
-## [0.44.0] - 2025-01-XX
+## [0.44.0] - 2026-04-05
 
 ### Summary
 Major release introducing per-feature AI agent and model configuration with an improved first-use experience.
