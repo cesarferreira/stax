@@ -36,7 +36,7 @@ pub fn run_open() -> Result<()> {
         );
     }
 
-    let pr_number = branch_info.and_then(|b| b.pr_number);
+    let pr_number = super::resolve_pr::resolve_pr_number(&repo, &stack, &current, &config)?;
     if pr_number.is_none() {
         anyhow::bail!(
             "No PR found for branch '{}'. Use {} to create one.",
@@ -44,9 +44,10 @@ pub fn run_open() -> Result<()> {
             "stax submit".cyan()
         );
     }
+    let pr_number = pr_number.unwrap();
 
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
-    let pr_url = remote_info.pr_url(pr_number.unwrap());
+    let pr_url = remote_info.pr_url(pr_number);
 
     println!("Opening {} in browser...", pr_url.cyan());
     open_url_in_browser(&pr_url);
