@@ -4,6 +4,7 @@ use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::tui::split_hunk::diff_parser::{parse_diff, reconstruct_full_patch, DiffFile};
 use anyhow::{bail, Context, Result};
+use ratatui::widgets::ListState;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -48,6 +49,10 @@ pub struct HunkSplitApp {
     pub selected: Vec<Vec<bool>>,
     pub flat_items: Vec<FlatItem>,
     pub cursor: usize,
+    pub list_state: ListState,
+    pub diff_scroll: u16,
+    pub diff_line_count: u16,
+    pub diff_viewport_height: u16,
     pub mode: HunkSplitMode,
     pub round: usize,
     created_branches: Vec<String>,
@@ -59,6 +64,7 @@ pub struct HunkSplitApp {
     pub round_complete: bool,
     pub all_done: bool,
     existing_branches: Vec<String>,
+    no_verify: bool,
 }
 
 fn git(workdir: &Path, args: &[&str]) -> Result<String> {
@@ -85,7 +91,7 @@ fn git_ok(workdir: &Path, args: &[&str]) -> bool {
 
 impl HunkSplitApp {
     /// Initialize the hunk split: validate state, flatten branch, parse diff.
-    pub fn new() -> Result<Self> {
+    pub fn new(no_verify: bool) -> Result<Self> {
         let repo = GitRepo::open()?;
         let stack = Stack::load(&repo)?;
         let current = repo.current_branch()?;
@@ -117,10 +123,11 @@ impl HunkSplitApp {
         let stashed = repo.is_dirty()?;
         if stashed {
             git(&workdir, &["add", "-A"])?;
-            git(
-                &workdir,
-                &["commit", "-m", "WIP: uncommitted changes for split"],
-            )?;
+            let mut commit_args = vec!["commit", "-m", "WIP: uncommitted changes for split"];
+            if no_verify {
+                commit_args.push("--no-verify");
+            }
+            git(&workdir, &commit_args)?;
         }
 
         let parent_sha = repo.merge_base(&parent, &current)?;
@@ -158,6 +165,10 @@ impl HunkSplitApp {
             selected,
             flat_items,
             cursor: 0,
+            list_state: ListState::default(),
+            diff_scroll: 0,
+            diff_line_count: 0,
+            diff_viewport_height: 0,
             mode: HunkSplitMode::List,
             round: 1,
             created_branches: Vec::new(),
@@ -169,6 +180,7 @@ impl HunkSplitApp {
             round_complete: false,
             all_done: false,
             existing_branches,
+            no_verify,
         })
     }
 
@@ -182,6 +194,7 @@ impl HunkSplitApp {
         if self.cursor > 0 {
             self.cursor -= 1;
         }
+        self.diff_scroll = 0;
     }
 
     /// Move cursor down one item
@@ -189,6 +202,7 @@ impl HunkSplitApp {
         if self.cursor < self.flat_items.len().saturating_sub(1) {
             self.cursor += 1;
         }
+        self.diff_scroll = 0;
     }
 
     /// Toggle selection of the hunk at cursor
@@ -245,6 +259,21 @@ impl HunkSplitApp {
         }
     }
 
+    pub fn scroll_diff_down(&mut self) {
+        let max = self
+            .diff_line_count
+            .saturating_sub(self.diff_viewport_height);
+        if self.diff_scroll < max {
+            self.diff_scroll += 1;
+        }
+    }
+
+    pub fn scroll_diff_up(&mut self) {
+        if self.diff_scroll > 0 {
+            self.diff_scroll -= 1;
+        }
+    }
+
     /// Select the current hunk and advance to the next (sequential mode)
     pub fn accept_and_advance(&mut self) {
         if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().copied() {
@@ -258,6 +287,7 @@ impl HunkSplitApp {
             }
         }
         self.advance_to_next_hunk();
+        self.diff_scroll = 0;
     }
 
     /// Skip the current hunk and advance to the next (sequential mode)
@@ -273,6 +303,7 @@ impl HunkSplitApp {
             }
         }
         self.advance_to_next_hunk();
+        self.diff_scroll = 0;
     }
 
     fn advance_to_next_hunk(&mut self) {
@@ -355,6 +386,9 @@ impl HunkSplitApp {
     /// Stage and commit the selected hunks for this round.
     /// Returns `Ok(true)` if there are remaining hunks for another round.
     pub fn commit_round(&mut self, branch_name: &str) -> Result<bool> {
+        let selected_count = self.selected_count();
+        let total_count = self.total_hunk_count();
+
         let mut selections: Vec<(usize, Vec<usize>)> = Vec::new();
         for (fi, file_sel) in self.selected.iter().enumerate() {
             let hunks: Vec<usize> = file_sel
@@ -374,6 +408,22 @@ impl HunkSplitApp {
 
         let patch = reconstruct_full_patch(&self.files, &selections);
 
+        let debug = std::env::var("STAX_SPLIT_DEBUG").is_ok();
+        let debug_log_path = std::env::temp_dir().join("stax-split-debug.log");
+        if debug {
+            let mut log = if self.round == 1 {
+                String::new()
+            } else {
+                std::fs::read_to_string(&debug_log_path).unwrap_or_default()
+            };
+            log.push_str(&format!(
+                "=== Round {} commit ===\nBranch: {}\nSelected: {}/{}\nSelections: {:?}\n",
+                self.round, branch_name, selected_count, total_count, selections,
+            ));
+            log.push_str(&format!("--- patch ---\n{}\n--- end patch ---\n", patch));
+            let _ = std::fs::write(&debug_log_path, &log);
+        }
+
         git(&self.workdir, &["reset"])?;
 
         let tmpdir = tempfile::tempdir()?;
@@ -382,22 +432,49 @@ impl HunkSplitApp {
 
         let patch_str = patch_path.to_string_lossy().to_string();
         git(&self.workdir, &["apply", "--cached", &patch_str])?;
-        git(&self.workdir, &["commit", "-m", branch_name])?;
+        let mut commit_args = vec!["commit", "-m", branch_name];
+        if self.no_verify {
+            commit_args.push("--no-verify");
+        }
+        git(&self.workdir, &commit_args)?;
 
         self.created_branches.push(branch_name.to_string());
         if branch_name != self.original_branch {
             self.existing_branches.push(branch_name.to_string());
         }
 
-        remove_committed_hunks(&mut self.files, &mut self.selected, &selections);
+        git(&self.workdir, &["add", "-N", "."])?;
+        let diff_output = git(&self.workdir, &["diff"])?;
+        let files = parse_diff(&diff_output);
+        let has_remaining = !files.is_empty();
 
-        let has_remaining = self.files.iter().any(|f| !f.hunks.is_empty());
+        if debug {
+            let mut log = std::fs::read_to_string(&debug_log_path).unwrap_or_default();
+            log.push_str(&format!(
+                "--- post-commit diff ({} files remaining) ---\n{}\n--- end diff ---\n",
+                files.len(),
+                if diff_output.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    diff_output.clone()
+                },
+            ));
+            if selected_count < total_count && !has_remaining {
+                log.push_str("!!! BUG: partial selection but no remaining hunks !!!\n");
+            }
+            let _ = std::fs::write(&debug_log_path, &log);
+        }
 
         if has_remaining {
+            self.selected = files.iter().map(|f| vec![false; f.hunks.len()]).collect();
+            self.files = files;
             self.flat_items = build_flat_items(&self.files);
             self.cursor = 0;
+            self.diff_scroll = 0;
             self.undo_stack.clear();
             self.round += 1;
+        } else {
+            self.files = files;
         }
 
         Ok(has_remaining)
@@ -520,28 +597,6 @@ fn build_flat_items(files: &[DiffFile]) -> Vec<FlatItem> {
     items
 }
 
-fn remove_committed_hunks(
-    files: &mut Vec<DiffFile>,
-    selected: &mut Vec<Vec<bool>>,
-    selections: &[(usize, Vec<usize>)],
-) {
-    for (fi, hunk_indices) in selections.iter().rev() {
-        for hi in hunk_indices.iter().rev() {
-            files[*fi].hunks.remove(*hi);
-            selected[*fi].remove(*hi);
-        }
-    }
-
-    let mut i = files.len();
-    while i > 0 {
-        i -= 1;
-        if files[i].hunks.is_empty() {
-            files.remove(i);
-            selected.remove(i);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,44 +658,5 @@ mod tests {
     fn test_build_flat_items_empty() {
         let items = build_flat_items(&[]);
         assert!(items.is_empty());
-    }
-
-    #[test]
-    fn test_remove_committed_hunks_partial() {
-        let mut files = vec![make_file("a.rs", 3), make_file("b.rs", 2)];
-        let mut selected = vec![vec![true, false, true], vec![false, true]];
-
-        let selections = vec![(0, vec![0, 2])];
-        remove_committed_hunks(&mut files, &mut selected, &selections);
-
-        assert_eq!(files.len(), 2);
-        assert_eq!(files[0].hunks.len(), 1);
-        assert_eq!(files[0].hunks[0].new_start, 11);
-        assert_eq!(selected[0], vec![false]);
-    }
-
-    #[test]
-    fn test_remove_committed_hunks_removes_empty_file() {
-        let mut files = vec![make_file("a.rs", 1), make_file("b.rs", 1)];
-        let mut selected = vec![vec![true], vec![false]];
-
-        let selections = vec![(0, vec![0])];
-        remove_committed_hunks(&mut files, &mut selected, &selections);
-
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].path, "b.rs");
-        assert_eq!(selected.len(), 1);
-    }
-
-    #[test]
-    fn test_remove_committed_hunks_all() {
-        let mut files = vec![make_file("a.rs", 2)];
-        let mut selected = vec![vec![true, true]];
-
-        let selections = vec![(0, vec![0, 1])];
-        remove_committed_hunks(&mut files, &mut selected, &selections);
-
-        assert!(files.is_empty());
-        assert!(selected.is_empty());
     }
 }

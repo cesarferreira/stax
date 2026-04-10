@@ -5,7 +5,7 @@ use anyhow::Result;
 use colored::Colorize;
 use std::io::IsTerminal;
 
-pub fn run(hunk_mode: bool) -> Result<()> {
+pub fn run(hunk_mode: bool, no_verify: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let stack = Stack::load(&repo)?;
     let current = repo.current_branch()?;
@@ -58,7 +58,7 @@ pub fn run(hunk_mode: bool) -> Result<()> {
 
     if hunk_mode {
         drop(repo);
-        return tui::split_hunk::run();
+        return tui::split_hunk::run(no_verify);
     }
 
     tui::split::run()

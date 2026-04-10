@@ -3,11 +3,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
-pub fn render(f: &mut Frame, app: &HunkSplitApp) {
+pub fn render(f: &mut Frame, app: &mut HunkSplitApp) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(2)])
@@ -30,7 +30,7 @@ pub fn render(f: &mut Frame, app: &HunkSplitApp) {
     }
 }
 
-fn render_file_list(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
+fn render_file_list(f: &mut Frame, app: &mut HunkSplitApp, area: Rect) {
     let mut items: Vec<ListItem> = Vec::new();
 
     for (i, flat_item) in app.flat_items.iter().enumerate() {
@@ -145,10 +145,11 @@ fn render_file_list(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
         .border_style(Style::default().fg(Color::Blue));
 
     let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    app.list_state.select(Some(app.cursor));
+    f.render_stateful_widget(list, area, &mut app.list_state);
 }
 
-fn render_diff_preview(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
+fn render_diff_preview(f: &mut Frame, app: &mut HunkSplitApp, area: Rect) {
     let block = Block::default()
         .title(" Diff Preview ")
         .borders(Borders::ALL)
@@ -229,17 +230,19 @@ fn render_diff_preview(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
         ))],
     };
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    app.diff_line_count = lines.len() as u16;
+    app.diff_viewport_height = inner.height;
+    let paragraph = Paragraph::new(lines).scroll((app.diff_scroll, 0));
     f.render_widget(paragraph, inner);
 }
 
 fn render_status_bar(f: &mut Frame, app: &HunkSplitApp, area: Rect) {
     let help_line = match app.mode {
         HunkSplitMode::List => {
-            "j/k:nav  Space:toggle  a:file  Tab:sequential  Enter:commit  u:undo  ?:help  q:quit"
+            "j/k:nav  Shift+j/k:scroll diff  Space:toggle  a:file  Tab:sequential  Enter:commit  u:undo  ?:help  q:quit"
         }
         HunkSplitMode::Sequential => {
-            "y:accept  n:skip  a:toggle file  Tab:list  Enter:commit  u:undo  ?:help  q:quit"
+            "y:accept  n:skip  a:toggle file  Shift+j/k:scroll diff  Tab:list  Enter:commit  u:undo  ?:help  q:quit"
         }
         HunkSplitMode::Naming => "Enter:confirm  Esc:cancel",
         HunkSplitMode::ConfirmAbort => "y:quit  n:cancel",
@@ -267,8 +270,13 @@ fn render_naming_dialog(f: &mut Frame, app: &HunkSplitApp) {
     let area = centered_rect(50, 20, f.area());
     f.render_widget(Clear, area);
 
+    let title = format!(
+        " Enter branch name ({}/{} hunks) ",
+        app.selected_count(),
+        app.total_hunk_count()
+    );
     let block = Block::default()
-        .title(" Enter branch name ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
 
@@ -373,6 +381,8 @@ fn render_help_dialog(f: &mut Frame) {
             "General",
             Style::default().add_modifier(Modifier::BOLD),
         )),
+        Line::from("  Shift+j/k  Scroll diff preview"),
+        Line::from("  PgUp/PgDn  Scroll diff preview"),
         Line::from("  ?          Toggle help"),
         Line::from("  q/Esc      Quit (abort split)"),
         Line::from("  Ctrl-C     Force quit"),

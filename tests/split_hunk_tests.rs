@@ -137,6 +137,11 @@ fn run_split_hunk(repo: &TestRepo, rounds: usize) {
     );
 }
 
+fn file_content(repo: &TestRepo, branch: &str, path: &str) -> String {
+    let output = repo.git(&["show", &format!("{}:{}", branch, path)]);
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
 #[test]
 fn test_split_hunk_two_files_into_two_branches() {
     let repo = TestRepo::new();
@@ -296,4 +301,653 @@ fn test_split_hunk_abort_with_dirty_workdir_preserves_changes() {
     );
     let content = std::fs::read_to_string(&dirty_path).unwrap();
     assert_eq!(content, "dirty content\n");
+}
+
+// =============================================================================
+// Regression tests: same-file multi-hunk splits (stale offset bug)
+// =============================================================================
+
+#[test]
+fn test_split_hunk_same_file_two_hunks() {
+    let repo = TestRepo::new();
+
+    let base_content: String = (1..=30).map(|i| format!("line {}\n", i)).collect();
+    repo.create_file("shared.txt", &base_content);
+    repo.commit("add shared file");
+
+    let output = repo.run_stax(&["bc", "same-file-split"]);
+    assert!(
+        output.status.success(),
+        "bc failed: {}",
+        TestRepo::stderr(&output)
+    );
+    let original = repo.current_branch();
+
+    let modified: String = (1..=30)
+        .map(|i| match i {
+            3 => "line 3 MODIFIED\n".to_string(),
+            25 => "line 25 MODIFIED\n".to_string(),
+            _ => format!("line {}\n", i),
+        })
+        .collect();
+    repo.create_file("shared.txt", &modified);
+    repo.commit("modify shared file in two places");
+
+    run_split_hunk(&repo, 2);
+
+    let split_1 = format!("{}_split_1", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    let parents = parent_map(&repo);
+    assert_eq!(parents.get(&split_1).map(String::as_str), Some("main"));
+    assert_eq!(
+        parents.get(&original).map(String::as_str),
+        Some(split_1.as_str())
+    );
+
+    let s1_content = file_content(&repo, &split_1, "shared.txt");
+    assert!(
+        s1_content.contains("line 3 MODIFIED"),
+        "split_1 should have line 3 modification"
+    );
+    assert!(
+        !s1_content.contains("line 25 MODIFIED"),
+        "split_1 should NOT have line 25 modification"
+    );
+
+    let final_content = file_content(&repo, &original, "shared.txt");
+    assert!(
+        final_content.contains("line 3 MODIFIED"),
+        "final branch should have line 3 modification"
+    );
+    assert!(
+        final_content.contains("line 25 MODIFIED"),
+        "final branch should have line 25 modification"
+    );
+}
+
+#[test]
+fn test_split_hunk_same_file_three_hunks() {
+    let repo = TestRepo::new();
+
+    let base_content: String = (1..=40).map(|i| format!("line {}\n", i)).collect();
+    repo.create_file("shared.txt", &base_content);
+    repo.commit("add shared file");
+
+    let output = repo.run_stax(&["bc", "three-way-split"]);
+    assert!(
+        output.status.success(),
+        "bc failed: {}",
+        TestRepo::stderr(&output)
+    );
+    let original = repo.current_branch();
+
+    let modified: String = (1..=40)
+        .map(|i| match i {
+            3 => "line 3 MODIFIED\n".to_string(),
+            20 => "line 20 MODIFIED\n".to_string(),
+            37 => "line 37 MODIFIED\n".to_string(),
+            _ => format!("line {}\n", i),
+        })
+        .collect();
+    repo.create_file("shared.txt", &modified);
+    repo.commit("modify shared file in three places");
+
+    run_split_hunk(&repo, 3);
+
+    let split_1 = format!("{}_split_1", original);
+    let split_2 = format!("{}_split_2", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&split_2),
+        "Missing {split_2}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    let parents = parent_map(&repo);
+    assert_eq!(parents.get(&split_1).map(String::as_str), Some("main"));
+    assert_eq!(
+        parents.get(&split_2).map(String::as_str),
+        Some(split_1.as_str())
+    );
+    assert_eq!(
+        parents.get(&original).map(String::as_str),
+        Some(split_2.as_str())
+    );
+
+    let s1_content = file_content(&repo, &split_1, "shared.txt");
+    assert!(s1_content.contains("line 3 MODIFIED"));
+    assert!(!s1_content.contains("line 20 MODIFIED"));
+    assert!(!s1_content.contains("line 37 MODIFIED"));
+
+    let s2_content = file_content(&repo, &split_2, "shared.txt");
+    assert!(s2_content.contains("line 3 MODIFIED"));
+    assert!(s2_content.contains("line 20 MODIFIED"));
+    assert!(!s2_content.contains("line 37 MODIFIED"));
+
+    let final_content = file_content(&repo, &original, "shared.txt");
+    assert!(final_content.contains("line 3 MODIFIED"));
+    assert!(final_content.contains("line 20 MODIFIED"));
+    assert!(final_content.contains("line 37 MODIFIED"));
+}
+
+#[test]
+fn test_split_hunk_line_additions_partial_select() {
+    let repo = TestRepo::new();
+
+    // Create base file with enough lines for 4 hunks (lines 8 apart minimum)
+    let base: String = (1..=60).map(|i| format!("line {}\n", i)).collect();
+    repo.create_file("main.txt", &base);
+    repo.commit("add base file");
+
+    let output = repo.run_stax(&["bc", "add-lines-split"]);
+    assert!(
+        output.status.success(),
+        "bc failed: {}",
+        TestRepo::stderr(&output)
+    );
+    let original = repo.current_branch();
+
+    // ADD new lines (not modify) at 4 locations — this shifts offsets between hunks
+    let modified: String = (1..=60)
+        .flat_map(|i| {
+            let mut lines = vec![format!("line {}\n", i)];
+            match i {
+                5 => {
+                    lines.push("ADDED AFTER 5a\n".to_string());
+                    lines.push("ADDED AFTER 5b\n".to_string());
+                }
+                18 => {
+                    lines.push("ADDED AFTER 18a\n".to_string());
+                    lines.push("ADDED AFTER 18b\n".to_string());
+                    lines.push("ADDED AFTER 18c\n".to_string());
+                }
+                35 => {
+                    lines.push("ADDED AFTER 35a\n".to_string());
+                }
+                50 => {
+                    lines.push("ADDED AFTER 50a\n".to_string());
+                    lines.push("ADDED AFTER 50b\n".to_string());
+                }
+                _ => {}
+            }
+            lines
+        })
+        .collect();
+    repo.create_file("main.txt", &modified);
+    repo.commit("add lines at 4 locations");
+
+    // Flat list:
+    //   [0] FileHeader(main.txt)
+    //   [1] Hunk 0 (adds 2 lines after line 5)
+    //   [2] Hunk 1 (adds 3 lines after line 18)
+    //   [3] Hunk 2 (adds 1 line after line 35)
+    //   [4] Hunk 3 (adds 2 lines after line 50)
+    //
+    // Round 1: select hunk 0 only (j, space, Enter, Enter)
+    // Round 2: select hunk 1 only (j, space, Enter, Enter)
+    // Round 3: select hunks 2 and 3 (j, space, j, space, Enter, Enter)
+
+    let script = [
+        "sleep 1",
+        "printf 'j \\r\\r'",
+        "sleep 3",
+        "printf 'j \\r\\r'",
+        "sleep 3",
+        "printf 'j j \\r\\r'",
+        "sleep 2",
+    ]
+    .join("; ");
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
+    assert!(
+        output.status.success(),
+        "Split TUI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let split_1 = format!("{}_split_1", original);
+    let split_2 = format!("{}_split_2", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&split_2),
+        "Missing {split_2}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    // Verify split_1 only has hunk 0
+    let s1 = file_content(&repo, &split_1, "main.txt");
+    assert!(s1.contains("ADDED AFTER 5a"), "split_1 should have hunk 0");
+    assert!(
+        !s1.contains("ADDED AFTER 18a"),
+        "split_1 should NOT have hunk 1"
+    );
+
+    // Verify split_2 has hunks 0+1
+    let s2 = file_content(&repo, &split_2, "main.txt");
+    assert!(s2.contains("ADDED AFTER 5a"));
+    assert!(s2.contains("ADDED AFTER 18a"));
+    assert!(!s2.contains("ADDED AFTER 35a"));
+
+    // Final branch has everything
+    let fin = file_content(&repo, &original, "main.txt");
+    assert!(fin.contains("ADDED AFTER 5a"));
+    assert!(fin.contains("ADDED AFTER 18a"));
+    assert!(fin.contains("ADDED AFTER 35a"));
+    assert!(fin.contains("ADDED AFTER 50a"));
+}
+
+#[test]
+fn test_split_hunk_partial_file_selection_gets_second_round() {
+    let repo = TestRepo::new();
+
+    // Create a base file on main with enough lines for 4 well-separated hunks
+    let base_a: String = (1..=50).map(|i| format!("a line {}\n", i)).collect();
+    repo.create_file("file_a.txt", &base_a);
+    let base_b: String = (1..=20).map(|i| format!("b line {}\n", i)).collect();
+    repo.create_file("file_b.txt", &base_b);
+    repo.commit("add base files");
+
+    let output = repo.run_stax(&["bc", "partial-select"]);
+    assert!(
+        output.status.success(),
+        "bc failed: {}",
+        TestRepo::stderr(&output)
+    );
+    let original = repo.current_branch();
+
+    // Modify file_a in 4 well-separated locations (4 hunks)
+    let mod_a: String = (1..=50)
+        .map(|i| match i {
+            3 => "a line 3 MODIFIED\n".to_string(),
+            15 => "a line 15 MODIFIED\n".to_string(),
+            30 => "a line 30 MODIFIED\n".to_string(),
+            45 => "a line 45 MODIFIED\n".to_string(),
+            _ => format!("a line {}\n", i),
+        })
+        .collect();
+    repo.create_file("file_a.txt", &mod_a);
+
+    // Modify file_b in 2 well-separated locations (2 hunks)
+    let mod_b: String = (1..=20)
+        .map(|i| match i {
+            3 => "b line 3 MODIFIED\n".to_string(),
+            15 => "b line 15 MODIFIED\n".to_string(),
+            _ => format!("b line {}\n", i),
+        })
+        .collect();
+    repo.create_file("file_b.txt", &mod_b);
+    repo.commit("modify both files");
+
+    // Flat list:
+    //   [0] FileHeader(file_a.txt)
+    //   [1] Hunk(A, 0) - line 3
+    //   [2] Hunk(A, 1) - line 15
+    //   [3] Hunk(A, 2) - line 30
+    //   [4] Hunk(A, 3) - line 45
+    //   [5] FileHeader(file_b.txt)
+    //   [6] Hunk(B, 0) - line 3
+    //   [7] Hunk(B, 1) - line 15
+    //
+    // Round 1: select A:0, A:1, and all of B (skip A:2, A:3)
+    //   j=A:0, space=select, j=A:1, space=select, j=A:2, j=A:3, j=FileHeader(B), a=select-all-B
+    //   Enter=commit, Enter=accept name
+    //
+    // Round 2: should have A:2, A:3 remaining
+    //   j=A:2(now idx 0), space=select, j=A:3(now idx 1), space=select
+    //   Enter=commit, Enter=accept name
+
+    let script = "sleep 1; printf 'j j jjja\\r\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
+    assert!(
+        output.status.success(),
+        "Split hunk TUI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let split_1 = format!("{}_split_1", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    // split_1 should have A:0, A:1 + all of B
+    let s1_a = file_content(&repo, &split_1, "file_a.txt");
+    assert!(s1_a.contains("a line 3 MODIFIED"));
+    assert!(s1_a.contains("a line 15 MODIFIED"));
+    assert!(
+        !s1_a.contains("a line 30 MODIFIED"),
+        "split_1 should NOT have A hunk 2"
+    );
+    assert!(
+        !s1_a.contains("a line 45 MODIFIED"),
+        "split_1 should NOT have A hunk 3"
+    );
+
+    // original should have all modifications
+    let final_a = file_content(&repo, &original, "file_a.txt");
+    assert!(final_a.contains("a line 3 MODIFIED"));
+    assert!(final_a.contains("a line 15 MODIFIED"));
+    assert!(
+        final_a.contains("a line 30 MODIFIED"),
+        "final branch should have A hunk 2"
+    );
+    assert!(
+        final_a.contains("a line 45 MODIFIED"),
+        "final branch should have A hunk 3"
+    );
+}
+
+// =============================================================================
+// Interaction pattern tests: different ways to select the same hunks
+// =============================================================================
+
+/// Set up a repo with file_a (4 hunks) and file_b (2 hunks) on a stax branch.
+/// Returns (repo, original_branch_name).
+fn setup_two_file_four_two_hunks() -> (TestRepo, String) {
+    let repo = TestRepo::new();
+
+    let base_a: String = (1..=50).map(|i| format!("a line {}\n", i)).collect();
+    repo.create_file("file_a.txt", &base_a);
+    let base_b: String = (1..=20).map(|i| format!("b line {}\n", i)).collect();
+    repo.create_file("file_b.txt", &base_b);
+    repo.commit("add base files");
+
+    let output = repo.run_stax(&["bc", "interaction-test"]);
+    assert!(
+        output.status.success(),
+        "bc failed: {}",
+        TestRepo::stderr(&output)
+    );
+    let original = repo.current_branch();
+
+    let mod_a: String = (1..=50)
+        .map(|i| match i {
+            3 => "a line 3 MODIFIED\n".to_string(),
+            15 => "a line 15 MODIFIED\n".to_string(),
+            30 => "a line 30 MODIFIED\n".to_string(),
+            45 => "a line 45 MODIFIED\n".to_string(),
+            _ => format!("a line {}\n", i),
+        })
+        .collect();
+    repo.create_file("file_a.txt", &mod_a);
+
+    let mod_b: String = (1..=20)
+        .map(|i| match i {
+            3 => "b line 3 MODIFIED\n".to_string(),
+            15 => "b line 15 MODIFIED\n".to_string(),
+            _ => format!("b line {}\n", i),
+        })
+        .collect();
+    repo.create_file("file_b.txt", &mod_b);
+    repo.commit("modify both files");
+
+    (repo, original)
+}
+
+/// Flat list layout for 4+2 hunk setup:
+///   [0] FileHeader(file_a.txt)
+///   [1] Hunk(A, 0) - line 3
+///   [2] Hunk(A, 1) - line 15
+///   [3] Hunk(A, 2) - line 30
+///   [4] Hunk(A, 3) - line 45
+///   [5] FileHeader(file_b.txt)
+///   [6] Hunk(B, 0) - line 3
+///   [7] Hunk(B, 1) - line 15
+fn assert_split_1_has_a01_and_all_b(repo: &TestRepo, split_1: &str, original: &str) {
+    let s1_a = file_content(repo, split_1, "file_a.txt");
+    assert!(
+        s1_a.contains("a line 3 MODIFIED"),
+        "split_1 should have A:0"
+    );
+    assert!(
+        s1_a.contains("a line 15 MODIFIED"),
+        "split_1 should have A:1"
+    );
+    assert!(
+        !s1_a.contains("a line 30 MODIFIED"),
+        "split_1 should NOT have A:2"
+    );
+    assert!(
+        !s1_a.contains("a line 45 MODIFIED"),
+        "split_1 should NOT have A:3"
+    );
+
+    let s1_b = file_content(repo, split_1, "file_b.txt");
+    assert!(
+        s1_b.contains("b line 3 MODIFIED"),
+        "split_1 should have B:0"
+    );
+    assert!(
+        s1_b.contains("b line 15 MODIFIED"),
+        "split_1 should have B:1"
+    );
+
+    let final_a = file_content(repo, original, "file_a.txt");
+    assert!(final_a.contains("a line 3 MODIFIED"));
+    assert!(final_a.contains("a line 15 MODIFIED"));
+    assert!(
+        final_a.contains("a line 30 MODIFIED"),
+        "final should have A:2"
+    );
+    assert!(
+        final_a.contains("a line 45 MODIFIED"),
+        "final should have A:3"
+    );
+}
+
+#[test]
+fn test_split_hunk_toggle_file_then_deselect() {
+    let (repo, original) = setup_two_file_four_two_hunks();
+
+    // Round 1: 'a' on file_a header selects all A, then deselect A:2 and A:3,
+    //          then 'a' on file_b header selects all B.
+    //
+    // [0] FileHeader(A) ← cursor starts here
+    //   a → select all A (A:0..A:3 = true)
+    //   j → [1] A:0
+    //   j → [2] A:1
+    //   j → [3] A:2
+    //   space → deselect A:2
+    //   j → [4] A:3
+    //   space → deselect A:3
+    //   j → [5] FileHeader(B)
+    //   a → select all B
+    //   Enter → commit (4/6 selected: A:0,A:1,B:0,B:1)
+    //   Enter → accept name
+    //
+    // Round 2 (list mode): file_a with 2 remaining hunks
+    //   j → first hunk, space, j → second hunk, space, Enter, Enter
+
+    let script = "sleep 1; printf 'ajjj j ja\\r\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], script);
+    assert!(
+        output.status.success(),
+        "Split failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let split_1 = format!("{}_split_1", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    assert_split_1_has_a01_and_all_b(&repo, &split_1, &original);
+}
+
+#[test]
+fn test_split_hunk_select_later_hunks_first() {
+    let (repo, original) = setup_two_file_four_two_hunks();
+
+    // Round 1: skip A:0 and A:1, select A:2 and A:3, then 'a' on file_b.
+    //
+    // [0] FileHeader(A) ← start
+    //   j → [1] A:0 (skip)
+    //   j → [2] A:1 (skip)
+    //   j → [3] A:2
+    //   space → select A:2
+    //   j → [4] A:3
+    //   space → select A:3
+    //   j → [5] FileHeader(B)
+    //   a → select all B
+    //   Enter → commit (4/6 selected: A:2,A:3,B:0,B:1)
+    //   Enter → accept name
+    //
+    // Round 2: file_a with A:0 and A:1 remaining
+    //   j → first hunk, space, j → second hunk, space, Enter, Enter
+
+    let script = "sleep 1; printf 'jjj j ja\\r\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], script);
+    assert!(
+        output.status.success(),
+        "Split failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let split_1 = format!("{}_split_1", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    // split_1 should have A:2, A:3 + all B (inverted from the other tests)
+    let s1_a = file_content(&repo, &split_1, "file_a.txt");
+    assert!(!s1_a.contains("a line 3 MODIFIED"), "split_1 should NOT have A:0");
+    assert!(!s1_a.contains("a line 15 MODIFIED"), "split_1 should NOT have A:1");
+    assert!(s1_a.contains("a line 30 MODIFIED"), "split_1 should have A:2");
+    assert!(s1_a.contains("a line 45 MODIFIED"), "split_1 should have A:3");
+
+    // original should have everything
+    let final_a = file_content(&repo, &original, "file_a.txt");
+    assert!(final_a.contains("a line 3 MODIFIED"));
+    assert!(final_a.contains("a line 15 MODIFIED"));
+    assert!(final_a.contains("a line 30 MODIFIED"));
+    assert!(final_a.contains("a line 45 MODIFIED"));
+}
+
+#[test]
+fn test_split_hunk_sequential_mode_partial() {
+    let (repo, original) = setup_two_file_four_two_hunks();
+
+    // Round 1 via sequential mode:
+    //   Tab → enter sequential mode (cursor at [0] FileHeader A)
+    //   y → no-op on header, advance to [1] A:0
+    //   y → accept A:0, advance to [2] A:1
+    //   y → accept A:1, advance to [3] A:2
+    //   n → skip A:2, advance to [4] A:3
+    //   n → skip A:3, advance to [6] B:0 (skips FileHeader)
+    //   a → toggle file B (selects all B) + advance past B → auto-enters Naming
+    //   Enter → accept name
+    //
+    // Round 2 (list mode): remaining A:2, A:3
+    //   j, space, j, space, Enter, Enter
+
+    let script =
+        "sleep 1; printf '\\tyyynnna\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], script);
+    assert!(
+        output.status.success(),
+        "Split failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let split_1 = format!("{}_split_1", original);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&split_1),
+        "Missing {split_1}, got: {branches:?}"
+    );
+    assert!(
+        branches.contains(&original),
+        "Missing {original}, got: {branches:?}"
+    );
+
+    assert_split_1_has_a01_and_all_b(&repo, &split_1, &original);
+}
+
+#[test]
+fn test_split_hunk_debug_log_captures_selections() {
+    let (repo, original) = setup_two_file_four_two_hunks();
+
+    // Same as partial-select: select A:0, A:1 + all B, expect round 2 with A:2, A:3
+    let script = "sleep 1; printf 'j j jjja\\r\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
+    let output = common::run_stax_in_script_with_env(
+        &repo.path(),
+        &["split", "--hunk"],
+        script,
+        &[("STAX_SPLIT_DEBUG", "1")],
+    );
+    assert!(
+        output.status.success(),
+        "Split failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the debug log was written and contains expected data
+    let log_path = std::env::temp_dir().join("stax-split-debug.log");
+    assert!(log_path.exists(), "Debug log should exist");
+
+    let log = std::fs::read_to_string(&log_path).unwrap();
+
+    // Round 1 should show 4/6 selected (A:0,A:1,B:0,B:1)
+    assert!(
+        log.contains("Selected: 4/6"),
+        "Debug log should show 4/6 selected in round 1, got:\n{}",
+        log
+    );
+
+    // Round 2 should show 2/2 selected (remaining A:2,A:3)
+    assert!(
+        log.contains("Selected: 2/2"),
+        "Debug log should show 2/2 selected in round 2, got:\n{}",
+        log
+    );
+
+    // Should NOT contain the bug marker
+    assert!(
+        !log.contains("!!! BUG"),
+        "Debug log should not contain bug marker, got:\n{}",
+        log
+    );
+
+    // Verify branches were created correctly
+    let split_1 = format!("{}_split_1", original);
+    assert_split_1_has_a01_and_all_b(&repo, &split_1, &original);
 }

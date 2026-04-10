@@ -14,8 +14,8 @@ use std::io;
 use std::time::Duration;
 
 /// Run the hunk-based split TUI
-pub fn run() -> Result<()> {
-    let mut app = HunkSplitApp::new()?;
+pub fn run(no_verify: bool) -> Result<()> {
+    let mut app = HunkSplitApp::new(no_verify)?;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -68,9 +68,11 @@ fn run_app(
                     return Ok(false);
                 }
 
+                let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
                 match &app.mode {
-                    HunkSplitMode::List => handle_list_key(app, key.code),
-                    HunkSplitMode::Sequential => handle_sequential_key(app, key.code),
+                    HunkSplitMode::List => handle_list_key(app, key.code, shift),
+                    HunkSplitMode::Sequential => handle_sequential_key(app, key.code, shift),
                     HunkSplitMode::Naming => handle_naming_key(app, key.code),
                     HunkSplitMode::ConfirmAbort => handle_confirm_abort_key(app, key.code),
                     HunkSplitMode::Help => handle_help_key(app, key.code),
@@ -117,10 +119,14 @@ fn try_finish_round(app: &mut HunkSplitApp) {
     }
 }
 
-fn handle_list_key(app: &mut HunkSplitApp, code: KeyCode) {
+fn handle_list_key(app: &mut HunkSplitApp, code: KeyCode, shift: bool) {
     match code {
+        KeyCode::Down | KeyCode::Char('j' | 'J') if shift => app.scroll_diff_down(),
+        KeyCode::Up | KeyCode::Char('k' | 'K') if shift => app.scroll_diff_up(),
         KeyCode::Down | KeyCode::Char('j') => app.move_cursor_down(),
         KeyCode::Up | KeyCode::Char('k') => app.move_cursor_up(),
+        KeyCode::PageDown => app.scroll_diff_down(),
+        KeyCode::PageUp => app.scroll_diff_up(),
         KeyCode::Char(' ') => app.toggle_current(),
         KeyCode::Char('a') => app.toggle_file(),
         KeyCode::Char('u') => app.undo(),
@@ -135,8 +141,12 @@ fn handle_list_key(app: &mut HunkSplitApp, code: KeyCode) {
     }
 }
 
-fn handle_sequential_key(app: &mut HunkSplitApp, code: KeyCode) {
+fn handle_sequential_key(app: &mut HunkSplitApp, code: KeyCode, shift: bool) {
     match code {
+        KeyCode::Down | KeyCode::Char('j' | 'J') if shift => app.scroll_diff_down(),
+        KeyCode::Up | KeyCode::Char('k' | 'K') if shift => app.scroll_diff_up(),
+        KeyCode::PageDown => app.scroll_diff_down(),
+        KeyCode::PageUp => app.scroll_diff_up(),
         KeyCode::Char('y') => app.accept_and_advance(),
         KeyCode::Char('n') => app.skip_and_advance(),
         KeyCode::Char('a') => {
