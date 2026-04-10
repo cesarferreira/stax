@@ -1,5 +1,13 @@
 sign-commit = false
 sign-tag = false
-publish = true 
+publish = true
 push = true
 tag-name = "v{{version}}"
+
+# Automatically update CHANGELOG.md during release
+pre-release-replacements = [
+  {file="CHANGELOG.md", search="Unreleased", replace="{{version}}", exactly=1},
+  {file="CHANGELOG.md", search="ReleaseDate", replace="{{date}}", exactly=1},
+  {file="CHANGELOG.md", search="<!-- next-header -->", replace="<!-- next-header -->\n## [Unreleased] - ReleaseDate\n", exactly=1},
+  {file="CHANGELOG.md", search="<!-- next-url -->", replace="<!-- next-url -->\n[Unreleased]: https://github.com/cesarferreira/stax/compare/v{{version}}...HEAD", exactly=1},
+]
