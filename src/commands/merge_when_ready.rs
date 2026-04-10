@@ -290,11 +290,35 @@ pub fn run(
                 }
             }
 
+            // Merge the PR
+            branches[idx].status = LandStatus::Merging;
+            let merge_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Merging ({})...", method.as_str()));
+
+            match rt.block_on(async { client.merge_pr(pr_number, method, None, None).await }) {
+                Ok(()) => {
+                    LiveTimer::maybe_finish_ok(merge_timer, "done");
+                    branches[idx].status = LandStatus::Merged;
+                    merged_prs.push((branch_name.clone(), pr_number));
+
+                    // Record CI history
+                    record_ci_history_for_branch(&repo, &rt, &client, &stack, &branch_name);
+                }
+                Err(e) => {
+                    LiveTimer::maybe_finish_err(merge_timer, "failed");
+                    let reason = e.to_string();
+                    branches[idx].status = LandStatus::Failed(reason.clone());
+                    failed_pr = Some((branch_name, pr_number, reason));
+                    break;
+                }
+            }
+
+            // Retarget next PR to trunk after successful merge
             if let Some(next_branch) = &next_branch {
                 let update_base_timer = LiveTimer::maybe_new(
                     !quiet,
                     &format!(
-                        "Retargeting #{} to {} before merge...",
+                        "Retargeting #{} to {}...",
                         next_branch.pr_number, scope.trunk
                     ),
                 );
@@ -317,29 +341,6 @@ pub fn run(
                         failed_pr = Some((branch_name, pr_number, reason));
                         break;
                     }
-                }
-            }
-
-            // Merge the PR
-            branches[idx].status = LandStatus::Merging;
-            let merge_timer =
-                LiveTimer::maybe_new(!quiet, &format!("Merging ({})...", method.as_str()));
-
-            match rt.block_on(async { client.merge_pr(pr_number, method, None, None).await }) {
-                Ok(()) => {
-                    LiveTimer::maybe_finish_ok(merge_timer, "done");
-                    branches[idx].status = LandStatus::Merged;
-                    merged_prs.push((branch_name.clone(), pr_number));
-
-                    // Record CI history
-                    record_ci_history_for_branch(&repo, &rt, &client, &stack, &branch_name);
-                }
-                Err(e) => {
-                    LiveTimer::maybe_finish_err(merge_timer, "failed");
-                    let reason = e.to_string();
-                    branches[idx].status = LandStatus::Failed(reason.clone());
-                    failed_pr = Some((branch_name, pr_number, reason));
-                    break;
                 }
             }
         }
