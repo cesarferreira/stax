@@ -401,6 +401,9 @@ enum Commands {
         /// Skip pre-commit and commit-msg hooks
         #[arg(long = "no-verify", short = 'n')]
         no_verify: bool,
+        /// Restack the stack after modifying
+        #[arg(short, long)]
+        restack: bool,
     },
 
     /// Authenticate with GitHub
@@ -1554,7 +1557,8 @@ pub fn run() -> Result<()> {
             all,
             quiet,
             no_verify,
-        } => commands::modify::run(message, all, quiet, no_verify),
+            restack,
+        } => commands::modify::run(message, all, quiet, no_verify, restack),
         Commands::Auth { .. } => unreachable!(), // Handled above
         Commands::Config { .. } => unreachable!(), // Handled above
         Commands::Init { .. } => unreachable!(), // Handled above

@@ -16,7 +16,7 @@ enum ModifyTarget {
 /// When files are already staged, only those files are committed.
 /// When nothing is staged, prompts to stage all (or use `-a`).
 /// On a fresh tracked branch, `-m` creates the first branch-local commit safely.
-pub fn run(message: Option<String>, all: bool, quiet: bool, no_verify: bool) -> Result<()> {
+pub fn run(message: Option<String>, all: bool, quiet: bool, no_verify: bool, restack: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?;
     let current = repo.current_branch()?;
@@ -145,6 +145,22 @@ pub fn run(message: Option<String>, all: bool, quiet: bool, no_verify: bool) -> 
                 println!("{} {}", "Committed".green(), current.cyan());
             }
         }
+    }
+
+    if restack {
+        if !quiet {
+            println!();
+        }
+        super::restack::run(
+            false,  // all
+            false,  // stop_here
+            false,  // continue
+            false,  // dry_run
+            true,   // yes (skip confirmation)
+            quiet,
+            false,  // auto_stash_pop
+            super::restack::SubmitAfterRestack::No,
+        )?;
     }
 
     Ok(())

@@ -35,7 +35,7 @@
 | Command | Alias | Description |
 |---|---|---|
 | `st create <name>` | `c`, `bc` | Create stacked branch |
-| `st modify` | `m` | Amend staged changes into current commit; prompts when nothing is staged (`-a` to stage all); on a fresh tracked branch, `-m` creates the first commit safely |
+| `st modify` | `m` | Amend staged changes into current commit; prompts when nothing is staged (`-a` to stage all); on a fresh tracked branch, `-m` creates the first commit safely; `-r` restacks the stack afterwards |
 | `st rename` | | Rename current branch |
 | `st branch track` | | Track existing branch |
 | `st branch track --all-prs` | | Track all open PRs (GitHub, GitLab, Gitea) |
@@ -146,6 +146,8 @@ Worktree launch examples:
 
 - `st modify -a` (stage all and amend, old default behavior)
 - `st modify -am "msg"` (stage all and amend with new message)
+- `st modify -r` (amend and restack the stack)
+- `st modify -ar` (stage all, amend, and restack)
 - `st create -am "msg"`
 - `st branch create --message "msg" --prefix feature/`
 - `st branch reparent --branch feature-a --parent main`
