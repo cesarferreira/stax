@@ -214,12 +214,16 @@ enum Commands {
         #[arg(long, default_value = "30")]
         timeout: u64,
         /// Wait for each PR to be ready (CI + approval) before merging
-        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "remote"])]
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "remote", "queue"])]
         when_ready: bool,
         /// Merge via GitHub API only (no local checkout/rebase/push); GitHub updates branches remotely
-        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready"])]
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "queue"])]
         remote: bool,
-        /// Polling interval in seconds for --when-ready and --remote
+        /// Enqueue PRs into the forge's merge queue instead of merging one-by-one.
+        /// Supported on GitHub (merge queue) and GitLab (merge trains). Not available on Gitea.
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote"])]
+        queue: bool,
+        /// Polling interval in seconds for --when-ready, --remote, and --queue
         #[arg(long, default_value = "15")]
         interval: u64,
         /// Skip post-merge sync (`stax rs`)
@@ -1415,13 +1419,16 @@ pub fn run() -> Result<()> {
             timeout,
             when_ready,
             remote,
+            queue,
             interval,
             no_sync,
             yes,
             quiet,
         } => {
             let merge_method = method.parse().unwrap_or_default();
-            if remote {
+            if queue {
+                commands::merge_queue::run(all, timeout, interval, no_sync, yes, quiet)
+            } else if remote {
                 commands::merge_remote::run(
                     all,
                     merge_method,

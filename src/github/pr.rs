@@ -262,6 +262,41 @@ struct PrReviewData {
     repository: Option<RepositoryData>,
 }
 
+// --- Merge queue (enqueuePullRequest) GraphQL types ---
+
+#[derive(Debug, Deserialize)]
+struct PrNodeIdData {
+    repository: Option<PrNodeIdRepo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrNodeIdRepo {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<PrNodeId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrNodeId {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnqueueData {
+    #[serde(rename = "enqueuePullRequest")]
+    enqueue_pull_request: Option<EnqueueResult>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnqueueResult {
+    #[serde(rename = "mergeQueueEntry")]
+    pub merge_queue_entry: Option<MergeQueueEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MergeQueueEntry {
+    pub position: Option<u32>,
+}
+
 #[derive(Debug, Deserialize)]
 struct RepositoryData {
     #[serde(rename = "pullRequest")]
@@ -835,6 +870,83 @@ impl GitHubClient {
             .unwrap_or((None, 0, false));
 
         Ok((review_decision, approvals, changes_requested))
+    }
+
+    /// Get the GraphQL node ID for a PR (needed for mutations like enqueuePullRequest).
+    async fn get_pr_node_id(&self, pr_number: u64) -> Result<String> {
+        let query = format!(
+            r#"
+            query {{
+                repository(owner: "{}", name: "{}") {{
+                    pullRequest(number: {}) {{
+                        id
+                    }}
+                }}
+            }}
+            "#,
+            self.owner, self.repo, pr_number
+        );
+
+        let response: GraphQLResponse<PrNodeIdData> = self
+            .octocrab
+            .graphql(&serde_json::json!({ "query": query }))
+            .await
+            .context("Failed to query PR node ID")?;
+
+        if let Some(errors) = response.errors {
+            if !errors.is_empty() {
+                anyhow::bail!("GraphQL error: {}", errors[0].message);
+            }
+        }
+
+        response
+            .data
+            .and_then(|d| d.repository)
+            .and_then(|r| r.pull_request)
+            .map(|pr| pr.id)
+            .context("PR not found")
+    }
+
+    /// Enqueue a PR into GitHub's merge queue.
+    ///
+    /// Requires the repository to have merge queue enabled in branch protection rules.
+    /// Returns the queue entry with position information.
+    pub async fn enqueue_pr(&self, pr_number: u64) -> Result<EnqueueResult> {
+        let node_id = self.get_pr_node_id(pr_number).await?;
+
+        let mutation = format!(
+            r#"
+            mutation {{
+                enqueuePullRequest(input: {{ pullRequestId: "{}" }}) {{
+                    mergeQueueEntry {{
+                        position
+                    }}
+                }}
+            }}
+            "#,
+            node_id
+        );
+
+        let response: GraphQLResponse<EnqueueData> = self
+            .octocrab
+            .graphql(&serde_json::json!({ "query": mutation }))
+            .await
+            .context("Failed to enqueue PR into merge queue")?;
+
+        if let Some(errors) = response.errors {
+            if !errors.is_empty() {
+                anyhow::bail!(
+                    "Failed to enqueue PR #{} into merge queue: {}",
+                    pr_number,
+                    errors[0].message
+                );
+            }
+        }
+
+        response
+            .data
+            .and_then(|d| d.enqueue_pull_request)
+            .context("No enqueue result returned — is merge queue enabled on this repository?")
     }
 
     /// Check if a PR is already merged

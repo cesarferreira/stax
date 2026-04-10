@@ -169,6 +169,24 @@ impl ForgeClient {
         dispatch!(self, update_pr_base(number, new_base))
     }
 
+    /// Enqueue a PR into the forge's merge queue (GitHub) or merge train (GitLab).
+    /// Not supported on Gitea/Forgejo (no merge queue feature).
+    pub async fn enqueue_pr(
+        &self,
+        number: u64,
+    ) -> Result<crate::github::pr::EnqueueResult> {
+        match self {
+            Self::GitHub(client) => client.enqueue_pr(number).await,
+            Self::GitLab(client) => client.add_to_merge_train(number).await,
+            Self::Gitea(_) => {
+                bail!(
+                    "`stax merge --queue` is not supported for Gitea/Forgejo — \
+                     Gitea does not have a merge queue feature"
+                )
+            }
+        }
+    }
+
     /// GitHub only: merge the PR base into the head branch remotely ("Update branch").
     pub async fn update_pr_branch(&self, number: u64) -> Result<()> {
         match self {

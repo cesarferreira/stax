@@ -52,6 +52,40 @@ After a successful run, run `st rs` to sync your local repository (delete merged
 
 `--remote` cannot be combined with `--dry-run`, `--when-ready`, or `--no-wait`. Only **GitHub** is supported (not GitLab/Gitea).
 
+### `--queue` mode (GitHub & GitLab)
+
+`st merge --queue` enqueues your stack PRs into the forge's merge queue instead of merging them one-by-one. The merge queue batches CI so it runs once on the combined result, which is significantly faster for stacks with slow CI pipelines.
+
+```bash
+st merge --queue
+st merge --queue --all
+st merge --queue --yes
+```
+
+**What happens:**
+
+1. All stack PRs/MRs are retargeted to trunk
+2. Each PR/MR is enqueued into the merge queue via the forge API
+3. stax polls until all PRs are merged (respects `--timeout` and `--interval`)
+4. Automatically runs `st rs` to clean up merged branches (unless `--no-sync`)
+5. Sends a desktop notification when complete
+
+This gives a "land and walk away" experience — enqueue, wait for CI, auto-cleanup — similar to Graphite's merge flow.
+
+#### GitHub
+
+Uses the `enqueuePullRequest` GraphQL mutation. Requires merge queue enabled in branch protection rules. Available on **GitHub Team and Enterprise Cloud** plans, or on **public repositories** on any plan. See [GitHub's merge queue documentation](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue) for setup instructions.
+
+#### GitLab
+
+Uses the [merge trains REST API](https://docs.gitlab.com/api/merge_trains/). Requires **GitLab Premium or Ultimate** and [merge request pipelines](https://docs.gitlab.com/ci/pipelines/merge_request_pipelines/) configured in `.gitlab-ci.yml`. MRs are added with `auto_merge` so they enter the train once their pipeline succeeds.
+
+#### Gitea / Forgejo
+
+**Not supported.** Gitea does not have a merge queue or merge train feature. Use `st merge` or `st merge --when-ready` instead.
+
+`--queue` cannot be combined with `--dry-run`, `--when-ready`, `--remote`, or `--no-wait`.
+
 ### Partial stack merge
 
 ```bash
