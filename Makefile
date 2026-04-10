@@ -1,9 +1,10 @@
-.PHONY: build release install clean test test-native test-local-fast test-local-ramdisk test-docker ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
+.PHONY: build build-release release install clean test test-native test-local-fast test-local-ramdisk test-docker ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
 RAMDISK_MOUNT ?= /Volumes/$(RAMDISK_NAME)
 MAC_LOCAL_TEST_THREADS ?= 8
+LEVEL ?= minor
 
 # Default target
 all: check build test
@@ -13,8 +14,12 @@ build:
 	cargo build
 
 # Build release version
-release:
+build-release:
 	cargo build --release
+
+# Publish a new release (usage: make release or make release LEVEL=patch)
+release:
+	cargo release $(LEVEL) --execute --no-confirm
 
 # Install to ~/.cargo/bin
 install:
