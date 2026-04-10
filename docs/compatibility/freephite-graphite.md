@@ -6,7 +6,8 @@ stax uses the same metadata format as freephite (`refs/branch-metadata/<branch>`
 
 | freephite | graphite | stax |
 |-----------|----------|------|
-| `fp ss` | `gt submit` | `st submit` / `st ss` |
+| `fp ss` | `gt submit` | `st stack submit` / `st ss` / `st s s` |
+| `fp sr` | — | `st stack restack` / `st sr` / `st s r` |
 | `fp bs` | `gt branch submit` | `st branch submit` / `st bs` |
 | `fp us submit` | `gt upstack submit` | `st upstack submit` |
 | `fp ds submit` | `gt downstack submit` | `st downstack submit` |
@@ -17,7 +18,7 @@ stax uses the same metadata format as freephite (`refs/branch-metadata/<branch>`
 | `fp bd` | `gt down` | `st down` / `st bd` |
 | `fp ls` | `gt log` | `st status` / `st ls` |
 | — | `gt modify` | `st modify` / `st m` |
-| `fp restack` | `gt restack` | `st restack` |
+| `fp restack` | `gt restack` | `st restack` / `st sr` |
 | — | `gt restack --upstack` | `st upstack restack` |
 | — | `gt merge` | `st merge` |
 | — | — | `st cascade` |
@@ -28,10 +29,13 @@ stax uses the same metadata format as freephite (`refs/branch-metadata/<branch>`
 stax also installs as `st` — a shorter alias for the same binary:
 
 ```bash
-st ss       # same as st submit
+st ss       # same as st stack submit (or st s s)
+st sr       # same as st stack restack (or st s r)
 st rs       # same as st sync
 st ls       # same as st status
 ```
+
+> **Note:** `st s` opens the `stack` subcommand group. Use `st ls` or `st status` for the status view.
 
 ## Migration is instant
 

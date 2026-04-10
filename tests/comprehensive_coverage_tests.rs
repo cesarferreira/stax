@@ -52,11 +52,11 @@ fn test_navigation_bottom_from_top() {
 // =============================================================================
 
 #[test]
-fn test_status_alias_s() {
+fn test_stack_alias_s() {
     let repo = TestRepo::new();
     repo.create_stack(&["feature"]);
 
-    let output = repo.run_stax(&["s"]);
+    let output = repo.run_stax(&["s", "s", "--help"]);
     output.assert_success();
 }
 

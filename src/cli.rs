@@ -127,7 +127,7 @@ struct AiLaneArgs {
 #[derive(Subcommand)]
 enum Commands {
     /// Show all stacks (simple tree view)
-    #[command(visible_aliases = ["s", "ls"])]
+    #[command(visible_alias = "ls")]
     Status {
         /// Output JSON for scripting
         #[arg(long)]
@@ -187,7 +187,7 @@ enum Commands {
     },
 
     /// Submit stack - push branches and create/update PRs
-    #[command(visible_alias = "ss")]
+    #[command(visible_alias = "ss", hide = true)]
     Submit {
         #[command(flatten)]
         submit: SubmitOptions,
@@ -301,6 +301,7 @@ enum Commands {
     },
 
     /// Restack (rebase) the current branch onto its parent
+    #[command(hide = true)]
     Restack {
         /// Restack all branches in the stack
         #[arg(short, long)]
@@ -498,6 +499,10 @@ enum Commands {
     /// Downstack commands (operate on ancestors)
     #[command(subcommand, visible_alias = "ds")]
     Downstack(DownstackCommands),
+
+    /// Stack commands (submit, restack)
+    #[command(subcommand, visible_alias = "s")]
+    Stack(StackCommands),
 
     /// Create a new branch stacked on current
     #[command(visible_alias = "c")]
@@ -881,12 +886,70 @@ enum Commands {
     },
     #[command(hide = true)]
     Wtrs,
+    #[command(hide = true)]
+    Sr {
+        #[arg(short, long)]
+        all: bool,
+        #[arg(long, conflicts_with = "all")]
+        stop_here: bool,
+        #[arg(long)]
+        r#continue: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(short, long)]
+        yes: bool,
+        #[arg(long)]
+        quiet: bool,
+        #[arg(long)]
+        auto_stash_pop: bool,
+        #[arg(long, value_enum, default_value_t = RestackSubmitAfter::No)]
+        submit_after: RestackSubmitAfter,
+    },
 }
 
 #[derive(Subcommand, Clone)]
 enum AuthSubcommand {
     /// Show which auth source is currently active
     Status,
+}
+
+#[derive(Subcommand)]
+enum StackCommands {
+    /// Submit stack - push branches and create/update PRs
+    #[command(visible_alias = "s")]
+    Submit {
+        #[command(flatten)]
+        submit: SubmitOptions,
+    },
+
+    /// Restack (rebase) the current branch onto its parent
+    #[command(visible_alias = "r")]
+    Restack {
+        /// Restack all branches in the stack
+        #[arg(short, long)]
+        all: bool,
+        /// Restack ancestors + current only (skip descendants)
+        #[arg(long, conflicts_with = "all")]
+        stop_here: bool,
+        /// Continue after resolving conflicts
+        #[arg(long)]
+        r#continue: bool,
+        /// Preview predicted conflicts without rebasing
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip conflict confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+        /// Suppress extra output
+        #[arg(long)]
+        quiet: bool,
+        /// Auto-stash and auto-pop dirty target worktrees during restack operations
+        #[arg(long)]
+        auto_stash_pop: bool,
+        /// After restack, submit stack updates (`ask`, `yes`, `no`)
+        #[arg(long, value_enum, default_value_t = RestackSubmitAfter::No)]
+        submit_after: RestackSubmitAfter,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1665,6 +1728,30 @@ pub fn run() -> Result<()> {
                 run_submit(submit, commands::submit::SubmitScope::Downstack)
             }
         },
+        Commands::Stack(cmd) => match cmd {
+            StackCommands::Submit { submit } => {
+                run_submit(submit, commands::submit::SubmitScope::Stack)
+            }
+            StackCommands::Restack {
+                all,
+                stop_here,
+                r#continue,
+                dry_run,
+                yes,
+                quiet,
+                auto_stash_pop,
+                submit_after,
+            } => commands::restack::run(
+                all,
+                stop_here,
+                r#continue,
+                dry_run,
+                yes,
+                quiet,
+                auto_stash_pop,
+                submit_after.into(),
+            ),
+        },
         // Hidden shortcuts
         Commands::Bc {
             name,
@@ -1676,6 +1763,25 @@ pub fn run() -> Result<()> {
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
         Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
+        Commands::Sr {
+            all,
+            stop_here,
+            r#continue,
+            dry_run,
+            yes,
+            quiet,
+            auto_stash_pop,
+            submit_after,
+        } => commands::restack::run(
+            all,
+            stop_here,
+            r#continue,
+            dry_run,
+            yes,
+            quiet,
+            auto_stash_pop,
+            submit_after.into(),
+        ),
         Commands::Worktree { command } => match command {
             None => {
                 let interactive_terminal =
@@ -1919,7 +2025,8 @@ fn print_worktree_help() -> Result<()> {
 mod tests {
     use super::{
         check_interactive_terminal_with_probe, detect_interactive_stdio, has_interactive_terminal,
-        Cli, Commands, InteractiveTerminalCheck, RestackSubmitAfter, WorktreeCommands,
+        Cli, Commands, InteractiveTerminalCheck, RestackSubmitAfter, StackCommands,
+        WorktreeCommands,
     };
     use clap::Parser;
     use std::cell::Cell;
@@ -2112,5 +2219,68 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn stack_restack_via_two_tokens() {
+        let cli = parse_cli(&["stax", "s", "r"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack(StackCommands::Restack {
+                submit_after: RestackSubmitAfter::No,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn stack_restack_via_single_token_sr() {
+        let cli = parse_cli(&["stax", "sr"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Sr {
+                submit_after: RestackSubmitAfter::No,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn stack_submit_via_two_tokens() {
+        let cli = parse_cli(&["stax", "s", "s"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Stack(StackCommands::Submit { .. }))
+        ));
+    }
+
+    #[test]
+    fn ss_still_parses_as_top_level_submit() {
+        let cli = parse_cli(&["stax", "ss"]);
+        assert!(matches!(cli.command, Some(Commands::Submit { .. })));
+    }
+
+    #[test]
+    fn ls_parses_as_status() {
+        let cli = parse_cli(&["stax", "ls"]);
+        assert!(matches!(cli.command, Some(Commands::Status { .. })));
+    }
+
+    #[test]
+    fn submit_backward_compat() {
+        let cli = parse_cli(&["stax", "submit"]);
+        assert!(matches!(cli.command, Some(Commands::Submit { .. })));
+    }
+
+    #[test]
+    fn restack_backward_compat() {
+        let cli = parse_cli(&["stax", "restack"]);
+        assert!(matches!(cli.command, Some(Commands::Restack { .. })));
+    }
+
+    #[test]
+    fn s_alone_shows_stack_group() {
+        let result = try_parse_cli(&["stax", "s"]);
+        assert!(result.is_err(), "bare `s` should require a subcommand");
     }
 }
