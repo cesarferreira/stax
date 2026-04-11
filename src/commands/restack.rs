@@ -8,8 +8,10 @@ use crate::progress::LiveTimer;
 use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,15 +88,21 @@ fn run_impl(
     restore_branch: Option<String>,
 ) -> Result<()> {
     let current = repo.current_branch()?;
+    let current_workdir = canonical_workdir(repo)?;
     let restore_branch = restore_branch.unwrap_or_else(|| current.clone());
     let mut stack = Stack::load(repo)?;
 
-    let mut stashed = false;
+    let mut stashed_worktrees: Vec<PathBuf> = Vec::new();
+    let mut stashed_worktree_set: HashSet<PathBuf> = HashSet::new();
     if repo.is_dirty()? {
         if auto_stash_pop {
-            stashed = repo.stash_push()?;
+            let stashed = repo.stash_push()?;
             if stashed && !quiet {
                 println!("{}", "✓ Stashed working tree changes.".green());
+            }
+            if stashed {
+                stashed_worktree_set.insert(current_workdir.clone());
+                stashed_worktrees.push(current_workdir.clone());
             }
         } else if quiet {
             anyhow::bail!("Working tree is dirty. Please stash or commit changes first.");
@@ -105,9 +113,13 @@ fn run_impl(
                 .interact()?;
 
             if stash {
-                stashed = repo.stash_push()?;
+                let stashed = repo.stash_push()?;
                 auto_stash_pop = true;
                 println!("{}", "✓ Stashed working tree changes.".green());
+                if stashed {
+                    stashed_worktree_set.insert(current_workdir.clone());
+                    stashed_worktrees.push(current_workdir.clone());
+                }
             } else {
                 println!("{}", "Aborted.".red());
                 return Ok(());
@@ -163,9 +175,7 @@ fn run_impl(
         if !quiet {
             println!("{}", "✓ Stack is up to date, nothing to restack.".green());
         }
-        if stashed {
-            repo.stash_pop()?;
-        }
+        restore_stashed_worktrees(repo, &stashed_worktrees, quiet)?;
         return Ok(());
     }
 
@@ -206,9 +216,7 @@ fn run_impl(
         }
 
         if dry_run {
-            if stashed {
-                repo.stash_pop()?;
-            }
+            restore_stashed_worktrees(repo, &stashed_worktrees, quiet)?;
             return Ok(());
         }
 
@@ -218,9 +226,7 @@ fn run_impl(
                 .default(true)
                 .interact()?;
             if !confirm {
-                if stashed {
-                    repo.stash_pop()?;
-                }
+                restore_stashed_worktrees(repo, &stashed_worktrees, quiet)?;
                 return Ok(());
             }
         }
@@ -280,6 +286,21 @@ fn run_impl(
             &format!("{} onto {}", branch, meta.parent_branch_name),
         );
 
+        // Pre-stash dirty target worktrees so the rebase can proceed
+        let target_workdir = repo.branch_rebase_target_workdir(branch)?;
+        if auto_stash_pop
+            && !stashed_worktree_set.contains(&target_workdir)
+            && repo.is_dirty_at(&target_workdir)?
+        {
+            if repo.stash_push_at(&target_workdir)? {
+                stashed_worktree_set.insert(target_workdir.clone());
+                stashed_worktrees.push(target_workdir.clone());
+                if !quiet {
+                    print_stash_message(&current_workdir, &target_workdir);
+                }
+            }
+        }
+
         // Rebase using provenance-aware upstream inference to avoid replaying
         // already-integrated commits after squash/cherry-pick merges.
         match repo.rebase_branch_onto_with_provenance(
@@ -324,8 +345,8 @@ fn run_impl(
                         ],
                     },
                 );
-                if stashed {
-                    println!("{}", "Stash kept to avoid conflicts.".yellow());
+                if !stashed_worktrees.is_empty() {
+                    println!("{}", "Auto-stash kept to avoid conflicts.".yellow());
                 }
                 summary.push((branch.clone(), "conflict".to_string()));
 
@@ -360,12 +381,7 @@ fn run_impl(
     // Check for merged branches and offer to delete them
     cleanup_merged_branches(repo, quiet, yes)?;
 
-    if stashed {
-        repo.stash_pop()?;
-        if !quiet {
-            println!("{}", "✓ Restored stashed changes.".green());
-        }
-    }
+    restore_stashed_worktrees(repo, &stashed_worktrees, quiet)?;
 
     let should_submit = should_submit_after_restack(&summary, quiet, submit_after)?;
 
@@ -373,6 +389,44 @@ fn run_impl(
         submit_after_restack(quiet)?;
     }
 
+    Ok(())
+}
+
+fn canonical_workdir(repo: &GitRepo) -> Result<PathBuf> {
+    let workdir = repo.workdir()?.to_path_buf();
+    Ok(std::fs::canonicalize(&workdir).unwrap_or(workdir))
+}
+
+fn print_stash_message(current_workdir: &Path, target_workdir: &Path) {
+    if target_workdir == current_workdir {
+        println!("{}", "✓ Stashed working tree changes.".green());
+    } else {
+        println!(
+            "{}",
+            format!(
+                "✓ Stashed working tree changes in {}.",
+                target_workdir.display()
+            )
+            .green()
+        );
+    }
+}
+
+fn restore_stashed_worktrees(repo: &GitRepo, worktrees: &[PathBuf], quiet: bool) -> Result<()> {
+    let current_workdir = canonical_workdir(repo)?;
+    for worktree in worktrees.iter().rev() {
+        repo.stash_pop_at(worktree)?;
+        if !quiet {
+            if *worktree == current_workdir {
+                println!("{}", "✓ Restored stashed changes.".green());
+            } else {
+                println!(
+                    "{}",
+                    format!("✓ Restored stashed changes in {}.", worktree.display()).green()
+                );
+            }
+        }
+    }
     Ok(())
 }
 
