@@ -195,7 +195,7 @@ pub fn run(
                     rollback_create(&repo, &current, &branch_name);
                     bail!(
                         "Commit failed (pre-commit hook or other error). \
-                         Branch was not created. Fix the issue and retry."
+                         Branch rolled back. Fix the issue and retry."
                     );
                 }
 
