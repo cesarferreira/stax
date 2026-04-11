@@ -45,10 +45,10 @@ struct PrPlan {
     parent: String,
     existing_pr: Option<u64>,
     existing_pr_is_draft: Option<bool>,
-    /// Current PR title on the forge (for existing PRs)
-    existing_pr_title: Option<String>,
     /// Tip commit subject line (for auto-updating PR title)
     tip_commit_subject: Option<String>,
+    /// Whether the tip commit subject differs from the existing PR title.
+    needs_title_update: bool,
     // For new PRs, we'll collect these upfront
     title: Option<String>,
     body: Option<String>,
@@ -404,8 +404,8 @@ pub fn run(
                 parent: meta.parent_branch_name,
                 existing_pr,
                 existing_pr_is_draft: None,
-                existing_pr_title: None,
                 tip_commit_subject: None,
+                needs_title_update: false,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -568,22 +568,25 @@ pub fn run(
                 true // New PR always needs creation
             };
 
-            let existing_pr_title = existing_pr.as_ref().map(|p| p.title.clone());
-
             // Capture tip commit subject for auto-updating PR title on existing PRs
             let tip_commit_subject = if pr_number.is_some() && !is_empty {
                 tip_commit_subject(repo.workdir()?, branch)
             } else {
                 None
             };
+            let needs_title_update = existing_pr
+                .as_ref()
+                .zip(tip_commit_subject.as_ref())
+                .map(|(pr, commit_subject)| pr.title != *commit_subject)
+                .unwrap_or(false);
 
             plans.push(PrPlan {
                 branch: branch.clone(),
                 parent: base,
                 existing_pr: pr_number,
                 existing_pr_is_draft: existing_pr.as_ref().map(|pr| pr.info.is_draft),
-                existing_pr_title,
                 tip_commit_subject,
+                needs_title_update,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -969,13 +972,8 @@ pub fn run(
                         .await?;
 
                     // Auto-update PR title from tip commit subject when it has changed
-                    if let Some(ref commit_subject) = plan.tip_commit_subject {
-                        let title_changed = plan
-                            .existing_pr_title
-                            .as_ref()
-                            .map(|current| current != commit_subject)
-                            .unwrap_or(false);
-                        if title_changed {
+                    if plan.needs_title_update {
+                        if let Some(ref commit_subject) = plan.tip_commit_subject {
                             client
                                 .update_pr_title(existing_pr_number, commit_subject)
                                 .await?;
@@ -1079,6 +1077,24 @@ pub fn run(
                         }
                     }
 
+                    // Update PR title if opt-in and the tip commit subject drifted
+                    if plan.needs_title_update {
+                        let title_timer = LiveTimer::maybe_new(
+                            !quiet,
+                            &format!(
+                                "Updating title for {} #{}...",
+                                plan.branch, existing_pr_number
+                            ),
+                        );
+                        if let Some(ref commit_subject) = plan.tip_commit_subject {
+                            client
+                                .update_pr_title(existing_pr_number, commit_subject)
+                                .await?;
+                        }
+                        LiveTimer::maybe_finish_ok(title_timer, "done");
+                    }
+
+                    // No-op - just add to pr_infos for summary
                     pr_infos.push(StackPrInfo {
                         branch: plan.branch.clone(),
                         pr_number: Some(existing_pr_number),
@@ -1543,7 +1559,11 @@ fn tip_commit_subject(workdir: &Path, branch: &str) -> Option<String> {
         .filter(|o| o.status.success())
         .and_then(|o| {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         })
 }
 
