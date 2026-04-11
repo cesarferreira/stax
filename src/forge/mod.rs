@@ -200,6 +200,10 @@ impl ForgeClient {
         }
     }
 
+    pub async fn update_pr_title(&self, number: u64, title: &str) -> Result<()> {
+        dispatch!(self, update_pr_title(number, title))
+    }
+
     pub async fn update_pr_body(&self, number: u64, body: &str) -> Result<()> {
         dispatch!(self, update_pr_body(number, body))
     }

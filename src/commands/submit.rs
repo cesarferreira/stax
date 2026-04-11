@@ -45,6 +45,10 @@ struct PrPlan {
     parent: String,
     existing_pr: Option<u64>,
     existing_pr_is_draft: Option<bool>,
+    /// Current PR title on the forge (for existing PRs)
+    existing_pr_title: Option<String>,
+    /// Tip commit subject line (for auto-updating PR title)
+    tip_commit_subject: Option<String>,
     // For new PRs, we'll collect these upfront
     title: Option<String>,
     body: Option<String>,
@@ -400,6 +404,8 @@ pub fn run(
                 parent: meta.parent_branch_name,
                 existing_pr,
                 existing_pr_is_draft: None,
+                existing_pr_title: None,
+                tip_commit_subject: None,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -562,11 +568,22 @@ pub fn run(
                 true // New PR always needs creation
             };
 
+            let existing_pr_title = existing_pr.as_ref().map(|p| p.title.clone());
+
+            // Capture tip commit subject for auto-updating PR title on existing PRs
+            let tip_commit_subject = if pr_number.is_some() && !is_empty {
+                tip_commit_subject(repo.workdir()?, branch)
+            } else {
+                None
+            };
+
             plans.push(PrPlan {
                 branch: branch.clone(),
                 parent: base,
                 existing_pr: pr_number,
                 existing_pr_is_draft: existing_pr.as_ref().map(|pr| pr.info.is_draft),
+                existing_pr_title,
+                tip_commit_subject,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -950,6 +967,20 @@ pub fn run(
                     client
                         .update_pr_base(existing_pr_number, &plan.parent)
                         .await?;
+
+                    // Auto-update PR title from tip commit subject when it has changed
+                    if let Some(ref commit_subject) = plan.tip_commit_subject {
+                        let title_changed = plan
+                            .existing_pr_title
+                            .as_ref()
+                            .map(|current| current != commit_subject)
+                            .unwrap_or(false);
+                        if title_changed {
+                            client
+                                .update_pr_title(existing_pr_number, commit_subject)
+                                .await?;
+                        }
+                    }
 
                     apply_pr_metadata(&client, existing_pr_number, &reviewers, &labels, &assignees)
                         .await?;
@@ -1500,6 +1531,20 @@ fn branch_matches_remote(workdir: &Path, remote: &str, branch: &str) -> bool {
         (Some(l), Some(r)) => l == r,
         _ => false,
     }
+}
+
+/// Get the subject line of the tip commit on a branch.
+fn tip_commit_subject(workdir: &Path, branch: &str) -> Option<String> {
+    Command::new("git")
+        .args(["log", "-1", "--format=%s", branch])
+        .current_dir(workdir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { None } else { Some(s) }
+        })
 }
 
 fn collect_commit_messages(workdir: &Path, parent: &str, branch: &str) -> Vec<String> {

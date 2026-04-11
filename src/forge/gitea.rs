@@ -109,6 +109,8 @@ struct UpdatePullRequest<'a> {
     body: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     draft: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -216,6 +218,23 @@ impl GiteaClient {
             base: Some(new_base),
             body: None,
             draft: None,
+            title: None,
+        };
+        let _: GiteaPull = patch_json(
+            &self.client,
+            &self.repo_url(&format!("/pulls/{}", number)),
+            &request,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_pr_title(&self, number: u64, title: &str) -> Result<()> {
+        let request = UpdatePullRequest {
+            base: None,
+            body: None,
+            draft: None,
+            title: Some(title),
         };
         let _: GiteaPull = patch_json(
             &self.client,
@@ -231,6 +250,7 @@ impl GiteaClient {
             base: None,
             body: Some(body),
             draft: None,
+            title: None,
         };
         let _: GiteaPull = patch_json(
             &self.client,
@@ -246,6 +266,7 @@ impl GiteaClient {
             base: None,
             body: None,
             draft: Some(is_draft),
+            title: None,
         };
         let _: GiteaPull = patch_json(
             &self.client,
@@ -658,6 +679,7 @@ fn pr_to_info_with_head(pr: GiteaPull) -> PrInfoWithHead {
         info: pr_to_info(&pr),
         head: pr.head.ref_name.clone(),
         head_label: pr.head.label.clone(),
+        title: pr.title.clone(),
     }
 }
 
