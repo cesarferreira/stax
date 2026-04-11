@@ -47,12 +47,12 @@ fn render_stack_position(stack_branches: &[String], conflict_branch: &str) -> Ve
             if name == conflict_branch {
                 format!(
                     "  {} {}    {}",
-                    "\u{25c9}".red().bold(),
+                    "◉".red().bold(),
                     name.red().bold(),
-                    "\u{2190} conflict".red()
+                    "← conflict".red()
                 )
             } else {
-                format!("  {} {}", "\u{25cb}".dimmed(), name.dimmed())
+                format!("  {} {}", "○".dimmed(), name.dimmed())
             }
         })
         .collect()
