@@ -110,6 +110,11 @@ struct UpdatePullRequest<'a> {
 }
 
 #[derive(Serialize)]
+struct UpdatePullRequestDraft {
+    draft: bool,
+}
+
+#[derive(Serialize)]
 struct MergePullRequest<'a> {
     #[serde(rename = "MergeTitleField", skip_serializing_if = "Option::is_none")]
     merge_title: Option<&'a str>,
@@ -228,6 +233,17 @@ impl GiteaClient {
             base: None,
             body: Some(body),
         };
+        let _: GiteaPull = patch_json(
+            &self.client,
+            &self.repo_url(&format!("/pulls/{}", number)),
+            &request,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_pr_draft(&self, number: u64, is_draft: bool) -> Result<()> {
+        let request = UpdatePullRequestDraft { draft: is_draft };
         let _: GiteaPull = patch_json(
             &self.client,
             &self.repo_url(&format!("/pulls/{}", number)),

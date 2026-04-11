@@ -169,6 +169,12 @@ impl ForgeClient {
         dispatch!(self, update_pr_base(number, new_base))
     }
 
+    /// Set the draft status of an existing PR.
+    /// `is_draft = true` converts to draft, `is_draft = false` marks ready for review.
+    pub async fn set_pr_draft(&self, number: u64, is_draft: bool) -> Result<()> {
+        dispatch!(self, set_pr_draft(number, is_draft))
+    }
+
     /// Enqueue a PR into the forge's merge queue (GitHub) or merge train (GitLab).
     /// Not supported on Gitea/Forgejo (no merge queue feature).
     pub async fn enqueue_pr(&self, number: u64) -> Result<crate::github::pr::EnqueueResult> {

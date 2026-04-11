@@ -16,9 +16,12 @@ struct Cli {
 
 #[derive(Args, Clone)]
 struct SubmitOptions {
-    /// Create PRs as drafts
-    #[arg(short, long)]
+    /// Create new PRs as drafts; convert existing PRs to draft
+    #[arg(short, long, conflicts_with = "publish")]
     draft: bool,
+    /// Create new PRs as published; convert existing draft PRs to published
+    #[arg(long, conflicts_with = "draft")]
+    publish: bool,
     /// Only push, don't create/update PRs
     #[arg(long)]
     no_pr: bool,
@@ -1300,6 +1303,7 @@ fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Re
     commands::submit::run(
         scope,
         submit.draft,
+        submit.publish,
         submit.no_pr,
         submit.no_fetch,
         submit.force,
