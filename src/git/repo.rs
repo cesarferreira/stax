@@ -1960,7 +1960,7 @@ Use --auto-stash-pop or stash/commit changes first.",
     /// Force push a branch to remote
     pub fn force_push(&self, remote: &str, branch: &str) -> Result<()> {
         let status = Command::new("git")
-            .args(["push", "-f", remote, branch])
+            .args(["push", "--force-with-lease", remote, branch])
             .current_dir(self.workdir()?)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

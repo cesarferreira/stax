@@ -1134,7 +1134,7 @@ pub fn run(
 
 fn push_branch(workdir: &std::path::Path, remote: &str, branch: &str) -> Result<()> {
     let status = Command::new("git")
-        .args(["push", "-f", "-u", remote, branch])
+        .args(["push", "--force-with-lease", "-u", remote, branch])
         .current_dir(workdir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
