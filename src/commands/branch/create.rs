@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::engine::BranchMetadata;
+use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::remote;
 use anyhow::{bail, Result};
@@ -15,6 +15,7 @@ pub fn run(
     from: Option<String>,
     prefix: Option<String>,
     all: bool,
+    insert: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let config = Config::load()?;
@@ -139,6 +140,49 @@ pub fn run(
     if let Err(e) = meta.write(repo.inner(), &branch_name) {
         rollback_create(&repo, &current, &branch_name);
         return Err(e);
+    }
+
+    // If --insert, reparent children of the parent branch to the new branch
+    if insert {
+        let stack = Stack::load(&repo)?;
+        if let Some(parent_info) = stack.branches.get(&parent_branch) {
+            let children: Vec<String> = parent_info
+                .children
+                .iter()
+                .filter(|c| *c != &branch_name)
+                .cloned()
+                .collect();
+
+            if !children.is_empty() {
+                let new_parent_rev = repo.branch_commit(&branch_name)?;
+                for child in &children {
+                    if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
+                        let merge_base = repo
+                            .merge_base(&branch_name, child)
+                            .unwrap_or_else(|_| new_parent_rev.clone());
+                        let updated = BranchMetadata {
+                            parent_branch_name: branch_name.clone(),
+                            parent_branch_revision: merge_base,
+                            ..child_meta
+                        };
+                        updated.write(repo.inner(), child)?;
+                    }
+                }
+
+                println!(
+                    "Reparented {} child branch(es) to '{}'",
+                    children.len(),
+                    branch_name.green()
+                );
+                for child in &children {
+                    println!("  {} -> {}", child.cyan(), branch_name.green());
+                }
+                println!(
+                    "{}",
+                    "Run `stax restack --all` to rebase the reparented branches.".yellow()
+                );
+            }
+        }
     }
 
     // Checkout the new branch
