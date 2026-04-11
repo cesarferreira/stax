@@ -136,10 +136,16 @@ pub fn run(
     // Track it with current branch as parent
     let parent_rev = repo.branch_commit(&parent_branch)?;
     let meta = BranchMetadata::new(&parent_branch, &parent_rev);
-    meta.write(repo.inner(), &branch_name)?;
+    if let Err(e) = meta.write(repo.inner(), &branch_name) {
+        rollback_create(&repo, &current, &branch_name);
+        return Err(e);
+    }
 
     // Checkout the new branch
-    repo.checkout(&branch_name)?;
+    if let Err(e) = repo.checkout(&branch_name) {
+        rollback_create(&repo, &current, &branch_name);
+        return Err(e);
+    }
 
     if let Ok(remote_branches) = remote::get_remote_branches(repo.workdir()?, config.remote_name())
     {
@@ -182,14 +188,30 @@ pub fn run(
             let diff_output = Command::new("git")
                 .args(["diff", "--cached", "--quiet"])
                 .current_dir(workdir)
-                .status()?;
+                .status();
+
+            let diff_output = match diff_output {
+                Ok(status) => status,
+                Err(e) => {
+                    rollback_create(&repo, &current, &branch_name);
+                    return Err(e.into());
+                }
+            };
 
             if !diff_output.success() {
                 // There are staged changes, commit them
                 let commit_status = Command::new("git")
                     .args(["commit", "-m", &msg])
                     .current_dir(workdir)
-                    .status()?;
+                    .status();
+
+                let commit_status = match commit_status {
+                    Ok(status) => status,
+                    Err(e) => {
+                        rollback_create(&repo, &current, &branch_name);
+                        return Err(e.into());
+                    }
+                };
 
                 if !commit_status.success() {
                     rollback_create(&repo, &current, &branch_name);

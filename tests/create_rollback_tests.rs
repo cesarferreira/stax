@@ -136,6 +136,14 @@ fn create_rollback_then_succeed_after_hook_removed() {
         .assert_success();
 
     let branch = repo.current_branch();
-    assert!(branch.contains("my-feature"), "Should be on the feature branch: {}", branch);
-    assert!(!branch.contains("my-feature-2"), "Should not have a -2 suffix: {}", branch);
+    assert!(
+        branch.contains("my-feature"),
+        "Should be on the feature branch: {}",
+        branch
+    );
+    assert!(
+        !branch.contains("my-feature-2"),
+        "Should not have a -2 suffix: {}",
+        branch
+    );
 }
