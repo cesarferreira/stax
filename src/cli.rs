@@ -594,6 +594,16 @@ enum Commands {
         no_verify: bool,
     },
 
+    /// Absorb staged changes into the correct stack branches
+    Absorb {
+        /// Show what would be absorbed without making changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Stage all changes before absorbing (like -a)
+        #[arg(short, long)]
+        all: bool,
+    },
+
     /// Copy branch name or PR URL to clipboard
     Copy {
         /// Copy PR URL instead of branch name
@@ -1629,6 +1639,7 @@ pub fn run() -> Result<()> {
             verbose,
         } => commands::ci::run(all, stack, json, refresh, watch, interval, verbose),
         Commands::Split { hunk, no_verify } => commands::split::run(hunk, no_verify),
+        Commands::Absorb { dry_run, all } => commands::absorb::run(dry_run, all),
         Commands::Copy { pr } => {
             let target = if pr {
                 commands::copy::CopyTarget::Pr

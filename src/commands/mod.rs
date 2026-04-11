@@ -1,4 +1,5 @@
 pub mod abort;
+pub mod absorb;
 pub mod auth;
 pub mod branch;
 pub mod cascade;
