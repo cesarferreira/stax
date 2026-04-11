@@ -57,6 +57,7 @@ pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
             false,  // edit
             false,  // ai_body
             false,  // rerequest_review
+            false,  // squash
         )?;
     }
 

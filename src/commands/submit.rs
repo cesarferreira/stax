@@ -100,6 +100,7 @@ pub fn run(
     edit: bool,
     ai_body: bool,
     rerequest_review: bool,
+    squash: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
@@ -813,6 +814,20 @@ pub fn run(
         }
 
         for plan in &branches_needing_push {
+            // Squash all commits on the branch down to one before pushing
+            if squash {
+                if let Err(e) = squash_branch_commits(repo.workdir()?, &plan.branch, &plan.parent) {
+                    if !quiet {
+                        println!(
+                            "  {} squash {}: {}",
+                            "⚠".yellow(),
+                            plan.branch,
+                            e
+                        );
+                    }
+                }
+            }
+
             let push_timer = LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", plan.branch));
 
             // Get local OID before push (this is what we're pushing)
@@ -1127,6 +1142,89 @@ pub fn run(
             &timings,
             full_scan_fallbacks,
         );
+    }
+
+    Ok(())
+}
+
+/// Squash all commits on a branch down to one commit above the base.
+/// Uses `git reset --soft` + `git commit` to preserve the tree while collapsing history.
+fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()> {
+    // Check how many commits ahead of base
+    let output = Command::new("git")
+        .args(["rev-list", "--count", &format!("{}..{}", base, branch)])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to count commits")?;
+
+    let count: usize = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0);
+
+    if count <= 1 {
+        return Ok(()); // Already single commit or empty, nothing to squash
+    }
+
+    // Get the current branch so we can restore it
+    let current_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(workdir)
+        .output()?;
+    let current = String::from_utf8_lossy(&current_output.stdout)
+        .trim()
+        .to_string();
+
+    // Get the first commit message on the branch (for the squashed commit)
+    let msg_output = Command::new("git")
+        .args(["log", "--format=%s", "--reverse", &format!("{}..{}", base, branch)])
+        .current_dir(workdir)
+        .output()?;
+    let first_msg = String::from_utf8_lossy(&msg_output.stdout)
+        .lines()
+        .next()
+        .unwrap_or(branch)
+        .to_string();
+
+    // Checkout the branch, soft-reset to base, recommit
+    let _ = Command::new("git")
+        .args(["checkout", branch])
+        .current_dir(workdir)
+        .output();
+
+    let reset = Command::new("git")
+        .args(["reset", "--soft", base])
+        .current_dir(workdir)
+        .status()?;
+
+    if !reset.success() {
+        // Restore branch state
+        let _ = Command::new("git")
+            .args(["checkout", &current])
+            .current_dir(workdir)
+            .output();
+        anyhow::bail!("Failed to soft-reset {} to {}", branch, base);
+    }
+
+    let commit = Command::new("git")
+        .args(["commit", "-m", &first_msg])
+        .current_dir(workdir)
+        .status()?;
+
+    if !commit.success() {
+        let _ = Command::new("git")
+            .args(["checkout", &current])
+            .current_dir(workdir)
+            .output();
+        anyhow::bail!("Failed to commit squashed changes on {}", branch);
+    }
+
+    // Return to original branch
+    if current != branch {
+        let _ = Command::new("git")
+            .args(["checkout", &current])
+            .current_dir(workdir)
+            .output();
     }
 
     Ok(())

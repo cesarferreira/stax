@@ -26,6 +26,7 @@ A modern CLI for stacked Git branches and PRs.
 - Manage worktree lanes and the `st wt` dashboard: [Worktrees](worktrees/index.md)
 - Understand repo-wide linked-checkout behavior: [Multi-Worktree Behavior](workflows/multi-worktree.md)
 - Run parallel AI sessions in worktree lanes: [AI Worktree Lanes](workflows/agent-worktrees.md)
+- Integrate with AI code review tools: [Roborev Integration](integrations/roborev.md)
 - Recover from risky rewrites: [Undo and Redo](safety/undo-redo.md)
 - Configure auth and naming: [Config Reference](configuration/index.md)
 - Validate and repair stack health: [Stack Health](commands/stack-health.md)

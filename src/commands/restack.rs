@@ -675,6 +675,7 @@ fn submit_after_restack(quiet: bool) -> Result<()> {
         false, // edit
         false, // ai_body
         false, // rerequest_review
+        false, // squash
     )?;
 
     Ok(())
