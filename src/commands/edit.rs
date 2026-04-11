@@ -111,6 +111,11 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Check for interactive terminal early, before displaying the selection UI
+    if !yes && !Term::stderr().is_term() {
+        bail!("Interactive terminal required for `stax edit`.");
+    }
+
     if commits.len() == 1 {
         println!(
             "{}",
@@ -141,10 +146,6 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
         );
     }
     println!();
-
-    if !Term::stderr().is_term() {
-        bail!("Interactive terminal required for `stax edit`.");
-    }
 
     // Collect actions for each commit
     let mut actions: Vec<EditAction> = vec![EditAction::Pick; commits.len()];
@@ -214,7 +215,7 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
     if has_reword {
         println!(
             "{}",
-            "  Note: reword will open your editor for each rewarded commit.".dimmed()
+            "  Note: reword will open your editor for each reworded commit.".dimmed()
         );
     }
     println!();
@@ -284,13 +285,21 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
         tx.finish_ok()?;
 
         println!("{}", "Edit applied successfully.".green());
-    } else if repo.rebase_in_progress()? {
         println!(
             "{}",
-            "Rebase paused due to conflicts. Resolve them, then run `stax continue`.".yellow()
+            "Run `stax restack --all` to rebase child branches if needed."
+                .yellow()
+        );
+    } else if repo.rebase_in_progress()? {
+        // Transaction stays open -- stax continue will handle completion
+        println!(
+            "{}",
+            "Rebase paused due to conflicts. Resolve them, then run `stax continue` or `stax abort`."
+                .yellow()
         );
     } else {
-        bail!("Rebase failed. Run `stax abort` to undo.");
+        tx.finish_err("rebase failed", Some("edit"), Some(&current))?;
+        bail!("Rebase failed. Run `stax undo` to restore the previous state.");
     }
 
     Ok(())
