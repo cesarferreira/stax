@@ -67,6 +67,9 @@ struct SubmitOptions {
     /// Re-request review from existing reviewers when updating PRs
     #[arg(long)]
     rerequest_review: bool,
+    /// Squash all commits on each branch into one before pushing
+    #[arg(long)]
+    squash: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -1285,6 +1288,7 @@ fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Re
         submit.edit,
         submit.ai_body,
         submit.rerequest_review,
+        submit.squash,
     )
 }
 
