@@ -47,6 +47,7 @@
 | `st branch squash` | | Squash commits |
 | `st detach` | | Remove branch from stack, reparent children |
 | `st reorder` | | Interactively reorder branches in stack |
+| `st absorb` | | Distribute staged changes to the correct stack branches (file-level attribution) |
 | `st upstack restack` | | Restack current + descendants |
 | `st upstack submit` | | Submit current + descendants |
 | `st downstack get` | | Show branches below current |
@@ -214,4 +215,6 @@ Worktree launch examples:
 - `st init --trunk main`
 - `st undo --yes --no-push`
 - `st undo --quiet`
+- `st absorb --dry-run` (preview absorption plan without changes)
+- `st absorb -a` (stage all changes before absorbing)
 - `st redo --yes --no-push --quiet`
