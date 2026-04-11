@@ -298,8 +298,15 @@ pub fn run(
                     }
                 }
             }
+        } else if !is_ancestor(&workdir, &stack.trunk, &remote_trunk_ref) {
+            // Local trunk has diverged from remote (has local-only commits).
+            // Refuse to reset to avoid silently losing those commits.
+            LiveTimer::maybe_finish_warn(
+                update_timer,
+                "diverged (local has commits not on remote; use --safe or resolve manually)",
+            );
         } else {
-            // Try reset to remote
+            // Local is ancestor of remote -- safe to reset (equivalent to fast-forward)
             let reset_output = Command::new("git")
                 .args(["reset", "--hard", &remote_trunk_ref])
                 .current_dir(&workdir)
@@ -342,6 +349,11 @@ pub fn run(
                         }
                     }
                 }
+            } else if !is_ancestor(&trunk_worktree_path, &stack.trunk, &remote_trunk_ref) {
+                LiveTimer::maybe_finish_warn(
+                    update_timer,
+                    "diverged (local has commits not on remote; use --safe or resolve manually)",
+                );
             } else {
                 let reset_output = Command::new("git")
                     .args(["reset", "--hard", &remote_trunk_ref])
@@ -1005,8 +1017,13 @@ pub fn run(
                     }
                 }
             }
+        } else if !is_ancestor(&workdir, &stack.trunk, &remote_trunk_ref) {
+            LiveTimer::maybe_finish_warn(
+                deferred_timer,
+                "diverged (local has commits not on remote; use --safe or resolve manually)",
+            );
         } else {
-            // Try reset to remote
+            // Local is ancestor of remote -- safe to reset
             let reset_output = Command::new("git")
                 .args(["reset", "--hard", &remote_trunk_ref])
                 .current_dir(&workdir)
