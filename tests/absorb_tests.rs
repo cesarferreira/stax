@@ -6,6 +6,7 @@
 mod common;
 
 use common::{OutputAssertions, TestRepo};
+use std::fs;
 
 #[test]
 fn absorb_on_trunk_fails() {
@@ -159,5 +160,59 @@ fn absorb_single_branch_stack_shows_current() {
         stdout.contains("feature") || stdout.contains("current"),
         "Should attribute to current/only branch: {}",
         stdout
+    );
+}
+
+#[test]
+fn absorb_moves_changes_to_their_owning_branch() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "feature-a"]).assert_success();
+    repo.create_file("a.txt", "hello from feature-a");
+    repo.commit("add a.txt in feature-a");
+    let feature_a = repo.current_branch();
+
+    repo.run_stax(&["create", "feature-b"]).assert_success();
+    repo.create_file("b.txt", "hello from feature-b");
+    repo.commit("add b.txt in feature-b");
+    let feature_b = repo.current_branch();
+
+    repo.create_file("a.txt", "updated from feature-b");
+    repo.git(&["add", "a.txt"]);
+
+    let output = repo.run_stax(&["absorb"]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Absorb complete"),
+        "Expected completion message, got: {}",
+        stdout
+    );
+    assert_eq!(repo.current_branch(), feature_b);
+
+    let status = repo.git(&["status", "--short"]);
+    assert!(
+        !TestRepo::stdout(&status).contains("a.txt"),
+        "a.txt should no longer be staged on the current branch"
+    );
+
+    repo.run_stax(&["checkout", &feature_a]).assert_success();
+    assert_eq!(
+        fs::read_to_string(repo.path().join("a.txt")).unwrap(),
+        "updated from feature-b"
+    );
+    let feature_a_log = repo.git(&["log", "-1", "--format=%s"]);
+    assert!(
+        TestRepo::stdout(&feature_a_log).starts_with("fixup! add a.txt in feature-a"),
+        "Expected fixup commit on feature-a, got: {}",
+        TestRepo::stdout(&feature_a_log)
+    );
+
+    repo.run_stax(&["checkout", &feature_b]).assert_success();
+    assert_eq!(
+        fs::read_to_string(repo.path().join("a.txt")).unwrap(),
+        "hello from feature-a"
     );
 }

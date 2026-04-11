@@ -165,8 +165,7 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
         .output()?;
 
     let stash_msg = String::from_utf8_lossy(&stash_output.stdout);
-    let stashed =
-        stash_output.status.success() && !stash_msg.contains("No local changes to save");
+    let stashed = stash_output.status.success() && !stash_msg.contains("No local changes to save");
 
     if !stashed {
         bail!("Failed to stash changes before absorbing");
@@ -225,6 +224,19 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
                     .current_dir(workdir)
                     .status();
             } else {
+                let reset_status = Command::new("git")
+                    .args(["reset", "--hard", "HEAD"])
+                    .current_dir(workdir)
+                    .status()?;
+
+                if !reset_status.success() {
+                    errors.push(format!(
+                        "Failed to clean worktree after committing absorbed changes on '{}'",
+                        branch
+                    ));
+                    break;
+                }
+
                 absorbed_files.extend(files.iter().cloned());
                 println!(
                     "  {} {} file(s) → {}",
@@ -247,6 +259,20 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
                 current
             ));
             break;
+        }
+    }
+
+    if repo.current_branch()? != current {
+        let co_back = Command::new("git")
+            .args(["checkout", &current])
+            .current_dir(workdir)
+            .status()?;
+
+        if !co_back.success() {
+            errors.push(format!(
+                "Failed to return to '{}'. Repository may be on wrong branch.",
+                current
+            ));
         }
     }
 
