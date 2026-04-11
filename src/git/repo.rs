@@ -292,7 +292,7 @@ impl GitRepo {
             .with_context(|| format!("Failed to run git {}", args.join(" ")))
     }
 
-    fn normalize_path(path: &Path) -> PathBuf {
+    pub(crate) fn normalize_path(path: &Path) -> PathBuf {
         std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
     }
 
@@ -910,18 +910,16 @@ impl GitRepo {
         self.rebase_with_args_in_path(cwd, &["rebase", "--onto", onto, upstream])
     }
 
-    fn prepare_branch_rebase_context(&self, branch: &str) -> Result<(PathBuf, PathBuf)> {
+    /// Resolve the worktree path where a branch rebase would run.
+    /// Returns the linked worktree path if one exists, otherwise the main workdir.
+    pub(crate) fn branch_rebase_target_workdir(&self, branch: &str) -> Result<PathBuf> {
         let current_workdir = Self::normalize_path(self.workdir()?);
         let target_workdir = self
             .branch_worktree_path(branch)?
             .unwrap_or_else(|| current_workdir.clone());
         let target_workdir = Self::normalize_path(&target_workdir);
 
-        if target_workdir == current_workdir {
-            if self.current_branch()? != branch {
-                self.checkout(branch)?;
-            }
-        } else {
+        if target_workdir != current_workdir {
             let current_in_target = self.current_branch_in_path(&target_workdir)?;
             if current_in_target != branch {
                 anyhow::bail!(
@@ -930,6 +928,19 @@ impl GitRepo {
                     target_workdir.display(),
                     current_in_target
                 );
+            }
+        }
+
+        Ok(target_workdir)
+    }
+
+    fn prepare_branch_rebase_context(&self, branch: &str) -> Result<(PathBuf, PathBuf)> {
+        let current_workdir = Self::normalize_path(self.workdir()?);
+        let target_workdir = self.branch_rebase_target_workdir(branch)?;
+
+        if target_workdir == current_workdir {
+            if self.current_branch()? != branch {
+                self.checkout(branch)?;
             }
         }
 
