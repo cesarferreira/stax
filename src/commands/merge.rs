@@ -364,7 +364,7 @@ pub fn run(
                 LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", next_branch.branch));
 
             let push_status = Command::new("git")
-                .args(["push", "-f", &remote_info.name, &next_branch.branch])
+                .args(["push", "--force-with-lease", &remote_info.name, &next_branch.branch])
                 .current_dir(repo.workdir()?)
                 .output()
                 .context("Failed to push")?;
@@ -439,7 +439,7 @@ pub fn run(
                     }
 
                     let _ = Command::new("git")
-                        .args(["push", "-f", &remote_info.name, &remaining.branch])
+                        .args(["push", "--force-with-lease", &remote_info.name, &remaining.branch])
                         .current_dir(repo.workdir()?)
                         .output();
 
