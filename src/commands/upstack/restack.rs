@@ -124,6 +124,7 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
             }
             RebaseResult::Conflict => {
                 println!("    {}", "✗ conflict".red());
+                let conflict_stack = live_stack.current_stack(branch);
                 print_restack_conflict(
                     &repo,
                     &RestackConflictContext {
@@ -136,6 +137,7 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
                             .map(|index| upstack.len().saturating_sub(index + 1))
                             .unwrap_or(0),
                         continue_commands: &["stax resolve", "stax continue"],
+                        stack_branches: &conflict_stack,
                     },
                 );
 

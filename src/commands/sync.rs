@@ -1185,6 +1185,7 @@ pub fn run(
                             .filter(|(_, status)| status == "ok")
                             .map(|(name, _)| name.clone())
                             .collect();
+                        let conflict_stack = live_stack.current_stack(branch);
                         print_restack_conflict(
                             &repo,
                             &RestackConflictContext {
@@ -1197,6 +1198,7 @@ pub fn run(
                                     "stax continue",
                                     "stax sync --continue",
                                 ],
+                                stack_branches: &conflict_stack,
                             },
                         );
                         if stashed {
