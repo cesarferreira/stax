@@ -21,6 +21,9 @@ use std::time::{Duration, Instant};
 struct QueueBranchInfo {
     branch: String,
     pr_number: u64,
+    /// The original PR base branch (stacked parent) so we can restore it if
+    /// enqueue fails after retargeting.
+    original_base: String,
 }
 
 pub fn run(all: bool, timeout: u64, interval: u64, no_sync: bool, yes: bool, quiet: bool) -> Result<()> {
@@ -96,10 +99,17 @@ pub fn run(all: bool, timeout: u64, interval: u64, no_sync: bool, yes: bool, qui
                     .map(|pr| pr.info.number)
             });
 
+        let original_base = stack
+            .branches
+            .get(branch_name)
+            .and_then(|b| b.parent.clone())
+            .unwrap_or_else(|| trunk.clone());
+
         match pr_number {
             Some(num) => branches.push(QueueBranchInfo {
                 branch: branch_name.clone(),
                 pr_number: num,
+                original_base,
             }),
             None => {
                 LiveTimer::maybe_finish_err(fetch_timer, "missing PR");
@@ -235,6 +245,38 @@ pub fn run(all: bool, timeout: u64, interval: u64, no_sync: bool, yes: bool, qui
             }
             Err(e) => {
                 LiveTimer::maybe_finish_err(enqueue_timer, "failed");
+
+                // Rollback: restore the original PR base since the PR was
+                // retargeted to trunk but never actually enqueued.  Use
+                // best-effort — if the rollback itself fails we still report
+                // the original enqueue error.
+                if branch.original_base != trunk {
+                    let rollback_timer = LiveTimer::maybe_new(
+                        !quiet,
+                        &format!(
+                            "Rolling back #{} base to {}...",
+                            branch.pr_number, branch.original_base
+                        ),
+                    );
+                    match rt.block_on(async {
+                        client
+                            .update_pr_base(branch.pr_number, &branch.original_base)
+                            .await
+                    }) {
+                        Ok(()) => LiveTimer::maybe_finish_ok(rollback_timer, "restored"),
+                        Err(rb_err) => {
+                            LiveTimer::maybe_finish_err(rollback_timer, "rollback failed");
+                            if !quiet {
+                                println!(
+                                    "      {} Could not restore original base: {}",
+                                    "⚠".yellow(),
+                                    rb_err
+                                );
+                            }
+                        }
+                    }
+                }
+
                 failed = Some((
                     branch.branch.clone(),
                     branch.pr_number,
