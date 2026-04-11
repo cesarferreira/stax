@@ -143,152 +143,71 @@ fn split_by_file(
         anyhow::bail!("Diff is empty for the given pathspecs. Nothing to split.");
     }
 
+    // Closure that rolls back the entire split on any failure.
+    let rollback = || {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+    };
+
+    // Helper: run a fallible operation; rollback and return on error.
+    macro_rules! try_or_rollback {
+        ($expr:expr) => {
+            match $expr {
+                Ok(val) => val,
+                Err(err) => {
+                    rollback();
+                    return Err(err);
+                }
+            }
+        };
+    }
+
     // 4. Create the new branch at parent's tip
     repo.create_branch_at(&new_branch, parent)?;
-    if let Err(err) = repo.checkout(&new_branch) {
-        rollback_split_by_file(
-            repo,
-            current,
-            &current_head_before_split,
-            current_meta_before_split.as_ref(),
-            &new_branch,
-        );
-        return Err(err);
-    }
+    try_or_rollback!(repo.checkout(&new_branch));
 
     // 5. Apply the diff on the new branch
-    if let Err(err) = apply_diff(workdir, &diff_output) {
-        rollback_split_by_file(
-            repo,
-            current,
-            &current_head_before_split,
-            current_meta_before_split.as_ref(),
-            &new_branch,
-        );
-        return Err(err);
-    }
+    try_or_rollback!(apply_diff(workdir, &diff_output));
 
     // 6. Stage and commit
-    if let Err(err) = stage_files(workdir, &diff_files) {
-        rollback_split_by_file(
-            repo,
-            current,
-            &current_head_before_split,
-            current_meta_before_split.as_ref(),
-            &new_branch,
-        );
-        return Err(err);
-    }
+    try_or_rollback!(stage_files(workdir, &diff_files));
     let commit_msg = format!("split: extract {} from {}", pathspecs.join(", "), current);
-    if let Err(err) = commit(workdir, &commit_msg, no_verify) {
-        rollback_split_by_file(
-            repo,
-            current,
-            &current_head_before_split,
-            current_meta_before_split.as_ref(),
-            &new_branch,
-        );
-        return Err(err);
-    }
+    try_or_rollback!(commit(workdir, &commit_msg, no_verify));
 
     // 7. Record stax metadata: new branch is child of parent
     let parent_rev = repo.branch_commit(parent)?;
     let meta = BranchMetadata::new(parent, &parent_rev);
-    if let Err(err) = meta.write(repo.inner(), &new_branch) {
-        rollback_split_by_file(
-            repo,
-            current,
-            &current_head_before_split,
-            current_meta_before_split.as_ref(),
-            &new_branch,
-        );
-        return Err(err);
-    }
+    try_or_rollback!(meta.write(repo.inner(), &new_branch));
 
     // 8. Switch back to the original branch
-    if let Err(err) = repo.checkout(current) {
-        rollback_split_by_file(
-            repo,
-            current,
-            &current_head_before_split,
-            current_meta_before_split.as_ref(),
-            &new_branch,
-        );
-        return Err(err);
-    }
+    try_or_rollback!(repo.checkout(current));
 
     // 9. Remove the extracted files from the current branch by restoring them
-    //    to the state they have on the new branch (i.e. undo our changes to those files).
-    //    We checkout the files from the *parent* so the diff parent..current no longer
-    //    includes them, then amend.
-    if let Err(err) = restore_paths_from_ref(workdir, parent, &diff_files) {
-        rollback_split_by_file(
-            repo,
-            current,
-            &current_head_before_split,
-            current_meta_before_split.as_ref(),
-            &new_branch,
-        );
-        return Err(err);
-    }
+    //    to the parent state so the diff parent..current no longer includes them.
+    try_or_rollback!(restore_paths_from_ref(workdir, parent, &diff_files));
 
-    // Stage and amend
-    if let Err(err) = stage_all_changes(workdir) {
-        rollback_split_by_file(
-            repo,
-            current,
-            &current_head_before_split,
-            current_meta_before_split.as_ref(),
-            &new_branch,
-        );
-        return Err(err);
-    }
-    let tip_becomes_empty = match index_matches_head_parent(workdir) {
-        Ok(result) => result,
-        Err(err) => {
-            rollback_split_by_file(
-                repo,
-                current,
-                &current_head_before_split,
-                current_meta_before_split.as_ref(),
-                &new_branch,
-            );
-            return Err(err);
-        }
-    };
+    // Stage and amend (or drop if tip becomes empty)
+    try_or_rollback!(stage_all_changes(workdir));
+    let tip_becomes_empty = try_or_rollback!(index_matches_head_parent(workdir));
 
     let rewrite_result = if tip_becomes_empty {
         drop_head_commit(workdir)
     } else {
         amend_head(workdir, no_verify)
     };
-
-    if let Err(err) = rewrite_result {
-        rollback_split_by_file(
-            repo,
-            current,
-            &current_head_before_split,
-            current_meta_before_split.as_ref(),
-            &new_branch,
-        );
-        return Err(err);
-    }
+    try_or_rollback!(rewrite_result);
 
     // 10. Update current branch metadata: parent is now the new branch
     let new_branch_rev = repo.branch_commit(&new_branch)?;
     if let Some(mut meta) = BranchMetadata::read(repo.inner(), current)? {
         meta.parent_branch_name = new_branch.clone();
         meta.parent_branch_revision = new_branch_rev;
-        if let Err(err) = meta.write(repo.inner(), current) {
-            rollback_split_by_file(
-                repo,
-                current,
-                &current_head_before_split,
-                current_meta_before_split.as_ref(),
-                &new_branch,
-            );
-            return Err(err);
-        }
+        try_or_rollback!(meta.write(repo.inner(), current));
     }
 
     println!();
