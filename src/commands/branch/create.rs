@@ -136,10 +136,16 @@ pub fn run(
     // Track it with current branch as parent
     let parent_rev = repo.branch_commit(&parent_branch)?;
     let meta = BranchMetadata::new(&parent_branch, &parent_rev);
-    meta.write(repo.inner(), &branch_name)?;
+    if let Err(e) = meta.write(repo.inner(), &branch_name) {
+        rollback_create(&repo, &current, &branch_name);
+        return Err(e);
+    }
 
     // Checkout the new branch
-    repo.checkout(&branch_name)?;
+    if let Err(e) = repo.checkout(&branch_name) {
+        rollback_create(&repo, &current, &branch_name);
+        return Err(e);
+    }
 
     if let Ok(remote_branches) = remote::get_remote_branches(repo.workdir()?, config.remote_name())
     {
@@ -170,7 +176,10 @@ pub fn run(
         let workdir = repo.workdir()?;
 
         if stage_mode == StageMode::All || needs_stage_all {
-            stage_all(workdir)?;
+            if let Err(e) = stage_all(workdir) {
+                rollback_create(&repo, &current, &branch_name);
+                return Err(e);
+            }
         }
 
         // Only commit if -m was provided
@@ -179,17 +188,37 @@ pub fn run(
             let diff_output = Command::new("git")
                 .args(["diff", "--cached", "--quiet"])
                 .current_dir(workdir)
-                .status()?;
+                .status();
+
+            let diff_output = match diff_output {
+                Ok(status) => status,
+                Err(e) => {
+                    rollback_create(&repo, &current, &branch_name);
+                    return Err(e.into());
+                }
+            };
 
             if !diff_output.success() {
                 // There are staged changes, commit them
                 let commit_status = Command::new("git")
                     .args(["commit", "-m", &msg])
                     .current_dir(workdir)
-                    .status()?;
+                    .status();
+
+                let commit_status = match commit_status {
+                    Ok(status) => status,
+                    Err(e) => {
+                        rollback_create(&repo, &current, &branch_name);
+                        return Err(e.into());
+                    }
+                };
 
                 if !commit_status.success() {
-                    bail!("Failed to commit changes");
+                    rollback_create(&repo, &current, &branch_name);
+                    bail!(
+                        "Commit failed (pre-commit hook or other error). \
+                         Branch rolled back. Fix the issue and retry."
+                    );
                 }
 
                 println!("Committed: {}", msg.cyan());
@@ -202,6 +231,26 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// Best-effort rollback: unstage changes, checkout the original branch,
+/// delete the new branch and its metadata.
+/// Errors during rollback are intentionally ignored (matching the pattern in split_hunk/app.rs).
+fn rollback_create(repo: &GitRepo, original_branch: &str, new_branch: &str) {
+    if let Ok(workdir) = repo.workdir() {
+        // Reset index first so staged changes from stage_all don't block checkout
+        // or leak onto the original branch. This preserves working tree files.
+        let _ = Command::new("git")
+            .args(["reset"])
+            .current_dir(workdir)
+            .status();
+        let _ = Command::new("git")
+            .args(["checkout", original_branch])
+            .current_dir(workdir)
+            .status();
+    }
+    let _ = repo.delete_branch(new_branch, true);
+    let _ = BranchMetadata::delete(repo.inner(), new_branch);
 }
 
 #[derive(Clone, Copy)]
