@@ -28,6 +28,7 @@ pub enum OpKind {
     MergeWhenReady,
     Detach,
     Fix,
+    Edit,
 }
 
 impl OpKind {
@@ -42,6 +43,7 @@ impl OpKind {
             OpKind::MergeWhenReady => "merge-when-ready",
             OpKind::Detach => "detach",
             OpKind::Fix => "stack fix",
+            OpKind::Edit => "edit",
         }
     }
 }

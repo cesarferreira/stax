@@ -13,6 +13,7 @@ pub mod demo;
 pub mod detach;
 pub mod diff;
 pub mod doctor;
+pub mod edit;
 pub mod generate;
 pub(crate) mod github_list;
 pub mod init;
