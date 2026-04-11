@@ -151,6 +151,7 @@ pub fn run() -> Result<()> {
                 );
             }
             Ok(false) => {
+                issues += 1;
                 println!(
                     "{} {}",
                     "⚠".yellow(),
@@ -205,8 +206,11 @@ pub fn run() -> Result<()> {
 
     // Check: stale PR metadata (OPEN PR on a branch that no longer exists locally)
     {
-        let local_branches: std::collections::HashSet<String> =
-            repo.list_branches().unwrap_or_default().into_iter().collect();
+        let local_branches: std::collections::HashSet<String> = repo
+            .list_branches()
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
         let metadata_branches = refs::list_metadata_branches(repo.inner()).unwrap_or_default();
         let mut stale = Vec::new();
 
@@ -224,12 +228,9 @@ pub fn run() -> Result<()> {
         }
 
         if stale.is_empty() {
-            println!(
-                "{} {}",
-                "✓".green(),
-                "No stale PR metadata found".dimmed()
-            );
+            println!("{} {}", "✓".green(), "No stale PR metadata found".dimmed());
         } else {
+            issues += 1;
             println!(
                 "{} {}",
                 "⚠".yellow(),
@@ -264,7 +265,9 @@ fn git_config_is_true(workdir: Option<&std::path::Path>, key: &str) -> bool {
     }
     match cmd.output() {
         Ok(output) if output.status.success() => {
-            let value = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+            let value = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_lowercase();
             value == "true"
         }
         _ => false,
