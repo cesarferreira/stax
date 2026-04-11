@@ -109,6 +109,20 @@ fn split_by_file(
         );
     }
 
+    let commit_count = repo.commits_between(parent, current)?.len();
+    if commit_count > 1 {
+        println!(
+            "{}",
+            "Warning: `stax split --file` only rewrites the tip commit. Matching files may remain in earlier commits."
+                .yellow()
+        );
+        println!(
+            "{}",
+            "Tip: use `stax split --hunk` for commit-by-commit history surgery.".dimmed()
+        );
+        println!();
+    }
+
     println!(
         "Splitting {} file(s) from '{}' into a new parent branch:",
         diff_files.len().to_string().cyan(),
@@ -120,53 +134,161 @@ fn split_by_file(
 
     // 2. Generate a new branch name
     let new_branch = generate_split_branch_name(current, repo)?;
+    let current_head_before_split = repo.branch_commit(current)?;
+    let current_meta_before_split = BranchMetadata::read(repo.inner(), current)?;
 
     // 3. Get the aggregate diff for the matching files
-    let diff_output = git_diff_for_paths(workdir, parent, current, pathspecs)?;
+    let diff_output = git_diff_for_files(workdir, parent, current, &diff_files)?;
     if diff_output.is_empty() {
         anyhow::bail!("Diff is empty for the given pathspecs. Nothing to split.");
     }
 
     // 4. Create the new branch at parent's tip
     repo.create_branch_at(&new_branch, parent)?;
-    repo.checkout(&new_branch)?;
+    if let Err(err) = repo.checkout(&new_branch) {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+        return Err(err);
+    }
 
     // 5. Apply the diff on the new branch
-    apply_diff(workdir, &diff_output)?;
+    if let Err(err) = apply_diff(workdir, &diff_output) {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+        return Err(err);
+    }
 
     // 6. Stage and commit
-    stage_files(workdir, &diff_files)?;
-    let commit_msg = format!(
-        "split: extract {} from {}",
-        pathspecs.join(", "),
-        current
-    );
-    commit(workdir, &commit_msg, no_verify)?;
+    if let Err(err) = stage_files(workdir, &diff_files) {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+        return Err(err);
+    }
+    let commit_msg = format!("split: extract {} from {}", pathspecs.join(", "), current);
+    if let Err(err) = commit(workdir, &commit_msg, no_verify) {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+        return Err(err);
+    }
 
     // 7. Record stax metadata: new branch is child of parent
     let parent_rev = repo.branch_commit(parent)?;
     let meta = BranchMetadata::new(parent, &parent_rev);
-    meta.write(repo.inner(), &new_branch)?;
+    if let Err(err) = meta.write(repo.inner(), &new_branch) {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+        return Err(err);
+    }
 
     // 8. Switch back to the original branch
-    repo.checkout(current)?;
+    if let Err(err) = repo.checkout(current) {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+        return Err(err);
+    }
 
     // 9. Remove the extracted files from the current branch by restoring them
     //    to the state they have on the new branch (i.e. undo our changes to those files).
     //    We checkout the files from the *parent* so the diff parent..current no longer
     //    includes them, then amend.
-    checkout_paths_from_ref(workdir, &new_branch, pathspecs)?;
+    if let Err(err) = restore_paths_from_ref(workdir, parent, &diff_files) {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+        return Err(err);
+    }
 
     // Stage and amend
-    stage_files(workdir, &diff_files)?;
-    amend_head(workdir, no_verify)?;
+    if let Err(err) = stage_all_changes(workdir) {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+        return Err(err);
+    }
+    let tip_becomes_empty = match index_matches_head_parent(workdir) {
+        Ok(result) => result,
+        Err(err) => {
+            rollback_split_by_file(
+                repo,
+                current,
+                &current_head_before_split,
+                current_meta_before_split.as_ref(),
+                &new_branch,
+            );
+            return Err(err);
+        }
+    };
+
+    let rewrite_result = if tip_becomes_empty {
+        drop_head_commit(workdir)
+    } else {
+        amend_head(workdir, no_verify)
+    };
+
+    if let Err(err) = rewrite_result {
+        rollback_split_by_file(
+            repo,
+            current,
+            &current_head_before_split,
+            current_meta_before_split.as_ref(),
+            &new_branch,
+        );
+        return Err(err);
+    }
 
     // 10. Update current branch metadata: parent is now the new branch
     let new_branch_rev = repo.branch_commit(&new_branch)?;
     if let Some(mut meta) = BranchMetadata::read(repo.inner(), current)? {
         meta.parent_branch_name = new_branch.clone();
         meta.parent_branch_revision = new_branch_rev;
-        meta.write(repo.inner(), current)?;
+        if let Err(err) = meta.write(repo.inner(), current) {
+            rollback_split_by_file(
+                repo,
+                current,
+                &current_head_before_split,
+                current_meta_before_split.as_ref(),
+                &new_branch,
+            );
+            return Err(err);
+        }
     }
 
     println!();
@@ -185,6 +307,19 @@ fn split_by_file(
         "Tip: run `stax restack` if descendants need rebasing.".dimmed()
     );
 
+    Ok(())
+}
+
+fn stage_all_changes(workdir: &Path) -> Result<()> {
+    let status = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(workdir)
+        .status()
+        .context("Failed to run git add -A")?;
+
+    if !status.success() {
+        anyhow::bail!("git add -A failed");
+    }
     Ok(())
 }
 
@@ -226,16 +361,11 @@ fn changed_files_between(
 }
 
 /// Get the raw diff output for the given pathspecs.
-fn git_diff_for_paths(
-    workdir: &Path,
-    base: &str,
-    head: &str,
-    pathspecs: &[String],
-) -> Result<Vec<u8>> {
+fn git_diff_for_files(workdir: &Path, base: &str, head: &str, files: &[String]) -> Result<Vec<u8>> {
     let range = format!("{}..{}", base, head);
     let mut args = vec!["diff", &range, "--"];
-    let pathspec_refs: Vec<&str> = pathspecs.iter().map(|s| s.as_str()).collect();
-    args.extend_from_slice(&pathspec_refs);
+    let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+    args.extend_from_slice(&file_refs);
 
     let output = Command::new("git")
         .args(&args)
@@ -282,7 +412,7 @@ fn stage_files(workdir: &Path, files: &[String]) -> Result<()> {
         return Ok(());
     }
     let status = Command::new("git")
-        .arg("add")
+        .args(["add", "-A"])
         .arg("--")
         .args(files)
         .current_dir(workdir)
@@ -331,23 +461,104 @@ fn amend_head(workdir: &Path, no_verify: bool) -> Result<()> {
     Ok(())
 }
 
-/// Checkout specific paths from a given ref.
-fn checkout_paths_from_ref(workdir: &Path, refspec: &str, pathspecs: &[String]) -> Result<()> {
-    let mut args = vec!["checkout", refspec, "--"];
-    let pathspec_refs: Vec<&str> = pathspecs.iter().map(|s| s.as_str()).collect();
-    args.extend_from_slice(&pathspec_refs);
+fn drop_head_commit(workdir: &Path) -> Result<()> {
+    let status = Command::new("git")
+        .args(["reset", "--hard", "HEAD^"])
+        .current_dir(workdir)
+        .status()
+        .context("Failed to drop now-empty tip commit")?;
 
+    if !status.success() {
+        anyhow::bail!("git reset --hard HEAD^ failed");
+    }
+    Ok(())
+}
+
+fn index_matches_head_parent(workdir: &Path) -> Result<bool> {
+    let status = Command::new("git")
+        .args(["diff", "--cached", "--quiet", "HEAD^"])
+        .current_dir(workdir)
+        .status()
+        .context("Failed to compare staged changes against HEAD^")?;
+
+    Ok(status.success())
+}
+
+/// Restore specific paths to the state they have in `refspec`.
+///
+/// Paths that do not exist in `refspec` are removed from the current branch.
+fn restore_paths_from_ref(workdir: &Path, refspec: &str, paths: &[String]) -> Result<()> {
+    for path in paths {
+        if path_exists_in_ref(workdir, refspec, path)? {
+            let output = Command::new("git")
+                .args(["checkout", refspec, "--", path])
+                .current_dir(workdir)
+                .output()
+                .context("Failed to run git checkout <ref> -- <path>")?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                anyhow::bail!("git checkout {} -- {} failed: {}", refspec, path, stderr);
+            }
+        } else {
+            let output = Command::new("git")
+                .args(["rm", "-f", "--ignore-unmatch", "--", path])
+                .current_dir(workdir)
+                .output()
+                .context("Failed to run git rm")?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                anyhow::bail!("git rm {} failed: {}", path, stderr);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn path_exists_in_ref(workdir: &Path, refspec: &str, path: &str) -> Result<bool> {
     let output = Command::new("git")
-        .args(&args)
+        .args(["ls-tree", "-r", "--name-only", refspec, "--", path])
         .current_dir(workdir)
         .output()
-        .context("Failed to run git checkout <ref> -- <paths>")?;
+        .context("Failed to run git ls-tree")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        anyhow::bail!("git checkout {} -- <paths> failed: {}", refspec, stderr);
+        anyhow::bail!("git ls-tree {} -- {} failed: {}", refspec, path, stderr);
     }
-    Ok(())
+
+    Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
+fn rollback_split_by_file(
+    repo: &GitRepo,
+    original_branch: &str,
+    original_head: &str,
+    original_meta: Option<&BranchMetadata>,
+    new_branch: &str,
+) {
+    if let Ok(workdir) = repo.workdir() {
+        let _ = Command::new("git")
+            .args(["reset", "--hard"])
+            .current_dir(workdir)
+            .status();
+        let _ = Command::new("git")
+            .args(["checkout", original_branch])
+            .current_dir(workdir)
+            .status();
+        let _ = Command::new("git")
+            .args(["reset", "--hard", original_head])
+            .current_dir(workdir)
+            .status();
+    }
+
+    if let Some(meta) = original_meta {
+        let _ = meta.write(repo.inner(), original_branch);
+    }
+
+    let _ = repo.delete_branch(new_branch, true);
+    let _ = BranchMetadata::delete(repo.inner(), new_branch);
 }
 
 /// Generate a branch name for the split-off branch (e.g. "feature-split-1").
