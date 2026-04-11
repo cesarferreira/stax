@@ -1957,7 +1957,7 @@ Use --auto-stash-pop or stash/commit changes first.",
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    /// Force push a branch to remote
+    /// Lease-protected force push a branch to the remote.
     pub fn force_push(&self, remote: &str, branch: &str) -> Result<()> {
         let status = Command::new("git")
             .args(["push", "--force-with-lease", remote, branch])
@@ -1965,10 +1965,10 @@ Use --auto-stash-pop or stash/commit changes first.",
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .context("Failed to run git push -f")?;
+            .context("Failed to run git push --force-with-lease")?;
 
         if !status.success() {
-            anyhow::bail!("git push -f {} {} failed", remote, branch);
+            anyhow::bail!("git push --force-with-lease {} {} failed", remote, branch);
         }
         Ok(())
     }
