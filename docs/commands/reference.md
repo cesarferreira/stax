@@ -49,6 +49,7 @@
 | `st reorder` | | Interactively reorder branches in stack |
 | `st absorb` | | Distribute staged changes to the correct stack branches (file-level attribution) |
 | `st upstack restack` | | Restack current + descendants |
+| `st upstack onto [branch]` | | Reparent current + all descendants onto a new parent (interactive picker if omitted) |
 | `st upstack submit` | | Submit current + descendants |
 | `st downstack get` | | Show branches below current |
 | `st downstack submit` | | Submit ancestors + current |

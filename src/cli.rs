@@ -1149,6 +1149,15 @@ enum UpstackCommands {
         auto_stash_pop: bool,
     },
 
+    /// Reparent current branch and all descendants onto a new parent
+    Onto {
+        /// Target parent branch (interactive picker if omitted)
+        target: Option<String>,
+        /// Restack the moved branches after reparenting
+        #[arg(long)]
+        restack: bool,
+    },
+
     /// Submit current branch and descendants
     Submit {
         #[command(flatten)]
@@ -1768,6 +1777,9 @@ pub fn run() -> Result<()> {
         Commands::Upstack(cmd) => match cmd {
             UpstackCommands::Restack { auto_stash_pop } => {
                 commands::upstack::restack::run(auto_stash_pop)
+            }
+            UpstackCommands::Onto { target, restack } => {
+                commands::upstack::onto::run(target, restack)
             }
             UpstackCommands::Submit { submit } => {
                 run_submit(submit, commands::submit::SubmitScope::Upstack)
