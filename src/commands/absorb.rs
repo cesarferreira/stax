@@ -1,8 +1,9 @@
-use crate::engine::{BranchMetadata, Stack};
+use crate::engine::Stack;
 use crate::git::GitRepo;
 use anyhow::{bail, Result};
 use colored::Colorize;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -60,27 +61,27 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Build the stack branch list (from trunk up to current, excluding trunk)
+    // Build (branch, parent) pairs from the Stack (no extra metadata reads needed)
     let ancestors = stack.ancestors(&current);
     let mut stack_branches: Vec<String> = ancestors.into_iter().rev().collect();
     stack_branches.push(current.clone());
-    // Remove trunk from the list
     stack_branches.retain(|b| *b != stack.trunk);
 
     if stack_branches.is_empty() {
         bail!("No stack branches found above trunk.");
     }
 
-    // For each branch, find its parent boundary for commit scoping
-    let mut branch_boundaries: Vec<(String, String)> = Vec::new();
-    for branch in &stack_branches {
-        let meta = BranchMetadata::read(repo.inner(), branch)?;
-        let parent = meta
-            .as_ref()
-            .map(|m| m.parent_branch_name.clone())
-            .unwrap_or_else(|| stack.trunk.clone());
-        branch_boundaries.push((branch.clone(), parent));
-    }
+    let branch_boundaries: Vec<(String, String)> = stack_branches
+        .iter()
+        .map(|branch| {
+            let parent = stack
+                .branches
+                .get(branch)
+                .and_then(|b| b.parent.clone())
+                .unwrap_or_else(|| stack.trunk.clone());
+            (branch.clone(), parent)
+        })
+        .collect();
 
     // Attribute each file to a branch
     let plan = attribute_files(workdir, &staged_files, &branch_boundaries)?;
@@ -121,13 +122,9 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
     }
 
     // Check if there are changes targeting other branches (not just current)
-    let other_branch_groups: Vec<_> = plan
-        .groups
-        .iter()
-        .filter(|(b, _)| *b != current)
-        .collect();
+    let has_other_targets = plan.groups.iter().any(|(b, _)| *b != current);
 
-    if other_branch_groups.is_empty() {
+    if !has_other_targets {
         println!(
             "{}",
             "All changes already target the current branch. Nothing to absorb.".dimmed()
@@ -135,16 +132,14 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Perform absorption: move changes to their target branches
-    // Strategy: extract patches per group, stash everything, apply to each branch
-    let mut patches: Vec<(String, String, Vec<String>)> = Vec::new(); // (branch, patch_content, files)
+    // Extract patches as raw bytes (preserves binary diffs)
+    let mut patches: Vec<(String, Vec<u8>, Vec<String>)> = Vec::new();
 
     for (branch, files) in &plan.groups {
         if *branch == current {
-            continue; // Leave current-branch changes staged
+            continue;
         }
 
-        // Extract patch for these files
         let mut diff_args = vec!["diff".to_string(), "--cached".to_string(), "--".to_string()];
         diff_args.extend(files.iter().cloned());
 
@@ -154,11 +149,7 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
             .output()?;
 
         if diff_output.status.success() && !diff_output.stdout.is_empty() {
-            patches.push((
-                branch.clone(),
-                String::from_utf8_lossy(&diff_output.stdout).to_string(),
-                files.clone(),
-            ));
+            patches.push((branch.clone(), diff_output.stdout, files.clone()));
         }
     }
 
@@ -174,7 +165,8 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
         .output()?;
 
     let stash_msg = String::from_utf8_lossy(&stash_output.stdout);
-    let stashed = stash_output.status.success() && !stash_msg.contains("No local changes to save");
+    let stashed =
+        stash_output.status.success() && !stash_msg.contains("No local changes to save");
 
     if !stashed {
         bail!("Failed to stash changes before absorbing");
@@ -183,7 +175,7 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
     let mut absorbed_files: Vec<String> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
-    for (branch, patch, files) in &patches {
+    for (branch, patch_bytes, files) in &patches {
         // Checkout target branch
         let co = Command::new("git")
             .args(["checkout", branch])
@@ -192,75 +184,70 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
 
         if !co.success() {
             errors.push(format!("Failed to checkout '{}'", branch));
-            let _ = Command::new("git")
-                .args(["checkout", &current])
-                .current_dir(workdir)
-                .status();
-            continue;
+            break; // Can't continue safely if checkout fails
         }
 
-        // Apply the patch
+        // Apply the patch (git apply reads from stdin when no path is given)
         let mut apply_cmd = Command::new("git")
-            .args(["apply", "--cached", "-"])
+            .args(["apply", "--cached"])
             .current_dir(workdir)
             .stdin(std::process::Stdio::piped())
             .spawn()?;
 
         if let Some(mut stdin) = apply_cmd.stdin.take() {
-            use std::io::Write;
-            let _ = stdin.write_all(patch.as_bytes());
-            drop(stdin); // Close stdin before wait to avoid deadlock
+            stdin.write_all(patch_bytes)?;
+            drop(stdin);
         }
         let apply_status = apply_cmd.wait()?;
 
         if !apply_status.success() {
             errors.push(format!(
-                "Failed to apply patch to '{}' (files may conflict)",
+                "Failed to apply patch to '{}' (files may have diverged)",
                 branch
             ));
-            // Reset and go back
-            let _ = Command::new("git")
-                .args(["reset"])
-                .current_dir(workdir)
-                .status();
-            let _ = Command::new("git")
-                .args(["checkout", &current])
-                .current_dir(workdir)
-                .status();
-            continue;
-        }
-
-        // Get the tip commit message for the fixup label
-        let tip_msg = get_branch_tip_message(workdir, branch);
-
-        // Commit
-        let commit_msg = format!("fixup! {}", tip_msg.unwrap_or_else(|| branch.clone()));
-        let commit_status = Command::new("git")
-            .args(["commit", "-m", &commit_msg])
-            .current_dir(workdir)
-            .status()?;
-
-        if !commit_status.success() {
-            errors.push(format!("Failed to commit fixup on '{}'", branch));
             let _ = Command::new("git")
                 .args(["reset"])
                 .current_dir(workdir)
                 .status();
         } else {
-            absorbed_files.extend(files.iter().cloned());
-            println!(
-                "  {} {} file(s) → {}",
-                "✓".green(),
-                files.len(),
-                branch.cyan()
-            );
+            // Get the tip commit message for the fixup label
+            let tip_msg = get_branch_tip_message(workdir, branch);
+            let commit_msg = format!("fixup! {}", tip_msg.unwrap_or_else(|| branch.clone()));
+            let commit_status = Command::new("git")
+                .args(["commit", "-m", &commit_msg])
+                .current_dir(workdir)
+                .status()?;
+
+            if !commit_status.success() {
+                errors.push(format!("Failed to commit fixup on '{}'", branch));
+                let _ = Command::new("git")
+                    .args(["reset"])
+                    .current_dir(workdir)
+                    .status();
+            } else {
+                absorbed_files.extend(files.iter().cloned());
+                println!(
+                    "  {} {} file(s) → {}",
+                    "✓".green(),
+                    files.len(),
+                    branch.cyan()
+                );
+            }
         }
 
-        // Return to original branch
-        let _ = Command::new("git")
+        // Return to original branch -- abort if this fails
+        let co_back = Command::new("git")
             .args(["checkout", &current])
             .current_dir(workdir)
-            .status();
+            .status()?;
+
+        if !co_back.success() {
+            errors.push(format!(
+                "Failed to return to '{}'. Repository may be on wrong branch.",
+                current
+            ));
+            break;
+        }
     }
 
     // Restore stash
@@ -280,22 +267,18 @@ pub fn run(dry_run: bool, all: bool) -> Result<()> {
     // For tracked files: reset index + checkout from HEAD.
     // For untracked/new files: reset index + remove from working tree.
     for file in &absorbed_files {
-        // Unstage
         let _ = Command::new("git")
             .args(["reset", "HEAD", "--", file])
             .current_dir(workdir)
             .status();
 
-        // Try to checkout from HEAD (works for tracked files)
         let checkout = Command::new("git")
             .args(["checkout", "HEAD", "--", file])
             .current_dir(workdir)
             .status();
 
-        // If checkout failed (untracked file not in HEAD), remove it
         if checkout.map(|s| !s.success()).unwrap_or(true) {
-            let file_path = workdir.join(file);
-            let _ = std::fs::remove_file(file_path);
+            let _ = std::fs::remove_file(workdir.join(file));
         }
     }
 
@@ -351,13 +334,10 @@ fn attribute_files(
         }
 
         if !attributed {
-            // File was not modified by any stack branch (new file or changed on trunk)
-            // Default to current branch
             unattributed.push(file.clone());
         }
     }
 
-    // Build ordered groups matching the branch order
     let groups: Vec<(String, Vec<String>)> = branch_boundaries
         .iter()
         .filter_map(|(branch, _)| {
