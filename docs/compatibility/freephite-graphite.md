@@ -27,6 +27,7 @@ stax uses the same metadata format as freephite (`refs/branch-metadata/<branch>`
 | — | — | `st cascade` |
 | — | `gt absorb` | `st absorb` |
 | — | — | `st undo` / `st redo` |
+| — | `gt split -f <path>` | `st split --file <path>` |
 
 ## Short alias: `st`
 
