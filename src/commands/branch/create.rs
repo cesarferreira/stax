@@ -170,7 +170,10 @@ pub fn run(
         let workdir = repo.workdir()?;
 
         if stage_mode == StageMode::All || needs_stage_all {
-            stage_all(workdir)?;
+            if let Err(e) = stage_all(workdir) {
+                rollback_create(&repo, &current, &branch_name);
+                return Err(e);
+            }
         }
 
         // Only commit if -m was provided
@@ -189,7 +192,11 @@ pub fn run(
                     .status()?;
 
                 if !commit_status.success() {
-                    bail!("Failed to commit changes");
+                    rollback_create(&repo, &current, &branch_name);
+                    bail!(
+                        "Commit failed (pre-commit hook or other error). \
+                         Branch was not created. Fix the issue and retry."
+                    );
                 }
 
                 println!("Committed: {}", msg.cyan());
@@ -202,6 +209,26 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// Best-effort rollback: unstage changes, checkout the original branch,
+/// delete the new branch and its metadata.
+/// Errors during rollback are intentionally ignored (matching the pattern in split_hunk/app.rs).
+fn rollback_create(repo: &GitRepo, original_branch: &str, new_branch: &str) {
+    if let Ok(workdir) = repo.workdir() {
+        // Reset index first so staged changes from stage_all don't block checkout
+        // or leak onto the original branch. This preserves working tree files.
+        let _ = Command::new("git")
+            .args(["reset"])
+            .current_dir(workdir)
+            .status();
+        let _ = Command::new("git")
+            .args(["checkout", original_branch])
+            .current_dir(workdir)
+            .status();
+    }
+    let _ = repo.delete_branch(new_branch, true);
+    let _ = BranchMetadata::delete(repo.inner(), new_branch);
 }
 
 #[derive(Clone, Copy)]
