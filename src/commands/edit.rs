@@ -71,6 +71,7 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
     let meta = BranchMetadata::read(repo.inner(), &current)?
         .ok_or_else(|| anyhow::anyhow!("Branch '{}' is not tracked by stax", current))?;
     let parent = &meta.parent_branch_name;
+    let child_branches = stack.descendants(&current);
 
     // Get commits between parent and HEAD (oldest first)
     let workdir = repo.workdir()?;
@@ -111,8 +112,13 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Check for interactive terminal early, before displaying the selection UI
-    if !yes && !Term::stderr().is_term() {
+    let interactive_terminal = Term::stderr().is_term();
+    if !interactive_terminal {
+        if yes {
+            bail!(
+                "Interactive terminal required for `stax edit` to choose per-commit actions. `--yes` only skips the final confirmation."
+            );
+        }
         bail!("Interactive terminal required for `stax edit`.");
     }
 
@@ -138,14 +144,27 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
         .bold()
     );
     for (i, c) in commits.iter().enumerate() {
-        println!(
-            "  {}. {} {}",
-            i + 1,
-            c.short_sha().yellow(),
-            c.message
-        );
+        println!("  {}. {} {}", i + 1, c.short_sha().yellow(), c.message);
     }
     println!();
+
+    if !child_branches.is_empty() {
+        println!(
+            "{}",
+            format!(
+                "Warning: editing '{}' will require restacking {} child branch(es): {}",
+                current,
+                child_branches.len(),
+                child_branches.join(", ")
+            )
+            .yellow()
+        );
+        println!(
+            "{}",
+            "Run `stax restack --all` after editing to repair the stack.".dimmed()
+        );
+        println!();
+    }
 
     // Collect actions for each commit
     let mut actions: Vec<EditAction> = vec![EditAction::Pick; commits.len()];
@@ -285,11 +304,22 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
         tx.finish_ok()?;
 
         println!("{}", "Edit applied successfully.".green());
-        println!(
-            "{}",
-            "Run `stax restack --all` to rebase child branches if needed."
+        if child_branches.is_empty() {
+            println!(
+                "{}",
+                "Run `stax restack --all` to rebase child branches if needed.".yellow()
+            );
+        } else {
+            println!(
+                "{}",
+                format!(
+                    "Run `stax restack --all` to rebase {} child branch(es): {}",
+                    child_branches.len(),
+                    child_branches.join(", ")
+                )
                 .yellow()
-        );
+            );
+        }
     } else if repo.rebase_in_progress()? {
         // Transaction stays open -- stax continue will handle completion
         println!(

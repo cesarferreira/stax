@@ -100,10 +100,7 @@ fn edit_drop_removes_commit() {
     // Run git rebase -i directly with our todo (simulating what st edit does)
     let rebase = repo.git(&[
         "-c",
-        &format!(
-            "sequence.editor=cp {}",
-            todo_path.to_string_lossy()
-        ),
+        &format!("sequence.editor=cp {}", todo_path.to_string_lossy()),
         "rebase",
         "-i",
         "main",
@@ -145,4 +142,24 @@ fn edit_requires_interactive_terminal() {
     // It should either fail (needing terminal) or succeed with --yes
     // In non-interactive, it should fail with a terminal error
     output.assert_failure();
+}
+
+#[test]
+fn edit_yes_still_requires_terminal_for_action_selection() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "feature"]).assert_success();
+    repo.create_file("a.txt", "content");
+    repo.commit("a commit");
+
+    let output = repo.run_stax(&["edit", "--yes"]);
+    output.assert_failure();
+
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("--yes") && stderr.contains("Interactive terminal"),
+        "Expected explicit --yes terminal guidance, got: {}",
+        stderr
+    );
 }

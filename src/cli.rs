@@ -614,7 +614,7 @@ enum Commands {
     /// Interactively edit commits on the current branch (reword, squash, fixup, drop)
     #[command(visible_alias = "e")]
     Edit {
-        /// Skip confirmation prompts
+        /// Skip the final confirmation prompt after interactive commit selection
         #[arg(long)]
         yes: bool,
         /// Skip pre-commit hooks when recreating commits
