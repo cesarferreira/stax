@@ -531,6 +531,9 @@ enum Commands {
         /// Override branch prefix (e.g. "feature/")
         #[arg(long)]
         prefix: Option<String>,
+        /// Insert between current branch and its children (reparent children)
+        #[arg(long)]
+        insert: bool,
     },
 
     /// Open the current branch PR or list repo pull requests
@@ -838,6 +841,9 @@ enum Commands {
         /// Override branch prefix (e.g. "feature/")
         #[arg(long)]
         prefix: Option<String>,
+        /// Insert between current branch and its children (reparent children)
+        #[arg(long)]
+        insert: bool,
     },
     #[command(hide = true)]
     Bu {
@@ -996,6 +1002,9 @@ enum BranchCommands {
         /// Override branch prefix (e.g. "feature/")
         #[arg(long)]
         prefix: Option<String>,
+        /// Insert between current branch and its children (reparent children)
+        #[arg(long)]
+        insert: bool,
     },
 
     /// Checkout a branch in the stack
@@ -1598,7 +1607,8 @@ pub fn run() -> Result<()> {
             message,
             from,
             prefix,
-        } => commands::branch::create::run(name, message, from, prefix, all),
+            insert,
+        } => commands::branch::create::run(name, message, from, prefix, all, insert),
         Commands::Pr { command } => match command.unwrap_or(PrCommands::Open) {
             PrCommands::Open => commands::pr::run_open(),
             PrCommands::List { limit, json } => commands::pr::run_list(limit, json),
@@ -1707,7 +1717,8 @@ pub fn run() -> Result<()> {
                 message,
                 from,
                 prefix,
-            } => commands::branch::create::run(name, message, from, prefix, all),
+                insert,
+            } => commands::branch::create::run(name, message, from, prefix, all, insert),
             BranchCommands::Checkout {
                 branch,
                 trunk,
@@ -1790,7 +1801,8 @@ pub fn run() -> Result<()> {
             message,
             from,
             prefix,
-        } => commands::branch::create::run(name, message, from, prefix, all),
+            insert,
+        } => commands::branch::create::run(name, message, from, prefix, all, insert),
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
         Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),

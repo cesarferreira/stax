@@ -13,6 +13,7 @@ stax uses the same metadata format as freephite (`refs/branch-metadata/<branch>`
 | `fp ds submit` | `gt downstack submit` | `st downstack submit` |
 | `fp rs` | `gt sync` | `st sync` / `st rs` |
 | `fp bc` | `gt create` | `st create` / `st bc` |
+| — | `gt create --insert` | `st create --insert` |
 | `fp bco` | `gt checkout` | `st checkout` / `st co` |
 | `fp bu` | `gt up` | `st up` / `st bu` |
 | `fp bd` | `gt down` | `st down` / `st bd` |

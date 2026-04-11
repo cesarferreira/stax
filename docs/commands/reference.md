@@ -219,3 +219,4 @@ Worktree launch examples:
 - `st redo --yes --no-push --quiet`
 - `st edit --yes` (skip final confirmation; interactive commit selection still required)
 - `st edit --no-verify` (skip pre-commit hooks during rebase)
+- `st create --insert` (reparent children of current branch to the new branch)
