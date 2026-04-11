@@ -8,7 +8,7 @@
 | `st ll` | | Show stack with PR URLs and full details |
 | `st log` | `l` | Show stack with commits and PR info |
 | `st submit` | `ss` | Submit full current stack |
-| `st merge` | | Merge PRs bottom -> current with provenance-aware descendant rebases, then sync local repo (`--no-sync` to skip); `st merge --remote` merges via GitHub API only (no local git; GitHub-only) |
+| `st merge` | | Merge PRs bottom -> current with provenance-aware descendant rebases, then sync local repo (`--no-sync` to skip); `st merge --remote` merges via GitHub API only (no local git; GitHub-only); `st merge --queue` enqueues PRs into GitHub merge queue / GitLab merge trains |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
 | `st sync` | `rs` | Pull trunk from remote, detect and delete merged branches (incl. squash merges), reparent their children — **no rebasing; confirmed cleanup can also remove a safe linked worktree that still owns the branch** |
 | `st sync --restack` | `rs --restack` | Everything `sync` does, **then** rebase the current stack onto updated parents |
@@ -93,6 +93,7 @@
 | `st config` | Show current configuration |
 | `st config --reset-ai` | Clear saved AI defaults, then re-prompt interactively |
 | `st config --reset-ai --no-prompt` | Clear saved AI defaults without reopening the picker |
+| `st config --set-ai` | Interactively set AI agent/model for a specific feature or global default |
 | `st init` | Initialize stax or reconfigure the repo trunk interactively |
 | `st init --trunk <branch>` | Set the repo trunk directly |
 | `st doctor` | Check repo health |
@@ -180,6 +181,7 @@ Worktree launch examples:
 - `st merge --when-ready --interval 10`
 - `st merge --remote`
 - `st merge --remote --all --method squash --yes`
+- `st merge --queue`
 - `st merge --no-wait`
 - `st merge --no-sync`
 - `st merge --timeout 60 --no-delete --quiet`

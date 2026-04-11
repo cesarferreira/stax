@@ -87,29 +87,30 @@ stax fix                       # Auto-repair metadata
 stax test <cmd...>             # Run command on each branch
 stax demo                      # Interactive tutorial
 
-stax agent create <title>      # Create isolated worktree + stacked branch for an AI agent
-stax agent open [name]         # Reopen a worktree in the editor (fuzzy picker if no name)
-stax agent list|ls             # List all registered agent worktrees
-stax agent register            # Register current dir as an agent worktree
-stax agent remove [name]       # Remove worktree (+ --delete-branch to also delete branch)
-stax agent prune               # Remove dead registry entries + git worktree prune
-stax agent sync                # Restack all registered agent worktrees at once
+stax lane [name] [prompt]      # Open interactive lane picker, or start/resume named AI lane
+stax absorb                    # Absorb staged changes into correct stack branches
+stax edit|e                    # Interactively edit commits (reword, squash, fixup, drop)
 
 stax worktree create [branch]  # Create a worktree for an existing or new branch
 stax worktree list             # List all worktrees (* = current)
+stax worktree ll               # Richer worktree status (managed/prunable/conflict state)
 stax worktree go <name>        # Navigate to a worktree (requires shell integration)
 stax worktree path <name>      # Print absolute path of a worktree (for scripting)
 stax worktree remove <name>    # Remove a worktree
+stax worktree cleanup          # Prune stale bookkeeping + bulk-remove merged/detached worktrees
+stax worktree restack          # Restack all stax-managed worktrees
 stax shell-setup               # Print shell integration snippet for manual install
 stax shell-setup --install     # Write shell integration under ~/.config/stax and source it from your shell config
 
 # Worktree shortcuts
-stax wt                        # Alias for worktree subcommand
+stax wt                        # Open worktree dashboard (TTY) or print worktree help
 stax w                         # List worktrees
 stax wtc [branch]              # Create worktree
 stax wtls                      # List worktrees
+stax wtll                      # Long worktree list
 stax wtgo <name>               # Navigate to worktree path
 stax wtrm <name>               # Remove worktree
+stax wtrs                      # Restack all stax-managed worktrees
 sw <name>                      # Quick-switch (shell alias installed by stax shell-setup)
 ```
 
@@ -269,26 +270,26 @@ stax generate --pr-body --edit     # Open editor before update
 stax generate --pr-body --agent codex --model gpt-5
 ```
 
-### Agent Worktrees (parallel AI agents)
+### AI Worktree Lanes (parallel AI agents)
 
 ```bash
-stax agent create "Add dark mode" --open-codex    # Create worktree + branch, open in Codex
-stax agent create "Fix auth bug" --open-cursor    # Open in Cursor
-stax agent create "Write tests"                   # Create without opening
-stax agent create "Feature X" --stack-on main     # Explicit base branch
-stax agent create "Feature X" --no-hook           # Skip post_create_hook
+stax lane                                         # Interactive lane picker (create or resume)
+stax lane add-dark-mode "Add dark mode"           # Start a named lane with a prompt
+stax lane add-dark-mode --agent codex             # Start a lane with a specific agent
+stax lane add-dark-mode --agent codex --model gpt-5.4  # Override model too
+stax lane add-dark-mode                           # Re-enter the lane (reattaches tmux session)
+stax lane add-dark-mode "new prompt" --no-tmux    # Force direct terminal (no tmux)
 
-stax agent open                                   # Fuzzy picker to reattach to any session
-stax agent open add-dark-mode                     # Reattach by name
+stax wt ll                                        # Rich status of all lanes
+stax wt rs                                        # Restack ALL stax-managed worktrees after trunk moves
+stax wt rm add-dark-mode --delete-branch          # Remove worktree + delete branch + metadata
+stax wt rm add-dark-mode --force                  # Force remove dirty worktree
+stax wt cleanup --dry-run                         # Preview bulk prune/remove decisions
+stax wt cleanup                                   # Prune stale entries + remove merged/detached lanes
 
-stax agent list                                   # Table: name, branch, exists, open command
-stax agent register                               # Register current dir/branch in the registry
-
-stax agent sync                                   # Restack ALL agent worktrees after trunk moves
-stax agent remove add-dark-mode                   # Remove worktree, keep branch
-stax agent remove add-dark-mode --delete-branch   # Remove worktree + delete branch + metadata
-stax agent remove add-dark-mode --force           # Force remove dirty worktree
-stax agent prune                                  # Clean dead entries + git worktree prune
+# Lower-level worktree control
+stax wt c review-pass --agent codex -- "address the open PR comments"  # Create + launch agent
+stax wt go review-pass --agent codex --tmux       # Re-enter + launch agent in existing lane
 ```
 
 ### Maintenance, Safety, and Setup
@@ -403,33 +404,29 @@ stax worktree remove payments-api
 Each agent gets its own isolated worktree and branch. They cannot conflict.
 
 ```bash
-# 1. Create one worktree per task
-stax agent create "Add dark mode" --open-codex
-stax agent create "Fix auth refresh" --open-cursor
-stax agent create "Write integration tests"
-
-# Point Claude Code or OpenCode at the third worktree manually:
-#   claude     (inside .stax/trees/write-integration-tests)
-#   opencode   (inside .stax/trees/write-integration-tests)
+# 1. Start one lane per task — stax creates the worktree, branch, and launches the agent
+stax lane add-dark-mode --agent codex "Add dark mode"
+stax lane fix-auth-refresh --agent claude "Fix auth refresh edge case"
+stax lane write-integration-tests "Write integration tests for checkout flow"
 
 # 2. Check status while agents run
-stax agent list      # see all three + existence status
-stax status          # all three branches appear in normal stack tree
+stax wt ll           # rich status of all lanes (tmux state, dirty/clean, branch)
+stax status          # all three branches appear in the normal stack tree
 
 # 3. Reattach to a session later
-stax agent open      # fuzzy picker
-stax agent open fix-auth-refresh
+stax lane            # interactive picker — fuzzy, shows tmux + status columns
+stax lane fix-auth-refresh  # jump directly back to that lane
 
 # 4. Trunk moved — restack everything at once
-git pull
-stax agent sync
+stax wt rs
 
 # 5. Review and submit each branch normally
 stax checkout add-dark-mode
 stax submit
 
 # 6. Clean up
-stax agent remove add-dark-mode --delete-branch
+stax wt rm add-dark-mode --delete-branch
+stax wt cleanup      # bulk-remove merged/detached lanes
 ```
 
 ## Reading Stack Output
@@ -459,9 +456,9 @@ Symbols:
 4. Prefer amend flow (`stax m`) to keep one commit per branch.
 5. Validate and repair metadata (`stax validate`, `stax fix`) before deep stack surgery.
 6. Check stack shape (`stax ls` / `stax ll`) before submit or merge.
-7. Use `stax agent create` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
-8. After trunk moves, run `stax agent sync` once instead of rebasing each agent worktree manually.
-9. Use `stax worktree create` (not `stax agent create`) when you want a worktree for an existing branch or for human parallel development — no registry, no editor overhead.
+7. Use `stax lane <name> [prompt]` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
+8. After trunk moves, run `stax wt rs` once instead of rebasing each agent worktree manually.
+9. Use `stax worktree create` when you want a worktree for an existing branch or for human parallel development — `st lane` is the higher-level AI shortcut.
 10. Run `stax shell-setup --install` once per machine to enable `stax worktree go` and the `sw` alias without executing `stax` on every shell startup.
 
 ## Tips
@@ -471,6 +468,6 @@ Symbols:
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.
 - Use `--yes` for non-interactive scripting.
 - Use `--json` on supported commands for machine-readable output.
-- Use `stax agent open` with no arguments for a fuzzy picker over all registered agent sessions — useful when you forget where a session lives.
+- Use `stax lane` with no arguments for an interactive picker over all stax-managed lanes — useful when you forget where a session lives.
 - Use `stax worktree go` (or `sw`) + shell integration to switch between stacks without `cd` gymnastics.
 - `stax worktree list` shows ALL worktrees including those created externally via `git worktree add`.
