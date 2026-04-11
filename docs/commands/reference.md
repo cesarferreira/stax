@@ -48,6 +48,7 @@
 | `st detach` | | Remove branch from stack, reparent children |
 | `st reorder` | | Interactively reorder branches in stack |
 | `st upstack restack` | | Restack current + descendants |
+| `st upstack onto <branch>` | | Reparent current + all descendants onto a new parent |
 | `st upstack submit` | | Submit current + descendants |
 | `st downstack get` | | Show branches below current |
 | `st downstack submit` | | Submit ancestors + current |
