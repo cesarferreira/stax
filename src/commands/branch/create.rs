@@ -157,12 +157,9 @@ pub fn run(
                 let new_parent_rev = repo.branch_commit(&branch_name)?;
                 for child in &children {
                     if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
-                        let merge_base = repo
-                            .merge_base(&branch_name, child)
-                            .unwrap_or_else(|_| new_parent_rev.clone());
                         let updated = BranchMetadata {
                             parent_branch_name: branch_name.clone(),
-                            parent_branch_revision: merge_base,
+                            parent_branch_revision: new_parent_rev.clone(),
                             ..child_meta
                         };
                         updated.write(repo.inner(), child)?;

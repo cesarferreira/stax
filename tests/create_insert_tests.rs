@@ -110,9 +110,7 @@ fn test_create_insert_via_bc_alias() {
     repo.run_stax(&["checkout", &branches[1]]);
     let b_parent = repo.get_current_parent();
     assert!(
-        b_parent
-            .as_ref()
-            .map_or(false, |p| p.contains("alias-mid")),
+        b_parent.as_ref().map_or(false, |p| p.contains("alias-mid")),
         "B should be reparented to alias-mid, got parent: {:?}",
         b_parent
     );
@@ -144,10 +142,50 @@ fn test_create_without_insert_does_not_reparent() {
     repo.run_stax(&["checkout", &branches[1]]);
     let b_parent = repo.get_current_parent();
     assert!(
+        b_parent.as_ref().map_or(false, |p| p.contains("norep-a")),
+        "B should still have A as parent, got parent: {:?}",
+        b_parent
+    );
+}
+
+#[test]
+fn test_create_insert_from_trunk_reparents_direct_children() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["status"]).assert_success();
+
+    let trunk_a = repo.create_stack(&["trunk-a"]);
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    let trunk_b = repo.create_stack(&["trunk-b"]);
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    let output = repo.run_stax(&["create", "trunk-mid", "--insert"]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Reparented"),
+        "Expected reparent message from trunk insert, got: {}",
+        stdout
+    );
+
+    repo.run_stax(&["checkout", &trunk_a[0]]).assert_success();
+    let a_parent = repo.get_current_parent();
+    assert!(
+        a_parent
+            .as_ref()
+            .is_some_and(|parent| parent.contains("trunk-mid")),
+        "trunk-a should be reparented to trunk-mid, got parent: {:?}",
+        a_parent
+    );
+
+    repo.run_stax(&["checkout", &trunk_b[0]]).assert_success();
+    let b_parent = repo.get_current_parent();
+    assert!(
         b_parent
             .as_ref()
-            .map_or(false, |p| p.contains("norep-a")),
-        "B should still have A as parent, got parent: {:?}",
+            .is_some_and(|parent| parent.contains("trunk-mid")),
+        "trunk-b should be reparented to trunk-mid, got parent: {:?}",
         b_parent
     );
 }
