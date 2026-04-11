@@ -59,6 +59,7 @@
 | `st` | | Launch TUI |
 | `st split` | | Split branch into stacked branches (commit-based; needs 2+ commits) |
 | `st split --hunk` | | Split a single commit into stacked branches by selecting individual diff hunks |
+| `st edit` | `e` | Interactively edit commits on current branch (pick, reword, squash, fixup, drop) |
 
 ## Recovery
 
@@ -215,3 +216,5 @@ Worktree launch examples:
 - `st undo --yes --no-push`
 - `st undo --quiet`
 - `st redo --yes --no-push --quiet`
+- `st edit --yes` (skip final confirmation; interactive commit selection still required)
+- `st edit --no-verify` (skip pre-commit hooks during rebase)

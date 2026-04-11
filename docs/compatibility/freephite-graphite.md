@@ -18,6 +18,7 @@ stax uses the same metadata format as freephite (`refs/branch-metadata/<branch>`
 | `fp bd` | `gt down` | `st down` / `st bd` |
 | `fp ls` | `gt log` | `st status` / `st ls` |
 | — | `gt modify` | `st modify` / `st m` |
+| — | `gt edit` | `st edit` / `st e` |
 | `fp restack` | `gt restack` | `st restack` / `st sr` |
 | — | `gt restack --upstack` | `st upstack restack` |
 | — | `gt merge` | `st merge` |
