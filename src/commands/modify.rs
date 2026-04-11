@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
@@ -161,6 +162,15 @@ pub fn run(message: Option<String>, all: bool, quiet: bool, no_verify: bool, res
             false,  // auto_stash_pop
             super::restack::SubmitAfterRestack::No,
         )?;
+    } else if !quiet {
+        let config = Config::load().unwrap_or_default();
+        if config.ui.tips {
+            println!(
+                "{}",
+                "Hint: Run `st restack` to update child branches, or `st ss` to submit."
+                    .dimmed()
+            );
+        }
     }
 
     Ok(())
