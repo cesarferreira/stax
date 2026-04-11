@@ -726,7 +726,13 @@ pub fn run(
                     let local_still_exists = local_branch_exists(&workdir, branch);
 
                     let metadata_deleted = if !local_still_exists {
-                        let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+                        if let Err(e) = crate::git::refs::delete_metadata(repo.inner(), branch) {
+                            eprintln!(
+                                "{}",
+                                format!("Warning: failed to delete metadata for '{}': {}", branch, e)
+                                    .yellow()
+                            );
+                        }
                         true
                     } else {
                         false
@@ -927,7 +933,13 @@ pub fn run(
                 let local_still_exists = local_branch_exists(&workdir, branch);
 
                 let metadata_deleted = if !local_still_exists {
-                    let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+                    if let Err(e) = crate::git::refs::delete_metadata(repo.inner(), branch) {
+                        eprintln!(
+                            "{}",
+                            format!("Warning: failed to delete metadata for '{}': {}", branch, e)
+                                .yellow()
+                        );
+                    }
                     true
                 } else {
                     false
