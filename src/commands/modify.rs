@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
@@ -16,8 +17,15 @@ enum ModifyTarget {
 /// When files are already staged, only those files are committed.
 /// When nothing is staged, prompts to stage all (or use `-a`).
 /// On a fresh tracked branch, `-m` creates the first branch-local commit safely.
-pub fn run(message: Option<String>, all: bool, quiet: bool, no_verify: bool, restack: bool) -> Result<()> {
+pub fn run(
+    message: Option<String>,
+    all: bool,
+    quiet: bool,
+    no_verify: bool,
+    restack: bool,
+) -> Result<()> {
     let repo = GitRepo::open()?;
+    let config = Config::load()?;
     let workdir = repo.workdir()?;
     let current = repo.current_branch()?;
 
@@ -152,15 +160,20 @@ pub fn run(message: Option<String>, all: bool, quiet: bool, no_verify: bool, res
             println!();
         }
         super::restack::run(
-            false,  // all
-            false,  // stop_here
-            false,  // continue
-            false,  // dry_run
-            true,   // yes (skip confirmation)
+            false, // all
+            false, // stop_here
+            false, // continue
+            false, // dry_run
+            true,  // yes (skip confirmation)
             quiet,
-            false,  // auto_stash_pop
+            false, // auto_stash_pop
             super::restack::SubmitAfterRestack::No,
         )?;
+    } else if !quiet && config.ui.tips {
+        println!(
+            "{}",
+            "Hint: Run `st restack` to update child branches, or `st ss` to submit.".dimmed()
+        );
     }
 
     Ok(())

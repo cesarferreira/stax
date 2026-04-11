@@ -1269,6 +1269,14 @@ pub fn run(
             "Sync complete!".green().bold(),
             render_sync_footer(&stats, sync_started_at.elapsed())
         );
+
+        if !restack && stats.merged_branches_cleaned > 0 && config.ui.tips {
+            println!(
+                "{}",
+                "Hint: Run `st restack --all` to rebase branches onto the updated trunk."
+                    .dimmed()
+            );
+        }
     }
 
     Ok(())

@@ -230,6 +230,14 @@ pub fn run(
         }
     }
 
+    if config.ui.tips {
+        println!(
+            "{}",
+            "Hint: Run `st ss` to submit, or add changes with `st modify -a -m \"message\"`"
+                .dimmed()
+        );
+    }
+
     Ok(())
 }
 
