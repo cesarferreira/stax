@@ -44,6 +44,7 @@ struct PrPlan {
     branch: String,
     parent: String,
     existing_pr: Option<u64>,
+    existing_pr_is_draft: Option<bool>,
     // For new PRs, we'll collect these upfront
     title: Option<String>,
     body: Option<String>,
@@ -398,6 +399,7 @@ pub fn run(
                 branch: branch.clone(),
                 parent: meta.parent_branch_name,
                 existing_pr,
+                existing_pr_is_draft: None,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -564,6 +566,7 @@ pub fn run(
                 branch: branch.clone(),
                 parent: base,
                 existing_pr: pr_number,
+                existing_pr_is_draft: existing_pr.as_ref().map(|pr| pr.info.is_draft),
                 title: None,
                 body: None,
                 is_draft: None,
@@ -927,6 +930,13 @@ pub fn run(
 
             let meta = BranchMetadata::read(repo.inner(), &plan.branch)?
                 .context(format!("No metadata for branch {}", plan.branch))?;
+            let desired_draft_state = if draft {
+                Some(true)
+            } else if publish {
+                Some(false)
+            } else {
+                None
+            };
 
             if let Some(existing_pr_number) = plan.existing_pr {
                 if plan.needs_pr_update {
@@ -944,11 +954,23 @@ pub fn run(
                     apply_pr_metadata(&client, existing_pr_number, &reviewers, &labels, &assignees)
                         .await?;
 
-                    // Toggle draft status if --draft or --publish was passed
-                    if draft || publish {
-                        client
-                            .set_pr_draft(existing_pr_number, draft)
-                            .await?;
+                    // Toggle draft status if --draft or --publish was passed.
+                    if let Some(is_draft) = desired_draft_state {
+                        if plan.existing_pr_is_draft == Some(is_draft) {
+                            let reason = if is_draft {
+                                "already draft"
+                            } else {
+                                "already published"
+                            };
+                            if verbose && !quiet {
+                                println!(
+                                    "      Skipping draft toggle for #{} ({})",
+                                    existing_pr_number, reason
+                                );
+                            }
+                        } else {
+                            client.set_pr_draft(existing_pr_number, is_draft).await?;
+                        }
                     }
 
                     // Re-request review from existing reviewers if flag is set
@@ -985,32 +1007,45 @@ pub fn run(
                     });
                 } else {
                     // Toggle draft status even when no other update is needed
-                    if draft || publish {
+                    if let Some(is_draft) = desired_draft_state {
                         let draft_timer = LiveTimer::maybe_new(
                             !quiet,
                             &format!(
                                 "{} {} #{}...",
-                                if draft { "Converting to draft" } else { "Publishing" },
+                                if is_draft {
+                                    "Converting to draft"
+                                } else {
+                                    "Publishing"
+                                },
                                 plan.branch,
                                 existing_pr_number,
                             ),
                         );
-                        client
-                            .set_pr_draft(existing_pr_number, draft)
-                            .await?;
-                        LiveTimer::maybe_finish_ok(draft_timer, "done");
+                        if plan.existing_pr_is_draft == Some(is_draft) {
+                            LiveTimer::maybe_finish_skipped(
+                                draft_timer,
+                                if is_draft {
+                                    "already draft"
+                                } else {
+                                    "already published"
+                                },
+                            );
+                        } else {
+                            client.set_pr_draft(existing_pr_number, is_draft).await?;
+                            LiveTimer::maybe_finish_ok(draft_timer, "done");
 
-                        // Refresh metadata after draft status change
-                        let pr = client.get_pr(existing_pr_number).await?;
-                        let updated_meta = BranchMetadata {
-                            pr_info: Some(crate::engine::metadata::PrInfo {
-                                number: pr.number,
-                                state: pr.state.clone(),
-                                is_draft: Some(pr.is_draft),
-                            }),
-                            ..meta
-                        };
-                        updated_meta.write(repo.inner(), &plan.branch)?;
+                            // Refresh metadata after draft status change
+                            let pr = client.get_pr(existing_pr_number).await?;
+                            let updated_meta = BranchMetadata {
+                                pr_info: Some(crate::engine::metadata::PrInfo {
+                                    number: pr.number,
+                                    state: pr.state.clone(),
+                                    is_draft: Some(pr.is_draft),
+                                }),
+                                ..meta
+                            };
+                            updated_meta.write(repo.inner(), &plan.branch)?;
+                        }
                     }
 
                     pr_infos.push(StackPrInfo {
