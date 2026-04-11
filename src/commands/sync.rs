@@ -303,7 +303,7 @@ pub fn run(
             // Refuse to reset to avoid silently losing those commits.
             LiveTimer::maybe_finish_warn(
                 update_timer,
-                "diverged (local has commits not on remote; use --safe or resolve manually)",
+                "diverged (local has commits not on remote; rebase or reset trunk manually)",
             );
         } else {
             // Local is ancestor of remote -- safe to reset (equivalent to fast-forward)
@@ -352,7 +352,7 @@ pub fn run(
             } else if !is_ancestor(&trunk_worktree_path, &stack.trunk, &remote_trunk_ref) {
                 LiveTimer::maybe_finish_warn(
                     update_timer,
-                    "diverged (local has commits not on remote; use --safe or resolve manually)",
+                    "diverged (local has commits not on remote; rebase or reset trunk manually)",
                 );
             } else {
                 let reset_output = Command::new("git")
@@ -1020,7 +1020,7 @@ pub fn run(
         } else if !is_ancestor(&workdir, &stack.trunk, &remote_trunk_ref) {
             LiveTimer::maybe_finish_warn(
                 deferred_timer,
-                "diverged (local has commits not on remote; use --safe or resolve manually)",
+                "diverged (local has commits not on remote; rebase or reset trunk manually)",
             );
         } else {
             // Local is ancestor of remote -- safe to reset
