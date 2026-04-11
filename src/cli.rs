@@ -611,6 +611,17 @@ enum Commands {
         yes: bool,
     },
 
+    /// Interactively edit commits on the current branch (reword, squash, fixup, drop)
+    #[command(visible_alias = "e")]
+    Edit {
+        /// Skip the final confirmation prompt after interactive commit selection
+        #[arg(long)]
+        yes: bool,
+        /// Skip pre-commit hooks when recreating commits
+        #[arg(long)]
+        no_verify: bool,
+    },
+
     /// Validate stack metadata health
     Validate,
 
@@ -1614,6 +1625,7 @@ pub fn run() -> Result<()> {
         }
         Commands::Detach { branch, yes } => commands::detach::run(branch, yes),
         Commands::Reorder { yes } => commands::reorder::run(yes),
+        Commands::Edit { yes, no_verify } => commands::edit::run(yes, no_verify),
         Commands::Validate => commands::stack_cmd::run_validate(),
         Commands::Fix { dry_run, yes } => commands::stack_cmd::run_fix(dry_run, yes),
         Commands::Run {
