@@ -88,7 +88,7 @@ fn run_impl(
     restore_branch: Option<String>,
 ) -> Result<()> {
     let current = repo.current_branch()?;
-    let current_workdir = canonical_workdir(repo)?;
+    let current_workdir = normalized_workdir(repo)?;
     let restore_branch = restore_branch.unwrap_or_else(|| current.clone());
     let mut stack = Stack::load(repo)?;
 
@@ -392,9 +392,8 @@ fn run_impl(
     Ok(())
 }
 
-fn canonical_workdir(repo: &GitRepo) -> Result<PathBuf> {
-    let workdir = repo.workdir()?.to_path_buf();
-    Ok(std::fs::canonicalize(&workdir).unwrap_or(workdir))
+fn normalized_workdir(repo: &GitRepo) -> Result<PathBuf> {
+    Ok(GitRepo::normalize_path(repo.workdir()?))
 }
 
 fn print_stash_message(current_workdir: &Path, target_workdir: &Path) {
@@ -413,18 +412,35 @@ fn print_stash_message(current_workdir: &Path, target_workdir: &Path) {
 }
 
 fn restore_stashed_worktrees(repo: &GitRepo, worktrees: &[PathBuf], quiet: bool) -> Result<()> {
-    let current_workdir = canonical_workdir(repo)?;
+    let current_workdir = normalized_workdir(repo)?;
+    let mut errors: Vec<String> = Vec::new();
     for worktree in worktrees.iter().rev() {
-        repo.stash_pop_at(worktree)?;
-        if !quiet {
-            if *worktree == current_workdir {
-                println!("{}", "✓ Restored stashed changes.".green());
-            } else {
-                println!(
-                    "{}",
-                    format!("✓ Restored stashed changes in {}.", worktree.display()).green()
-                );
+        match repo.stash_pop_at(worktree) {
+            Ok(()) => {
+                if !quiet {
+                    if *worktree == current_workdir {
+                        println!("{}", "✓ Restored stashed changes.".green());
+                    } else {
+                        println!(
+                            "{}",
+                            format!("✓ Restored stashed changes in {}.", worktree.display())
+                                .green()
+                        );
+                    }
+                }
             }
+            Err(e) => {
+                errors.push(format!("{}: {}", worktree.display(), e));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        println!(
+            "{}",
+            "Warning: some stash pops failed. Run `git stash pop` manually in:".yellow()
+        );
+        for e in &errors {
+            println!("  {}", e);
         }
     }
     Ok(())

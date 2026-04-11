@@ -292,7 +292,7 @@ impl GitRepo {
             .with_context(|| format!("Failed to run git {}", args.join(" ")))
     }
 
-    fn normalize_path(path: &Path) -> PathBuf {
+    pub(crate) fn normalize_path(path: &Path) -> PathBuf {
         std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
     }
 
