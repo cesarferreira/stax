@@ -156,6 +156,55 @@ Notes:
 - if you omit `--agent`, stax uses your configured default agent
 - the optional `[prompt]` is passed through to the launched agent
 
+## VS Code (or Cursor) Integration
+
+By default, `st lane` launches the agent in a tmux session and does not open your editor. If you want your **existing** VS Code / Cursor window to show each new lane as an extra folder in the Explorer (instead of spawning a new window per lane), add a worktree hook to `~/.config/stax/config.toml`:
+
+```toml
+[worktree.hooks]
+post_start = "code --add ."
+# Or for Cursor:
+# post_start = "cursor --add ."
+```
+
+`code --add <folder>` tells the most recently active VS Code window to add the folder to its current workspace. Because `post_start` runs in the background after the worktree is ready, the hook does not block the agent launch. Use `post_create` (blocking) if you prefer the folder to appear before the agent starts.
+
+After the hook is configured:
+
+```bash
+st lane fix-flaky --agent claude "stabilize the flaky test suite"
+```
+
+- stax creates the worktree and launches the agent in tmux as normal
+- your existing VS Code window grows a new folder in the Explorer pointing at the lane
+- each lane has its own file tree, terminal tabs, and git state while sharing one VS Code process
+
+### Making it persistent across VS Code restarts
+
+`code --add` adds folders to the current window but VS Code forgets them on restart unless you are using a workspace file. To keep the multi-lane view across restarts:
+
+1. Create `stax.code-workspace` once at the main repo root:
+
+    ```json
+    {
+      "folders": [{ "path": "." }]
+    }
+    ```
+
+2. Open VS Code via `code stax.code-workspace` (not by opening the folder directly).
+
+Now every `code --add` call persists the new lane into the workspace file, so closing and reopening VS Code brings back the full multi-lane layout.
+
+### Watching the agent from VS Code
+
+Once a lane is in your workspace, attach to its tmux session from any VS Code terminal tab:
+
+```bash
+tmux attach -t <lane-name>
+```
+
+The agent keeps running in tmux even when you detach or close the terminal.
+
 ## A Realistic Daily Workflow
 
 ```bash
