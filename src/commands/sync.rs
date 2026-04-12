@@ -860,6 +860,23 @@ pub fn run(
                 println!();
             }
 
+            // Reload the stack so the merged-branch path's reparenting is reflected
+            // before we start resolving the upstream-gone branches' metadata.
+            let live_stack = Stack::load(&repo)?;
+
+            // Lazy-initialize forge client once for any PR base updates below.
+            let forge_client: Option<(tokio::runtime::Runtime, ForgeClient)> = {
+                let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
+                if let Some(info) = remote_info {
+                    tokio::runtime::Runtime::new().ok().and_then(|rt| {
+                        let _enter = rt.enter();
+                        ForgeClient::new(&info).ok().map(|client| (rt, client))
+                    })
+                } else {
+                    None
+                }
+            };
+
             for branch in &gone {
                 if !local_branch_exists(&workdir, branch) {
                     continue;
@@ -871,7 +888,17 @@ pub fn run(
                 } else {
                     plan_blocking_worktree_cleanup(&repo, branch, force)?
                 };
-                let fallback_parent = &stack.trunk;
+
+                // Resolve the parent children will be reparented to:
+                // recorded parent if it still exists locally, otherwise trunk.
+                let recorded_parent_branch = live_stack
+                    .branches
+                    .get(branch)
+                    .and_then(|b| b.parent.clone())
+                    .unwrap_or_else(|| stack.trunk.clone());
+                let (fallback_parent, parent_fallback_from) =
+                    resolve_effective_parent(&workdir, &recorded_parent_branch, &stack.trunk);
+
                 let prompt = sync_delete_prompt(
                     branch,
                     if is_current_branch {
@@ -905,8 +932,19 @@ pub fn run(
                     continue;
                 }
 
+                if !quiet {
+                    if let Some(missing_parent) = &parent_fallback_from {
+                        println!(
+                            "    {} parent {} not found locally; using {}",
+                            "↪".yellow(),
+                            missing_parent.yellow(),
+                            fallback_parent.cyan()
+                        );
+                    }
+                }
+
                 if is_current_branch {
-                    match checkout_branch_for_cleanup(&repo, &workdir, fallback_parent) {
+                    match checkout_branch_for_cleanup(&repo, &workdir, &fallback_parent) {
                         Ok(()) => {
                             current_after_deletions = fallback_parent.clone();
                             if !quiet {
@@ -930,6 +968,77 @@ pub fn run(
                                 );
                             }
                             continue;
+                        }
+                    }
+                }
+
+                // Reparent tracked children of this branch to the fallback parent
+                // before deleting, so descendants don't point at a branch that no
+                // longer exists. Mirrors the merged-branch cleanup path.
+                let children: Vec<String> = live_stack
+                    .branches
+                    .iter()
+                    .filter(|(_, info)| info.parent.as_deref() == Some(branch))
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                let gone_branch_tip = repo.branch_commit(branch).ok();
+
+                for child in &children {
+                    if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
+                        // Preserve the old-parent boundary so restack can run
+                        // `git rebase --onto <new> <old>` precisely. Only use the
+                        // deleted branch's tip when it is still in the child's
+                        // ancestry; otherwise keep the recorded revision.
+                        let old_parent_boundary = gone_branch_tip
+                            .clone()
+                            .filter(|tip| repo.is_ancestor(tip, child).unwrap_or(false))
+                            .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
+
+                        let updated_meta = BranchMetadata {
+                            parent_branch_name: fallback_parent.clone(),
+                            parent_branch_revision: old_parent_boundary,
+                            ..child_meta.clone()
+                        };
+                        updated_meta.write(repo.inner(), child)?;
+
+                        // Best-effort PR base update. Upstream-gone branches usually
+                        // have closed PRs, so failures here are expected and logged.
+                        if let Some(pr_info) = &child_meta.pr_info {
+                            if let Some((rt, client)) = &forge_client {
+                                match rt.block_on(
+                                    client.update_pr_base(pr_info.number, &fallback_parent),
+                                ) {
+                                    Ok(()) => {
+                                        if !quiet {
+                                            println!(
+                                                "    {} updated PR #{} base → {}",
+                                                "↪".cyan(),
+                                                pr_info.number,
+                                                fallback_parent.cyan()
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if !quiet {
+                                            println!(
+                                                "    {} couldn't update PR #{} base: {}",
+                                                "⚠".yellow(),
+                                                pr_info.number,
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if !quiet {
+                            println!(
+                                "    {} reparented {} → {}",
+                                "↪".cyan(),
+                                child.cyan(),
+                                fallback_parent.cyan()
+                            );
                         }
                     }
                 }

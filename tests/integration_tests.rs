@@ -4251,6 +4251,75 @@ fn test_sync_delete_upstream_gone_deletes_untracked_local_branch() {
 }
 
 #[test]
+fn test_sync_delete_upstream_gone_reparents_tracked_children() {
+    // Regression test for #200: sync --delete-upstream-gone must reparent
+    // tracked children before deleting, so descendants do not end up
+    // pointing at a branch that no longer exists.
+    let repo = TestRepo::new_with_remote();
+
+    // Build main -> parent-200 -> child-200
+    repo.run_stax(&["bc", "parent-200"]);
+    let parent_branch = repo.current_branch();
+    repo.create_file("parent.txt", "parent content");
+    repo.commit("Parent commit");
+    repo.git(&["push", "-u", "origin", &parent_branch]);
+
+    repo.run_stax(&["bc", "child-200"]);
+    let child_branch = repo.current_branch();
+    repo.create_file("child.txt", "child content");
+    repo.commit("Child commit");
+    repo.git(&["push", "-u", "origin", &child_branch]);
+
+    // Delete the parent on the remote so its upstream is gone
+    repo.git(&["checkout", "main"]);
+    repo.git(&["push", "origin", "--delete", &parent_branch]);
+
+    // Run sync --delete-upstream-gone; parent should be deleted and the
+    // child should be reparented to main (the nearest surviving ancestor).
+    let output = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|b| *b == parent_branch),
+        "Expected parent to be deleted, still have: {:?}",
+        branches
+    );
+    assert!(
+        branches.iter().any(|b| *b == child_branch),
+        "Expected child to survive, got: {:?}",
+        branches
+    );
+
+    // Child's recorded parent must no longer point at the deleted branch.
+    let status = repo.run_stax(&["status", "--json"]);
+    let json: serde_json::Value =
+        serde_json::from_str(&TestRepo::stdout(&status)).expect("valid JSON");
+    let child_entry = json["branches"]
+        .as_array()
+        .expect("branches array")
+        .iter()
+        .find(|b| b["name"].as_str() == Some(&child_branch))
+        .expect("child in status");
+    let new_parent = child_entry["parent"]
+        .as_str()
+        .expect("child has a parent field");
+    assert_ne!(
+        new_parent, parent_branch,
+        "Child still points at the deleted parent"
+    );
+    assert_eq!(
+        new_parent, "main",
+        "Expected child to be reparented to main, got: {}",
+        new_parent
+    );
+}
+
+#[test]
 fn test_sync_detects_branch_with_empty_diff_against_trunk() {
     let repo = TestRepo::new_with_remote();
 
