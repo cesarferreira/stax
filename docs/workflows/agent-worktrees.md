@@ -158,18 +158,20 @@ Notes:
 
 ## VS Code (or Cursor) Integration
 
-By default, `st lane` launches the agent in a tmux session and does not open your editor. If you want your **existing** VS Code / Cursor window to show each new lane as an extra folder in the Explorer (instead of spawning a new window per lane), add a worktree hook to `~/.config/stax/config.toml`:
+By default, `st lane` launches the agent in a tmux session and does not open your editor. If you want your **existing** VS Code / Cursor window to show each new lane as an extra folder in the Explorer — without spawning a new window per lane — add two worktree hooks to `~/.config/stax/config.toml`:
 
 ```toml
 [worktree.hooks]
-post_start = "code --add ."
-# Or for Cursor:
-# post_start = "cursor --add ."
+post_start = "code --add ."  # fires when a lane is freshly created
+post_go    = "code --add ."  # fires when re-entering an existing lane
+# For Cursor, replace both with `cursor --add .`
 ```
 
-`code --add <folder>` tells the most recently active VS Code window to add the folder to its current workspace. Because `post_start` runs in the background after the worktree is ready, the hook does not block the agent launch. Use `post_create` (blocking) if you prefer the folder to appear before the agent starts.
+Both hooks are needed. `post_start` only runs the first time a lane is created; `post_go` runs every subsequent `st lane <name>` that re-enters the existing worktree. Without `post_go`, the recipe silently stops working the second time you enter a lane. `code --add .` is idempotent — re-adding an already-added folder is a no-op.
 
-After the hook is configured:
+`code --add <folder>` tells the most recently active VS Code window to add the folder to its current workspace. Both hooks are background hooks, so they do not block the agent launch.
+
+After the hooks are configured:
 
 ```bash
 st lane fix-flaky --agent claude "stabilize the flaky test suite"
@@ -181,29 +183,37 @@ st lane fix-flaky --agent claude "stabilize the flaky test suite"
 
 ### Making it persistent across VS Code restarts
 
-`code --add` adds folders to the current window but VS Code forgets them on restart unless you are using a workspace file. To keep the multi-lane view across restarts:
+`code --add` needs a workspace file to persist folders across restarts. Without one, VS Code will either prompt "Do you want to save the workspace?" on the first add, or forget the lane when the window closes. Create a workspace file once and open VS Code through it:
 
-1. Create `stax.code-workspace` once at the main repo root:
+1. Create `stax.code-workspace` **outside the repo** (so it does not get committed or appear in every worktree), for example at `~/Documents/code-workspaces/<repo>.code-workspace`:
 
     ```json
     {
-      "folders": [{ "path": "." }]
+      "folders": [{ "path": "/absolute/path/to/your/repo" }]
     }
     ```
 
-2. Open VS Code via `code stax.code-workspace` (not by opening the folder directly).
+    If you prefer to keep it in the repo, add it to `.gitignore` — it will accumulate lane paths over time.
 
-Now every `code --add` call persists the new lane into the workspace file, so closing and reopening VS Code brings back the full multi-lane layout.
+2. Open VS Code via `code /path/to/stax.code-workspace` (not by opening the folder directly).
+
+Now every `code --add` call writes the new lane into the workspace file, so closing and reopening VS Code restores the full multi-lane layout.
 
 ### Watching the agent from VS Code
 
-Once a lane is in your workspace, attach to its tmux session from any VS Code terminal tab:
+Once a lane is in your workspace, attach to its tmux session from any VS Code terminal tab (see [Tmux Behavior](#tmux-behavior) above for how the session name is derived):
 
 ```bash
 tmux attach -t <lane-name>
 ```
 
 The agent keeps running in tmux even when you detach or close the terminal.
+
+### Caveats
+
+- **`code` / `cursor` must be on `$PATH`.** On macOS this requires running `Shell Command: Install 'code' command in PATH` from the Command Palette once. Background hooks discard stderr, so a missing binary fails silently — to debug, temporarily switch `post_start` to `post_create` (blocking) to surface the error.
+- **Designed for local worktrees.** Over SSH / remote shells, `code --add .` adds the path as a local path in your controlling window, which is almost never what a remote user wants.
+- **Cursor and VS Code share the `--add` flag**, but if both are installed only the most recently active window will receive the folder. Pick one in the hook.
 
 ## A Realistic Daily Workflow
 
