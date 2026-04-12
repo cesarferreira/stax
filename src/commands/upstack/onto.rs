@@ -84,7 +84,10 @@ pub fn run(target: Option<String>, restack: bool) -> Result<()> {
         parent_branch_revision: merge_base.clone(),
         ..old_meta
     };
-    updated.write(repo.inner(), &current)?;
+
+    if !restack {
+        updated.write(repo.inner(), &current)?;
+    }
 
     println!(
         "✓ Reparented '{}' onto '{}'",
@@ -117,12 +120,11 @@ pub fn run(target: Option<String>, restack: bool) -> Result<()> {
             false,
         )? {
             RebaseResult::Success => {
-                // Update metadata with new parent rev after rebase
+                // Persist metadata only after the root rebase succeeds
                 let new_parent_rev = repo.branch_commit(&new_parent)?;
-                if let Some(mut meta) = BranchMetadata::read(repo.inner(), &current)? {
-                    meta.parent_branch_revision = new_parent_rev;
-                    meta.write(repo.inner(), &current)?;
-                }
+                let mut persisted = updated.clone();
+                persisted.parent_branch_revision = new_parent_rev;
+                persisted.write(repo.inner(), &current)?;
                 println!(
                     "  {} rebased '{}' onto '{}'",
                     "✓".green(),

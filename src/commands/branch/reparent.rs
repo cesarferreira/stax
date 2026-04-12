@@ -113,8 +113,6 @@ pub fn run(branch: Option<String>, parent: Option<String>, restack: bool) -> Res
         BranchMetadata::new(&parent_branch, &merge_base)
     };
 
-    updated.write(repo.inner(), &target)?;
-
     let config = crate::config::Config::load()?;
     if let Ok(remote_branches) = remote::get_remote_branches(repo.workdir()?, config.remote_name())
     {
@@ -129,6 +127,10 @@ pub fn run(branch: Option<String>, parent: Option<String>, restack: bool) -> Res
                 .yellow()
             );
         }
+    }
+
+    if !restack {
+        updated.write(repo.inner(), &target)?;
     }
 
     println!(
@@ -146,10 +148,9 @@ pub fn run(branch: Option<String>, parent: Option<String>, restack: bool) -> Res
         )? {
             RebaseResult::Success => {
                 let new_parent_rev = repo.branch_commit(&parent_branch)?;
-                if let Some(mut meta) = BranchMetadata::read(repo.inner(), &target)? {
-                    meta.parent_branch_revision = new_parent_rev;
-                    meta.write(repo.inner(), &target)?;
-                }
+                let mut persisted = updated.clone();
+                persisted.parent_branch_revision = new_parent_rev;
+                persisted.write(repo.inner(), &target)?;
                 println!(
                     "{}",
                     format!("✓ Rebased '{}' onto '{}'", target, parent_branch).green()
