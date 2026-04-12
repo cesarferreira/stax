@@ -860,9 +860,11 @@ pub fn run(
                 println!();
             }
 
-            // Reload the stack so the merged-branch path's reparenting is reflected
-            // before we start resolving the upstream-gone branches' metadata.
-            let live_stack = Stack::load(&repo)?;
+            // Reload the stack so the merged-branch path's reparenting is
+            // reflected before we resolve upstream-gone branches. Fall back to
+            // the snapshot captured at the top of sync() if the reload fails,
+            // to degrade gracefully rather than aborting a mid-sync run.
+            let mut live_stack = Stack::load(&repo).unwrap_or_else(|_| stack.clone());
 
             // Lazy-initialize forge client once for any PR base updates below.
             let forge_client: Option<(tokio::runtime::Runtime, ForgeClient)> = {
@@ -889,15 +891,28 @@ pub fn run(
                     plan_blocking_worktree_cleanup(&repo, branch, force)?
                 };
 
-                // Resolve the parent children will be reparented to:
-                // recorded parent if it still exists locally, otherwise trunk.
-                let recorded_parent_branch = live_stack
-                    .branches
-                    .get(branch)
-                    .and_then(|b| b.parent.clone())
-                    .unwrap_or_else(|| stack.trunk.clone());
+                // Resolve the parent children will be reparented to. Walks up
+                // the recorded-parent chain skipping any branch that is itself
+                // scheduled for deletion in this pass, so a stack like A -> B -> C
+                // (where A and B both have upstream gone) lands C on trunk
+                // rather than on the soon-to-be-deleted A.
                 let (fallback_parent, parent_fallback_from) =
-                    resolve_effective_parent(&workdir, &recorded_parent_branch, &stack.trunk);
+                    resolve_fallback_parent_skipping_doomed(
+                        &workdir, &live_stack, branch, &gone,
+                    );
+
+                // Print the parent-fallback hint BEFORE the confirm prompt so the
+                // user knows why the prompt mentions a non-recorded parent.
+                if !quiet {
+                    if let Some(missing_parent) = &parent_fallback_from {
+                        println!(
+                            "    {} parent {} not available; using {}",
+                            "↪".yellow(),
+                            missing_parent.yellow(),
+                            fallback_parent.cyan()
+                        );
+                    }
+                }
 
                 let prompt = sync_delete_prompt(
                     branch,
@@ -932,17 +947,6 @@ pub fn run(
                     continue;
                 }
 
-                if !quiet {
-                    if let Some(missing_parent) = &parent_fallback_from {
-                        println!(
-                            "    {} parent {} not found locally; using {}",
-                            "↪".yellow(),
-                            missing_parent.yellow(),
-                            fallback_parent.cyan()
-                        );
-                    }
-                }
-
                 if is_current_branch {
                     match checkout_branch_for_cleanup(&repo, &workdir, &fallback_parent) {
                         Ok(()) => {
@@ -972,75 +976,24 @@ pub fn run(
                     }
                 }
 
-                // Reparent tracked children of this branch to the fallback parent
-                // before deleting, so descendants don't point at a branch that no
-                // longer exists. Mirrors the merged-branch cleanup path.
-                let children: Vec<String> = live_stack
-                    .branches
-                    .iter()
-                    .filter(|(_, info)| info.parent.as_deref() == Some(branch))
-                    .map(|(name, _)| name.clone())
-                    .collect();
-                let gone_branch_tip = repo.branch_commit(branch).ok();
+                // Reparent tracked children to the fallback parent before
+                // deleting. The shared helper also mirrors the merged-branch
+                // path's ancestor-check rationale from issue #120.
+                reparent_children_for_deletion(
+                    &repo,
+                    &live_stack,
+                    branch,
+                    &fallback_parent,
+                    forge_client.as_ref(),
+                    quiet,
+                )?;
 
-                for child in &children {
-                    if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
-                        // Preserve the old-parent boundary so restack can run
-                        // `git rebase --onto <new> <old>` precisely. Only use the
-                        // deleted branch's tip when it is still in the child's
-                        // ancestry; otherwise keep the recorded revision.
-                        let old_parent_boundary = gone_branch_tip
-                            .clone()
-                            .filter(|tip| repo.is_ancestor(tip, child).unwrap_or(false))
-                            .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
-
-                        let updated_meta = BranchMetadata {
-                            parent_branch_name: fallback_parent.clone(),
-                            parent_branch_revision: old_parent_boundary,
-                            ..child_meta.clone()
-                        };
-                        updated_meta.write(repo.inner(), child)?;
-
-                        // Best-effort PR base update. Upstream-gone branches usually
-                        // have closed PRs, so failures here are expected and logged.
-                        if let Some(pr_info) = &child_meta.pr_info {
-                            if let Some((rt, client)) = &forge_client {
-                                match rt.block_on(
-                                    client.update_pr_base(pr_info.number, &fallback_parent),
-                                ) {
-                                    Ok(()) => {
-                                        if !quiet {
-                                            println!(
-                                                "    {} updated PR #{} base → {}",
-                                                "↪".cyan(),
-                                                pr_info.number,
-                                                fallback_parent.cyan()
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        if !quiet {
-                                            println!(
-                                                "    {} couldn't update PR #{} base: {}",
-                                                "⚠".yellow(),
-                                                pr_info.number,
-                                                e
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !quiet {
-                            println!(
-                                "    {} reparented {} → {}",
-                                "↪".cyan(),
-                                child.cyan(),
-                                fallback_parent.cyan()
-                            );
-                        }
-                    }
+                // Refresh the in-memory stack so subsequent iterations see the
+                // just-reparented children under the new parent (preventing a
+                // later iteration from bouncing them again). Fall back to the
+                // current live_stack if the reload fails.
+                if let Ok(refreshed) = Stack::load(&repo) {
+                    live_stack = refreshed;
                 }
 
                 let local_delete = delete_local_branch_for_sync(
@@ -1950,6 +1903,139 @@ fn resolve_effective_parent(
     }
 
     (recorded_parent.to_string(), None)
+}
+
+/// Walk the parent chain from `branch` skipping any branch in `doomed` (e.g.
+/// branches scheduled for deletion in the same sync pass). Returns the first
+/// ancestor that is not doomed and still exists locally, falling back to trunk.
+/// This prevents reparenting children onto a branch that is about to be deleted
+/// when multiple branches in the same stack have their upstream gone.
+fn resolve_fallback_parent_skipping_doomed(
+    workdir: &std::path::Path,
+    stack: &Stack,
+    branch: &str,
+    doomed: &[String],
+) -> (String, Option<String>) {
+    let recorded_parent = stack
+        .branches
+        .get(branch)
+        .and_then(|b| b.parent.clone())
+        .unwrap_or_else(|| stack.trunk.clone());
+
+    let mut current = recorded_parent.clone();
+    let mut visited: std::collections::HashSet<String> =
+        std::collections::HashSet::from([branch.to_string()]);
+
+    loop {
+        if !visited.insert(current.clone()) {
+            // Cycle guard: fall back to trunk
+            break;
+        }
+        let is_doomed = doomed.iter().any(|d| d == &current);
+        let exists_locally = local_branch_exists(workdir, &current);
+        if !is_doomed && exists_locally {
+            let fallback_from = if current == recorded_parent {
+                None
+            } else {
+                Some(recorded_parent.clone())
+            };
+            return (current, fallback_from);
+        }
+        // Walk up to the parent of `current`; if none, break to trunk.
+        match stack.branches.get(&current).and_then(|b| b.parent.clone()) {
+            Some(next) if next != current => current = next,
+            _ => break,
+        }
+    }
+
+    // Fall back to trunk if nothing else worked.
+    let fallback_from = if recorded_parent == stack.trunk {
+        None
+    } else {
+        Some(recorded_parent)
+    };
+    (stack.trunk.clone(), fallback_from)
+}
+
+/// Reparent tracked children of `branch` onto `new_parent`, preserving the old
+/// parent boundary for later restack (see issue #120 rationale). Best-effort
+/// updates the PR base on the forge when a child has a tracked PR.
+///
+/// Used by both the merged-branch and upstream-gone cleanup paths.
+fn reparent_children_for_deletion(
+    repo: &GitRepo,
+    stack_snapshot: &Stack,
+    branch: &str,
+    new_parent: &str,
+    forge_client: Option<&(tokio::runtime::Runtime, ForgeClient)>,
+    quiet: bool,
+) -> Result<()> {
+    let children: Vec<String> = stack_snapshot
+        .branches
+        .iter()
+        .filter(|(_, info)| info.parent.as_deref() == Some(branch))
+        .map(|(name, _)| name.clone())
+        .collect();
+    let doomed_tip = repo.branch_commit(branch).ok();
+
+    for child in &children {
+        let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? else {
+            continue;
+        };
+
+        // Preserve the old-parent boundary so restack can run `git rebase
+        // --onto <new> <old>` precisely. Only use the deleted branch's tip
+        // when it is still in the child's ancestry; otherwise keep the
+        // recorded revision (see #120).
+        let old_parent_boundary = doomed_tip
+            .clone()
+            .filter(|tip| repo.is_ancestor(tip, child).unwrap_or(false))
+            .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
+
+        let updated_meta = BranchMetadata {
+            parent_branch_name: new_parent.to_string(),
+            parent_branch_revision: old_parent_boundary,
+            ..child_meta.clone()
+        };
+        updated_meta.write(repo.inner(), child)?;
+
+        // Best-effort PR base update. Expected to fail when upstream is gone
+        // (PR closed) — log and continue.
+        if let (Some(pr_info), Some((rt, client))) = (&child_meta.pr_info, forge_client) {
+            match rt.block_on(client.update_pr_base(pr_info.number, new_parent)) {
+                Ok(()) => {
+                    if !quiet {
+                        println!(
+                            "    {} updated PR #{} base → {}",
+                            "↪".cyan(),
+                            pr_info.number,
+                            new_parent.cyan()
+                        );
+                    }
+                }
+                Err(e) => {
+                    if !quiet {
+                        println!(
+                            "    {} couldn't update PR #{} base: {}",
+                            "⚠".yellow(),
+                            pr_info.number,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        if !quiet {
+            println!(
+                "    {} reparented {} → {}",
+                "↪".cyan(),
+                child.cyan(),
+                new_parent.cyan()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Record CI history for merged branches before they are deleted

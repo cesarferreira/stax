@@ -4320,6 +4320,83 @@ fn test_sync_delete_upstream_gone_reparents_tracked_children() {
 }
 
 #[test]
+fn test_sync_delete_upstream_gone_reparents_across_multiple_doomed_ancestors() {
+    // Regression guard: if both the parent AND the grandparent are upstream-gone,
+    // the deepest descendant must land on the first non-doomed ancestor (trunk
+    // in this case), NOT on a soon-to-be-deleted ancestor.
+    let repo = TestRepo::new_with_remote();
+
+    // Build main -> grand-200 -> mid-200 -> leaf-200
+    repo.run_stax(&["bc", "grand-200"]);
+    let grand = repo.current_branch();
+    repo.create_file("grand.txt", "grand");
+    repo.commit("grand");
+    repo.git(&["push", "-u", "origin", &grand]);
+
+    repo.run_stax(&["bc", "mid-200"]);
+    let mid = repo.current_branch();
+    repo.create_file("mid.txt", "mid");
+    repo.commit("mid");
+    repo.git(&["push", "-u", "origin", &mid]);
+
+    repo.run_stax(&["bc", "leaf-200"]);
+    let leaf = repo.current_branch();
+    repo.create_file("leaf.txt", "leaf");
+    repo.commit("leaf");
+    repo.git(&["push", "-u", "origin", &leaf]);
+
+    // Delete both grand AND mid on the remote. Leaf survives remotely.
+    repo.git(&["checkout", "main"]);
+    repo.git(&["push", "origin", "--delete", &grand]);
+    repo.git(&["push", "origin", "--delete", &mid]);
+
+    let output = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|b| *b == grand),
+        "grand should be deleted, got: {:?}",
+        branches
+    );
+    assert!(
+        !branches.iter().any(|b| *b == mid),
+        "mid should be deleted, got: {:?}",
+        branches
+    );
+    assert!(
+        branches.iter().any(|b| *b == leaf),
+        "leaf should survive, got: {:?}",
+        branches
+    );
+
+    // Leaf must NOT point at either deleted branch; it should land on main.
+    let status = repo.run_stax(&["status", "--json"]);
+    let json: serde_json::Value =
+        serde_json::from_str(&TestRepo::stdout(&status)).expect("valid JSON");
+    let leaf_entry = json["branches"]
+        .as_array()
+        .expect("branches array")
+        .iter()
+        .find(|b| b["name"].as_str() == Some(&leaf))
+        .expect("leaf in status");
+    let new_parent = leaf_entry["parent"]
+        .as_str()
+        .expect("leaf has a parent field");
+    assert_ne!(new_parent, mid, "leaf still points at deleted mid");
+    assert_ne!(new_parent, grand, "leaf still points at deleted grand");
+    assert_eq!(
+        new_parent, "main",
+        "Expected leaf to be reparented to main, got: {}",
+        new_parent
+    );
+}
+
+#[test]
 fn test_sync_detects_branch_with_empty_diff_against_trunk() {
     let repo = TestRepo::new_with_remote();
 
