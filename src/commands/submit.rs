@@ -110,6 +110,7 @@ pub fn run(
     ai_body: bool,
     rerequest_review: bool,
     squash: bool,
+    update_title: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
@@ -568,17 +569,20 @@ pub fn run(
                 true // New PR always needs creation
             };
 
-            // Capture tip commit subject for auto-updating PR title on existing PRs
-            let tip_commit_subject = if pr_number.is_some() && !is_empty {
+            // Capture tip commit subject for auto-updating PR title on existing PRs.
+            // Only computed when the user opts in via `--update-title` so default submits
+            // do not silently rewrite PR titles from local commit messages.
+            let tip_commit_subject = if update_title && pr_number.is_some() && !is_empty {
                 tip_commit_subject(repo.workdir()?, branch)
             } else {
                 None
             };
-            let needs_title_update = existing_pr
-                .as_ref()
-                .zip(tip_commit_subject.as_ref())
-                .map(|(pr, commit_subject)| pr.title != *commit_subject)
-                .unwrap_or(false);
+            let needs_title_update = update_title
+                && existing_pr
+                    .as_ref()
+                    .zip(tip_commit_subject.as_ref())
+                    .map(|(pr, commit_subject)| pr.title != *commit_subject)
+                    .unwrap_or(false);
 
             plans.push(PrPlan {
                 branch: branch.clone(),

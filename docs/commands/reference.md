@@ -175,6 +175,7 @@ Worktree launch examples:
 - `st submit --no-template`
 - `st submit --edit`
 - `st submit --rerequest-review`
+- `st submit --update-title` (sync existing PR titles with the tip commit subject when they differ)
 - `~/.config/stax/config.toml`: set `[submit] stack_links = "comment"` (or `"body" | "both" | "off"`)
 - `st merge --all --method squash --yes`
 - `st merge --dry-run`
