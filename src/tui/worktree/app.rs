@@ -136,7 +136,7 @@ pub struct WorktreeApp {
     loader: Option<Receiver<LoaderUpdate>>,
     removal_operation: Option<Receiver<RemovalUpdate>>,
     removal_in_progress: bool,
-    removal_status: Option<String>,
+    pub removal_status: Option<String>,
     repo_path: PathBuf,
 }
 

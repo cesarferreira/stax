@@ -264,21 +264,30 @@ fn render_details(f: &mut Frame, app: &WorktreeApp, area: Rect) {
 }
 
 fn render_status_bar(f: &mut Frame, app: &WorktreeApp, area: Rect) {
-    let status_line = if let Some(message) = &app.status_message {
-        Line::from(Span::styled(
-            message.clone(),
+    let status_text = if let Some(removal_msg) = &app.removal_status {
+        removal_msg.clone()
+    } else if let Some(msg) = &app.status_message {
+        msg.clone()
+    } else if let Some(loading_msg) = app.loading_summary() {
+        loading_msg
+    } else {
+        "Tmux-first dashboard: browse lanes here, enter the session in tmux when ready.".to_string()
+    };
+
+    let status_line = Line::from(Span::styled(
+        status_text,
+        if app.removal_status.is_some() {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else if app.status_message.is_some() {
             Style::default()
                 .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ))
-    } else if let Some(message) = app.loading_summary() {
-        Line::from(Span::styled(message, Style::default().fg(Color::DarkGray)))
-    } else {
-        Line::from(Span::styled(
-            "Tmux-first dashboard: browse lanes here, enter the session in tmux when ready.",
-            Style::default().fg(Color::DarkGray),
-        ))
-    };
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        },
+    ));
 
     let shortcuts_line = Line::from(vec![
         key_hint("↑↓", Color::Cyan),
@@ -370,23 +379,52 @@ fn render_create_modal(f: &mut Frame, app: &WorktreeApp) {
 fn render_delete_modal(f: &mut Frame, app: &WorktreeApp) {
     let area = centered_rect(52, 20, f.area());
     f.render_widget(Clear, area);
+
     let name = app
         .selected()
         .map(|record| record.info.name.clone())
         .unwrap_or_else(|| "this worktree".to_string());
-    let lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Remove ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(name, Style::default().fg(Color::Red)),
-            Span::raw("?"),
-        ]),
-        Line::from(""),
-        Line::from("Press y to confirm or Esc to cancel."),
-    ];
+
+    let (title, lines) = match app.mode {
+        DashboardMode::ConfirmDelete => {
+            let lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Remove ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(&name, Style::default().fg(Color::Red)),
+                    Span::raw("?"),
+                ]),
+                Line::from(""),
+                Line::from("Press y to confirm or Esc to cancel."),
+            ];
+            (" Confirm Remove ", lines)
+        }
+        DashboardMode::ConfirmForceDelete => {
+            let lines = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        "Warning: ",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(&name, Style::default().fg(Color::Red)),
+                    Span::raw(" has uncommitted changes."),
+                ]),
+                Line::from(""),
+                Line::from("Force remove anyway?"),
+                Line::from(""),
+                Line::from("Press y to force remove or Esc to cancel."),
+            ];
+            (" Force Remove ", lines)
+        }
+        _ => return, // shouldn't happen
+    };
+
     let widget = Paragraph::new(lines).block(
         Block::default()
-            .title(" Confirm Remove ")
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Red)),
     );
