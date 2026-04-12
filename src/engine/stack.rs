@@ -17,6 +17,7 @@ pub struct StackBranch {
 }
 
 /// The full stack structure
+#[derive(Debug, Clone)]
 pub struct Stack {
     pub branches: HashMap<String, StackBranch>,
     pub trunk: String,
