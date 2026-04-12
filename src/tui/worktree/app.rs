@@ -1,7 +1,9 @@
+use crate::commands::worktree::remove::remove_worktree_with_hooks;
 use crate::commands::worktree::shared::{
-    compute_worktree_details, default_tmux_session_name, list_tmux_sessions, status_labels,
-    TmuxSession, WorktreeDetails,
+    compute_worktree_details, default_tmux_session_name, find_worktree, list_tmux_sessions,
+    status_labels, TmuxSession, WorktreeDetails,
 };
+use crate::config::Config;
 use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
 use anyhow::Result;
@@ -274,11 +276,36 @@ impl WorktreeApp {
 
     pub fn confirm_delete(&mut self) {
         if let Some(record) = self.selected() {
-            self.pending_command = Some(PendingCommand::Remove {
-                name: record.info.name.clone(),
-            });
-            self.should_quit = true;
+            // Check if worktree is dirty and details are loaded
+            if let Some(details) = &record.details {
+                if details.dirty {
+                    // Dirty worktree: show force confirmation
+                    self.mode = DashboardMode::ConfirmForceDelete;
+                    return;
+                }
+            }
+
+            // Clean worktree or details not loaded: proceed with removal
+            self.start_removal(false);
+            self.mode = DashboardMode::Normal;
         }
+    }
+
+    pub fn confirm_force_delete(&mut self) {
+        self.start_removal(true);
+        self.mode = DashboardMode::Normal;
+    }
+
+    fn start_removal(&mut self, force: bool) {
+        let Some(record) = self.selected() else {
+            return;
+        };
+
+        let worktree_name = record.info.name.clone();
+        let repo_path = self.repo_path.clone();
+
+        self.removal_operation = Some(spawn_removal_operation(repo_path, worktree_name, force));
+        self.removal_in_progress = true;
     }
 
     pub fn request_restack(&mut self) {
@@ -446,6 +473,70 @@ fn spawn_loader(repo_path: PathBuf, worktrees: Vec<WorktreeInfo>) -> Receiver<Lo
         }
 
         let _ = sender.send(LoaderUpdate::Done);
+    });
+
+    receiver
+}
+
+fn spawn_removal_operation(
+    repo_path: PathBuf,
+    worktree_name: String,
+    force: bool,
+) -> Receiver<RemovalUpdate> {
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let repo = match GitRepo::open_from_path(&repo_path) {
+            Ok(repo) => repo,
+            Err(e) => {
+                let _ = sender.send(RemovalUpdate::Error {
+                    message: format!("Failed to open repository: {}", e),
+                });
+                return;
+            }
+        };
+
+        let config = match Config::load() {
+            Ok(config) => config,
+            Err(e) => {
+                let _ = sender.send(RemovalUpdate::Error {
+                    message: format!("Failed to load config: {}", e),
+                });
+                return;
+            }
+        };
+
+        let worktree = match find_worktree(&repo, &worktree_name) {
+            Ok(Some(wt)) => wt,
+            Ok(None) => {
+                let _ = sender.send(RemovalUpdate::Error {
+                    message: format!("Worktree '{}' not found", worktree_name),
+                });
+                return;
+            }
+            Err(e) => {
+                let _ = sender.send(RemovalUpdate::Error {
+                    message: format!("Failed to find worktree: {}", e),
+                });
+                return;
+            }
+        };
+
+        let _ = sender.send(RemovalUpdate::RunningPreHook);
+        let _ = sender.send(RemovalUpdate::RemovingWorktree);
+
+        match remove_worktree_with_hooks(&repo, &config, &worktree, force) {
+            Ok(display_name) => {
+                let _ = sender.send(RemovalUpdate::Success {
+                    removed_name: display_name,
+                });
+            }
+            Err(e) => {
+                let _ = sender.send(RemovalUpdate::Error {
+                    message: format!("Removal failed: {}", e),
+                });
+            }
+        }
     });
 
     receiver
