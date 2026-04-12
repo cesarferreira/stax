@@ -44,6 +44,7 @@ struct PrPlan {
     branch: String,
     parent: String,
     existing_pr: Option<u64>,
+    existing_pr_is_draft: Option<bool>,
     // For new PRs, we'll collect these upfront
     title: Option<String>,
     body: Option<String>,
@@ -68,11 +69,14 @@ const PR_TYPE_DEFAULT_INDEX: usize = 0;
 
 fn resolve_is_draft_without_prompt(
     draft_flag_set: bool,
+    publish_flag_set: bool,
     draft: bool,
     no_prompt: bool,
 ) -> Option<bool> {
     if draft_flag_set {
         Some(draft)
+    } else if publish_flag_set {
+        Some(false)
     } else if no_prompt {
         Some(true)
     } else {
@@ -84,6 +88,7 @@ fn resolve_is_draft_without_prompt(
 pub fn run(
     scope: SubmitScope,
     draft: bool,
+    publish: bool,
     no_pr: bool,
     no_fetch: bool,
     _force: bool, // kept for CLI compatibility
@@ -394,6 +399,7 @@ pub fn run(
                 branch: branch.clone(),
                 parent: meta.parent_branch_name,
                 existing_pr,
+                existing_pr_is_draft: None,
                 title: None,
                 body: None,
                 is_draft: None,
@@ -560,6 +566,7 @@ pub fn run(
                 branch: branch.clone(),
                 parent: base,
                 existing_pr: pr_number,
+                existing_pr_is_draft: existing_pr.as_ref().map(|pr| pr.info.is_draft),
                 title: None,
                 body: None,
                 is_draft: None,
@@ -746,9 +753,9 @@ pub fn run(
                 }
             };
 
-            // Ask about draft vs publish (only if --draft wasn't explicitly set)
+            // Ask about draft vs publish (only if --draft/--publish wasn't explicitly set)
             let is_draft = if let Some(is_draft) =
-                resolve_is_draft_without_prompt(draft_flag_set, draft, no_prompt)
+                resolve_is_draft_without_prompt(draft_flag_set, publish, draft, no_prompt)
             {
                 is_draft
             } else {
@@ -923,6 +930,13 @@ pub fn run(
 
             let meta = BranchMetadata::read(repo.inner(), &plan.branch)?
                 .context(format!("No metadata for branch {}", plan.branch))?;
+            let desired_draft_state = if draft {
+                Some(true)
+            } else if publish {
+                Some(false)
+            } else {
+                None
+            };
 
             if let Some(existing_pr_number) = plan.existing_pr {
                 if plan.needs_pr_update {
@@ -939,6 +953,25 @@ pub fn run(
 
                     apply_pr_metadata(&client, existing_pr_number, &reviewers, &labels, &assignees)
                         .await?;
+
+                    // Toggle draft status if --draft or --publish was passed.
+                    if let Some(is_draft) = desired_draft_state {
+                        if plan.existing_pr_is_draft == Some(is_draft) {
+                            let reason = if is_draft {
+                                "already draft"
+                            } else {
+                                "already published"
+                            };
+                            if verbose && !quiet {
+                                println!(
+                                    "      Skipping draft toggle for #{} ({})",
+                                    existing_pr_number, reason
+                                );
+                            }
+                        } else {
+                            client.set_pr_draft(existing_pr_number, is_draft).await?;
+                        }
+                    }
 
                     // Re-request review from existing reviewers if flag is set
                     if rerequest_review {
@@ -973,7 +1006,48 @@ pub fn run(
                         pr_number: Some(pr.number),
                     });
                 } else {
-                    // No-op - just add to pr_infos for summary
+                    // Toggle draft status even when no other update is needed
+                    if let Some(is_draft) = desired_draft_state {
+                        let draft_timer = LiveTimer::maybe_new(
+                            !quiet,
+                            &format!(
+                                "{} {} #{}...",
+                                if is_draft {
+                                    "Converting to draft"
+                                } else {
+                                    "Publishing"
+                                },
+                                plan.branch,
+                                existing_pr_number,
+                            ),
+                        );
+                        if plan.existing_pr_is_draft == Some(is_draft) {
+                            LiveTimer::maybe_finish_skipped(
+                                draft_timer,
+                                if is_draft {
+                                    "already draft"
+                                } else {
+                                    "already published"
+                                },
+                            );
+                        } else {
+                            client.set_pr_draft(existing_pr_number, is_draft).await?;
+                            LiveTimer::maybe_finish_ok(draft_timer, "done");
+
+                            // Refresh metadata after draft status change
+                            let pr = client.get_pr(existing_pr_number).await?;
+                            let updated_meta = BranchMetadata {
+                                pr_info: Some(crate::engine::metadata::PrInfo {
+                                    number: pr.number,
+                                    state: pr.state.clone(),
+                                    is_draft: Some(pr.is_draft),
+                                }),
+                                ..meta
+                            };
+                            updated_meta.write(repo.inner(), &plan.branch)?;
+                        }
+                    }
+
                     pr_infos.push(StackPrInfo {
                         branch: plan.branch.clone(),
                         pr_number: Some(existing_pr_number),
@@ -1666,7 +1740,7 @@ mod tests {
     #[test]
     fn no_prompt_defaults_to_draft() {
         assert_eq!(
-            resolve_is_draft_without_prompt(false, false, true),
+            resolve_is_draft_without_prompt(false, false, false, true),
             Some(true)
         );
     }
@@ -1674,14 +1748,33 @@ mod tests {
     #[test]
     fn explicit_draft_flag_still_forces_draft() {
         assert_eq!(
-            resolve_is_draft_without_prompt(true, true, false),
+            resolve_is_draft_without_prompt(true, false, true, false),
             Some(true)
         );
     }
 
     #[test]
     fn explicit_no_draft_flag_still_requires_prompt() {
-        assert_eq!(resolve_is_draft_without_prompt(false, false, false), None);
+        assert_eq!(
+            resolve_is_draft_without_prompt(false, false, false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn publish_flag_forces_non_draft() {
+        assert_eq!(
+            resolve_is_draft_without_prompt(false, true, false, false),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn publish_flag_overrides_no_prompt_default() {
+        assert_eq!(
+            resolve_is_draft_without_prompt(false, true, false, true),
+            Some(false)
+        );
     }
 
     #[test]

@@ -226,3 +226,5 @@ Worktree launch examples:
 - `st edit --yes` (skip final confirmation; interactive commit selection still required)
 - `st edit --no-verify` (skip pre-commit hooks during rebase)
 - `st create --insert` (reparent children of current branch to the new branch)
+- `st submit --publish` (convert existing draft PRs to published)
+- `st submit --draft` (convert existing PRs to draft)

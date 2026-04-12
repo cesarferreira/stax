@@ -105,6 +105,9 @@ struct UpdateMrRequest<'a> {
     target_branch: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<&'a str>,
+    /// GitLab 14.0+ supports setting draft status directly via the `draft` field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    draft: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -226,6 +229,7 @@ impl GitLabClient {
         let request = UpdateMrRequest {
             target_branch: Some(new_base),
             description: None,
+            draft: None,
         };
         let _: GitLabMr = put_json(
             &self.client,
@@ -240,6 +244,22 @@ impl GitLabClient {
         let request = UpdateMrRequest {
             target_branch: None,
             description: Some(body),
+            draft: None,
+        };
+        let _: GitLabMr = put_json(
+            &self.client,
+            &self.project_url(&format!("/merge_requests/{}", number)),
+            &request,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_pr_draft(&self, number: u64, is_draft: bool) -> Result<()> {
+        let request = UpdateMrRequest {
+            target_branch: None,
+            description: None,
+            draft: Some(is_draft),
         };
         let _: GitLabMr = put_json(
             &self.client,

@@ -107,6 +107,8 @@ struct UpdatePullRequest<'a> {
     base: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     body: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    draft: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -213,6 +215,7 @@ impl GiteaClient {
         let request = UpdatePullRequest {
             base: Some(new_base),
             body: None,
+            draft: None,
         };
         let _: GiteaPull = patch_json(
             &self.client,
@@ -227,6 +230,22 @@ impl GiteaClient {
         let request = UpdatePullRequest {
             base: None,
             body: Some(body),
+            draft: None,
+        };
+        let _: GiteaPull = patch_json(
+            &self.client,
+            &self.repo_url(&format!("/pulls/{}", number)),
+            &request,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_pr_draft(&self, number: u64, is_draft: bool) -> Result<()> {
+        let request = UpdatePullRequest {
+            base: None,
+            body: None,
+            draft: Some(is_draft),
         };
         let _: GiteaPull = patch_json(
             &self.client,

@@ -541,6 +541,64 @@ impl GitHubClient {
         Ok(())
     }
 
+    /// Set the draft status of an existing PR.
+    ///
+    /// Uses GraphQL mutations because the REST API does not support toggling draft status.
+    /// - `convertPullRequestToDraft` to mark as draft
+    /// - `markPullRequestReadyForReview` to publish
+    pub async fn set_pr_draft(&self, pr_number: u64, is_draft: bool) -> Result<()> {
+        let node_id = self.get_pr_node_id(pr_number).await?;
+
+        let mutation = if is_draft {
+            self.record_api_call("pulls.convertToDraft");
+            format!(
+                r#"
+                mutation {{
+                    convertPullRequestToDraft(input: {{ pullRequestId: "{}" }}) {{
+                        pullRequest {{ isDraft }}
+                    }}
+                }}
+                "#,
+                node_id
+            )
+        } else {
+            self.record_api_call("pulls.markReadyForReview");
+            format!(
+                r#"
+                mutation {{
+                    markPullRequestReadyForReview(input: {{ pullRequestId: "{}" }}) {{
+                        pullRequest {{ isDraft }}
+                    }}
+                }}
+                "#,
+                node_id
+            )
+        };
+
+        let response: GraphQLResponse<serde_json::Value> = self
+            .octocrab
+            .graphql(&serde_json::json!({ "query": mutation }))
+            .await
+            .context("Failed to update PR draft status")?;
+
+        if let Some(errors) = response.errors {
+            if !errors.is_empty() {
+                anyhow::bail!(
+                    "Failed to {} PR #{}: {}",
+                    if is_draft {
+                        "convert to draft"
+                    } else {
+                        "mark ready for review"
+                    },
+                    pr_number,
+                    errors[0].message
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Merge the pull request base branch into the head branch (GitHub "Update branch" button).
     ///
     /// See <https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request-branch>.

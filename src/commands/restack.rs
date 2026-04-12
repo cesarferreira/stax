@@ -730,6 +730,7 @@ fn submit_after_restack(quiet: bool) -> Result<()> {
     crate::commands::submit::run(
         crate::commands::submit::SubmitScope::Stack,
         false,  // draft
+        false,  // publish
         false,  // no_pr
         false,  // no_fetch
         false,  // force
