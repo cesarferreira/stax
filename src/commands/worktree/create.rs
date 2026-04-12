@@ -26,6 +26,8 @@ pub fn run(
     tmux: bool,
     tmux_session: Option<String>,
     args: Vec<String>,
+    yolo: bool,
+    agent_args: Vec<String>,
 ) -> Result<()> {
     if pick && name.is_some() {
         bail!("Use either a name or --pick, not both.");
@@ -40,6 +42,8 @@ pub fn run(
         tmux,
         tmux_session,
         args,
+        yolo,
+        agent_args,
     };
 
     if let Some(ref target) = name {

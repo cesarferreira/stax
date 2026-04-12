@@ -156,6 +156,36 @@ Notes:
 - if you omit `--agent`, stax uses your configured default agent
 - the optional `[prompt]` is passed through to the launched agent
 
+## Auto-accepting Permission Prompts (`--yolo`)
+
+By default every agent launches with its normal interactive permission flow. For well-scoped work in an isolated lane, you often want the agent to run autonomously. `--yolo` injects each agent's permission-bypass flag:
+
+| Agent | Injected flag |
+|---|---|
+| `claude` | `--dangerously-skip-permissions` |
+| `codex` | `--dangerously-bypass-approvals-and-sandbox` |
+| `opencode` | `--dangerously-skip-permissions` |
+| `gemini` | `--yolo` |
+
+```bash
+st lane fix-flaky --agent claude --yolo "stabilize the flaky test suite"
+st lane refactor --agent codex --yolo "split the auth module"
+```
+
+`--yolo` only makes sense with `--agent` (it needs to know which flag to inject).
+
+**Use with care**: yolo mode lets the agent edit files, run commands, and touch your environment without prompting. The lane's worktree is isolated, but everything the agent runs is still running as you.
+
+## Extra Agent Flags (`--agent-arg`)
+
+For any flag not covered by `--yolo`, use `--agent-arg` (repeatable):
+
+```bash
+st lane big-refactor --agent claude --agent-arg=--thinking --agent-arg=--verbose "pull apart the auth module"
+```
+
+Values are forwarded to the agent verbatim, before the prompt.
+
 ## VS Code (or Cursor) Integration
 
 By default, `st lane` launches the agent in a tmux session and does not open your editor. If you want your **existing** VS Code / Cursor window to show each new lane as an extra folder in the Explorer — without spawning a new window per lane — add two worktree hooks to `~/.config/stax/config.toml`:
