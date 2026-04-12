@@ -1317,12 +1317,8 @@ mod tests {
 
     #[test]
     fn build_tmux_launch_spec_inside_tmux_no_agent_opens_shell_window() {
-        let launch = build_tmux_launch_spec(
-            "my-lane",
-            None,
-            ExistingTmuxSessionBehavior::Attach,
-        )
-        .expect("tmux launch");
+        let launch = build_tmux_launch_spec("my-lane", None, ExistingTmuxSessionBehavior::Attach)
+            .expect("tmux launch");
         match launch {
             LaunchSpec::Shell { command, .. } => {
                 assert!(

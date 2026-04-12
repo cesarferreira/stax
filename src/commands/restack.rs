@@ -291,13 +291,12 @@ fn run_impl(
         if auto_stash_pop
             && !stashed_worktree_set.contains(&target_workdir)
             && repo.is_dirty_at(&target_workdir)?
+            && repo.stash_push_at(&target_workdir)?
         {
-            if repo.stash_push_at(&target_workdir)? {
-                stashed_worktree_set.insert(target_workdir.clone());
-                stashed_worktrees.push(target_workdir.clone());
-                if !quiet {
-                    print_stash_message(&current_workdir, &target_workdir);
-                }
+            stashed_worktree_set.insert(target_workdir.clone());
+            stashed_worktrees.push(target_workdir.clone());
+            if !quiet {
+                print_stash_message(&current_workdir, &target_workdir);
             }
         }
 

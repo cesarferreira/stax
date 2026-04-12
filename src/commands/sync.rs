@@ -1273,8 +1273,7 @@ pub fn run(
         if !restack && stats.merged_branches_cleaned > 0 && config.ui.tips {
             println!(
                 "{}",
-                "Hint: Run `st restack --all` to rebase branches onto the updated trunk."
-                    .dimmed()
+                "Hint: Run `st restack --all` to rebase branches onto the updated trunk.".dimmed()
             );
         }
     }
@@ -1599,6 +1598,7 @@ fn plan_blocking_worktree_cleanup(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn delete_local_branch_for_sync(
     repo: &GitRepo,
     config: &Config,

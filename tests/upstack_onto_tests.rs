@@ -9,9 +9,12 @@ fn find_branch<'a>(
     branches: &'a [serde_json::Value],
     suffix: &str,
 ) -> Option<&'a serde_json::Value> {
-    branches
-        .iter()
-        .find(|b| b["name"].as_str().map(|n| n.ends_with(suffix)).unwrap_or(false))
+    branches.iter().find(|b| {
+        b["name"]
+            .as_str()
+            .map(|n| n.ends_with(suffix))
+            .unwrap_or(false)
+    })
 }
 
 #[test]
@@ -38,8 +41,16 @@ fn upstack_onto_moves_branch_and_descendants() {
     output.assert_success();
 
     let stdout = TestRepo::stdout(&output);
-    assert!(stdout.contains("Reparented"), "Should mention reparenting: {}", stdout);
-    assert!(stdout.contains("descendant"), "Should mention descendants: {}", stdout);
+    assert!(
+        stdout.contains("Reparented"),
+        "Should mention reparenting: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("descendant"),
+        "Should mention descendants: {}",
+        stdout
+    );
 
     // Verify b's parent is now main
     let status = repo.run_stax(&["status", "--json"]);
@@ -112,7 +123,11 @@ fn upstack_onto_single_branch_no_descendants() {
 
     let stdout = TestRepo::stdout(&output);
     assert!(stdout.contains("Reparented"), "Should reparent: {}", stdout);
-    assert!(!stdout.contains("descendant"), "Leaf branch should have no descendants: {}", stdout);
+    assert!(
+        !stdout.contains("descendant"),
+        "Leaf branch should have no descendants: {}",
+        stdout
+    );
 }
 
 #[test]

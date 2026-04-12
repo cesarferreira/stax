@@ -849,10 +849,22 @@ fn test_split_hunk_select_later_hunks_first() {
 
     // split_1 should have A:2, A:3 + all B (inverted from the other tests)
     let s1_a = file_content(&repo, &split_1, "file_a.txt");
-    assert!(!s1_a.contains("a line 3 MODIFIED"), "split_1 should NOT have A:0");
-    assert!(!s1_a.contains("a line 15 MODIFIED"), "split_1 should NOT have A:1");
-    assert!(s1_a.contains("a line 30 MODIFIED"), "split_1 should have A:2");
-    assert!(s1_a.contains("a line 45 MODIFIED"), "split_1 should have A:3");
+    assert!(
+        !s1_a.contains("a line 3 MODIFIED"),
+        "split_1 should NOT have A:0"
+    );
+    assert!(
+        !s1_a.contains("a line 15 MODIFIED"),
+        "split_1 should NOT have A:1"
+    );
+    assert!(
+        s1_a.contains("a line 30 MODIFIED"),
+        "split_1 should have A:2"
+    );
+    assert!(
+        s1_a.contains("a line 45 MODIFIED"),
+        "split_1 should have A:3"
+    );
 
     // original should have everything
     let final_a = file_content(&repo, &original, "file_a.txt");
@@ -879,8 +891,7 @@ fn test_split_hunk_sequential_mode_partial() {
     // Round 2 (list mode): remaining A:2, A:3
     //   j, space, j, space, Enter, Enter
 
-    let script =
-        "sleep 1; printf '\\tyyynnna\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
+    let script = "sleep 1; printf '\\tyyynnna\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
     let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], script);
     assert!(
         output.status.success(),

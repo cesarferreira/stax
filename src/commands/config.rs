@@ -48,11 +48,26 @@ pub fn run(reset_ai: bool, no_prompt: bool, yes: bool, set_ai: bool) -> Result<(
 
 fn set_ai_interactive() -> Result<()> {
     const FEATURES: &[(&str, &str)] = &[
-        ("global", "Global default  (used when no feature override is set)"),
-        ("generate", "generate        (PR body — stax generate, stax submit --ai-body)"),
-        ("standup", "standup         (standup summary — stax standup --summary)"),
-        ("resolve", "resolve         (conflict resolution — stax resolve)"),
-        ("lane", "lane            (interactive coding agent — stax lane)"),
+        (
+            "global",
+            "Global default  (used when no feature override is set)",
+        ),
+        (
+            "generate",
+            "generate        (PR body — stax generate, stax submit --ai-body)",
+        ),
+        (
+            "standup",
+            "standup         (standup summary — stax standup --summary)",
+        ),
+        (
+            "resolve",
+            "resolve         (conflict resolution — stax resolve)",
+        ),
+        (
+            "lane",
+            "lane            (interactive coding agent — stax lane)",
+        ),
     ];
 
     let items: Vec<&str> = FEATURES.iter().map(|(_, label)| *label).collect();

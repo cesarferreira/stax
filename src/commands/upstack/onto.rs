@@ -18,13 +18,12 @@ pub fn run(target: Option<String>, restack: bool) -> Result<()> {
     }
 
     // Ensure the branch is tracked
-    let old_meta = BranchMetadata::read(repo.inner(), &current)?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Branch '{}' is not tracked by stax. Run `st branch track` first.",
-                current
-            )
-        })?;
+    let old_meta = BranchMetadata::read(repo.inner(), &current)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Branch '{}' is not tracked by stax. Run `st branch track` first.",
+            current
+        )
+    })?;
 
     let descendants = stack.descendants(&current);
 
@@ -47,8 +46,11 @@ pub fn run(target: Option<String>, restack: bool) -> Result<()> {
     if old_meta.parent_branch_name == new_parent {
         println!(
             "{}",
-            format!("'{}' is already parented onto '{}'. Nothing to do.", current, new_parent)
-                .dimmed()
+            format!(
+                "'{}' is already parented onto '{}'. Nothing to do.",
+                current, new_parent
+            )
+            .dimmed()
         );
         return Ok(());
     }
@@ -111,7 +113,13 @@ pub fn run(target: Option<String>, restack: bool) -> Result<()> {
         // Rebase the root branch directly using old parent info as upstream
         // (same approach as reparent.rs -- we need the old parent boundary
         // because the metadata was already overwritten)
-        let rebase_upstream = resolve_rebase_upstream(&repo, &old_parent_name, &old_parent_rev, &current, &merge_base)?;
+        let rebase_upstream = resolve_rebase_upstream(
+            &repo,
+            &old_parent_name,
+            &old_parent_rev,
+            &current,
+            &merge_base,
+        )?;
 
         match repo.rebase_branch_onto_with_provenance(
             &current,
@@ -154,8 +162,7 @@ pub fn run(target: Option<String>, restack: bool) -> Result<()> {
     } else {
         println!(
             "{}",
-            "Run `st restack` to rebase the moved branches onto their new parent."
-                .yellow()
+            "Run `st restack` to rebase the moved branches onto their new parent.".yellow()
         );
     }
 

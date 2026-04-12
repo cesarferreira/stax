@@ -42,7 +42,7 @@ enum LoaderUpdate {
     TmuxProbe(Result<Vec<TmuxSession>, String>),
     Details {
         index: usize,
-        details: WorktreeDetails,
+        details: Box<WorktreeDetails>,
         status_labels: Vec<String>,
     },
     DetailError {
@@ -56,9 +56,14 @@ enum LoaderUpdate {
 enum RemovalUpdate {
     RunningPreHook,
     RemovingWorktree,
+    #[allow(dead_code)]
     RunningPostHook,
-    Success { removed_name: String },
-    Error { message: String },
+    Success {
+        removed_name: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -339,7 +344,6 @@ impl WorktreeApp {
                 .is_some_and(|details| details.is_managed)
         }) {
             self.set_status("No stax-managed worktrees to restack");
-            return;
         }
     }
 
@@ -431,7 +435,7 @@ impl WorktreeApp {
                 status_labels,
             } => {
                 if let Some(record) = self.records.get_mut(index) {
-                    record.details = Some(details);
+                    record.details = Some(*details);
                     record.load_error = None;
                     record.status_labels = status_labels;
                 }
@@ -546,7 +550,7 @@ fn spawn_loader(repo_path: PathBuf, worktrees: Vec<WorktreeInfo>) -> Receiver<Lo
                     let labels = status_labels(&details);
                     let _ = sender.send(LoaderUpdate::Details {
                         index,
-                        details,
+                        details: Box::new(details),
                         status_labels: labels,
                     });
                 }

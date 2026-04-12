@@ -216,7 +216,7 @@ pub fn run(yes: bool, no_verify: bool) -> Result<()> {
     // Show summary
     println!();
     println!("{}", "Edit plan:".bold());
-    let has_reword = actions.iter().any(|a| *a == EditAction::Reword);
+    let has_reword = actions.contains(&EditAction::Reword);
     for (i, (commit, action)) in commits.iter().zip(actions.iter()).enumerate() {
         let action_str = match action {
             EditAction::Pick => action.label().dimmed().to_string(),

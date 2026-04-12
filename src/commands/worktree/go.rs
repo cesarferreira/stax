@@ -49,6 +49,7 @@ pub fn run_go(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_go_on_worktree(
     worktree: &WorktreeInfo,
     no_verify: bool,
@@ -81,7 +82,7 @@ pub(crate) fn run_go_on_worktree(
         );
     }
 
-    format_go_message(&worktree);
+    format_go_message(worktree);
 
     if !no_verify {
         run_blocking_hook(None, &worktree.path, "pre_go")?;

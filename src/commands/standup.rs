@@ -163,7 +163,13 @@ pub fn run(
     if summary {
         // --summary --json → {"summary": "..."}
         if json {
-            let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), model_flag.as_deref(), true)?;
+            let raw = generate_summary(
+                &data,
+                jit_summary.as_ref(),
+                agent_flag.as_deref(),
+                model_flag.as_deref(),
+                true,
+            )?;
             let mut out = serde_json::json!({ "summary": raw.trim() });
             if jit {
                 out["jit"] = serde_json::to_value(&jit_summary)?;
@@ -174,7 +180,13 @@ pub fn run(
         }
         // --summary --plain-text → raw text, no spinner, no colors
         if plain_text {
-            let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), model_flag.as_deref(), true)?;
+            let raw = generate_summary(
+                &data,
+                jit_summary.as_ref(),
+                agent_flag.as_deref(),
+                model_flag.as_deref(),
+                true,
+            )?;
             println!("{}", raw.trim());
             return Ok(());
         }
@@ -187,7 +199,13 @@ pub fn run(
             println!();
         }
         // --summary alone → spinner + card with colors
-        let raw = generate_summary(&data, jit_summary.as_ref(), agent_flag.as_deref(), model_flag.as_deref(), false)?;
+        let raw = generate_summary(
+            &data,
+            jit_summary.as_ref(),
+            agent_flag.as_deref(),
+            model_flag.as_deref(),
+            false,
+        )?;
         print_summary_card(raw.trim());
         return Ok(());
     }

@@ -93,7 +93,10 @@ fn resolve_agent_and_model(
 ) -> Result<(String, Option<String>)> {
     let mut config = Config::load()?;
 
-    let agent = if let Some(a) = agent_flag.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+    let agent = if let Some(a) = agent_flag
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
         generate::validate_agent_name(&a)?;
         a
     } else if config.ai.resolve.agent.is_some() {

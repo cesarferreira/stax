@@ -132,7 +132,8 @@ fn test_generate_no_template_flag_skips_discovery() {
     let discovered_with_flag: Vec<stax::github::pr_template::PrTemplate> = Vec::new();
     assert!(discovered_with_flag.is_empty());
     // With an empty list, select_template_interactive returns None (no template content)
-    let selected = stax::github::pr_template::select_template_interactive(&discovered_with_flag).unwrap();
+    let selected =
+        stax::github::pr_template::select_template_interactive(&discovered_with_flag).unwrap();
     assert!(selected.is_none());
 }
 
@@ -145,8 +146,7 @@ fn test_generate_template_flag_selects_by_name() {
     fs::write(template_dir.join("feature.md"), "# Feature template\n").unwrap();
     fs::write(template_dir.join("bugfix.md"), "# Bugfix template\n").unwrap();
 
-    let templates =
-        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    let templates = stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
     assert_eq!(templates.len(), 2);
 
     // --template feature: find by name (production logic in generate::run)
@@ -165,10 +165,13 @@ fn test_generate_no_prompt_single_template_auto_selects() {
 
     let github_dir = repo.path().join(".github");
     fs::create_dir_all(&github_dir).unwrap();
-    fs::write(github_dir.join("PULL_REQUEST_TEMPLATE.md"), "# Single template\n").unwrap();
+    fs::write(
+        github_dir.join("PULL_REQUEST_TEMPLATE.md"),
+        "# Single template\n",
+    )
+    .unwrap();
 
-    let templates =
-        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    let templates = stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
     assert_eq!(templates.len(), 1);
 
     // --no-prompt with a single template: select_template_auto returns it automatically
@@ -186,8 +189,7 @@ fn test_generate_no_prompt_multiple_templates_uses_none() {
     fs::write(template_dir.join("feature.md"), "# Feature\n").unwrap();
     fs::write(template_dir.join("bugfix.md"), "# Bugfix\n").unwrap();
 
-    let templates =
-        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    let templates = stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
     assert_eq!(templates.len(), 2);
 
     // --no-prompt with multiple templates: select_template_auto returns None
@@ -206,8 +208,7 @@ fn test_build_template_options_sorts_alphabetically() {
     fs::write(template_dir.join("alpha.md"), "# Alpha\n").unwrap();
     fs::write(template_dir.join("middle.md"), "# Middle\n").unwrap();
 
-    let templates =
-        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    let templates = stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
     assert_eq!(templates.len(), 3);
 
     let options = stax::github::pr_template::build_template_options(&templates);
@@ -240,8 +241,7 @@ fn test_generate_template_content_used_in_prompt() {
     )
     .unwrap();
 
-    let templates =
-        stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
+    let templates = stax::github::pr_template::discover_pr_templates(&repo.path()).unwrap();
 
     // When a template is selected by name, its content is available for use in the AI prompt
     let selected = templates.iter().find(|t| t.name == "feature").cloned();

@@ -1926,13 +1926,7 @@ fn test_restack_cleanup_excludes_checked_out_branch() {
 
     // Merge merged-branch into main so cleanup will consider it.
     repo.run_stax(&["t"]);
-    repo.git(&[
-        "merge",
-        "--no-ff",
-        &merged,
-        "-m",
-        "Merge merged-branch",
-    ]);
+    repo.git(&["merge", "--no-ff", &merged, "-m", "Merge merged-branch"]);
 
     // Create another branch that needs restack so cleanup path runs.
     repo.run_stax(&["bc", "trigger-branch"]);

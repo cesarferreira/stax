@@ -263,9 +263,15 @@ fn prepare_ai_launch_with_tmux_probe(
                     return Ok(PreparedAiLaunch { launch, messages });
                 }
 
-                let agent =
-                    generate::resolve_agent_non_interactive(request.agent.as_deref(), config, "lane")?;
-                let model = request.model.clone().or_else(|| config.ai.lane.model.clone());
+                let agent = generate::resolve_agent_non_interactive(
+                    request.agent.as_deref(),
+                    config,
+                    "lane",
+                )?;
+                let model = request
+                    .model
+                    .clone()
+                    .or_else(|| config.ai.lane.model.clone());
                 generate::print_using_agent(&agent, model.as_deref());
                 let inner = build_agent_launch_spec(&agent, model, prompt_args)?;
                 let behavior = if request.prompt.is_some() {
@@ -286,7 +292,10 @@ fn prepare_ai_launch_with_tmux_probe(
     }
 
     let agent = generate::resolve_agent_non_interactive(request.agent.as_deref(), config, "lane")?;
-    let model = request.model.clone().or_else(|| config.ai.lane.model.clone());
+    let model = request
+        .model
+        .clone()
+        .or_else(|| config.ai.lane.model.clone());
     generate::print_using_agent(&agent, model.as_deref());
     let launch = build_agent_launch_spec(&agent, model, prompt_args)?;
     Ok(PreparedAiLaunch { launch, messages })

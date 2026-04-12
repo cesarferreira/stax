@@ -288,10 +288,7 @@ pub fn run(
                 let next_pr = next_branch.pr_number.unwrap();
                 let update_base_timer = LiveTimer::maybe_new(
                     !quiet,
-                    &format!(
-                        "Retargeting #{} to {}...",
-                        next_pr, scope.trunk
-                    ),
+                    &format!("Retargeting #{} to {}...", next_pr, scope.trunk),
                 );
 
                 match rt.block_on(async { client.update_pr_base(next_pr, &scope.trunk).await }) {
@@ -364,7 +361,12 @@ pub fn run(
                 LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", next_branch.branch));
 
             let push_status = Command::new("git")
-                .args(["push", "--force-with-lease", &remote_info.name, &next_branch.branch])
+                .args([
+                    "push",
+                    "--force-with-lease",
+                    &remote_info.name,
+                    &next_branch.branch,
+                ])
                 .current_dir(repo.workdir()?)
                 .output()
                 .context("Failed to push")?;
@@ -439,7 +441,12 @@ pub fn run(
                     }
 
                     let _ = Command::new("git")
-                        .args(["push", "--force-with-lease", &remote_info.name, &remaining.branch])
+                        .args([
+                            "push",
+                            "--force-with-lease",
+                            &remote_info.name,
+                            &remaining.branch,
+                        ])
                         .current_dir(repo.workdir()?)
                         .output();
 

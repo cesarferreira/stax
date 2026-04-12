@@ -1598,7 +1598,9 @@ mod tests {
         // GitLab uses MR terminology and !N prefix
         assert!(comment.contains("This MR is part of a stacked series:"));
         assert!(comment.contains("[**MR !10**](https://gitlab.com/user/repo/-/merge_requests/10)"));
-        assert!(comment.contains("[**MR !11**](https://gitlab.com/user/repo/-/merge_requests/11) 👈"));
+        assert!(
+            comment.contains("[**MR !11**](https://gitlab.com/user/repo/-/merge_requests/11) 👈")
+        );
     }
 
     #[test]

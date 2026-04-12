@@ -938,10 +938,8 @@ impl GitRepo {
         let current_workdir = Self::normalize_path(self.workdir()?);
         let target_workdir = self.branch_rebase_target_workdir(branch)?;
 
-        if target_workdir == current_workdir {
-            if self.current_branch()? != branch {
-                self.checkout(branch)?;
-            }
+        if target_workdir == current_workdir && self.current_branch()? != branch {
+            self.checkout(branch)?;
         }
 
         Ok((current_workdir, target_workdir))

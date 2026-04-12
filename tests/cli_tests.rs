@@ -50,7 +50,9 @@ fn test_stack_alias_s() {
     let output = stax(&["s", "--help"]);
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("submit") || String::from_utf8_lossy(&output.stdout).contains("submit"));
+    assert!(
+        stderr.contains("submit") || String::from_utf8_lossy(&output.stdout).contains("submit")
+    );
 }
 
 #[test]

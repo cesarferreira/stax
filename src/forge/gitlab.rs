@@ -335,9 +335,7 @@ impl GitLabClient {
         &self,
         number: u64,
     ) -> Result<crate::github::pr::EnqueueResult> {
-        let request = AddToMergeTrainRequest {
-            auto_merge: true,
-        };
+        let request = AddToMergeTrainRequest { auto_merge: true };
         let _: serde_json::Value = post_json(
             &self.client,
             &self.project_url(&format!("/merge_trains/merge_requests/{}", number)),

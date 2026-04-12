@@ -26,7 +26,14 @@ struct QueueBranchInfo {
     original_base: String,
 }
 
-pub fn run(all: bool, timeout: u64, interval: u64, no_sync: bool, yes: bool, quiet: bool) -> Result<()> {
+pub fn run(
+    all: bool,
+    timeout: u64,
+    interval: u64,
+    no_sync: bool,
+    yes: bool,
+    quiet: bool,
+) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -56,8 +63,8 @@ pub fn run(all: bool, timeout: u64, interval: u64, no_sync: bool, yes: bool, qui
         return Ok(());
     }
 
-    let remote_info = RemoteInfo::from_repo(&repo, &config)
-        .context("Failed to read git remote configuration")?;
+    let remote_info =
+        RemoteInfo::from_repo(&repo, &config).context("Failed to read git remote configuration")?;
     if remote_info.forge == ForgeType::Gitea {
         anyhow::bail!(
             "`stax merge --queue` is not supported for Gitea/Forgejo — \
@@ -340,10 +347,8 @@ pub fn run(all: bool, timeout: u64, interval: u64, no_sync: bool, yes: bool, qui
     let timeout_duration = Duration::from_secs(timeout * 60);
     let poll_interval = Duration::from_secs(interval);
     let start = Instant::now();
-    let mut pending: Vec<(String, u64)> = enqueued
-        .iter()
-        .map(|(b, pr, _)| (b.clone(), *pr))
-        .collect();
+    let mut pending: Vec<(String, u64)> =
+        enqueued.iter().map(|(b, pr, _)| (b.clone(), *pr)).collect();
     let mut timed_out = false;
 
     while !pending.is_empty() {
@@ -378,8 +383,7 @@ pub fn run(all: bool, timeout: u64, interval: u64, no_sync: bool, yes: bool, qui
         if !pending.is_empty() && !quiet {
             let names: Vec<String> = pending.iter().map(|(_, pr)| format!("#{}", pr)).collect();
             print!(
-                "\r  {} {}  {}",
-                "⏳",
+                "\r  ⏳ {}  {}",
                 names.join(", "),
                 format!("({}s)", elapsed.as_secs()).dimmed()
             );
@@ -406,10 +410,7 @@ pub fn run(all: bool, timeout: u64, interval: u64, no_sync: bool, yes: bool, qui
                 )
                 .yellow()
             );
-            println!(
-                "{}",
-                "Run `stax rs` manually to sync once merged.".dimmed()
-            );
+            println!("{}", "Run `stax rs` manually to sync once merged.".dimmed());
         }
         return Ok(());
     }
@@ -540,8 +541,8 @@ fn display_width(s: &str) -> usize {
         .map(|c| match c {
             '\x00'..='\x1f' | '\x7f' => 0,
             '\x20'..='\x7e' => 1,
-            '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╭' | '╮'
-            | '╯' | '╰' | '║' | '═' => 1,
+            '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╭' | '╮' | '╯'
+            | '╰' | '║' | '═' => 1,
             '←' | '→' | '↑' | '↓' => 1,
             '✓' | '✗' | '✔' | '✘' => 1,
             _ => 2,

@@ -171,10 +171,7 @@ impl ForgeClient {
 
     /// Enqueue a PR into the forge's merge queue (GitHub) or merge train (GitLab).
     /// Not supported on Gitea/Forgejo (no merge queue feature).
-    pub async fn enqueue_pr(
-        &self,
-        number: u64,
-    ) -> Result<crate::github::pr::EnqueueResult> {
+    pub async fn enqueue_pr(&self, number: u64) -> Result<crate::github::pr::EnqueueResult> {
         match self {
             Self::GitHub(client) => client.enqueue_pr(number).await,
             Self::GitLab(client) => client.add_to_merge_train(number).await,

@@ -818,12 +818,7 @@ pub fn run(
             if squash {
                 if let Err(e) = squash_branch_commits(repo.workdir()?, &plan.branch, &plan.parent) {
                     if !quiet {
-                        println!(
-                            "  {} squash {}: {}",
-                            "⚠".yellow(),
-                            plan.branch,
-                            e
-                        );
+                        println!("  {} squash {}: {}", "⚠".yellow(), plan.branch, e);
                     }
                 }
             }
@@ -1177,7 +1172,12 @@ fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()>
 
     // Get the first commit message on the branch (for the squashed commit)
     let msg_output = Command::new("git")
-        .args(["log", "--format=%s", "--reverse", &format!("{}..{}", base, branch)])
+        .args([
+            "log",
+            "--format=%s",
+            "--reverse",
+            &format!("{}..{}", base, branch),
+        ])
         .current_dir(workdir)
         .output()?;
     let first_msg = String::from_utf8_lossy(&msg_output.stdout)
