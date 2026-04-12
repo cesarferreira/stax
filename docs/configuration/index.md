@@ -64,6 +64,11 @@ Main config path: `~/.config/stax/config.toml`
 # post_go = ""     # background hook run after entering an existing worktree
 # pre_remove = ""  # blocking hook run before removal
 # post_remove = "" # background hook run after removal
+#
+# Worked example — keep VS Code / Cursor aware of every lane:
+#   post_start = "code --add ."
+#   post_go    = "code --add ."
+# See workflows/agent-worktrees.md → "VS Code (or Cursor) Integration".
 ```
 
 ## AI configuration
