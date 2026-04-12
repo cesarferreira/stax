@@ -200,6 +200,8 @@ pub fn run(
             false,
             None,
             Vec::new(),
+            false,
+            Vec::new(),
         )?;
     } else if target == current {
         if shell_output {

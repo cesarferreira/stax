@@ -28,6 +28,8 @@ pub fn run_go(
     tmux: bool,
     tmux_session: Option<String>,
     args: Vec<String>,
+    yolo: bool,
+    agent_args: Vec<String>,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let worktree = match name {
@@ -46,6 +48,8 @@ pub fn run_go(
         tmux,
         tmux_session,
         args,
+        yolo,
+        agent_args,
     )
 }
 
@@ -60,6 +64,8 @@ pub(crate) fn run_go_on_worktree(
     tmux: bool,
     tmux_session: Option<String>,
     args: Vec<String>,
+    yolo: bool,
+    agent_args: Vec<String>,
 ) -> Result<()> {
     let config = Config::load()?;
     let launch = build_launch_spec(
@@ -71,6 +77,8 @@ pub(crate) fn run_go_on_worktree(
             tmux,
             tmux_session,
             args,
+            yolo,
+            agent_args,
         },
         &worktree.name,
     )?;

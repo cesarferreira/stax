@@ -137,6 +137,8 @@ pub struct LaunchOptions {
     pub tmux: bool,
     pub tmux_session: Option<String>,
     pub args: Vec<String>,
+    pub yolo: bool,
+    pub agent_args: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -633,51 +635,21 @@ pub fn build_launch_spec(
     if options.tmux_session.is_some() && !options.tmux {
         bail!("--tmux-session requires --tmux");
     }
+    if options.yolo && options.agent.is_none() {
+        bail!("--yolo requires --agent");
+    }
+    if !options.agent_args.is_empty() && options.agent.is_none() {
+        bail!("--agent-arg requires --agent");
+    }
 
     let base_launch = if let Some(agent) = options.agent.as_deref() {
-        generate::validate_agent_name(agent)?;
-        let model = options
-            .model
-            .clone()
-            .filter(|value| !value.trim().is_empty());
-
-        let mut args = Vec::new();
-        match agent {
-            "claude" => {
-                if let Some(ref model) = model {
-                    args.extend(["--model".to_string(), model.clone()]);
-                }
-            }
-            "codex" => {
-                if let Some(ref model) = model {
-                    args.extend(["--model".to_string(), model.clone()]);
-                }
-            }
-            "gemini" => {
-                if let Some(ref model) = model {
-                    args.extend(["-m".to_string(), model.clone()]);
-                }
-            }
-            "opencode" => {
-                if let Some(ref model) = model {
-                    args.extend(["--model".to_string(), model.clone()]);
-                }
-            }
-            _ => bail!("Unsupported AI agent: {}", agent),
-        }
-        args.extend(options.args.clone());
-
-        let display = if let Some(model) = model {
-            format!("{} ({})", agent, model)
-        } else {
-            agent.to_string()
-        };
-
-        Some(LaunchSpec::Process {
-            program: agent.to_string(),
-            args,
-            display,
-        })
+        Some(build_agent_launch_spec_with_options(
+            agent,
+            options.model.clone(),
+            options.args.clone(),
+            options.yolo,
+            &options.agent_args,
+        )?)
     } else if let Some(command) = options.run.as_deref() {
         let full_command = if options.args.is_empty() {
             command.to_string()
@@ -714,10 +686,30 @@ pub fn build_launch_spec(
     Ok(base_launch)
 }
 
-pub fn build_agent_launch_spec(
+/// Return the per-agent flag that auto-accepts permission prompts.
+///
+/// Returns `None` for agents where stax has not verified a supported yolo flag.
+/// Note on opencode: `--dangerously-skip-permissions` is documented for
+/// `opencode run`, but stax launches the top-level `opencode` command. Until
+/// that invocation path is updated (or we confirm the flag is accepted on the
+/// top-level CLI), treat opencode yolo as unsupported.
+pub fn yolo_flag_for_agent(agent: &str) -> Option<&'static str> {
+    match agent {
+        "claude" => Some("--dangerously-skip-permissions"),
+        "codex" => Some("--dangerously-bypass-approvals-and-sandbox"),
+        "gemini" => Some("--yolo"),
+        // "opencode" intentionally unsupported until the top-level CLI accepts
+        // the flag; see function-level docstring.
+        _ => None,
+    }
+}
+
+pub fn build_agent_launch_spec_with_options(
     agent: &str,
     model: Option<String>,
     passthrough_args: Vec<String>,
+    yolo: bool,
+    extra_agent_args: &[String],
 ) -> Result<LaunchSpec> {
     generate::validate_agent_name(agent)?;
     let model = model.filter(|value| !value.trim().is_empty());
@@ -736,6 +728,23 @@ pub fn build_agent_launch_spec(
         }
         _ => bail!("Unsupported AI agent: {}", agent),
     }
+
+    // Inject the per-agent permission-bypass flag before any user-supplied args.
+    if yolo {
+        match yolo_flag_for_agent(agent) {
+            Some(flag) => args.push(flag.to_string()),
+            None => bail!(
+                "--yolo is not supported for agent '{}'. \
+                 Use --agent-arg to pass a bypass flag manually.",
+                agent
+            ),
+        }
+    }
+
+    // Raw agent passthrough (--agent-arg) flags come before the prompt so agents
+    // that treat trailing positional args as the prompt still work.
+    args.extend(extra_agent_args.iter().cloned());
+
     args.extend(passthrough_args);
 
     let display = if let Some(model) = model {
@@ -1112,10 +1121,10 @@ fn parse_tmux_sessions_output(output: &str) -> Result<Vec<TmuxSession>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_agent_launch_spec, build_launch_spec, build_tmux_launch_spec,
+        build_agent_launch_spec_with_options, build_launch_spec, build_tmux_launch_spec,
         default_tmux_session_name, is_tmux_no_server_error, parse_tmux_sessions_output,
-        worktree_removal_blockers_for_cleanup, ExistingTmuxSessionBehavior, LaunchOptions,
-        LaunchSpec, WorktreeDetails,
+        worktree_removal_blockers_for_cleanup, yolo_flag_for_agent, ExistingTmuxSessionBehavior,
+        LaunchOptions, LaunchSpec, WorktreeDetails,
     };
     use crate::config::Config;
     use crate::git::repo::WorktreeInfo;
@@ -1199,10 +1208,12 @@ mod tests {
 
     #[test]
     fn build_agent_launch_spec_adds_agent_specific_model_flag() {
-        let launch = build_agent_launch_spec(
+        let launch = build_agent_launch_spec_with_options(
             "gemini",
             Some("gemini-2.5-flash".to_string()),
             vec!["fix flaky tests".to_string()],
+            false,
+            &[],
         )
         .expect("agent launch");
 
@@ -1225,6 +1236,157 @@ mod tests {
             }
             LaunchSpec::Shell { .. } => panic!("expected process launch"),
         }
+    }
+
+    #[test]
+    fn yolo_flag_for_agent_maps_each_supported_agent() {
+        assert_eq!(
+            yolo_flag_for_agent("claude"),
+            Some("--dangerously-skip-permissions")
+        );
+        assert_eq!(
+            yolo_flag_for_agent("codex"),
+            Some("--dangerously-bypass-approvals-and-sandbox")
+        );
+        assert_eq!(yolo_flag_for_agent("gemini"), Some("--yolo"));
+        // opencode is intentionally unsupported for --yolo right now
+        // (see yolo_flag_for_agent docstring).
+        assert_eq!(yolo_flag_for_agent("opencode"), None);
+        assert_eq!(yolo_flag_for_agent("unknown"), None);
+    }
+
+    #[test]
+    fn build_agent_launch_spec_bails_when_yolo_unsupported_for_agent() {
+        let err = build_agent_launch_spec_with_options(
+            "opencode",
+            None,
+            vec!["fix flaky tests".to_string()],
+            true,
+            &[],
+        )
+        .expect_err("opencode yolo should bail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--yolo is not supported") && msg.contains("opencode"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[test]
+    fn build_agent_launch_spec_injects_yolo_flag_per_agent() {
+        let launch = build_agent_launch_spec_with_options(
+            "claude",
+            None,
+            vec!["fix flaky tests".to_string()],
+            true,
+            &[],
+        )
+        .expect("claude yolo");
+        match launch {
+            LaunchSpec::Process { args, .. } => {
+                assert!(
+                    args.contains(&"--dangerously-skip-permissions".to_string()),
+                    "claude yolo flag missing: {:?}",
+                    args
+                );
+            }
+            _ => panic!("expected process launch"),
+        }
+
+        let launch = build_agent_launch_spec_with_options(
+            "codex",
+            None,
+            vec!["fix flaky tests".to_string()],
+            true,
+            &[],
+        )
+        .expect("codex yolo");
+        match launch {
+            LaunchSpec::Process { args, .. } => {
+                assert!(
+                    args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
+                    "codex yolo flag missing: {:?}",
+                    args
+                );
+            }
+            _ => panic!("expected process launch"),
+        }
+
+        let launch = build_agent_launch_spec_with_options(
+            "gemini",
+            None,
+            vec!["fix flaky tests".to_string()],
+            true,
+            &[],
+        )
+        .expect("gemini yolo");
+        match launch {
+            LaunchSpec::Process { args, .. } => {
+                assert!(
+                    args.contains(&"--yolo".to_string()),
+                    "gemini yolo flag missing: {:?}",
+                    args
+                );
+            }
+            _ => panic!("expected process launch"),
+        }
+    }
+
+    #[test]
+    fn build_agent_launch_spec_forwards_agent_args_before_prompt() {
+        let launch = build_agent_launch_spec_with_options(
+            "claude",
+            None,
+            vec!["the prompt".to_string()],
+            false,
+            &["--verbose".to_string(), "--debug".to_string()],
+        )
+        .expect("agent args launch");
+
+        match launch {
+            LaunchSpec::Process { args, .. } => {
+                // --verbose + --debug come before the prompt
+                assert_eq!(
+                    args,
+                    vec![
+                        "--verbose".to_string(),
+                        "--debug".to_string(),
+                        "the prompt".to_string(),
+                    ]
+                );
+            }
+            _ => panic!("expected process launch"),
+        }
+    }
+
+    #[test]
+    fn build_launch_spec_rejects_yolo_without_agent() {
+        let config = Config::default();
+        let err = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                yolo: true,
+                ..LaunchOptions::default()
+            },
+            "session",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--yolo requires --agent"));
+    }
+
+    #[test]
+    fn build_launch_spec_rejects_agent_arg_without_agent() {
+        let config = Config::default();
+        let err = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                agent_args: vec!["--verbose".to_string()],
+                ..LaunchOptions::default()
+            },
+            "session",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--agent-arg requires --agent"));
     }
 
     #[test]

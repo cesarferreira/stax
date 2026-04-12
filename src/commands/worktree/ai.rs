@@ -1,10 +1,10 @@
 use super::shared::{
-    build_agent_launch_spec, build_tmux_launch_spec, compute_worktree_details, default_create_base,
-    default_tmux_session_name, derive_unique_worktree_name, emit_shell_message, emit_shell_payload,
-    ensure_gitignore, ensure_managed_worktrees_root, find_worktree, format_create_message,
-    format_go_message, list_tmux_sessions, managed_worktrees_dir, resolve_branch_name,
-    run_blocking_hook, spawn_background_hook, status_labels, ExistingTmuxSessionBehavior,
-    LaunchSpec, TmuxSession,
+    build_agent_launch_spec_with_options, build_tmux_launch_spec, compute_worktree_details,
+    default_create_base, default_tmux_session_name, derive_unique_worktree_name,
+    emit_shell_message, emit_shell_payload, ensure_gitignore, ensure_managed_worktrees_root,
+    find_worktree, format_create_message, format_go_message, list_tmux_sessions,
+    managed_worktrees_dir, resolve_branch_name, run_blocking_hook, spawn_background_hook,
+    status_labels, ExistingTmuxSessionBehavior, LaunchSpec, TmuxSession,
 };
 use crate::commands::generate;
 use crate::config::Config;
@@ -21,13 +21,15 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::Path;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct AiLaneRequest {
     prompt: Option<String>,
     agent: Option<String>,
     model: Option<String>,
     no_tmux: bool,
     tmux_session: Option<String>,
+    yolo: bool,
+    agent_args: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +56,8 @@ pub fn run(
     model: Option<String>,
     no_tmux: bool,
     tmux_session: Option<String>,
+    yolo: bool,
+    agent_args: Vec<String>,
 ) -> Result<()> {
     if name.is_none() && tmux_session.is_some() {
         bail!("--tmux-session requires an explicit lane name");
@@ -74,6 +78,8 @@ pub fn run(
         model,
         no_tmux,
         tmux_session,
+        yolo,
+        agent_args,
     };
 
     let (name, prompt) = match name {
@@ -255,6 +261,15 @@ fn prepare_ai_launch_with_tmux_probe(
                 let session_exists = sessions.iter().any(|session| session.name == session_name);
 
                 if request.prompt.is_none() && session_exists {
+                    // Reattaching to an existing tmux session -- no agent is
+                    // launched, so --yolo / --agent-arg have no effect here.
+                    if request.yolo || !request.agent_args.is_empty() {
+                        messages.push(
+                            "Reattaching to existing tmux session; --yolo / --agent-arg are ignored. \
+                             Pass a new prompt to launch a fresh agent window."
+                                .to_string(),
+                        );
+                    }
                     let launch = build_tmux_launch_spec(
                         session_name,
                         None,
@@ -273,7 +288,13 @@ fn prepare_ai_launch_with_tmux_probe(
                     .clone()
                     .or_else(|| config.ai.lane.model.clone());
                 generate::print_using_agent(&agent, model.as_deref());
-                let inner = build_agent_launch_spec(&agent, model, prompt_args)?;
+                let inner = build_agent_launch_spec_with_options(
+                    &agent,
+                    model,
+                    prompt_args,
+                    request.yolo,
+                    &request.agent_args,
+                )?;
                 let behavior = if request.prompt.is_some() {
                     ExistingTmuxSessionBehavior::NewWindow
                 } else {
@@ -297,7 +318,13 @@ fn prepare_ai_launch_with_tmux_probe(
         .clone()
         .or_else(|| config.ai.lane.model.clone());
     generate::print_using_agent(&agent, model.as_deref());
-    let launch = build_agent_launch_spec(&agent, model, prompt_args)?;
+    let launch = build_agent_launch_spec_with_options(
+        &agent,
+        model,
+        prompt_args,
+        request.yolo,
+        &request.agent_args,
+    )?;
     Ok(PreparedAiLaunch { launch, messages })
 }
 
@@ -621,10 +648,8 @@ mod tests {
             "review-pass",
             &AiLaneRequest {
                 prompt: Some("fix macOS build".to_string()),
-                agent: None,
-                model: None,
                 no_tmux: true,
-                tmux_session: None,
+                ..Default::default()
             },
             Err(anyhow!("tmux unavailable")),
         )
@@ -650,10 +675,9 @@ mod tests {
             "review-pass",
             &AiLaneRequest {
                 prompt: Some("fix macOS build".to_string()),
-                agent: None,
                 model: Some("claude-sonnet-4-5-20250929".to_string()),
                 no_tmux: true,
-                tmux_session: None,
+                ..Default::default()
             },
             Err(anyhow!("tmux unavailable")),
         )
@@ -683,13 +707,7 @@ mod tests {
         let prepared = prepare_ai_launch_with_tmux_probe(
             &config,
             "review-pass",
-            &AiLaneRequest {
-                prompt: None,
-                agent: None,
-                model: None,
-                no_tmux: false,
-                tmux_session: None,
-            },
+            &AiLaneRequest::default(),
             Ok(vec![crate::commands::worktree::shared::TmuxSession {
                 name: "review-pass".to_string(),
                 attached_clients: 0,
@@ -714,13 +732,7 @@ mod tests {
         let prepared = prepare_ai_launch_with_tmux_probe(
             &config,
             "review-pass",
-            &AiLaneRequest {
-                prompt: None,
-                agent: None,
-                model: None,
-                no_tmux: false,
-                tmux_session: None,
-            },
+            &AiLaneRequest::default(),
             Err(anyhow!("tmux unavailable")),
         )
         .expect("prepare launch");

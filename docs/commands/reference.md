@@ -144,6 +144,8 @@ Full guide: [Worktrees](../worktrees/index.md)
 Worktree launch examples:
 - `st lane`
 - `st lane review-pass "address PR comments"`
+- `st lane fix-flaky --agent claude --yolo "stabilize the flaky tests"` (auto-accept permission prompts)
+- `st lane big-refactor --agent claude --agent-arg=--verbose "split the auth module"` (pass extra flags to the agent)
 - `st wt go ui-polish --run "cursor ." --tmux`
 
 ## Common flags

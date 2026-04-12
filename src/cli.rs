@@ -112,6 +112,14 @@ struct WorktreeLaunchArgs {
     /// Override the tmux session name (defaults to the worktree name)
     #[arg(long, requires = "tmux")]
     tmux_session: Option<String>,
+    /// Auto-accept agent permission prompts (claude: --dangerously-skip-permissions,
+    /// codex: --dangerously-bypass-approvals-and-sandbox, opencode: --dangerously-skip-permissions,
+    /// gemini: --yolo). Use with care.
+    #[arg(long, requires = "agent")]
+    yolo: bool,
+    /// Pass an extra argument to the launched agent (repeatable)
+    #[arg(long = "agent-arg", requires = "agent")]
+    agent_arg: Vec<String>,
     /// Arguments passed through to the launched agent or command (after `--`)
     #[arg(last = true)]
     args: Vec<String>,
@@ -131,6 +139,14 @@ struct AiLaneArgs {
     /// Override the tmux session name (defaults to the lane name)
     #[arg(long, conflicts_with = "no_tmux")]
     tmux_session: Option<String>,
+    /// Auto-accept agent permission prompts (claude: --dangerously-skip-permissions,
+    /// codex: --dangerously-bypass-approvals-and-sandbox, opencode: --dangerously-skip-permissions,
+    /// gemini: --yolo). Use with care.
+    #[arg(long)]
+    yolo: bool,
+    /// Pass an extra argument to the launched agent (repeatable)
+    #[arg(long = "agent-arg")]
+    agent_arg: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -1893,6 +1909,8 @@ pub fn run() -> Result<()> {
                 launch.tmux,
                 launch.tmux_session,
                 launch.args,
+                launch.yolo,
+                launch.agent_arg,
             ),
             Some(WorktreeCommands::List { json }) => commands::worktree::list::run(json),
             Some(WorktreeCommands::LongList { json }) => commands::worktree::ll::run(json),
@@ -1911,6 +1929,8 @@ pub fn run() -> Result<()> {
                 launch.tmux,
                 launch.tmux_session,
                 launch.args,
+                launch.yolo,
+                launch.agent_arg,
             ),
             Some(WorktreeCommands::Path { name }) => commands::worktree::go::run_path(&name),
             Some(WorktreeCommands::Remove {
@@ -1944,6 +1964,8 @@ pub fn run() -> Result<()> {
             ai.model,
             ai.no_tmux,
             ai.tmux_session,
+            ai.yolo,
+            ai.agent_arg,
         ),
         // Hidden worktree shortcuts
         Commands::W => commands::worktree::list::run(false),
@@ -1968,6 +1990,8 @@ pub fn run() -> Result<()> {
             launch.tmux,
             launch.tmux_session,
             launch.args,
+            launch.yolo,
+            launch.agent_arg,
         ),
         Commands::Wtls => commands::worktree::list::run(false),
         Commands::Wtll { json } => commands::worktree::ll::run(json),
@@ -1986,6 +2010,8 @@ pub fn run() -> Result<()> {
             launch.tmux,
             launch.tmux_session,
             launch.args,
+            launch.yolo,
+            launch.agent_arg,
         ),
         Commands::Wtrm {
             name,
