@@ -101,7 +101,6 @@ impl WorktreeRecord {
 pub enum PendingCommand {
     Go { name: String },
     Create { name: Option<String> },
-    Remove { name: String },
     Restack,
 }
 
@@ -117,7 +116,6 @@ impl PendingCommand {
                 args.push("--tmux".into());
                 args
             }
-            Self::Remove { name } => vec!["wt".into(), "rm".into(), name.clone()],
             Self::Restack => vec!["wt".into(), "rs".into()],
         }
     }

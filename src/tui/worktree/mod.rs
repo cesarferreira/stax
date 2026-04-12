@@ -169,9 +169,9 @@ fn handle_force_delete_key(app: &mut WorktreeApp, code: KeyCode) -> Result<()> {
 
 fn selection_after_command(command: &PendingCommand) -> Option<String> {
     match command {
-        PendingCommand::Go { name }
-        | PendingCommand::Create { name: Some(name) }
-        | PendingCommand::Remove { name } => Some(name.clone()),
+        PendingCommand::Go { name } | PendingCommand::Create { name: Some(name) } => {
+            Some(name.clone())
+        }
         PendingCommand::Create { name: None } | PendingCommand::Restack => None,
     }
 }
@@ -196,8 +196,6 @@ fn execute_dashboard_command(command: &PendingCommand) -> Result<Option<String>>
                 Ok(Some(format!("Command failed: {}", args.join(" "))))
             }
         }
-        PendingCommand::Remove { name } => run_captured_command(&exe, workdir, &args)
-            .map(|status| status.or_else(|| Some(format!("Removed '{}'", name)))),
         PendingCommand::Restack => run_captured_command(&exe, workdir, &args)
             .map(|status| status.or_else(|| Some("Restacked managed worktrees".to_string()))),
     }
