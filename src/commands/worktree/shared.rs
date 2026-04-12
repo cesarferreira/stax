@@ -686,23 +686,20 @@ pub fn build_launch_spec(
     Ok(base_launch)
 }
 
-#[cfg(test)]
-pub fn build_agent_launch_spec(
-    agent: &str,
-    model: Option<String>,
-    passthrough_args: Vec<String>,
-) -> Result<LaunchSpec> {
-    build_agent_launch_spec_with_options(agent, model, passthrough_args, false, &[])
-}
-
-/// Return the per-agent flag that auto-accepts permission prompts, or `None` if
-/// the agent has no known equivalent.
+/// Return the per-agent flag that auto-accepts permission prompts.
+///
+/// Returns `None` for agents where stax has not verified a supported yolo flag.
+/// Note on opencode: `--dangerously-skip-permissions` is documented for
+/// `opencode run`, but stax launches the top-level `opencode` command. Until
+/// that invocation path is updated (or we confirm the flag is accepted on the
+/// top-level CLI), treat opencode yolo as unsupported.
 pub fn yolo_flag_for_agent(agent: &str) -> Option<&'static str> {
     match agent {
         "claude" => Some("--dangerously-skip-permissions"),
         "codex" => Some("--dangerously-bypass-approvals-and-sandbox"),
-        "opencode" => Some("--dangerously-skip-permissions"),
         "gemini" => Some("--yolo"),
+        // "opencode" intentionally unsupported until the top-level CLI accepts
+        // the flag; see function-level docstring.
         _ => None,
     }
 }
@@ -734,16 +731,19 @@ pub fn build_agent_launch_spec_with_options(
 
     // Inject the per-agent permission-bypass flag before any user-supplied args.
     if yolo {
-        if let Some(flag) = yolo_flag_for_agent(agent) {
-            args.push(flag.to_string());
+        match yolo_flag_for_agent(agent) {
+            Some(flag) => args.push(flag.to_string()),
+            None => bail!(
+                "--yolo is not supported for agent '{}'. \
+                 Use --agent-arg to pass a bypass flag manually.",
+                agent
+            ),
         }
     }
 
     // Raw agent passthrough (--agent-arg) flags come before the prompt so agents
     // that treat trailing positional args as the prompt still work.
-    for extra in extra_agent_args {
-        args.push(extra.clone());
-    }
+    args.extend(extra_agent_args.iter().cloned());
 
     args.extend(passthrough_args);
 
@@ -1121,10 +1121,10 @@ fn parse_tmux_sessions_output(output: &str) -> Result<Vec<TmuxSession>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_agent_launch_spec, build_agent_launch_spec_with_options, build_launch_spec,
-        build_tmux_launch_spec, default_tmux_session_name, is_tmux_no_server_error,
-        parse_tmux_sessions_output, worktree_removal_blockers_for_cleanup, yolo_flag_for_agent,
-        ExistingTmuxSessionBehavior, LaunchOptions, LaunchSpec, WorktreeDetails,
+        build_agent_launch_spec_with_options, build_launch_spec, build_tmux_launch_spec,
+        default_tmux_session_name, is_tmux_no_server_error, parse_tmux_sessions_output,
+        worktree_removal_blockers_for_cleanup, yolo_flag_for_agent, ExistingTmuxSessionBehavior,
+        LaunchOptions, LaunchSpec, WorktreeDetails,
     };
     use crate::config::Config;
     use crate::git::repo::WorktreeInfo;
@@ -1208,10 +1208,12 @@ mod tests {
 
     #[test]
     fn build_agent_launch_spec_adds_agent_specific_model_flag() {
-        let launch = build_agent_launch_spec(
+        let launch = build_agent_launch_spec_with_options(
             "gemini",
             Some("gemini-2.5-flash".to_string()),
             vec!["fix flaky tests".to_string()],
+            false,
+            &[],
         )
         .expect("agent launch");
 
@@ -1246,12 +1248,28 @@ mod tests {
             yolo_flag_for_agent("codex"),
             Some("--dangerously-bypass-approvals-and-sandbox")
         );
-        assert_eq!(
-            yolo_flag_for_agent("opencode"),
-            Some("--dangerously-skip-permissions")
-        );
         assert_eq!(yolo_flag_for_agent("gemini"), Some("--yolo"));
+        // opencode is intentionally unsupported for --yolo right now
+        // (see yolo_flag_for_agent docstring).
+        assert_eq!(yolo_flag_for_agent("opencode"), None);
         assert_eq!(yolo_flag_for_agent("unknown"), None);
+    }
+
+    #[test]
+    fn build_agent_launch_spec_bails_when_yolo_unsupported_for_agent() {
+        let err = build_agent_launch_spec_with_options(
+            "opencode",
+            None,
+            vec!["fix flaky tests".to_string()],
+            true,
+            &[],
+        )
+        .expect_err("opencode yolo should bail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--yolo is not supported") && msg.contains("opencode"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]

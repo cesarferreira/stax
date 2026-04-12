@@ -261,6 +261,15 @@ fn prepare_ai_launch_with_tmux_probe(
                 let session_exists = sessions.iter().any(|session| session.name == session_name);
 
                 if request.prompt.is_none() && session_exists {
+                    // Reattaching to an existing tmux session -- no agent is
+                    // launched, so --yolo / --agent-arg have no effect here.
+                    if request.yolo || !request.agent_args.is_empty() {
+                        messages.push(
+                            "Reattaching to existing tmux session; --yolo / --agent-arg are ignored. \
+                             Pass a new prompt to launch a fresh agent window."
+                                .to_string(),
+                        );
+                    }
                     let launch = build_tmux_launch_spec(
                         session_name,
                         None,
@@ -698,9 +707,7 @@ mod tests {
         let prepared = prepare_ai_launch_with_tmux_probe(
             &config,
             "review-pass",
-            &AiLaneRequest {
-                ..Default::default()
-            },
+            &AiLaneRequest::default(),
             Ok(vec![crate::commands::worktree::shared::TmuxSession {
                 name: "review-pass".to_string(),
                 attached_clients: 0,
@@ -725,9 +732,7 @@ mod tests {
         let prepared = prepare_ai_launch_with_tmux_probe(
             &config,
             "review-pass",
-            &AiLaneRequest {
-                ..Default::default()
-            },
+            &AiLaneRequest::default(),
             Err(anyhow!("tmux unavailable")),
         )
         .expect("prepare launch");
