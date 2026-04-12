@@ -73,6 +73,9 @@ struct SubmitOptions {
     /// Squash all commits on each branch into one before pushing
     #[arg(long)]
     squash: bool,
+    /// Update existing PR titles when the tip commit subject has changed
+    #[arg(long)]
+    update_title: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -1321,6 +1324,7 @@ fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Re
         submit.ai_body,
         submit.rerequest_review,
         submit.squash,
+        submit.update_title,
     )
 }
 

@@ -5799,6 +5799,41 @@ mod forge_mock_tests {
             .unwrap_or_else(|| panic!("Did not find request {} {}", method_name, path_name))
     }
 
+    /// Find a request to a PR/MR endpoint whose JSON payload contains a body/description key.
+    /// This distinguishes body-update requests from title-update requests (both hit the same URL).
+    /// Works for GitHub (PATCH + "body"), GitLab (PUT + "description"), and Gitea (PATCH + "body").
+    fn find_body_update<'a>(
+        requests: &'a [wiremock::Request],
+        method_name: &str,
+        path_name: &str,
+        json_key: &str,
+    ) -> &'a wiremock::Request {
+        requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == method_name
+                    && request.url.path() == path_name
+                    && serde_json::from_slice::<serde_json::Value>(&request.body)
+                        .ok()
+                        .and_then(|v| v.get(json_key).cloned())
+                        .is_some()
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "Did not find {} request to {} with '{}' in payload",
+                    method_name, path_name, json_key
+                )
+            })
+    }
+
+    /// Shorthand for GitHub/Gitea PATCH requests with "body" key.
+    fn find_body_patch<'a>(
+        requests: &'a [wiremock::Request],
+        path_name: &str,
+    ) -> &'a wiremock::Request {
+        find_body_update(requests, "PATCH", path_name, "body")
+    }
+
     fn issue_comment_fixture(id: u64, body: &str) -> serde_json::Value {
         serde_json::json!({
             "id": id,
@@ -6487,13 +6522,7 @@ mod forge_mock_tests {
             request.method.as_str() == "PATCH"
                 && request.url.path() == "/repos/test/repo/issues/comments/901"
         }));
-        let body_patch = requests
-            .iter()
-            .find(|request| {
-                request.method.as_str() == "PATCH"
-                    && request.url.path() == "/repos/test/repo/pulls/42"
-            })
-            .expect("missing body patch");
+        let body_patch = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
         assert_eq!(payload["body"], "## Summary\n\nhello");
     }
@@ -6573,13 +6602,7 @@ mod forge_mock_tests {
             request.method.as_str() == "DELETE"
                 && request.url.path() == "/repos/test/repo/issues/comments/901"
         }));
-        let body_patch = requests
-            .iter()
-            .find(|request| {
-                request.method.as_str() == "PATCH"
-                    && request.url.path() == "/repos/test/repo/pulls/42"
-            })
-            .expect("missing body patch");
+        let body_patch = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
         let body = payload["body"].as_str().unwrap();
         assert!(body.starts_with("## Summary\n\nhello"));
@@ -6667,13 +6690,7 @@ mod forge_mock_tests {
             request.method.as_str() == "PATCH"
                 && request.url.path() == "/repos/test/repo/issues/comments/901"
         }));
-        let body_patch = requests
-            .iter()
-            .find(|request| {
-                request.method.as_str() == "PATCH"
-                    && request.url.path() == "/repos/test/repo/pulls/42"
-            })
-            .expect("missing body patch");
+        let body_patch = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
         assert!(payload["body"]
             .as_str()
@@ -6756,13 +6773,7 @@ mod forge_mock_tests {
             request.method.as_str() == "DELETE"
                 && request.url.path() == "/repos/test/repo/issues/comments/901"
         }));
-        let body_patch = requests
-            .iter()
-            .find(|request| {
-                request.method.as_str() == "PATCH"
-                    && request.url.path() == "/repos/test/repo/pulls/42"
-            })
-            .expect("missing body patch");
+        let body_patch = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
         assert_eq!(payload["body"], "## Summary\n\nhello");
     }
@@ -8024,13 +8035,12 @@ mod forge_mock_tests {
             .unwrap()
             .contains("<!-- stax-stack-comment -->"));
 
-        let body_update = requests
-            .iter()
-            .find(|request| {
-                request.method.as_str() == "PUT"
-                    && request.url.path() == "/projects/test%2Frepo/merge_requests/42"
-            })
-            .expect("missing GitLab body update request");
+        let body_update = find_body_update(
+            &requests,
+            "PUT",
+            "/projects/test%2Frepo/merge_requests/42",
+            "description",
+        );
         let body_payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
         assert!(body_payload["description"]
             .as_str()
@@ -8128,13 +8138,12 @@ mod forge_mock_tests {
             request.method.as_str() == "DELETE"
                 && request.url.path() == "/projects/test%2Frepo/merge_requests/42/notes/900"
         }));
-        let body_update = requests
-            .iter()
-            .find(|request| {
-                request.method.as_str() == "PUT"
-                    && request.url.path() == "/projects/test%2Frepo/merge_requests/42"
-            })
-            .expect("missing GitLab body update request");
+        let body_update = find_body_update(
+            &requests,
+            "PUT",
+            "/projects/test%2Frepo/merge_requests/42",
+            "description",
+        );
         let payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
         assert_eq!(payload["description"], "## Summary\n\nhello");
     }
@@ -8720,13 +8729,7 @@ mod forge_mock_tests {
         assert!(output.status.success(), "{}", TestRepo::stderr(&output));
 
         let requests = mock_server.received_requests().await.unwrap();
-        let body_update = requests
-            .iter()
-            .find(|request| {
-                request.method.as_str() == "PATCH"
-                    && request.url.path() == "/repos/test/repo/pulls/42"
-            })
-            .expect("missing Gitea body update request");
+        let body_update = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
         assert!(payload["body"]
             .as_str()
@@ -8838,13 +8841,7 @@ mod forge_mock_tests {
             .unwrap()
             .contains("<!-- stax-stack-comment -->"));
 
-        let body_update = requests
-            .iter()
-            .find(|request| {
-                request.method.as_str() == "PATCH"
-                    && request.url.path() == "/repos/test/repo/pulls/42"
-            })
-            .expect("missing Gitea body update request");
+        let body_update = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let body_payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
         assert!(body_payload["body"]
             .as_str()
@@ -8941,13 +8938,7 @@ mod forge_mock_tests {
             request.method.as_str() == "DELETE"
                 && request.url.path() == "/repos/test/repo/issues/comments/901"
         }));
-        let body_update = requests
-            .iter()
-            .find(|request| {
-                request.method.as_str() == "PATCH"
-                    && request.url.path() == "/repos/test/repo/pulls/42"
-            })
-            .expect("missing Gitea body update request");
+        let body_update = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
         assert_eq!(payload["body"], "## Summary\n\nhello");
     }

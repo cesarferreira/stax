@@ -94,6 +94,7 @@ pub struct PrInfoWithHead {
     pub info: PrInfo,
     pub head: String,
     pub head_label: Option<String>,
+    pub title: String,
 }
 
 /// Merge method for PRs
@@ -359,6 +360,7 @@ impl GitHubClient {
 
             return Ok(Some(PrInfoWithHead {
                 head_label: pr.head.label.clone(),
+                title: pr.title.clone().unwrap_or_default(),
                 info: PrInfo {
                     number: pr.number,
                     state: pr
@@ -423,6 +425,7 @@ impl GitHubClient {
                     head,
                     PrInfoWithHead {
                         head_label: pr.head.label.clone(),
+                        title: pr.title.clone().unwrap_or_default(),
                         info: PrInfo {
                             number: pr.number,
                             state: pr
@@ -515,6 +518,7 @@ impl GitHubClient {
         Ok(PrInfoWithHead {
             head: pr.head.ref_field.clone(),
             head_label: pr.head.label.clone(),
+            title: pr.title.clone().unwrap_or_default(),
             info: PrInfo {
                 number: pr.number,
                 state: pr
@@ -627,6 +631,19 @@ impl GitHubClient {
                 }
             }
         }
+    }
+
+    /// Update PR title
+    pub async fn update_pr_title(&self, pr_number: u64, title: &str) -> Result<()> {
+        self.record_api_call("pulls.update.title");
+        self.octocrab
+            .pulls(&self.owner, &self.repo)
+            .update(pr_number)
+            .title(title)
+            .send()
+            .await
+            .context("Failed to update PR title")?;
+        Ok(())
     }
 
     /// Update PR body text

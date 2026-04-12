@@ -108,6 +108,8 @@ struct UpdateMrRequest<'a> {
     /// GitLab 14.0+ supports setting draft status directly via the `draft` field.
     #[serde(skip_serializing_if = "Option::is_none")]
     draft: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -230,6 +232,23 @@ impl GitLabClient {
             target_branch: Some(new_base),
             description: None,
             draft: None,
+            title: None,
+        };
+        let _: GitLabMr = put_json(
+            &self.client,
+            &self.project_url(&format!("/merge_requests/{}", number)),
+            &request,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_pr_title(&self, number: u64, title: &str) -> Result<()> {
+        let request = UpdateMrRequest {
+            target_branch: None,
+            description: None,
+            draft: None,
+            title: Some(title),
         };
         let _: GitLabMr = put_json(
             &self.client,
@@ -245,6 +264,7 @@ impl GitLabClient {
             target_branch: None,
             description: Some(body),
             draft: None,
+            title: None,
         };
         let _: GitLabMr = put_json(
             &self.client,
@@ -260,6 +280,7 @@ impl GitLabClient {
             target_branch: None,
             description: None,
             draft: Some(is_draft),
+            title: None,
         };
         let _: GitLabMr = put_json(
             &self.client,
@@ -727,6 +748,7 @@ fn mr_to_pr_with_head(mr: GitLabMr) -> PrInfoWithHead {
         info: mr_to_pr_info(&mr),
         head: mr.source_branch,
         head_label: mr.web_url,
+        title: mr.title,
     }
 }
 
