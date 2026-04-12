@@ -4285,12 +4285,12 @@ fn test_sync_delete_upstream_gone_reparents_tracked_children() {
 
     let branches = repo.list_branches();
     assert!(
-        !branches.iter().any(|b| *b == parent_branch),
+        !branches.contains(&parent_branch),
         "Expected parent to be deleted, still have: {:?}",
         branches
     );
     assert!(
-        branches.iter().any(|b| *b == child_branch),
+        branches.contains(&child_branch),
         "Expected child to survive, got: {:?}",
         branches
     );
@@ -4359,17 +4359,17 @@ fn test_sync_delete_upstream_gone_reparents_across_multiple_doomed_ancestors() {
 
     let branches = repo.list_branches();
     assert!(
-        !branches.iter().any(|b| *b == grand),
+        !branches.contains(&grand),
         "grand should be deleted, got: {:?}",
         branches
     );
     assert!(
-        !branches.iter().any(|b| *b == mid),
+        !branches.contains(&mid),
         "mid should be deleted, got: {:?}",
         branches
     );
     assert!(
-        branches.iter().any(|b| *b == leaf),
+        branches.contains(&leaf),
         "leaf should survive, got: {:?}",
         branches
     );

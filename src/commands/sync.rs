@@ -484,7 +484,7 @@ pub fn run(
         drop(repo);
         let repo = GitRepo::open_from_path(&reopen_repo_path)?;
 
-        // Lazy-initialize forge client for updating PR bases (only if needed)
+        // Initialize forge client once up-front for any PR base updates below.
         let forge_client: Option<(tokio::runtime::Runtime, ForgeClient)> = {
             let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
 
@@ -640,76 +640,16 @@ pub fn run(
                         }
                     }
 
-                    // Reparent children of this branch to its parent before deleting
-                    let children: Vec<String> = stack
-                        .branches
-                        .iter()
-                        .filter(|(_, info)| info.parent.as_deref() == Some(branch))
-                        .map(|(name, _)| name.clone())
-                        .collect();
-                    let merged_branch_tip = repo.branch_commit(branch).ok();
-
-                    for child in &children {
-                        if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
-                            // Preserve the old-parent boundary so restack can run
-                            // `git rebase --onto <new> <old>` precisely.
-                            // Only use the merged branch's current tip when it is
-                            // actually in the child's ancestry.  If the parent was
-                            // rebased before deletion its tip may have moved out of
-                            // the child's commit graph (#120).
-                            let old_parent_boundary = merged_branch_tip
-                                .clone()
-                                .filter(|tip| repo.is_ancestor(tip, child).unwrap_or(false))
-                                .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
-
-                            let updated_meta = BranchMetadata {
-                                parent_branch_name: parent_branch.clone(),
-                                parent_branch_revision: old_parent_boundary,
-                                ..child_meta.clone()
-                            };
-                            updated_meta.write(repo.inner(), child)?;
-
-                            // Update PR base on the forge if this branch has a PR
-                            if let Some(pr_info) = &child_meta.pr_info {
-                                if let Some((rt, client)) = &forge_client {
-                                    match rt.block_on(
-                                        client.update_pr_base(pr_info.number, &parent_branch),
-                                    ) {
-                                        Ok(()) => {
-                                            if !quiet {
-                                                println!(
-                                                    "    {} updated PR #{} base → {}",
-                                                    "↪".cyan(),
-                                                    pr_info.number,
-                                                    parent_branch.cyan()
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            // Log warning but don't fail - PR might already be closed/merged
-                                            if !quiet {
-                                                println!(
-                                                    "    {} couldn't update PR #{} base: {}",
-                                                    "⚠".yellow(),
-                                                    pr_info.number,
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if !quiet {
-                                println!(
-                                    "    {} reparented {} → {}",
-                                    "↪".cyan(),
-                                    child.cyan(),
-                                    parent_branch.cyan()
-                                );
-                            }
-                        }
-                    }
+                    // Reparent tracked children onto the surviving parent before
+                    // deleting, preserving the old-parent boundary for later restack.
+                    reparent_children_for_deletion(
+                        &repo,
+                        &stack,
+                        branch,
+                        &parent_branch,
+                        forge_client.as_ref(),
+                        quiet,
+                    )?;
 
                     let local_delete = delete_local_branch_for_sync(
                         &repo,
@@ -866,7 +806,7 @@ pub fn run(
             // to degrade gracefully rather than aborting a mid-sync run.
             let mut live_stack = Stack::load(&repo).unwrap_or_else(|_| stack.clone());
 
-            // Lazy-initialize forge client once for any PR base updates below.
+            // Initialize forge client once up-front for any PR base updates below.
             let forge_client: Option<(tokio::runtime::Runtime, ForgeClient)> = {
                 let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
                 if let Some(info) = remote_info {
@@ -1926,14 +1866,11 @@ fn resolve_fallback_parent_skipping_doomed(
     let mut visited: std::collections::HashSet<String> =
         std::collections::HashSet::from([branch.to_string()]);
 
-    loop {
-        if !visited.insert(current.clone()) {
-            // Cycle guard: fall back to trunk
-            break;
-        }
+    // Walk up the recorded-parent chain. `visited.insert` doubles as the cycle
+    // guard: once we revisit a branch we fall through to the trunk fallback.
+    while visited.insert(current.clone()) {
         let is_doomed = doomed.iter().any(|d| d == &current);
-        let exists_locally = local_branch_exists(workdir, &current);
-        if !is_doomed && exists_locally {
+        if !is_doomed && local_branch_exists(workdir, &current) {
             let fallback_from = if current == recorded_parent {
                 None
             } else {
