@@ -346,6 +346,7 @@ impl WorktreeApp {
     }
 
     pub fn refresh_background(&mut self) {
+        // Process loader updates
         loop {
             let update = match self.loader.as_ref() {
                 Some(loader) => match loader.try_recv() {
@@ -363,6 +364,26 @@ impl WorktreeApp {
                 break;
             };
             self.apply_loader_update(update);
+        }
+
+        // Process removal updates
+        loop {
+            let update = match self.removal_operation.as_ref() {
+                Some(operation) => match operation.try_recv() {
+                    Ok(update) => Some(update),
+                    Err(TryRecvError::Empty) => None,
+                    Err(TryRecvError::Disconnected) => {
+                        self.removal_operation = None;
+                        None
+                    }
+                },
+                None => None,
+            };
+
+            let Some(update) = update else {
+                break;
+            };
+            self.apply_removal_update(update);
         }
     }
 
@@ -426,6 +447,74 @@ impl WorktreeApp {
             LoaderUpdate::Done => {
                 self.loader = None;
             }
+        }
+    }
+
+    fn apply_removal_update(&mut self, update: RemovalUpdate) {
+        match update {
+            RemovalUpdate::RunningPreHook => {
+                self.removal_status = Some("Running pre-remove hook...".to_string());
+            }
+            RemovalUpdate::RemovingWorktree => {
+                self.removal_status = Some("Removing worktree...".to_string());
+            }
+            RemovalUpdate::RunningPostHook => {
+                self.removal_status = Some("Running post-remove hook...".to_string());
+            }
+            RemovalUpdate::Success { removed_name } => {
+                self.removal_in_progress = false;
+                self.removal_operation = None;
+                self.removal_status = None;
+                self.set_status(format!("Removed '{}'", removed_name));
+                self.reload_worktrees();
+            }
+            RemovalUpdate::Error { message } => {
+                self.removal_in_progress = false;
+                self.removal_operation = None;
+                self.removal_status = None;
+                self.set_status(format!("Error: {}", message));
+            }
+        }
+    }
+
+    fn reload_worktrees(&mut self) {
+        let repo = match GitRepo::open() {
+            Ok(r) => r,
+            Err(e) => {
+                self.set_status(format!("Failed to reload: {}", e));
+                return;
+            }
+        };
+
+        let repo_path = match repo.git_dir() {
+            Ok(p) => p.to_path_buf(),
+            Err(e) => {
+                self.set_status(format!("Failed to get repo path: {}", e));
+                return;
+            }
+        };
+
+        let worktrees = match repo.list_worktrees() {
+            Ok(wts) => wts,
+            Err(e) => {
+                self.set_status(format!("Failed to list worktrees: {}", e));
+                return;
+            }
+        };
+
+        self.records = worktrees.into_iter().map(WorktreeRecord::new).collect();
+
+        if self.selected_index >= self.records.len() && !self.records.is_empty() {
+            self.selected_index = self.records.len() - 1;
+        }
+
+        if !self.records.is_empty() {
+            self.loader = Some(spawn_loader(
+                repo_path,
+                self.records.iter().map(|r| r.info.clone()).collect(),
+            ));
+        } else {
+            self.loader = None;
         }
     }
 }
