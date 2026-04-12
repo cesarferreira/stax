@@ -90,7 +90,7 @@ fn handle_key(app: &mut WorktreeApp, code: KeyCode, modifiers: KeyModifiers) -> 
         }
         DashboardMode::CreateInput => handle_create_key(app, code),
         DashboardMode::ConfirmDelete => handle_delete_key(app, code),
-        DashboardMode::ConfirmForceDelete => handle_delete_key(app, code),
+        DashboardMode::ConfirmForceDelete => handle_force_delete_key(app, code),
     }
 }
 
@@ -151,6 +151,17 @@ fn handle_delete_key(app: &mut WorktreeApp, code: KeyCode) -> Result<()> {
             app.mode = DashboardMode::Normal;
         }
         KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_delete(),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_force_delete_key(app: &mut WorktreeApp, code: KeyCode) -> Result<()> {
+    match code {
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+            app.mode = DashboardMode::Normal;
+        }
+        KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_force_delete(),
         _ => {}
     }
     Ok(())
