@@ -608,8 +608,12 @@ enum Commands {
     /// Split the current branch into multiple stacked branches (interactive)
     Split {
         /// Split by selecting individual hunks instead of by commit
-        #[arg(long)]
+        #[arg(long, conflicts_with = "file")]
         hunk: bool,
+
+        /// Extract changes to matching files into a new parent branch (repeatable)
+        #[arg(long, short = 'f', num_args = 1.., conflicts_with = "hunk")]
+        file: Vec<String>,
 
         /// Skip pre-commit hooks when committing split branches
         #[arg(long)]
@@ -1671,7 +1675,11 @@ pub fn run() -> Result<()> {
             interval,
             verbose,
         } => commands::ci::run(all, stack, json, refresh, watch, interval, verbose),
-        Commands::Split { hunk, no_verify } => commands::split::run(hunk, no_verify),
+        Commands::Split {
+            hunk,
+            file,
+            no_verify,
+        } => commands::split::run(hunk, file, no_verify),
         Commands::Absorb { dry_run, all } => commands::absorb::run(dry_run, all),
         Commands::Copy { pr } => {
             let target = if pr {
@@ -2382,5 +2390,37 @@ mod tests {
     fn s_alone_shows_stack_group() {
         let result = try_parse_cli(&["stax", "s"]);
         assert!(result.is_err(), "bare `s` should require a subcommand");
+    }
+
+    #[test]
+    fn split_parses_file_flag() {
+        let cli = parse_cli(&["stax", "split", "--file", "src/main.rs"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Split {
+                hunk: false,
+                ref file,
+                no_verify: false,
+            }) if file == &["src/main.rs"]
+        ));
+    }
+
+    #[test]
+    fn split_parses_short_file_flag() {
+        let cli = parse_cli(&["stax", "split", "-f", "src/main.rs", "src/lib.rs"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Split {
+                hunk: false,
+                ref file,
+                no_verify: false,
+            }) if file == &["src/main.rs", "src/lib.rs"]
+        ));
+    }
+
+    #[test]
+    fn split_file_and_hunk_conflict() {
+        let result = try_parse_cli(&["stax", "split", "--hunk", "--file", "foo.rs"]);
+        assert!(result.is_err(), "--hunk and --file should conflict");
     }
 }

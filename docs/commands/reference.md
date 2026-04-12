@@ -61,6 +61,7 @@
 | `st` | | Launch TUI |
 | `st split` | | Split branch into stacked branches (commit-based; needs 2+ commits) |
 | `st split --hunk` | | Split a single commit into stacked branches by selecting individual diff hunks |
+| `st split --file <pathspec>` | | Split by extracting files matching pathspec into a new parent branch |
 | `st edit` | `e` | Interactively edit commits on current branch (pick, reword, squash, fixup, drop) |
 
 ## Recovery
@@ -231,3 +232,5 @@ Worktree launch examples:
 - `st create --insert` (reparent children of current branch to the new branch)
 - `st submit --publish` (convert existing draft PRs to published)
 - `st submit --draft` (convert existing PRs to draft)
+- `st split --file src/auth.rs` (extract matching files into new parent branch)
+- `st split -f "src/api/*"` (short form, supports globs)

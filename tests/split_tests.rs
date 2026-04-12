@@ -195,3 +195,62 @@ fn test_split_from_middle_of_stack_passes_validation() {
         stderr
     );
 }
+
+#[test]
+fn test_split_file_extracts_matching_paths_into_new_parent_branch() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["status"]).assert_success();
+    repo.run_stax(&["create", "feature"]).assert_success();
+
+    repo.create_file("keep.txt", "keep");
+    repo.commit("add keep");
+    repo.create_file("move.txt", "move");
+    repo.commit("add move");
+
+    let feature_branch = repo.current_branch();
+
+    let output = repo.run_stax(&["split", "--file", "move.txt"]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Created") && stdout.contains("Reparented"),
+        "Expected split summary, got: {}",
+        stdout
+    );
+
+    let split_branch = repo
+        .find_branch_containing("feature-split")
+        .expect("expected split branch to be created");
+    assert_eq!(repo.current_branch(), feature_branch);
+
+    let parent_output = repo.git(&["show", &format!("refs/branch-metadata/{}", feature_branch)]);
+    let parent_metadata = TestRepo::stdout(&parent_output);
+    assert!(
+        parent_metadata.contains(&split_branch),
+        "Expected current branch metadata to point to split branch, got: {}",
+        parent_metadata
+    );
+
+    let split_diff = repo.git(&["diff", "--name-only", "main", &split_branch]);
+    let split_files = TestRepo::stdout(&split_diff);
+    assert!(
+        split_files.contains("move.txt"),
+        "Split branch should contain move.txt, got: {}",
+        split_files
+    );
+
+    let feature_diff = repo.git(&["diff", "--name-only", "main", &feature_branch]);
+    let feature_files = TestRepo::stdout(&feature_diff);
+    assert!(
+        feature_files.contains("keep.txt"),
+        "Current branch should still contain keep.txt vs main, got: {}",
+        feature_files
+    );
+    assert!(
+        !feature_files.contains("move.txt"),
+        "Current branch should no longer carry move.txt in its own history, got: {}",
+        feature_files
+    );
+}
