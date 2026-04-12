@@ -10,8 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.49.0] - 2026-04-12
 
+### Summary
+Major feature release introducing new commands (absorb, edit, upstack onto), enhanced TUI capabilities with worktree removal, improved submit workflow with PR title auto-update and draft/publish toggles, and comprehensive doctor checks. Also includes split command enhancements and numerous reliability improvements.
+
 ### Added
-- Parameterized `make release` target with configurable version bump level (minor/patch/major)
+- `st absorb` command for automatic change distribution across stack
+- `st edit` command for interactive commit editing
+- `st upstack onto` for mass reparent with descendants
+- `--insert` flag for `st create` to insert branches mid-stack
+- `--file` flag for `st split` for pathspec-based splitting
+- `--yolo` and `--agent-arg` flags to `st lane` and `st wt create`
+- `--update-title` flag to gate PR title auto-update in submit
+- `--publish`/`--draft` toggle for existing PRs in submit
+- `--squash` flag for submit with roborev integration
+- TUI: Force delete confirmation and removal progress tracking
+- TUI: Two-stage confirmation for dirty worktree removal
+- Conflict position indicator in restack stack view
+- Post-operation next-step hints for better UX
+- Doctor checks for diverged trunk, git config, and stale PR metadata
+- Parameterized `make release` target with configurable version bump level
+
+### Fixed
+- Sync: Reparent tracked children before delete-upstream-gone (#280)
+- Submit: Update PR titles even on no-op submits
+- Split: Rollback file splits and cover the flow
+- Restack: Hold auto-stashes until restack finishes
+- Create: Rollback on metadata and git spawn failures
+- Create: Rollback branch when commit fails during `st create -m`
+- Sync: Only count metadata cleanup when it succeeds
+- Sync: Warn on metadata deletion failures instead of silently ignoring
+- Sync: Add ancestor check before trunk hard-reset
+- Merge-queue: Rollback PR base on enqueue failure
+- Push: Use --force-with-lease instead of -f for all force pushes
+- Doctor: Count diverged trunk and stale metadata properly
+- Absorb: Cover and clean up non-dry-run flow
+- Persist reparent metadata only after successful restack
+- Surface config load failures in modify hints
+
+### Documentation
+- VS Code / Cursor integration recipe for agent worktrees
+- Added --publish/--draft flags to command reference
+- Added st split --file to command reference and compatibility matrix
 
 ## [0.46.0] - 2026-04-10
 
