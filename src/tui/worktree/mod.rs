@@ -90,6 +90,7 @@ fn handle_key(app: &mut WorktreeApp, code: KeyCode, modifiers: KeyModifiers) -> 
         }
         DashboardMode::CreateInput => handle_create_key(app, code),
         DashboardMode::ConfirmDelete => handle_delete_key(app, code),
+        DashboardMode::ConfirmForceDelete => handle_delete_key(app, code),
     }
 }
 

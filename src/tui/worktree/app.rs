@@ -16,6 +16,7 @@ pub enum DashboardMode {
     Help,
     CreateInput,
     ConfirmDelete,
+    ConfirmForceDelete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +48,15 @@ enum LoaderUpdate {
         error: String,
     },
     Done,
+}
+
+#[derive(Debug)]
+enum RemovalUpdate {
+    RunningPreHook,
+    RemovingWorktree,
+    RunningPostHook,
+    Success { removed_name: String },
+    Error { message: String },
 }
 
 #[derive(Debug, Clone)]

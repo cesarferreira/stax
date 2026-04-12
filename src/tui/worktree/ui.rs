@@ -26,6 +26,7 @@ pub fn render(f: &mut Frame, app: &WorktreeApp) {
         DashboardMode::Help => render_help_modal(f),
         DashboardMode::CreateInput => render_create_modal(f, app),
         DashboardMode::ConfirmDelete => render_delete_modal(f, app),
+        DashboardMode::ConfirmForceDelete => render_delete_modal(f, app),
         DashboardMode::Normal => {}
     }
 }
