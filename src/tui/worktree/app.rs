@@ -132,6 +132,10 @@ pub struct WorktreeApp {
     pub pending_command: Option<PendingCommand>,
     tmux_availability: TmuxAvailability,
     loader: Option<Receiver<LoaderUpdate>>,
+    removal_operation: Option<Receiver<RemovalUpdate>>,
+    removal_in_progress: bool,
+    removal_status: Option<String>,
+    repo_path: PathBuf,
 }
 
 impl WorktreeApp {
@@ -151,7 +155,7 @@ impl WorktreeApp {
             None
         } else {
             Some(spawn_loader(
-                repo_path,
+                repo_path.clone(),
                 records.iter().map(|record| record.info.clone()).collect(),
             ))
         };
@@ -167,6 +171,10 @@ impl WorktreeApp {
             pending_command: None,
             tmux_availability: TmuxAvailability::Loading,
             loader,
+            removal_operation: None,
+            removal_in_progress: false,
+            removal_status: None,
+            repo_path,
         })
     }
 
