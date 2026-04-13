@@ -261,16 +261,13 @@ fn test_split_file_on_multi_commit_branch_fails() {
 
     repo.run_stax(&["create", "feature"]).assert_success();
 
-    // Two commits on the branch above parent, both touching the same file.
     repo.create_file("move.txt", "v1");
     repo.commit("add move.txt");
     repo.create_file("move.txt", "v2");
     repo.commit("modify move.txt");
 
     let branch_before = repo.current_branch();
-    let head_before = TestRepo::stdout(&repo.git(&["rev-parse", "HEAD"]))
-        .trim()
-        .to_string();
+    let head_before = repo.head_sha();
 
     let output = repo.run_stax(&["split", "--file", "move.txt"]);
     output.assert_failure();
@@ -282,19 +279,17 @@ fn test_split_file_on_multi_commit_branch_fails() {
         stderr
     );
 
-    // Branch state must be untouched after the hard-fail.
+    // Hard-fail must leave branch state untouched — no partial split left behind.
     assert_eq!(repo.current_branch(), branch_before);
-    let head_after = TestRepo::stdout(&repo.git(&["rev-parse", "HEAD"]))
-        .trim()
-        .to_string();
     assert_eq!(
-        head_before, head_after,
+        head_before,
+        repo.head_sha(),
         "HEAD should not move when split --file aborts"
     );
-    let branches = TestRepo::stdout(&repo.git(&["branch", "--list"]));
+    let branches = repo.list_branches();
     assert!(
-        !branches.contains("feature-split"),
-        "No split branch should be created on hard-fail, got branches: {}",
+        !branches.iter().any(|b| b.contains("feature-split")),
+        "No split branch should be created on hard-fail, got branches: {:?}",
         branches
     );
 }

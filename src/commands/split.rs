@@ -97,18 +97,6 @@ fn split_by_file(
         );
     }
 
-    // 1. Check that the pathspecs actually match something in the diff
-    let diff_files = changed_files_between(workdir, parent, current, pathspecs)?;
-    if diff_files.is_empty() {
-        anyhow::bail!(
-            "No changes match the given pathspec(s) between '{}' and '{}'.\n\
-             Files checked: {}",
-            parent,
-            current,
-            pathspecs.join(", ")
-        );
-    }
-
     let commit_count = repo.commits_between(parent, current)?.len();
     if commit_count > 1 {
         anyhow::bail!(
@@ -120,6 +108,18 @@ fn split_by_file(
             commit_count,
             parent,
             "stax split --hunk".cyan()
+        );
+    }
+
+    // Check that the pathspecs actually match something in the diff
+    let diff_files = changed_files_between(workdir, parent, current, pathspecs)?;
+    if diff_files.is_empty() {
+        anyhow::bail!(
+            "No changes match the given pathspec(s) between '{}' and '{}'.\n\
+             Files checked: {}",
+            parent,
+            current,
+            pathspecs.join(", ")
         );
     }
 
