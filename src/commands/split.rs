@@ -111,16 +111,16 @@ fn split_by_file(
 
     let commit_count = repo.commits_between(parent, current)?.len();
     if commit_count > 1 {
-        println!(
-            "{}",
-            "Warning: `stax split --file` only rewrites the tip commit. Matching files may remain in earlier commits."
-                .yellow()
+        anyhow::bail!(
+            "`stax split --file` is unsafe on multi-commit branches: it only rewrites the tip \
+             commit, so matching files can remain in earlier commits of '{}' ({} commits above \
+             '{}').\n\
+             Use {} for commit-by-commit history surgery instead.",
+            current,
+            commit_count,
+            parent,
+            "stax split --hunk".cyan()
         );
-        println!(
-            "{}",
-            "Tip: use `stax split --hunk` for commit-by-commit history surgery.".dimmed()
-        );
-        println!();
     }
 
     println!(
