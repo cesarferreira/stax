@@ -5,6 +5,7 @@ use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
+use crate::errors::ConflictStopped;
 use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -34,10 +35,46 @@ pub fn run(
 ) -> Result<()> {
     let repo = GitRepo::open()?;
 
+    let mut completed_from_receipt: HashSet<String> = HashSet::new();
+
     if r#continue {
         crate::commands::continue_cmd::run()?;
         if repo.rebase_in_progress()? {
             return Ok(());
+        }
+
+        // Recover metadata + completed list from the failed receipt.
+        if let Some(receipt) =
+            crate::commands::continue_cmd::latest_failed_restack_receipt(&repo)?
+        {
+            completed_from_receipt
+                .extend(receipt.completed_branches.iter().cloned());
+
+            // If the user finished the rebase via `git rebase --continue`
+            // directly, the failed branch's metadata was never updated.
+            if let Some(failed_branch) = receipt
+                .error
+                .as_ref()
+                .and_then(|e| e.failed_branch.as_deref())
+            {
+                if let Some(meta) =
+                    BranchMetadata::read(repo.inner(), failed_branch)?
+                {
+                    if let Ok(actual_parent_rev) =
+                        repo.branch_commit(&meta.parent_branch_name)
+                    {
+                        if meta.parent_branch_revision != actual_parent_rev {
+                            let updated = BranchMetadata {
+                                parent_branch_revision: actual_parent_rev,
+                                ..meta
+                            };
+                            updated.write(repo.inner(), failed_branch)?;
+                        }
+                    }
+                }
+                completed_from_receipt
+                    .insert(failed_branch.to_string());
+            }
         }
     }
 
@@ -52,6 +89,7 @@ pub fn run(
         submit_after,
         r#continue,
         None,
+        completed_from_receipt,
     )
 }
 
@@ -71,6 +109,7 @@ pub(crate) fn resume_after_rebase(
         SubmitAfterRestack::No,
         true,
         restore_branch,
+        HashSet::new(),
     )
 }
 
@@ -86,6 +125,7 @@ fn run_impl(
     submit_after: SubmitAfterRestack,
     skip_prediction: bool,
     restore_branch: Option<String>,
+    completed_from_receipt: HashSet<String>,
 ) -> Result<()> {
     let current = repo.current_branch()?;
     let current_workdir = normalized_workdir(repo)?;
@@ -265,6 +305,10 @@ fn run_impl(
     let mut summary: Vec<(String, String)> = Vec::new();
 
     for (index, branch) in scope_branches.iter().enumerate() {
+        if completed_from_receipt.contains(branch) {
+            continue;
+        }
+
         let live_stack = Stack::load(repo)?;
         let needs_restack = live_stack
             .branches
@@ -319,6 +363,7 @@ fn run_impl(
 
                 // Record the after-OID for this branch
                 tx.record_after(repo, branch)?;
+                tx.push_completed_branch(branch);
 
                 LiveTimer::maybe_finish_ok(restack_timer, "done");
                 summary.push((branch.clone(), "ok".to_string()));
@@ -354,7 +399,7 @@ fn run_impl(
                 // Finish transaction with error
                 tx.finish_err("Rebase conflict", Some("rebase"), Some(branch))?;
 
-                return Ok(());
+                return Err(ConflictStopped.into());
             }
         }
     }

@@ -1,4 +1,4 @@
-use crate::{commands, config::Config, tui, update};
+use crate::{commands, config::Config, errors::ConflictStopped, git::GitRepo, tui, update};
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use std::{io::IsTerminal, time::Duration};
@@ -1461,6 +1461,18 @@ pub fn run() -> Result<()> {
     // Ensure repo is initialized for all other commands
     commands::init::ensure_initialized()?;
 
+    // Block non-rebase-aware commands when a rebase is in progress.
+    if !is_rebase_aware_command(&command) {
+        if let Ok(repo) = GitRepo::open() {
+            if repo.rebase_in_progress().unwrap_or(false) {
+                anyhow::bail!(
+                    "A rebase is in progress. Resolve conflicts and run one of:\n  \
+                     stax resolve\n  stax continue\n  stax abort"
+                );
+            }
+        }
+    }
+
     let result = match command {
         Commands::Status {
             json,
@@ -2039,7 +2051,30 @@ pub fn run() -> Result<()> {
     update::show_update_notification();
     update::check_in_background();
 
-    result
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) if e.is::<ConflictStopped>() => std::process::exit(1),
+        Err(e) => Err(e),
+    }
+}
+
+fn is_rebase_aware_command(cmd: &Commands) -> bool {
+    matches!(
+        cmd,
+        Commands::Continue
+            | Commands::Resolve { .. }
+            | Commands::Abort
+            | Commands::Undo { .. }
+            | Commands::Redo { .. }
+            | Commands::Restack {
+                r#continue: true,
+                ..
+            }
+            | Commands::Sync {
+                r#continue: true,
+                ..
+            }
+    )
 }
 
 fn detect_interactive_stdio() -> (bool, bool) {

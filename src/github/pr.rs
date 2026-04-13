@@ -332,7 +332,7 @@ impl GitHubClient {
         branch: &str,
     ) -> Result<Option<PrInfoWithHead>> {
         self.record_api_call("pulls.list.head");
-        let prs = self
+        let prs = match self
             .octocrab
             .pulls(&self.owner, &self.repo)
             .list()
@@ -342,7 +342,11 @@ impl GitHubClient {
             .sort(Sort::Created)
             .send()
             .await
-            .context("Failed to list PRs by head")?;
+            .context("Failed to list PRs by head")
+        {
+            Ok(prs) => prs,
+            Err(e) => return Err(self.enrich_api_error(e)),
+        };
 
         for pr in &prs.items {
             if pr.head.ref_field != branch {
@@ -403,7 +407,7 @@ impl GitHubClient {
 
         loop {
             self.record_api_call("pulls.list.open.page");
-            let prs = self
+            let prs = match self
                 .octocrab
                 .pulls(&self.owner, &self.repo)
                 .list()
@@ -413,7 +417,11 @@ impl GitHubClient {
                 .sort(Sort::Created)
                 .send()
                 .await
-                .context("Failed to list PRs")?;
+                .context("Failed to list PRs")
+            {
+                Ok(prs) => prs,
+                Err(e) => return Err(self.enrich_api_error(e)),
+            };
 
             for pr in &prs.items {
                 let head = pr.head.ref_field.clone();

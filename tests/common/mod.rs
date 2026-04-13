@@ -479,6 +479,16 @@ impl TestRepo {
             .expect("Failed to run git command")
     }
 
+    /// Run a raw git command with additional environment variables
+    pub fn git_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let mut cmd = hermetic_git_command();
+        cmd.args(args).current_dir(self.path());
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+        cmd.output().expect("Failed to run git command")
+    }
+
     /// Run a raw git command in a specific directory
     pub fn git_in(&self, cwd: &Path, args: &[&str]) -> Output {
         hermetic_git_command()

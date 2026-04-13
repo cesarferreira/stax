@@ -1,4 +1,5 @@
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
+use crate::errors::ConflictStopped;
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
@@ -118,6 +119,7 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
 
                 // Record the after-OID for this branch
                 tx.record_after(&repo, branch)?;
+                tx.push_completed_branch(branch);
 
                 completed_branches.push(branch.clone());
                 println!("    {}", "✓ done".green());
@@ -144,7 +146,7 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
                 // Finish transaction with error
                 tx.finish_err("Rebase conflict", Some("rebase"), Some(branch))?;
 
-                return Ok(());
+                return Err(ConflictStopped.into());
             }
         }
     }

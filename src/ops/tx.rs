@@ -100,6 +100,11 @@ impl Transaction {
         self.receipt.auto_stash_pop = auto_stash_pop;
     }
 
+    /// Record a branch that completed successfully during this operation.
+    pub fn push_completed_branch(&mut self, branch: &str) {
+        self.receipt.completed_branches.push(branch.to_string());
+    }
+
     /// Create backup refs and write the in-progress receipt
     pub fn snapshot(&mut self) -> Result<()> {
         if self.snapshotted {
