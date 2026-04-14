@@ -215,6 +215,14 @@ impl Stack {
         siblings.sort();
         siblings
     }
+
+    /// Get direct children of a branch
+    pub fn children(&self, branch: &str) -> Vec<String> {
+        self.branches
+            .get(branch)
+            .map(|b| b.children.clone())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

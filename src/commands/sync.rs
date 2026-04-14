@@ -511,19 +511,73 @@ pub fn run(
                     merged.len().to_string().cyan(),
                     branch_word
                 );
-                for branch in &merged {
-                    println!("      {} {}", "▸".bright_black(), branch);
+                for info in &merged {
+                    println!("      {} {}", "▸".bright_black(), info.branch);
                 }
                 println!();
             }
 
             // Record CI history for merged branches before deleting them
             if let Some((ref rt, ref client)) = forge_client {
-                record_ci_history_for_merged(&repo, rt, client, &merged, &stack, quiet);
+                let branch_names: Vec<String> = merged.iter().map(|m| m.branch.clone()).collect();
+                record_ci_history_for_merged(&repo, rt, client, &branch_names, &stack, quiet);
             }
 
-            for branch in &merged {
+            for merged_info in &merged {
+                let branch = &merged_info.branch;
+                let merge_type = &merged_info.merge_type;
                 let is_current_branch = branch == &current;
+
+                // Handle squash-merged branches with children
+                if matches!(merge_type, MergeType::SquashMerge) {
+                    let children = stack.children(branch);
+                    if !children.is_empty() {
+                        if !quiet {
+                            println!(
+                                "    {} Branch '{}' was squash-merged into {}. Rebasing {} child(ren) onto {}...",
+                                "⚑".yellow(),
+                                branch.yellow(),
+                                stack.trunk,
+                                children.len(),
+                                stack.trunk
+                            );
+                        }
+
+                        for child in &children {
+                            // Use existing provenance-aware rebase
+                            match repo.rebase_branch_onto_with_provenance(
+                                child,
+                                &stack.trunk,
+                                branch,  // fallback upstream
+                                false,   // auto_stash_pop
+                            ) {
+                                Ok(_) => {
+                                    // Update child's parent metadata to trunk
+                                    if let Some(mut metadata) = BranchMetadata::read(repo.inner(), child)? {
+                                        metadata.parent_branch_name = stack.trunk.clone();
+                                        metadata.parent_branch_revision = repo.rev_parse(&stack.trunk)?;
+                                        metadata.write(repo.inner(), child)?;
+                                    }
+
+                                    if !quiet {
+                                        println!("      {} Rebased {} onto {}", "✓".green(), child.cyan(), stack.trunk.cyan());
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "      {} Failed to rebase {}: {}",
+                                        "✗".red(),
+                                        child.yellow(),
+                                        e
+                                    );
+                                    eprintln!("      Stopping sync. Resolve conflicts and run `stax continue`.");
+                                    return Err(e);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let blocking_worktree_cleanup = if is_current_branch {
                     None
                 } else {
@@ -1307,13 +1361,25 @@ fn prune_stale_remote_tracking_refs(
     }
 }
 
+#[derive(Debug, Clone)]
+enum MergeType {
+    Ancestor,     // Detected via git branch --merged
+    SquashMerge,  // Detected via patch-ID matching
+}
+
+#[derive(Debug, Clone)]
+struct MergedBranchInfo {
+    branch: String,
+    merge_type: MergeType,
+}
+
 fn find_merged_branches(
     repo: &GitRepo,
     workdir: &std::path::Path,
     stack: &Stack,
     remote_name: &str,
     remote_branches: &HashSet<String>,
-) -> Result<Vec<String>> {
+) -> Result<Vec<MergedBranchInfo>> {
     let mut merged = Vec::new();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
 
@@ -1336,7 +1402,10 @@ fn find_merged_branches(
 
         // Only include branches we're tracking
         if stack.branches.contains_key(branch) {
-            merged.push(branch.to_string());
+            merged.push(MergedBranchInfo {
+                branch: branch.to_string(),
+                merge_type: MergeType::Ancestor,
+            });
         }
     }
 
@@ -1358,8 +1427,11 @@ fn find_merged_branches(
             }
 
             // Only include branches we're tracking (and avoid duplicates)
-            if stack.branches.contains_key(branch) && !merged.iter().any(|b| b == branch) {
-                merged.push(branch.to_string());
+            if stack.branches.contains_key(branch) && !merged.iter().any(|info| &info.branch == branch) {
+                merged.push(MergedBranchInfo {
+                    branch: branch.to_string(),
+                    merge_type: MergeType::Ancestor,
+                });
             }
         }
     }
@@ -1375,7 +1447,7 @@ fn find_merged_branches(
         }
 
         // Skip if already in merged list
-        if merged.contains(branch) {
+        if merged.iter().any(|m| &m.branch == branch) {
             continue;
         }
 
@@ -1383,7 +1455,10 @@ fn find_merged_branches(
             info.pr_state.as_deref(),
             Some(state) if state.eq_ignore_ascii_case("merged")
         ) {
-            merged.push(branch.clone());
+            merged.push(MergedBranchInfo {
+                branch: branch.clone(),
+                merge_type: MergeType::Ancestor,
+            });
         }
     }
 
@@ -1397,7 +1472,7 @@ fn find_merged_branches(
         }
 
         // Skip if already in merged list
-        if merged.contains(branch) {
+        if merged.iter().any(|m| &m.branch == branch) {
             continue;
         }
 
@@ -1410,7 +1485,10 @@ fn find_merged_branches(
         // Check if remote branch was deleted (strong signal it was merged)
         if !remote_branches.contains(branch.as_str()) {
             // Remote branch doesn't exist and had a PR - likely merged and deleted
-            merged.push(branch.clone());
+            merged.push(MergedBranchInfo {
+                branch: branch.clone(),
+                merge_type: MergeType::Ancestor,
+            });
         }
     }
 
@@ -1432,7 +1510,7 @@ fn find_merged_branches(
         }
 
         // Skip if already in merged list
-        if merged.contains(branch) {
+        if merged.iter().any(|m| &m.branch == branch) {
             continue;
         }
 
@@ -1441,7 +1519,10 @@ fn find_merged_branches(
 
         // If branch doesn't exist locally AND doesn't exist remotely, it's orphaned
         if !local_exists && !remote_exists {
-            merged.push(branch.clone());
+            merged.push(MergedBranchInfo {
+                branch: branch.clone(),
+                merge_type: MergeType::Ancestor,
+            });
         }
     }
 
@@ -1453,7 +1534,7 @@ fn find_merged_branches(
     let mut need_patch_id: Vec<(String, String)> = Vec::new();
 
     for branch in stack.branches.keys() {
-        if branch == &stack.trunk || merged.contains(branch) {
+        if branch == &stack.trunk || merged.iter().any(|m| &m.branch == branch) {
             continue;
         }
         // Remote still exists -> not merged via squash-delete; skip expensive check.
@@ -1461,7 +1542,10 @@ fn find_merged_branches(
             continue;
         }
         match repo.is_branch_merged_cheap(branch) {
-            Ok(Some(())) => merged.push(branch.clone()),
+            Ok(Some(())) => merged.push(MergedBranchInfo {
+                branch: branch.clone(),
+                merge_type: MergeType::Ancestor,
+            }),
             Ok(None) => {
                 if let Ok(mb) = repo.merge_base(trunk, branch) {
                     need_patch_id.push((branch.clone(), mb));
@@ -1487,7 +1571,10 @@ fn find_merged_branches(
                             .is_branch_merged_equivalent_to_trunk(&branch)
                             .unwrap_or(false)
                         {
-                            merged.push(branch);
+                            merged.push(MergedBranchInfo {
+                                branch,
+                                merge_type: MergeType::Ancestor,
+                            });
                         }
                     }
                     continue;
@@ -1500,7 +1587,10 @@ fn find_merged_branches(
                         .is_branch_merged_equivalent_to_trunk(&branch)
                         .unwrap_or(false)
                     {
-                        merged.push(branch);
+                        merged.push(MergedBranchInfo {
+                            branch,
+                            merge_type: MergeType::Ancestor,
+                        });
                     }
                 }
                 continue;
@@ -1514,7 +1604,10 @@ fn find_merged_branches(
                             .is_branch_merged_equivalent_to_trunk(&branch)
                             .unwrap_or(false)
                         {
-                            merged.push(branch);
+                            merged.push(MergedBranchInfo {
+                                branch,
+                                merge_type: MergeType::Ancestor,
+                            });
                         }
                     }
                     continue;
@@ -1528,7 +1621,10 @@ fn find_merged_branches(
                     Err(_) => continue,
                 };
                 if branch_patch_ids.is_empty() || branch_patch_ids.is_subset(&trunk_patch_ids) {
-                    merged.push(branch);
+                    merged.push(MergedBranchInfo {
+                        branch,
+                        merge_type: MergeType::SquashMerge,
+                    });
                 }
             }
         }
