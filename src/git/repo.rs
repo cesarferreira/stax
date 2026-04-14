@@ -1968,11 +1968,29 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Lease-protected force push a branch to the remote.
     pub fn force_push(&self, remote: &str, branch: &str) -> Result<()> {
+        let output = Command::new("git")
+            .args(["push", "--force-with-lease", "--atomic", remote, branch])
+            .current_dir(self.workdir()?)
+            .output()
+            .context("Failed to run git push")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            // Fallback if remote doesn't support atomic
+            if stderr.contains("--atomic") || stderr.contains("atomic push failed") {
+                return self.force_push_non_atomic(remote, branch);
+            }
+
+            anyhow::bail!("git push failed: {}", stderr);
+        }
+        Ok(())
+    }
+
+    fn force_push_non_atomic(&self, remote: &str, branch: &str) -> Result<()> {
         let status = Command::new("git")
             .args(["push", "--force-with-lease", remote, branch])
             .current_dir(self.workdir()?)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
             .status()
             .context("Failed to run git push --force-with-lease")?;
 
