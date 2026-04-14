@@ -1461,8 +1461,8 @@ pub fn run() -> Result<()> {
     // Ensure repo is initialized for all other commands
     commands::init::ensure_initialized()?;
 
-    // Block non-rebase-aware commands when a rebase is in progress.
-    if !is_rebase_aware_command(&command) {
+    // Block commands that do not explicitly support running during an active rebase.
+    if !command.allows_during_rebase() {
         if let Ok(repo) = GitRepo::open() {
             if repo.rebase_in_progress().unwrap_or(false) {
                 anyhow::bail!(
@@ -2058,23 +2058,33 @@ pub fn run() -> Result<()> {
     }
 }
 
-fn is_rebase_aware_command(cmd: &Commands) -> bool {
-    matches!(
-        cmd,
-        Commands::Continue
-            | Commands::Resolve { .. }
-            | Commands::Abort
-            | Commands::Undo { .. }
-            | Commands::Redo { .. }
-            | Commands::Restack {
-                r#continue: true,
-                ..
+impl Commands {
+    fn policy(&self) -> CommandPolicy {
+        match self {
+            Commands::Continue | Commands::Resolve { .. } | Commands::Abort => {
+                CommandPolicy::RebaseControl
+            }
+            Commands::Undo { .. } | Commands::Redo { .. } => CommandPolicy::RebaseSafe,
+            Commands::Restack {
+                r#continue: true, ..
             }
             | Commands::Sync {
-                r#continue: true,
-                ..
-            }
-    )
+                r#continue: true, ..
+            } => CommandPolicy::RebaseSafe,
+            _ => CommandPolicy::RequiresCleanRepoState,
+        }
+    }
+
+    fn allows_during_rebase(&self) -> bool {
+        !matches!(self.policy(), CommandPolicy::RequiresCleanRepoState)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandPolicy {
+    RebaseControl,
+    RebaseSafe,
+    RequiresCleanRepoState,
 }
 
 fn detect_interactive_stdio() -> (bool, bool) {
@@ -2168,7 +2178,7 @@ fn print_worktree_help() -> Result<()> {
 mod tests {
     use super::{
         check_interactive_terminal_with_probe, detect_interactive_stdio, has_interactive_terminal,
-        Cli, Commands, InteractiveTerminalCheck, RestackSubmitAfter, StackCommands,
+        Cli, CommandPolicy, Commands, InteractiveTerminalCheck, RestackSubmitAfter, StackCommands,
         WorktreeCommands,
     };
     use clap::Parser;
@@ -2457,5 +2467,29 @@ mod tests {
     fn split_file_and_hunk_conflict() {
         let result = try_parse_cli(&["stax", "split", "--hunk", "--file", "foo.rs"]);
         assert!(result.is_err(), "--hunk and --file should conflict");
+    }
+
+    #[test]
+    fn continue_is_marked_as_rebase_control() {
+        let cli = parse_cli(&["stax", "continue"]);
+        let cmd = cli.command.expect("command");
+        assert_eq!(cmd.policy(), CommandPolicy::RebaseControl);
+        assert!(cmd.allows_during_rebase());
+    }
+
+    #[test]
+    fn sync_continue_is_marked_as_rebase_safe() {
+        let cli = parse_cli(&["stax", "sync", "--continue"]);
+        let cmd = cli.command.expect("command");
+        assert_eq!(cmd.policy(), CommandPolicy::RebaseSafe);
+        assert!(cmd.allows_during_rebase());
+    }
+
+    #[test]
+    fn status_requires_clean_repo_state() {
+        let cli = parse_cli(&["stax", "status"]);
+        let cmd = cli.command.expect("command");
+        assert_eq!(cmd.policy(), CommandPolicy::RequiresCleanRepoState);
+        assert!(!cmd.allows_during_rebase());
     }
 }
