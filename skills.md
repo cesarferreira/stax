@@ -99,8 +99,8 @@ stax worktree path <name>      # Print absolute path of a worktree (for scriptin
 stax worktree remove <name>    # Remove a worktree
 stax worktree cleanup          # Prune stale bookkeeping + bulk-remove merged/detached worktrees
 stax worktree restack          # Restack all stax-managed worktrees
-stax shell-setup               # Print shell integration snippet for manual install
-stax shell-setup --install     # Write shell integration under ~/.config/stax and source it from your shell config
+stax setup                     # Install shell integration under ~/.config/stax and source it from your shell config
+stax setup --print             # Print shell integration snippet for manual install
 
 # Worktree shortcuts
 stax wt                        # Open worktree dashboard (TTY) or print worktree help
@@ -111,7 +111,7 @@ stax wtll                      # Long worktree list
 stax wtgo <name>               # Navigate to worktree path
 stax wtrm <name>               # Remove worktree
 stax wtrs                      # Restack all stax-managed worktrees
-sw <name>                      # Quick-switch (shell alias installed by stax shell-setup)
+sw <name>                      # Quick-switch (shell alias installed by stax setup)
 ```
 
 ## High-Value Commands and Flags
@@ -378,7 +378,7 @@ stax fix --yes
 
 ```bash
 # One-time shell integration (enables transparent cd)
-stax shell-setup --install
+stax setup
 
 # Create a worktree for an existing branch
 stax worktree create feature/payments-api
@@ -459,7 +459,7 @@ Symbols:
 7. Use `stax lane <name> [prompt]` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
 8. After trunk moves, run `stax wt rs` once instead of rebasing each agent worktree manually.
 9. Use `stax worktree create` when you want a worktree for an existing branch or for human parallel development — `st lane` is the higher-level AI shortcut.
-10. Run `stax shell-setup --install` once per machine to enable `stax worktree go` and the `sw` alias without executing `stax` on every shell startup.
+10. Run `stax setup` once per machine to enable `stax worktree go` and the `sw` alias without executing `stax` on every shell startup.
 
 ## Tips
 

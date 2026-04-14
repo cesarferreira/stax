@@ -365,7 +365,7 @@ That split is useful:
 Install shell integration if you want lane creation and navigation to move the parent shell automatically:
 
 ```bash
-st shell-setup --install
+st setup
 ```
 
 After shell integration is installed:

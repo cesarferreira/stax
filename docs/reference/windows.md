@@ -22,7 +22,7 @@ All core stax features work on Windows without modification:
 
 ## Shell integration limitations
 
-`st shell-setup` generates shell functions for **bash, zsh, and fish** only. There is no PowerShell or CMD equivalent. This means:
+`st setup` generates shell functions for **bash, zsh, and fish** only. There is no PowerShell or CMD equivalent. This means:
 
 | Feature | Unix (bash/zsh/fish) | Windows (PowerShell/CMD) |
 |---|---|---|

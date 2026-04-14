@@ -227,7 +227,7 @@ fn test_config_help_includes_reset_ai_flag() {
 
 #[test]
 fn test_shell_setup_help_uses_static_install_language() {
-    let output = stax(&["shell-setup", "--help"]);
+    let output = stax(&["setup", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("manual install"));
@@ -239,11 +239,11 @@ fn test_shell_setup_help_uses_static_install_language() {
 fn test_shell_setup_runs_outside_repo() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let output = Command::new(stax_bin())
-        .args(["shell-setup", "--print"])
+        .args(["setup", "--print"])
         .current_dir(tmp.path())
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .output()
-        .expect("run shell-setup");
+        .expect("run setup");
 
     assert!(output.status.success(), "{:?}", output);
 
@@ -302,12 +302,12 @@ fn test_shell_setup_refresh_updates_installed_shell_snippet_outside_repo() {
 
     let tmp = tempfile::tempdir().expect("create temp dir");
     let output = Command::new(stax_bin())
-        .args(["shell-setup", "--refresh"])
+        .args(["setup", "--refresh"])
         .current_dir(tmp.path())
         .env("HOME", home.path())
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .output()
-        .expect("run shell-setup --refresh");
+        .expect("run setup --refresh");
 
     assert!(output.status.success(), "{:?}", output);
 

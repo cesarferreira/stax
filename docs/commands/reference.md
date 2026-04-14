@@ -139,8 +139,8 @@ Full guide: [Worktrees](../worktrees/index.md)
 | `st worktree prune` | `wt prune`, `wtprune` | Clean stale git worktree bookkeeping only |
 | `st worktree cleanup` | `wt cleanup`, `wt clean` | Prune stale bookkeeping, remove detached linked worktrees, and remove stax-managed worktrees already merged into trunk (`--dry-run` previews only) |
 | `st worktree restack` | `wt rs`, `wtrs` | Restack all stax-managed worktrees |
-| `st shell-setup` | | Print shell integration snippet for manual install |
-| `st shell-setup --install` | | Write shell integration under `~/.config/stax/` and source it from your shell config |
+| `st setup` | | Install shell integration under `~/.config/stax/` and source it from your shell config |
+| `st setup --print` | | Print shell integration snippet for manual install |
 
 Worktree launch examples:
 - `st lane`

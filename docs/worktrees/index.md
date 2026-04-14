@@ -167,8 +167,8 @@ The dashboard is a control plane, not an embedded shell. The stack/patched-branc
 Install shell integration once if you want the parent shell to move into the target directory automatically:
 
 ```bash
-st shell-setup
-st shell-setup --install
+st setup        # Install shell integration
+st setup --print  # Show snippet for manual install
 ```
 
 After installation:

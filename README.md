@@ -307,7 +307,7 @@ Work on multiple stacks in parallel without losing context. `st worktree` (alias
 st wt
 
 # One-time shell integration setup
-st shell-setup --install   # writes ~/.config/stax/shell-setup.sh and sources it from ~/.zshrc
+st setup   # writes ~/.config/stax/shell-setup.sh and sources it from ~/.zshrc
 # Later stax upgrades refresh the generated shell-setup file automatically
 
 # Create a fresh random lane or a named lane
@@ -432,7 +432,7 @@ Read full config reference: [docs/configuration/index.md](docs/configuration/ind
 
 stax builds and runs on Windows (x86_64) with pre-built binaries available from [GitHub Releases](https://github.com/cesarferreira/stax/releases). Most commands work identically, with the following limitations:
 
-**Shell integration is not available.** `st shell-setup` supports bash, zsh, and fish only. On Windows this means:
+**Shell integration is not available.** `st setup` supports bash, zsh, and fish only. On Windows this means:
 
 - `st wt c` and `st wt go` create/navigate worktrees but cannot auto-`cd` the parent shell. After running these commands, manually `cd` to the printed path.
 - The `sw` quick alias is not available.
