@@ -418,6 +418,12 @@ impl Config {
         Self::resolve_github_auth_with_config(&auth_config).map(|(_, token)| token)
     }
 
+    /// Like `github_token` but also returns the source for error messages.
+    pub fn github_token_with_source() -> Option<(GitHubAuthSource, String)> {
+        let auth_config = Self::load().map(|c| c.auth).unwrap_or_default();
+        Self::resolve_github_auth_with_config(&auth_config)
+    }
+
     /// Get the saved credentials-file token written by `stax auth`.
     ///
     /// This stored token is forge-agnostic and can be reused across GitHub,

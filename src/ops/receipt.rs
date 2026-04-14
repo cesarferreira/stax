@@ -126,6 +126,9 @@ pub struct OpReceipt {
     pub plan_summary: PlanSummary,
     /// Error information if failed
     pub error: Option<OpError>,
+    /// Branches that completed successfully before a conflict stopped the operation
+    #[serde(default)]
+    pub completed_branches: Vec<String>,
 }
 
 impl OpReceipt {
@@ -153,6 +156,7 @@ impl OpReceipt {
             remote_refs: Vec::new(),
             plan_summary: PlanSummary::default(),
             error: None,
+            completed_branches: Vec::new(),
         }
     }
 

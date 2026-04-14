@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::config::Config;
+use crate::config::{Config, GitHubAuthSource};
 use crate::forge::{PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity};
 
 const GITHUB_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -21,17 +21,17 @@ pub struct GitHubClient {
     pub octocrab: Octocrab,
     pub owner: String,
     pub repo: String,
+    auth_source: Option<GitHubAuthSource>,
     api_call_tracker: Arc<ApiCallTracker>,
 }
 
 impl Clone for GitHubClient {
     fn clone(&self) -> Self {
-        // Note: Octocrab doesn't implement Clone, so we create a minimal placeholder
-        // This is only used in tests where we create fresh clients anyway
         Self {
             octocrab: self.octocrab.clone(),
             owner: self.owner.clone(),
             repo: self.repo.clone(),
+            auth_source: self.auth_source,
             api_call_tracker: self.api_call_tracker.clone(),
         }
     }
@@ -172,7 +172,7 @@ struct RepoListIssue {
 impl GitHubClient {
     /// Create a new GitHub client from config
     pub fn new(owner: &str, repo: &str, api_base_url: Option<String>) -> Result<Self> {
-        let token = Config::github_token().context(
+        let (auth_source, token) = Config::github_token_with_source().context(
             "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, \
              `gh auth login`, or set `STAX_GITHUB_TOKEN`.",
         )?;
@@ -195,6 +195,7 @@ impl GitHubClient {
             octocrab,
             owner: owner.to_string(),
             repo: repo.to_string(),
+            auth_source: Some(auth_source),
             api_call_tracker: Arc::new(ApiCallTracker::default()),
         })
     }
@@ -206,6 +207,7 @@ impl GitHubClient {
             octocrab,
             owner: owner.to_string(),
             repo: repo.to_string(),
+            auth_source: None,
             api_call_tracker: Arc::new(ApiCallTracker::default()),
         }
     }
@@ -216,6 +218,32 @@ impl GitHubClient {
 
     pub(crate) fn record_api_call(&self, operation: &'static str) {
         self.api_call_tracker.record(operation, 1);
+    }
+
+    /// Enrich an API error with auth troubleshooting context when it looks
+    /// like a token permissions issue (GitHub returns 404 for private repos
+    /// when the token lacks access, not 403).
+    pub(crate) fn enrich_api_error(&self, err: anyhow::Error) -> anyhow::Error {
+        let msg = format!("{:#}", err);
+        if msg.contains("Not Found")
+            || msg.contains("404")
+            || msg.contains("Unauthorized")
+            || msg.contains("401")
+            || msg.contains("Bad credentials")
+        {
+            let source_hint = match self.auth_source {
+                Some(s) => format!("Current auth source: {}.", s.display_name()),
+                None => "No auth source recorded.".to_string(),
+            };
+            err.context(format!(
+                "GitHub API error for {}/{}. This often means your token is expired or \
+                 lacks access to this repository. {}\n\
+                 To fix: run `stax auth --from-gh` to refresh, or check your token scopes.",
+                self.owner, self.repo, source_hint,
+            ))
+        } else {
+            err
+        }
     }
 
     /// Get combined CI status from both commit statuses AND check runs (GitHub Actions)
@@ -1182,5 +1210,83 @@ mod tests {
     fn test_github_client_clone() {
         // This test just verifies Clone is implemented
         // We can't actually test it without a mock server setup
+    }
+
+    #[tokio::test]
+    async fn test_enrich_api_error_adds_auth_context_on_not_found() {
+        ensure_crypto_provider();
+        let octocrab = Octocrab::builder()
+            .personal_token("expired-token".to_string())
+            .build()
+            .unwrap();
+
+        let mut client = GitHubClient::with_octocrab(octocrab, "myorg", "myrepo");
+        client.auth_source = Some(GitHubAuthSource::CredentialsFile);
+
+        let original = anyhow::anyhow!("Not Found");
+        let enriched = client.enrich_api_error(original);
+        let msg = format!("{:#}", enriched);
+
+        assert!(
+            msg.contains("token is expired or lacks access"),
+            "Expected auth hint, got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("credentials file"),
+            "Expected auth source in message, got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("stax auth --from-gh"),
+            "Expected fix suggestion, got: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enrich_api_error_passes_through_non_auth_errors() {
+        ensure_crypto_provider();
+        let octocrab = Octocrab::builder()
+            .personal_token("token".to_string())
+            .build()
+            .unwrap();
+
+        let client = GitHubClient::with_octocrab(octocrab, "myorg", "myrepo");
+
+        let original = anyhow::anyhow!("Connection timeout");
+        let enriched = client.enrich_api_error(original);
+        let msg = format!("{:#}", enriched);
+
+        assert!(
+            !msg.contains("token is expired"),
+            "Non-auth errors should not get auth hint, got: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_find_open_pr_by_head_404_gives_auth_hint() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found",
+                "documentation_url": "https://docs.github.com/rest"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.find_open_pr_by_head("test-owner", "my-branch").await;
+
+        assert!(result.is_err(), "Expected error on 404");
+        let err_msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            err_msg.contains("token is expired or lacks access"),
+            "Expected auth hint in 404 error, got: {}",
+            err_msg
+        );
     }
 }

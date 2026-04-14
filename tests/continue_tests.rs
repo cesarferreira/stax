@@ -219,8 +219,8 @@ fn test_continue_resumes_remaining_restack_after_conflict() {
 
     let output = repo.run_stax(&["restack", "--quiet"]);
     assert!(
-        output.status.success(),
-        "Restack should stop on conflict without failing\nstdout: {}\nstderr: {}",
+        !output.status.success(),
+        "Restack should exit non-zero on conflict\nstdout: {}\nstderr: {}",
         TestRepo::stdout(&output),
         TestRepo::stderr(&output)
     );

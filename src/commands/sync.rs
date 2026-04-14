@@ -1,4 +1,5 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
+use crate::errors::ConflictStopped;
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::commands::worktree::{
@@ -1175,6 +1176,7 @@ pub fn run(
 
                         // Record after-OID
                         tx.record_after(&repo, branch)?;
+                        tx.push_completed_branch(branch);
 
                         LiveTimer::maybe_finish_timed(restack_timer);
                         restacked_branches += 1;
@@ -1211,7 +1213,7 @@ pub fn run(
                         // Finish transaction with error
                         tx.finish_err("Rebase conflict", Some("restack"), Some(branch))?;
 
-                        return Ok(());
+                        return Err(ConflictStopped.into());
                     }
                 }
             }

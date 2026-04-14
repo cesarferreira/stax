@@ -2056,8 +2056,8 @@ fn test_restack_conflict_reports_branch_progress_and_files() {
 
     let output = repo.run_stax(&["restack", "--yes"]);
     assert!(
-        output.status.success(),
-        "restack failed\nstdout: {}\nstderr: {}",
+        !output.status.success(),
+        "restack should exit non-zero on conflict\nstdout: {}\nstderr: {}",
         TestRepo::stdout(&output),
         TestRepo::stderr(&output)
     );
@@ -2221,8 +2221,8 @@ fn test_cascade_conflict_reports_restack_context() {
 
     let output = repo.run_stax(&["cascade", "--no-submit"]);
     assert!(
-        output.status.success(),
-        "cascade failed\nstdout: {}\nstderr: {}",
+        !output.status.success(),
+        "cascade should exit non-zero on conflict\nstdout: {}\nstderr: {}",
         TestRepo::stdout(&output),
         TestRepo::stderr(&output)
     );

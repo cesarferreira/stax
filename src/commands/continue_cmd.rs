@@ -25,7 +25,7 @@ pub(crate) fn continue_rebase_and_update_metadata(repo: &GitRepo) -> Result<Reba
     }
 }
 
-fn latest_failed_restack(repo: &GitRepo) -> Result<Option<OpReceipt>> {
+pub(crate) fn latest_failed_restack(repo: &GitRepo) -> Result<Option<OpReceipt>> {
     let git_dir = repo.git_dir()?;
     let current = repo.current_branch()?;
     let workdir = repo.workdir()?.to_string_lossy().to_string();
@@ -39,6 +39,22 @@ fn latest_failed_restack(repo: &GitRepo) -> Result<Option<OpReceipt>> {
                 .as_ref()
                 .and_then(|error| error.failed_branch.as_deref())
                 == Some(current.as_str())
+    }))
+}
+
+/// Like `latest_failed_restack` but does not require the current branch to
+/// match. Used by `restack --continue` to recover metadata when the user
+/// may have finished the rebase via `git rebase --continue` directly.
+pub(crate) fn latest_failed_restack_receipt(repo: &GitRepo) -> Result<Option<OpReceipt>> {
+    let git_dir = repo.git_dir()?;
+    let workdir = repo.workdir()?.to_string_lossy().to_string();
+
+    Ok(OpReceipt::load_latest(git_dir)?.filter(|receipt| {
+        matches!(
+            receipt.kind,
+            OpKind::Restack | OpKind::SyncRestack | OpKind::UpstackRestack
+        ) && receipt.status == OpStatus::Failed
+            && receipt.repo_workdir == workdir
     }))
 }
 
