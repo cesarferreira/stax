@@ -239,7 +239,7 @@ fn test_shell_setup_help_uses_static_install_language() {
 fn test_shell_setup_runs_outside_repo() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let output = Command::new(stax_bin())
-        .args(["shell-setup"])
+        .args(["shell-setup", "--print"])
         .current_dir(tmp.path())
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .output()

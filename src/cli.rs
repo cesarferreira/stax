@@ -855,6 +855,13 @@ enum Commands {
     },
 
     /// Setup shell integration and enable git rerere
+    ///
+    /// This command installs shell integration into your shell config file
+    /// (~/.bashrc, ~/.zshrc, etc.) and enables git rerere for conflict resolution.
+    ///
+    /// For manual install, use --print to show the snippet, then add it to your
+    /// shell config. The auto-install writes to ~/.config/stax/shell-setup.sh
+    /// and sources it from your shell config.
     #[command(name = "setup", visible_alias = "shell-setup")]
     Setup {
         /// Print shell integration snippet instead of installing
