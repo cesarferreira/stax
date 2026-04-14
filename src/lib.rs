@@ -10,7 +10,7 @@ pub mod cli;
 mod commands;
 mod config;
 mod engine;
-pub(crate) mod errors;
+pub mod errors;
 mod forge;
 mod git;
 mod ops;
