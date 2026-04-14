@@ -7,6 +7,7 @@
 - Bare commands that default to a TUI/dashboard must gate on both `stdin` and `stdout` being terminals and otherwise fall back to help or a non-interactive view; never assume `st`/`st wt` is launched from a full TTY.
 - TUI/dashboard launch checks must also preflight the terminal input backend before entering the alternate screen; `isatty` alone is insufficient under constrained environments such as low file-descriptor limits.
 - TUI/dashboard startup must render from cheap repo data first and defer expensive per-item Git or tmux inspection until after the first paint; do not block initial draw on full worktree/branch status scans.
+- Background TUI loaders must distinguish queued work from actively running work; only mark an item as `loading` once its worker starts, or selection changes can leave stale loading state behind.
 - TUI/dashboard actions that shell back into `stax` must exit the alternate screen and drop live app/repo state before spawning the nested command; running child `stax` commands from inside an active dashboard can hit `EMFILE` in large repos.
 - When adding or changing CLI commands/flags, update both `README.md` and `docs/` command references in the same change and verify parity against `stax --help` before marking docs complete.
 - When a feature has both command docs and workflow guides, keep one canonical docs page for the command surface and have workflow pages link back to it instead of duplicating subcommand semantics.

@@ -12,7 +12,7 @@ pub fn render_details(f: &mut Frame, app: &App, area: Rect) {
     let branch = app.selected_branch();
 
     let content = if let Some(branch) = branch {
-        build_details_content(branch)
+        build_details_content(app, branch)
     } else {
         vec![Line::from("No branch selected")]
     };
@@ -32,7 +32,7 @@ pub fn render_details(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
-fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
+fn build_details_content(app: &App, branch: &BranchDisplay) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     lines.push(Line::from(vec![
@@ -98,6 +98,16 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
         ci_summary_span(branch),
     ]));
 
+    let (live_ci, dimmed) = app.ci_summary_line(branch);
+    lines.push(Line::from(vec![Span::styled(
+        live_ci,
+        if dimmed {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::Yellow)
+        },
+    )]));
+
     lines.push(Line::from(vec![Span::styled(
         "Recent commits",
         Style::default().add_modifier(Modifier::BOLD),
@@ -109,16 +119,16 @@ fn build_details_content(branch: &BranchDisplay) -> Vec<Line<'static>> {
             Style::default().fg(Color::DarkGray),
         )]));
     } else {
-        for commit in branch.commits.iter().take(3) {
+        for commit in branch.commits.iter().take(2) {
             lines.push(Line::from(vec![
                 Span::styled("• ", Style::default().fg(Color::DarkGray)),
                 Span::raw(truncate(commit, 72)),
             ]));
         }
 
-        if branch.commits.len() > 3 {
+        if branch.commits.len() > 2 {
             lines.push(Line::from(vec![Span::styled(
-                format!("+{} more commits", branch.commits.len() - 3),
+                format!("+{} more commits", branch.commits.len() - 2),
                 Style::default().fg(Color::DarkGray),
             )]));
         }

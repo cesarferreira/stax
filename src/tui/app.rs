@@ -1,9 +1,21 @@
 use crate::cache::CiCache;
+use crate::ci::{history, CheckRunInfo};
+use crate::config::Config;
 use crate::engine::Stack;
+use crate::forge::ForgeClient;
 use crate::git::GitRepo;
+use crate::remote::RemoteInfo;
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::time::Instant;
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const CI_ACTIVE_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
+const CI_IDLE_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
+const CI_ERROR_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 /// A line in a diff with its type
 #[derive(Debug, Clone)]
@@ -33,6 +45,157 @@ pub struct DiffStatLine {
 struct CachedDiff {
     stat: Vec<DiffStatLine>,
     lines: Vec<DiffLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchCiSummary {
+    pub overall_status: Option<String>,
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub running: usize,
+    pub queued: usize,
+    pub skipped: usize,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub average_secs: Option<u64>,
+}
+
+impl BranchCiSummary {
+    fn from_checks(
+        overall_status: Option<String>,
+        checks: &[CheckRunInfo],
+        average_secs: Option<u64>,
+    ) -> Self {
+        let mut passed = 0;
+        let mut failed = 0;
+        let mut running = 0;
+        let mut queued = 0;
+        let mut skipped = 0;
+
+        for check in checks {
+            match check.status.as_str() {
+                "completed" => match check.conclusion.as_deref() {
+                    Some("success") => passed += 1,
+                    Some("skipped") | Some("neutral") | Some("cancelled") => skipped += 1,
+                    _ => failed += 1,
+                },
+                "in_progress" => running += 1,
+                "queued" | "waiting" | "requested" | "pending" => queued += 1,
+                _ => queued += 1,
+            }
+        }
+
+        let started_at = checks
+            .iter()
+            .filter_map(|check| parse_ci_timestamp(check.started_at.as_deref()))
+            .min();
+        let completed_at = if checks.iter().all(|check| check.status == "completed") {
+            checks
+                .iter()
+                .filter_map(|check| parse_ci_timestamp(check.completed_at.as_deref()))
+                .max()
+        } else {
+            None
+        };
+
+        Self {
+            overall_status,
+            total: checks.len(),
+            passed,
+            failed,
+            running,
+            queued,
+            skipped,
+            started_at,
+            completed_at,
+            average_secs,
+        }
+    }
+
+    pub fn has_checks(&self) -> bool {
+        self.total > 0
+    }
+
+    pub fn is_active(&self) -> bool {
+        !self.is_complete() && (self.running > 0 || self.queued > 0)
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.total > 0 && self.completed_count() == self.total
+    }
+
+    pub fn completed_count(&self) -> usize {
+        self.passed + self.failed + self.skipped
+    }
+
+    pub fn elapsed_secs(&self, now: DateTime<Utc>) -> Option<u64> {
+        let started_at = self.started_at?;
+        let finished_at = if self.is_complete() {
+            self.completed_at.unwrap_or(now)
+        } else {
+            now
+        };
+        Some(
+            finished_at
+                .signed_duration_since(started_at)
+                .num_seconds()
+                .max(0) as u64,
+        )
+    }
+
+    pub fn progress_percent(&self, now: DateTime<Utc>) -> Option<u8> {
+        if self.is_complete() {
+            return Some(100);
+        }
+
+        let average_secs = self.average_secs?;
+        let elapsed_secs = self.elapsed_secs(now)?;
+        if average_secs == 0 {
+            return Some(99);
+        }
+
+        Some(if elapsed_secs >= average_secs {
+            99
+        } else {
+            ((elapsed_secs * 100) / average_secs).min(99) as u8
+        })
+    }
+
+    pub fn eta_secs(&self, now: DateTime<Utc>) -> Option<u64> {
+        if self.is_complete() {
+            return Some(0);
+        }
+
+        let average_secs = self.average_secs?;
+        let elapsed_secs = self.elapsed_secs(now)?;
+        Some(average_secs.saturating_sub(elapsed_secs))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum BranchCiState {
+    Loading,
+    Ready {
+        summary: BranchCiSummary,
+        fetched_at: Instant,
+    },
+    Unavailable {
+        message: String,
+        fetched_at: Instant,
+    },
+}
+
+#[derive(Debug)]
+enum CiUpdate {
+    Loaded {
+        branch: String,
+        summary: BranchCiSummary,
+    },
+    Unavailable {
+        branch: String,
+        message: String,
+    },
 }
 
 /// Branch display information for the TUI
@@ -138,6 +301,7 @@ pub struct App {
     pub stack: Stack,
     pub cache: CiCache,
     pub repo: GitRepo,
+    git_dir: PathBuf,
     pub current_branch: String,
     pub selected_index: usize,
     pub branches: Vec<BranchDisplay>,
@@ -157,6 +321,10 @@ pub struct App {
     pub needs_refresh: bool,
     pub reorder_state: Option<ReorderState>,
     diff_cache: HashMap<String, CachedDiff>,
+    ci_states: HashMap<String, BranchCiState>,
+    ci_loader: Option<Receiver<CiUpdate>>,
+    ci_loading_branch: Option<String>,
+    ci_queued_branch: Option<String>,
 }
 
 impl App {
@@ -169,12 +337,14 @@ impl App {
         let current_branch = repo.current_branch()?;
         let git_dir = repo.git_dir()?;
         let cache = CiCache::load(git_dir);
+        let git_dir = git_dir.to_path_buf();
         let status_set_at = initial_status.as_ref().map(|_| Instant::now());
 
         let mut app = Self {
             stack,
             cache,
             repo,
+            git_dir,
             current_branch,
             selected_index: 0,
             branches: Vec::new(),
@@ -194,6 +364,10 @@ impl App {
             needs_refresh: true,
             reorder_state: None,
             diff_cache: HashMap::new(),
+            ci_states: HashMap::new(),
+            ci_loader: None,
+            ci_loading_branch: None,
+            ci_queued_branch: None,
         };
 
         app.refresh_branches()?;
@@ -203,6 +377,7 @@ impl App {
             app.select_current_branch();
         }
         app.update_diff();
+        app.queue_ci_refresh_for_selected();
 
         Ok(app)
     }
@@ -215,6 +390,7 @@ impl App {
         self.diff_cache.clear();
         self.needs_refresh = false;
         self.update_diff();
+        self.queue_ci_refresh_for_selected();
         Ok(())
     }
 
@@ -381,6 +557,7 @@ impl App {
         if let Some(idx) = self.branches.iter().position(|b| b.is_current) {
             self.selected_index = idx;
         }
+        self.queue_ci_refresh_for_selected();
     }
 
     /// Select a branch by name, falling back to current branch when not found.
@@ -388,6 +565,7 @@ impl App {
         if let Some(idx) = self.branches.iter().position(|b| b.name == branch) {
             self.selected_index = idx;
             self.update_diff();
+            self.queue_ci_refresh_for_selected();
             return;
         }
 
@@ -417,6 +595,7 @@ impl App {
         if len > 0 && self.selected_index > 0 {
             self.selected_index -= 1;
             self.update_diff();
+            self.queue_ci_refresh_for_selected();
         }
     }
 
@@ -431,6 +610,7 @@ impl App {
         if len > 0 && self.selected_index < len - 1 {
             self.selected_index += 1;
             self.update_diff();
+            self.queue_ci_refresh_for_selected();
         }
     }
 
@@ -547,6 +727,166 @@ impl App {
                 self.status_message = None;
                 self.status_set_at = None;
             }
+        }
+    }
+
+    pub fn refresh_background(&mut self) {
+        self.poll_ci_updates();
+        self.queue_ci_refresh_for_selected();
+        self.spawn_ci_loader_if_needed();
+    }
+
+    pub fn ci_row_progress(&self, branch: &str) -> Option<String> {
+        let summary = match self.ci_states.get(branch) {
+            Some(BranchCiState::Ready { summary, .. }) if summary.is_active() => summary,
+            _ => return None,
+        };
+
+        Some(format!("{}/{}", summary.completed_count(), summary.total))
+    }
+
+    pub fn ci_summary_line(&self, branch: &BranchDisplay) -> (String, bool) {
+        match self.ci_states.get(&branch.name) {
+            Some(BranchCiState::Loading) => ("Live CI: fetching latest checks…".to_string(), false),
+            Some(BranchCiState::Unavailable { message, .. }) => {
+                (format!("Live CI: {}", message), true)
+            }
+            Some(BranchCiState::Ready { summary, .. }) => live_ci_summary_text(summary),
+            None if self.ci_queued_branch.as_deref() == Some(branch.name.as_str()) => {
+                ("Live CI: fetching latest checks…".to_string(), false)
+            }
+            None if branch.has_remote => (
+                "Live CI: select the branch for a background refresh".to_string(),
+                false,
+            ),
+            None => (
+                "Live CI: push branch to see remote checks".to_string(),
+                true,
+            ),
+        }
+    }
+
+    fn queue_ci_refresh_for_selected(&mut self) {
+        let Some(branch) = self.selected_branch().map(|branch| branch.name.clone()) else {
+            return;
+        };
+
+        let Some(selected) = self.selected_branch() else {
+            return;
+        };
+
+        if !selected.has_remote {
+            self.ci_states.insert(
+                branch,
+                BranchCiState::Unavailable {
+                    message: "push branch to see remote checks".to_string(),
+                    fetched_at: Instant::now(),
+                },
+            );
+            return;
+        }
+
+        let should_queue = match self.ci_states.get(&branch) {
+            Some(BranchCiState::Loading) => false,
+            Some(BranchCiState::Ready {
+                summary,
+                fetched_at,
+            }) => {
+                let interval = if summary.is_active() {
+                    CI_ACTIVE_REFRESH_INTERVAL
+                } else {
+                    CI_IDLE_REFRESH_INTERVAL
+                };
+                fetched_at.elapsed() >= interval
+            }
+            Some(BranchCiState::Unavailable { fetched_at, .. }) => {
+                fetched_at.elapsed() >= CI_ERROR_RETRY_INTERVAL
+            }
+            None => true,
+        };
+
+        if should_queue {
+            self.ci_queued_branch = Some(branch);
+        }
+    }
+
+    fn poll_ci_updates(&mut self) {
+        loop {
+            let update = match self.ci_loader.as_ref() {
+                Some(loader) => match loader.try_recv() {
+                    Ok(update) => Some(update),
+                    Err(TryRecvError::Empty) => None,
+                    Err(TryRecvError::Disconnected) => {
+                        self.ci_loader = None;
+                        self.ci_loading_branch = None;
+                        None
+                    }
+                },
+                None => None,
+            };
+
+            let Some(update) = update else {
+                break;
+            };
+            self.apply_ci_update(update);
+        }
+    }
+
+    fn spawn_ci_loader_if_needed(&mut self) {
+        if self.ci_loader.is_some() {
+            return;
+        }
+
+        let Some(branch) = self.ci_queued_branch.take() else {
+            return;
+        };
+
+        self.ci_states
+            .insert(branch.clone(), BranchCiState::Loading);
+        self.ci_loading_branch = Some(branch.clone());
+        self.ci_loader = Some(spawn_ci_loader(self.git_dir.clone(), branch));
+    }
+
+    fn apply_ci_update(&mut self, update: CiUpdate) {
+        let fetched_at = Instant::now();
+        let branch_name = match &update {
+            CiUpdate::Loaded { branch, .. } | CiUpdate::Unavailable { branch, .. } => {
+                branch.clone()
+            }
+        };
+
+        match update {
+            CiUpdate::Loaded { branch, summary } => {
+                let ci_state = summary.overall_status.clone();
+                self.ci_states.insert(
+                    branch.clone(),
+                    BranchCiState::Ready {
+                        summary,
+                        fetched_at,
+                    },
+                );
+                if let Some(branch_display) =
+                    self.branches.iter_mut().find(|item| item.name == branch)
+                {
+                    branch_display.ci_state = ci_state.clone();
+                }
+                self.cache.update(&branch, ci_state, None);
+                let _ = self.cache.save(&self.git_dir);
+            }
+            CiUpdate::Unavailable { branch, message } => {
+                self.ci_states.insert(
+                    branch.clone(),
+                    BranchCiState::Unavailable {
+                        message,
+                        fetched_at,
+                    },
+                );
+            }
+        }
+
+        if self.ci_loading_branch.as_deref() == Some(branch_name.as_str()) {
+            self.ci_loader = None;
+            self.ci_loading_branch = None;
         }
     }
 
@@ -795,5 +1135,246 @@ impl App {
     /// Clear reorder state
     pub fn clear_reorder_state(&mut self) {
         self.reorder_state = None;
+    }
+}
+
+fn parse_ci_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
+    value.and_then(|timestamp| timestamp.parse::<DateTime<Utc>>().ok())
+}
+
+fn live_ci_summary_text(summary: &BranchCiSummary) -> (String, bool) {
+    if !summary.has_checks() {
+        return (
+            "Live CI: no checks reported for the latest push".to_string(),
+            true,
+        );
+    }
+
+    let now = Utc::now();
+    let mut parts = Vec::new();
+
+    if summary.is_active() {
+        parts.push(format!(
+            "{}/{} complete",
+            summary.completed_count(),
+            summary.total
+        ));
+    } else {
+        parts.push(format!("{} checks", summary.total));
+    }
+
+    if summary.failed > 0 {
+        parts.push(format!("{} failed", summary.failed));
+    }
+    if summary.running > 0 {
+        parts.push(format!("{} running", summary.running));
+    }
+    if summary.queued > 0 {
+        parts.push(format!("{} queued", summary.queued));
+    }
+    if summary.passed > 0 {
+        parts.push(format!("{} passed", summary.passed));
+    }
+    if summary.skipped > 0 {
+        parts.push(format!("{} skipped", summary.skipped));
+    }
+    if let Some(percent) = summary.progress_percent(now) {
+        if summary.is_active() {
+            parts.push(format!("{}%", percent));
+        }
+    }
+    if let Some(elapsed_secs) = summary.elapsed_secs(now) {
+        if summary.is_complete() {
+            parts.push(format!("{} total", format_duration_compact(elapsed_secs)));
+        } else {
+            parts.push(format!("{} elapsed", format_duration_compact(elapsed_secs)));
+        }
+    }
+    if let Some(eta_secs) = summary.eta_secs(now) {
+        if summary.is_active() && eta_secs > 0 {
+            parts.push(format!("~{} left", format_duration_compact(eta_secs)));
+        }
+    }
+
+    let is_dimmed = summary.failed == 0 && !summary.is_active();
+    (format!("Live CI: {}", parts.join("  •  ")), is_dimmed)
+}
+
+fn format_duration_compact(secs: u64) -> String {
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+fn branch_average_secs(repo: &GitRepo, branch_name: &str, checks: &[CheckRunInfo]) -> Option<u64> {
+    let history_key = format!("branch-overall:{}", branch_name);
+    history::load_check_history(repo, &history_key)
+        .ok()
+        .and_then(|history| history::calculate_average(&history))
+        .or_else(|| checks.iter().filter_map(|check| check.average_secs).max())
+}
+
+fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let repo = match GitRepo::open_from_path(&repo_path) {
+            Ok(repo) => repo,
+            Err(_) => {
+                let _ = sender.send(CiUpdate::Unavailable {
+                    branch,
+                    message: "unable to open the repository".to_string(),
+                });
+                return;
+            }
+        };
+
+        let config = match Config::load() {
+            Ok(config) => config,
+            Err(_) => {
+                let _ = sender.send(CiUpdate::Unavailable {
+                    branch,
+                    message: "unable to load config".to_string(),
+                });
+                return;
+            }
+        };
+
+        let remote = match RemoteInfo::from_repo(&repo, &config) {
+            Ok(remote) => remote,
+            Err(_) => {
+                let _ = sender.send(CiUpdate::Unavailable {
+                    branch,
+                    message: "configure a git remote to fetch checks".to_string(),
+                });
+                return;
+            }
+        };
+
+        let client = match ForgeClient::new(&remote) {
+            Ok(client) => client,
+            Err(_) => {
+                let _ = sender.send(CiUpdate::Unavailable {
+                    branch,
+                    message: "run `stax auth` to fetch live CI".to_string(),
+                });
+                return;
+            }
+        };
+
+        let sha = match repo.branch_commit(&branch) {
+            Ok(sha) => sha,
+            Err(_) => {
+                let _ = sender.send(CiUpdate::Unavailable {
+                    branch,
+                    message: "branch commit could not be resolved".to_string(),
+                });
+                return;
+            }
+        };
+
+        let runtime = match tokio::runtime::Runtime::new() {
+            Ok(runtime) => runtime,
+            Err(_) => {
+                let _ = sender.send(CiUpdate::Unavailable {
+                    branch,
+                    message: "unable to start CI worker".to_string(),
+                });
+                return;
+            }
+        };
+
+        let (overall_status, check_runs) = match runtime.block_on(client.fetch_checks(&repo, &sha))
+        {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = sender.send(CiUpdate::Unavailable {
+                    branch,
+                    message: "live CI is temporarily unavailable".to_string(),
+                });
+                return;
+            }
+        };
+
+        let average_secs = branch_average_secs(&repo, &branch, &check_runs);
+        let summary = BranchCiSummary::from_checks(overall_status, &check_runs, average_secs);
+        let _ = sender.send(CiUpdate::Loaded { branch, summary });
+    });
+
+    receiver
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{live_ci_summary_text, BranchCiSummary};
+    use chrono::{TimeZone, Utc};
+
+    fn sample_summary() -> BranchCiSummary {
+        BranchCiSummary {
+            overall_status: Some("pending".to_string()),
+            total: 6,
+            passed: 2,
+            failed: 0,
+            running: 1,
+            queued: 3,
+            skipped: 0,
+            started_at: Some(Utc.with_ymd_and_hms(2026, 4, 14, 10, 0, 0).unwrap()),
+            completed_at: None,
+            average_secs: Some(900),
+        }
+    }
+
+    #[test]
+    fn ci_summary_tracks_completion_counts_and_eta() {
+        let summary = sample_summary();
+        let now = Utc.with_ymd_and_hms(2026, 4, 14, 10, 5, 0).unwrap();
+
+        assert_eq!(summary.completed_count(), 2);
+        assert_eq!(summary.elapsed_secs(now), Some(300));
+        assert_eq!(summary.progress_percent(now), Some(33));
+        assert_eq!(summary.eta_secs(now), Some(600));
+    }
+
+    #[test]
+    fn ci_summary_marks_completed_runs_as_done() {
+        let summary = BranchCiSummary {
+            overall_status: Some("success".to_string()),
+            total: 3,
+            passed: 2,
+            failed: 0,
+            running: 0,
+            queued: 0,
+            skipped: 1,
+            started_at: Some(Utc.with_ymd_and_hms(2026, 4, 14, 10, 0, 0).unwrap()),
+            completed_at: Some(Utc.with_ymd_and_hms(2026, 4, 14, 10, 6, 0).unwrap()),
+            average_secs: Some(600),
+        };
+
+        assert!(summary.is_complete());
+        assert_eq!(summary.progress_percent(Utc::now()), Some(100));
+    }
+
+    #[test]
+    fn live_ci_text_handles_missing_checks() {
+        let summary = BranchCiSummary {
+            overall_status: None,
+            total: 0,
+            passed: 0,
+            failed: 0,
+            running: 0,
+            queued: 0,
+            skipped: 0,
+            started_at: None,
+            completed_at: None,
+            average_secs: None,
+        };
+
+        let (text, dimmed) = live_ci_summary_text(&summary);
+        assert_eq!(text, "Live CI: no checks reported for the latest push");
+        assert!(dimmed);
     }
 }

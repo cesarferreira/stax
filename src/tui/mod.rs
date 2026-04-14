@@ -81,6 +81,8 @@ fn run_app(
             app.refresh_branches()?;
         }
 
+        app.refresh_background();
+
         // Clear stale status messages
         app.clear_stale_status();
 
