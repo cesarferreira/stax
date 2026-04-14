@@ -376,6 +376,9 @@ enum Commands {
     Checkout {
         /// Branch name (interactive if not provided)
         branch: Option<String>,
+        /// Checkout branch by PR number
+        #[arg(long, conflicts_with = "branch")]
+        pr: Option<u64>,
         /// Jump directly to trunk
         #[arg(long)]
         trunk: bool,
@@ -1048,6 +1051,9 @@ enum BranchCommands {
     Checkout {
         /// Branch name (interactive if not provided)
         branch: Option<String>,
+        /// Checkout branch by PR number
+        #[arg(long, conflicts_with = "branch")]
+        pr: Option<u64>,
         /// Jump directly to trunk
         #[arg(long)]
         trunk: bool,
@@ -1623,11 +1629,12 @@ pub fn run() -> Result<()> {
         } => commands::cascade::run(no_pr, no_submit, auto_stash_pop),
         Commands::Checkout {
             branch,
+            pr,
             trunk,
             parent,
             child,
             shell_output,
-        } => commands::checkout::run(branch, trunk, parent, child, shell_output),
+        } => commands::checkout::run(branch, pr, trunk, parent, child, shell_output),
         Commands::Continue => commands::continue_cmd::run_and_resume_restack(),
         Commands::Resolve {
             agent,
@@ -1652,7 +1659,7 @@ pub fn run() -> Result<()> {
             if let Some(name) = branch {
                 commands::set_trunk::run(&name)
             } else {
-                commands::checkout::run(None, true, false, None, false)
+                commands::checkout::run(None, None, true, false, None, false)
             }
         }
         Commands::Up { count } => commands::navigate::up(count),
@@ -1785,11 +1792,12 @@ pub fn run() -> Result<()> {
             } => commands::branch::create::run(name, message, from, prefix, all, insert),
             BranchCommands::Checkout {
                 branch,
+                pr,
                 trunk,
                 parent,
                 child,
                 shell_output,
-            } => commands::checkout::run(branch, trunk, parent, child, shell_output),
+            } => commands::checkout::run(branch, pr, trunk, parent, child, shell_output),
             BranchCommands::Track { parent, all_prs } => {
                 commands::branch::track::run(parent, all_prs)
             }

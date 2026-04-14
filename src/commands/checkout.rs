@@ -65,6 +65,7 @@ fn render_stderr<T: Display>(value: T, style: Style) -> String {
 
 pub fn run(
     branch: Option<String>,
+    pr: Option<u64>,
     trunk: bool,
     parent: bool,
     child: Option<usize>,
@@ -73,6 +74,18 @@ pub fn run(
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?.to_path_buf();
     let current = repo.current_branch()?;
+
+    // Handle explicit --pr flag
+    if let Some(pr_num) = pr {
+        return checkout_by_pr(&repo, pr_num, shell_output);
+    }
+
+    // Parse "#123" from branch string
+    if let Some(ref branch_str) = branch {
+        if let Some(pr_num) = parse_pr_number(branch_str)? {
+            return checkout_by_pr(&repo, pr_num, shell_output);
+        }
+    }
 
     if branch.is_some() && (trunk || parent || child.is_some()) {
         anyhow::bail!("Cannot combine explicit branch with --trunk/--parent/--child");
@@ -532,6 +545,56 @@ fn collect_recursive(
         name: branch.to_string(),
         column,
     });
+    Ok(())
+}
+
+/// Parse PR number from string (supports "#123" format or plain number)
+fn parse_pr_number(input: &str) -> Result<Option<u64>> {
+    if let Some(num_str) = input.strip_prefix('#') {
+        let num = num_str
+            .parse::<u64>()
+            .map_err(|_| anyhow::anyhow!("Invalid PR number after #: {}", num_str))?;
+        return Ok(Some(num));
+    }
+    Ok(None)
+}
+
+/// Checkout branch by PR number
+fn checkout_by_pr(repo: &GitRepo, pr_num: u64, shell_output: bool) -> Result<()> {
+    let config = Config::load()?;
+    let remote_info = crate::remote::RemoteInfo::from_repo(repo, &config)?;
+
+    // Get PR info including head branch
+    let rt = tokio::runtime::Runtime::new()?;
+    let pr_info = rt.block_on(async {
+        let client = crate::forge::ForgeClient::new(&remote_info)?;
+        client.get_pr_with_head(pr_num).await
+    })?;
+
+    let target_branch = pr_info.head;
+
+    // Check if branch exists locally
+    let local_branches = repo.list_branches()?;
+    if !local_branches.contains(&target_branch) {
+        anyhow::bail!(
+            "PR #{} points to branch '{}' which doesn't exist locally.\n\
+             Hint: Try 'stax branch track --all-prs' to track all your open PRs",
+            pr_num,
+            target_branch
+        );
+    }
+
+    // Checkout the branch
+    let workdir = repo.workdir()?;
+    checkout_branch_in(workdir, &target_branch)?;
+
+    if shell_output {
+        let message = format!("Checked out PR #{}: {}", pr_num, target_branch);
+        emit_shell_message(&message);
+    } else {
+        println!("Checked out PR #{}: {}", pr_num, target_branch.cyan());
+    }
+
     Ok(())
 }
 
