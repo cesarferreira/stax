@@ -203,10 +203,10 @@ fn test_split_file_extracts_matching_paths_into_new_parent_branch() {
     repo.run_stax(&["status"]).assert_success();
     repo.run_stax(&["create", "feature"]).assert_success();
 
+    // Single commit touching both files — `split --file` requires one commit above parent.
     repo.create_file("keep.txt", "keep");
-    repo.commit("add keep");
     repo.create_file("move.txt", "move");
-    repo.commit("add move");
+    repo.commit("add keep and move");
 
     let feature_branch = repo.current_branch();
 
@@ -252,5 +252,44 @@ fn test_split_file_extracts_matching_paths_into_new_parent_branch() {
         !feature_files.contains("move.txt"),
         "Current branch should no longer carry move.txt in its own history, got: {}",
         feature_files
+    );
+}
+
+#[test]
+fn test_split_file_on_multi_commit_branch_fails() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["create", "feature"]).assert_success();
+
+    repo.create_file("move.txt", "v1");
+    repo.commit("add move.txt");
+    repo.create_file("move.txt", "v2");
+    repo.commit("modify move.txt");
+
+    let branch_before = repo.current_branch();
+    let head_before = repo.head_sha();
+
+    let output = repo.run_stax(&["split", "--file", "move.txt"]);
+    output.assert_failure();
+
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("multi-commit") && stderr.contains("stax split --hunk"),
+        "Expected guidance toward --hunk, got: {}",
+        stderr
+    );
+
+    // Hard-fail must leave branch state untouched — no partial split left behind.
+    assert_eq!(repo.current_branch(), branch_before);
+    assert_eq!(
+        head_before,
+        repo.head_sha(),
+        "HEAD should not move when split --file aborts"
+    );
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|b| b.contains("feature-split")),
+        "No split branch should be created on hard-fail, got branches: {:?}",
+        branches
     );
 }

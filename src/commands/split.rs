@@ -97,7 +97,21 @@ fn split_by_file(
         );
     }
 
-    // 1. Check that the pathspecs actually match something in the diff
+    let commit_count = repo.commits_between(parent, current)?.len();
+    if commit_count > 1 {
+        anyhow::bail!(
+            "`stax split --file` is unsafe on multi-commit branches: it only rewrites the tip \
+             commit, so matching files can remain in earlier commits of '{}' ({} commits above \
+             '{}').\n\
+             Use {} for commit-by-commit history surgery instead.",
+            current,
+            commit_count,
+            parent,
+            "stax split --hunk".cyan()
+        );
+    }
+
+    // Check that the pathspecs actually match something in the diff
     let diff_files = changed_files_between(workdir, parent, current, pathspecs)?;
     if diff_files.is_empty() {
         anyhow::bail!(
@@ -107,20 +121,6 @@ fn split_by_file(
             current,
             pathspecs.join(", ")
         );
-    }
-
-    let commit_count = repo.commits_between(parent, current)?.len();
-    if commit_count > 1 {
-        println!(
-            "{}",
-            "Warning: `stax split --file` only rewrites the tip commit. Matching files may remain in earlier commits."
-                .yellow()
-        );
-        println!(
-            "{}",
-            "Tip: use `stax split --hunk` for commit-by-commit history surgery.".dimmed()
-        );
-        println!();
     }
 
     println!(

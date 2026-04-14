@@ -61,7 +61,7 @@
 | `st` | | Launch TUI |
 | `st split` | | Split branch into stacked branches (commit-based; needs 2+ commits) |
 | `st split --hunk` | | Split a single commit into stacked branches by selecting individual diff hunks |
-| `st split --file <pathspec>` | | Split by extracting files matching pathspec into a new parent branch |
+| `st split --file <pathspec>` | | Split by extracting files matching pathspec into a new parent branch (single-commit branches only; use `st split --hunk` for multi-commit surgery) |
 | `st edit` | `e` | Interactively edit commits on current branch (pick, reword, squash, fixup, drop) |
 
 ## Recovery
