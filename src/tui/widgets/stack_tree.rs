@@ -100,6 +100,13 @@ pub fn render_stack_tree(f: &mut Frame, app: &App, area: Rect) {
                     ));
                 }
 
+                if let Some(progress) = app.ci_row_progress(&branch.name) {
+                    status_spans.push(Span::styled(
+                        format!(" {}", progress),
+                        Style::default().fg(Color::Yellow),
+                    ));
+                }
+
                 let branch_style = if branch.is_current {
                     Style::default()
                         .fg(Color::Green)

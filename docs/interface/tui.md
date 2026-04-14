@@ -11,10 +11,12 @@ stax
 ## Features
 
 - Full-height stack tree with PR status, sync indicators, and ahead/behind counts
-- Selected-branch summary with recommended next actions
+- Selected-branch summary with recommended next actions and live CI progress
 - Patch viewer with a compact diffstat header and scrollable patch body
 - Keyboard-driven checkout, restack, submit, create, rename, and delete
 - Reorder mode for branch reparenting
+
+The dashboard renders immediately from local stack data, then fetches live CI for the selected branch in the background. While checks are running, the stack row shows a compact completed/total counter and the summary pane expands with pass/fail/running counts plus elapsed/ETA context.
 
 The main `st` TUI is focused on stacks and patches. Worktree management lives in the dedicated [`st wt` dashboard](../worktrees/index.md).
 

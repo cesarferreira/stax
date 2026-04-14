@@ -285,7 +285,7 @@ Read more: [docs/commands/core.md](docs/commands/core.md) and [docs/commands/ref
 
 ### Interactive TUI
 
-Launch with no arguments to browse stacks, inspect the selected branch summary, scroll patches, and run common operations without leaving the terminal.
+Launch with no arguments to browse stacks, inspect the selected branch summary, watch live CI progress hydrate in the background, scroll patches, and run common operations without leaving the terminal.
 
 ```bash
 st
