@@ -8,6 +8,7 @@ use crate::remote::RemoteInfo;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -1218,6 +1219,18 @@ fn branch_average_secs(repo: &GitRepo, branch_name: &str, checks: &[CheckRunInfo
         .or_else(|| checks.iter().filter_map(|check| check.average_secs).max())
 }
 
+fn run_in_tokio_runtime<T, F, Fut>(operation: F) -> Result<T>
+where
+    F: FnOnce() -> Result<Fut>,
+    Fut: Future<Output = Result<T>>,
+{
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async move {
+        let future = operation()?;
+        future.await
+    })
+}
+
 fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
     let (sender, receiver) = mpsc::channel();
 
@@ -1255,17 +1268,6 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
             }
         };
 
-        let client = match ForgeClient::new(&remote) {
-            Ok(client) => client,
-            Err(_) => {
-                let _ = sender.send(CiUpdate::Unavailable {
-                    branch,
-                    message: "run `stax auth` to fetch live CI".to_string(),
-                });
-                return;
-            }
-        };
-
         let sha = match repo.branch_commit(&branch) {
             Ok(sha) => sha,
             Err(_) => {
@@ -1277,23 +1279,16 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
             }
         };
 
-        let runtime = match tokio::runtime::Runtime::new() {
-            Ok(runtime) => runtime,
-            Err(_) => {
-                let _ = sender.send(CiUpdate::Unavailable {
-                    branch,
-                    message: "unable to start CI worker".to_string(),
-                });
-                return;
-            }
-        };
-
-        let (overall_status, check_runs) = match runtime.block_on(client.fetch_checks(&repo, &sha))
-        {
+        let repo_ref = &repo;
+        let sha_ref = sha.as_str();
+        let (overall_status, check_runs) = match run_in_tokio_runtime(|| {
+            let client = ForgeClient::new(&remote)?;
+            Ok(async move { client.fetch_checks(repo_ref, sha_ref).await })
+        }) {
             Ok(result) => result,
             Err(_) => {
                 let _ = sender.send(CiUpdate::Unavailable {
-                    branch,
+                    branch: branch.clone(),
                     message: "live CI is temporarily unavailable".to_string(),
                 });
                 return;
@@ -1310,8 +1305,14 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
 
 #[cfg(test)]
 mod tests {
-    use super::{live_ci_summary_text, BranchCiSummary};
+    use super::{live_ci_summary_text, run_in_tokio_runtime, BranchCiSummary};
+    use anyhow::{anyhow, Result};
     use chrono::{TimeZone, Utc};
+    use std::future::Ready;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     fn sample_summary() -> BranchCiSummary {
         BranchCiSummary {
@@ -1376,5 +1377,51 @@ mod tests {
         let (text, dimmed) = live_ci_summary_text(&summary);
         assert_eq!(text, "Live CI: no checks reported for the latest push");
         assert!(dimmed);
+    }
+
+    #[test]
+    fn run_in_tokio_runtime_provides_runtime_to_setup_and_future() {
+        let setup_has_runtime = Arc::new(AtomicBool::new(false));
+        let future_has_runtime = Arc::new(AtomicBool::new(false));
+        let setup_has_runtime_clone = Arc::clone(&setup_has_runtime);
+        let future_has_runtime_clone = Arc::clone(&future_has_runtime);
+
+        let result = run_in_tokio_runtime(|| {
+            setup_has_runtime_clone.store(
+                tokio::runtime::Handle::try_current().is_ok(),
+                Ordering::SeqCst,
+            );
+            Ok(async move {
+                future_has_runtime_clone.store(
+                    tokio::runtime::Handle::try_current().is_ok(),
+                    Ordering::SeqCst,
+                );
+                Ok::<_, anyhow::Error>(42usize)
+            })
+        })
+        .unwrap();
+
+        assert_eq!(result, 42);
+        assert!(setup_has_runtime.load(Ordering::SeqCst));
+        assert!(future_has_runtime.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn run_in_tokio_runtime_propagates_setup_errors() {
+        let err =
+            run_in_tokio_runtime::<(), _, Ready<Result<()>>>(|| -> Result<Ready<Result<()>>> {
+                Err(anyhow!("setup failed"))
+            })
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("setup failed"));
+    }
+
+    #[test]
+    fn run_in_tokio_runtime_propagates_async_errors() {
+        let err = run_in_tokio_runtime(|| Ok(async { Err::<(), _>(anyhow!("fetch failed")) }))
+            .unwrap_err();
+
+        assert!(format!("{err:#}").contains("fetch failed"));
     }
 }
