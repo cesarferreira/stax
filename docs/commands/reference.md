@@ -168,7 +168,6 @@ Worktree launch examples:
 - `st submit --no-pr`
 - `st submit --no-fetch`
 - `st submit --open`
-- `st submit --force`
 - `st submit --reviewers alice,bob --labels bug,urgent --assignees alice`
 - `st submit --quiet`
 - `st submit --squash` (squash all commits on each branch into one before pushing)
