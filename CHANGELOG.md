@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.50.0] - 2026-04-14
+
 ## [0.49.0] - 2026-04-12
 
 ### Summary
@@ -121,7 +123,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.49.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.50.0...HEAD
+[0.50.0]: https://github.com/cesarferreira/stax/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/cesarferreira/stax/compare/v0.48.0...v0.49.0
 [0.46.0]: https://github.com/cesarferreira/stax/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/cesarferreira/stax/compare/v0.44.2...v0.45.0
