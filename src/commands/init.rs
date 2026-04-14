@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
@@ -95,6 +96,17 @@ fn set_trunk(repo: GitRepo, trunk: &str) -> Result<()> {
         }
         None => {
             println!("Trunk set to {}", trunk.cyan());
+        }
+    }
+
+    // Enable git rerere for conflict resolution memory (if not disabled in config)
+    let config = Config::load().ok();
+    let should_enable_rerere = config.as_ref().map(|c| c.git.rerere).unwrap_or(true);
+
+    if should_enable_rerere {
+        match repo.enable_rerere() {
+            Ok(_) => println!("{}  Enabled git rerere", "✓".green().bold()),
+            Err(e) => eprintln!("{}  Failed to enable rerere: {}", "Warning:".yellow().bold(), e),
         }
     }
 

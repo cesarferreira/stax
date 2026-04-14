@@ -23,6 +23,8 @@ pub struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub worktree: WorktreeConfig,
+    #[serde(default)]
+    pub git: GitConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -227,6 +229,25 @@ impl Default for WorktreeConfig {
             hooks: WorktreeHooksConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GitConfig {
+    /// Auto-enable git rerere on init (default: true)
+    #[serde(default = "default_true")]
+    pub rerere: bool,
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self {
+            rerere: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

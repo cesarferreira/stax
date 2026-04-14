@@ -381,11 +381,26 @@ pub fn run(install: bool, refresh: bool) -> Result<()> {
     }
 
     if install {
-        install_to_shell_config()
+        let result = install_to_shell_config();
+        if result.is_ok() {
+            enable_rerere_if_in_repo()?;
+        }
+        result
     } else {
         println!("{}", shell_snippet(detect_shell_kind()));
         Ok(())
     }
+}
+
+/// Enable git rerere if we're in a git repository
+fn enable_rerere_if_in_repo() -> Result<()> {
+    if let Ok(repo) = crate::git::repo::GitRepo::open() {
+        match repo.enable_rerere() {
+            Ok(_) => println!("{}  Enabled git rerere for conflict resolution memory", "✓".green().bold()),
+            Err(e) => eprintln!("{}  Failed to enable rerere: {}", "Warning:".yellow().bold(), e),
+        }
+    }
+    Ok(())
 }
 
 /// Refresh generated shell integration files in-place after upgrades.

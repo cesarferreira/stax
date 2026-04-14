@@ -1997,6 +1997,31 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
         Ok(())
     }
+
+    /// Enable git rerere (reuse recorded resolution) for this repository
+    pub fn enable_rerere(&self) -> Result<()> {
+        let status = Command::new("git")
+            .args(["config", "rerere.enabled", "true"])
+            .current_dir(self.workdir()?)
+            .status()
+            .context("Failed to enable rerere")?;
+
+        if !status.success() {
+            anyhow::bail!("Failed to set rerere.enabled config");
+        }
+        Ok(())
+    }
+
+    /// Check if git rerere is enabled for this repository
+    pub fn rerere_enabled(&self) -> Result<bool> {
+        let output = Command::new("git")
+            .args(["config", "--get", "rerere.enabled"])
+            .current_dir(self.workdir()?)
+            .output()
+            .context("Failed to check rerere config")?;
+
+        Ok(output.status.success() && output.stdout.starts_with(b"true"))
+    }
 }
 
 #[derive(Debug, PartialEq)]

@@ -851,9 +851,9 @@ enum Commands {
         ai: AiLaneArgs,
     },
 
-    /// Output shell integration snippet for manual install or use `--install`
-    #[command(name = "shell-setup")]
-    ShellSetup {
+    /// Setup shell integration and enable git rerere
+    #[command(name = "setup", visible_alias = "shell-setup")]
+    Setup {
         /// Write shell integration under ~/.config/stax and source it from your shell config
         #[arg(long)]
         install: bool,
@@ -1363,7 +1363,7 @@ pub fn run() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if let Some(Commands::ShellSetup { install, refresh }) = &cli.command {
+    if let Some(Commands::Setup { install, refresh }) = &cli.command {
         let result = commands::shell_setup::run(*install, *refresh);
         update::show_update_notification();
         update::check_in_background();
@@ -1966,8 +1966,8 @@ pub fn run() -> Result<()> {
             }) => commands::worktree::cleanup::run(force, yes, dry_run),
             Some(WorktreeCommands::Restack) => commands::worktree::restack::run(),
         },
-        Commands::ShellSetup { .. } => {
-            unreachable!("shell-setup returns before repo initialization")
+        Commands::Setup { .. } => {
+            unreachable!("setup returns before repo initialization")
         }
         Commands::Lane {
             name,
