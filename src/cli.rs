@@ -857,11 +857,11 @@ enum Commands {
     /// Setup shell integration and enable git rerere
     #[command(name = "setup", visible_alias = "shell-setup")]
     Setup {
-        /// Write shell integration under ~/.config/stax and source it from your shell config
+        /// Print shell integration snippet instead of installing
         #[arg(long)]
-        install: bool,
+        print: bool,
         /// Refresh already-installed generated shell snippets in-place
-        #[arg(long, hide = true, conflicts_with = "install")]
+        #[arg(long, hide = true, conflicts_with = "print")]
         refresh: bool,
     },
 
@@ -1369,8 +1369,8 @@ pub fn run() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if let Some(Commands::Setup { install, refresh }) = &cli.command {
-        let result = commands::shell_setup::run(*install, *refresh);
+    if let Some(Commands::Setup { print, refresh }) = &cli.command {
+        let result = commands::shell_setup::run(*print, *refresh);
         update::show_update_notification();
         update::check_in_background();
         return result;

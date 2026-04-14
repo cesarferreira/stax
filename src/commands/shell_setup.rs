@@ -365,8 +365,8 @@ function sw
 end"#
 }
 
-/// Print the shell snippet to stdout for manual shell setup.
-pub fn run(install: bool, refresh: bool) -> Result<()> {
+/// Setup shell integration and enable rerere. By default installs; use --print to just see the snippet.
+pub fn run(print: bool, refresh: bool) -> Result<()> {
     if refresh {
         return refresh_installed_snippets();
     }
@@ -380,16 +380,21 @@ pub fn run(install: bool, refresh: bool) -> Result<()> {
         );
     }
 
-    if install {
-        let result = install_to_shell_config();
-        if result.is_ok() {
-            enable_rerere_if_in_repo()?;
-        }
-        result
-    } else {
+    let result = if print {
+        // Just print the snippet for manual setup
         println!("{}", shell_snippet(detect_shell_kind()));
         Ok(())
+    } else {
+        // Default: install shell integration
+        install_to_shell_config()
+    };
+
+    // Always enable rerere when in a git repo (unless we're just printing)
+    if result.is_ok() && !print {
+        enable_rerere_if_in_repo()?;
     }
+
+    result
 }
 
 /// Enable git rerere if we're in a git repository
