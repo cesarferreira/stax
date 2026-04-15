@@ -273,3 +273,49 @@ fn create_rollback_then_succeed_after_hook_removed() {
         branch
     );
 }
+
+/// The `--from <other> -m "msg"` path still uses branch-first + the
+/// `rollback_create` fallback (commit-first only applies when the new branch
+/// stacks on the current branch). Guard that path: a failing hook must roll
+/// back the branch so retry is clean, just like the commit-first path.
+///
+/// `-m` is passed without a positional name so the branch name is derived
+/// from the message — when both are given, stax uses the positional name and
+/// discards the message, which would suppress the commit entirely.
+#[test]
+#[cfg(unix)]
+fn create_from_other_branch_with_failing_hook_rolls_back() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    // Seed a second branch so we have somewhere to point --from at.
+    let branches = repo.create_stack(&["sibling"]);
+
+    // Back on main, install a failing hook and drop an uncommitted file that
+    // `-a` will pick up after the branch switch.
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    install_failing_pre_commit_hook(&repo);
+    repo.create_file("wip.txt", "wip");
+
+    let output = repo.run_stax(&[
+        "create",
+        "--from",
+        &branches[0],
+        "-a",
+        "-m",
+        "off sibling feature",
+    ]);
+    output.assert_failure();
+
+    // The branch must have been rolled back — no orphan, and the error must
+    // name the rollback so users know what happened.
+    assert!(
+        !repo
+            .list_branches()
+            .iter()
+            .any(|b| b.contains("off-sibling-feature")),
+        "new branch must be rolled back after hook failure. Branches: {:?}",
+        repo.list_branches(),
+    );
+    output.assert_stderr_contains("rolled back");
+}

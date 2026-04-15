@@ -1,3 +1,21 @@
+//! `stax create` — create a new branch, optionally with a first commit.
+//!
+//! Two flows live in this file:
+//!
+//! - **Commit-first** (the default when `-m "msg"` is used and the new branch
+//!   stacks on the current branch): `git commit` runs on the current branch
+//!   *before* any stax ref is created. On hook failure or Ctrl+C nothing is
+//!   touched — no orphan branch, no `mybranch-2` drift on retry. The new
+//!   commit is then split off to the new branch and the current branch ref is
+//!   moved back to its pre-commit SHA.
+//! - **Branch-first** (everything else: name-only `st create`, `--from
+//!   <other>`, no-op `-m` with a clean tree): create the branch and switch to
+//!   it first, then optionally commit. Failures here use the legacy
+//!   `rollback_create` cleanup.
+//!
+//! Both flows share `create_branch_with_banner` for the create → metadata →
+//! `--insert` → checkout → summary sequence.
+
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
@@ -149,41 +167,14 @@ pub fn run(
         }
     }
 
-    // Create the branch
-    if parent_branch == current {
-        repo.create_branch(&branch_name)?;
-    } else {
-        repo.create_branch_at(&branch_name, &parent_branch)?;
-    }
-
-    // Track it with current branch as parent
-    let parent_rev = repo.branch_commit(&parent_branch)?;
-    let meta = BranchMetadata::new(&parent_branch, &parent_rev);
-    if let Err(e) = meta.write(repo.inner(), &branch_name) {
-        rollback_create(&repo, &current, &branch_name);
-        return Err(e);
-    }
-
-    if insert {
-        if let Err(e) = apply_insert_reparenting(&repo, &parent_branch, &branch_name) {
-            rollback_create(&repo, &current, &branch_name);
-            return Err(e);
-        }
-    }
-
-    // Checkout the new branch
-    if let Err(e) = repo.checkout(&branch_name) {
-        rollback_create(&repo, &current, &branch_name);
-        return Err(e);
-    }
-
-    print_remote_parent_warning(&repo, &config, &parent_branch);
-
-    println!(
-        "Created and switched to branch '{}' (stacked on {})",
-        branch_name.green(),
-        parent_branch.blue()
-    );
+    create_branch_with_banner(
+        &repo,
+        &config,
+        &current,
+        &parent_branch,
+        &branch_name,
+        insert,
+    )?;
 
     // Stage/commit behavior:
     // - StageMode::All / needs_stage_all => run `git add -A`
@@ -199,48 +190,15 @@ pub fn run(
             }
         }
 
-        // Only commit if -m was provided
+        // Only commit if -m was provided. This block only runs for the
+        // `--from <other>` + `-m` path; the common `-m` without `--from` case
+        // returns early via `run_commit_first`.
         if let Some(msg) = commit_message {
-            // Check if there are staged changes to commit
-            let diff_output = Command::new("git")
-                .args(["diff", "--cached", "--quiet"])
-                .current_dir(workdir)
-                .status();
-
-            let diff_output = match diff_output {
-                Ok(status) => status,
-                Err(e) => {
-                    rollback_create(&repo, &current, &branch_name);
-                    return Err(e.into());
-                }
-            };
-
-            if !diff_output.success() {
-                // There are staged changes, commit them
-                let commit_status = Command::new("git")
-                    .args(["commit", "-m", &msg])
-                    .current_dir(workdir)
-                    .status();
-
-                let commit_status = match commit_status {
-                    Ok(status) => status,
-                    Err(e) => {
-                        rollback_create(&repo, &current, &branch_name);
-                        return Err(e.into());
-                    }
-                };
-
-                if !commit_status.success() {
-                    rollback_create(&repo, &current, &branch_name);
-                    bail!(
-                        "Commit failed (pre-commit hook or other error). \
-                         Branch rolled back. Fix the issue and retry."
-                    );
-                }
-
-                println!("Committed: {}", msg.cyan());
-            } else {
+            if is_staging_area_empty(workdir) {
                 println!("{}", "No changes to commit".dimmed());
+            } else {
+                commit_or_rollback(workdir, &msg, &repo, &current, &branch_name)?;
+                println!("Committed: {}", msg.cyan());
             }
         } else if stage_mode == StageMode::All {
             println!("{}", "Changes staged".dimmed());
@@ -256,6 +214,38 @@ pub fn run(
     }
 
     Ok(())
+}
+
+/// Run `git commit -m <msg>` on the currently checked-out branch. On any
+/// failure (spawn error, non-zero exit, hook rejection), invoke
+/// `rollback_create` to clean up the partially-created branch before
+/// returning the error. Used only by the branch-first path — commit-first
+/// runs its own bare `git commit` because there's nothing to roll back yet.
+fn commit_or_rollback(
+    workdir: &Path,
+    message: &str,
+    repo: &GitRepo,
+    original: &str,
+    new_branch: &str,
+) -> Result<()> {
+    let status = Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(workdir)
+        .status();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(_) => {
+            rollback_create(repo, original, new_branch);
+            bail!(
+                "Commit failed (pre-commit hook or other error). \
+                 Branch rolled back. Fix the issue and retry."
+            );
+        }
+        Err(e) => {
+            rollback_create(repo, original, new_branch);
+            Err(anyhow::Error::from(e).context("Failed to run git commit"))
+        }
+    }
 }
 
 /// Best-effort rollback: unstage changes, checkout the original branch,
@@ -307,32 +297,10 @@ fn run_commit_first(
     }
 
     // If nothing is staged by the time we reach here, there is no commit to
-    // make. Fall back to creating an empty branch (mirrors the "No changes to
-    // commit" path from the branch-first flow).
+    // make. Fall back to creating an empty branch — same shape as the
+    // branch-first path without the trailing commit.
     if is_staging_area_empty(workdir) {
-        repo.create_branch(branch_name)?;
-        let parent_rev = repo.branch_commit(current)?;
-        let meta = BranchMetadata::new(current, &parent_rev);
-        if let Err(e) = meta.write(repo.inner(), branch_name) {
-            rollback_create(repo, current, branch_name);
-            return Err(e);
-        }
-        if insert {
-            if let Err(e) = apply_insert_reparenting(repo, current, branch_name) {
-                rollback_create(repo, current, branch_name);
-                return Err(e);
-            }
-        }
-        if let Err(e) = repo.checkout(branch_name) {
-            rollback_create(repo, current, branch_name);
-            return Err(e);
-        }
-        print_remote_parent_warning(repo, config, current);
-        println!(
-            "Created and switched to branch '{}' (stacked on {})",
-            branch_name.green(),
-            current.blue()
-        );
+        create_branch_with_banner(repo, config, current, current, branch_name, insert)?;
         println!("{}", "No changes to commit".dimmed());
         print_tips(config);
         return Ok(());
@@ -423,6 +391,62 @@ fn rollback_after_commit(workdir: &Path, old_sha: &str, new_branch: Option<&str>
         .args(["reset", "--soft", old_sha])
         .current_dir(workdir)
         .status();
+}
+
+/// Create `branch_name` stacked on `parent_branch`, write stax metadata,
+/// apply `--insert` reparenting, check out the new branch, and print the
+/// "Created and switched…" banner. On any failure, undo all of it with
+/// `rollback_create` so the caller sees a clean failure.
+///
+/// `original` is the branch the user was on when `st create` was invoked; it's
+/// where `rollback_create` checks out on failure. For the commit-first
+/// no-changes fallback `original == parent_branch == current`; for the
+/// branch-first flow `original == current`, and `parent_branch` may or may not
+/// equal it (the `--from` case).
+///
+/// The caller owns whatever comes next — the trailing "No changes to commit"
+/// note, the stage/commit block, or the tips line.
+fn create_branch_with_banner(
+    repo: &GitRepo,
+    config: &Config,
+    original: &str,
+    parent_branch: &str,
+    branch_name: &str,
+    insert: bool,
+) -> Result<()> {
+    if parent_branch == original {
+        repo.create_branch(branch_name)?;
+    } else {
+        repo.create_branch_at(branch_name, parent_branch)?;
+    }
+
+    let parent_rev = repo.branch_commit(parent_branch)?;
+    let meta = BranchMetadata::new(parent_branch, &parent_rev);
+    if let Err(e) = meta.write(repo.inner(), branch_name) {
+        rollback_create(repo, original, branch_name);
+        return Err(e);
+    }
+
+    if insert {
+        if let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name) {
+            rollback_create(repo, original, branch_name);
+            return Err(e);
+        }
+    }
+
+    if let Err(e) = repo.checkout(branch_name) {
+        rollback_create(repo, original, branch_name);
+        return Err(e);
+    }
+
+    print_remote_parent_warning(repo, config, parent_branch);
+    println!(
+        "Created and switched to branch '{}' (stacked on {})",
+        branch_name.green(),
+        parent_branch.blue()
+    );
+
+    Ok(())
 }
 
 /// Reparent children of `parent_branch` onto `new_branch` and print the usual
