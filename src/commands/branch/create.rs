@@ -164,43 +164,10 @@ pub fn run(
         return Err(e);
     }
 
-    // If --insert, reparent children of the parent branch to the new branch
     if insert {
-        let stack = Stack::load(&repo)?;
-        if let Some(parent_info) = stack.branches.get(&parent_branch) {
-            let children: Vec<String> = parent_info
-                .children
-                .iter()
-                .filter(|c| *c != &branch_name)
-                .cloned()
-                .collect();
-
-            if !children.is_empty() {
-                let new_parent_rev = repo.branch_commit(&branch_name)?;
-                for child in &children {
-                    if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
-                        let updated = BranchMetadata {
-                            parent_branch_name: branch_name.clone(),
-                            parent_branch_revision: new_parent_rev.clone(),
-                            ..child_meta
-                        };
-                        updated.write(repo.inner(), child)?;
-                    }
-                }
-
-                println!(
-                    "Reparented {} child branch(es) to '{}'",
-                    children.len(),
-                    branch_name.green()
-                );
-                for child in &children {
-                    println!("  {} -> {}", child.cyan(), branch_name.green());
-                }
-                println!(
-                    "{}",
-                    "Run `stax restack --all` to rebase the reparented branches.".yellow()
-                );
-            }
+        if let Err(e) = apply_insert_reparenting(&repo, &parent_branch, &branch_name) {
+            rollback_create(&repo, &current, &branch_name);
+            return Err(e);
         }
     }
 
@@ -210,20 +177,7 @@ pub fn run(
         return Err(e);
     }
 
-    if let Ok(remote_branches) = remote::get_remote_branches(repo.workdir()?, config.remote_name())
-    {
-        if !remote_branches.contains(&parent_branch) {
-            println!(
-                "{}",
-                format!(
-                    "Warning: parent '{}' is not on remote '{}'.",
-                    parent_branch,
-                    config.remote_name()
-                )
-                .yellow()
-            );
-        }
-    }
+    print_remote_parent_warning(&repo, &config, &parent_branch);
 
     println!(
         "Created and switched to branch '{}' (stacked on {})",
@@ -364,7 +318,10 @@ fn run_commit_first(
             return Err(e);
         }
         if insert {
-            apply_insert_reparenting(repo, current, branch_name)?;
+            if let Err(e) = apply_insert_reparenting(repo, current, branch_name) {
+                rollback_create(repo, current, branch_name);
+                return Err(e);
+            }
         }
         if let Err(e) = repo.checkout(branch_name) {
             rollback_create(repo, current, branch_name);

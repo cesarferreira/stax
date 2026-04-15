@@ -144,6 +144,88 @@ fn create_commit_lives_only_on_new_branch() {
     );
 }
 
+/// `--insert` + `-m` exercises the commit-first flow AND the reparenting path.
+/// Verifies children get reparented to the newly-created (and now committed)
+/// branch, and the split-off commit still only lives on that branch.
+#[test]
+fn create_commit_first_with_insert_reparents_children_onto_new_commit() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    // main -> insert-a -> insert-b
+    let branches = repo.create_stack(&["insert-a", "insert-b"]);
+
+    // Back on insert-a, create a new branch WITH a commit, inserting above A.
+    repo.run_stax(&["checkout", &branches[0]]).assert_success();
+    repo.create_file("insert_mid.txt", "new work");
+
+    let insert_a_before = repo.get_commit_sha(&branches[0]);
+
+    let output = repo.run_stax(&["create", "-a", "-m", "mid feature", "--insert"]);
+    output.assert_success();
+
+    // insert-a (the parent) must not have moved — the new commit lives only on
+    // the inserted branch.
+    assert_eq!(
+        repo.get_commit_sha(&branches[0]),
+        insert_a_before,
+        "parent branch must not advance in commit-first + --insert",
+    );
+
+    // The previously-direct child of insert-a should now be reparented.
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Reparented"),
+        "Expected reparent message, got: {}",
+        stdout
+    );
+
+    // insert-b's parent should now be the inserted branch.
+    repo.run_stax(&["checkout", &branches[1]]).assert_success();
+    let b_parent = repo.get_current_parent();
+    assert!(
+        b_parent
+            .as_deref()
+            .is_some_and(|p| p.contains("mid-feature")),
+        "insert-b should be reparented onto the mid-feature branch, got: {:?}",
+        b_parent,
+    );
+}
+
+/// After a failing pre-commit hook, the user's working-tree changes must still
+/// be present so they can fix the hook and retry with the same command — the
+/// whole point of commit-first is that retrying is a clean operation.
+#[test]
+#[cfg(unix)]
+fn create_failing_hook_preserves_working_tree_changes() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    repo.create_file("notes.txt", "draft idea");
+
+    install_failing_pre_commit_hook(&repo);
+
+    repo.run_stax(&["create", "-a", "-m", "my feature"])
+        .assert_failure();
+
+    // The file the user wanted committed must still be on disk, unchanged.
+    let contents = std::fs::read_to_string(repo.path().join("notes.txt"))
+        .expect("notes.txt should still exist");
+    assert_eq!(contents, "draft idea");
+
+    // Remove hook and retry — must succeed with the original branch name (no
+    // `-2` suffix) because nothing was left behind.
+    remove_pre_commit_hook(&repo);
+    repo.run_stax(&["create", "-a", "-m", "my feature"])
+        .assert_success();
+
+    let branch = repo.current_branch();
+    assert!(
+        branch.contains("my-feature") && !branch.contains("my-feature-2"),
+        "Retry should use the original branch name, got: {}",
+        branch,
+    );
+}
+
 #[test]
 #[cfg(unix)]
 fn create_without_message_unaffected_by_hook() {
