@@ -419,13 +419,13 @@ fn render_input_modal(f: &mut Frame, action: &InputAction, input: &str, cursor: 
     f.render_widget(paragraph, area);
 }
 
-/// Render the move-picker modal (fuzzy parent selector for `gt move`).
+/// Render the move-picker modal (parent selector for `gt move`).
 ///
 /// Layout: a centered 60×60 box. First line is a bold prompt naming the
 /// source branch; second is the live query; remaining lines list filtered
 /// candidates with the selected one highlighted. Trailing line is the
 /// shortcut hint. The list truncates to fit — users scroll with ↑/↓.
-fn render_move_picker_modal(f: &mut Frame, app: &crate::tui::app::App) {
+fn render_move_picker_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(60, 60, f.area());
 
     let filtered = app.move_picker_filtered_indices();
@@ -467,9 +467,10 @@ fn render_move_picker_modal(f: &mut Frame, app: &crate::tui::app::App) {
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        // Show a window around the selected index so scrolling feels natural
-        // on small terminals. The modal gives us ~N visible rows; cap the
-        // candidate list at 20 to leave room for header + hint.
+        // Scroll window: keep the selected row roughly centered. `start`
+        // is pulled back to `end - MAX_VISIBLE` after clamping `end` to
+        // the list length, so when `selected` is near the end of a long
+        // list we still show a full window instead of a half-empty tail.
         const MAX_VISIBLE: usize = 20;
         let start = selected.saturating_sub(MAX_VISIBLE / 2);
         let end = (start + MAX_VISIBLE).min(filtered.len());

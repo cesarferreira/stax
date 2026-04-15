@@ -660,22 +660,10 @@ impl App {
         }
         let source_name = source.name.clone();
 
-        // Same filter as the CLI picker (src/commands/upstack/onto.rs): all
-        // branches except the one being moved and its descendants. Trunk
-        // stays in the list but gets pinned to the top so it's the obvious
-        // default target.
+        let all_names: Vec<String> = self.branches.iter().map(|b| b.name.clone()).collect();
         let descendants = self.stack.descendants(&source_name);
-        let trunk = self.stack.trunk.clone();
-        let mut candidates: Vec<String> = self
-            .branches
-            .iter()
-            .map(|b| b.name.clone())
-            .filter(|n| n != &source_name && !descendants.contains(n))
-            .collect();
-        if let Some(pos) = candidates.iter().position(|n| n == &trunk) {
-            let t = candidates.remove(pos);
-            candidates.insert(0, t);
-        }
+        let candidates =
+            build_move_picker_candidates(&all_names, &source_name, &descendants, &self.stack.trunk);
         if candidates.is_empty() {
             return false;
         }
@@ -692,16 +680,7 @@ impl App {
     /// `move_picker_candidates`. Case-insensitive substring match, same
     /// shape as `update_search` for the main stack view.
     pub fn move_picker_filtered_indices(&self) -> Vec<usize> {
-        let query = self.move_picker_query.to_lowercase();
-        if query.is_empty() {
-            return (0..self.move_picker_candidates.len()).collect();
-        }
-        self.move_picker_candidates
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| n.to_lowercase().contains(&query))
-            .map(|(i, _)| i)
-            .collect()
+        substring_filter_indices(&self.move_picker_candidates, &self.move_picker_query)
     }
 
     /// Currently highlighted candidate (after applying the filter).
@@ -1251,6 +1230,49 @@ impl App {
     }
 }
 
+/// Case-insensitive substring filter. Returns the indices of `candidates`
+/// that match `query`. Empty query returns every index in original order.
+///
+/// Extracted as a pure function so the filter behaviour is unit-testable
+/// without spinning up a full `App` (which needs a live `GitRepo`).
+fn substring_filter_indices(candidates: &[String], query: &str) -> Vec<usize> {
+    let q = query.to_lowercase();
+    if q.is_empty() {
+        return (0..candidates.len()).collect();
+    }
+    candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.to_lowercase().contains(&q))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Build the ordered candidate list for the move picker: every branch
+/// except `source` and its `descendants`, with `trunk` (if present) pinned
+/// to the top so it's the obvious default target.
+///
+/// Mirrors the filter used by the CLI's `pick_parent_interactively` in
+/// `src/commands/upstack/onto.rs`. Extracted so both the behaviour and the
+/// pinning are testable directly.
+fn build_move_picker_candidates(
+    all_branches: &[String],
+    source: &str,
+    descendants: &[String],
+    trunk: &str,
+) -> Vec<String> {
+    let mut candidates: Vec<String> = all_branches
+        .iter()
+        .filter(|n| n.as_str() != source && !descendants.iter().any(|d| d == *n))
+        .cloned()
+        .collect();
+    if let Some(pos) = candidates.iter().position(|n| n == trunk) {
+        let t = candidates.remove(pos);
+        candidates.insert(0, t);
+    }
+    candidates
+}
+
 fn parse_ci_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
     value.and_then(|timestamp| timestamp.parse::<DateTime<Utc>>().ok())
 }
@@ -1417,7 +1439,10 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
 
 #[cfg(test)]
 mod tests {
-    use super::{live_ci_summary_text, run_in_tokio_runtime, BranchCiSummary};
+    use super::{
+        build_move_picker_candidates, live_ci_summary_text, run_in_tokio_runtime,
+        substring_filter_indices, BranchCiSummary,
+    };
     use anyhow::{anyhow, Result};
     use chrono::{TimeZone, Utc};
     use std::future::Ready;
@@ -1425,6 +1450,62 @@ mod tests {
         atomic::{AtomicBool, Ordering},
         Arc,
     };
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn substring_filter_empty_query_returns_all_indices_in_order() {
+        let candidates = names(&["main", "feat-a", "feat-b"]);
+        assert_eq!(substring_filter_indices(&candidates, ""), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn substring_filter_matches_case_insensitively() {
+        let candidates = names(&["Main", "FEAT-A", "feat-b"]);
+        assert_eq!(substring_filter_indices(&candidates, "feat"), vec![1, 2]);
+        assert_eq!(substring_filter_indices(&candidates, "MAIN"), vec![0]);
+    }
+
+    #[test]
+    fn substring_filter_returns_empty_when_nothing_matches() {
+        let candidates = names(&["main", "feat-a"]);
+        assert!(substring_filter_indices(&candidates, "xyz").is_empty());
+    }
+
+    #[test]
+    fn move_picker_candidates_exclude_source_and_descendants() {
+        let all = names(&["main", "a", "b", "c", "sibling"]);
+        let descendants = names(&["b", "c"]);
+        let got = build_move_picker_candidates(&all, "a", &descendants, "main");
+        assert_eq!(got, names(&["main", "sibling"]));
+    }
+
+    #[test]
+    fn move_picker_candidates_pin_trunk_to_top() {
+        // 'main' appears after 'z-branch' in the source list — the helper
+        // must still place it first in the output.
+        let all = names(&["z-branch", "sibling", "main"]);
+        let got = build_move_picker_candidates(&all, "feat-self", &[], "main");
+        assert_eq!(got.first().map(String::as_str), Some("main"));
+    }
+
+    #[test]
+    fn move_picker_candidates_without_trunk_preserves_source_order() {
+        // If the trunk isn't in the candidates (e.g. detached scenario),
+        // the helper should not crash or reorder the remainder.
+        let all = names(&["z", "a", "m"]);
+        let got = build_move_picker_candidates(&all, "feat", &[], "unlisted-trunk");
+        assert_eq!(got, names(&["z", "a", "m"]));
+    }
+
+    #[test]
+    fn move_picker_candidates_empty_when_everything_is_source_or_descendant() {
+        let all = names(&["a", "b"]);
+        let got = build_move_picker_candidates(&all, "a", &names(&["b"]), "a");
+        assert!(got.is_empty());
+    }
 
     fn sample_summary() -> BranchCiSummary {
         BranchCiSummary {
