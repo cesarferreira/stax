@@ -287,15 +287,8 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
             }
         }
         KeyAction::MovePicker => {
-            let Some(selected) = app.selected_branch() else {
-                return Ok(());
-            };
-            if selected.is_trunk {
-                app.set_status("Cannot reparent trunk branch");
-                return Ok(());
-            }
-            if !app.init_move_picker() {
-                app.set_status("No eligible parents to move onto");
+            if let Err(msg) = app.init_move_picker() {
+                app.set_status(msg);
             }
         }
         _ => {}

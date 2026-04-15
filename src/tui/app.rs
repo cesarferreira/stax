@@ -648,15 +648,16 @@ impl App {
 
     /// Prepare state for `Mode::MovePicker` and enter it.
     ///
-    /// Returns `false` (without changing mode) if the selected branch is
-    /// trunk or has no valid candidates — the caller should display a
-    /// status message in that case.
-    pub fn init_move_picker(&mut self) -> bool {
+    /// On `Err`, the static string is a user-facing reason suitable for
+    /// `set_status`. Returning a specific message from here (rather than a
+    /// bool) keeps the dispatcher from having to duplicate the trunk /
+    /// no-candidates checks to figure out what to show.
+    pub fn init_move_picker(&mut self) -> Result<(), &'static str> {
         let Some(source) = self.selected_branch() else {
-            return false;
+            return Err("No branch selected");
         };
         if source.is_trunk {
-            return false;
+            return Err("Cannot reparent trunk branch");
         }
         let source_name = source.name.clone();
 
@@ -665,7 +666,7 @@ impl App {
         let candidates =
             build_move_picker_candidates(&all_names, &source_name, &descendants, &self.stack.trunk);
         if candidates.is_empty() {
-            return false;
+            return Err("No eligible parents to move onto");
         }
 
         self.move_picker_source = source_name;
@@ -673,7 +674,7 @@ impl App {
         self.move_picker_query.clear();
         self.move_picker_selected = 0;
         self.mode = Mode::MovePicker;
-        true
+        Ok(())
     }
 
     /// Return the filtered subset of candidates as indices into
