@@ -178,3 +178,88 @@ fn upstack_onto_self_fails() {
     output.assert_failure();
     output.assert_stderr_contains("itself");
 }
+
+/// `st move <target>` is a graphite-parity alias that dispatches to the same
+/// `commands::upstack::onto::run` as `st upstack onto <target>`. Behavioural
+/// parity is verified end-to-end: a stack of a → b gets reparented b onto
+/// main via the alias, and `status --json` shows the same resulting parent
+/// pointer that `upstack onto` produces.
+#[test]
+fn move_alias_reparents_like_upstack_onto() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "a");
+    repo.commit("commit a");
+
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "b");
+    repo.commit("commit b");
+
+    repo.run_stax(&["checkout", "b"]);
+    let output = repo.run_stax(&["move", "main"]);
+    output.assert_success();
+    assert!(
+        TestRepo::stdout(&output).contains("Reparented"),
+        "`st move` should print the same reparent summary as `st upstack onto`",
+    );
+
+    let status = repo.run_stax(&["status", "--json"]);
+    let json: serde_json::Value =
+        serde_json::from_str(&TestRepo::stdout(&status)).expect("valid json");
+    let branches = json["branches"].as_array().expect("branches array");
+    let b_entry = find_branch(branches, "b").expect("should find branch b");
+    assert_eq!(b_entry["parent"].as_str().unwrap(), "main");
+}
+
+/// `st mv` is the short form. Same dispatch, same outcome — just typing.
+#[test]
+fn mv_short_alias_works() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "a");
+    repo.commit("commit a");
+
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "b");
+    repo.commit("commit b");
+
+    repo.run_stax(&["checkout", "b"]);
+    let output = repo.run_stax(&["mv", "main"]);
+    output.assert_success();
+
+    let status = repo.run_stax(&["status", "--json"]);
+    let json: serde_json::Value =
+        serde_json::from_str(&TestRepo::stdout(&status)).expect("valid json");
+    let branches = json["branches"].as_array().expect("branches array");
+    let b_entry = find_branch(branches, "b").expect("should find branch b");
+    assert_eq!(b_entry["parent"].as_str().unwrap(), "main");
+}
+
+/// The alias must reject the same error cases `upstack onto` does, so the
+/// guards in `commands::upstack::onto::run` aren't silently bypassed.
+#[test]
+fn move_alias_rejects_trunk_and_circular() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    // On trunk: "Cannot reparent trunk" — same as upstack onto.
+    let output = repo.run_stax(&["move", "main"]);
+    output.assert_failure();
+    output.assert_stderr_contains("trunk");
+
+    // Circular: reparent a onto its descendant b should fail.
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "a");
+    repo.commit("commit a");
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "b");
+    repo.commit("commit b");
+    repo.run_stax(&["checkout", "a"]);
+    let output = repo.run_stax(&["move", "b"]);
+    output.assert_failure();
+    output.assert_stderr_contains("circular");
+}

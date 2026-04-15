@@ -236,6 +236,10 @@ pub enum Mode {
     Confirm(ConfirmAction),
     Input(InputAction),
     Reorder,
+    /// Fuzzy-filter picker for selecting a new parent to reparent onto
+    /// (`gt move` equivalent). Parallel to `Search` — chars type into the
+    /// query, Enter confirms, Esc cancels.
+    MovePicker,
 }
 
 /// Actions that require text input
@@ -321,6 +325,16 @@ pub struct App {
     pub pending_command: Option<PendingCommand>,
     pub needs_refresh: bool,
     pub reorder_state: Option<ReorderState>,
+    /// Branch being reparented (snapshot taken when MovePicker opens so the
+    /// picker survives UI refreshes that change `selected_index`).
+    pub move_picker_source: String,
+    /// All eligible parent branches for the move (current + descendants
+    /// already excluded). Never changes while the picker is open.
+    pub move_picker_candidates: Vec<String>,
+    /// User's substring query (case-insensitive match against candidates).
+    pub move_picker_query: String,
+    /// Index into the filtered view (see `move_picker_filtered_indices`).
+    pub move_picker_selected: usize,
     diff_cache: HashMap<String, CachedDiff>,
     ci_states: HashMap<String, BranchCiState>,
     ci_loader: Option<Receiver<CiUpdate>>,
@@ -364,6 +378,10 @@ impl App {
             pending_command: None,
             needs_refresh: true,
             reorder_state: None,
+            move_picker_source: String::new(),
+            move_picker_candidates: Vec::new(),
+            move_picker_query: String::new(),
+            move_picker_selected: 0,
             diff_cache: HashMap::new(),
             ci_states: HashMap::new(),
             ci_loader: None,
@@ -626,6 +644,100 @@ impl App {
             .map(|(i, _)| i)
             .collect();
         self.selected_index = 0;
+    }
+
+    /// Prepare state for `Mode::MovePicker` and enter it.
+    ///
+    /// Returns `false` (without changing mode) if the selected branch is
+    /// trunk or has no valid candidates — the caller should display a
+    /// status message in that case.
+    pub fn init_move_picker(&mut self) -> bool {
+        let Some(source) = self.selected_branch() else {
+            return false;
+        };
+        if source.is_trunk {
+            return false;
+        }
+        let source_name = source.name.clone();
+
+        // Same filter as the CLI picker (src/commands/upstack/onto.rs): all
+        // branches except the one being moved and its descendants. Trunk
+        // stays in the list but gets pinned to the top so it's the obvious
+        // default target.
+        let descendants = self.stack.descendants(&source_name);
+        let trunk = self.stack.trunk.clone();
+        let mut candidates: Vec<String> = self
+            .branches
+            .iter()
+            .map(|b| b.name.clone())
+            .filter(|n| n != &source_name && !descendants.contains(n))
+            .collect();
+        if let Some(pos) = candidates.iter().position(|n| n == &trunk) {
+            let t = candidates.remove(pos);
+            candidates.insert(0, t);
+        }
+        if candidates.is_empty() {
+            return false;
+        }
+
+        self.move_picker_source = source_name;
+        self.move_picker_candidates = candidates;
+        self.move_picker_query.clear();
+        self.move_picker_selected = 0;
+        self.mode = Mode::MovePicker;
+        true
+    }
+
+    /// Return the filtered subset of candidates as indices into
+    /// `move_picker_candidates`. Case-insensitive substring match, same
+    /// shape as `update_search` for the main stack view.
+    pub fn move_picker_filtered_indices(&self) -> Vec<usize> {
+        let query = self.move_picker_query.to_lowercase();
+        if query.is_empty() {
+            return (0..self.move_picker_candidates.len()).collect();
+        }
+        self.move_picker_candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.to_lowercase().contains(&query))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Currently highlighted candidate (after applying the filter).
+    pub fn move_picker_current(&self) -> Option<&str> {
+        let filtered = self.move_picker_filtered_indices();
+        let idx = *filtered.get(self.move_picker_selected)?;
+        self.move_picker_candidates.get(idx).map(String::as_str)
+    }
+
+    /// Move highlight up in the filtered view; clamps at 0.
+    pub fn move_picker_select_previous(&mut self) {
+        if self.move_picker_selected > 0 {
+            self.move_picker_selected -= 1;
+        }
+    }
+
+    /// Move highlight down in the filtered view; clamps at the last item.
+    pub fn move_picker_select_next(&mut self) {
+        let len = self.move_picker_filtered_indices().len();
+        if len > 0 && self.move_picker_selected + 1 < len {
+            self.move_picker_selected += 1;
+        }
+    }
+
+    /// After the query changes: reset the highlight to the first match so
+    /// the user doesn't land out-of-bounds when the filter shrinks.
+    pub fn move_picker_on_query_change(&mut self) {
+        self.move_picker_selected = 0;
+    }
+
+    /// Clear all picker state. Call when exiting the mode by any path.
+    pub fn clear_move_picker(&mut self) {
+        self.move_picker_source.clear();
+        self.move_picker_candidates.clear();
+        self.move_picker_query.clear();
+        self.move_picker_selected = 0;
     }
 
     /// Update the diff for the currently selected branch

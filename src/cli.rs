@@ -649,6 +649,19 @@ enum Commands {
         yes: bool,
     },
 
+    /// Move the current branch (and its descendants) onto a new parent.
+    ///
+    /// Equivalent to `stax upstack onto`; kept as a top-level alias for
+    /// graphite parity (`gt move`).
+    #[command(visible_alias = "mv")]
+    Move {
+        /// Target parent branch (interactive picker if omitted)
+        target: Option<String>,
+        /// Restack the moved branches after reparenting
+        #[arg(long)]
+        restack: bool,
+    },
+
     /// Interactively reorder branches within a stack
     Reorder {
         /// Skip confirmation prompts
@@ -1844,6 +1857,7 @@ pub fn run() -> Result<()> {
                 run_submit(submit, commands::submit::SubmitScope::Upstack)
             }
         },
+        Commands::Move { target, restack } => commands::upstack::onto::run(target, restack),
         Commands::Downstack(cmd) => match cmd {
             DownstackCommands::Get => {
                 commands::status::run(false, None, false, false, false, false)

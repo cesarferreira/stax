@@ -100,6 +100,9 @@ fn run_app(
                 Mode::Search => {
                     handle_search_key(app, key)?;
                 }
+                Mode::MovePicker => {
+                    handle_move_picker_key(app, key)?;
+                }
                 _ => {
                     let context = match app.mode {
                         Mode::Normal => KeyContext::Normal,
@@ -108,6 +111,7 @@ fn run_app(
                         Mode::Confirm(_) => KeyContext::Confirm,
                         Mode::Input(_) => KeyContext::Input,
                         Mode::Reorder => KeyContext::Reorder,
+                        Mode::MovePicker => KeyContext::MovePicker,
                     };
                     let action = KeyAction::from_key(key, context);
                     handle_action(app, action)?;
@@ -139,6 +143,9 @@ fn handle_action(app: &mut App, action: KeyAction) -> Result<()> {
             handle_input_action(app, action, &input_action)?;
         }
         Mode::Reorder => handle_reorder_action(app, action)?,
+        // MovePicker is only reached here for actions that couldn't be
+        // handled by `handle_move_picker_key` — currently none.
+        Mode::MovePicker => {}
     }
     Ok(())
 }
@@ -161,6 +168,7 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
                 '?' => Some(KeyAction::Help),
                 'q' => Some(KeyAction::Quit),
                 'o' => Some(KeyAction::ReorderMode),
+                'm' => Some(KeyAction::MovePicker),
                 _ => None,
             };
 
@@ -278,6 +286,18 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
                 app.mode = Mode::Reorder;
             }
         }
+        KeyAction::MovePicker => {
+            let Some(selected) = app.selected_branch() else {
+                return Ok(());
+            };
+            if selected.is_trunk {
+                app.set_status("Cannot reparent trunk branch");
+                return Ok(());
+            }
+            if !app.init_move_picker() {
+                app.set_status("No eligible parents to move onto");
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -312,6 +332,63 @@ fn handle_search_action(app: &mut App, action: KeyAction) -> Result<()> {
         KeyAction::Backspace => {
             app.search_query.pop();
             app.update_search();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Key handler for `Mode::MovePicker`. Mirrors `handle_search_key` (chars
+/// feed the query, Up/Down navigate, Enter confirms, Esc cancels) but on
+/// Enter it queues `upstack onto <target>` instead of checkout.
+fn handle_move_picker_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    if is_ctrl_c(&key) {
+        app.should_quit = true;
+        return Ok(());
+    }
+
+    match key.code {
+        KeyCode::Esc => {
+            app.clear_move_picker();
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Enter => {
+            let Some(target) = app.move_picker_current().map(str::to_string) else {
+                app.set_status("No candidate selected");
+                return Ok(());
+            };
+            let source = app.move_picker_source.clone();
+            app.clear_move_picker();
+            app.mode = Mode::Normal;
+            // Run `checkout <source> && upstack onto <target>` so the
+            // reparent operates on the picker's source branch regardless
+            // of where HEAD is — `upstack onto` always reparents the
+            // *current* branch.
+            let mut commands = Vec::new();
+            if app.current_branch != source {
+                commands.push(vec!["checkout".to_string(), source.clone()]);
+            }
+            commands.push(vec![
+                "upstack".to_string(),
+                "onto".to_string(),
+                target.clone(),
+            ]);
+            queue_command(
+                app,
+                commands,
+                format!("Moved '{}' onto '{}'", source, target),
+                Some(source),
+            );
+        }
+        KeyCode::Up => app.move_picker_select_previous(),
+        KeyCode::Down => app.move_picker_select_next(),
+        KeyCode::Char(c) => {
+            app.move_picker_query.push(c);
+            app.move_picker_on_query_change();
+        }
+        KeyCode::Backspace => {
+            app.move_picker_query.pop();
+            app.move_picker_on_query_change();
         }
         _ => {}
     }
@@ -630,6 +707,7 @@ fn log_key_event(app: &App, key: &KeyEvent) {
         Mode::Confirm(_) => "confirm",
         Mode::Input(_) => "input",
         Mode::Reorder => "reorder",
+        Mode::MovePicker => "move_picker",
     };
 
     let Ok(mut file) = std::fs::OpenOptions::new()
