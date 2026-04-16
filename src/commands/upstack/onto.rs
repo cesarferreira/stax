@@ -214,31 +214,20 @@ fn pick_parent_interactively(
         bail!("No branches available as a new parent");
     }
 
-    // Build tree-formatted display strings so the picker mirrors the
-    // graphite-style visual hierarchy (same connectors as `st log`).
-    let max_depth = branches
+    // Build tree-formatted display strings using the same helper the TUI
+    // move picker uses (`build_tree_prefix`) so both surfaces look alike.
+    // `is_selected = false` because dialoguer provides its own `>` marker.
+    let depths: Vec<usize> = branches
         .iter()
         .map(|b| branch_depth(stack, b, trunk))
-        .max()
-        .unwrap_or(0);
+        .collect();
+    let max_depth = depths.iter().copied().max().unwrap_or(0);
     let display_items: Vec<String> = branches
         .iter()
-        .map(|b| {
-            let depth = branch_depth(stack, b, trunk);
-            let mut prefix = String::new();
-            for c in 0..=depth {
-                if c == depth {
-                    prefix.push('○');
-                } else {
-                    prefix.push_str("│ ");
-                }
-            }
-            let tree_width = depth * 2 + 1;
-            let target_width = (max_depth + 1) * 2;
-            for _ in tree_width..target_width {
-                prefix.push(' ');
-            }
-            format!("{} {}", prefix, b)
+        .zip(&depths)
+        .map(|(b, &depth)| {
+            let prefix = crate::tui::ui::build_tree_prefix(depth, max_depth, false);
+            format!("{}{}", prefix, b)
         })
         .collect();
 
@@ -271,4 +260,59 @@ fn branch_depth(stack: &Stack, name: &str, trunk: &str) -> usize {
         }
     }
     depth
+}
+
+#[cfg(test)]
+mod tests {
+    use super::branch_depth;
+    use crate::engine::stack::{Stack, StackBranch};
+    use std::collections::HashMap;
+
+    fn test_stack() -> Stack {
+        // main → a → b → c
+        let mut branches = HashMap::new();
+        for (name, parent) in [
+            ("main", None),
+            ("a", Some("main")),
+            ("b", Some("a")),
+            ("c", Some("b")),
+        ] {
+            branches.insert(
+                name.to_string(),
+                StackBranch {
+                    name: name.to_string(),
+                    parent: parent.map(str::to_string),
+                    children: vec![],
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: None,
+                    pr_is_draft: None,
+                },
+            );
+        }
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    #[test]
+    fn depth_of_trunk_is_zero() {
+        assert_eq!(branch_depth(&test_stack(), "main", "main"), 0);
+    }
+
+    #[test]
+    fn depth_of_direct_child_is_one() {
+        assert_eq!(branch_depth(&test_stack(), "a", "main"), 1);
+    }
+
+    #[test]
+    fn depth_of_deeply_nested_branch() {
+        assert_eq!(branch_depth(&test_stack(), "c", "main"), 3);
+    }
+
+    #[test]
+    fn depth_of_untracked_branch_is_zero() {
+        assert_eq!(branch_depth(&test_stack(), "unknown", "main"), 0);
+    }
 }
