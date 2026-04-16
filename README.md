@@ -109,20 +109,20 @@ st --version
 <a id="quick-start"></a>
 ## 60-Second Quick Start
 
-`st setup` is the one-shot onboarding command. It can install shell integration, AI agent skills, and GitHub auth for you.
+`st setup` is the recommended onboarding path. It can install shell integration, AI agent skills, and GitHub auth for you.
 
 ```bash
-# Do it all in one step
+# Recommended: do it all in one step
 st setup --yes
 
-# Option A (recommended): import GitHub CLI auth
+# Alternative: import GitHub CLI auth manually
 gh auth login
 st auth --from-gh
 
-# Option B: enter token interactively
+# Alternative: enter token interactively
 st auth
 
-# Option C: env var
+# Alternative: env var
 export STAX_GITHUB_TOKEN="ghp_xxxx"
 ```
 
