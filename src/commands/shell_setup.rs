@@ -15,6 +15,27 @@ enum ShellKind {
     Fish,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SkillInstallMode {
+    Ask,
+    Skip,
+    Install,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthSetupMode {
+    Ask,
+    Skip,
+    ImportFromGh,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SetupOptions {
+    pub auto_accept: bool,
+    pub skill_install_mode: SkillInstallMode,
+    pub auth_setup_mode: AuthSetupMode,
+}
+
 /// The shell function block that users source in their shell config.
 /// It intercepts worktree commands that need shell-side directory changes,
 /// performs the actual `cd` in the calling shell process, and can safely
@@ -366,7 +387,7 @@ end"#
 }
 
 /// Setup shell integration and enable rerere. By default installs; use --print to just see the snippet.
-pub fn run(print: bool, refresh: bool) -> Result<()> {
+pub fn run(print: bool, refresh: bool, options: SetupOptions) -> Result<()> {
     if refresh {
         return refresh_installed_snippets();
     }
@@ -380,29 +401,38 @@ pub fn run(print: bool, refresh: bool) -> Result<()> {
         );
     }
 
-    let result = if print {
+    let shell_setup_completed = if print {
         // Just print the snippet for manual setup
         println!("{}", shell_snippet(detect_shell_kind()));
-        Ok(())
+        true
     } else {
         // Default: install shell integration
-        install_to_shell_config()
+        install_to_shell_config(options.auto_accept)?
     };
 
     // Always enable rerere when in a git repo (unless we're just printing)
-    if result.is_ok() && !print {
+    if shell_setup_completed && !print {
         enable_rerere_if_in_repo()?;
+        maybe_install_skills(options)?;
+        maybe_setup_auth(options)?;
     }
 
-    result
+    Ok(())
 }
 
 /// Enable git rerere if we're in a git repository
 fn enable_rerere_if_in_repo() -> Result<()> {
     if let Ok(repo) = crate::git::repo::GitRepo::open() {
         match repo.enable_rerere() {
-            Ok(_) => println!("{}  Enabled git rerere for conflict resolution memory", "✓".green().bold()),
-            Err(e) => eprintln!("{}  Failed to enable rerere: {}", "Warning:".yellow().bold(), e),
+            Ok(_) => println!(
+                "{}  Enabled git rerere for conflict resolution memory",
+                "✓".green().bold()
+            ),
+            Err(e) => eprintln!(
+                "{}  Failed to enable rerere: {}",
+                "Warning:".yellow().bold(),
+                e
+            ),
         }
     }
     Ok(())
@@ -452,7 +482,7 @@ pub fn prompt_if_missing() -> Result<()> {
         .interact()?;
 
     if install {
-        install_to_shell_config()?;
+        install_to_shell_config(false)?;
         eprintln!();
         eprintln!(
             "{}  Restart your shell or run: {}",
@@ -465,7 +495,7 @@ pub fn prompt_if_missing() -> Result<()> {
     Ok(())
 }
 
-fn install_to_shell_config() -> Result<()> {
+fn install_to_shell_config(auto_accept: bool) -> Result<bool> {
     let shell_kind = detect_shell_kind();
     let config_path = detect_shell_config()?;
     let integration_path = shell_integration_path(shell_kind)?;
@@ -486,7 +516,7 @@ fn install_to_shell_config() -> Result<()> {
             config_path.display()
         );
         println!("  Refreshed {}", integration_path.display());
-        return Ok(());
+        return Ok(true);
     }
 
     println!(
@@ -498,14 +528,18 @@ fn install_to_shell_config() -> Result<()> {
     println!("  {}", source_line.cyan());
     println!();
 
-    let proceed = Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt("Proceed?")
-        .default(true)
-        .interact()?;
+    let proceed = if auto_accept {
+        true
+    } else {
+        Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Proceed?")
+            .default(true)
+            .interact()?
+    };
 
     if !proceed {
         println!("{}", "Aborted.".dimmed());
-        return Ok(());
+        return Ok(false);
     }
 
     write_integration_file(&integration_path, shell_snippet(shell_kind))?;
@@ -522,7 +556,136 @@ fn install_to_shell_config() -> Result<()> {
     println!("  Wrote {}", integration_path.display());
     println!("  Restart your shell or run: {}", shell_source_cmd().cyan());
 
+    Ok(true)
+}
+
+fn maybe_install_skills(options: SetupOptions) -> Result<()> {
+    let should_install = match options.skill_install_mode {
+        SkillInstallMode::Install => true,
+        SkillInstallMode::Skip => false,
+        SkillInstallMode::Ask => {
+            if options.auto_accept {
+                true
+            } else {
+                prompt_for_skill_install()?
+            }
+        }
+    };
+
+    if !should_install {
+        return Ok(());
+    }
+
+    println!();
+    crate::commands::skills::run_update(false)
+}
+
+fn maybe_setup_auth(options: SetupOptions) -> Result<()> {
+    let status = crate::config::Config::github_auth_status();
+    if has_non_gh_auth(&status) {
+        return Ok(());
+    }
+
+    match options.auth_setup_mode {
+        AuthSetupMode::Skip => Ok(()),
+        AuthSetupMode::ImportFromGh => import_auth_from_gh(),
+        AuthSetupMode::Ask => handle_default_auth_setup(status, options.auto_accept),
+    }
+}
+
+fn has_non_gh_auth(status: &crate::config::GitHubAuthStatus) -> bool {
+    status.stax_env_available
+        || status.credentials_file_available
+        || (status.allow_github_token_env && status.github_env_available)
+}
+
+fn handle_default_auth_setup(
+    status: crate::config::GitHubAuthStatus,
+    auto_accept: bool,
+) -> Result<()> {
+    if status.gh_cli_available {
+        let should_import = if auto_accept {
+            true
+        } else {
+            prompt_for_gh_auth_import()?
+        };
+
+        if should_import {
+            return import_auth_from_gh();
+        }
+
+        return Ok(());
+    }
+
+    if auto_accept {
+        print_auth_setup_hint();
+        return Ok(());
+    }
+
+    if prompt_for_auth_setup_hint()? {
+        print_auth_setup_hint();
+    }
+
     Ok(())
+}
+
+fn import_auth_from_gh() -> Result<()> {
+    println!();
+    crate::commands::auth::run(None, true)
+}
+
+fn prompt_for_skill_install() -> Result<bool> {
+    if !can_prompt() {
+        return Ok(false);
+    }
+
+    eprintln!();
+    Ok(Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Install stax AI agent skills too?")
+        .default(true)
+        .interact()?)
+}
+
+fn prompt_for_gh_auth_import() -> Result<bool> {
+    if !can_prompt() {
+        return Ok(false);
+    }
+
+    eprintln!();
+    Ok(Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Import GitHub auth from `gh` now?")
+        .default(true)
+        .interact()?)
+}
+
+fn prompt_for_auth_setup_hint() -> Result<bool> {
+    if !can_prompt() {
+        return Ok(false);
+    }
+
+    eprintln!();
+    Ok(Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Show GitHub auth setup steps?")
+        .default(true)
+        .interact()?)
+}
+
+fn print_auth_setup_hint() {
+    println!();
+    println!("{}", "GitHub auth is not configured yet.".yellow().bold());
+    println!(
+        "Run {} to sign in with GitHub CLI.",
+        "`gh auth login`".cyan()
+    );
+    println!(
+        "Then import that token with {}.",
+        "`st auth --from-gh`".cyan()
+    );
+    println!("Or save a token directly with {}.", "`st auth`".cyan());
+}
+
+fn can_prompt() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
 fn detect_shell_kind() -> ShellKind {

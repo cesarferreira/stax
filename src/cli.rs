@@ -881,7 +881,7 @@ enum Commands {
     /// For manual install, use --print to show the snippet, then add it to your
     /// shell config. The auto-install writes to ~/.config/stax/shell-setup.sh
     /// and sources it from your shell config.
-    #[command(name = "setup")]
+    #[command(name = "setup", alias = "shell-setup")]
     Setup {
         /// Print shell integration snippet instead of installing
         #[arg(long)]
@@ -889,6 +889,21 @@ enum Commands {
         /// Refresh already-installed generated shell snippets in-place
         #[arg(long, hide = true, conflicts_with = "print")]
         refresh: bool,
+        /// Skip the optional AI agent skills install prompt
+        #[arg(long, conflicts_with_all = ["install_skills", "print", "refresh"])]
+        skip_skills: bool,
+        /// Install AI agent skills without prompting
+        #[arg(long, conflicts_with_all = ["skip_skills", "print", "refresh"])]
+        install_skills: bool,
+        /// Skip the optional GitHub auth onboarding step
+        #[arg(long, conflicts_with_all = ["auth_from_gh", "print", "refresh"])]
+        skip_auth: bool,
+        /// Import GitHub auth from `gh auth token` without prompting
+        #[arg(long, conflicts_with_all = ["skip_auth", "print", "refresh"])]
+        auth_from_gh: bool,
+        /// Accept default setup actions without prompting
+        #[arg(short, long, conflicts_with_all = ["print", "refresh"])]
+        yes: bool,
     },
 
     // Hidden top-level shortcuts for convenience
@@ -1408,8 +1423,36 @@ pub fn run() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if let Some(Commands::Setup { print, refresh }) = &cli.command {
-        let result = commands::shell_setup::run(*print, *refresh);
+    if let Some(Commands::Setup {
+        print,
+        refresh,
+        skip_skills,
+        install_skills,
+        skip_auth,
+        auth_from_gh,
+        yes,
+    }) = &cli.command
+    {
+        let skill_install_mode = if *install_skills {
+            commands::shell_setup::SkillInstallMode::Install
+        } else if *skip_skills {
+            commands::shell_setup::SkillInstallMode::Skip
+        } else {
+            commands::shell_setup::SkillInstallMode::Ask
+        };
+        let auth_setup_mode = if *auth_from_gh {
+            commands::shell_setup::AuthSetupMode::ImportFromGh
+        } else if *skip_auth {
+            commands::shell_setup::AuthSetupMode::Skip
+        } else {
+            commands::shell_setup::AuthSetupMode::Ask
+        };
+        let setup_options = commands::shell_setup::SetupOptions {
+            auto_accept: *yes,
+            skill_install_mode,
+            auth_setup_mode,
+        };
+        let result = commands::shell_setup::run(*print, *refresh, setup_options);
         update::show_update_notification();
         update::check_in_background();
         return result;
@@ -1497,9 +1540,7 @@ pub fn run() -> Result<()> {
         Commands::Skills { command } => {
             let result = match command {
                 None | Some(SkillsCommands::List) => commands::skills::run_list(),
-                Some(SkillsCommands::Update { dry_run }) => {
-                    commands::skills::run_update(*dry_run)
-                }
+                Some(SkillsCommands::Update { dry_run }) => commands::skills::run_update(*dry_run),
             };
             update::show_update_notification();
             update::check_in_background();

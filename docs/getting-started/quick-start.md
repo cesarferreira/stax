@@ -1,16 +1,19 @@
 # Quick Start
 
-Set up GitHub auth first (required for PR creation, CI checks, and review metadata).
+`st setup` is the recommended onboarding path. It can install shell integration, AI agent skills, and GitHub auth for you.
 
 ```bash
-# Option A (recommended): use GitHub CLI auth
+# Recommended: do it all in one step
+st setup --yes
+
+# Alternative: use GitHub CLI auth manually
 gh auth login
 st auth --from-gh
 
-# Option B: enter a personal access token manually
+# Alternative: enter a personal access token manually
 st auth
 
-# Option C: provide a stax-specific env var
+# Alternative: provide a stax-specific env var
 export STAX_GITHUB_TOKEN="ghp_xxxx"
 ```
 

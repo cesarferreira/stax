@@ -164,10 +164,15 @@ The dashboard is a control plane, not an embedded shell. The stack/patched-branc
 
 ## Shell Integration
 
-Install shell integration once if you want the parent shell to move into the target directory automatically:
+Use `st setup` as the one-shot onboarding command if you want shell integration, AI agent skills, and GitHub auth handled from one entry point:
 
 ```bash
-st setup        # Install shell integration
+st setup                  # One-shot setup: shell integration plus optional skills/auth onboarding
+st setup --yes            # Accept shell setup defaults, install skills, and import auth from gh when available
+st setup --install-skills # Install shell integration and AI agent skills without prompting
+st setup --skip-skills    # Install shell integration without the AI agent skills prompt
+st setup --auth-from-gh   # Install shell integration and import GitHub auth from gh without prompting
+st setup --skip-auth      # Install shell integration without the auth onboarding step
 st setup --print  # Show snippet for manual install
 ```
 
