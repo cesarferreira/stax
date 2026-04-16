@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use colored::Colorize;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::FuzzySelect;
+use std::collections::HashSet;
 
 /// Reparent the current branch AND all its descendants onto a new parent.
 /// The subtree structure is preserved -- only the root's parent changes.
@@ -245,18 +246,21 @@ fn pick_parent_interactively(
 
 /// Walk up the parent chain to compute how deep `name` is below `trunk`.
 /// Returns 0 for trunk itself, 1 for its direct children, etc. If the
-/// branch isn't tracked in the stack or its ancestor chain doesn't reach
-/// trunk, stops and returns the depth reached so far.
+/// branch isn't tracked in the stack, its ancestor chain doesn't reach
+/// trunk, or a cycle is detected, stops and returns the depth reached so
+/// far. The visited set mirrors `Stack::descendants` to prevent infinite
+/// loops on corrupt metadata.
 fn branch_depth(stack: &Stack, name: &str, trunk: &str) -> usize {
     let mut depth = 0;
     let mut current = name.to_string();
+    let mut visited = HashSet::from([current.clone()]);
     while current != trunk {
         match stack.branches.get(&current).and_then(|i| i.parent.as_ref()) {
-            Some(parent) => {
+            Some(parent) if visited.insert(parent.clone()) => {
                 current.clone_from(parent);
                 depth += 1;
             }
-            None => break,
+            _ => break,
         }
     }
     depth
@@ -314,5 +318,32 @@ mod tests {
     #[test]
     fn depth_of_untracked_branch_is_zero() {
         assert_eq!(branch_depth(&test_stack(), "unknown", "main"), 0);
+    }
+
+    #[test]
+    fn depth_terminates_on_cyclic_metadata() {
+        // a → b → a (cycle that never reaches trunk)
+        let mut branches = HashMap::new();
+        for (name, parent) in [("a", Some("b")), ("b", Some("a"))] {
+            branches.insert(
+                name.to_string(),
+                StackBranch {
+                    name: name.to_string(),
+                    parent: parent.map(str::to_string),
+                    children: vec![],
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: None,
+                    pr_is_draft: None,
+                },
+            );
+        }
+        let stack = Stack {
+            branches,
+            trunk: "main".to_string(),
+        };
+        // Must not hang — should return some finite depth.
+        let d = branch_depth(&stack, "a", "main");
+        assert!(d <= 2, "cyclic chain should terminate, got depth {}", d);
     }
 }

@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
+use std::collections::HashMap;
 
 /// Main UI render function
 pub fn render(f: &mut Frame, app: &App) {
@@ -468,7 +469,7 @@ fn render_move_picker_modal(f: &mut Frame, app: &App) {
         )));
     } else {
         // name→column lookup (HashMap avoids repeated linear scans).
-        let column_map: std::collections::HashMap<&str, usize> = app
+        let column_map: HashMap<&str, usize> = app
             .branches
             .iter()
             .map(|b| (b.name.as_str(), b.column))
