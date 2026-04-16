@@ -1,8 +1,10 @@
 mod common;
 
-use common::TestRepo;
+use common::{run_stax_in_script_with_env, TestRepo};
 use std::process::Command;
 use tempfile::tempdir;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Get path to compiled binary (built by cargo test)
 fn stax_bin() -> &'static str {
@@ -22,6 +24,74 @@ fn stax_with_home(args: &[&str], home: &std::path::Path) -> std::process::Output
         .env("HOME", home)
         .output()
         .expect("Failed to execute stax")
+}
+
+fn ensure_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+fn configure_existing_shell_setup(home: &std::path::Path) -> std::path::PathBuf {
+    let config_dir = home.join(".config").join("stax");
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+
+    let snippet_path = config_dir.join("shell-setup.sh");
+    let rc_path = home.join(".zshrc");
+    std::fs::write(
+        &rc_path,
+        format!("source \"{}\" # stax shell-setup\n", snippet_path.display()),
+    )
+    .expect("write zshrc");
+
+    snippet_path
+}
+
+fn write_fake_gh(home: &std::path::Path, token: &str) -> std::path::PathBuf {
+    let bin_dir = home.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+    let gh_path = bin_dir.join("gh");
+    std::fs::write(
+        &gh_path,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  echo \"{token}\"\n  exit 0\nfi\nexit 1\n"
+        ),
+    )
+    .expect("write fake gh");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake gh");
+    }
+
+    bin_dir
+}
+
+fn write_unavailable_gh(home: &std::path::Path) -> std::path::PathBuf {
+    let bin_dir = home.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+    let gh_path = bin_dir.join("gh");
+    std::fs::write(&gh_path, "#!/bin/sh\nexit 1\n").expect("write unavailable gh");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod unavailable gh");
+    }
+
+    bin_dir
+}
+
+fn path_with_bin(bin_dir: &std::path::Path) -> String {
+    let current = std::env::var("PATH").unwrap_or_default();
+    if current.is_empty() {
+        bin_dir.display().to_string()
+    } else {
+        format!("{}:{}", bin_dir.display(), current)
+    }
 }
 
 #[test]
@@ -232,6 +302,11 @@ fn test_shell_setup_help_uses_static_install_language() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("manual install"));
     assert!(stdout.contains("~/.config/stax"));
+    assert!(stdout.contains("--skip-skills"));
+    assert!(stdout.contains("--install-skills"));
+    assert!(stdout.contains("--skip-auth"));
+    assert!(stdout.contains("--auth-from-gh"));
+    assert!(stdout.contains("--yes"));
     assert!(!stdout.contains("eval \"$(stax shell-setup)\""));
 }
 
@@ -330,6 +405,304 @@ fn test_shell_setup_refresh_updates_installed_shell_snippet_outside_repo() {
         !refreshed.contains("command stax stale-wrapper"),
         "expected stale wrapper to be replaced, got:\n{}",
         refreshed
+    );
+}
+
+#[test]
+fn test_shell_setup_rejects_conflicting_skill_flags() {
+    let output = stax(&["setup", "--skip-skills", "--install-skills"]);
+    assert!(!output.status.success(), "{:?}", output);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--skip-skills"));
+    assert!(stderr.contains("--install-skills"));
+}
+
+#[test]
+fn test_shell_setup_noninteractive_default_skips_skills_install() {
+    let home = tempdir().expect("temp home");
+    let snippet_path = configure_existing_shell_setup(home.path());
+    let unavailable_gh_bin = write_unavailable_gh(home.path());
+
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let output = Command::new(stax_bin())
+        .args(["setup"])
+        .current_dir(tmp.path())
+        .env("HOME", home.path())
+        .env("SHELL", "/bin/zsh")
+        .env("PATH", path_with_bin(&unavailable_gh_bin))
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .expect("run setup");
+
+    assert!(output.status.success(), "{:?}", output);
+    assert!(
+        snippet_path.exists(),
+        "expected shell snippet to be refreshed"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Install stax AI agent skills"),
+        "non-interactive setup should not prompt for skills:\n{}",
+        stdout
+    );
+    assert!(
+        !home.path().join(".codex/skills/stax/SKILL.md").exists(),
+        "skills should not be installed without prompt/flag"
+    );
+}
+
+#[tokio::test]
+async fn test_shell_setup_install_skills_flag_installs_skills() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = tempdir().expect("temp home");
+    let _snippet_path = configure_existing_shell_setup(home.path());
+    let unavailable_gh_bin = write_unavailable_gh(home.path());
+
+    Mock::given(method("GET"))
+        .and(path("/skills.md"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("<!-- stax-skills-version: 0.51.0 -->\n# Stax Skills\n"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let output = Command::new(stax_bin())
+        .args(["setup", "--install-skills"])
+        .current_dir(tmp.path())
+        .env("HOME", home.path())
+        .env("SHELL", "/bin/zsh")
+        .env("PATH", path_with_bin(&unavailable_gh_bin))
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env(
+            "STAX_SKILLS_URL",
+            format!("{}/skills.md", mock_server.uri()),
+        )
+        .output()
+        .expect("run setup --install-skills");
+
+    assert!(output.status.success(), "{:?}", output);
+
+    let codex_skill = home.path().join(".codex/skills/stax/SKILL.md");
+    assert!(codex_skill.exists(), "expected Codex skill to be installed");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("stax skills update"),
+        "expected setup to run skills installer:\n{}",
+        stdout
+    );
+}
+
+#[tokio::test]
+async fn test_shell_setup_interactive_prompt_can_decline_skills_install() {
+    ensure_crypto_provider();
+    let home = tempdir().expect("temp home");
+    let _snippet_path = configure_existing_shell_setup(home.path());
+    let cwd = tempfile::tempdir().expect("create temp dir");
+    let home_str = home.path().to_str().expect("home path");
+    let unavailable_gh_bin = write_unavailable_gh(home.path());
+    let path_buf = path_with_bin(&unavailable_gh_bin);
+
+    let output = run_stax_in_script_with_env(
+        cwd.path(),
+        &["setup"],
+        "printf 'n\\n'",
+        &[
+            ("HOME", home_str),
+            ("SHELL", "/bin/zsh"),
+            ("PATH", &path_buf),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Install stax AI agent skills"),
+        "expected interactive setup to ask about skills:\n{}",
+        combined
+    );
+    assert!(
+        !home.path().join(".codex/skills/stax/SKILL.md").exists(),
+        "declining the prompt should not install skills"
+    );
+}
+
+#[test]
+fn test_shell_setup_rejects_conflicting_auth_flags() {
+    let output = stax(&["setup", "--skip-auth", "--auth-from-gh"]);
+    assert!(!output.status.success(), "{:?}", output);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--skip-auth"));
+    assert!(stderr.contains("--auth-from-gh"));
+}
+
+#[tokio::test]
+async fn test_shell_setup_yes_installs_skills_and_imports_auth_from_gh() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = tempdir().expect("temp home");
+    let _snippet_path = configure_existing_shell_setup(home.path());
+    let fake_gh_bin = write_fake_gh(home.path(), "gh-imported-token");
+
+    Mock::given(method("GET"))
+        .and(path("/skills.md"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("<!-- stax-skills-version: 0.51.0 -->\n# Stax Skills\n"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let output = Command::new(stax_bin())
+        .args(["setup", "--yes"])
+        .current_dir(tmp.path())
+        .env("HOME", home.path())
+        .env("SHELL", "/bin/zsh")
+        .env("PATH", path_with_bin(&fake_gh_bin))
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env(
+            "STAX_SKILLS_URL",
+            format!("{}/skills.md", mock_server.uri()),
+        )
+        .output()
+        .expect("run setup --yes");
+
+    assert!(output.status.success(), "{:?}", output);
+
+    let credentials_path = home.path().join(".config/stax/.credentials");
+    let saved = std::fs::read_to_string(&credentials_path).expect("read credentials");
+    assert_eq!(saved.trim(), "gh-imported-token");
+    assert!(
+        home.path().join(".codex/skills/stax/SKILL.md").exists(),
+        "expected skills to be installed"
+    );
+}
+
+#[test]
+fn test_shell_setup_yes_without_gh_prints_auth_next_steps() {
+    let home = tempdir().expect("temp home");
+    let _snippet_path = configure_existing_shell_setup(home.path());
+    let unavailable_gh_bin = write_unavailable_gh(home.path());
+
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let output = Command::new(stax_bin())
+        .args(["setup", "--yes", "--skip-skills"])
+        .current_dir(tmp.path())
+        .env("HOME", home.path())
+        .env("SHELL", "/bin/zsh")
+        .env("PATH", path_with_bin(&unavailable_gh_bin))
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .expect("run setup --yes --skip-skills");
+
+    assert!(output.status.success(), "{:?}", output);
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("gh auth login"),
+        "missing gh hint:\n{}",
+        combined
+    );
+    assert!(
+        combined.contains("st auth --from-gh"),
+        "missing st auth import hint:\n{}",
+        combined
+    );
+    assert!(
+        combined.contains("st auth"),
+        "missing manual auth hint:\n{}",
+        combined
+    );
+    assert!(
+        !home.path().join(".config/stax/.credentials").exists(),
+        "should not create credentials without gh or explicit auth"
+    );
+}
+
+#[test]
+fn test_shell_setup_yes_auto_accepts_shell_install_prompt() {
+    let home = tempdir().expect("temp home");
+    let unavailable_gh_bin = write_unavailable_gh(home.path());
+
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let output = Command::new(stax_bin())
+        .args(["setup", "--yes", "--skip-skills", "--skip-auth"])
+        .current_dir(tmp.path())
+        .env("HOME", home.path())
+        .env("SHELL", "/bin/zsh")
+        .env("PATH", path_with_bin(&unavailable_gh_bin))
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .expect("run setup --yes --skip-skills --skip-auth");
+
+    assert!(output.status.success(), "{:?}", output);
+    assert!(
+        home.path().join(".zshrc").exists(),
+        "expected --yes to install shell integration without prompting"
+    );
+}
+
+#[test]
+fn test_shell_setup_interactive_prompt_can_decline_auth_import_from_gh() {
+    let home = tempdir().expect("temp home");
+    let _snippet_path = configure_existing_shell_setup(home.path());
+    let fake_gh_bin = write_fake_gh(home.path(), "gh-imported-token");
+    let cwd = tempfile::tempdir().expect("create temp dir");
+    let home_str = home.path().to_str().expect("home path");
+    let path_buf = path_with_bin(&fake_gh_bin);
+
+    let output = run_stax_in_script_with_env(
+        cwd.path(),
+        &["setup", "--skip-skills"],
+        "printf 'n\\n'",
+        &[
+            ("HOME", home_str),
+            ("SHELL", "/bin/zsh"),
+            ("PATH", &path_buf),
+        ],
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Import GitHub auth from `gh` now?"),
+        "expected auth import prompt:\n{}",
+        combined
+    );
+    assert!(
+        !home.path().join(".config/stax/.credentials").exists(),
+        "declining gh import should not save credentials"
     );
 }
 

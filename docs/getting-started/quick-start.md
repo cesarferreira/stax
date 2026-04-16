@@ -1,8 +1,11 @@
 # Quick Start
 
-Set up GitHub auth first (required for PR creation, CI checks, and review metadata).
+`st setup` is the one-shot onboarding command. It can install shell integration, AI agent skills, and GitHub auth for you.
 
 ```bash
+# Do it all in one step
+st setup --yes
+
 # Option A (recommended): use GitHub CLI auth
 gh auth login
 st auth --from-gh

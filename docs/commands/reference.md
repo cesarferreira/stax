@@ -139,7 +139,12 @@ Full guide: [Worktrees](../worktrees/index.md)
 | `st worktree prune` | `wt prune`, `wtprune` | Clean stale git worktree bookkeeping only |
 | `st worktree cleanup` | `wt cleanup`, `wt clean` | Prune stale bookkeeping, remove detached linked worktrees, and remove stax-managed worktrees already merged into trunk (`--dry-run` previews only) |
 | `st worktree restack` | `wt rs`, `wtrs` | Restack all stax-managed worktrees |
-| `st setup` | | Install shell integration under `~/.config/stax/` and source it from your shell config |
+| `st setup` | | One-shot setup/onboarding command: installs shell integration and can also handle AI agent skills plus GitHub auth onboarding |
+| `st setup --yes` | | Accept shell setup defaults, install AI agent skills, and import auth from `gh` when available |
+| `st setup --install-skills` | | Install shell integration and AI agent skills without prompting |
+| `st setup --skip-skills` | | Install shell integration without the AI agent skills prompt |
+| `st setup --auth-from-gh` | | Install shell integration and import GitHub auth from `gh auth token` without prompting |
+| `st setup --skip-auth` | | Install shell integration without the GitHub auth onboarding step |
 | `st setup --print` | | Print shell integration snippet for manual install |
 
 Worktree launch examples:

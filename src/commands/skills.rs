@@ -3,8 +3,7 @@ use colored::Colorize;
 use std::path::PathBuf;
 
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-const REMOTE_URL: &str =
-    "https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md";
+const REMOTE_URL: &str = "https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md";
 
 /// Known agent skill file locations (relative to `$HOME`).
 struct SkillLocation {
@@ -53,11 +52,7 @@ pub fn extract_skills_version(content: &str) -> Option<String> {
         }
 
         if let Some(rest) = trimmed.strip_prefix("stax_version:") {
-            let v = rest
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'')
-                .to_string();
+            let v = rest.trim().trim_matches('"').trim_matches('\'').to_string();
             if !v.is_empty() {
                 return Some(v);
             }
@@ -88,20 +83,22 @@ fn build_content(body: &str, loc: &SkillLocation) -> String {
 
 /// Download the latest `skills.md` from GitHub and return its content.
 fn fetch_remote_skills() -> Result<String> {
+    let remote_url = std::env::var("STAX_SKILLS_URL").unwrap_or_else(|_| REMOTE_URL.to_string());
     let runtime = tokio::runtime::Runtime::new()?;
-    let body = runtime.block_on(async {
-        reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(10))
-            .build()?
-            .get(REMOTE_URL)
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await
-    })
-    .context("Failed to download skills from GitHub")?;
+    let body = runtime
+        .block_on(async {
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(10))
+                .build()?
+                .get(remote_url)
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await
+        })
+        .context("Failed to download skills from GitHub")?;
     Ok(body)
 }
 
@@ -156,12 +153,7 @@ pub fn run_list() -> Result<()> {
             Err(_) => {
                 // File doesn't exist — show it as "not installed".
                 let path_str = path.display().to_string().dimmed();
-                println!(
-                    "{}  {}  {}",
-                    "–".dimmed(),
-                    loc.name.dimmed(),
-                    path_str,
-                );
+                println!("{}  {}  {}", "–".dimmed(), loc.name.dimmed(), path_str,);
             }
         }
     }
@@ -173,7 +165,10 @@ pub fn run_list() -> Result<()> {
             "No skill files found. Run `stax skills update` to install them.".yellow()
         );
     } else {
-        println!("Run {} to bring all skill files up to date.", "`stax skills update`".cyan());
+        println!(
+            "Run {} to bring all skill files up to date.",
+            "`stax skills update`".cyan()
+        );
     }
 
     Ok(())
@@ -190,13 +185,10 @@ pub fn run_update(dry_run: bool) -> Result<()> {
     println!("Fetching latest skills from GitHub…");
     let remote_body = fetch_remote_skills()?;
 
-    let remote_version = extract_skills_version(&remote_body)
-        .unwrap_or_else(|| PKG_VERSION.to_string());
+    let remote_version =
+        extract_skills_version(&remote_body).unwrap_or_else(|| PKG_VERSION.to_string());
 
-    println!(
-        "Remote version: {}",
-        format!("v{remote_version}").green()
-    );
+    println!("Remote version: {}", format!("v{remote_version}").green());
     println!();
 
     let mut updated = 0usize;
@@ -241,9 +233,8 @@ pub fn run_update(dry_run: bool) -> Result<()> {
             );
         } else {
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).with_context(|| {
-                    format!("Failed to create directory {}", parent.display())
-                })?;
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create directory {}", parent.display()))?;
             }
             std::fs::write(&path, &content)
                 .with_context(|| format!("Failed to write {}", path.display()))?;
@@ -313,28 +304,19 @@ mod tests {
     #[test]
     fn test_extract_html_comment_version() {
         let content = "<!-- stax-skills-version: 1.2.3 -->\n# Stax Skills\n";
-        assert_eq!(
-            extract_skills_version(content),
-            Some("1.2.3".to_string())
-        );
+        assert_eq!(extract_skills_version(content), Some("1.2.3".to_string()));
     }
 
     #[test]
     fn test_extract_yaml_frontmatter_version() {
         let content = "---\nname: stax\nstax_version: \"0.50.2\"\n---\n# Stax\n";
-        assert_eq!(
-            extract_skills_version(content),
-            Some("0.50.2".to_string())
-        );
+        assert_eq!(extract_skills_version(content), Some("0.50.2".to_string()));
     }
 
     #[test]
     fn test_extract_yaml_single_quotes() {
         let content = "---\nstax_version: '1.0.0'\n---\n";
-        assert_eq!(
-            extract_skills_version(content),
-            Some("1.0.0".to_string())
-        );
+        assert_eq!(extract_skills_version(content), Some("1.0.0".to_string()));
     }
 
     #[test]

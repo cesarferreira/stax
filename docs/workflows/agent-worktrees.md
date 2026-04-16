@@ -362,10 +362,12 @@ That split is useful:
 
 ## Setup Once
 
-Install shell integration if you want lane creation and navigation to move the parent shell automatically:
+Use `st setup` as the one-shot onboarding command if you want lane creation/navigation shell integration plus the related skills/auth setup in one place:
 
 ```bash
-st setup
+st setup                  # one-shot setup: shell integration plus optional skills/auth onboarding
+st setup --yes            # accept shell setup defaults, install skills, and import auth from gh when available
+st setup --install-skills # install shell integration and AI agent skills without prompting
 ```
 
 After shell integration is installed:

@@ -105,7 +105,12 @@ stax worktree path <name>      # Print absolute path of a worktree (for scriptin
 stax worktree remove <name>    # Remove a worktree
 stax worktree cleanup          # Prune stale bookkeeping + bulk-remove merged/detached worktrees
 stax worktree restack          # Restack all stax-managed worktrees
-stax setup                     # Install shell integration under ~/.config/stax and source it from your shell config
+stax setup                     # Install shell integration, then optionally offer AI agent skills + auth onboarding
+stax setup --yes               # Accept shell setup defaults, install skills, and import auth from gh when available
+stax setup --install-skills    # Install shell integration and accept the skills install automatically
+stax setup --skip-skills       # Install shell integration without the skills prompt
+stax setup --auth-from-gh      # Install shell integration and import GitHub auth from gh without prompting
+stax setup --skip-auth         # Install shell integration without the auth onboarding step
 stax setup --print             # Print shell integration snippet for manual install
 
 # Worktree shortcuts
@@ -390,6 +395,8 @@ stax fix --yes
 ```bash
 # One-time shell integration (enables transparent cd)
 stax setup
+stax setup --yes               # Shell integration + skills + auth import from gh when available
+stax setup --install-skills    # Non-interactive onboarding: shell integration + AI agent skills
 
 # Create a worktree for an existing branch
 stax worktree create feature/payments-api

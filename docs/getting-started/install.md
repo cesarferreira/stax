@@ -36,4 +36,6 @@ See [Windows notes](../reference/windows.md) for shell and worktree limitations.
 
 ```bash
 stax --version
+# One-shot onboarding: shell integration + skills + auth import from gh when available
+st setup --yes
 ```

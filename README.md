@@ -109,9 +109,12 @@ st --version
 <a id="quick-start"></a>
 ## 60-Second Quick Start
 
-Set up GitHub auth first (required for PR creation, CI checks, and review metadata).
+`st setup` is the one-shot onboarding command. It can install shell integration, AI agent skills, and GitHub auth for you.
 
 ```bash
+# Do it all in one step
+st setup --yes
+
 # Option A (recommended): import GitHub CLI auth
 gh auth login
 st auth --from-gh
@@ -306,8 +309,13 @@ Work on multiple stacks in parallel without losing context. `st worktree` (alias
 # Open the worktree dashboard (interactive terminals only)
 st wt
 
-# One-time shell integration setup
-st setup   # writes ~/.config/stax/shell-setup.sh and sources it from ~/.zshrc
+# One-time setup / onboarding
+st setup            # shell integration + optional skills/auth onboarding
+st setup --yes      # accept shell setup defaults, install skills, and import auth from gh when available
+st setup --install-skills   # install shell integration and accept the skills install automatically
+st setup --skip-skills      # install shell integration without the skills prompt
+st setup --auth-from-gh     # install shell integration and import auth from gh without prompting
+st setup --skip-auth        # install shell integration without auth onboarding
 # Later stax upgrades refresh the generated shell-setup file automatically
 
 # Create a fresh random lane or a named lane
