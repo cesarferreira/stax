@@ -30,17 +30,34 @@ fn ensure_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-fn configure_existing_shell_setup(home: &std::path::Path) -> std::path::PathBuf {
+const TEST_SHELL: &str = "/bin/bash";
+
+fn shell_rc_path(home: &std::path::Path, shell: &str) -> std::path::PathBuf {
+    if shell.ends_with("zsh") {
+        home.join(".zshrc")
+    } else if shell.ends_with("bash") {
+        home.join(".bashrc")
+    } else if shell.ends_with("fish") {
+        home.join(".config").join("fish").join("config.fish")
+    } else {
+        home.join(".profile")
+    }
+}
+
+fn configure_existing_shell_setup(home: &std::path::Path, shell: &str) -> std::path::PathBuf {
     let config_dir = home.join(".config").join("stax");
     std::fs::create_dir_all(&config_dir).expect("create config dir");
 
     let snippet_path = config_dir.join("shell-setup.sh");
-    let rc_path = home.join(".zshrc");
+    let rc_path = shell_rc_path(home, shell);
+    if let Some(parent) = rc_path.parent() {
+        std::fs::create_dir_all(parent).expect("create shell rc dir");
+    }
     std::fs::write(
         &rc_path,
         format!("source \"{}\" # stax shell-setup\n", snippet_path.display()),
     )
-    .expect("write zshrc");
+    .expect("write shell rc");
 
     snippet_path
 }
@@ -421,7 +438,7 @@ fn test_shell_setup_rejects_conflicting_skill_flags() {
 #[test]
 fn test_shell_setup_noninteractive_default_skips_skills_install() {
     let home = tempdir().expect("temp home");
-    let snippet_path = configure_existing_shell_setup(home.path());
+    let snippet_path = configure_existing_shell_setup(home.path(), TEST_SHELL);
     let unavailable_gh_bin = write_unavailable_gh(home.path());
 
     let tmp = tempfile::tempdir().expect("create temp dir");
@@ -429,7 +446,7 @@ fn test_shell_setup_noninteractive_default_skips_skills_install() {
         .args(["setup"])
         .current_dir(tmp.path())
         .env("HOME", home.path())
-        .env("SHELL", "/bin/zsh")
+        .env("SHELL", TEST_SHELL)
         .env("PATH", path_with_bin(&unavailable_gh_bin))
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .output()
@@ -458,7 +475,7 @@ async fn test_shell_setup_install_skills_flag_installs_skills() {
     ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = tempdir().expect("temp home");
-    let _snippet_path = configure_existing_shell_setup(home.path());
+    let _snippet_path = configure_existing_shell_setup(home.path(), TEST_SHELL);
     let unavailable_gh_bin = write_unavailable_gh(home.path());
 
     Mock::given(method("GET"))
@@ -475,7 +492,7 @@ async fn test_shell_setup_install_skills_flag_installs_skills() {
         .args(["setup", "--install-skills"])
         .current_dir(tmp.path())
         .env("HOME", home.path())
-        .env("SHELL", "/bin/zsh")
+        .env("SHELL", TEST_SHELL)
         .env("PATH", path_with_bin(&unavailable_gh_bin))
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .env(
@@ -502,7 +519,7 @@ async fn test_shell_setup_install_skills_flag_installs_skills() {
 async fn test_shell_setup_interactive_prompt_can_decline_skills_install() {
     ensure_crypto_provider();
     let home = tempdir().expect("temp home");
-    let _snippet_path = configure_existing_shell_setup(home.path());
+    let _snippet_path = configure_existing_shell_setup(home.path(), TEST_SHELL);
     let cwd = tempfile::tempdir().expect("create temp dir");
     let home_str = home.path().to_str().expect("home path");
     let unavailable_gh_bin = write_unavailable_gh(home.path());
@@ -514,7 +531,7 @@ async fn test_shell_setup_interactive_prompt_can_decline_skills_install() {
         "printf 'n\\n'",
         &[
             ("HOME", home_str),
-            ("SHELL", "/bin/zsh"),
+            ("SHELL", TEST_SHELL),
             ("PATH", &path_buf),
         ],
     );
@@ -557,7 +574,7 @@ async fn test_shell_setup_yes_installs_skills_and_imports_auth_from_gh() {
     ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = tempdir().expect("temp home");
-    let _snippet_path = configure_existing_shell_setup(home.path());
+    let _snippet_path = configure_existing_shell_setup(home.path(), TEST_SHELL);
     let fake_gh_bin = write_fake_gh(home.path(), "gh-imported-token");
 
     Mock::given(method("GET"))
@@ -574,7 +591,7 @@ async fn test_shell_setup_yes_installs_skills_and_imports_auth_from_gh() {
         .args(["setup", "--yes"])
         .current_dir(tmp.path())
         .env("HOME", home.path())
-        .env("SHELL", "/bin/zsh")
+        .env("SHELL", TEST_SHELL)
         .env("PATH", path_with_bin(&fake_gh_bin))
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .env(
@@ -598,7 +615,7 @@ async fn test_shell_setup_yes_installs_skills_and_imports_auth_from_gh() {
 #[test]
 fn test_shell_setup_yes_without_gh_prints_auth_next_steps() {
     let home = tempdir().expect("temp home");
-    let _snippet_path = configure_existing_shell_setup(home.path());
+    let _snippet_path = configure_existing_shell_setup(home.path(), TEST_SHELL);
     let unavailable_gh_bin = write_unavailable_gh(home.path());
 
     let tmp = tempfile::tempdir().expect("create temp dir");
@@ -606,7 +623,7 @@ fn test_shell_setup_yes_without_gh_prints_auth_next_steps() {
         .args(["setup", "--yes", "--skip-skills"])
         .current_dir(tmp.path())
         .env("HOME", home.path())
-        .env("SHELL", "/bin/zsh")
+        .env("SHELL", TEST_SHELL)
         .env("PATH", path_with_bin(&unavailable_gh_bin))
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .output()
@@ -650,7 +667,7 @@ fn test_shell_setup_yes_auto_accepts_shell_install_prompt() {
         .args(["setup", "--yes", "--skip-skills", "--skip-auth"])
         .current_dir(tmp.path())
         .env("HOME", home.path())
-        .env("SHELL", "/bin/zsh")
+        .env("SHELL", TEST_SHELL)
         .env("PATH", path_with_bin(&unavailable_gh_bin))
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .output()
@@ -658,7 +675,7 @@ fn test_shell_setup_yes_auto_accepts_shell_install_prompt() {
 
     assert!(output.status.success(), "{:?}", output);
     assert!(
-        home.path().join(".zshrc").exists(),
+        shell_rc_path(home.path(), TEST_SHELL).exists(),
         "expected --yes to install shell integration without prompting"
     );
 }
@@ -666,7 +683,7 @@ fn test_shell_setup_yes_auto_accepts_shell_install_prompt() {
 #[test]
 fn test_shell_setup_interactive_prompt_can_decline_auth_import_from_gh() {
     let home = tempdir().expect("temp home");
-    let _snippet_path = configure_existing_shell_setup(home.path());
+    let _snippet_path = configure_existing_shell_setup(home.path(), TEST_SHELL);
     let fake_gh_bin = write_fake_gh(home.path(), "gh-imported-token");
     let cwd = tempfile::tempdir().expect("create temp dir");
     let home_str = home.path().to_str().expect("home path");
@@ -678,7 +695,7 @@ fn test_shell_setup_interactive_prompt_can_decline_auth_import_from_gh() {
         "printf 'n\\n'",
         &[
             ("HOME", home_str),
-            ("SHELL", "/bin/zsh"),
+            ("SHELL", TEST_SHELL),
             ("PATH", &path_buf),
         ],
     );
