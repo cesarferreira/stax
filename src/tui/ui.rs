@@ -51,6 +51,7 @@ pub fn render(f: &mut Frame, app: &App) {
         Mode::Help => render_help_modal(f),
         Mode::Confirm(action) => render_confirm_modal(f, action),
         Mode::Input(action) => render_input_modal(f, action, &app.input_buffer, app.input_cursor),
+        Mode::MovePicker => render_move_picker_modal(f, app),
         _ => {}
     }
 }
@@ -126,6 +127,20 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled("Esc", Style::default().fg(Color::Cyan)),
                 Span::raw(" cancel"),
             ]),
+            Mode::MovePicker => Line::from(vec![
+                Span::styled(
+                    " MOVE ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  pick new parent for "),
+                Span::styled(
+                    format!("'{}'", app.move_picker_source),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]),
         }
     };
 
@@ -160,6 +175,16 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
             Span::raw(" move  "),
             key_hint("Enter", Color::Green),
             Span::raw(" apply  "),
+            key_hint("Esc", Color::Red),
+            Span::raw(" cancel"),
+        ]),
+        Mode::MovePicker => Line::from(vec![
+            key_hint("Type", Color::Cyan),
+            Span::raw(" filter  "),
+            key_hint("↑↓", Color::Cyan),
+            Span::raw(" select  "),
+            key_hint("Enter", Color::Green),
+            Span::raw(" move  "),
             key_hint("Esc", Color::Red),
             Span::raw(" cancel"),
         ]),
@@ -198,6 +223,8 @@ fn build_normal_shortcuts(app: &App) -> Line<'static> {
 
     spans.push(key_hint("/", Color::Cyan));
     spans.push(Span::raw(" search  "));
+    spans.push(key_hint("m", Color::Magenta));
+    spans.push(Span::raw(" move  "));
     spans.push(key_hint("?", Color::Yellow));
     spans.push(Span::raw(" help  "));
     spans.push(key_hint("q", Color::Cyan));
@@ -248,7 +275,8 @@ fn render_help_modal(f: &mut Frame) {
         Line::from("  n        Create new branch"),
         Line::from("  e        Rename current branch"),
         Line::from("  d        Delete selected branch"),
-        Line::from("  o        Reorder stack (reparent)"),
+        Line::from("  o        Reorder stack (swap siblings)"),
+        Line::from("  m        Move branch onto a new parent"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Reorder Mode (press 'o' to enter)",
@@ -258,6 +286,15 @@ fn render_help_modal(f: &mut Frame) {
         Line::from("  Shift+↓/J  Move branch down in stack"),
         Line::from("  Enter      Apply reparenting and restack"),
         Line::from("  Esc        Cancel reorder"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Move Mode (press 'm' to enter)",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  Type       Filter candidate parents"),
+        Line::from("  ↑/↓        Select candidate"),
+        Line::from("  Enter      Reparent and run `upstack onto`"),
+        Line::from("  Esc        Cancel"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Other",
@@ -375,6 +412,108 @@ fn render_input_modal(f: &mut Frame, action: &InputAction, input: &str, cursor: 
                 .borders(Borders::ALL)
                 .title(title)
                 .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(Clear, area);
+    f.render_widget(paragraph, area);
+}
+
+/// Render the move-picker modal (parent selector for `gt move`).
+///
+/// Layout: a centered 60×60 box. First line is a bold prompt naming the
+/// source branch; second is the live query; remaining lines list filtered
+/// candidates with the selected one highlighted. Trailing line is the
+/// shortcut hint. The list truncates to fit — users scroll with ↑/↓.
+fn render_move_picker_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(60, 60, f.area());
+
+    let filtered = app.move_picker_filtered_indices();
+    let selected = app.move_picker_selected;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled("Move ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("'{}'", app.move_picker_source),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " (and its descendants) onto:",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("> ", Style::default().fg(Color::Cyan)),
+        Span::styled(
+            app.move_picker_query.clone(),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            "│",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    if filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no matches)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        // Scroll window: keep the selected row roughly centered. `start`
+        // is pulled back to `end - MAX_VISIBLE` after clamping `end` to
+        // the list length, so when `selected` is near the end of a long
+        // list we still show a full window instead of a half-empty tail.
+        const MAX_VISIBLE: usize = 20;
+        let start = selected.saturating_sub(MAX_VISIBLE / 2);
+        let end = (start + MAX_VISIBLE).min(filtered.len());
+        let start = end.saturating_sub(MAX_VISIBLE);
+
+        for (row, filter_idx) in filtered[start..end].iter().enumerate() {
+            let absolute_row = start + row;
+            let name = &app.move_picker_candidates[*filter_idx];
+            let is_selected = absolute_row == selected;
+            let marker = if is_selected { "▸ " } else { "  " };
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(name.clone(), style),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Type", Style::default().fg(Color::DarkGray)),
+        Span::styled(" filter  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("↑↓", Style::default().fg(Color::DarkGray)),
+        Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("⏎", Style::default().fg(Color::DarkGray)),
+        Span::styled(" move  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+    ]));
+
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Move onto ")
+                .border_style(Style::default().fg(Color::Magenta)),
         )
         .wrap(Wrap { trim: false });
 

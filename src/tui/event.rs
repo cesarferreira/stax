@@ -35,6 +35,7 @@ pub enum KeyAction {
     Help,
     Quit,
     ReorderMode,
+    MovePicker,
 
     // Reorder mode actions
     MoveUp,
@@ -62,6 +63,7 @@ pub enum KeyContext {
     Confirm,
     Help,
     Reorder,
+    MovePicker,
 }
 
 impl From<KeyEvent> for KeyAction {
@@ -81,7 +83,10 @@ impl KeyAction {
 
         // Handle Shift modifiers
         if key.modifiers.contains(KeyModifiers::SHIFT)
-            && !matches!(context, KeyContext::Input | KeyContext::Search)
+            && !matches!(
+                context,
+                KeyContext::Input | KeyContext::Search | KeyContext::MovePicker,
+            )
         {
             match key.code {
                 KeyCode::Char('R') | KeyCode::Char('r') => return KeyAction::RestackAll,
@@ -228,5 +233,40 @@ mod tests {
             KeyContext::Input,
         );
         assert_eq!(action, KeyAction::Char('K'));
+    }
+
+    /// MovePicker is a text-input context (users type a filter query). Shift
+    /// must not remap `k`/`j`/`r` to MoveUp/MoveDown/RestackAll the way it
+    /// does in Normal/Reorder — those are valid characters in a branch name.
+    #[test]
+    fn move_picker_mode_treats_shortcut_letters_as_text() {
+        for c in ['n', 'r', 's', 'q', 'd', 'e', 'p', 'o', 'm', 'j', 'k'] {
+            let action = KeyAction::from_key(
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                KeyContext::MovePicker,
+            );
+            assert_eq!(
+                action,
+                KeyAction::Char(c),
+                "char '{}' should pass through",
+                c
+            );
+        }
+    }
+
+    #[test]
+    fn move_picker_mode_allows_shifted_letters_as_text() {
+        for c in ['K', 'J', 'R'] {
+            let action = KeyAction::from_key(
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT),
+                KeyContext::MovePicker,
+            );
+            assert_eq!(
+                action,
+                KeyAction::Char(c),
+                "Shift+'{}' should pass through",
+                c
+            );
+        }
     }
 }
