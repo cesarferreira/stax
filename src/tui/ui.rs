@@ -467,10 +467,24 @@ fn render_move_picker_modal(f: &mut Frame, app: &App) {
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        // Scroll window: keep the selected row roughly centered. `start`
-        // is pulled back to `end - MAX_VISIBLE` after clamping `end` to
-        // the list length, so when `selected` is near the end of a long
-        // list we still show a full window instead of a half-empty tail.
+        // Build a name→column lookup so candidates render with tree
+        // connectors (same visual language as the main stack view).
+        let column_of = |name: &str| -> usize {
+            app.branches
+                .iter()
+                .find(|b| b.name == name)
+                .map_or(0, |b| b.column)
+        };
+
+        // Max column across visible candidates, for alignment.
+        let max_col = filtered
+            .iter()
+            .map(|i| column_of(&app.move_picker_candidates[*i]))
+            .max()
+            .unwrap_or(0);
+        let tree_target_width = (max_col + 1) * 2 + 2;
+
+        // Scroll window: keep the selected row roughly centered.
         const MAX_VISIBLE: usize = 20;
         let start = selected.saturating_sub(MAX_VISIBLE / 2);
         let end = (start + MAX_VISIBLE).min(filtered.len());
@@ -479,8 +493,25 @@ fn render_move_picker_modal(f: &mut Frame, app: &App) {
         for (row, filter_idx) in filtered[start..end].iter().enumerate() {
             let absolute_row = start + row;
             let name = &app.move_picker_candidates[*filter_idx];
+            let col = column_of(name);
             let is_selected = absolute_row == selected;
-            let marker = if is_selected { "▸ " } else { "  " };
+
+            // Tree prefix: "│ " for each ancestor level, then "○" at the
+            // branch's own column — same pattern as render_stack_tree.
+            let mut tree = String::new();
+            tree.push(if is_selected { '▸' } else { ' ' });
+            for c in 0..=col {
+                if c == col {
+                    tree.push('○');
+                } else {
+                    tree.push_str("│ ");
+                }
+            }
+            let tree_width = col * 2 + 2;
+            for _ in tree_width..tree_target_width {
+                tree.push(' ');
+            }
+
             let style = if is_selected {
                 Style::default()
                     .fg(Color::Black)
@@ -490,7 +521,7 @@ fn render_move_picker_modal(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::White)
             };
             lines.push(Line::from(vec![
-                Span::styled(marker, style),
+                Span::styled(tree, style),
                 Span::styled(name.clone(), style),
             ]));
         }
