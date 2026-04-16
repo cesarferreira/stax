@@ -272,30 +272,30 @@ mod tests {
     use crate::engine::stack::{Stack, StackBranch};
     use std::collections::HashMap;
 
+    fn stub(name: &str, parent: Option<&str>) -> (String, StackBranch) {
+        (
+            name.to_string(),
+            StackBranch {
+                name: name.to_string(),
+                parent: parent.map(str::to_string),
+                children: vec![],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        )
+    }
+
     fn test_stack() -> Stack {
         // main → a → b → c
-        let mut branches = HashMap::new();
-        for (name, parent) in [
-            ("main", None),
-            ("a", Some("main")),
-            ("b", Some("a")),
-            ("c", Some("b")),
-        ] {
-            branches.insert(
-                name.to_string(),
-                StackBranch {
-                    name: name.to_string(),
-                    parent: parent.map(str::to_string),
-                    children: vec![],
-                    needs_restack: false,
-                    pr_number: None,
-                    pr_state: None,
-                    pr_is_draft: None,
-                },
-            );
-        }
         Stack {
-            branches,
+            branches: HashMap::from([
+                stub("main", None),
+                stub("a", Some("main")),
+                stub("b", Some("a")),
+                stub("c", Some("b")),
+            ]),
             trunk: "main".to_string(),
         }
     }
@@ -323,26 +323,10 @@ mod tests {
     #[test]
     fn depth_terminates_on_cyclic_metadata() {
         // a → b → a (cycle that never reaches trunk)
-        let mut branches = HashMap::new();
-        for (name, parent) in [("a", Some("b")), ("b", Some("a"))] {
-            branches.insert(
-                name.to_string(),
-                StackBranch {
-                    name: name.to_string(),
-                    parent: parent.map(str::to_string),
-                    children: vec![],
-                    needs_restack: false,
-                    pr_number: None,
-                    pr_state: None,
-                    pr_is_draft: None,
-                },
-            );
-        }
         let stack = Stack {
-            branches,
+            branches: HashMap::from([stub("a", Some("b")), stub("b", Some("a"))]),
             trunk: "main".to_string(),
         };
-        // Must not hang — should return some finite depth.
         let d = branch_depth(&stack, "a", "main");
         assert!(d <= 2, "cyclic chain should terminate, got depth {}", d);
     }
