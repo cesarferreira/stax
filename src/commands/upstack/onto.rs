@@ -35,7 +35,7 @@ pub fn run(target: Option<String>, restack: bool) -> Result<()> {
             }
             t
         }
-        None => pick_parent_interactively(&repo, &current, &trunk, &descendants)?,
+        None => pick_parent_interactively(&repo, &stack, &current, &trunk, &descendants)?,
     };
 
     if new_parent == current {
@@ -196,6 +196,7 @@ fn resolve_rebase_upstream(
 
 fn pick_parent_interactively(
     repo: &GitRepo,
+    stack: &Stack,
     current: &str,
     trunk: &str,
     descendants: &[String],
@@ -213,14 +214,61 @@ fn pick_parent_interactively(
         bail!("No branches available as a new parent");
     }
 
+    // Build tree-formatted display strings so the picker mirrors the
+    // graphite-style visual hierarchy (same connectors as `st log`).
+    let max_depth = branches
+        .iter()
+        .map(|b| branch_depth(stack, b, trunk))
+        .max()
+        .unwrap_or(0);
+    let display_items: Vec<String> = branches
+        .iter()
+        .map(|b| {
+            let depth = branch_depth(stack, b, trunk);
+            let mut prefix = String::new();
+            for c in 0..=depth {
+                if c == depth {
+                    prefix.push('○');
+                } else {
+                    prefix.push_str("│ ");
+                }
+            }
+            let tree_width = depth * 2 + 1;
+            let target_width = (max_depth + 1) * 2;
+            for _ in tree_width..target_width {
+                prefix.push(' ');
+            }
+            format!("{} {}", prefix, b)
+        })
+        .collect();
+
     let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
         .with_prompt(format!(
             "Select new parent for '{}' (and all its descendants)",
             current
         ))
-        .items(&branches)
+        .items(&display_items)
         .default(0)
         .interact()?;
 
     Ok(branches[selection].clone())
+}
+
+/// Walk up the parent chain to compute how deep `name` is below `trunk`.
+/// Returns 0 for trunk itself, 1 for its direct children, etc. If the
+/// branch isn't tracked in the stack or its ancestor chain doesn't reach
+/// trunk, stops and returns the depth reached so far.
+fn branch_depth(stack: &Stack, name: &str, trunk: &str) -> usize {
+    let mut depth = 0;
+    let mut current = name.to_string();
+    while current != trunk {
+        match stack.branches.get(&current).and_then(|i| i.parent.as_ref()) {
+            Some(parent) => {
+                current.clone_from(parent);
+                depth += 1;
+            }
+            None => break,
+        }
+    }
+    depth
 }
