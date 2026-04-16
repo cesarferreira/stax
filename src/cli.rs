@@ -881,7 +881,7 @@ enum Commands {
     /// For manual install, use --print to show the snippet, then add it to your
     /// shell config. The auto-install writes to ~/.config/stax/shell-setup.sh
     /// and sources it from your shell config.
-    #[command(name = "setup")]
+    #[command(name = "setup", alias = "shell-setup")]
     Setup {
         /// Print shell integration snippet instead of installing
         #[arg(long)]
