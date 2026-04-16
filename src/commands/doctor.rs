@@ -1,3 +1,4 @@
+use crate::commands::skills;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge;
@@ -242,6 +243,35 @@ pub fn run() -> Result<()> {
             );
             for (branch, pr_num) in &stale {
                 println!("  {} (PR #{})", branch, pr_num);
+            }
+        }
+    }
+
+    // Check: installed AI agent skill files are current
+    {
+        let stale = skills::stale_skill_files();
+        if stale.is_empty() {
+            println!(
+                "{} {}",
+                "✓".green(),
+                "AI agent skill files are up to date".dimmed()
+            );
+        } else {
+            println!(
+                "{} {}",
+                "⚠".yellow(),
+                format!(
+                    "{} AI agent skill file(s) are out of date — run `stax skills update`",
+                    stale.len()
+                )
+                .yellow()
+            );
+            for (name, installed_version) in &stale {
+                let version_note = installed_version
+                    .as_deref()
+                    .map(|v| format!("installed v{v}"))
+                    .unwrap_or_else(|| "no version marker".to_string());
+                println!("  {} ({})", name, version_note.dimmed());
             }
         }
     }

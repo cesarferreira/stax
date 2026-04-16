@@ -492,6 +492,12 @@ enum Commands {
     /// Check stax configuration and repo health
     Doctor,
 
+    /// Manage AI agent skill files (`stax skills update` to refresh)
+    Skills {
+        #[command(subcommand)]
+        command: Option<SkillsCommands>,
+    },
+
     /// Switch to the trunk branch, or set it with `stax trunk <branch>`
     #[command(visible_alias = "t")]
     Trunk {
@@ -1217,6 +1223,19 @@ enum DownstackCommands {
 }
 
 #[derive(Subcommand)]
+enum SkillsCommands {
+    /// List installed AI agent skill files and their version status
+    List,
+
+    /// Download the latest skills from GitHub and update all installed skill files
+    Update {
+        /// Preview what would be updated without writing any files
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum WorktreeCommands {
     /// Create or enter a worktree lane
     #[command(visible_alias = "c")]
@@ -1462,6 +1481,17 @@ pub fn run() -> Result<()> {
             update::check_in_background();
             return result;
         }
+        Commands::Skills { command } => {
+            let result = match command {
+                None | Some(SkillsCommands::List) => commands::skills::run_list(),
+                Some(SkillsCommands::Update { dry_run }) => {
+                    commands::skills::run_update(*dry_run)
+                }
+            };
+            update::show_update_notification();
+            update::check_in_background();
+            return result;
+        }
         Commands::Demo => {
             let result = commands::demo::run();
             update::show_update_notification();
@@ -1662,6 +1692,7 @@ pub fn run() -> Result<()> {
         Commands::Diff { stack, all } => commands::diff::run(stack, all),
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
         Commands::Doctor => unreachable!(), // Handled above
+        Commands::Skills { .. } => unreachable!(), // Handled above
         Commands::Trunk { branch } => {
             if let Some(name) = branch {
                 commands::set_trunk::run(&name)

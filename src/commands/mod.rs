@@ -39,6 +39,7 @@ pub(crate) mod restack_conflict;
 pub(crate) mod restack_parent;
 pub mod set_trunk;
 pub mod shell_setup;
+pub mod skills;
 pub mod split;
 pub mod stack_cmd;
 pub mod standup;

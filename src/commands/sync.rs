@@ -1427,7 +1427,7 @@ fn find_merged_branches(
             }
 
             // Only include branches we're tracking (and avoid duplicates)
-            if stack.branches.contains_key(branch) && !merged.iter().any(|info| &info.branch == branch) {
+            if stack.branches.contains_key(branch) && !merged.iter().any(|info| info.branch == branch) {
                 merged.push(MergedBranchInfo {
                     branch: branch.to_string(),
                     merge_type: MergeType::Ancestor,

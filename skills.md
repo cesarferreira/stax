@@ -1,3 +1,4 @@
+<!-- stax-skills-version: 0.50.2 -->
 # Stax Skills for AI Coding Agents
 
 This document teaches AI coding agents (Claude Code, Codex, Gemini CLI, OpenCode) how to use `stax` to manage stacked Git branches and PRs.
@@ -81,11 +82,16 @@ stax generate --pr-body        # AI PR body generation
 
 stax auth [status]             # GitHub auth setup/status
 stax config                    # Print config path + contents
-stax doctor                    # Health checks
+stax doctor                    # Health checks (also reports stale skill files)
 stax validate                  # Validate stack metadata
 stax fix                       # Auto-repair metadata
 stax test <cmd...>             # Run command on each branch
 stax demo                      # Interactive tutorial
+
+stax skills                    # List installed AI agent skill files + version status
+stax skills list               # Same as above
+stax skills update             # Download latest skills from GitHub and update all installed files
+stax skills update --dry-run   # Preview what would be updated without writing
 
 stax lane [name] [prompt]      # Open interactive lane picker, or start/resume named AI lane
 stax absorb                    # Absorb staged changes into correct stack branches
@@ -315,8 +321,13 @@ stax auth --token <token>          # Save GitHub PAT
 stax auth --from-gh                # Import from gh auth token
 stax auth status                   # Show active auth source
 stax config                        # Print config location + values
-stax doctor                        # Repo/config health checks
+stax doctor                        # Repo/config health checks (also reports stale skill files)
 stax demo                          # Interactive tutorial
+
+stax skills                        # List installed AI agent skill files + version status
+stax skills list                   # Same as above
+stax skills update                 # Download latest skills from GitHub and update all installed files
+stax skills update --dry-run       # Preview what would be updated without writing
 ```
 
 ## Common Workflows
