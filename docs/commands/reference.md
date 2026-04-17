@@ -98,6 +98,7 @@
 | `st config --set-ai` | Interactively set AI agent/model for a specific feature or global default |
 | `st init` | Initialize stax or reconfigure the repo trunk interactively |
 | `st init --trunk <branch>` | Set the repo trunk directly |
+| `st cli upgrade` | Detect the current install method and run the matching upgrade command, then refresh generated shell integration |
 | `st doctor` | Check repo health |
 | `st continue` | Continue after conflicts |
 | `st pr` | Open current branch PR |

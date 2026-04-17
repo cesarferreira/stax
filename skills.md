@@ -82,6 +82,7 @@ stax generate --pr-body        # AI PR body generation
 
 stax auth [status]             # GitHub auth setup/status
 stax config                    # Print config path + contents
+stax cli upgrade               # Detect the install method and run the matching upgrade flow
 stax doctor                    # Health checks (also reports stale skill files)
 stax validate                  # Validate stack metadata
 stax fix                       # Auto-repair metadata
@@ -326,6 +327,7 @@ stax auth --token <token>          # Save GitHub PAT
 stax auth --from-gh                # Import from gh auth token
 stax auth status                   # Show active auth source
 stax config                        # Print config location + values
+stax cli upgrade                   # Upgrade using the detected install method, then refresh shell setup
 stax doctor                        # Repo/config health checks (also reports stale skill files)
 stax demo                          # Interactive tutorial
 

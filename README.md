@@ -316,7 +316,8 @@ st setup --install-skills   # install shell integration and accept the skills in
 st setup --skip-skills      # install shell integration without the skills prompt
 st setup --auth-from-gh     # install shell integration and import auth from gh without prompting
 st setup --skip-auth        # install shell integration without auth onboarding
-# Later stax upgrades refresh the generated shell-setup file automatically
+st cli upgrade      # detect how stax was installed and run the matching upgrade flow
+# `st cli upgrade` also refreshes the generated shell-setup file automatically
 
 # Create a fresh random lane or a named lane
 st worktree create
