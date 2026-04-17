@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
+use std::collections::HashMap;
 
 /// Main UI render function
 pub fn render(f: &mut Frame, app: &App) {
@@ -467,10 +468,21 @@ fn render_move_picker_modal(f: &mut Frame, app: &App) {
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        // Scroll window: keep the selected row roughly centered. `start`
-        // is pulled back to `end - MAX_VISIBLE` after clamping `end` to
-        // the list length, so when `selected` is near the end of a long
-        // list we still show a full window instead of a half-empty tail.
+        // name→column lookup (HashMap avoids repeated linear scans).
+        let column_map: HashMap<&str, usize> = app
+            .branches
+            .iter()
+            .map(|b| (b.name.as_str(), b.column))
+            .collect();
+        let col_of = |name: &str| column_map.get(name).copied().unwrap_or(0);
+
+        let max_col = filtered
+            .iter()
+            .map(|i| col_of(&app.move_picker_candidates[*i]))
+            .max()
+            .unwrap_or(0);
+
+        // Scroll window: keep the selected row roughly centered.
         const MAX_VISIBLE: usize = 20;
         let start = selected.saturating_sub(MAX_VISIBLE / 2);
         let end = (start + MAX_VISIBLE).min(filtered.len());
@@ -480,7 +492,9 @@ fn render_move_picker_modal(f: &mut Frame, app: &App) {
             let absolute_row = start + row;
             let name = &app.move_picker_candidates[*filter_idx];
             let is_selected = absolute_row == selected;
-            let marker = if is_selected { "▸ " } else { "  " };
+
+            let tree = build_tree_prefix(col_of(name), max_col, is_selected);
+
             let style = if is_selected {
                 Style::default()
                     .fg(Color::Black)
@@ -490,7 +504,7 @@ fn render_move_picker_modal(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::White)
             };
             lines.push(Line::from(vec![
-                Span::styled(marker, style),
+                Span::styled(tree, style),
                 Span::styled(name.clone(), style),
             ]));
         }
@@ -521,6 +535,33 @@ fn render_move_picker_modal(f: &mut Frame, app: &App) {
     f.render_widget(paragraph, area);
 }
 
+/// Build the tree-connector prefix for a branch at the given `column` depth.
+///
+/// Output shape: `▸│ │ ○   ` — a selection marker, one `│ ` per ancestor
+/// column, `○` at the branch's own column, then spaces to pad to
+/// `max_column` width so all rows align.
+///
+/// Used by the move-picker modal; the main stack view
+/// (`render_stack_tree`) has the same logic inlined with an additional
+/// `is_current` flag. Extracted here so the pattern is testable.
+pub(crate) fn build_tree_prefix(column: usize, max_column: usize, is_selected: bool) -> String {
+    let mut s = String::new();
+    s.push(if is_selected { '▸' } else { ' ' });
+    for c in 0..=column {
+        if c == column {
+            s.push('○');
+        } else {
+            s.push_str("│ ");
+        }
+    }
+    let tree_width = column * 2 + 2;
+    let target_width = (max_column + 1) * 2 + 2;
+    for _ in tree_width..target_width {
+        s.push(' ');
+    }
+    s
+}
+
 /// Create a centered rectangle
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
@@ -540,4 +581,35 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_tree_prefix;
+
+    #[test]
+    fn tree_prefix_root_column() {
+        // Column 0, max 0: marker + circle + 2 padding chars.
+        assert_eq!(build_tree_prefix(0, 0, false), " ○  ");
+        assert_eq!(build_tree_prefix(0, 0, true), "▸○  ");
+    }
+
+    #[test]
+    fn tree_prefix_nested_column() {
+        // Column 2, max 2: marker + ancestor pipes + circle + padding.
+        assert_eq!(build_tree_prefix(2, 2, false), " │ │ ○  ");
+        // Column 1, max 2: shallower branch gets more trailing padding.
+        assert_eq!(build_tree_prefix(1, 2, true), "▸│ ○    ");
+    }
+
+    #[test]
+    fn tree_prefix_padding_aligns_to_max_column() {
+        // All rows at different depths should produce the same visual
+        // width so branch names start in the same column.
+        let w0 = build_tree_prefix(0, 2, false).chars().count();
+        let w1 = build_tree_prefix(1, 2, false).chars().count();
+        let w2 = build_tree_prefix(2, 2, false).chars().count();
+        assert_eq!(w0, w1);
+        assert_eq!(w1, w2);
+    }
 }
