@@ -1,7 +1,7 @@
 use crate::cache::CiCache;
 use crate::ci::{history, CheckRunInfo};
 use crate::config::Config;
-use crate::engine::Stack;
+use crate::engine::{build_parent_candidates, Stack};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
@@ -652,6 +652,11 @@ impl App {
     /// `set_status`. Returning a specific message from here (rather than a
     /// bool) keeps the dispatcher from having to duplicate the trunk /
     /// no-candidates checks to figure out what to show.
+    ///
+    /// Candidates are sourced from `repo.list_branches()` — the same
+    /// universe the CLI `pick_parent_interactively` uses — so both
+    /// surfaces offer the same targets, including local branches that
+    /// aren't yet tracked in the stax stack.
     pub fn init_move_picker(&mut self) -> Result<(), &'static str> {
         let Some(source) = self.selected_branch() else {
             return Err("No branch selected");
@@ -661,10 +666,17 @@ impl App {
         }
         let source_name = source.name.clone();
 
-        let all_names: Vec<String> = self.branches.iter().map(|b| b.name.clone()).collect();
+        let all_names = self
+            .repo
+            .list_branches()
+            .map_err(|_| "Failed to list branches")?;
         let descendants = self.stack.descendants(&source_name);
-        let candidates =
-            build_move_picker_candidates(&all_names, &source_name, &descendants, &self.stack.trunk);
+        let candidates = build_parent_candidates(
+            &all_names,
+            &source_name,
+            &descendants,
+            &self.stack.trunk,
+        );
         if candidates.is_empty() {
             return Err("No eligible parents to move onto");
         }
@@ -1249,31 +1261,6 @@ fn substring_filter_indices(candidates: &[String], query: &str) -> Vec<usize> {
         .collect()
 }
 
-/// Build the ordered candidate list for the move picker: every branch
-/// except `source` and its `descendants`, with `trunk` (if present) pinned
-/// to the top so it's the obvious default target.
-///
-/// Mirrors the filter used by the CLI's `pick_parent_interactively` in
-/// `src/commands/upstack/onto.rs`. Extracted so both the behaviour and the
-/// pinning are testable directly.
-fn build_move_picker_candidates(
-    all_branches: &[String],
-    source: &str,
-    descendants: &[String],
-    trunk: &str,
-) -> Vec<String> {
-    let mut candidates: Vec<String> = all_branches
-        .iter()
-        .filter(|n| n.as_str() != source && !descendants.iter().any(|d| d == *n))
-        .cloned()
-        .collect();
-    if let Some(pos) = candidates.iter().position(|n| n == trunk) {
-        let t = candidates.remove(pos);
-        candidates.insert(0, t);
-    }
-    candidates
-}
-
 fn parse_ci_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
     value.and_then(|timestamp| timestamp.parse::<DateTime<Utc>>().ok())
 }
@@ -1441,8 +1428,7 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_move_picker_candidates, live_ci_summary_text, run_in_tokio_runtime,
-        substring_filter_indices, BranchCiSummary,
+        live_ci_summary_text, run_in_tokio_runtime, substring_filter_indices, BranchCiSummary,
     };
     use anyhow::{anyhow, Result};
     use chrono::{TimeZone, Utc};
@@ -1473,39 +1459,6 @@ mod tests {
     fn substring_filter_returns_empty_when_nothing_matches() {
         let candidates = names(&["main", "feat-a"]);
         assert!(substring_filter_indices(&candidates, "xyz").is_empty());
-    }
-
-    #[test]
-    fn move_picker_candidates_exclude_source_and_descendants() {
-        let all = names(&["main", "a", "b", "c", "sibling"]);
-        let descendants = names(&["b", "c"]);
-        let got = build_move_picker_candidates(&all, "a", &descendants, "main");
-        assert_eq!(got, names(&["main", "sibling"]));
-    }
-
-    #[test]
-    fn move_picker_candidates_pin_trunk_to_top() {
-        // 'main' appears after 'z-branch' in the source list — the helper
-        // must still place it first in the output.
-        let all = names(&["z-branch", "sibling", "main"]);
-        let got = build_move_picker_candidates(&all, "feat-self", &[], "main");
-        assert_eq!(got.first().map(String::as_str), Some("main"));
-    }
-
-    #[test]
-    fn move_picker_candidates_without_trunk_preserves_source_order() {
-        // If the trunk isn't in the candidates (e.g. detached scenario),
-        // the helper should not crash or reorder the remainder.
-        let all = names(&["z", "a", "m"]);
-        let got = build_move_picker_candidates(&all, "feat", &[], "unlisted-trunk");
-        assert_eq!(got, names(&["z", "a", "m"]));
-    }
-
-    #[test]
-    fn move_picker_candidates_empty_when_everything_is_source_or_descendant() {
-        let all = names(&["a", "b"]);
-        let got = build_move_picker_candidates(&all, "a", &names(&["b"]), "a");
-        assert!(got.is_empty());
     }
 
     fn sample_summary() -> BranchCiSummary {

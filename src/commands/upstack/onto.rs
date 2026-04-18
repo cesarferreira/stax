@@ -1,4 +1,4 @@
-use crate::engine::{BranchMetadata, Stack};
+use crate::engine::{build_parent_candidates, BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
 use anyhow::{bail, Result};
 use colored::Colorize;
@@ -202,14 +202,8 @@ fn pick_parent_interactively(
     trunk: &str,
     descendants: &[String],
 ) -> Result<String> {
-    let mut branches = repo.list_branches()?;
-    branches.retain(|b| b != current && !descendants.contains(b));
-    branches.sort();
-
-    if let Some(pos) = branches.iter().position(|b| b == trunk) {
-        branches.remove(pos);
-        branches.insert(0, trunk.to_string());
-    }
+    let all_branches = repo.list_branches()?;
+    let branches = build_parent_candidates(&all_branches, current, descendants, trunk);
 
     if branches.is_empty() {
         bail!("No branches available as a new parent");
