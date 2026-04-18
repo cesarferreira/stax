@@ -846,7 +846,7 @@ impl GitHubClient {
             merge_builder = merge_builder.message(message);
         }
 
-        merge_builder.send().await.context("Failed to merge PR")?;
+        merge_builder.send().await.map_err(format_merge_error)?;
 
         Ok(())
     }
@@ -1129,6 +1129,36 @@ impl GitHubClient {
 
         Ok(all_comments)
     }
+}
+
+/// Build a detailed error when octocrab returns a GitHub API failure on merge.
+///
+/// octocrab's default Display for `Error::GitHub` doesn't surface the HTTP
+/// status code, so merges that fail against `PUT /repos/.../pulls/{n}/merge`
+/// previously reported only "Failed to merge PR". This helper extracts the
+/// status code, server-provided message, errors array, and docs URL so
+/// callers can show something actionable like
+/// `GitHub API 405: Base branch was modified, review and try the merge again`.
+fn format_merge_error(err: octocrab::Error) -> anyhow::Error {
+    if let octocrab::Error::GitHub { source, .. } = &err {
+        let mut msg = format!(
+            "GitHub API {}: {}",
+            source.status_code.as_u16(),
+            source.message
+        );
+        if let Some(errors) = source.errors.as_ref() {
+            for item in errors.iter() {
+                msg.push_str(&format!("\n  - {}", item));
+            }
+        }
+        if let Some(url) = source.documentation_url.as_ref() {
+            if !url.is_empty() {
+                msg.push_str(&format!("\n  docs: {}", url));
+            }
+        }
+        return anyhow::Error::new(err).context(msg);
+    }
+    anyhow::Error::new(err).context("Failed to merge PR")
 }
 
 /// PR info for stack comment generation
@@ -2168,4 +2198,69 @@ mod tests {
     // - Should only return OPEN PRs
     // - Should validate head branch matches before returning
     // - Should return None if no matching open PR exists
+
+    #[tokio::test]
+    async fn test_merge_pr_surfaces_github_error_details() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test-owner/test-repo/pulls/42/merge"))
+            .respond_with(ResponseTemplate::new(405).set_body_json(serde_json::json!({
+                "message": "Base branch was modified. Review and try the merge again.",
+                "documentation_url": "https://docs.github.com/rest/pulls/pulls#merge-a-pull-request"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.merge_pr(42, MergeMethod::Squash, None, None).await;
+
+        let err = result.expect_err("merge_pr should fail on 405");
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("405"),
+            "expected HTTP status in error, got: {msg}"
+        );
+        assert!(
+            msg.contains("Base branch was modified"),
+            "expected GitHub message in error, got: {msg}"
+        );
+        assert!(
+            msg.contains("docs.github.com"),
+            "expected documentation URL in error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_pr_surfaces_unprocessable_entity_errors_array() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test-owner/test-repo/pulls/7/merge"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "message": "Pull Request is not mergeable",
+                "errors": ["Head branch was modified"],
+                "documentation_url": "https://docs.github.com/rest/pulls"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.merge_pr(7, MergeMethod::Merge, None, None).await;
+
+        let err = result.expect_err("merge_pr should fail on 422");
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("422"),
+            "expected HTTP status in error, got: {msg}"
+        );
+        assert!(
+            msg.contains("Pull Request is not mergeable"),
+            "expected server message in error, got: {msg}"
+        );
+        assert!(
+            msg.contains("Head branch was modified"),
+            "expected errors array item in error, got: {msg}"
+        );
+    }
 }

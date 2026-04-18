@@ -269,7 +269,7 @@ pub fn run(
                 }
                 Err(e) => {
                     LiveTimer::maybe_finish_err(merge_timer, "failed");
-                    failed_pr = Some((branch_name, pr_number, e.to_string()));
+                    failed_pr = Some((branch_name, pr_number, format!("{:#}", e)));
                     break;
                 }
             }

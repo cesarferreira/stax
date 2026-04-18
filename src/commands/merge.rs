@@ -278,7 +278,8 @@ pub fn run(
                 }
                 Err(e) => {
                     LiveTimer::maybe_finish_err(merge_timer, "failed");
-                    failed_pr = Some((branch_info.branch.clone(), pr_number, e.to_string()));
+                    failed_pr =
+                        Some((branch_info.branch.clone(), pr_number, format!("{:#}", e)));
                     break;
                 }
             }
@@ -300,7 +301,7 @@ pub fn run(
                         failed_pr = Some((
                             branch_info.branch.clone(),
                             pr_number,
-                            format!("Failed to retarget dependent PR #{}: {}", next_pr, e),
+                            format!("Failed to retarget dependent PR #{}: {:#}", next_pr, e),
                         ));
                         break;
                     }
@@ -382,6 +383,20 @@ pub fn run(
             }
 
             LiveTimer::maybe_finish_ok(push_timer, "done");
+
+            // GitHub occasionally keeps serving the pre-push head SHA for a
+            // short window after a force-push. Merging in that window returns
+            // `405 Base branch was modified`. Wait until the API agrees the
+            // PR is pointing at the freshly pushed commit.
+            if let Ok(pushed_sha) = repo.rev_parse(&next_branch.branch) {
+                wait_for_github_head_sync(
+                    &rt,
+                    &client,
+                    next_pr,
+                    &pushed_sha,
+                    Duration::from_secs(15),
+                );
+            }
         }
     }
 
@@ -986,6 +1001,33 @@ fn wait_for_pr_ready(
         }
 
         // Wait before next poll
+        std::thread::sleep(poll_interval);
+    }
+}
+
+/// Briefly poll until GitHub reports the expected head commit for a PR.
+///
+/// After a force-push, GitHub's API can still return the pre-push head SHA
+/// for a short window while it processes the update. Calling `merge` in that
+/// window produces a `405 Base branch was modified` error. This helper polls
+/// until the PR's head matches `expected_sha` or `max_wait` elapses; it is
+/// best-effort and silently returns on timeout so the subsequent merge
+/// attempt surfaces the real error if GitHub is genuinely unhappy.
+pub(crate) fn wait_for_github_head_sync(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    expected_sha: &str,
+    max_wait: Duration,
+) {
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(500);
+    while start.elapsed() < max_wait {
+        if let Ok(status) = rt.block_on(async { client.get_pr_merge_status(pr_number).await }) {
+            if status.head_sha == expected_sha {
+                return;
+            }
+        }
         std::thread::sleep(poll_interval);
     }
 }
