@@ -416,6 +416,12 @@ impl GiteaClient {
         Ok(pr.merged.unwrap_or(false))
     }
 
+    pub async fn get_pr_head_sha(&self, number: u64) -> Result<String> {
+        let pr: GiteaPull =
+            get_json(&self.client, &self.repo_url(&format!("/pulls/{}", number))).await?;
+        Ok(pr.head.sha.unwrap_or_default())
+    }
+
     pub async fn fetch_checks(&self, sha: &str) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
         let statuses: Vec<GiteaCommitStatus> = get_json(
             &self.client,

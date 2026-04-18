@@ -1,5 +1,5 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
-use crate::commands::merge::wait_for_github_head_sync;
+use crate::commands::merge::sync_head_after_push;
 use crate::commands::merge_rebase::{
     fetch_remote_for_descendant_rebase, rebase_descendant_onto_remote_trunk_with_provenance,
 };
@@ -416,20 +416,7 @@ pub fn run(
             }
 
             LiveTimer::maybe_finish_ok(push_timer, "done");
-
-            // GitHub occasionally keeps serving the pre-push head SHA for a
-            // short window after a force-push. Merging in that window returns
-            // `405 Base branch was modified`. Wait until the API agrees the
-            // PR is pointing at the freshly pushed commit.
-            if let Ok(pushed_sha) = repo.rev_parse(&next_branch_name) {
-                wait_for_github_head_sync(
-                    &rt,
-                    &client,
-                    next_pr,
-                    &pushed_sha,
-                    Duration::from_secs(15),
-                );
-            }
+            sync_head_after_push(&rt, &client, &repo, next_pr, &next_branch_name);
         }
     }
 

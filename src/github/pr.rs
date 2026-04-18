@@ -1044,6 +1044,20 @@ impl GitHubClient {
         Ok(pr.merged_at.is_some())
     }
 
+    /// Return the PR's current head commit SHA. One `pulls.get` call, no
+    /// CI/review fan-out — used by the post-push sync helper that only
+    /// needs the head ref, not full merge status.
+    pub async fn get_pr_head_sha(&self, pr_number: u64) -> Result<String> {
+        self.record_api_call("pulls.get");
+        let pr = self
+            .octocrab
+            .pulls(&self.owner, &self.repo)
+            .get(pr_number)
+            .await
+            .context("Failed to get PR")?;
+        Ok(pr.head.sha)
+    }
+
     /// List all issue comments (conversation comments) on a PR
     pub async fn list_issue_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>> {
         let url = format!(

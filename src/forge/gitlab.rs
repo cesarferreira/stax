@@ -462,6 +462,15 @@ impl GitLabClient {
         Ok(mr.state.eq_ignore_ascii_case("merged"))
     }
 
+    pub async fn get_pr_head_sha(&self, number: u64) -> Result<String> {
+        let mr: GitLabMr = get_json(
+            &self.client,
+            &self.project_url(&format!("/merge_requests/{}", number)),
+        )
+        .await?;
+        Ok(mr.sha.unwrap_or_default())
+    }
+
     pub async fn fetch_checks(&self, sha: &str) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
         let statuses: Vec<GitLabCommitStatus> = get_json(
             &self.client,
