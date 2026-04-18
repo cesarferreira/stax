@@ -278,7 +278,8 @@ pub fn run(
                 }
                 Err(e) => {
                     LiveTimer::maybe_finish_err(merge_timer, "failed");
-                    failed_pr = Some((branch_info.branch.clone(), pr_number, e.to_string()));
+                    failed_pr =
+                        Some((branch_info.branch.clone(), pr_number, format!("{:#}", e)));
                     break;
                 }
             }
@@ -300,7 +301,7 @@ pub fn run(
                         failed_pr = Some((
                             branch_info.branch.clone(),
                             pr_number,
-                            format!("Failed to retarget dependent PR #{}: {}", next_pr, e),
+                            format!("Failed to retarget dependent PR #{}: {:#}", next_pr, e),
                         ));
                         break;
                     }
@@ -382,6 +383,7 @@ pub fn run(
             }
 
             LiveTimer::maybe_finish_ok(push_timer, "done");
+            sync_head_after_push(&rt, &client, next_pr, &repo, &next_branch.branch);
         }
     }
 
@@ -987,6 +989,46 @@ fn wait_for_pr_ready(
 
         // Wait before next poll
         std::thread::sleep(poll_interval);
+    }
+}
+
+/// Best-effort wait until the forge reports `expected_sha` as the PR head.
+/// Silently times out so the next merge attempt surfaces the real error.
+fn wait_for_github_head_sync(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    expected_sha: &str,
+    max_wait: Duration,
+) {
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(500);
+    loop {
+        if let Ok(sha) = rt.block_on(async { client.get_pr_head_sha(pr_number).await }) {
+            if sha == expected_sha {
+                return;
+            }
+        }
+        // Stop before sleeping past the deadline.
+        if start.elapsed() + poll_interval >= max_wait {
+            return;
+        }
+        std::thread::sleep(poll_interval);
+    }
+}
+
+/// After a force-push, briefly wait for the forge to acknowledge the new head
+/// SHA so the next merge call doesn't race against an in-flight update and
+/// return `405 Base branch was modified`.
+pub(crate) fn sync_head_after_push(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    repo: &GitRepo,
+    branch: &str,
+) {
+    if let Ok(pushed_sha) = repo.rev_parse(branch) {
+        wait_for_github_head_sync(rt, client, pr_number, &pushed_sha, Duration::from_secs(15));
     }
 }
 

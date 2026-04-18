@@ -257,6 +257,10 @@ impl ForgeClient {
         dispatch!(self, is_pr_merged(number))
     }
 
+    pub async fn get_pr_head_sha(&self, number: u64) -> Result<String> {
+        dispatch!(self, get_pr_head_sha(number))
+    }
+
     pub async fn fetch_checks(
         &self,
         repo: &crate::git::GitRepo,

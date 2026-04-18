@@ -1,4 +1,5 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
+use crate::commands::merge::sync_head_after_push;
 use crate::commands::merge_rebase::{
     fetch_remote_for_descendant_rebase, rebase_descendant_onto_remote_trunk_with_provenance,
 };
@@ -415,6 +416,7 @@ pub fn run(
             }
 
             LiveTimer::maybe_finish_ok(push_timer, "done");
+            sync_head_after_push(&rt, &client, next_pr, &repo, &next_branch_name);
         }
     }
 
