@@ -383,7 +383,7 @@ pub fn run(
             }
 
             LiveTimer::maybe_finish_ok(push_timer, "done");
-            sync_head_after_push(&rt, &client, &repo, next_pr, &next_branch.branch);
+            sync_head_after_push(&rt, &client, next_pr, &repo, &next_branch.branch);
         }
     }
 
@@ -994,7 +994,7 @@ fn wait_for_pr_ready(
 
 /// Best-effort wait until the forge reports `expected_sha` as the PR head.
 /// Silently times out so the next merge attempt surfaces the real error.
-pub(crate) fn wait_for_github_head_sync(
+fn wait_for_github_head_sync(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
     pr_number: u64,
@@ -1009,6 +1009,7 @@ pub(crate) fn wait_for_github_head_sync(
                 return;
             }
         }
+        // Stop before sleeping past the deadline.
         if start.elapsed() + poll_interval >= max_wait {
             return;
         }
@@ -1022,8 +1023,8 @@ pub(crate) fn wait_for_github_head_sync(
 pub(crate) fn sync_head_after_push(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
-    repo: &GitRepo,
     pr_number: u64,
+    repo: &GitRepo,
     branch: &str,
 ) {
     if let Ok(pushed_sha) = repo.rev_parse(branch) {

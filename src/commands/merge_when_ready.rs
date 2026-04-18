@@ -416,7 +416,7 @@ pub fn run(
             }
 
             LiveTimer::maybe_finish_ok(push_timer, "done");
-            sync_head_after_push(&rt, &client, &repo, next_pr, &next_branch_name);
+            sync_head_after_push(&rt, &client, next_pr, &repo, &next_branch_name);
         }
     }
 
