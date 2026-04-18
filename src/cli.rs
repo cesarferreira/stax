@@ -446,6 +446,12 @@ enum Commands {
         command: Option<AuthSubcommand>,
     },
 
+    /// Manage the installed stax CLI
+    Cli {
+        #[command(subcommand)]
+        command: CliSubcommand,
+    },
+
     /// Show config file path and contents
     Config {
         /// Clear saved AI agent/model defaults so stax prompts again later
@@ -1024,6 +1030,12 @@ enum AuthSubcommand {
     Status,
 }
 
+#[derive(Subcommand, Clone)]
+enum CliSubcommand {
+    /// Upgrade stax using the current installation method
+    Upgrade,
+}
+
 #[derive(Subcommand)]
 enum StackCommands {
     /// Submit stack - push branches and create/update PRs
@@ -1514,6 +1526,12 @@ pub fn run() -> Result<()> {
             update::check_in_background();
             return result;
         }
+        Commands::Cli { command } => {
+            let result = match command {
+                CliSubcommand::Upgrade => commands::cli::run_upgrade(),
+            };
+            return result;
+        }
         Commands::Config {
             reset_ai,
             no_prompt,
@@ -1741,6 +1759,7 @@ pub fn run() -> Result<()> {
             restack,
         } => commands::modify::run(message, all, quiet, no_verify, restack),
         Commands::Auth { .. } => unreachable!(), // Handled above
+        Commands::Cli { .. } => unreachable!(),  // Handled above
         Commands::Config { .. } => unreachable!(), // Handled above
         Commands::Init { .. } => unreachable!(), // Handled above
         Commands::Diff { stack, all } => commands::diff::run(stack, all),
@@ -2279,8 +2298,8 @@ fn print_worktree_help() -> Result<()> {
 mod tests {
     use super::{
         check_interactive_terminal_with_probe, detect_interactive_stdio, has_interactive_terminal,
-        Cli, CommandPolicy, Commands, InteractiveTerminalCheck, RestackSubmitAfter, StackCommands,
-        WorktreeCommands,
+        Cli, CliSubcommand, CommandPolicy, Commands, InteractiveTerminalCheck, RestackSubmitAfter,
+        StackCommands, WorktreeCommands,
     };
     use clap::Parser;
     use std::cell::Cell;
@@ -2530,6 +2549,17 @@ mod tests {
     fn restack_backward_compat() {
         let cli = parse_cli(&["stax", "restack"]);
         assert!(matches!(cli.command, Some(Commands::Restack { .. })));
+    }
+
+    #[test]
+    fn cli_upgrade_parses() {
+        let cli = parse_cli(&["stax", "cli", "upgrade"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Cli {
+                command: CliSubcommand::Upgrade
+            })
+        ));
     }
 
     #[test]

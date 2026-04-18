@@ -6,6 +6,7 @@ pub mod cascade;
 pub mod changelog;
 pub mod checkout;
 pub mod ci;
+pub mod cli;
 pub mod comments;
 pub mod config;
 pub mod continue_cmd;

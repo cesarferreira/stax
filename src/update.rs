@@ -17,21 +17,22 @@ fn update_checks_disabled() -> bool {
 }
 
 /// Detect how stax was installed based on binary path
-fn detect_install_method() -> InstallMethod {
+pub(crate) fn detect_install_method() -> InstallMethod {
     match std::env::current_exe() {
         Ok(path) => install_method_from_path(&path.to_string_lossy()),
         Err(_) => InstallMethod::Cargo, // Default fallback
     }
 }
 
-enum InstallMethod {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstallMethod {
     Cargo,
     Homebrew,
     Unknown,
 }
 
 impl InstallMethod {
-    fn upgrade_command(&self) -> &'static str {
+    pub(crate) fn upgrade_command(&self) -> &'static str {
         match self {
             InstallMethod::Cargo => "cargo install stax",
             InstallMethod::Homebrew => "brew upgrade stax",
