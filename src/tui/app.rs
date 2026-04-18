@@ -648,7 +648,7 @@ impl App {
 
     /// Prepare state for `Mode::MovePicker` and enter it.
     ///
-    /// On `Err`, the string is a user-facing reason suitable for
+    /// On `Err`, the static string is a user-facing reason suitable for
     /// `set_status`. Returning a specific message from here (rather than a
     /// bool) keeps the dispatcher from having to duplicate the trunk /
     /// no-candidates checks to figure out what to show.
@@ -657,19 +657,19 @@ impl App {
     /// universe the CLI `pick_parent_interactively` uses — so both
     /// surfaces offer the same targets, including local branches that
     /// aren't yet tracked in the stax stack.
-    pub fn init_move_picker(&mut self) -> Result<(), String> {
+    pub fn init_move_picker(&mut self) -> Result<(), &'static str> {
         let Some(source) = self.selected_branch() else {
-            return Err("No branch selected".to_string());
+            return Err("No branch selected");
         };
         if source.is_trunk {
-            return Err("Cannot reparent trunk branch".to_string());
+            return Err("Cannot reparent trunk branch");
         }
         let source_name = source.name.clone();
 
         let all_names = self
             .repo
             .list_branches()
-            .map_err(|e| format!("Failed to list branches: {e:#}"))?;
+            .map_err(|_| "Failed to list branches")?;
         let descendants = self.stack.descendants(&source_name);
         let candidates = build_parent_candidates(
             &all_names,
@@ -678,7 +678,7 @@ impl App {
             &self.stack.trunk,
         );
         if candidates.is_empty() {
-            return Err("No eligible parents to move onto".to_string());
+            return Err("No eligible parents to move onto");
         }
 
         self.move_picker_source = source_name;

@@ -18,7 +18,7 @@ pub fn build_parent_candidates(
 ) -> Vec<String> {
     let mut candidates: Vec<String> = all_branches
         .iter()
-        .filter(|n| n.as_str() != source && !descendants.iter().any(|d| d == *n))
+        .filter(|n| n.as_str() != source && !descendants.contains(*n))
         .cloned()
         .collect();
     candidates.sort();
