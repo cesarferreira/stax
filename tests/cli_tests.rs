@@ -1537,3 +1537,37 @@ fn test_ci_command_flags() {
         stdout
     );
 }
+
+#[test]
+fn test_submit_short_dash_f_is_rejected() {
+    let output = stax(&["ss", "-f", "--help"]);
+    assert!(
+        !output.status.success(),
+        "expected `stax ss -f` to fail clap parsing after -f short is removed; \
+         stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unexpected argument") && stderr.contains("-f"),
+        "expected clap error mentioning -f, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_submit_long_force_emits_deprecation_warning() {
+    let tmp = tempdir().expect("tempdir");
+    let output = Command::new(stax_bin())
+        .args(["ss", "--force", "--no-fetch", "--no-prompt", "--yes"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("Failed to execute stax");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("--force is deprecated"),
+        "expected deprecation warning when --force is passed, got:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
