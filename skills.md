@@ -57,8 +57,8 @@ stax branch ...|b              # Branch subcommands
 stax upstack ...|us            # Descendant-scope commands
 stax downstack ...|ds          # Ancestor-scope commands
 
-stax create|c                  # Create stacked branch
-stax modify|m                  # Stage all + amend commit
+stax create|c                  # Create stacked branch (menu when nothing staged)
+stax modify|m                  # Amend current commit (menu when nothing staged)
 stax rename                    # Rename current branch
 stax detach                    # Remove branch from stack, reparent children
 stax reorder                   # Interactive stack reorder
@@ -132,15 +132,21 @@ sw <name>                      # Quick-switch (shell alias installed by stax set
 
 ```bash
 stax create <name>                 # Create branch stacked on current
-stax create -m "message"           # Use commit message
+stax create -m "message"           # Use commit message (TTY menu if nothing staged)
 stax create -a                     # Stage all before creating
-stax create -am "message"          # Stage all + commit
+stax create -am "message"          # Stage all + commit (bypasses menu)
 stax create --from <branch>        # Create from explicit base
 stax create --prefix feature/      # Override branch prefix
 stax bc <name>                     # Hidden shortcut alias
 
-stax m                             # Stage all + amend current commit
+stax m                             # Amend current commit (TTY menu if nothing staged)
+stax m -a                          # Stage all + amend (bypasses menu)
 stax m -m "new msg"                # Amend with a new commit message
+
+# When nothing is staged and a TTY is attached, `stax create -m` and
+# `stax modify` show a menu: Stage all / Select --patch / Continue without
+# staging (empty branch OR amend message only) / Abort. Non-TTY callers bail
+# with guidance to use `-a` or `git add` first.
 
 stax rename <name>                 # Rename current branch
 stax rename --edit                 # Edit commit message while renaming

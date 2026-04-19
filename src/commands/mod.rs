@@ -43,6 +43,7 @@ pub mod shell_setup;
 pub mod skills;
 pub mod split;
 pub mod stack_cmd;
+pub mod staging;
 pub mod standup;
 pub mod status;
 pub mod submit;
