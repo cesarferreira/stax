@@ -95,7 +95,7 @@ pub fn run(
     publish: bool,
     no_pr: bool,
     no_fetch: bool,
-    _force: bool, // kept for CLI compatibility
+    force: bool, // deprecated; kept for CLI compatibility — see issue #222
     yes: bool,
     no_prompt: bool,
     reviewers: Vec<String>,
@@ -112,6 +112,12 @@ pub fn run(
     squash: bool,
     update_title: bool,
 ) -> Result<()> {
+    if force && !quiet {
+        eprintln!(
+            "  {} --force is deprecated and has no effect (see issue #222)",
+            "warning:".yellow()
+        );
+    }
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -229,25 +235,88 @@ pub fn run(
             .join()
             .map_err(|_| anyhow::anyhow!("submit ls-remote thread panicked"))?;
 
-        let summary = match fetch_res {
-            Ok(()) => {
-                LiveTimer::maybe_finish_ok(fetch_timer, "done");
-                "ok".to_string()
-            }
-            Err(_) => {
-                LiveTimer::maybe_finish_warn(fetch_timer, "skipped (continuing with local refs)");
-                "failed (continued with cached refs)".to_string()
-            }
-        };
-
+        // We need the remote-branch set (from ls-remote) to know which of the
+        // refs we asked git to fetch actually exist on the remote. New branches
+        // (about to be pushed for the first time) won't, and `git fetch origin
+        // trunk feat-new` legitimately fails with "couldn't find remote ref" —
+        // that case is benign and must NOT bail. The dangerous case is when an
+        // *existing* remote ref failed to refresh, because then any subsequent
+        // `--force-with-lease` push runs against stale refs and is rejected by
+        // the remote as `(stale info)`.
         let rb = match ls_joined {
             Ok(set) => set,
-            Err(_) => remote::get_remote_branches(repo.workdir()?, &remote_info.name)?
-                .into_iter()
-                .collect(),
+            Err(e) => anyhow::bail!(
+                "git ls-remote --heads {} failed: {e:#}\n\n\
+                 Re-run with --no-fetch to fall back to cached \
+                 remote-tracking refs.",
+                remote_info.name
+            ),
         };
 
-        (summary, rb)
+        match fetch_res {
+            Ok(()) => LiveTimer::maybe_finish_ok(fetch_timer, "done"),
+            Err(initial_err) => {
+                // The optimistic parallel fetch may have failed simply because
+                // some of the requested branches do not yet exist on the remote
+                // (git fetch is all-or-nothing). Retry with only the refs that
+                // ls-remote confirmed exist; if THAT still fails the failure is
+                // real (auth/network/lock).
+                let existing_refs: Vec<String> =
+                    refs.iter().filter(|r| rb.contains(*r)).cloned().collect();
+
+                if existing_refs.is_empty() {
+                    LiveTimer::maybe_finish_ok(fetch_timer, "skipped (no existing remote refs)");
+                } else if existing_refs.len() == refs.len() {
+                    // Every requested ref existed on remote, yet fetch still
+                    // failed. This is the dangerous case.
+                    LiveTimer::maybe_finish_warn(fetch_timer, "FAILED");
+                    anyhow::bail!(
+                        "git fetch from '{}' failed: {initial_err:#}\n\n\
+                         Refusing to continue: existing remote-tracking refs \
+                         ({}) could not be refreshed, and \
+                         --force-with-lease against stale refs is unsafe — the \
+                         remote will reject it as `(stale info)`.\n\n\
+                         Try one of:\n  \
+                         - Fix the underlying fetch failure (auth, network, \
+                         .git/index.lock) and retry\n  \
+                         - Re-run with --no-fetch to explicitly accept cached \
+                         remote-tracking refs",
+                        remote_info.name,
+                        existing_refs.join(", "),
+                    );
+                } else {
+                    match remote::fetch_remote_refs(
+                        repo.workdir()?,
+                        &remote_info.name,
+                        &existing_refs,
+                    ) {
+                        Ok(()) => LiveTimer::maybe_finish_ok(
+                            fetch_timer,
+                            "done (skipped non-existent remote refs)",
+                        ),
+                        Err(retry_err) => {
+                            LiveTimer::maybe_finish_warn(fetch_timer, "FAILED");
+                            anyhow::bail!(
+                                "git fetch from '{}' failed: {retry_err:#}\n\n\
+                                 Refusing to continue: existing remote-tracking refs \
+                                 ({}) could not be refreshed, and \
+                                 --force-with-lease against stale refs is unsafe — the \
+                                 remote will reject it as `(stale info)`.\n\n\
+                                 Try one of:\n  \
+                                 - Fix the underlying fetch failure (auth, network, \
+                                 .git/index.lock) and retry\n  \
+                                 - Re-run with --no-fetch to explicitly accept cached \
+                                 remote-tracking refs",
+                                remote_info.name,
+                                existing_refs.join(", "),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        ("ok".to_string(), rb)
     };
 
     // Verify trunk exists on remote

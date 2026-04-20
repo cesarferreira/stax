@@ -417,6 +417,23 @@ fn configure_submit_remote(repo: &TestRepo) {
         "https://github.com/test-owner/test-repo.git",
     ]);
     repo.git(&["remote", "set-url", "--push", "origin", &remote_path_str]);
+
+    // Redirect the fake fetch URL to the local bare repo so `git fetch` and
+    // `git ls-remote` actually succeed in the sandbox (no real network call to
+    // github.com). Without this, submit's fetch step fails — historically that
+    // failure was silently swallowed; after the issue #222 fix it correctly
+    // bails. These tests aren't exercising fetch behaviour, so we just point
+    // it at the same local bare repo as push.
+    let file_url = format!("file://{}", remote_path_str);
+    repo.git(&[
+        "config",
+        "--local",
+        &format!(
+            "url.{}.insteadOf",
+            file_url.trim_end_matches('/').to_string()
+        ),
+        "https://github.com/test-owner/test-repo.git",
+    ]);
 }
 
 fn list_remote_heads(repo: &TestRepo) -> Vec<String> {
@@ -6210,7 +6227,14 @@ mod forge_mock_tests {
         token_env: &str,
     ) -> TestRepo {
         let repo = TestRepo::new();
-        let _remote_root = setup_fake_remote(&repo, home, remote_url, remote_base);
+        // Persist the bare-repo tempdir for the rest of the test process — the
+        // returned TestRepo is now the caller's only handle, and previously
+        // this temp dir was being dropped here, deleting the bare repo. Today
+        // submit's fetch/ls-remote calls fail loudly on a missing bare repo
+        // (issue #222 fix), so they need the directory to actually exist for
+        // the duration of the test.
+        let remote_root = setup_fake_remote(&repo, home, remote_url, remote_base);
+        let _ = remote_root.keep();
 
         let output = run_stax_with_token_env(&repo, home, token_env, &["bc", branch]);
         assert!(
