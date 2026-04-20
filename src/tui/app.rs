@@ -1329,11 +1329,8 @@ fn format_duration_compact(secs: u64) -> String {
     }
 }
 
-fn branch_average_secs(repo: &GitRepo, branch_name: &str, checks: &[CheckRunInfo]) -> Option<u64> {
-    let history_key = format!("branch-overall:{}", branch_name);
-    history::load_check_history(repo, &history_key)
-        .ok()
-        .and_then(|history| history::calculate_average(&history))
+fn branch_average_secs(repo: &GitRepo, checks: &[CheckRunInfo]) -> Option<u64> {
+    history::estimate_run_average(repo, checks)
         .or_else(|| checks.iter().filter_map(|check| check.average_secs).max())
 }
 
@@ -1413,7 +1410,7 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
             }
         };
 
-        let average_secs = branch_average_secs(&repo, &branch, &check_runs);
+        let average_secs = branch_average_secs(&repo, &check_runs);
         let summary = BranchCiSummary::from_checks(overall_status, &check_runs, average_secs);
         let _ = sender.send(CiUpdate::Loaded { branch, summary });
     });

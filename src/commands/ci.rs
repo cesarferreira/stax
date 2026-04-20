@@ -96,11 +96,7 @@ fn dedup_check_runs(check_runs: Vec<CheckRunInfo>) -> Vec<CheckRunInfo> {
 }
 
 /// Calculate overall timing for the entire branch CI run
-fn calculate_branch_timing(
-    repo: &GitRepo,
-    branch_name: &str,
-    checks: &[CheckRunInfo],
-) -> Option<BranchTiming> {
+fn calculate_branch_timing(repo: &GitRepo, checks: &[CheckRunInfo]) -> Option<BranchTiming> {
     if checks.is_empty() {
         return None;
     }
@@ -114,14 +110,8 @@ fn calculate_branch_timing(
         checks.iter().filter_map(|c| c.elapsed_secs).max()
     })?;
 
-    // Try branch-level history first (most accurate: wall-clock from first to last check)
-    let history_key = format!("branch-overall:{}", branch_name);
-    let average_secs = match history::load_check_history(repo, &history_key) {
-        Ok(hist) => history::calculate_average(&hist),
-        Err(_) => None,
-    }
-    // Fall back to max(individual check averages) -- the slowest check is the critical path
-    .or_else(|| checks.iter().filter_map(|c| c.average_secs).max());
+    let average_secs = history::estimate_run_average(repo, checks)
+        .or_else(|| checks.iter().filter_map(|c| c.average_secs).max());
 
     let pct = if !is_complete {
         average_secs.map(|avg| {
@@ -551,7 +541,7 @@ fn display_branch_compact(repo: &GitRepo, status: &BranchCiStatus, is_current: b
     }
 
     // Timing / ETA footer
-    if let Some(timing) = calculate_branch_timing(repo, &status.branch, &status.check_runs) {
+    if let Some(timing) = calculate_branch_timing(repo, &status.check_runs) {
         println!();
         println!(
             "  {}",
@@ -662,7 +652,7 @@ fn display_branch_verbose(repo: &GitRepo, status: &BranchCiStatus, is_current: b
     }
 
     // Timing / ETA footer
-    if let Some(timing) = calculate_branch_timing(repo, &status.branch, &status.check_runs) {
+    if let Some(timing) = calculate_branch_timing(repo, &status.check_runs) {
         println!();
         println!(
             "  {}",
@@ -746,45 +736,34 @@ fn print_multi_branch_header(statuses: &[BranchCiStatus]) {
 /// Record CI history for completed successful checks
 pub fn record_ci_history(repo: &GitRepo, statuses: &[BranchCiStatus]) {
     for status in statuses {
+        let earliest_start = status
+            .check_runs
+            .iter()
+            .filter_map(|c| c.started_at.as_ref())
+            .filter_map(|s| s.parse::<DateTime<Utc>>().ok())
+            .min();
+
         for check in &status.check_runs {
             if check.status == "completed" && check.conclusion.as_deref() == Some("success") {
                 if let (Some(elapsed), Some(completed_at)) =
                     (check.elapsed_secs, check.completed_at.as_ref())
                 {
-                    let _ =
-                        history::add_completion(repo, &check.name, elapsed, completed_at.clone());
+                    let end_offset_secs = earliest_start.and_then(|earliest| {
+                        completed_at.parse::<DateTime<Utc>>().ok().map(|completed| {
+                            completed
+                                .signed_duration_since(earliest)
+                                .num_seconds()
+                                .max(0) as u64
+                        })
+                    });
+                    let _ = history::add_timing_sample(
+                        repo,
+                        &check.name,
+                        elapsed,
+                        completed_at.clone(),
+                        end_offset_secs,
+                    );
                 }
-            }
-        }
-
-        let all_completed = !status.check_runs.is_empty()
-            && status.check_runs.iter().all(|c| c.status == "completed");
-        let all_success = status.check_runs.iter().all(|c| {
-            c.conclusion.as_deref() == Some("success")
-                || c.conclusion.as_deref() == Some("skipped")
-                || c.conclusion.as_deref() == Some("neutral")
-        });
-
-        if all_completed && all_success {
-            if let (Some(earliest), Some(latest)) = (
-                status
-                    .check_runs
-                    .iter()
-                    .filter_map(|c| c.started_at.as_ref())
-                    .filter_map(|s| s.parse::<DateTime<Utc>>().ok())
-                    .min(),
-                status
-                    .check_runs
-                    .iter()
-                    .filter_map(|c| c.completed_at.as_ref())
-                    .filter_map(|s| s.parse::<DateTime<Utc>>().ok())
-                    .max(),
-            ) {
-                let duration = latest.signed_duration_since(earliest);
-                let elapsed_secs = duration.num_seconds().max(0) as u64;
-                let completed_at = latest.to_rfc3339();
-                let history_key = format!("branch-overall:{}", status.branch);
-                let _ = history::add_completion(repo, &history_key, elapsed_secs, completed_at);
             }
         }
     }
