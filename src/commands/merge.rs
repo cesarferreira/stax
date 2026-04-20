@@ -435,23 +435,16 @@ pub fn run(
 
             match rebase_result {
                 Ok(RebaseResult::Success) => {
-                    if let Some(pr_num) = remaining.pr_number {
-                        let _ = rt.block_on(async {
-                            client.update_pr_base(pr_num, &parent_branch).await
-                        });
-                    }
-
-                    let _ = Command::new("git")
-                        .args([
-                            "push",
-                            "--force-with-lease",
-                            &remote_info.name,
-                            &remaining.branch,
-                        ])
-                        .current_dir(repo.workdir()?)
-                        .output();
-
-                    LiveTimer::maybe_finish_ok(remaining_timer, "done");
+                    finalize_remaining_branch_push(
+                        &repo,
+                        &rt,
+                        &client,
+                        &remote_info.name,
+                        &remaining.branch,
+                        remaining.pr_number,
+                        &parent_branch,
+                        remaining_timer,
+                    )?;
                 }
                 Ok(RebaseResult::Conflict) => {
                     let abort_dir = repo
@@ -1014,6 +1007,67 @@ fn wait_for_github_head_sync(
         }
         std::thread::sleep(poll_interval);
     }
+}
+
+/// Extract a concise, user-visible reason from `git push` stderr output.
+/// Returns the first non-empty line, or a generic fallback when stderr is empty.
+pub(crate) fn summarize_git_stderr(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    text.lines()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or("push rejected")
+        .to_string()
+}
+
+/// Push a rebased remaining-stack branch and — only on success — retarget its
+/// PR base. Surfaces push or retarget failures via the supplied `LiveTimer`;
+/// on any failure the PR base is left pointing at the previous parent so the
+/// on-forge state cannot diverge from the remote branch contents.
+///
+/// Use this from the "remaining branches" rebase pass in both `merge` and
+/// `merge --when-ready`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn finalize_remaining_branch_push(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    remote_name: &str,
+    branch: &str,
+    pr_number: Option<u64>,
+    new_base: &str,
+    timer: Option<LiveTimer>,
+) -> Result<()> {
+    let push_output = Command::new("git")
+        .args(["push", "--force-with-lease", remote_name, branch])
+        .current_dir(repo.workdir()?)
+        .output();
+
+    let push_err = match &push_output {
+        Ok(out) if out.status.success() => None,
+        Ok(out) => Some(summarize_git_stderr(&out.stderr)),
+        Err(e) => Some(e.to_string()),
+    };
+
+    if let Some(reason) = push_err {
+        LiveTimer::maybe_finish_err(
+            timer,
+            &format!("push failed; PR base unchanged ({})", reason),
+        );
+        return Ok(());
+    }
+
+    if let Some(pr_num) = pr_number {
+        if let Err(e) =
+            rt.block_on(async { client.update_pr_base(pr_num, new_base).await })
+        {
+            LiveTimer::maybe_finish_err(timer, &format!("retarget failed: {:#}", e));
+            return Ok(());
+        }
+    }
+
+    LiveTimer::maybe_finish_ok(timer, "done");
+    Ok(())
 }
 
 /// After a force-push, briefly wait for the forge to acknowledge the new head

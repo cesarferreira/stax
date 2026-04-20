@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+- Merge: Only retarget remaining PR bases after the rewritten branch has been pushed successfully; surface push failures instead of silently ignoring them (#312)
+
 ## [0.55.0] - 2026-04-20
 
 ### Added
