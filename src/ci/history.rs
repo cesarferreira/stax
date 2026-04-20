@@ -104,16 +104,6 @@ pub fn save_check_history(repo: &GitRepo, history: &CiCheckHistory) -> Result<()
     Ok(())
 }
 
-/// Add a completed run to history (keeps only last MAX_HISTORY_RUNS)
-pub fn add_completion(
-    repo: &GitRepo,
-    check_name: &str,
-    duration_secs: u64,
-    completed_at: String,
-) -> Result<()> {
-    add_timing_sample(repo, check_name, duration_secs, completed_at, None)
-}
-
 /// Add a completed run to history with an optional run-level end offset
 pub fn add_timing_sample(
     repo: &GitRepo,
@@ -401,7 +391,14 @@ mod tests {
     #[test]
     fn test_estimate_run_average_falls_back_to_duration_plus_start_offset() {
         let (_tempdir, repo) = init_temp_repo();
-        add_completion(&repo, "late check", 300, "2026-01-16T12:10:00Z".to_string()).unwrap();
+        add_timing_sample(
+            &repo,
+            "late check",
+            300,
+            "2026-01-16T12:10:00Z".to_string(),
+            None,
+        )
+        .unwrap();
 
         let checks = vec![
             CheckRunInfo {

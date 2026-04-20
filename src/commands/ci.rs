@@ -1641,11 +1641,12 @@ mod tests {
     #[test]
     fn test_normalize_commit_status_context_pending_tracks_elapsed_from_created_at() {
         let (_tempdir, repo) = init_temp_repo();
-        history::add_completion(
+        history::add_timing_sample(
             &repo,
             "android suite",
             1500,
             "2026-01-16T11:00:00Z".to_string(),
+            None,
         )
         .unwrap();
 
