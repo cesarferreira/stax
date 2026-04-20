@@ -29,7 +29,7 @@ struct SubmitOptions {
     #[arg(long = "no-fetch", action = clap::ArgAction::SetTrue)]
     no_fetch: bool,
     /// Deprecated: kept for CLI compatibility (currently a no-op)
-    #[arg(short, long, hide = true)]
+    #[arg(long, hide = true)]
     force: bool,
     /// Auto-approve prompts
     #[arg(long)]

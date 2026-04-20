@@ -1,8 +1,8 @@
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
-use crate::errors::ConflictStopped;
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
+use crate::errors::ConflictStopped;
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};

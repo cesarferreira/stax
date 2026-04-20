@@ -106,7 +106,11 @@ fn set_trunk(repo: GitRepo, trunk: &str) -> Result<()> {
     if should_enable_rerere {
         match repo.enable_rerere() {
             Ok(_) => println!("{}  Enabled git rerere", "✓".green().bold()),
-            Err(e) => eprintln!("{}  Failed to enable rerere: {}", "Warning:".yellow().bold(), e),
+            Err(e) => eprintln!(
+                "{}  Failed to enable rerere: {}",
+                "Warning:".yellow().bold(),
+                e
+            ),
         }
     }
 

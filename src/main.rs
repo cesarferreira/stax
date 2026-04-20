@@ -9,7 +9,10 @@ fn main() {
         }
 
         // Check if it's a ConflictStopped (exit code 2)
-        if err.downcast_ref::<stax::errors::ConflictStopped>().is_some() {
+        if err
+            .downcast_ref::<stax::errors::ConflictStopped>()
+            .is_some()
+        {
             // ConflictStopped already printed the error message
             std::process::exit(stax::errors::exit_codes::CONFLICT);
         }

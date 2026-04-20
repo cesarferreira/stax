@@ -1,10 +1,12 @@
+use super::CheckRunInfo;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 /// Maximum number of historical runs to keep per check
-const MAX_HISTORY_RUNS: usize = 5;
+const MAX_HISTORY_RUNS: usize = 20;
 const HISTORY_REF_PREFIX: &str = "refs/stax/ci-history/";
 
 /// CI check history stored in git refs
@@ -19,6 +21,8 @@ pub struct CiCheckHistory {
 pub struct CiRunRecord {
     pub duration_secs: u64,
     pub completed_at: String, // ISO 8601 timestamp
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_offset_secs: Option<u64>,
 }
 
 impl CiCheckHistory {
@@ -100,19 +104,27 @@ pub fn save_check_history(repo: &GitRepo, history: &CiCheckHistory) -> Result<()
     Ok(())
 }
 
-/// Add a completed run to history (keeps only last MAX_HISTORY_RUNS)
-pub fn add_completion(
+/// Add a completed run to history with an optional run-level end offset
+pub fn add_timing_sample(
     repo: &GitRepo,
     check_name: &str,
     duration_secs: u64,
     completed_at: String,
+    end_offset_secs: Option<u64>,
 ) -> Result<()> {
+    if duration_secs == 0 {
+        return Ok(());
+    }
+
     let mut history = load_check_history(repo, check_name)?;
+
+    history.runs.retain(|run| run.duration_secs > 0);
 
     // Add new run
     history.runs.push(CiRunRecord {
         duration_secs,
         completed_at,
+        end_offset_secs: end_offset_secs.filter(|secs| *secs > 0),
     });
 
     // Keep only last MAX_HISTORY_RUNS (FIFO queue)
@@ -128,18 +140,87 @@ pub fn add_completion(
 
 /// Calculate average duration from history
 pub fn calculate_average(history: &CiCheckHistory) -> Option<u64> {
-    if history.runs.is_empty() {
+    let valid_runs: Vec<&CiRunRecord> = history
+        .runs
+        .iter()
+        .filter(|run| run.duration_secs > 0)
+        .collect();
+
+    if valid_runs.is_empty() {
         return None;
     }
 
-    let sum: u64 = history.runs.iter().map(|r| r.duration_secs).sum();
-    Some(sum / history.runs.len() as u64)
+    let sum: u64 = valid_runs.iter().map(|run| run.duration_secs).sum();
+    Some(sum / valid_runs.len() as u64)
+}
+
+/// Calculate average run end offset from history
+pub fn calculate_average_end_offset(history: &CiCheckHistory) -> Option<u64> {
+    let valid_offsets: Vec<u64> = history
+        .runs
+        .iter()
+        .filter_map(|run| run.end_offset_secs)
+        .filter(|secs| *secs > 0)
+        .collect();
+
+    if valid_offsets.is_empty() {
+        return None;
+    }
+
+    let sum: u64 = valid_offsets.iter().sum();
+    Some(sum / valid_offsets.len() as u64)
+}
+
+/// Estimate total wall-clock runtime for the current run from reusable per-check history.
+pub fn estimate_run_average(repo: &GitRepo, checks: &[CheckRunInfo]) -> Option<u64> {
+    let run_start = checks
+        .iter()
+        .filter_map(|check| parse_ci_timestamp(check.started_at.as_deref()))
+        .min();
+
+    checks
+        .iter()
+        .filter_map(|check| {
+            let history = load_check_history(repo, &check.name).ok()?;
+            calculate_average_end_offset(&history).or_else(|| {
+                let avg_duration = calculate_average(&history)?;
+                let start_offset =
+                    match (run_start, parse_ci_timestamp(check.started_at.as_deref())) {
+                        (Some(run_start), Some(check_start)) => check_start
+                            .signed_duration_since(run_start)
+                            .num_seconds()
+                            .max(0)
+                            as u64,
+                        _ => 0,
+                    };
+                Some(start_offset + avg_duration)
+            })
+        })
+        .max()
+}
+
+fn parse_ci_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
+    value?.parse::<DateTime<Utc>>().ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::GitRepo;
     use std::process::Command;
+    use tempfile::TempDir;
+
+    fn init_temp_repo() -> (TempDir, GitRepo) {
+        let tempdir = TempDir::new().unwrap();
+        let status = Command::new("git")
+            .args(["init"])
+            .current_dir(tempdir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let repo = GitRepo::open_from_path(tempdir.path()).unwrap();
+        (tempdir, repo)
+    }
 
     #[test]
     fn test_new_history() {
@@ -176,6 +257,7 @@ mod tests {
         history.runs.push(CiRunRecord {
             duration_secs: 100,
             completed_at: "2026-01-16T12:00:00Z".to_string(),
+            end_offset_secs: None,
         });
         assert_eq!(calculate_average(&history), Some(100));
     }
@@ -186,17 +268,188 @@ mod tests {
         history.runs.push(CiRunRecord {
             duration_secs: 100,
             completed_at: "2026-01-16T12:00:00Z".to_string(),
+            end_offset_secs: None,
         });
         history.runs.push(CiRunRecord {
             duration_secs: 120,
             completed_at: "2026-01-16T12:05:00Z".to_string(),
+            end_offset_secs: None,
         });
         history.runs.push(CiRunRecord {
             duration_secs: 140,
             completed_at: "2026-01-16T12:10:00Z".to_string(),
+            end_offset_secs: None,
         });
         // Average: (100 + 120 + 140) / 3 = 120
         assert_eq!(calculate_average(&history), Some(120));
+    }
+
+    #[test]
+    fn test_calculate_average_ignores_zero_duration_runs() {
+        let mut history = CiCheckHistory::new("test".to_string());
+        history.runs.push(CiRunRecord {
+            duration_secs: 0,
+            completed_at: "2026-01-16T12:00:00Z".to_string(),
+            end_offset_secs: None,
+        });
+        history.runs.push(CiRunRecord {
+            duration_secs: 120,
+            completed_at: "2026-01-16T12:05:00Z".to_string(),
+            end_offset_secs: None,
+        });
+        history.runs.push(CiRunRecord {
+            duration_secs: 180,
+            completed_at: "2026-01-16T12:10:00Z".to_string(),
+            end_offset_secs: None,
+        });
+
+        assert_eq!(calculate_average(&history), Some(150));
+    }
+
+    #[test]
+    fn test_calculate_average_all_zero_duration_runs_returns_none() {
+        let mut history = CiCheckHistory::new("test".to_string());
+        history.runs.push(CiRunRecord {
+            duration_secs: 0,
+            completed_at: "2026-01-16T12:00:00Z".to_string(),
+            end_offset_secs: None,
+        });
+        history.runs.push(CiRunRecord {
+            duration_secs: 0,
+            completed_at: "2026-01-16T12:05:00Z".to_string(),
+            end_offset_secs: None,
+        });
+
+        assert_eq!(calculate_average(&history), None);
+    }
+
+    #[test]
+    fn test_calculate_average_end_offset() {
+        let mut history = CiCheckHistory::new("test".to_string());
+        history.runs.push(CiRunRecord {
+            duration_secs: 120,
+            completed_at: "2026-01-16T12:00:00Z".to_string(),
+            end_offset_secs: Some(600),
+        });
+        history.runs.push(CiRunRecord {
+            duration_secs: 180,
+            completed_at: "2026-01-16T12:05:00Z".to_string(),
+            end_offset_secs: Some(900),
+        });
+
+        assert_eq!(calculate_average_end_offset(&history), Some(750));
+    }
+
+    #[test]
+    fn test_estimate_run_average_prefers_historical_end_offsets() {
+        let (_tempdir, repo) = init_temp_repo();
+        add_timing_sample(
+            &repo,
+            "android suite",
+            1500,
+            "2026-01-16T12:25:00Z".to_string(),
+            Some(1500),
+        )
+        .unwrap();
+        add_timing_sample(
+            &repo,
+            "checklist",
+            330,
+            "2026-01-16T12:05:30Z".to_string(),
+            Some(330),
+        )
+        .unwrap();
+
+        let checks = vec![
+            CheckRunInfo {
+                name: "android suite".to_string(),
+                status: "in_progress".to_string(),
+                conclusion: None,
+                url: None,
+                started_at: Some("2026-01-16T12:00:00Z".to_string()),
+                completed_at: None,
+                elapsed_secs: Some(600),
+                average_secs: Some(1500),
+                completion_percent: Some(40),
+            },
+            CheckRunInfo {
+                name: "checklist".to_string(),
+                status: "completed".to_string(),
+                conclusion: Some("success".to_string()),
+                url: None,
+                started_at: Some("2026-01-16T12:00:00Z".to_string()),
+                completed_at: Some("2026-01-16T12:05:11Z".to_string()),
+                elapsed_secs: Some(311),
+                average_secs: Some(330),
+                completion_percent: None,
+            },
+        ];
+
+        assert_eq!(estimate_run_average(&repo, &checks), Some(1500));
+    }
+
+    #[test]
+    fn test_estimate_run_average_falls_back_to_duration_plus_start_offset() {
+        let (_tempdir, repo) = init_temp_repo();
+        add_timing_sample(
+            &repo,
+            "late check",
+            300,
+            "2026-01-16T12:10:00Z".to_string(),
+            None,
+        )
+        .unwrap();
+
+        let checks = vec![
+            CheckRunInfo {
+                name: "setup".to_string(),
+                status: "completed".to_string(),
+                conclusion: Some("success".to_string()),
+                url: None,
+                started_at: Some("2026-01-16T12:00:00Z".to_string()),
+                completed_at: Some("2026-01-16T12:01:00Z".to_string()),
+                elapsed_secs: Some(60),
+                average_secs: None,
+                completion_percent: None,
+            },
+            CheckRunInfo {
+                name: "late check".to_string(),
+                status: "in_progress".to_string(),
+                conclusion: None,
+                url: None,
+                started_at: Some("2026-01-16T12:05:00Z".to_string()),
+                completed_at: None,
+                elapsed_secs: Some(30),
+                average_secs: Some(300),
+                completion_percent: Some(10),
+            },
+        ];
+
+        assert_eq!(estimate_run_average(&repo, &checks), Some(600));
+    }
+
+    #[test]
+    fn test_add_timing_sample_keeps_recent_window() {
+        let (_tempdir, repo) = init_temp_repo();
+
+        for idx in 0..(MAX_HISTORY_RUNS + 5) {
+            add_timing_sample(
+                &repo,
+                "android suite",
+                100 + idx as u64,
+                format!("2026-01-16T12:{idx:02}:00Z"),
+                Some(200 + idx as u64),
+            )
+            .unwrap();
+        }
+
+        let history = load_check_history(&repo, "android suite").unwrap();
+        assert_eq!(history.runs.len(), MAX_HISTORY_RUNS);
+        assert_eq!(history.runs.first().unwrap().duration_secs, 105);
+        assert_eq!(
+            history.runs.last().unwrap().duration_secs,
+            100 + (MAX_HISTORY_RUNS + 4) as u64
+        );
     }
 
     #[test]
@@ -204,15 +457,18 @@ mod tests {
         let record = CiRunRecord {
             duration_secs: 150,
             completed_at: "2026-01-16T12:00:00Z".to_string(),
+            end_offset_secs: Some(900),
         };
 
         let json = serde_json::to_string(&record).unwrap();
         assert!(json.contains("150"));
         assert!(json.contains("2026-01-16T12:00:00Z"));
+        assert!(json.contains("900"));
 
         let deserialized: CiRunRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.duration_secs, 150);
         assert_eq!(deserialized.completed_at, "2026-01-16T12:00:00Z");
+        assert_eq!(deserialized.end_offset_secs, Some(900));
     }
 
     #[test]
@@ -221,6 +477,7 @@ mod tests {
         history.runs.push(CiRunRecord {
             duration_secs: 100,
             completed_at: "2026-01-16T12:00:00Z".to_string(),
+            end_offset_secs: Some(120),
         });
 
         let json = serde_json::to_string(&history).unwrap();

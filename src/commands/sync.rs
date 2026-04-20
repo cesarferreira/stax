@@ -1,5 +1,4 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
-use crate::errors::ConflictStopped;
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::commands::worktree::{
@@ -8,6 +7,7 @@ use crate::commands::worktree::{
 };
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
+use crate::errors::ConflictStopped;
 use crate::forge::ForgeClient;
 use crate::git::repo::BranchDeleteResolution;
 use crate::git::{GitRepo, RebaseResult};
@@ -548,19 +548,27 @@ pub fn run(
                             match repo.rebase_branch_onto_with_provenance(
                                 child,
                                 &stack.trunk,
-                                branch,  // fallback upstream
-                                false,   // auto_stash_pop
+                                branch, // fallback upstream
+                                false,  // auto_stash_pop
                             ) {
                                 Ok(_) => {
                                     // Update child's parent metadata to trunk
-                                    if let Some(mut metadata) = BranchMetadata::read(repo.inner(), child)? {
+                                    if let Some(mut metadata) =
+                                        BranchMetadata::read(repo.inner(), child)?
+                                    {
                                         metadata.parent_branch_name = stack.trunk.clone();
-                                        metadata.parent_branch_revision = repo.rev_parse(&stack.trunk)?;
+                                        metadata.parent_branch_revision =
+                                            repo.rev_parse(&stack.trunk)?;
                                         metadata.write(repo.inner(), child)?;
                                     }
 
                                     if !quiet {
-                                        println!("      {} Rebased {} onto {}", "✓".green(), child.cyan(), stack.trunk.cyan());
+                                        println!(
+                                            "      {} Rebased {} onto {}",
+                                            "✓".green(),
+                                            child.cyan(),
+                                            stack.trunk.cyan()
+                                        );
                                     }
                                 }
                                 Err(e) => {
@@ -892,9 +900,7 @@ pub fn run(
                 // (where A and B both have upstream gone) lands C on trunk
                 // rather than on the soon-to-be-deleted A.
                 let (fallback_parent, parent_fallback_from) =
-                    resolve_fallback_parent_skipping_doomed(
-                        &workdir, &live_stack, branch, &gone,
-                    );
+                    resolve_fallback_parent_skipping_doomed(&workdir, &live_stack, branch, &gone);
 
                 // Print the parent-fallback hint BEFORE the confirm prompt so the
                 // user knows why the prompt mentions a non-recorded parent.
@@ -1363,8 +1369,8 @@ fn prune_stale_remote_tracking_refs(
 
 #[derive(Debug, Clone)]
 enum MergeType {
-    Ancestor,     // Detected via git branch --merged
-    SquashMerge,  // Detected via patch-ID matching
+    Ancestor,    // Detected via git branch --merged
+    SquashMerge, // Detected via patch-ID matching
 }
 
 #[derive(Debug, Clone)]
@@ -1427,7 +1433,9 @@ fn find_merged_branches(
             }
 
             // Only include branches we're tracking (and avoid duplicates)
-            if stack.branches.contains_key(branch) && !merged.iter().any(|info| info.branch == branch) {
+            if stack.branches.contains_key(branch)
+                && !merged.iter().any(|info| info.branch == branch)
+            {
                 merged.push(MergedBranchInfo {
                     branch: branch.to_string(),
                     merge_type: MergeType::Ancestor,

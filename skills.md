@@ -263,7 +263,7 @@ stax range-diff                    # Range-diff branches needing restack
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output
 
-stax ci                            # CI for current branch
+stax ci                            # CI for current branch (elapsed/ETA + avg from recent successful runs of the same checks)
 stax ci --stack                    # CI for current stack
 stax ci --all                      # CI for all tracked branches
 stax ci --watch --interval 30      # Watch CI, custom poll interval
