@@ -19,6 +19,7 @@ build-release:
 
 # Publish a new release (usage: make release or make release LEVEL=patch)
 release:
+	python3 scripts/prepare_release.py
 	cargo release $(LEVEL) --execute --no-confirm
 
 # Install to ~/.cargo/bin

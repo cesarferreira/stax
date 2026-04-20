@@ -30,3 +30,4 @@ A modern CLI for stacked Git branches and PRs.
 - Recover from risky rewrites: [Undo and Redo](safety/undo-redo.md)
 - Configure auth and naming: [Config Reference](configuration/index.md)
 - Validate and repair stack health: [Stack Health](commands/stack-health.md)
+- Cut a release with generated changelog notes: [Release Workflow](workflows/releasing.md)

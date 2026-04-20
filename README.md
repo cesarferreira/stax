@@ -332,6 +332,16 @@ Before opening a PR, run:
 make test   # or: just test
 ```
 
+To cut a release, run:
+
+```bash
+make release          # default minor bump
+make release LEVEL=patch
+just release-patch    # or: just release-minor / just release-major
+```
+
+Release automation now rebuilds the `Unreleased` section in `CHANGELOG.md` from commits since the latest `v*` tag before handing off to `cargo release`. If there are no commits since the last tag, the release exits early instead of creating an empty changelog entry.
+
 Project docs and architecture: [docs/index.md](docs/index.md). Contributor guidelines: [AGENTS.md](AGENTS.md).
 
 ## License
