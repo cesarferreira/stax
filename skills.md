@@ -128,6 +128,19 @@ sw <name>                      # Quick-switch (shell alias installed by stax set
 
 ## High-Value Commands and Flags
 
+### Contributor Release Workflow
+
+```bash
+make release                     # Regenerate CHANGELOG.md from commits, then cargo release (minor)
+make release LEVEL=patch         # Same flow with a patch bump
+just release-patch               # Patch release with generated changelog notes
+just release-minor               # Minor release with generated changelog notes
+just release-major               # Major release with generated changelog notes
+just release-dry patch           # Dry-run cargo release only; does not rewrite CHANGELOG.md
+```
+
+Release prep rewrites the `Unreleased` section from non-merge commits since the latest `v*` tag before `cargo release` promotes that block into the new versioned section. Prefixes map to changelog sections as follows: `feat` → `Added`, `fix` → `Fixed`, `docs` → `Documentation`, everything else → `Changed`.
+
 ### Create and Edit Branches
 
 ```bash
