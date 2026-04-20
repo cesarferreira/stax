@@ -396,70 +396,22 @@ pub fn run(
         }
 
         for (idx, remaining) in scope.remaining.iter().enumerate() {
-            let parent_branch = if idx == 0 {
-                scope.trunk.clone()
+            let previous = if idx == 0 {
+                None
             } else {
-                scope.remaining[idx - 1].branch.clone()
+                Some(scope.remaining[idx - 1].branch.as_str())
             };
-            let parent_is_trunk = idx == 0;
-
-            let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching latest...");
-            let fetch_ok = fetch_remote_for_descendant_rebase(&repo, &remote_info.name)?;
-            if !fetch_ok {
-                LiveTimer::maybe_finish_warn(fetch_timer, "warning");
-            } else {
-                LiveTimer::maybe_finish_ok(fetch_timer, "done");
-            }
-
-            let remaining_timer = LiveTimer::maybe_new(
-                !quiet,
-                &format!("Rebasing {} onto {}...", remaining.branch, parent_branch),
-            );
-
-            let rebase_result = if parent_is_trunk {
-                rebase_descendant_onto_remote_trunk_with_provenance(
-                    &repo,
-                    &remaining.branch,
-                    &scope.trunk,
-                    &remote_info.name,
-                )
-            } else {
-                rebase_descendant_onto_parent_with_provenance(
-                    &repo,
-                    &remaining.branch,
-                    &parent_branch,
-                    &remote_info.name,
-                    false,
-                )
-            };
-
-            match rebase_result {
-                Ok(RebaseResult::Success) => {
-                    finalize_remaining_branch_push(
-                        &repo,
-                        &rt,
-                        &client,
-                        &remote_info.name,
-                        &remaining.branch,
-                        remaining.pr_number,
-                        &parent_branch,
-                        remaining_timer,
-                    )?;
-                }
-                Ok(RebaseResult::Conflict) => {
-                    let abort_dir = repo
-                        .branch_worktree_path(&remaining.branch)?
-                        .unwrap_or(repo.workdir()?.to_path_buf());
-                    let _ = Command::new("git")
-                        .args(["rebase", "--abort"])
-                        .current_dir(&abort_dir)
-                        .output();
-                    LiveTimer::maybe_finish_warn(remaining_timer, "conflict (skipped)");
-                }
-                Err(_) => {
-                    LiveTimer::maybe_finish_err(remaining_timer, "failed");
-                }
-            }
+            rebase_and_finalize_remaining_branch(
+                &repo,
+                &rt,
+                &client,
+                &remote_info.name,
+                &scope.trunk,
+                &remaining.branch,
+                remaining.pr_number,
+                previous,
+                quiet,
+            )?;
         }
     }
 
@@ -1011,7 +963,7 @@ fn wait_for_github_head_sync(
 
 /// Extract a concise, user-visible reason from `git push` stderr output.
 /// Returns the first non-empty line, or a generic fallback when stderr is empty.
-pub(crate) fn summarize_git_stderr(stderr: &[u8]) -> String {
+fn summarize_git_stderr(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
     text.lines()
         .map(|line| line.trim())
@@ -1024,11 +976,8 @@ pub(crate) fn summarize_git_stderr(stderr: &[u8]) -> String {
 /// PR base. Surfaces push or retarget failures via the supplied `LiveTimer`;
 /// on any failure the PR base is left pointing at the previous parent so the
 /// on-forge state cannot diverge from the remote branch contents.
-///
-/// Use this from the "remaining branches" rebase pass in both `merge` and
-/// `merge --when-ready`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn finalize_remaining_branch_push(
+fn finalize_remaining_branch_push(
     repo: &GitRepo,
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
@@ -1067,6 +1016,87 @@ pub(crate) fn finalize_remaining_branch_push(
     }
 
     LiveTimer::maybe_finish_ok(timer, "done");
+    Ok(())
+}
+
+/// Fetch, rebase, push, and retarget a single remaining-stack branch while
+/// preserving the relative chain: when `previous_remaining` is `None` the
+/// branch rebases onto `trunk`, otherwise it rebases onto the preceding
+/// remaining branch so the stack topology stays intact.
+///
+/// Failures (fetch, rebase conflict, push rejection, retarget) are surfaced
+/// via live-timer messages but do not abort the outer loop — other remaining
+/// branches can still be processed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rebase_and_finalize_remaining_branch(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    remote_name: &str,
+    trunk: &str,
+    branch: &str,
+    pr_number: Option<u64>,
+    previous_remaining: Option<&str>,
+    quiet: bool,
+) -> Result<()> {
+    let parent_is_trunk = previous_remaining.is_none();
+    let parent_branch = previous_remaining
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| trunk.to_string());
+
+    let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching latest...");
+    let fetch_ok = fetch_remote_for_descendant_rebase(repo, remote_name)?;
+    if !fetch_ok {
+        LiveTimer::maybe_finish_warn(fetch_timer, "warning");
+    } else {
+        LiveTimer::maybe_finish_ok(fetch_timer, "done");
+    }
+
+    let remaining_timer = LiveTimer::maybe_new(
+        !quiet,
+        &format!("Rebasing {} onto {}...", branch, parent_branch),
+    );
+
+    let rebase_result = if parent_is_trunk {
+        rebase_descendant_onto_remote_trunk_with_provenance(repo, branch, trunk, remote_name)
+    } else {
+        rebase_descendant_onto_parent_with_provenance(
+            repo,
+            branch,
+            &parent_branch,
+            remote_name,
+            false,
+        )
+    };
+
+    match rebase_result {
+        Ok(RebaseResult::Success) => {
+            finalize_remaining_branch_push(
+                repo,
+                rt,
+                client,
+                remote_name,
+                branch,
+                pr_number,
+                &parent_branch,
+                remaining_timer,
+            )?;
+        }
+        Ok(RebaseResult::Conflict) => {
+            let abort_dir = repo
+                .branch_worktree_path(branch)?
+                .unwrap_or(repo.workdir()?.to_path_buf());
+            let _ = Command::new("git")
+                .args(["rebase", "--abort"])
+                .current_dir(&abort_dir)
+                .output();
+            LiveTimer::maybe_finish_warn(remaining_timer, "conflict (skipped)");
+        }
+        Err(_) => {
+            LiveTimer::maybe_finish_err(remaining_timer, "failed");
+        }
+    }
+
     Ok(())
 }
 
