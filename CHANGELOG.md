@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.55.0] - 2026-04-20
+
 ### Added
 - `stax modify` and `stax create -m`: when nothing is staged in a TTY, replace the yes/no prompt with a Graphite-style menu offering `--patch` (selective `git add -p`), "continue without staging" (empty branch on `create`; amend message only on `modify`), and abort, in addition to the existing "stage all" option. Non-TTY behavior unchanged. (#309)
 - `stax create` wizard: pick `--patch` alongside "stage all" and "empty branch".
@@ -138,7 +140,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.54.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.55.0...HEAD
+[0.55.0]: https://github.com/cesarferreira/stax/compare/v0.54.0...v0.55.0
 [0.54.0]: https://github.com/cesarferreira/stax/compare/v0.53.0...v0.54.0
 [0.53.0]: https://github.com/cesarferreira/stax/compare/v0.52.0...v0.53.0
 [0.52.0]: https://github.com/cesarferreira/stax/compare/v0.51.0...v0.52.0
