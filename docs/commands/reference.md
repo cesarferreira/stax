@@ -13,6 +13,7 @@
 | `st sync` | `rs` | Pull trunk from remote, detect and delete merged branches (incl. squash merges), reparent their children — **no rebasing; confirmed cleanup can also remove a safe linked worktree that still owns the branch** |
 | `st sync --restack` | `rs --restack` | Everything `sync` does, **then** rebase the current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
+| `st refresh` | | Run `sync --restack`, then push branches and create/update PRs for the current stack |
 | `st restack` | | Rebase current stack onto parents (local only, no fetch/delete) — auto-normalizes missing or merged parents before rebasing; `--stop-here` limits scope to ancestors + current |
 | `st cascade` | | Restack from bottom and submit updates |
 | `st diff` | | Show per-branch diffs vs parent |

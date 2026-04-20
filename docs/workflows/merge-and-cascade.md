@@ -108,3 +108,14 @@ During merge flows, descendant branches are rebased with provenance-aware bounda
 | `st cascade --no-pr` | restack -> push |
 | `st cascade --no-submit` | restack only |
 | `st cascade --auto-stash-pop` | auto stash/pop dirty worktrees |
+
+## `st refresh`
+
+`st refresh` is the "bottom PR merged, catch me up" command. It prints the plan up front, runs `st sync --restack`, then hands off to the normal submit flow for the current stack.
+
+| Command | Behavior |
+|---|---|
+| `st refresh` | sync -> restack -> push -> create/update PRs |
+| `st refresh --no-pr` | sync -> restack -> push |
+| `st refresh --no-submit` | sync -> restack |
+| `st refresh --force` | force the sync step instead of prompting |

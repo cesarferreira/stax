@@ -371,6 +371,25 @@ enum Commands {
         auto_stash_pop: bool,
     },
 
+    /// Sync trunk, restack current stack, then submit updates
+    Refresh {
+        /// Push branches to remote but skip PR creation/updates
+        #[arg(long)]
+        no_pr: bool,
+        /// Skip all remote interaction after restack (local refresh only)
+        #[arg(long)]
+        no_submit: bool,
+        /// Force sync without prompts
+        #[arg(short, long)]
+        force: bool,
+        /// Avoid hard reset when updating trunk
+        #[arg(long)]
+        safe: bool,
+        /// Auto-stash and auto-pop dirty target worktrees during sync/restack
+        #[arg(long)]
+        auto_stash_pop: bool,
+    },
+
     /// Checkout a branch in the stack
     #[command(visible_aliases = ["co", "bco"])]
     Checkout {
@@ -1736,6 +1755,13 @@ pub fn run() -> Result<()> {
             no_submit,
             auto_stash_pop,
         } => commands::cascade::run(no_pr, no_submit, auto_stash_pop),
+        Commands::Refresh {
+            no_pr,
+            no_submit,
+            force,
+            safe,
+            auto_stash_pop,
+        } => commands::refresh::run(no_pr, no_submit, force, safe, auto_stash_pop),
         Commands::Checkout {
             branch,
             pr,

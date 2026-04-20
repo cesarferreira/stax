@@ -152,7 +152,7 @@ st ls
 st ss
 
 # 4. After the bottom PR merges on GitHub…
-st rs --restack    # pull trunk, clean merged, rebase the rest
+st refresh         # sync trunk, restack this stack, update PRs
 ```
 
 Picked the wrong trunk? Run `st trunk main` or `st init --trunk <branch>` to reconfigure.
@@ -251,6 +251,7 @@ st config --set-ai
 | `st ss` | Submit the full stack, open/update linked PRs |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--remote`, `--all`) |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
+| `st refresh` | Sync trunk, restack current stack, then push/update PRs |
 | `st restack` | Rebase current stack onto parents locally |
 | `st cascade` | Restack + push + open/update PRs |
 | `st split` | Split a branch into stacked branches (by commit or `--hunk`) |

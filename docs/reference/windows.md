@@ -11,7 +11,7 @@ Download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github
 All core stax features work on Windows without modification:
 
 - Stacked branches: `st create`, `st ls`, `st ll`, `st restack`
-- PR workflows: `st ss`, `st merge`, `st cascade`, `st pr`
+- PR workflows: `st ss`, `st merge`, `st cascade`, `st refresh`, `st pr`
 - Sync and cleanup: `st rs`, `st sync`
 - Undo/redo safety: `st undo`, `st redo`
 - Interactive TUI: `st` (no arguments)
