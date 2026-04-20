@@ -1,11 +1,11 @@
+use crate::commands::staging::{
+    self, ContinueLabel, StagingAction,
+};
 use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use console::Term;
-use dialoguer::{theme::ColorfulTheme, Confirm};
-use std::path::Path;
 use std::process::Command;
 
 enum ModifyTarget {
@@ -15,7 +15,8 @@ enum ModifyTarget {
 
 /// Amend staged changes into the current branch tip.
 /// When files are already staged, only those files are committed.
-/// When nothing is staged, prompts to stage all (or use `-a`).
+/// When nothing is staged, offers an interactive menu (stage all, --patch,
+/// amend message only, abort). Non-TTY bails with guidance to use `-a`.
 /// On a fresh tracked branch, `-m` creates the first branch-local commit safely.
 pub fn run(
     message: Option<String>,
@@ -29,7 +30,6 @@ pub fn run(
     let workdir = repo.workdir()?;
     let current = repo.current_branch()?;
 
-    // Check if there are any changes at all
     if !repo.is_dirty()? {
         if !quiet {
             println!("{}", "No changes to amend.".dimmed());
@@ -39,50 +39,41 @@ pub fn run(
 
     let target = modify_target(&repo, &current)?;
 
+    // True when the index is empty after resolving the menu — i.e. the user
+    // picked "amend message only" or exited `git add -p` without staging.
+    let mut empty_amend = false;
+
     if all {
-        // Explicit --all: force-stage everything, even when some files are
-        // already selectively staged.
-        stage_all(workdir)?;
-    } else {
-        // Check whether anything is already staged
-        let has_staged = !is_staging_area_empty(workdir)?;
-
-        if !has_staged {
-            // Nothing staged — prompt interactively, bail otherwise
-            if Term::stderr().is_term() {
-                let change_count = count_uncommitted_changes(workdir);
-                let prompt = if change_count > 0 {
-                    format!(
-                        "No files staged. Stage all changes ({} files modified)?",
-                        change_count
-                    )
-                } else {
-                    "No files staged. Stage all changes?".to_string()
-                };
-
-                let should_stage = Confirm::with_theme(&ColorfulTheme::default())
-                    .with_prompt(prompt)
-                    .default(true)
-                    .interact()?;
-
-                if !should_stage {
-                    println!(
-                        "{}",
-                        "Aborted. Stage files with `git add` first, or use `stax modify -a`."
-                            .dimmed()
-                    );
+        staging::stage_all(workdir)?;
+    } else if staging::is_staging_area_empty(workdir)? {
+        match staging::prompt_action(
+            workdir,
+            ContinueLabel::AmendMessageOnly,
+            "Stage files with `git add` first, or use `stax modify -a`.",
+        )? {
+            StagingAction::All => staging::stage_all(workdir)?,
+            StagingAction::Patch => {
+                staging::stage_patch(workdir)?;
+                if staging::is_staging_area_empty(workdir)? {
+                    staging::print_patch_empty_notice();
                     return Ok(());
                 }
-            } else {
-                anyhow::bail!(
-                    "No files staged. Stage files with `git add` first, or use `stax modify -a`."
-                );
             }
-
-            stage_all(workdir)?;
+            StagingAction::Continue => {
+                // Amend message only — leave the index empty and proceed.
+                empty_amend = true;
+            }
+            StagingAction::Abort => {
+                println!(
+                    "{}",
+                    "Aborted. Stage files with `git add` first, or use `stax modify -a`."
+                        .dimmed()
+                );
+                return Ok(());
+            }
         }
-        // else: staged changes exist — proceed with them as-is
     }
+    // else: index already has staged changes — proceed with them as-is.
 
     match target {
         ModifyTarget::Amend => {
@@ -92,7 +83,13 @@ pub fn run(
                 amend_args.push("--no-verify");
             }
 
-            if let Some(ref msg) = message {
+            // Empty message-only amend: if the user also passed -m we pass it
+            // through; otherwise open the editor with the existing message.
+            if empty_amend && message.is_none() {
+                // No `-m`, no `--no-edit` — fall through to the editor so the
+                // user can rewrite the message (the whole point of picking
+                // "amend message only").
+            } else if let Some(ref msg) = message {
                 amend_args.push("-m");
                 amend_args.push(msg);
             } else {
@@ -110,7 +107,14 @@ pub fn run(
             }
 
             if !quiet {
-                if message.is_some() {
+                if empty_amend && message.is_none() {
+                    println!(
+                        "{} {} {}",
+                        "Amended".green(),
+                        current.cyan(),
+                        "(message only)".dimmed()
+                    );
+                } else if message.is_some() {
                     println!("{} {}", "Amended".green(), current.cyan());
                 } else {
                     println!(
@@ -133,6 +137,13 @@ pub fn run(
                     parent,
                 )
             })?;
+
+            if empty_amend {
+                anyhow::bail!(
+                    "Cannot create the first branch-local commit with an empty index.\n\
+                     Stage files with `git add`, re-run with `-a`, or pick a staging option in the menu."
+                );
+            }
 
             let mut commit_args = vec!["commit", "-m", commit_message];
             if no_verify {
@@ -177,45 +188,6 @@ pub fn run(
     }
 
     Ok(())
-}
-
-/// Run `git add -A` to stage all changes (tracked, modified, untracked).
-fn stage_all(workdir: &Path) -> Result<()> {
-    let status = Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(workdir)
-        .status()
-        .context("Failed to stage changes")?;
-
-    if !status.success() {
-        anyhow::bail!("Failed to stage changes");
-    }
-    Ok(())
-}
-
-/// Returns true when the staging area has no changes relative to HEAD.
-fn is_staging_area_empty(workdir: &Path) -> Result<bool> {
-    let status = Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
-        .current_dir(workdir)
-        .status()
-        .context("Failed to check staged changes")?;
-    Ok(status.success())
-}
-
-/// Count files with uncommitted changes (staged + unstaged + untracked).
-fn count_uncommitted_changes(workdir: &Path) -> usize {
-    Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(workdir)
-        .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .count()
-        })
-        .unwrap_or(0)
 }
 
 fn modify_target(repo: &GitRepo, current: &str) -> Result<ModifyTarget> {

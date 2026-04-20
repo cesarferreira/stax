@@ -34,8 +34,8 @@
 
 | Command | Alias | Description |
 |---|---|---|
-| `st create <name>` | `c`, `bc` | Create stacked branch |
-| `st modify` | `m` | Amend staged changes into current commit; prompts when nothing is staged (`-a` to stage all); on a fresh tracked branch, `-m` creates the first commit safely; `-r` restacks the stack afterwards |
+| `st create <name>` | `c`, `bc` | Create stacked branch. With `-m` and nothing staged, offers a TTY menu: stage all, `--patch`, empty branch, or abort |
+| `st modify` | `m` | Amend staged changes into current commit. With nothing staged, offers a TTY menu: stage all, `--patch`, amend message only, or abort (`-a` skips the menu and stages all); on a fresh tracked branch, `-m` creates the first commit safely; `-r` restacks the stack afterwards |
 | `st rename` | | Rename current branch |
 | `st branch track` | | Track existing branch |
 | `st branch track --all-prs` | | Track all open PRs (GitHub, GitLab, Gitea) |
@@ -161,7 +161,9 @@ Worktree launch examples:
 - `st modify -am "msg"` (stage all and amend with new message)
 - `st modify -r` (amend and restack the stack)
 - `st modify -ar` (stage all, amend, and restack)
+- `st modify` with nothing staged in a TTY prompts: stage all, `--patch`, amend message only, or abort
 - `st create -am "msg"`
+- `st create -m "msg"` with nothing staged in a TTY prompts: stage all, `--patch`, empty branch, or abort
 - `st branch create --message "msg" --prefix feature/`
 - `st branch reparent --branch feature-a --parent main`
 - `st branch rename --push`

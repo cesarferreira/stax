@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+### Added
+- `stax modify` and `stax create -m`: when nothing is staged in a TTY, replace the yes/no prompt with a Graphite-style menu offering `--patch` (selective `git add -p`), "continue without staging" (empty branch on `create`; amend message only on `modify`), and abort, in addition to the existing "stage all" option. Non-TTY behavior unchanged. (#309)
+- `stax create` wizard: pick `--patch` alongside "stage all" and "empty branch".
 ## [0.54.0] - 2026-04-20
 
 ## [0.53.0] - 2026-04-17

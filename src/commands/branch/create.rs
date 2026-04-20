@@ -15,7 +15,12 @@
 //!
 //! Both flows share `create_branch_with_banner` for the create → metadata →
 //! `--insert` → checkout → summary sequence.
+//!
+//! When the user passes `-m` but nothing is staged and `-a` wasn't supplied,
+//! `stax create` offers the shared staging menu (see
+//! `crate::commands::staging`) — stage all, `--patch`, empty branch, or abort.
 
+use crate::commands::staging::{self, ContinueLabel, StagingAction};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
@@ -23,14 +28,18 @@ use crate::remote;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use console::Term;
-use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Input, Select};
 use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StageMode {
+    /// No staging (plain `stax create <name>` or wizard empty-branch choice).
     None,
+    /// `-m` was passed without `-a`: prompt if nothing is staged, otherwise
+    /// commit what's already in the index.
     ExistingOnly,
+    /// `-a/--all` was passed: force-stage everything.
     All,
 }
 
@@ -55,7 +64,8 @@ pub fn run(
     // Get the branch name from either name or message
     // When using -m, the message is used for both branch name and commit message.
     // `stax create -m` respects already-staged changes. When nothing is staged
-    // it prompts interactively (or bails in non-TTY). Use -a/--all to skip the prompt.
+    // it offers an interactive menu (or bails in non-TTY). Use -a/--all to
+    // skip the menu and force-stage.
     // When neither name nor message is provided, launch interactive wizard.
     let (input, commit_message, stage_mode) = match (&name, &message) {
         (Some(n), _) => (
@@ -73,24 +83,15 @@ pub fn run(
             },
         ),
         (None, None) => {
-            // Check if we're in an interactive terminal
             if !Term::stderr().is_term() {
                 bail!(
                     "Branch name required. Use: stax create <name> or stax create -m \"message\""
                 );
             }
             // Launch interactive wizard
-            let (wizard_name, wizard_msg, wizard_stage_all) =
+            let (wizard_name, wizard_msg, wizard_stage) =
                 run_wizard(repo.workdir()?, &parent_branch)?;
-            (
-                wizard_name,
-                wizard_msg,
-                if wizard_stage_all {
-                    StageMode::All
-                } else {
-                    StageMode::None
-                },
-            )
+            (wizard_name, wizard_msg, wizard_stage)
         }
     };
 
@@ -103,28 +104,33 @@ pub fn run(
     let branch_name =
         resolve_branch_name_conflicts(&branch_name, &existing_branches, generated_from_message)?;
 
-    // Before creating the branch, check if we need to prompt about staging.
-    // Doing this early means declining is a clean no-op (no orphaned branch).
-    let needs_stage_all = if stage_mode == StageMode::ExistingOnly {
+    // Before creating the branch, resolve the staging question. Doing this
+    // early means declining ("Abort" / empty `--patch` exit) is a clean no-op
+    // — no orphaned branch, no refs touched.
+    //
+    // Returns (needs_stage_all, skip_commit):
+    //   needs_stage_all — run `git add -A` before the commit.
+    //   skip_commit     — the user picked "empty branch"; drop the message and
+    //                     create an empty branch instead of committing.
+    let (needs_stage_all, skip_commit) = if stage_mode == StageMode::ExistingOnly {
         let workdir = repo.workdir()?;
-        if is_staging_area_empty(workdir) && has_uncommitted_changes(workdir) {
-            if Term::stderr().is_term() {
-                let change_count = count_uncommitted_changes(workdir);
-                let prompt = if change_count > 0 {
-                    format!(
-                        "No files staged. Stage all changes ({} files modified)?",
-                        change_count
-                    )
-                } else {
-                    "No files staged. Stage all changes?".to_string()
-                };
-
-                let should_stage = Confirm::with_theme(&ColorfulTheme::default())
-                    .with_prompt(prompt)
-                    .default(true)
-                    .interact()?;
-
-                if !should_stage {
+        if staging::is_staging_area_empty(workdir)? && staging::has_uncommitted_changes(workdir) {
+            match staging::prompt_action(
+                workdir,
+                ContinueLabel::EmptyBranch,
+                "Stage files with `git add` first, or use `stax create -a -m \"message\"`.",
+            )? {
+                StagingAction::All => (true, false),
+                StagingAction::Patch => {
+                    staging::stage_patch(workdir)?;
+                    if staging::is_staging_area_empty(workdir)? {
+                        staging::print_patch_empty_notice();
+                        return Ok(());
+                    }
+                    (false, false)
+                }
+                StagingAction::Continue => (false, true),
+                StagingAction::Abort => {
                     println!(
                         "{}",
                         "Aborted. Stage files with `git add` first, or use `stax create -a -m \"message\"`."
@@ -132,18 +138,15 @@ pub fn run(
                     );
                     return Ok(());
                 }
-                true
-            } else {
-                bail!(
-                    "No files staged. Stage files with `git add` first, or use `stax create -a -m \"message\"`."
-                );
             }
         } else {
-            false
+            (false, false)
         }
     } else {
-        false
+        (false, false)
     };
+
+    let commit_message = if skip_commit { None } else { commit_message };
 
     // Commit-first path: when the user supplied -m and the new branch stacks on
     // the current branch, run the commit on the current branch BEFORE creating
@@ -184,7 +187,7 @@ pub fn run(
         let workdir = repo.workdir()?;
 
         if stage_mode == StageMode::All || needs_stage_all {
-            if let Err(e) = stage_all(workdir) {
+            if let Err(e) = staging::stage_all(workdir) {
                 rollback_create(&repo, &current, &branch_name);
                 return Err(e);
             }
@@ -194,7 +197,7 @@ pub fn run(
         // `--from <other>` + `-m` path; the common `-m` without `--from` case
         // returns early via `run_commit_first`.
         if let Some(msg) = commit_message {
-            if is_staging_area_empty(workdir) {
+            if staging::is_staging_area_empty(workdir)? {
                 println!("{}", "No changes to commit".dimmed());
             } else {
                 commit_or_rollback(workdir, &msg, &repo, &current, &branch_name)?;
@@ -293,13 +296,13 @@ fn run_commit_first(
 
     // Stage (if requested) BEFORE the commit so hooks see the final tree.
     if stage_mode == StageMode::All || needs_stage_all {
-        stage_all(workdir)?;
+        staging::stage_all(workdir)?;
     }
 
     // If nothing is staged by the time we reach here, there is no commit to
     // make. Fall back to creating an empty branch — same shape as the
     // branch-first path without the trailing commit.
-    if is_staging_area_empty(workdir) {
+    if staging::is_staging_area_empty(workdir)? {
         create_branch_with_banner(repo, config, current, current, branch_name, insert)?;
         println!("{}", "No changes to commit".dimmed());
         print_tips(config);
@@ -608,9 +611,16 @@ fn append_branch_suffix(branch_name: &str, suffix: usize) -> String {
     }
 }
 
-/// Interactive wizard for branch creation when no arguments provided
-fn run_wizard(workdir: &Path, parent_branch: &str) -> Result<(String, Option<String>, bool)> {
-    // Show header
+/// Interactive wizard for branch creation when no arguments provided.
+///
+/// Returns `(branch_name, commit_message, stage_mode)`. When the wizard
+/// routes to the staging menu and the user picks `--patch`, we run
+/// `git add -p` inline so the caller sees the "staged manually" shape
+/// (`StageMode::ExistingOnly`, no auto-stage-all).
+fn run_wizard(
+    workdir: &Path,
+    parent_branch: &str,
+) -> Result<(String, Option<String>, StageMode)> {
     println!();
     println!("╭─ Create Stacked Branch ─────────────────────────────╮");
     println!(
@@ -620,7 +630,6 @@ fn run_wizard(workdir: &Path, parent_branch: &str) -> Result<(String, Option<Str
     println!("╰─────────────────────────────────────────────────────╯");
     println!();
 
-    // 1. Branch name prompt (required)
     let name: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Branch name")
         .interact_text()?;
@@ -629,98 +638,65 @@ fn run_wizard(workdir: &Path, parent_branch: &str) -> Result<(String, Option<Str
         bail!("Branch name cannot be empty");
     }
 
-    // 2. Check for uncommitted changes
-    let has_changes = has_uncommitted_changes(workdir);
-    let change_count = count_uncommitted_changes(workdir);
+    let has_changes = staging::has_uncommitted_changes(workdir);
+    let change_count = staging::count_uncommitted_changes(workdir);
 
-    let (should_stage, commit_message) = if has_changes {
+    if !has_changes {
         println!();
+        return Ok((name, None, StageMode::None));
+    }
 
-        // Show staging options with change count
-        let stage_label = if change_count > 0 {
-            format!("Stage all changes ({} files modified)", change_count)
-        } else {
-            "Stage all changes".to_string()
-        };
+    println!();
 
-        let options = vec![stage_label.as_str(), "Empty branch (no changes)"];
-
-        let choice = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("What to include")
-            .items(&options)
-            .default(0)
-            .interact()?;
-
-        let stage = choice == 0;
-
-        // 3. Optional commit message (only if staging)
-        let msg = if stage {
-            println!();
-            let m: String = Input::with_theme(&ColorfulTheme::default())
-                .with_prompt("Commit message (Enter to skip)")
-                .allow_empty(true)
-                .interact_text()?;
-            if m.is_empty() {
-                None
-            } else {
-                Some(m)
-            }
-        } else {
-            None
-        };
-
-        (stage, msg)
+    let stage_label = if change_count > 0 {
+        format!("Stage all changes ({} files modified)", change_count)
     } else {
-        (false, None)
+        "Stage all changes".to_string()
+    };
+    let options = vec![
+        stage_label.as_str(),
+        "Select changes to commit (--patch)",
+        "Empty branch (no changes)",
+    ];
+
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("What to include")
+        .items(&options)
+        .default(0)
+        .interact()?;
+
+    let stage_mode = match choice {
+        0 => StageMode::All,
+        1 => {
+            staging::stage_patch(workdir)?;
+            if staging::is_staging_area_empty(workdir)? {
+                staging::print_patch_empty_notice();
+                // Fall through to creating the branch with no commit —
+                // matches the "empty branch" outcome.
+                StageMode::None
+            } else {
+                StageMode::ExistingOnly
+            }
+        }
+        _ => StageMode::None,
+    };
+
+    // Commit message only when we have something staged.
+    let msg = if stage_mode != StageMode::None {
+        println!();
+        let m: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Commit message (Enter to skip)")
+            .allow_empty(true)
+            .interact_text()?;
+        if m.is_empty() {
+            None
+        } else {
+            Some(m)
+        }
+    } else {
+        None
     };
 
     println!();
-    Ok((name, commit_message, should_stage))
-}
-
-/// Run `git add -A` to stage all changes (tracked, modified, untracked).
-fn stage_all(workdir: &Path) -> Result<()> {
-    let status = Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(workdir)
-        .status()?;
-    if !status.success() {
-        bail!("Failed to stage changes");
-    }
-    Ok(())
-}
-
-/// Returns true when the staging area has no changes relative to HEAD.
-fn is_staging_area_empty(workdir: &Path) -> bool {
-    Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
-        .current_dir(workdir)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(true)
-}
-
-/// Check if there are uncommitted changes in the working directory
-fn has_uncommitted_changes(workdir: &Path) -> bool {
-    Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(workdir)
-        .output()
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(false)
-}
-
-/// Count the number of files with uncommitted changes
-fn count_uncommitted_changes(workdir: &Path) -> usize {
-    Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(workdir)
-        .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .count()
-        })
-        .unwrap_or(0)
+    Ok((name, msg, stage_mode))
 }
