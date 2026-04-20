@@ -200,16 +200,58 @@ fn format_timing_footer(timing: &BranchTiming, overall_status: Option<&str>) -> 
                     format!("~{} left", format_duration(avg - timing.elapsed_secs))
                 };
                 format!(
-                    "{}  {}  {}%  ⏱ {}  elapsed  {}",
+                    "{}  {}  {}%  ⏱ {}  elapsed  {}  (avg: {})",
                     "running".yellow().bold(),
                     bar,
                     pct,
                     elapsed_str,
-                    eta
+                    eta,
+                    format_duration(avg)
                 )
             }
             _ => format!("{}  ⏱ {} elapsed", "running".yellow().bold(), elapsed_str),
         }
+    }
+}
+
+fn check_timing_text(check: &CheckRunInfo) -> String {
+    match check.status.as_str() {
+        "completed" => match (check.elapsed_secs, check.average_secs) {
+            (Some(elapsed), Some(avg)) => {
+                format!(
+                    "{}  (avg: {})",
+                    format_duration(elapsed),
+                    format_duration(avg)
+                )
+            }
+            (Some(elapsed), None) => format_duration(elapsed),
+            (None, Some(avg)) => format!("avg: {}", format_duration(avg)),
+            (None, None) => String::new(),
+        },
+        "in_progress" | "pending" | "queued" | "waiting" | "requested" => {
+            match (check.elapsed_secs, check.average_secs) {
+                (Some(elapsed), Some(avg)) => {
+                    if elapsed >= avg {
+                        format!(
+                            "{}  overdue (avg: {})",
+                            format_duration(elapsed),
+                            format_duration(avg)
+                        )
+                    } else {
+                        format!(
+                            "{}  ~{} left (avg: {})",
+                            format_duration(elapsed),
+                            format_duration(avg - elapsed),
+                            format_duration(avg)
+                        )
+                    }
+                }
+                (Some(elapsed), None) => format!("{} elapsed", format_duration(elapsed)),
+                (None, Some(avg)) => format!("avg: {}", format_duration(avg)),
+                (None, None) => String::new(),
+            }
+        }
+        _ => String::new(),
     }
 }
 
@@ -590,48 +632,7 @@ fn display_branch_verbose(repo: &GitRepo, status: &BranchCiStatus, is_current: b
     sorted.sort_by_key(check_sort_key);
 
     // Pre-compute timing strings so we can measure max width for right-alignment
-    let timing_cols: Vec<String> = sorted
-        .iter()
-        .map(|check| match check.status.as_str() {
-            "completed" => {
-                if let Some(elapsed) = check.elapsed_secs {
-                    match check.average_secs {
-                        Some(avg) => format!(
-                            "{}  (avg: {})",
-                            format_duration(elapsed),
-                            format_duration(avg)
-                        ),
-                        None => format_duration(elapsed),
-                    }
-                } else {
-                    String::new()
-                }
-            }
-            "in_progress" | "pending" | "queued" | "waiting" | "requested" => {
-                if let (Some(elapsed), Some(avg)) = (check.elapsed_secs, check.average_secs) {
-                    if elapsed >= avg {
-                        format!(
-                            "{}  overdue (avg: {})",
-                            format_duration(elapsed),
-                            format_duration(avg)
-                        )
-                    } else {
-                        format!(
-                            "{}  ~{} left (avg: {})",
-                            format_duration(elapsed),
-                            format_duration(avg - elapsed),
-                            format_duration(avg)
-                        )
-                    }
-                } else if let Some(elapsed) = check.elapsed_secs {
-                    format!("{} elapsed", format_duration(elapsed))
-                } else {
-                    String::new()
-                }
-            }
-            _ => String::new(),
-        })
-        .collect();
+    let timing_cols: Vec<String> = sorted.iter().map(check_timing_text).collect();
 
     let max_timing = timing_cols.iter().map(|s| s.len()).max().unwrap_or(0);
 
@@ -995,69 +996,7 @@ async fn fetch_commit_statuses(
         return Ok((None, Vec::new()));
     }
 
-    let mut check_runs: Vec<CheckRunInfo> = Vec::new();
-
-    for status in statuses {
-        let (status_str, conclusion, elapsed_secs) = match status.state.as_str() {
-            "success" => {
-                let elapsed = if let (Some(created), Some(updated)) =
-                    (&status.created_at, &status.updated_at)
-                {
-                    if let (Ok(created_time), Ok(updated_time)) = (
-                        created.parse::<DateTime<Utc>>(),
-                        updated.parse::<DateTime<Utc>>(),
-                    ) {
-                        let duration = updated_time.signed_duration_since(created_time);
-                        Some(duration.num_seconds().max(0) as u64)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                (
-                    "completed".to_string(),
-                    Some("success".to_string()),
-                    elapsed,
-                )
-            }
-            "failure" | "error" => ("completed".to_string(), Some("failure".to_string()), None),
-            "pending" => ("in_progress".to_string(), None, None),
-            _ => ("queued".to_string(), None, None),
-        };
-
-        let average_secs = match history::load_check_history(repo, &status.context) {
-            Ok(hist) => history::calculate_average(&hist),
-            Err(_) => None,
-        };
-
-        let completion_percent = if status_str == "in_progress" {
-            if let (Some(elapsed), Some(avg)) = (elapsed_secs, average_secs) {
-                if avg > 0 {
-                    let pct: u64 = ((elapsed * 100) / avg).min(99);
-                    Some(pct as u8)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        check_runs.push(CheckRunInfo {
-            name: status.context,
-            status: status_str,
-            conclusion,
-            url: status.target_url,
-            started_at: status.created_at,
-            completed_at: status.updated_at.clone(),
-            elapsed_secs,
-            average_secs,
-            completion_percent,
-        });
-    }
+    let check_runs = normalize_commit_statuses(repo, statuses, Utc::now());
 
     let mut has_pending = false;
     let mut has_failure = false;
@@ -1096,6 +1035,126 @@ async fn fetch_commit_statuses(
     };
 
     Ok((overall, check_runs))
+}
+
+fn normalize_commit_statuses(
+    repo: &GitRepo,
+    statuses: Vec<CommitStatus>,
+    now: DateTime<Utc>,
+) -> Vec<CheckRunInfo> {
+    let mut by_context: HashMap<String, Vec<CommitStatus>> = HashMap::new();
+    for status in statuses {
+        by_context
+            .entry(status.context.clone())
+            .or_default()
+            .push(status);
+    }
+
+    let mut check_runs = Vec::new();
+    for (context, events) in by_context {
+        if let Some(check_run) = normalize_commit_status_context(repo, &context, &events, now) {
+            check_runs.push(check_run);
+        }
+    }
+
+    check_runs.sort_by(|a, b| a.name.cmp(&b.name));
+    check_runs
+}
+
+fn normalize_commit_status_context(
+    repo: &GitRepo,
+    context: &str,
+    events: &[CommitStatus],
+    now: DateTime<Utc>,
+) -> Option<CheckRunInfo> {
+    let latest = events
+        .iter()
+        .max_by_key(|status| commit_status_event_time(status))?;
+    let latest_time = commit_status_event_time(latest)?;
+
+    let average_secs = match history::load_check_history(repo, context) {
+        Ok(hist) => history::calculate_average(&hist),
+        Err(_) => None,
+    };
+
+    let pending_start = events
+        .iter()
+        .filter(|status| status.state == "pending")
+        .filter_map(commit_status_event_time)
+        .filter(|time| *time <= latest_time)
+        .max();
+
+    let (status, conclusion, started_at, completed_at, elapsed_secs) = match latest.state.as_str() {
+        "success" => (
+            "completed".to_string(),
+            Some("success".to_string()),
+            pending_start.map(|time| time.to_rfc3339()),
+            Some(latest_time.to_rfc3339()),
+            pending_start
+                .map(|time| latest_time.signed_duration_since(time).num_seconds().max(0) as u64),
+        ),
+        "failure" | "error" => (
+            "completed".to_string(),
+            Some("failure".to_string()),
+            pending_start.map(|time| time.to_rfc3339()),
+            Some(latest_time.to_rfc3339()),
+            pending_start
+                .map(|time| latest_time.signed_duration_since(time).num_seconds().max(0) as u64),
+        ),
+        "pending" => (
+            "in_progress".to_string(),
+            None,
+            Some(latest_time.to_rfc3339()),
+            None,
+            Some(now.signed_duration_since(latest_time).num_seconds().max(0) as u64),
+        ),
+        _ => (
+            "queued".to_string(),
+            None,
+            latest.created_at.clone(),
+            latest.updated_at.clone(),
+            None,
+        ),
+    };
+
+    let completion_percent = if status == "in_progress" {
+        if let (Some(elapsed), Some(avg)) = (elapsed_secs, average_secs) {
+            if avg > 0 {
+                Some(((elapsed * 100) / avg).min(99) as u8)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Some(CheckRunInfo {
+        name: context.to_string(),
+        status,
+        conclusion,
+        url: latest.target_url.clone(),
+        started_at,
+        completed_at,
+        elapsed_secs,
+        average_secs,
+        completion_percent,
+    })
+}
+
+fn commit_status_event_time(status: &CommitStatus) -> Option<DateTime<Utc>> {
+    status
+        .created_at
+        .as_deref()
+        .and_then(|value| value.parse::<DateTime<Utc>>().ok())
+        .or_else(|| {
+            status
+                .updated_at
+                .as_deref()
+                .and_then(|value| value.parse::<DateTime<Utc>>().ok())
+        })
 }
 
 async fn fetch_check_runs(
@@ -1299,6 +1358,23 @@ fn check_icon_label(check: &CheckRunInfo) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::GitRepo;
+    use chrono::TimeZone;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn init_temp_repo() -> (TempDir, GitRepo) {
+        let tempdir = TempDir::new().unwrap();
+        let status = Command::new("git")
+            .args(["init"])
+            .current_dir(tempdir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let repo = GitRepo::open_from_path(tempdir.path()).unwrap();
+        (tempdir, repo)
+    }
 
     #[test]
     fn test_render_progress_bar_empty() {
@@ -1550,6 +1626,97 @@ mod tests {
         assert!(json.contains("90"));
         assert!(json.contains("120"));
         assert!(json.contains("75"));
+    }
+
+    #[test]
+    fn test_check_timing_text_running_without_elapsed_still_shows_average() {
+        let info = CheckRunInfo {
+            name: "android suite".to_string(),
+            status: "in_progress".to_string(),
+            conclusion: None,
+            url: None,
+            started_at: None,
+            completed_at: None,
+            elapsed_secs: None,
+            average_secs: Some(1500),
+            completion_percent: None,
+        };
+
+        assert_eq!(check_timing_text(&info), "avg: 25m");
+    }
+
+    #[test]
+    fn test_format_timing_footer_running_includes_average() {
+        let timing = BranchTiming {
+            elapsed_secs: 1800,
+            average_secs: Some(1500),
+            is_complete: false,
+            pct: Some(99),
+        };
+
+        let footer = format_timing_footer(&timing, Some("pending"));
+        assert!(footer.contains("avg: 25m"), "footer was: {footer}");
+        assert!(footer.contains("overdue"), "footer was: {footer}");
+    }
+
+    #[test]
+    fn test_normalize_commit_status_context_pending_tracks_elapsed_from_created_at() {
+        let (_tempdir, repo) = init_temp_repo();
+        history::add_completion(
+            &repo,
+            "android suite",
+            1500,
+            "2026-01-16T11:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        let now = Utc.with_ymd_and_hms(2026, 1, 16, 12, 25, 0).unwrap();
+        let events = vec![CommitStatus {
+            context: "android suite".to_string(),
+            state: "pending".to_string(),
+            target_url: None,
+            created_at: Some("2026-01-16T12:00:00Z".to_string()),
+            updated_at: Some("2026-01-16T12:00:00Z".to_string()),
+        }];
+
+        let run = normalize_commit_status_context(&repo, "android suite", &events, now).unwrap();
+        assert_eq!(run.status, "in_progress");
+        assert_eq!(run.elapsed_secs, Some(1500));
+        assert_eq!(run.average_secs, Some(1500));
+        assert_eq!(run.completion_percent, Some(99));
+    }
+
+    #[test]
+    fn test_normalize_commit_status_context_uses_pending_to_success_duration() {
+        let (_tempdir, repo) = init_temp_repo();
+        let now = Utc.with_ymd_and_hms(2026, 1, 16, 12, 30, 0).unwrap();
+        let events = vec![
+            CommitStatus {
+                context: "android suite".to_string(),
+                state: "pending".to_string(),
+                target_url: Some("https://example.com/pending".to_string()),
+                created_at: Some("2026-01-16T12:00:00Z".to_string()),
+                updated_at: Some("2026-01-16T12:00:00Z".to_string()),
+            },
+            CommitStatus {
+                context: "android suite".to_string(),
+                state: "success".to_string(),
+                target_url: Some("https://example.com/success".to_string()),
+                created_at: Some("2026-01-16T12:25:00Z".to_string()),
+                updated_at: Some("2026-01-16T12:25:00Z".to_string()),
+            },
+        ];
+
+        let run = normalize_commit_status_context(&repo, "android suite", &events, now).unwrap();
+        assert_eq!(run.status, "completed");
+        assert_eq!(run.conclusion.as_deref(), Some("success"));
+        assert_eq!(run.started_at.as_deref(), Some("2026-01-16T12:00:00+00:00"));
+        assert_eq!(
+            run.completed_at.as_deref(),
+            Some("2026-01-16T12:25:00+00:00")
+        );
+        assert_eq!(run.elapsed_secs, Some(1500));
+        assert_eq!(run.url.as_deref(), Some("https://example.com/success"));
     }
 
     #[test]

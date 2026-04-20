@@ -278,8 +278,7 @@ pub fn run(
                 }
                 Err(e) => {
                     LiveTimer::maybe_finish_err(merge_timer, "failed");
-                    failed_pr =
-                        Some((branch_info.branch.clone(), pr_number, format!("{:#}", e)));
+                    failed_pr = Some((branch_info.branch.clone(), pr_number, format!("{:#}", e)));
                     break;
                 }
             }

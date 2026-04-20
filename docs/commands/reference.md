@@ -106,7 +106,7 @@
 | `st pr list` | List open pull requests in the current repo (GitHub, GitLab, Gitea) |
 | `st issue list` | List open issues in the current repo (GitHub, GitLab, Gitea) |
 | `st open` | Open repository in browser |
-| `st ci` | Show CI status for current branch (full per-check table with ETA) |
+| `st ci` | Show CI status for current branch (full per-check table with elapsed, ETA, and recent averages when history exists) |
 | `st ci --stack` | Show CI status for all branches in current stack |
 | `st ci --all` | Show CI status for all tracked branches |
 | `st ci --watch` | Watch CI until completion, polls every 15s |

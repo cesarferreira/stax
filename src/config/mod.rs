@@ -240,9 +240,7 @@ pub struct GitConfig {
 
 impl Default for GitConfig {
     fn default() -> Self {
-        Self {
-            rerere: true,
-        }
+        Self { rerere: true }
     }
 }
 

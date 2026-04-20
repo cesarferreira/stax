@@ -96,21 +96,13 @@ fn test_status_during_rebase_gives_clear_error() {
     repo.create_conflict_scenario();
     let _ = repo.run_stax(&["restack", "--yes", "--quiet"]);
 
-    assert!(
-        repo.has_rebase_in_progress(),
-        "Expected rebase in progress"
-    );
+    assert!(repo.has_rebase_in_progress(), "Expected rebase in progress");
 
     let output = repo.run_stax(&["status"]);
 
-    let combined = format!(
-        "{}{}",
-        TestRepo::stdout(&output),
-        TestRepo::stderr(&output)
-    );
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
     assert!(
-        combined.contains("rebase is in progress")
-            || combined.contains("rebase in progress"),
+        combined.contains("rebase is in progress") || combined.contains("rebase in progress"),
         "Expected 'rebase in progress' message, got:\n{}",
         combined
     );
@@ -125,21 +117,13 @@ fn test_log_during_rebase_gives_clear_error() {
     repo.create_conflict_scenario();
     let _ = repo.run_stax(&["restack", "--yes", "--quiet"]);
 
-    assert!(
-        repo.has_rebase_in_progress(),
-        "Expected rebase in progress"
-    );
+    assert!(repo.has_rebase_in_progress(), "Expected rebase in progress");
 
     let output = repo.run_stax(&["log"]);
 
-    let combined = format!(
-        "{}{}",
-        TestRepo::stdout(&output),
-        TestRepo::stderr(&output)
-    );
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
     assert!(
-        combined.contains("rebase is in progress")
-            || combined.contains("rebase in progress"),
+        combined.contains("rebase is in progress") || combined.contains("rebase in progress"),
         "Expected 'rebase in progress' message, got:\n{}",
         combined
     );
@@ -154,21 +138,14 @@ fn test_continue_during_rebase_still_works() {
     repo.create_conflict_scenario();
     let _ = repo.run_stax(&["restack", "--yes", "--quiet"]);
 
-    assert!(
-        repo.has_rebase_in_progress(),
-        "Expected rebase in progress"
-    );
+    assert!(repo.has_rebase_in_progress(), "Expected rebase in progress");
 
     // `continue` should NOT be blocked by the rebase guard.
     // It will report "more conflicts" since we haven't resolved, but it
     // should not say "rebase is in progress" as a blocking error.
     let output = repo.run_stax(&["continue"]);
 
-    let combined = format!(
-        "{}{}",
-        TestRepo::stdout(&output),
-        TestRepo::stderr(&output)
-    );
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
     assert!(
         !combined.contains("A rebase is in progress. Resolve"),
         "continue should not be blocked by rebase guard, got:\n{}",
@@ -184,10 +161,7 @@ fn test_abort_during_rebase_clears_state() {
     repo.create_conflict_scenario();
     let _ = repo.run_stax(&["restack", "--yes", "--quiet"]);
 
-    assert!(
-        repo.has_rebase_in_progress(),
-        "Expected rebase in progress"
-    );
+    assert!(repo.has_rebase_in_progress(), "Expected rebase in progress");
 
     let output = repo.run_stax(&["abort"]);
 
@@ -285,17 +259,11 @@ fn test_restack_continue_after_git_rebase_continue() {
 
     // Drive into conflict
     let _ = repo.run_stax(&["restack", "--yes", "--quiet"]);
-    assert!(
-        repo.has_rebase_in_progress(),
-        "Expected rebase in progress"
-    );
+    assert!(repo.has_rebase_in_progress(), "Expected rebase in progress");
 
     // Resolve via git directly (bypassing stax)
     repo.resolve_conflicts_ours();
-    let git_continue = repo.git_with_env(
-        &["rebase", "--continue"],
-        &[("GIT_EDITOR", "true")],
-    );
+    let git_continue = repo.git_with_env(&["rebase", "--continue"], &[("GIT_EDITOR", "true")]);
     assert!(
         git_continue.status.success(),
         "git rebase --continue failed: {}",

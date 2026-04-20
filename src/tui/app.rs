@@ -671,12 +671,8 @@ impl App {
             .list_branches()
             .map_err(|_| "Failed to list branches")?;
         let descendants = self.stack.descendants(&source_name);
-        let candidates = build_parent_candidates(
-            &all_names,
-            &source_name,
-            &descendants,
-            &self.stack.trunk,
-        );
+        let candidates =
+            build_parent_candidates(&all_names, &source_name, &descendants, &self.stack.trunk);
         if candidates.is_empty() {
             return Err("No eligible parents to move onto");
         }

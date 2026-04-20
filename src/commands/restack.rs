@@ -1,11 +1,11 @@
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
 use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::engine::{BranchMetadata, Stack};
+use crate::errors::ConflictStopped;
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
-use crate::errors::ConflictStopped;
 use anyhow::Result;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -44,11 +44,9 @@ pub fn run(
         }
 
         // Recover metadata + completed list from the failed receipt.
-        if let Some(receipt) =
-            crate::commands::continue_cmd::latest_failed_restack_receipt(&repo)?
+        if let Some(receipt) = crate::commands::continue_cmd::latest_failed_restack_receipt(&repo)?
         {
-            completed_from_receipt
-                .extend(receipt.completed_branches.iter().cloned());
+            completed_from_receipt.extend(receipt.completed_branches.iter().cloned());
 
             // If the user finished the rebase via `git rebase --continue`
             // directly, the failed branch's metadata was never updated.
@@ -57,12 +55,8 @@ pub fn run(
                 .as_ref()
                 .and_then(|e| e.failed_branch.as_deref())
             {
-                if let Some(meta) =
-                    BranchMetadata::read(repo.inner(), failed_branch)?
-                {
-                    if let Ok(actual_parent_rev) =
-                        repo.branch_commit(&meta.parent_branch_name)
-                    {
+                if let Some(meta) = BranchMetadata::read(repo.inner(), failed_branch)? {
+                    if let Ok(actual_parent_rev) = repo.branch_commit(&meta.parent_branch_name) {
                         if meta.parent_branch_revision != actual_parent_rev {
                             let updated = BranchMetadata {
                                 parent_branch_revision: actual_parent_rev,
@@ -72,8 +66,7 @@ pub fn run(
                         }
                     }
                 }
-                completed_from_receipt
-                    .insert(failed_branch.to_string());
+                completed_from_receipt.insert(failed_branch.to_string());
             }
         }
     }

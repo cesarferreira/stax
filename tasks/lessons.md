@@ -37,3 +37,4 @@
 - For stack-merge flows that delete merged branches, always rebase and retarget descendant branches/PR bases before cleanup; deleting a base branch first can auto-close descendant PRs on GitHub.
 - Any descendant-rebase path (`merge`, `merge --when-ready`, `restack`, `upstack restack`, `sync --restack`) must preserve provenance boundaries (`parent_branch_revision` / old parent tip) and use provenance-aware rebase logic; plain `git rebase <trunk>` will replay already-integrated parent history after squash merges.
 - Configure explicit connect/read/write timeouts for GitHub API clients (and other network clients); never rely on library defaults for long-running CLI flows where silent waits look like hangs.
+- GitHub commit statuses are append-only events, not mutable runs; when showing CI timing or recording history for a status context, derive duration from the latest `pending` -> terminal sequence instead of a single status record's `created_at` / `updated_at`.
