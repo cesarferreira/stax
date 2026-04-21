@@ -8,8 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.56.0] - 2026-04-21
+
+### Changed
+- Cesar/rewrite readme (#313)
+- Add refresh command for sync/restack/submit flow (#314)
+- [codex] Add verbose refresh/restack timing diagnostics (#320)
+- Fix release script
+
 ### Fixed
-- Merge: Only retarget remaining PR bases after the rewritten branch has been pushed successfully; surface push failures instead of silently ignoring them (#312)
+- Push remaining branches before retargeting PR base (#312) (#317)
+
+### Documentation
+- Rewrite all user-facing docs with consistent, tighter structure (#319)
 
 ## [0.55.0] - 2026-04-20
 
@@ -143,7 +154,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.55.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.56.0...HEAD
+[0.56.0]: https://github.com/cesarferreira/stax/compare/v0.55.0...v0.56.0
 [0.55.0]: https://github.com/cesarferreira/stax/compare/v0.54.0...v0.55.0
 [0.54.0]: https://github.com/cesarferreira/stax/compare/v0.53.0...v0.54.0
 [0.53.0]: https://github.com/cesarferreira/stax/compare/v0.52.0...v0.53.0
