@@ -1,54 +1,56 @@
-# Quick Start
+# Quick start
 
-`st setup` is the recommended onboarding path. It can install shell integration, AI agent skills, and GitHub auth for you.
+## 1. Onboard
+
+`st setup` is the recommended one-shot: shell integration, AI agent skills, and GitHub auth.
 
 ```bash
-# Recommended: do it all in one step
 st setup --yes
+```
 
-# Alternative: use GitHub CLI auth manually
-gh auth login
-st auth --from-gh
+<details>
+<summary>Alternative auth paths</summary>
 
-# Alternative: enter a personal access token manually
+```bash
+# Import from the GitHub CLI
+gh auth login && st auth --from-gh
+
+# Enter a personal access token interactively
 st auth
 
-# Alternative: provide a stax-specific env var
+# Or via env var (stax-specific)
 export STAX_GITHUB_TOKEN="ghp_xxxx"
 ```
 
-By default, stax does not use ambient `GITHUB_TOKEN` unless you opt in with `auth.allow_github_token_env = true`.
+By default stax ignores ambient `GITHUB_TOKEN`. Opt in with `auth.allow_github_token_env = true`.
+
+</details>
+
+## 2. Ship a stack end-to-end
 
 ```bash
-# 1. Create stacked branches
+# Stack two branches on trunk
 st create auth-api
 st create auth-ui
 
-# 2. View your stack
+# See the stack
 st ls
 # ◉  auth-ui 1↑
 # ○  auth-api 1↑
 # ○  main
 
-# 3. Submit PRs for the whole stack
+# Submit the whole stack as linked PRs
 st ss
 
-# 4. After auth-api PR is merged on GitHub...
-
-# Pull trunk, detect the merge, delete auth-api, reparent auth-ui → main
-st rs
-
-# Rebase auth-ui onto updated main
-st restack
-
-# Or do both in one shot:
-st rs --restack
-
-# Or run the full catch-up + PR update flow in one shot:
-st refresh
+# After the bottom PR merges on GitHub, catch up in one shot:
+st rs --restack    # pull trunk, clean merged, rebase the rest
+# or: st refresh    # sync + restack + push/update PRs in one command
 ```
+
+Picked the wrong trunk? `st trunk main` or `st init --trunk <branch>` reconfigures.
 
 ## Next
 
 - [Interactive TUI](../interface/tui.md)
-- [Merge and Cascade](../workflows/merge-and-cascade.md)
+- [Merge and cascade](../workflows/merge-and-cascade.md)
+- [Core commands](../commands/core.md)

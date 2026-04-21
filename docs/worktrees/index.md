@@ -2,18 +2,18 @@
 
 stax has two related worktree stories:
 
-- repo-wide worktree awareness: `restack`, `sync`, `cascade`, and metadata operations run in the right linked checkout automatically
-- the `st worktree` command family: `st worktree` / `st wt` creates, enters, inspects, and cleans up worktree lanes
+- **Repo-wide awareness** — `restack`, `sync`, `cascade`, and metadata operations run in the right linked checkout automatically. See [Multi-worktree behavior](../workflows/multi-worktree.md).
+- **The `st worktree` command family** — create, enter, inspect, and clean up worktree lanes. This page is the canonical guide.
 
-This page is the canonical guide for the `st worktree` command. For repo-wide behavior, see [Multi-Worktree Behavior](../workflows/multi-worktree.md). For the parallel AI workflow, see [AI Worktree Lanes](../workflows/agent-worktrees.md).
+For the parallel AI workflow built on top, see [AI worktree lanes](../workflows/agent-worktrees.md).
 
-## Quick Start
+## Quick start
 
 ```bash
-# Open the dashboard in an interactive terminal
+# Open the interactive dashboard
 st wt
 
-# Create a fresh lane with a random funny name
+# Create a fresh lane with a random name
 st wt c
 
 # Create or reuse a named lane
@@ -22,231 +22,179 @@ st wt c payments-api
 # Start a new lane from an explicit base
 st wt c payments-api --from main
 
-# Jump back into an existing lane
+# Jump back into a lane
 st wt go payments-api
 
-# Inventory views
+# Inventory
 st wt ls
 st wt ll
 
-# Print the absolute path for scripting
+# Print the absolute path (scripting)
 st wt path payments-api
 
-# Remove or clean up lanes
+# Remove / clean up
 st wt rm payments-api
 st wt cleanup --dry-run
 st wt prune
 st wt rs
 ```
 
-## How `create` And `go` Resolve Targets
+## How `create` and `go` resolve targets
 
-`st wt c [name]` is deliberately convenience-first:
+`st wt c [name]` is convenience-first:
 
-- with no `name`, it generates a random two-word lane slug
-- if `name` matches an existing worktree, it reuses that lane instead of creating a duplicate
-- if `name` matches an existing branch, it creates a worktree for that branch
-- otherwise, it creates a new branch and a new worktree lane
+- no `name` → random two-word lane slug
+- `name` matches an existing worktree → reuse it
+- `name` matches an existing branch → create a worktree for that branch
+- otherwise → create a new branch and a new worktree
 
-`st wt go [name]` only opens an existing worktree. With no `name`, it opens an interactive picker.
+`st wt go [name]` only opens existing worktrees. With no `name`, it opens a picker.
 
-Selectors accepted by `go`, `path`, `rm`, and the reuse path in `create` can match:
+Selectors accepted by `go`, `path`, `rm`, and reuse paths in `create`:
 
-- the worktree name
-- the full branch name
-- a unique branch suffix such as `payments-api` matching `cesar/payments-api`
-- an absolute worktree path
+- worktree name
+- full branch name
+- unique branch suffix (e.g. `payments-api` matching `cesar/payments-api`)
+- absolute worktree path
 
-### Base Branch Rules
+### Base branch rules for new lanes
 
-For a new branch created by `st wt c`:
+- `--from <branch>` explicitly sets the base
+- otherwise if the current branch is tracked by stax → new lane stacks on current
+- otherwise → new lane starts from trunk
 
-- `--from <branch>` explicitly sets the base branch
-- otherwise, if the current branch is already tracked by stax, the new lane stacks on the current branch
-- otherwise, the new lane starts from trunk
+`--pick` chooses an existing local branch interactively. `--name <label>` lets the worktree directory label differ from the branch name. `--no-verify` skips worktree hooks for that command.
 
-Use `--pick` to choose an existing local branch interactively instead of typing a name.
-
-Use `--name <worktree-name>` when the branch name and the worktree directory label should differ.
-
-Use `--no-verify` on `create` or `go` to skip worktree hooks for that entry.
-
-## Command Map
+## Command map
 
 | Command | Aliases | What it does |
 |---|---|---|
-| `st worktree` | `st wt` | Open the interactive dashboard when stdin/stdout are TTYs; otherwise print worktree help |
+| `st worktree` | `st wt` | Interactive dashboard (TTY) or worktree help |
 | `st wt c [name]` | `st worktree create`, `st wtc` | Create or reuse a lane; supports `--from`, `--pick`, `--name`, `--agent`, `--run`, `--tmux`, `--no-verify` |
-| `st lane [name] [prompt]` | | Fast AI-lane entrypoint: bare `st lane` opens the lane picker, and `st lane <name> [prompt]` is the short explicit form |
-| `st wt go [name]` | `st worktree go`, `st wtgo` | Enter an existing worktree; with no name, open a picker; supports `--agent`, `--run`, `--tmux`, `--no-verify` |
-| `st wt ls` | `st worktree list`, `st w`, `st wtls` | Compact `NAME / BRANCH / PATH` inventory; add `--json` for scripting |
-| `st wt ll` | `st worktree ll`, `st wtll` | Rich status view with managed/dirty/rebase/conflicts/marker/prunable state; add `--json` for scripting |
-| `st wt path <name>` | `st worktree path <name>` | Print the absolute path of a worktree |
-| `st wt rm [name]` | `st worktree remove`, `st wtrm` | Remove one worktree; with no name, remove the current lane; supports `-f/--force` and `--delete-branch` |
+| `st lane [name] [prompt]` | | Fast AI-lane entrypoint (see [AI lanes](../workflows/agent-worktrees.md)) |
+| `st wt go [name]` | `st worktree go`, `st wtgo` | Enter an existing worktree; supports `--agent`, `--run`, `--tmux`, `--no-verify` |
+| `st wt ls` | `st worktree list`, `st w`, `st wtls` | Compact `NAME / BRANCH / PATH` inventory (`--json`) |
+| `st wt ll` | `st worktree ll`, `st wtll` | Rich status view with managed/dirty/rebase/conflict/marker/prunable state (`--json`) |
+| `st wt path <name>` | `st worktree path <name>` | Print absolute path |
+| `st wt rm [name]` | `st worktree remove`, `st wtrm` | Remove one worktree (`wt rm` removes current); supports `-f/--force`, `--delete-branch` |
 | `st wt prune` | `st worktree prune`, `st wtprune` | Remove stale `git worktree` bookkeeping only |
-| `st wt cleanup` | `st worktree cleanup`, `st wt clean` | Prune stale bookkeeping, then bulk-remove safe detached or managed-and-merged lanes; supports `--dry-run`, `--yes`, and `-f/--force` |
+| `st wt cleanup` | `st worktree cleanup`, `st wt clean` | Prune + bulk-remove safe detached/merged lanes (`--dry-run`, `--yes`, `-f`) |
 | `st wt restack` | `st worktree restack`, `st wtrs`, `st wt rs` | Restack all stax-managed worktrees |
 
-## AI Lanes
-
-The recommended AI workflow is:
+## Launch other tools inside a lane
 
 ```bash
-st lane auth-refresh "fix the flaky tests"
-st lane review-pass "address the open PR comments"
-st lane auth-refresh
-st lane
-```
-
-Behavior:
-
-- `--agent` supports `claude`, `codex`, `gemini`, and `opencode`
-- `--model` requires `--agent`
-- `st lane <name> [prompt]` defaults to tmux when available; use `--no-tmux` to launch directly in the terminal
-- `st lane` with no arguments opens a picker of stax-managed lanes
-- if a lane already has a tmux session, stax reattaches or switches to it
-- if you pass a new prompt to an existing tmux-backed lane, stax opens a fresh tmux window in that session
-- `--tmux-session` overrides the derived session name when you use the explicit `st lane <name>` form
-
-## Launch Other Tools Inside The Lane
-
-The lower-level `create` / `go` launch flags still exist for non-AI tools or more manual flows:
-
-```bash
-st wt c ui-polish --run "cursor ."
+st wt c ui-polish  --run "cursor ."
 st wt c review-pass --agent codex --tmux -- "address the open PR comments"
 st wt go review-pass --agent codex --tmux
 ```
 
-Rules:
-
-- `--agent` supports `claude`, `codex`, `gemini`, and `opencode`
+- `--agent` supports `claude`, `codex`, `gemini`, `opencode`
 - `--model` requires `--agent`
 - `--run` and `--agent` are mutually exclusive
-- anything after `--` is passed through to the launched agent or command
-- `--tmux` creates or reuses a tmux session named after the worktree unless you override it with `--tmux-session`
+- anything after `--` is passed through to the agent/command
+- `--tmux` creates/reuses a session named after the worktree unless `--tmux-session` overrides
 
-If you run `create` or `go` without shell integration and without a launcher, stax prints the `cd` command you need.
+If you run `create` / `go` without shell integration and without a launcher, stax prints the `cd` command to copy.
 
-## Managed Vs Unmanaged Worktrees
+## Managed vs unmanaged
 
-`st wt ls` shows every Git worktree, including ones created outside stax.
+`st wt ls` shows every Git worktree, including ones created outside stax. The important distinction is whether the branch has stax metadata:
 
-The important distinction is whether the branch has stax metadata:
+- new branches created by `st wt c foo` → **managed**
+- existing tracked branches opened as lanes → stay **managed**
+- existing plain Git branches opened as worktrees → **unmanaged** until `st branch track`
 
-- new branches created by `st wt c foo` are stax-managed
-- existing tracked branches stay managed when you open a lane for them
-- existing plain Git branches can get a worktree, but they stay unmanaged until you run `st branch track`
-
-Managed lanes behave like first-class stax branches:
-
-- they show up in `st ls`
-- they participate in `restack`, `sync --restack`, and undo/redo flows
-- they are targeted by `st wt restack`
-- merged managed lanes are eligible for `st wt cleanup`
-
-Unmanaged or detached worktrees still show up in `ls`, `ll`, `go`, `rm`, and `prune`, but stax keeps the history-rewriting operations conservative.
+Managed lanes behave like first-class stax branches: they show in `st ls`, participate in restack/sync/undo, and are targeted by `st wt restack`. Unmanaged lanes still show up in `ls`, `ll`, `go`, `rm`, and `prune`, but stax keeps history-rewriting operations conservative.
 
 ## Dashboard
 
-Run `st wt` in an interactive terminal to open the worktree dashboard.
+Run `st wt` in an interactive terminal.
 
-- Left pane: all Git worktrees, including unmanaged entries
-- Right pane: branch, base, path, status, and tmux session details
-- `Enter`: attach or switch to the derived tmux session for the selected worktree
-- `c`: create a lane and open it in tmux
-- `d`: remove the selected worktree
-- `R`: restack all stax-managed worktrees
-- `?`: show help
-- `q` / `Esc`: quit
+- Left pane: all Git worktrees, including unmanaged
+- Right pane: branch, base, path, status, tmux session details
 
-The dashboard is a control plane, not an embedded shell. The stack/patched-branch TUI stays documented separately in [Interactive TUI](../interface/tui.md).
+| Key | Action |
+|---|---|
+| `Enter` | Attach / switch to the tmux session for the selected worktree |
+| `c` | Create a lane and open it in tmux |
+| `d` | Remove the selected worktree |
+| `R` | Restack all stax-managed worktrees |
+| `?` | Show help |
+| `q` / `Esc` | Quit |
 
-## Shell Integration
+The dashboard is a control plane, not an embedded shell. The stack/patch TUI is documented separately in [Interactive TUI](../interface/tui.md).
 
-Use `st setup` as the one-shot onboarding command if you want shell integration, AI agent skills, and GitHub auth handled from one entry point:
+## Shell integration
+
+`st setup` is the one-shot onboarding command for shell integration, AI skills, and auth:
 
 ```bash
-st setup                  # One-shot setup: shell integration plus optional skills/auth onboarding
-st setup --yes            # Accept shell setup defaults, install skills, and import auth from gh when available
-st setup --install-skills # Install shell integration and AI agent skills without prompting
-st setup --skip-skills    # Install shell integration without the AI agent skills prompt
-st setup --auth-from-gh   # Install shell integration and import GitHub auth from gh without prompting
-st setup --skip-auth      # Install shell integration without the auth onboarding step
-st setup --print  # Show snippet for manual install
+st setup                    # full interactive onboarding
+st setup --yes              # accept defaults, install skills, import auth from gh
+st setup --install-skills   # install shell integration + skills without prompting
+st setup --skip-skills      # install shell integration without the skills prompt
+st setup --auth-from-gh     # install shell integration and import auth from gh
+st setup --skip-auth        # install shell integration without auth onboarding
+st setup --print            # print the snippet for manual install
 ```
 
 After installation:
 
-- `st wt c ...` changes the parent shell into the new lane
-- `st wt go ...` changes the parent shell into the selected lane
-- `st lane ...` changes the parent shell into the selected lane
-- `st wt rm` can relocate the shell before removing the current worktree
+- `st wt c ...` moves the parent shell into the new lane
+- `st wt go ...` moves the parent shell into the selected lane
+- `st lane ...` moves the parent shell into the selected lane
+- `st wt rm` (no arg) can relocate the shell before removing the current worktree
 - `sw <name>` becomes a quick alias for `st wt go <name>`
 
-Shell integration supports `bash`, `zsh`, and `fish`.
+Supports `bash`, `zsh`, and `fish`.
 
 !!! note "Windows"
-    On Windows, worktree commands still work, but the parent shell cannot auto-`cd`, `sw` is unavailable, and tmux integration is not supported. After `st wt c` or `st wt go`, manually `cd` to the printed path. See [Windows notes](../reference/windows.md).
+    On Windows, worktree commands work but the parent shell cannot auto-`cd`, `sw` is unavailable, and tmux integration is not supported. Manually `cd` to the printed path after `st wt c` / `st wt go`. See [Windows notes](../reference/windows.md).
 
-## Cleanup And Safety
+## Cleanup and safety
 
-Use the worktree cleanup commands intentionally:
-
-- `st wt rm [name]`: remove one live worktree; with no name, remove the current worktree
-- `st wt rm --delete-branch`: after removing the worktree, also try to delete the branch and its stax metadata
-- `st wt prune`: clear stale `git worktree` bookkeeping only; it never removes a live directory
-- `st wt cleanup`: prune stale bookkeeping first, then bulk-remove safe candidates
-- `st wt rs`: restack all stax-managed lanes only
+| Command | What it does |
+|---|---|
+| `st wt rm [name]` | Remove one live worktree (no name = current) |
+| `st wt rm --delete-branch` | Also delete the branch and its stax metadata |
+| `st wt prune` | Clear stale `git worktree` bookkeeping only — never removes a live directory |
+| `st wt cleanup` | Prune bookkeeping, then bulk-remove safe candidates |
+| `st wt rs` | Restack all stax-managed lanes |
 
 `cleanup` is intentionally conservative. It only targets:
 
 - detached worktrees
 - stax-managed worktrees whose branches are already merged into trunk
 
-It skips worktrees that are:
+It skips worktrees that are current, locked, mid-rebase, mid-merge, in conflict, or dirty (unless `-f`/`--force`). Use `--dry-run` to preview and `--yes` for non-interactive runs.
 
-- current
-- locked
-- mid-rebase
-- mid-merge
-- in conflict
-- dirty, unless you pass `-f` / `--force`
+## Location, config, and hooks
 
-Use `--dry-run` to preview the prune/remove plan and `--yes` for non-interactive confirmation.
-
-## Location, Config, And Hooks
-
-By default, stax keeps managed worktrees outside the repository under:
+By default, managed worktrees live outside the repository at:
 
 ```text
 ~/.stax/worktrees/<repo>
 ```
 
-Override that under `[worktree]` in `~/.config/stax/config.toml`:
+Override in `~/.config/stax/config.toml`:
 
 ```toml
 [worktree]
-# Leave unset/empty for the default external root
-# root_dir = ""
-
-# Or keep worktrees inside the repo, for example:
-# root_dir = ".worktrees"
+# root_dir = ""             # default external root
+# root_dir = ".worktrees"   # keep worktrees inside the repo
 
 [worktree.hooks]
-post_create = ""
-post_start = ""
-post_go = ""
-pre_remove = ""
-post_remove = ""
+post_create = ""   # blocking hook before launch
+post_start  = ""   # background hook after creation
+post_go     = ""   # background hook after entering an existing worktree
+pre_remove  = ""   # blocking hook before removal
+post_remove = ""   # background hook after removal
 ```
 
-Notes:
-
-- relative `root_dir` values are resolved under the main repository root
-- repo-local roots such as `.worktrees` are added to `.gitignore` automatically
-- `post_create` and `pre_remove` are blocking hooks
-- `post_start`, `post_go`, and `post_remove` run in the background
-- `--no-verify` on `create` and `go` skips the hook path for that command
+- Relative `root_dir` values resolve under the main repo root.
+- Repo-local roots like `.worktrees` are added to `.gitignore` automatically.
+- `post_create` and `pre_remove` are **blocking**; `post_start`, `post_go`, `post_remove` run in the **background**.
+- `--no-verify` on `create` / `go` skips hooks for that command.
 
 For the full config surface, see [Configuration](../configuration/index.md).

@@ -1,46 +1,41 @@
-# Standup and Changelog
+# Standup and changelog
 
 ## Standup summary
 
 ```bash
-st standup                   # Last 24 hours (default)
-st standup --hours 48        # Look back further
-st standup --all             # Include all stacks, not just current
-st standup --json            # Raw activity data as JSON
+st standup                 # last 24 hours (default)
+st standup --hours 48      # look back further
+st standup --all           # include all stacks
+st standup --json          # raw activity as JSON
 ```
 
 ![Standup summary](../assets/standup.png)
 
-Shows merged PRs, opened PRs, recent pushes, and items that need attention.
-Works with GitHub, GitLab, and Gitea repositories.
+Shows merged PRs, opened PRs, recent pushes, and items needing attention. Works with GitHub, GitLab, and Gitea.
 
-> **Note:** "Reviews given" data is not yet available on any forge. Efficiently
-> querying reviews authored by a user requires GraphQL (GitHub) or iterating
-> every open PR (GitLab/Gitea), which is too slow for large repositories.
+> **Note:** "Reviews given" is not yet available on any forge. Efficiently querying reviews authored by a user requires GraphQL (GitHub) or iterating every open PR (GitLab/Gitea), which is too slow for large repositories.
 
 ## AI standup summary
 
-Generate a concise spoken-style summary of your activity using an AI agent:
+Generate a concise spoken-style summary using your configured AI agent:
 
 ```bash
 st standup --summary
 st standup --summary --hours 48
 st standup --summary --agent claude
-st standup --summary --agent gemini
-st standup --summary --jit
+st standup --summary --jit       # add Jira context via jit
 ```
 
-Uses the AI agent configured under `[ai]` in `~/.config/stax/config.toml` (same agent as `st generate --pr-body`). Override for a single run with `--agent`.
+Uses the agent configured under `[ai]` in `~/.config/stax/config.toml` (same agent as `st generate --pr-body`). Override per-run with `--agent`.
 
-When `--jit` is enabled, standup also inspects your current Jira sprint via the `jit` CLI and feeds the AI two extra signals:
-- tickets that already have PRs in flight
-- likely next backlog tickets without PRs yet
+With `--jit`, standup inspects your current Jira sprint via the [`jit`](https://github.com/cesarferreira/jit) CLI and feeds the AI two extra signals:
 
-Install or learn more about `jit`: <https://github.com/cesarferreira/jit>
+- tickets with PRs already in flight
+- likely next backlog tickets without PRs
 
-The summary is word-wrapped and displayed in a card that fits your terminal width:
+The summary is word-wrapped into a card fit to your terminal width:
 
-```
+```text
   ✓ Generating standup summary with codex        4.1s
 
   ╭──────────────────────────────────────────────────────────────────╮
@@ -55,21 +50,20 @@ The summary is word-wrapped and displayed in a card that fits your terminal widt
   ╰──────────────────────────────────────────────────────────────────╯
 ```
 
-Key phrases are highlighted: completed work in green, new work in cyan, reviews in blue, and upcoming tasks in yellow.
+Key phrases are highlighted: completed work in green, new work in cyan, reviews in blue, upcoming tasks in yellow.
 
 ### Output formats
 
 ```bash
-st standup --summary                   # Spinner + colored card (default)
-st standup --summary --plain-text      # Raw text, no colors — pipe-friendly
-st standup --summary --json            # {"summary": "..."} JSON
-st standup --summary --jit             # Add Jira context via jit
+st standup --summary               # spinner + colored card (default)
+st standup --summary --plain-text  # raw text, pipe-friendly
+st standup --summary --json        # {"summary": "..."}
 ```
 
 ### Prerequisites
 
-- An AI agent installed and on `PATH`: `claude`, `codex`, `gemini`, or `opencode`
-- For `--jit`, install [`jit`](https://github.com/cesarferreira/jit) and make sure it is on `PATH`
+- An AI agent installed on `PATH`: `claude`, `codex`, `gemini`, or `opencode`
+- For `--jit`: [`jit`](https://github.com/cesarferreira/jit) on `PATH`
 - Agent configured in `~/.config/stax/config.toml`:
 
 ```toml
@@ -77,25 +71,25 @@ st standup --summary --jit             # Add Jira context via jit
 agent = "claude"   # or "codex", "gemini", "opencode"
 ```
 
-Or pass `--agent` directly to skip config.
+Or pass `--agent` directly.
 
 ## Changelog generation
 
 ```bash
-st changelog                      # Auto-detect last tag → HEAD
-st changelog v1.0.0               # Explicit from ref → HEAD
-st changelog v1.0.0 v2.0.0       # Between two explicit refs
-st changelog abc123 def456        # Between two commits
+st changelog                   # auto-detect last tag → HEAD
+st changelog v1.0.0            # explicit from ref → HEAD
+st changelog v1.0.0 v2.0.0     # between two refs
+st changelog abc123 def456     # between two commits
 ```
 
-### Tag prefix (monorepo releases)
+PR numbers are extracted from squash-merge commit messages like `(#123)`.
 
-In a monorepo with tags like `release/ios/v1.2.0` and `release/android/v3.0.0`,
-use `--tag-prefix` to pick the latest tag matching a platform:
+### Monorepo tag prefix
+
+With platform-scoped tags like `release/ios/v1.2.0`, pick the latest tag matching a prefix:
 
 ```bash
 st changelog --tag-prefix release/ios
-st changelog --tag-prefix release/android
 st changelog --tag-prefix release/android --json
 ```
 
@@ -110,7 +104,5 @@ st changelog v1.0.0 --path packages/shared-utils
 
 ```bash
 st changelog v1.0.0 --json
-st changelog --json               # Auto-resolved tag appears in "resolved_from"
+st changelog --json              # auto-resolved tag appears in "resolved_from"
 ```
-
-PR numbers are extracted from squash-merge commit messages like `(#123)`.

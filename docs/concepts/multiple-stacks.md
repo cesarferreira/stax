@@ -1,29 +1,34 @@
-# Working with Multiple Stacks
+# Multiple stacks
 
-You can keep multiple independent stacks in the same repository.
+You can keep independent stacks in the same repository. Useful when feature work is in flight and an unrelated fix needs to ship immediately.
 
 ```bash
-# Stack A
+# Stack A: feature work
 st create auth
 st create auth-login
 st create auth-validation
 
-# Stack B (hotfix)
+# Stack B: hotfix from trunk
 st co main
 st create hotfix-payment
 
-# View all stacks
+# See both
 st ls
 ```
 
-Example output:
+Output:
 
 ```text
 ○    auth-validation 1↑
-○    auth-login 1↑
-○    auth 1↑
-│ ◉  hotfix-payment 1↑
+○    auth-login      1↑
+○    auth            1↑
+│ ◉  hotfix-payment  1↑
 ○─┘  main
 ```
 
-This is useful when feature work is ongoing and an unrelated fix needs to ship immediately.
+Each stack is restacked, synced, and merged independently. `st run --stack` and `st run --stack=<branch>` scope commands to one stack at a time.
+
+## Related
+
+- [Stacked branches](stacked-branches.md)
+- [Navigation](../commands/navigation.md)

@@ -1,12 +1,22 @@
-# Claude Code Integration
+# Claude Code
 
-Install the stax skill file so Claude Code can operate stax workflows correctly.
+Install the stax skill file so Claude Code can drive stax workflows correctly.
 
 ```bash
 mkdir -p ~/.claude/skills
 curl -o ~/.claude/skills/stax.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
 ```
 
-This enables workflow assistance for stacked branch creation, submit flows, and related operations.
+Enables workflow assistance for stacked branch creation, submit flows, and related operations.
 
-For Codex setup, see [Codex Integration](codex.md). For Gemini setup, see [Gemini CLI Integration](gemini-cli.md). For OpenCode setup, see [OpenCode Integration](opencode.md).
+## Use Claude with AI PR body generation
+
+```bash
+st generate --pr-body --agent claude
+st generate --pr-body --agent claude --model claude-opus-4-5
+```
+
+## Related
+
+- [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md)
+- [PR templates + AI](pr-templates-and-ai.md)
