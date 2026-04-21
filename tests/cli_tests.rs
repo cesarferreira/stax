@@ -230,6 +230,7 @@ fn test_refresh_help() {
     assert!(stdout.contains("no-submit"));
     assert!(stdout.contains("force"));
     assert!(stdout.contains("safe"));
+    assert!(stdout.contains("verbose"));
 }
 
 #[test]

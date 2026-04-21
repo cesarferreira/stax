@@ -16,6 +16,7 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
 | `st refresh` | | `sync --restack`, then push and create/update PRs for the current stack |
+| `st refresh --verbose` | | Same as `st refresh`, with detailed sync/restack/submit timing |
 | `st restack` | | Rebase current stack locally — auto-normalizes missing/merged parents; `--stop-here` limits scope |
 | `st cascade` | | Restack from bottom and submit updates |
 | `st diff` | | Show per-branch diffs vs parent |

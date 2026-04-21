@@ -8,6 +8,7 @@ pub fn run(
     no_submit: bool,
     force: bool,
     safe: bool,
+    verbose: bool,
     auto_stash_pop: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
@@ -35,7 +36,7 @@ pub fn run(
         safe,
         false, // continue
         false, // quiet
-        false, // verbose
+        verbose,
         auto_stash_pop,
     )?;
 
@@ -61,14 +62,14 @@ pub fn run(
         vec![], // assignees
         false,  // quiet
         false,  // open
-        false,  // verbose
-        None,   // template
-        false,  // no_template
-        false,  // edit
-        false,  // ai_body
-        false,  // rerequest_review
-        false,  // squash
-        false,  // update_title
+        verbose,
+        None,  // template
+        false, // no_template
+        false, // edit
+        false, // ai_body
+        false, // rerequest_review
+        false, // squash
+        false, // update_title
     )?;
 
     restore_original_branch(&repo, &workdir, &original)

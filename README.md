@@ -252,6 +252,7 @@ st config --set-ai
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--remote`, `--all`) |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
 | `st refresh` | Sync trunk, restack current stack, then push/update PRs |
+| `st refresh --verbose` | Include detailed sync/restack/submit timing |
 | `st restack` | Rebase current stack onto parents locally |
 | `st cascade` | Restack + push + open/update PRs |
 | `st split` | Split a branch into stacked branches (by commit or `--hunk`) |
