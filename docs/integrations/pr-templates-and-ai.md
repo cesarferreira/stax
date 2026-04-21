@@ -1,16 +1,16 @@
-# PR Templates and AI PR Bodies
+# PR templates and AI PR bodies
 
 ## PR templates
 
-stax discovers templates from your repository.
+stax discovers templates from your repository automatically.
 
 ### Single template
 
-If `.github/PULL_REQUEST_TEMPLATE.md` exists, stax uses it automatically.
+If `.github/PULL_REQUEST_TEMPLATE.md` exists, stax uses it.
 
 ### Multiple templates
 
-Use `.github/PULL_REQUEST_TEMPLATE/` with one file per template.
+Use `.github/PULL_REQUEST_TEMPLATE/` with one file per template:
 
 ```text
 .github/
@@ -24,74 +24,71 @@ Use `.github/PULL_REQUEST_TEMPLATE/` with one file per template.
 
 ### Template flags
 
-- `--template <name>` choose template directly
-- `--no-template` skip template
-- `--edit` always open editor
+| Flag | Behavior |
+|---|---|
+| `--template <name>` | Use a specific template |
+| `--no-template` | Skip template entirely |
+| `--edit` | Always open the editor |
 
 ## AI PR body generation
 
-Generate and update PR body based on diff, commits, and template:
+Generate or update a PR body using diff, commits, and template:
 
 ```bash
 st generate --pr-body
-```
-
-If you want stax to generate the body and update the PR without the final review prompt:
-
-```bash
-st generate --pr-body --no-prompt
+st generate --pr-body --no-prompt   # skip final review prompt
 ```
 
 ### Prerequisites
 
-- Current branch must be tracked by stax
-- Current branch must already have a PR (for example created via `st submit` / `st ss`)
+- Current branch is tracked by stax
+- Current branch already has a PR (e.g. created via `st submit` / `st ss`)
 
-If no PR exists yet, submit first:
+If no PR exists yet:
 
 ```bash
 st ss
 st generate --pr-body
 ```
 
-### Template flags for `generate`
+### Template behavior for `generate`
 
-`generate --pr-body` uses the same template selection logic as `submit`:
+`generate --pr-body` uses the same template logic as `submit`:
 
 | Scenario | Behavior |
 |---|---|
 | `--no-template` | Skip template entirely |
-| `--template <name>` | Use the named template; warns and falls back to no template if not found |
-| `--no-prompt` + single template | Auto-selects the single available template |
-| `--no-prompt` + multiple templates | No template used (avoids silent arbitrary pick) |
-| Interactive (default) + single template | Auto-selects the single available template |
-| Interactive (default) + multiple templates | Fuzzy picker to choose template |
+| `--template <name>` | Use the named template (warns + falls back if not found) |
+| `--no-prompt` + single template | Auto-select the single template |
+| `--no-prompt` + multiple templates | No template (avoids silent arbitrary pick) |
+| Interactive + single template | Auto-select the single template |
+| Interactive + multiple templates | Fuzzy picker |
 
 ```bash
 st generate --pr-body --template feature
 st generate --pr-body --no-template
-st generate --pr-body --no-prompt   # auto-selects single template, or no template
+st generate --pr-body --no-prompt
 ```
 
 ### Options
 
-- `--agent <name>` override configured agent for one run
-- `--model <name>` override model for one run
-- `--no-prompt` skip AI picker/review prompts and use defaults
-- `--edit` review/edit generated body before update
-- `--template <name>` use a specific PR template by name
-- `--no-template` skip PR template entirely
-- Supported agents: `claude`, `codex`, `gemini`, `opencode`
+| Flag | Behavior |
+|---|---|
+| `--agent <name>` | Override configured agent for one run |
+| `--model <name>` | Override model for one run |
+| `--no-prompt` | Skip picker/review prompts, use defaults |
+| `--edit` | Review/edit generated body before update |
+| `--template <name>` | Use a specific PR template |
+| `--no-template` | Skip PR template |
 
-When `codex` is selected, stax will try OpenAI's live Models API first (using `OPENAI_API_KEY`) before falling back to its local Codex defaults.
+Supported agents: `claude`, `codex`, `gemini`, `opencode`. When `codex` is selected, stax tries OpenAI's live Models API first (using `OPENAI_API_KEY`) before falling back to local Codex defaults.
 
-If you want stax to forget the saved AI pairing and immediately ask again:
+To forget the saved AI pairing and re-prompt:
 
 ```bash
 st config --reset-ai
+st config --reset-ai --no-prompt   # clear without opening picker
 ```
-
-Use `st config --reset-ai --no-prompt` to clear the saved pairing without reopening the picker.
 
 You can also generate during submit:
 
@@ -99,20 +96,22 @@ You can also generate during submit:
 st submit --ai-body
 ```
 
-If you want the stack graph to live in the PR body instead of the usual stax comment, set:
+### Stack graph placement
+
+Put the stack graph in the PR body instead of the default stax comment:
 
 ```toml
 [submit]
-stack_links = "body" # or "both"
+stack_links = "body"   # or "both"
 ```
+
+### More examples
 
 ```bash
 st generate --pr-body --agent codex
 st generate --pr-body --model claude-haiku-4-5-20251001
 st generate --pr-body --agent gemini --model gemini-2.5-flash
 st generate --pr-body --agent opencode
-st generate --pr-body --no-prompt
 st generate --pr-body --edit
 st generate --pr-body --template feature
-st generate --pr-body --no-template
 ```

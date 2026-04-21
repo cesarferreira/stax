@@ -1,33 +1,39 @@
 # stax
 
-A modern CLI for stacked Git branches and PRs.
+**Stacked Git branches and PRs — fast, safe, and built for humans and AI agents.**
 
 ![stax screenshot](assets/screenshot.png)
 
-## Why stax?
+## Why stax
 
-- Blazing fast Rust binary (~22ms `st ls` on a 10-branch stack)
-- Interactive TUI with tree view, PR status, diffs, reorder mode, and split mode
-- Submit/update complete stacks with correct PR bases in one command
-- Transactional history operations with `st undo` and `st redo`
-- Freephite-compatible metadata, so existing stacks can be used immediately
+- **Stack, don't wait.** Keep shipping on top of in-review PRs.
+- **Native-fast.** A single Rust binary; `st ls` benches ~16× faster than Graphite/Freephite on this repo.
+- **Agent-native.** Parallel AI lanes (`st lane`), AI conflict resolution (`st resolve`), AI-drafted PR bodies.
+- **Undo-first.** Every destructive op is snapshotted. `st undo` / `st redo` rescue risky rebases.
+- **Drop-in compatible.** Same metadata format as Freephite — existing stacks work immediately.
 
-## Start Here
+## Start here
 
 1. [Install](getting-started/install.md)
-2. [Quick Start](getting-started/quick-start.md)
-3. [Core Commands](commands/core.md)
+2. [Quick start](getting-started/quick-start.md)
+3. [Core commands](commands/core.md)
 
-## Common Tasks
+## Learn by goal
 
-- Learn stacked-branch flow: [Stacked Branches](concepts/stacked-branches.md)
-- Work interactively in terminal: [Interactive TUI](interface/tui.md)
-- Merge an entire stack safely: [Merge and Cascade](workflows/merge-and-cascade.md)
-- Manage worktree lanes and the `st wt` dashboard: [Worktrees](worktrees/index.md)
-- Understand repo-wide linked-checkout behavior: [Multi-Worktree Behavior](workflows/multi-worktree.md)
-- Run parallel AI sessions in worktree lanes: [AI Worktree Lanes](workflows/agent-worktrees.md)
-- Integrate with AI code review tools: [Roborev Integration](integrations/roborev.md)
-- Recover from risky rewrites: [Undo and Redo](safety/undo-redo.md)
-- Configure auth and naming: [Config Reference](configuration/index.md)
-- Validate and repair stack health: [Stack Health](commands/stack-health.md)
-- Cut a release with generated changelog notes: [Release Workflow](workflows/releasing.md)
+| I want to… | Go to |
+|---|---|
+| Understand stacked-branch workflow | [Stacked branches](concepts/stacked-branches.md) |
+| Keep multiple independent stacks | [Multiple stacks](concepts/multiple-stacks.md) |
+| Drive stax from the terminal UI | [Interactive TUI](interface/tui.md) |
+| Merge an entire stack safely | [Merge and cascade](workflows/merge-and-cascade.md) |
+| Run parallel AI coding sessions | [AI worktree lanes](workflows/agent-worktrees.md) |
+| Manage Git worktrees as lanes | [Worktrees](worktrees/index.md) |
+| Understand worktree-aware behavior | [Multi-worktree behavior](workflows/multi-worktree.md) |
+| Recover from a bad rewrite | [Undo and redo](safety/undo-redo.md) |
+| Validate or repair stack metadata | [Stack health](commands/stack-health.md) |
+| Generate PR bodies / standup summaries | [Reporting](workflows/reporting.md) · [PR templates + AI](integrations/pr-templates-and-ai.md) |
+| Configure auth, naming, or AI agents | [Configuration](configuration/index.md) |
+| Cut a release with auto-generated changelog | [Release workflow](workflows/releasing.md) |
+| Use stax alongside a specific AI tool | [Integrations](integrations/claude-code.md) |
+| Migrate from Freephite or Graphite | [Compatibility](compatibility/freephite-graphite.md) |
+| See the full command surface | [Full reference](commands/reference.md) |

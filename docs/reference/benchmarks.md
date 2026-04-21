@@ -4,43 +4,37 @@ Absolute times vary by repo and machine. These `hyperfine` samples were captured
 
 | Command | [stax](https://github.com/cesarferreira/stax) | [freephite](https://github.com/bradymadden97/freephite) | [graphite](https://github.com/withgraphite/graphite-cli) |
 |---|---:|---:|---:|
-| `ls` | 45.5ms | 739.7ms | 457.7ms |
-| `rs` | 2.807s | 6.769s | — |
+| `ls` | **45.5 ms** | 739.7 ms | 457.7 ms |
+| `rs` | **2.807 s** | 6.769 s | — |
 
 ```text
   ls — mean execution time (lower is better)
 
-  stax       ███                                                45.5 ms
-  graphite   ███████████████████████████████                   457.7 ms
+  stax       ███                                                 45.5 ms
+  graphite   ███████████████████████████████                    457.7 ms
   freephite  ██████████████████████████████████████████████████ 739.7 ms
              ┬─────────┬─────────┬─────────┬─────────┬─────────┬
              0        150       300       450       600       750 ms
 ```
 
-`gt sync` was not included in this sample set, so the `rs` row does not include a Graphite comparison.
+`gt sync` was not captured, so the `rs` row has no Graphite comparison.
 
-Summary from the sample runs:
+**Summary**
 
-- `st ls` was ~16.25x faster than `fp ls`
-- `st ls` was ~10.05x faster than `gt ls`
-- `st rs` was ~2.41x faster than `fp rs`
+- `st ls` was ~**16.25×** faster than `fp ls`
+- `st ls` was ~**10.05×** faster than `gt ls`
+- `st rs` was ~**2.41×** faster than `fp rs`
 
 ## `ls`
-
-Command:
 
 ```bash
 hyperfine 'stax ls' 'fp ls' 'gt ls' --warmup 2
 ```
 
-Raw output:
-
 ```text
 Benchmark 1: stax ls
   Time (mean ± σ):      45.5 ms ±   6.9 ms    [User: 10.0 ms, System: 12.0 ms]
   Range (min … max):    40.3 ms …  89.5 ms    59 runs
-
-  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
 
 Benchmark 2: fp ls
   Time (mean ± σ):     739.7 ms ±  23.9 ms    [User: 353.1 ms, System: 208.9 ms]
@@ -58,13 +52,9 @@ Summary
 
 ## `rs`
 
-Command:
-
 ```bash
 hyperfine 'stax rs' 'fp rs'
 ```
-
-Raw output:
 
 ```text
 Benchmark 1: stax rs

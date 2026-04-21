@@ -1,6 +1,6 @@
 # Interactive TUI
 
-Run `st` with no arguments to open the terminal UI.
+Run `st` with no arguments to open the stack dashboard.
 
 ```bash
 stax
@@ -12,27 +12,13 @@ stax
 
 - Full-height stack tree with PR status, sync indicators, and ahead/behind counts
 - Selected-branch summary with recommended next actions and live CI progress
-- Patch viewer with a compact diffstat header and scrollable patch body
-- Keyboard-driven checkout, restack, submit, create, rename, and delete
-- Reorder mode for branch reparenting
+- Patch viewer with a compact diffstat header and scrollable body
+- Keyboard-driven checkout, restack, submit, create, rename, delete
+- Reorder mode for reparenting branches
 
-The dashboard renders immediately from local stack data, then fetches live CI for the selected branch in the background. While checks are running, the stack row shows a compact completed/total counter and the summary pane expands with pass/fail/running counts plus elapsed/ETA context.
+The dashboard renders immediately from local stack data, then fetches live CI for the selected branch in the background. While checks are running, the stack row shows a completed/total counter and the summary pane expands with pass/fail/running counts plus elapsed/ETA.
 
-The main `st` TUI is focused on stacks and patches. Worktree management lives in the dedicated [`st wt` dashboard](../worktrees/index.md).
-
-## Worktree Dashboard
-
-Run `st wt` in an interactive terminal to open the worktree dashboard.
-
-- Left pane: all Git worktrees, including unmanaged entries
-- Right pane: branch/base/path/status details plus tmux session state
-- `Enter`: attach or switch to the derived tmux session for the selected worktree
-- `c`: create a lane and open it in tmux
-- `d`: remove the selected worktree
-- `R`: restack all stax-managed worktrees
-- `?`: show help
-- `q`/`Esc`: quit
-- The footer keeps these shortcuts visible and highlights the key itself in the TUI
+The main `st` TUI is focused on stacks and patches. Worktree management lives in the dedicated [`st wt` dashboard](../worktrees/index.md#dashboard).
 
 ## Keybindings
 
@@ -48,12 +34,12 @@ Run `st wt` in an interactive terminal to open the worktree dashboard.
 | `n` | Create branch |
 | `e` | Rename current branch |
 | `d` | Delete branch |
-| `/` | Search/filter branches |
+| `/` | Search / filter branches |
 | `Tab` | Toggle focus between stack and patch panes |
 | `?` | Show keybindings |
 | `q`/`Esc` | Quit |
 
-## Reorder Mode
+## Reorder mode
 
 ![Reorder mode](../assets/reordering-stacks.png)
 
@@ -62,9 +48,9 @@ Run `st wt` in an interactive terminal to open the worktree dashboard.
 3. Review previewed reparent operations
 4. Press `Enter` to apply and restack
 
-## Split Mode
+## Split mode
 
-Split a branch with many commits into multiple stacked branches.
+Split a branch with multiple commits into stacked branches.
 
 ```bash
 st split
@@ -80,17 +66,17 @@ st split
 | `?` | Toggle help |
 | `q`/`Esc` | Cancel |
 
-Split operations are transactional and recoverable with `st undo`.
+Splits are transactional and recoverable with `st undo`.
 
-## Hunk Split Mode
+## Hunk split mode
 
-Split a branch by selecting individual diff hunks rather than whole commits. Useful when a branch has a single commit that should be broken into smaller stacked branches.
+Split a single-commit branch by selecting individual diff hunks.
 
 ```bash
 st split --hunk
 ```
 
-The hunk picker shows a two-pane layout: file/hunk list on the left, diff preview on the right. Splitting happens in rounds — select hunks, name the new branch, repeat until all hunks are assigned.
+Two-pane layout: file/hunk list on the left, diff preview on the right. Splitting happens in rounds — select hunks, name the new branch, repeat until all hunks are assigned.
 
 ### List mode (default)
 
@@ -103,11 +89,11 @@ The hunk picker shows a two-pane layout: file/hunk list on the left, diff previe
 | `Tab` | Switch to sequential mode |
 | `Enter` | Finish round (proceed to naming) |
 | `?` | Show help |
-| `q`/`Esc` | Abort split |
+| `q`/`Esc` | Abort |
 
 ### Sequential mode
 
-Step through hunks one by one with yes/no prompts. Press `Tab` to return to list mode.
+Step through hunks one at a time with yes/no prompts. Press `Tab` to return to list mode.
 
 | Key | Action |
 |---|---|
@@ -117,15 +103,11 @@ Step through hunks one by one with yes/no prompts. Press `Tab` to return to list
 | `u` | Undo |
 | `Enter` | Finish round |
 
-### Naming
-
-After finishing a round, enter a branch name for the selected hunks. The default suggestion is `<original>_split_N` for intermediate rounds and the original branch name for the final round.
-
-### Workflow
+### Flow
 
 1. Select hunks for the first new branch
 2. Press `Enter`, confirm the branch name
 3. Repeat for remaining hunks
-4. After the last round, stax creates the branch chain and updates stack metadata
+4. stax creates the branch chain and updates stack metadata after the last round
 
-Hunk split operations are transactional and recoverable with `st undo`.
+Default branch name suggestion: `<original>_split_N` for intermediate rounds, original name for the final round. Recoverable with `st undo`.

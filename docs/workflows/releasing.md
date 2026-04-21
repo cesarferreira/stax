@@ -1,9 +1,9 @@
-# Release Workflow
+# Release workflow
 
-Use the repo-level release targets when cutting a new `stax` release:
+Cut a new `stax` release with an auto-generated changelog entry.
 
 ```bash
-make release
+make release                  # defaults to a minor bump
 make release LEVEL=patch
 
 just release-patch
@@ -11,22 +11,24 @@ just release-minor
 just release-major
 ```
 
-Before `cargo release` runs, the workflow now regenerates the `Unreleased` section in `CHANGELOG.md` from commits since the latest `v<major>.<minor>.<patch>` tag.
+Before `cargo release` runs, the workflow regenerates the `Unreleased` section of `CHANGELOG.md` from commits since the latest `v<major>.<minor>.<patch>` tag.
 
-## What Gets Generated
+## What gets generated
 
-- `feat:` and related additions go under `### Added`
-- `fix:` commits go under `### Fixed`
-- `docs:` commits go under `### Documentation`
-- everything else falls back to `### Changed`
+| Commit prefix | Section |
+|---|---|
+| `feat:` (and related) | `### Added` |
+| `fix:` | `### Fixed` |
+| `docs:` | `### Documentation` |
+| anything else | `### Changed` |
 
-The generator strips the conventional-commit prefix, keeps PR references like `(#123)`, and overwrites any stale manual `Unreleased` body so the release target stays deterministic.
+The generator strips the conventional-commit prefix, keeps PR references like `(#123)`, and overwrites any stale manual `Unreleased` body — the release target stays deterministic.
 
-## Failure Mode
+## Failure mode
 
-If there are no non-merge commits since the last version tag, release prep fails with `No commits found since last tag` and the release stops before `cargo release` can create an empty version entry.
+If no non-merge commits exist since the last version tag, release prep fails with `No commits found since last tag` and the release stops before `cargo release` would create an empty version entry.
 
 ## Notes
 
-- `make release` still defaults to a minor bump. Use `LEVEL=patch` or the `just release-*` targets to control the semver bump.
-- `release-dry` remains a plain `cargo release` dry run and does not rewrite the changelog.
+- `make release` defaults to a minor bump. Use `LEVEL=patch` or the `just release-*` targets to control the semver bump.
+- `release-dry` is a plain `cargo release` dry run and does **not** rewrite the changelog.

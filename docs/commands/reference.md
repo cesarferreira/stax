@@ -1,4 +1,6 @@
-# Full Command Reference
+# Full command reference
+
+The complete command surface. For day-to-day commands only, see [Core commands](core.md). For navigation specifically, see [Navigation](navigation.md).
 
 ## Stack operations
 
@@ -8,37 +10,46 @@
 | `st ll` | | Show stack with PR URLs and full details |
 | `st log` | `l` | Show stack with commits and PR info |
 | `st submit` | `ss` | Submit full current stack |
-| `st merge` | | Merge PRs bottom -> current with provenance-aware descendant rebases, then sync local repo (`--no-sync` to skip); `st merge --remote` merges via GitHub API only (no local git; GitHub-only); `st merge --queue` enqueues PRs into GitHub merge queue / GitLab merge trains |
+| `st merge` | | Cascade-merge from bottom to current (see flags below) |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
-| `st sync` | `rs` | Pull trunk from remote, detect and delete merged branches (incl. squash merges), reparent their children — **no rebasing; confirmed cleanup can also remove a safe linked worktree that still owns the branch** |
-| `st sync --restack` | `rs --restack` | Everything `sync` does, **then** rebase the current stack onto updated parents |
+| `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
+| `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
-| `st refresh` | | Run `sync --restack`, then push branches and create/update PRs for the current stack |
-| `st restack` | | Rebase current stack onto parents (local only, no fetch/delete) — auto-normalizes missing or merged parents before rebasing; `--stop-here` limits scope to ancestors + current |
+| `st refresh` | | `sync --restack`, then push and create/update PRs for the current stack |
+| `st restack` | | Rebase current stack locally — auto-normalizes missing/merged parents; `--stop-here` limits scope |
 | `st cascade` | | Restack from bottom and submit updates |
 | `st diff` | | Show per-branch diffs vs parent |
 | `st range-diff` | | Show range-diff for branches needing restack |
+
+### `st merge` variants
+
+- `st merge` — local cascade merge with provenance-aware descendant rebases, then `st rs --force` unless `--no-sync`
+- `st merge --when-ready` — wait for CI + approvals + mergeability; incompatible with `--dry-run`, `--no-wait`, `--remote`
+- `st merge --remote` — merge entirely via GitHub API, no local git operations (GitHub only)
+- `st merge --queue` — enqueue PRs into GitHub merge queue / GitLab merge trains
+
+See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 
 ## Navigation
 
 | Command | Alias | Description |
 |---|---|---|
 | `st checkout` | `co`, `bco` | Interactive branch picker |
-| `st trunk` | `t` | Switch to trunk (or `st trunk <branch>` to set trunk) |
-| `st up [n]` | `u` | Move up to child branch |
-| `st down [n]` | `d` | Move down to parent branch |
-| `st top` | | Move to stack tip |
-| `st bottom` | | Move to stack base |
-| `st prev` | `p` | Switch to previous branch |
+| `st trunk` | `t` | Switch to trunk (or set trunk with `st trunk <branch>`) |
+| `st up [n]` | `u` | Move up to child |
+| `st down [n]` | `d` | Move down to parent |
+| `st top` | | Stack tip |
+| `st bottom` | | Stack base |
+| `st prev` | `p` | Toggle to previous branch |
 
-## Branch management and scopes
+## Branch management
 
 | Command | Alias | Description |
 |---|---|---|
-| `st create <name>` | `c`, `bc` | Create stacked branch. With `-m` and nothing staged, offers a TTY menu: stage all, `--patch`, empty branch, or abort |
-| `st modify` | `m` | Amend staged changes into current commit. With nothing staged, offers a TTY menu: stage all, `--patch`, amend message only, or abort (`-a` skips the menu and stages all); on a fresh tracked branch, `-m` creates the first commit safely; `-r` restacks the stack afterwards |
+| `st create <name>` | `c`, `bc` | Create stacked branch (TTY menu when nothing staged and `-m`) |
+| `st modify` | `m` | Amend staged changes into current commit (`-a` stages all, `-r` restacks after) |
 | `st rename` | | Rename current branch |
-| `st branch track` | | Track existing branch |
+| `st branch track` | | Track an existing branch |
 | `st branch track --all-prs` | | Track all open PRs (GitHub, GitLab, Gitea) |
 | `st branch untrack` | `ut` | Remove stax metadata |
 | `st branch reparent` | | Change parent |
@@ -48,197 +59,228 @@
 | `st branch squash` | | Squash commits |
 | `st detach` | | Remove branch from stack, reparent children |
 | `st reorder` | | Interactively reorder branches in stack |
-| `st absorb` | | Distribute staged changes to the correct stack branches (file-level attribution) |
-| `st upstack restack` | | Restack current + descendants |
-| `st upstack onto [branch]` | | Reparent current + all descendants onto a new parent (interactive picker if omitted) |
-| `st upstack submit` | | Submit current + descendants |
-| `st downstack get` | | Show branches below current |
-| `st downstack submit` | | Submit ancestors + current |
+| `st absorb` | | Distribute staged changes to the correct stack branches (file-level) |
 
-## Interactive
+### Up/down scopes
 
-| Command | Alias | Description |
-|---|---|---|
-| `st` | | Launch TUI |
-| `st split` | | Split branch into stacked branches (commit-based; needs 2+ commits) |
-| `st split --hunk` | | Split a single commit into stacked branches by selecting individual diff hunks |
-| `st split --file <pathspec>` | | Split by extracting files matching pathspec into a new parent branch (single-commit branches only; use `st split --hunk` for multi-commit surgery) |
-| `st edit` | `e` | Interactively edit commits on current branch (pick, reword, squash, fixup, drop) |
+| Command | Description |
+|---|---|
+| `st upstack restack` | Restack current + descendants |
+| `st upstack onto [branch]` | Reparent current + descendants onto a new parent |
+| `st upstack submit` | Submit current + descendants |
+| `st downstack get` | Show branches below current |
+| `st downstack submit` | Submit ancestors + current |
+
+## Interactive modes
+
+| Command | Description |
+|---|---|
+| `st` | Launch the TUI |
+| `st split` | Split branch into stacked branches (commit-based; needs 2+ commits) |
+| `st split --hunk` | Split a single commit by selecting individual diff hunks |
+| `st split --file <pathspec>` | Split by extracting matching files into a new parent branch |
+| `st edit` · `e` | Interactively edit commits (pick, reword, squash, fixup, drop) |
 
 ## Recovery
 
 | Command | Description |
 |---|---|
-| `st resolve` | Resolve in-progress rebase conflicts using AI |
-| `st abort` | Abort in-progress rebase/conflict resolution |
-| `st undo` | Undo last operation |
-| `st undo <op-id>` | Undo specific operation |
-| `st redo` | Re-apply last undone operation |
+| `st resolve` | AI-resolve an in-progress rebase conflict |
+| `st abort` | Abort the in-progress rebase / conflict resolution |
+| `st undo` | Undo the last operation |
+| `st undo <op-id>` | Undo a specific operation |
+| `st redo` | Re-apply the last undone operation |
 
-## Health & Testing
+## Health and testing
 
 | Command | Description |
 |---|---|
-| `st validate` | Validate stack metadata (orphans, cycles, staleness) |
-| `st fix` | Auto-repair broken metadata |
-| `st fix --dry-run` | Preview fixes without applying |
-| `st run <cmd>` | Run a command on each branch in the stack (alias: `st test <cmd>`) |
-| `st run <cmd> --stack[=<branch>]` | Run only one stack (current stack by default, or `<branch>` stack when provided) |
-| `st run <cmd> --fail-fast` | Stop after first failure |
-| `st run <cmd> --all` | Run on all tracked branches |
+| `st validate` | Check stack metadata for orphans, cycles, and staleness |
+| `st fix` | Auto-repair broken metadata (`--dry-run` previews) |
+| `st run <cmd>` | Run a command on each branch (alias: `st test`); `--stack[=<branch>]`, `--all`, `--fail-fast` |
+
+## CI, PRs, and reporting
+
+| Command | Description |
+|---|---|
+| `st ci` | CI status for current branch (with elapsed/ETA learned from recent runs) |
+| `st ci --stack` / `--all` / `--watch` | Scope and watch modes |
+| `st ci --verbose` / `--json` | Summary cards · JSON output |
+| `st pr` · `st pr open` | Open current branch PR |
+| `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
+| `st issue list` | List open issues |
+| `st comments` | Show PR comments |
+| `st copy` · `st copy --pr` | Copy branch name · PR URL |
+| `st standup` | Recent activity (`--summary` for AI spoken version; `--jit` for Jira context) |
+| `st changelog [from] [to]` | Generate changelog (auto-resolves last tag when `from` omitted) |
+| `st generate --pr-body` | Generate PR body with AI |
 
 ## Utilities
 
 | Command | Description |
 |---|---|
-| `st auth` | Configure GitHub token |
-| `st auth status` | Show active auth source |
+| `st auth` | Configure GitHub token (`--from-gh`, `--token <token>`, `status`) |
 | `st config` | Show current configuration |
-| `st config --reset-ai` | Clear saved AI defaults, then re-prompt interactively |
-| `st config --reset-ai --no-prompt` | Clear saved AI defaults without reopening the picker |
-| `st config --set-ai` | Interactively set AI agent/model for a specific feature or global default |
-| `st init` | Initialize stax or reconfigure the repo trunk interactively |
-| `st init --trunk <branch>` | Set the repo trunk directly |
-| `st cli upgrade` | Detect the current install method and run the matching upgrade command, then refresh generated shell integration |
+| `st config --set-ai` | Interactively set AI agent/model (global or per-feature) |
+| `st config --reset-ai` | Clear saved AI defaults and re-prompt (`--no-prompt` to clear only) |
+| `st init` | Initialize stax or reconfigure trunk (`--trunk <branch>`) |
+| `st cli upgrade` | Detect install method and run the matching upgrade |
 | `st doctor` | Check repo health |
 | `st continue` | Continue after conflicts |
-| `st pr` | Open current branch PR |
-| `st pr open` | Explicit form of `st pr` |
-| `st pr list` | List open pull requests in the current repo (GitHub, GitLab, Gitea) |
-| `st issue list` | List open issues in the current repo (GitHub, GitLab, Gitea) |
 | `st open` | Open repository in browser |
-| `st ci` | Show CI status for current branch (full per-check table with elapsed, ETA, and averages learned from recent successful runs of the same checks) |
-| `st ci --stack` | Show CI status for all branches in current stack |
-| `st ci --all` | Show CI status for all tracked branches |
-| `st ci --watch` | Watch CI until completion, polls every 15s |
-| `st ci --watch --interval 30` | Watch with custom polling interval (seconds) |
-| `st ci --verbose` | Compact summary cards instead of full table |
-| `st ci --json` | Output CI status as JSON |
-| `st comments` | Show PR comments |
-| `st copy` | Copy branch name |
-| `st copy --pr` | Copy PR URL |
-| `st standup` | Show recent activity (GitHub, GitLab, Gitea) |
-| `st standup --summary` | AI-generated spoken standup update |
-| `st standup --summary --jit` | Include Jira `jit` context for in-flight and next-up work ([jit repo](https://github.com/cesarferreira/jit)) |
-| `st changelog [from] [to]` | Generate changelog (auto-resolves last tag if `from` omitted) |
-| `st generate --pr-body [--no-prompt] [--template <name>] [--no-template]` | Generate PR body with AI |
-| `st demo` | Interactive tutorial (no auth/repo needed) |
+| `st demo` | Interactive tutorial — no auth or repo required |
 
 ## Worktrees
 
-Full guide: [Worktrees](../worktrees/index.md)
+Full guide: [Worktrees](../worktrees/index.md) · [AI lanes](../workflows/agent-worktrees.md)
 
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `st worktree` | `wt` | Open the interactive worktree dashboard in a TTY; otherwise print worktree help |
-| `st worktree create [name]` | `wt c`, `wtc` | Create or reuse a worktree lane (`wt c` with no args generates a random lane name) |
-| `st lane [name] [prompt]` | | Open the interactive lane picker, or use the explicit AI-lane shortcut when `name` is provided |
+| Command | Aliases | Description |
+|---|---|---|
+| `st worktree` | `wt` | Open the interactive dashboard (TTY only) |
+| `st worktree create [name]` | `wt c`, `wtc` | Create or reuse a lane (random name if omitted) |
+| `st lane [name] [prompt]` | | AI-lane entrypoint; bare `st lane` opens a picker |
 | `st worktree list` | `wt ls`, `w`, `wtls` | List all worktrees |
-| `st worktree ll` | `wt ll` | Show richer worktree status, including managed/prunable/conflict state |
-| `st worktree go [name]` | `wt go`, `wtgo` | Navigate to a worktree (picker if no name; requires shell integration for transparent `cd`) |
-| `st worktree path <name>` | | Print absolute path of a worktree (for scripting) |
-| `st worktree remove [name]` | `wt rm`, `wtrm` | Remove a worktree (`wt rm` with no name removes the current lane) |
-| `st worktree prune` | `wt prune`, `wtprune` | Clean stale git worktree bookkeeping only |
-| `st worktree cleanup` | `wt cleanup`, `wt clean` | Prune stale bookkeeping, remove detached linked worktrees, and remove stax-managed worktrees already merged into trunk (`--dry-run` previews only) |
+| `st worktree ll` | `wt ll` | Rich status view |
+| `st worktree go [name]` | `wt go`, `wtgo` | Navigate to a worktree (shell integration required for `cd`) |
+| `st worktree path <name>` | | Print absolute path (scripting) |
+| `st worktree remove [name]` | `wt rm`, `wtrm` | Remove a worktree (`wt rm` removes the current lane) |
+| `st worktree prune` | `wt prune`, `wtprune` | Clean stale git worktree bookkeeping |
+| `st worktree cleanup` | `wt cleanup`, `wt clean` | Prune + remove safe detached/merged lanes (`--dry-run` previews) |
 | `st worktree restack` | `wt rs`, `wtrs` | Restack all stax-managed worktrees |
-| `st setup` | | One-shot setup/onboarding command: installs shell integration and can also handle AI agent skills plus GitHub auth onboarding |
-| `st setup --yes` | | Accept shell setup defaults, install AI agent skills, and import auth from `gh` when available |
-| `st setup --install-skills` | | Install shell integration and AI agent skills without prompting |
-| `st setup --skip-skills` | | Install shell integration without the AI agent skills prompt |
-| `st setup --auth-from-gh` | | Install shell integration and import GitHub auth from `gh auth token` without prompting |
-| `st setup --skip-auth` | | Install shell integration without the GitHub auth onboarding step |
-| `st setup --print` | | Print shell integration snippet for manual install |
 
-Worktree launch examples:
-- `st lane`
-- `st lane review-pass "address PR comments"`
-- `st lane fix-flaky --agent claude --yolo "stabilize the flaky tests"` (auto-accept permission prompts)
-- `st lane big-refactor --agent claude --agent-arg=--verbose "split the auth module"` (pass extra flags to the agent)
-- `st wt go ui-polish --run "cursor ." --tmux`
+### `st setup`
 
-## Common flags
+| Command | Description |
+|---|---|
+| `st setup` | One-shot onboarding: shell integration + optional skills + auth |
+| `st setup --yes` | Accept defaults, install skills, import auth from `gh` when available |
+| `st setup --install-skills` / `--skip-skills` | Control AI agent skills prompt |
+| `st setup --auth-from-gh` / `--skip-auth` | Control auth onboarding |
+| `st setup --print` | Print shell integration snippet for manual install |
 
-- `st modify -a` (stage all and amend, old default behavior)
-- `st modify -am "msg"` (stage all and amend with new message)
-- `st modify -r` (amend and restack the stack)
-- `st modify -ar` (stage all, amend, and restack)
-- `st modify` with nothing staged in a TTY prompts: stage all, `--patch`, amend message only, or abort
-- `st create -am "msg"`
-- `st create -m "msg"` with nothing staged in a TTY prompts: stage all, `--patch`, empty branch, or abort
+### Lane launch examples
+
+```bash
+st lane
+st lane review-pass "address PR comments"
+st lane fix-flaky --agent claude --yolo "stabilize the flaky tests"
+st lane big-refactor --agent claude --agent-arg=--verbose "split the auth module"
+st wt go ui-polish --run "cursor ." --tmux
+```
+
+## Flags by command
+
+### `st modify`
+
+- `-a` stage all and amend
+- `-am "msg"` stage all and amend with a new message
+- `-r` restack after amending
+- `-ar` stage all, amend, restack
+- With nothing staged in a TTY: menu to stage all, `--patch`, amend message only, or abort
+
+### `st create`
+
+- `-m "msg"` set commit message (with nothing staged in a TTY: menu for stage all, `--patch`, empty branch, or abort)
+- `-am "msg"` stage all and commit
+- `--insert` reparent children of the current branch onto the new branch
 - `st branch create --message "msg" --prefix feature/`
-- `st branch reparent --branch feature-a --parent main`
-- `st branch rename --push`
-- `st branch squash --message "Squashed commit"`
-- `st branch fold --keep`
-- `st status --stack <branch> --current --compact --json --quiet`
-- `st ll --stack <branch> --current --compact --json --quiet`
-- `st log --stack <branch> --current --compact --json --quiet`
-- `st submit --draft --yes --no-prompt`
-- `st submit --no-pr`
-- `st submit --no-fetch`
-- `st submit --open`
-- `st submit --reviewers alice,bob --labels bug,urgent --assignees alice`
-- `st submit --quiet`
-- `st submit --squash` (squash all commits on each branch into one before pushing)
-- `st submit --verbose`
-- `st submit --ai-body`
-- `st submit --template <name>`
-- `st submit --no-template`
-- `st submit --edit`
-- `st submit --rerequest-review`
-- `st submit --update-title` (sync existing PR titles with the tip commit subject when they differ)
-- `~/.config/stax/config.toml`: set `[submit] stack_links = "comment"` (or `"body" | "both" | "off"`)
-- `st merge --all --method squash --yes`
-- `st merge --dry-run`
-- `st merge --when-ready`
-- `st merge --when-ready --interval 10`
-- `st merge --remote`
-- `st merge --remote --all --method squash --yes`
-- `st merge --queue`
-- `st merge --no-wait`
-- `st merge --no-sync`
-- `st merge --timeout 60 --no-delete --quiet`
-- `st rs --restack --auto-stash-pop`
-- `st sync --delete-upstream-gone`
-- `st sync --force --safe --continue`
-- `st sync --quiet`
-- `st sync --verbose`
-- `st restack --all --continue --quiet`
-- `st restack --stop-here`
-- `st restack --submit-after ask|yes|no`
-- `st resolve --agent codex --model gpt-5.3-codex --max-rounds 5`
-- `st cascade --no-pr`
-- `st cascade --no-submit`
-- `st checkout --trunk`
-- `st checkout --parent`
-- `st checkout --child 1`
-- `st ci --stack --watch --interval 30 --json`
-- `st standup --all --hours 48 --json`
-- `st standup --summary`
-- `st standup --summary --agent claude`
-- `st standup --summary --hours 48`
-- `st standup --summary --plain-text`
-- `st standup --summary --json`
-- `st standup --summary --jit`
+
+### `st status` / `st ll` / `st log`
+
+- `--stack <branch>` · `--current` · `--compact` · `--json` · `--quiet`
+
+### `st submit`
+
+- `--draft` / `--publish` / `--no-pr` / `--no-fetch` / `--open` / `--quiet` / `--verbose`
+- `--reviewers alice,bob --labels bug,urgent --assignees alice`
+- `--squash` squash commits on each branch before pushing
+- `--ai-body` generate PR body with AI
+- `--template <name>` / `--no-template` / `--edit`
+- `--rerequest-review` / `--update-title`
+- `--yes` / `--no-prompt`
+
+Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.config/stax/config.toml`.
+
+### `st merge`
+
+- `--dry-run` / `--yes`
+- `--all` / `--method squash|merge|rebase`
+- `--when-ready` · `--when-ready --interval 10`
+- `--remote` · `--remote --all` · `--remote --timeout 60 --interval 10`
+- `--queue` · `--queue --all --yes`
+- `--no-wait` / `--no-sync` / `--no-delete` / `--timeout 60` / `--quiet`
+
+### `st sync` / `st rs`
+
+- `--restack` · `--restack --auto-stash-pop`
+- `--delete-upstream-gone`
+- `--force` / `--safe` / `--continue` / `--quiet` / `--verbose`
+
+### `st restack`
+
+- `--all` / `--continue` / `--quiet`
+- `--stop-here`
+- `--submit-after ask|yes|no`
+
+### `st resolve`
+
+- `--agent codex --model gpt-5.3-codex --max-rounds 5`
+
+### `st cascade`
+
+- `--no-pr` / `--no-submit` / `--auto-stash-pop`
+
+### `st checkout`
+
+- `--trunk` / `--parent` / `--child 1`
+
+### `st ci`
+
+- `--stack` / `--all` / `--watch` / `--interval 30` / `--json`
+
+### `st standup`
+
+- `--all` / `--hours 48` / `--json`
+- `--summary` · `--summary --agent claude` · `--summary --hours 48`
+- `--summary --plain-text` / `--summary --json` / `--summary --jit`
+
+### `st pr` / `st issue`
+
 - `st pr list --limit 50 --json`
 - `st issue list --limit 50 --json`
-- `st generate --pr-body --template <name>`
-- `st generate --pr-body --no-template`
-- `st changelog --tag-prefix release/ios`
-- `st changelog --json`
-- `st changelog --path src/`
-- `st auth --from-gh`
-- `st auth --token <token>`
-- `st init --trunk main`
-- `st undo --yes --no-push`
-- `st undo --quiet`
-- `st absorb --dry-run` (preview absorption plan without changes)
-- `st absorb -a` (stage all changes before absorbing)
-- `st redo --yes --no-push --quiet`
-- `st edit --yes` (skip final confirmation; interactive commit selection still required)
-- `st edit --no-verify` (skip pre-commit hooks during rebase)
-- `st create --insert` (reparent children of current branch to the new branch)
-- `st submit --publish` (convert existing draft PRs to published)
-- `st submit --draft` (convert existing PRs to draft)
-- `st split --file src/auth.rs` (extract matching files into new parent branch)
-- `st split -f "src/api/*"` (short form, supports globs)
+
+### `st generate --pr-body`
+
+- `--template <name>` / `--no-template` / `--no-prompt` / `--edit`
+- `--agent <name>` / `--model <name>`
+
+### `st changelog`
+
+- `--tag-prefix release/ios`
+- `--path src/`
+- `--json`
+
+### `st auth`
+
+- `--from-gh` / `--token <token>` / `status`
+
+### `st init`
+
+- `--trunk main`
+
+### `st undo` / `st redo`
+
+- `--yes` / `--no-push` / `--quiet`
+
+### `st absorb`
+
+- `--dry-run` (preview) · `-a` (stage all first)
+
+### `st edit`
+
+- `--yes` (skip final confirmation) · `--no-verify` (skip pre-commit hooks)
+
+### `st split`
+
+- `--file <pathspec>` (or `-f "src/api/*"` with glob support)
+- `--hunk` (single-commit hunk-based split)

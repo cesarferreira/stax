@@ -1,78 +1,72 @@
-# Health & Testing Commands
+# Stack health
 
-Stax provides commands to validate, repair, and test your stack metadata.
+Commands to validate, repair, and test your stack metadata.
 
 ## `st validate`
 
-Check that all branch metadata is consistent and healthy.
+Check that all branch metadata is consistent.
 
 ```bash
 st validate
 ```
 
-Runs these checks:
-- **Orphaned metadata** - metadata refs exist for branches that have been deleted
-- **Missing parents** - metadata points to a parent branch that no longer exists
-- **Cycle detection** - detects loops in the parent chain
-- **Invalid metadata** - unparseable JSON in metadata refs
-- **Stale parent revision** - parent has moved since last restack
+Runs:
+
+- **Orphaned metadata** — metadata refs for deleted branches
+- **Missing parents** — metadata points to a parent that no longer exists
+- **Cycle detection** — loops in the parent chain
+- **Invalid metadata** — unparseable JSON
+- **Stale parent revision** — parent has moved since last restack
 
 Exit code `0` if healthy, `1` if issues found.
 
 ## `st fix`
 
-Auto-repair broken metadata.
+Auto-repair broken metadata. Wrapped in a transaction so `st undo` works.
 
 ```bash
-st fix           # Interactive repair
-st fix --yes     # Auto-approve all fixes
-st fix --dry-run # Preview without changing anything
+st fix            # interactive repair
+st fix --yes      # auto-approve all fixes
+st fix --dry-run  # preview without changing anything
 ```
 
 Repairs:
-- Deletes orphaned metadata (metadata for deleted branches)
-- Reparents orphaned branches to trunk (when parent doesn't exist)
-- Deletes invalid metadata (unparseable JSON)
-- Reports branches that need restack
 
-Wrapped in a transaction for undo support (`st undo`).
+- Deletes orphaned metadata
+- Reparents orphaned branches to trunk when the parent is gone
+- Deletes invalid metadata
+- Reports branches that need restack
 
 ## `st run <cmd>` (alias: `st test <cmd>`)
 
-Run a shell command on each branch in the stack.
+Run a shell command on each branch in the stack, bottom to top (excluding trunk), returning to the starting branch afterward.
 
 ```bash
-st run "cargo test"           # Run tests on each branch
-st run "make lint"            # Run linting on each branch
-st run --stack "make test"       # Run current stack
-st run --stack=feature-a "make test" # Run a specific stack
-st run "cargo run -- --version" # Run any command across the stack
-st run --fail-fast "cargo check"  # Stop on first failure
-st run --all "true"           # Run on all tracked branches
+st run "cargo test"                    # current stack
+st run --stack "make test"             # explicit current stack
+st run --stack=feature-a "make test"   # a specific stack
+st run --all "true"                    # all tracked branches
+st run --fail-fast "cargo check"       # stop on first failure
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--fail-fast` | Stop after the first branch that fails |
-| `--all` | Run on all tracked branches, not just the current stack |
-| `--stack[=<branch>]` | Run one stack: current by default, or `<branch>` when provided |
-
-The command checks out each branch (bottom to top, excluding trunk), runs the command, streams command output, and reports success/failure. Returns to the original branch when done. Exit code `1` if any branch fails.
+| Flag | Behavior |
+|---|---|
+| `--fail-fast` | Stop after the first failing branch |
+| `--all` | Run on all tracked branches |
+| `--stack[=<branch>]` | Run one stack (current by default) |
 
 Example output:
-```
+
+```text
 Running 'cargo test' on 3 branch(es)...
 
-  feature-a:
-  Result: SUCCESS
-
-  feature-b:
-  Result: FAIL
-
-  feature-c:
-  Result: SUCCESS
+  feature-a:   SUCCESS
+  feature-b:   FAIL
+  feature-c:   SUCCESS
 
 2 succeeded, 1 failed
 Failed branches:
   feature-b
 ```
+
+Exit code `1` if any branch fails.

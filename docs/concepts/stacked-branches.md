@@ -1,44 +1,46 @@
-# What Are Stacked Branches?
+# Stacked branches
 
-Instead of one massive PR, stacked branches split work into small reviewable pieces that build on each other.
+Instead of one giant PR, split work into a chain of small branches that build on each other. Each branch is its own focused PR.
 
-## Why this works well
+## Why it works
 
-- Smaller reviews with clearer scope
-- Parallel progress while lower PRs are being reviewed
-- Safer shipping by merging foundations first
-- Cleaner history for understanding and rollback
+- **Smaller reviews** with clearer scope
+- **Parallel progress** — keep stacking while lower PRs are in review
+- **Safer shipping** — merge foundations first, derive the rest
+- **Cleaner history** for reading and rollback
 
-## Example stack
+## The shape of a stack
 
 ```text
-◉  feature/auth-ui 1↑
-○  feature/auth-api 1↑
+◉  feature/auth-ui    1↑
+○  feature/auth-api   1↑
 ○  main
 ```
 
-Each branch is a focused PR. Reviewers see smaller diffs, and your stack keeps moving.
+Three focused PRs — each depending on the branch below it — instead of one 2,000-line monolith.
 
-## Real-world flow
+## A real flow
 
 ```bash
-# Start the foundation
+# Build bottom-up
 st create payments-models
-
-# Stack the API layer
 st create payments-api
-
-# Stack the UI layer
 st create payments-ui
 
-# Submit as separate PRs
+# Submit as three linked PRs
 st ss
 ```
 
-After the bottom PR merges:
+After the bottom PR merges on GitHub:
 
 ```bash
 st rs --restack
 ```
 
-stax rebases the rest of the stack and updates PR bases.
+`rs` pulls trunk and deletes the merged branch; `--restack` rebases the rest onto updated trunk and updates PR bases.
+
+## Related
+
+- [Multiple stacks](multiple-stacks.md)
+- [Merge and cascade](../workflows/merge-and-cascade.md)
+- [Quick start](../getting-started/quick-start.md)

@@ -1,34 +1,32 @@
-# Navigation and Stack View
+# Navigation and stack view
 
-## Navigation commands
+## Move around the stack
 
 | Command | What it does |
 |---|---|
-| `st u` | Move up to child branch |
-| `st d` | Move down to parent branch |
-| `st u 3` | Move up 3 branches |
-| `st d 2` | Move down 2 branches |
+| `st u [n]` | Move up `n` children (default 1) |
+| `st d [n]` | Move down `n` parents (default 1) |
 | `st top` | Jump to stack tip |
 | `st bottom` | Jump to stack base |
 | `st trunk` / `st t` | Jump to trunk |
-| `st trunk <branch>` | Set the trunk branch |
+| `st trunk <branch>` | Set trunk to `<branch>` |
 | `st prev` | Toggle to previous branch |
 | `st co` | Interactive branch picker |
 
 ## Checkout shortcuts
 
-Use `st checkout` (or `st co`) with navigation flags:
-
-- `st checkout --trunk` jump directly to trunk
-- `st checkout --parent` jump to parent of current branch
-- `st checkout --child 1` jump to first child branch
+```bash
+st checkout --trunk       # jump to trunk
+st checkout --parent      # jump to parent
+st checkout --child 1     # jump to first child
+```
 
 ## Reading `st ls`
 
 ```text
 ○        feature/validation 1↑
-◉        feature/auth 1↓ 2↑ ⟳
-│ ○    ☁ feature/payments PR #42
+◉        feature/auth       1↓ 2↑ ⟳
+│ ○    ☁ feature/payments   PR #42
 ○─┘    ☁ main
 ```
 
