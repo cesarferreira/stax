@@ -218,6 +218,10 @@ stax sync --force                  # Force sync without prompts
 stax sync --prune                  # Prune stale remotes
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
+stax refresh                       # Sync, restack, then submit
+stax refresh --no-pr               # Push only after sync/restack
+stax refresh --no-submit           # Sync/restack only
+stax refresh --force               # Force sync without prompts first
 
 stax restack                       # Restack current branch onto parent
 stax restack --all                 # Restack whole stack
@@ -390,8 +394,7 @@ stax merge --when-ready --interval 15
 ### After Base PR Merges
 
 ```bash
-stax rs --restack
-stax ss
+stax refresh
 ```
 
 ### Resolve Rebase Conflicts

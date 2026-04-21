@@ -2275,6 +2275,181 @@ fn test_cascade_conflict_reports_restack_context() {
 }
 
 // =============================================================================
+// Refresh Tests
+// =============================================================================
+
+#[test]
+fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "refresh-base"]);
+    let base = repo.current_branch();
+    repo.create_file("base.txt", "base");
+    repo.commit("base commit");
+
+    repo.run_stax(&["bc", "refresh-middle"]);
+    let middle = repo.current_branch();
+    repo.create_file("middle.txt", "middle");
+    repo.commit("middle commit");
+
+    repo.run_stax(&["bc", "refresh-tip"]);
+    let tip = repo.current_branch();
+    repo.create_file("tip.txt", "tip");
+    repo.commit("tip commit");
+
+    repo.simulate_remote_commit("main-update.txt", "main update", "main update");
+
+    repo.run_stax(&["checkout", &middle]);
+    let original = repo.current_branch();
+
+    let output = repo.run_stax(&["refresh", "--no-submit", "--force"]);
+    assert!(
+        output.status.success(),
+        "refresh --no-submit failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Refreshing stack..."),
+        "Expected refresh banner, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("1. Sync trunk and clean merged branches"),
+        "Expected sync step, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("2. Restack current stack onto updated parents"),
+        "Expected restack step, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("3. Skip push and PR updates (--no-submit)"),
+        "Expected no-submit step, got: {}",
+        stdout
+    );
+
+    let after = repo.current_branch();
+    assert_eq!(after, original, "refresh should restore original branch");
+
+    let after_output = repo.run_stax(&["status", "--json"]);
+    assert!(
+        after_output.status.success(),
+        "status failed after refresh\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&after_output),
+        TestRepo::stderr(&after_output)
+    );
+    let after_json: Value =
+        serde_json::from_str(&TestRepo::stdout(&after_output)).expect("Invalid JSON");
+    let after_branches = after_json["branches"]
+        .as_array()
+        .expect("Expected branches array");
+    for name in [&base, &middle, &tip] {
+        let branch = after_branches
+            .iter()
+            .find(|b| b["name"].as_str() == Some(name.as_str()))
+            .unwrap_or_else(|| panic!("Missing branch {} in status output", name));
+        assert_eq!(
+            branch["needs_restack"],
+            Value::Bool(false),
+            "Expected {} to be fully restacked by refresh",
+            name
+        );
+    }
+}
+
+#[test]
+fn test_refresh_no_pr_pushes_current_stack() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+
+    repo.run_stax(&["bc", "refresh-push"]);
+    let branch = repo.current_branch();
+    repo.create_file("push.txt", "push");
+    repo.commit("push commit");
+
+    let output = repo.run_stax(&["refresh", "--no-pr"]);
+    assert!(
+        output.status.success(),
+        "refresh --no-pr failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("3. Push branches without updating PRs"),
+        "Expected no-pr step, got: {}",
+        stdout
+    );
+
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        remote_branches.iter().any(|name| name == &branch),
+        "Expected {} to be pushed to origin, remote branches: {:?}",
+        branch,
+        remote_branches
+    );
+}
+
+#[test]
+fn test_refresh_conflict_reports_restack_context() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "refresh-progress-parent"]);
+    let _parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent content\n");
+    repo.commit("Parent commit");
+
+    repo.run_stax(&["bc", "refresh-progress-child"]);
+    let child = repo.current_branch();
+    repo.create_file("conflict.txt", "child content\n");
+    repo.commit("Child conflict commit");
+
+    repo.simulate_remote_commit("conflict.txt", "main content\n", "Main conflict commit");
+
+    let output = repo.run_stax(&["refresh", "--no-submit", "--force"]);
+    assert!(
+        !output.status.success(),
+        "refresh should exit non-zero on conflict\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Refreshing stack..."),
+        "Expected refresh banner, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Restack stopped on conflict:"),
+        "Expected restack conflict block, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains(&format!("Stopped at: {}", child)),
+        "Expected stopped-at branch in refresh output, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Conflicted files:") && stdout.contains("conflict.txt"),
+        "Expected conflicted files in output, got: {}",
+        stdout
+    );
+
+    let abort = repo.git(&["rebase", "--abort"]);
+    assert!(
+        abort.status.success(),
+        "Failed to abort rebase during cleanup: {}",
+        TestRepo::stderr(&abort)
+    );
+}
+
+// =============================================================================
 // Rename Tests
 // =============================================================================
 

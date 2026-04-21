@@ -43,6 +43,9 @@ st restack
 
 # Or do both in one shot:
 st rs --restack
+
+# Or run the full catch-up + PR update flow in one shot:
+st refresh
 ```
 
 ## Next
