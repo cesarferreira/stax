@@ -1,5 +1,5 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
-use crate::commands::merge::sync_head_after_push;
+use crate::commands::merge::{finalize_remaining_branch_push, sync_head_after_push};
 use crate::commands::merge_rebase::{
     fetch_remote_for_descendant_rebase, rebase_descendant_onto_remote_trunk_with_provenance,
 };
@@ -448,22 +448,16 @@ pub fn run(
 
             match rebase_result {
                 Ok(RebaseResult::Success) => {
-                    if let Some(pr_num) = remaining.pr_number {
-                        let _ = rt
-                            .block_on(async { client.update_pr_base(pr_num, &scope.trunk).await });
-                    }
-
-                    let _ = Command::new("git")
-                        .args([
-                            "push",
-                            "--force-with-lease",
-                            &remote_info.name,
-                            &remaining.branch,
-                        ])
-                        .current_dir(repo.workdir()?)
-                        .output();
-
-                    LiveTimer::maybe_finish_ok(remaining_timer, "done");
+                    finalize_remaining_branch_push(
+                        &repo,
+                        &rt,
+                        &client,
+                        &remote_info.name,
+                        &remaining.branch,
+                        remaining.pr_number,
+                        &scope.trunk,
+                        remaining_timer,
+                    )?;
                 }
                 Ok(RebaseResult::Conflict) => {
                     let abort_dir = repo
