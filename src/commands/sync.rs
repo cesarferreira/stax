@@ -10,7 +10,7 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::errors::ConflictStopped;
 use crate::forge::ForgeClient;
 use crate::git::repo::BranchDeleteResolution;
-use crate::git::{GitRepo, RebaseResult};
+use crate::git::{GitRepo, RebaseResult, RebaseTimings};
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
@@ -28,6 +28,19 @@ struct SyncStats {
     trunk: Option<TrunkSummary>,
     merged_branches_cleaned: usize,
     restacked_branches: usize,
+}
+
+#[derive(Debug, Clone)]
+struct RestackBranchTiming {
+    branch: String,
+    rebase_timings: RebaseTimings,
+    metadata_update: Duration,
+}
+
+impl RestackBranchTiming {
+    fn total(&self) -> Duration {
+        self.rebase_timings.total() + self.metadata_update
+    }
 }
 
 #[derive(Debug)]
@@ -113,6 +126,7 @@ pub fn run(
 ) -> Result<()> {
     let sync_started_at = Instant::now();
     let mut step_timings: Vec<(String, Duration)> = Vec::new();
+    let mut restack_branch_timings: Vec<RestackBranchTiming> = Vec::new();
     let mut stats = SyncStats::default();
 
     let repo = GitRepo::open()?;
@@ -1220,29 +1234,49 @@ pub fn run(
                     None => continue,
                 };
 
-                match repo.rebase_branch_onto_with_provenance(
+                let rebase = repo.rebase_branch_onto_with_provenance_timing(
                     branch,
                     &meta.parent_branch_name,
                     &meta.parent_branch_revision,
                     auto_stash_pop,
-                )? {
+                )?;
+
+                match rebase.result {
                     RebaseResult::Success => {
+                        let metadata_update_started_at = Instant::now();
                         let parent_commit = repo.branch_commit(&meta.parent_branch_name)?;
                         let updated_meta = BranchMetadata {
                             parent_branch_revision: parent_commit,
                             ..meta
                         };
                         updated_meta.write(repo.inner(), branch)?;
+                        let metadata_update = metadata_update_started_at.elapsed();
 
                         // Record after-OID
                         tx.record_after(&repo, branch)?;
                         tx.push_completed_branch(branch);
+
+                        if verbose {
+                            restack_branch_timings.push(RestackBranchTiming {
+                                branch: branch.clone(),
+                                rebase_timings: rebase.timings,
+                                metadata_update,
+                            });
+                        }
 
                         LiveTimer::maybe_finish_timed(restack_timer);
                         restacked_branches += 1;
                         summary.push((branch.clone(), "ok".to_string()));
                     }
                     RebaseResult::Conflict => {
+                        if verbose {
+                            restack_branch_timings.push(RestackBranchTiming {
+                                branch: branch.clone(),
+                                rebase_timings: rebase.timings,
+                                metadata_update: Duration::ZERO,
+                            });
+                        }
+
                         LiveTimer::maybe_finish_warn(restack_timer, "conflict");
                         let completed_branches: Vec<String> = summary
                             .iter()
@@ -1319,6 +1353,7 @@ pub fn run(
         for (step, duration) in &step_timings {
             println!("  {:<35} {}", step, format_duration(*duration).dimmed());
         }
+        print_restack_branch_timings(&restack_branch_timings);
         println!(
             "  {:<35} {}",
             "total",
@@ -2117,6 +2152,61 @@ fn record_ci_history_for_merged(
 
 fn format_duration(duration: Duration) -> String {
     format!("{:.3}s", duration.as_secs_f64())
+}
+
+fn print_restack_branch_timings(restack_branch_timings: &[RestackBranchTiming]) {
+    for timing in restack_branch_timings {
+        println!(
+            "  {}",
+            format!("restack branch {}", timing.branch).bright_cyan()
+        );
+        println!(
+            "    {:<31} {}",
+            "worktree prep",
+            format_duration(timing.rebase_timings.prepare_context).dimmed()
+        );
+        println!(
+            "    {:<31} {}",
+            "dirty check",
+            format_duration(timing.rebase_timings.dirty_check).dimmed()
+        );
+        if !timing.rebase_timings.auto_stash_push.is_zero() {
+            println!(
+                "    {:<31} {}",
+                "auto-stash push",
+                format_duration(timing.rebase_timings.auto_stash_push).dimmed()
+            );
+        }
+        println!(
+            "    {:<31} {}",
+            "provenance scan",
+            format_duration(timing.rebase_timings.provenance_scan).dimmed()
+        );
+        println!(
+            "    {:<31} {}",
+            "git rebase",
+            format_duration(timing.rebase_timings.git_rebase).dimmed()
+        );
+        if !timing.rebase_timings.auto_stash_pop.is_zero() {
+            println!(
+                "    {:<31} {}",
+                "auto-stash pop",
+                format_duration(timing.rebase_timings.auto_stash_pop).dimmed()
+            );
+        }
+        if !timing.metadata_update.is_zero() {
+            println!(
+                "    {:<31} {}",
+                "metadata update",
+                format_duration(timing.metadata_update).dimmed()
+            );
+        }
+        println!(
+            "    {:<31} {}",
+            "branch total",
+            format_duration(timing.total()).dimmed()
+        );
+    }
 }
 
 fn render_sync_footer(stats: &SyncStats, total_duration: Duration) -> String {

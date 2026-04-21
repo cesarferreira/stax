@@ -2362,6 +2362,44 @@ fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
 }
 
 #[test]
+fn test_refresh_verbose_shows_restack_timing_breakdown() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "refresh-verbose"]);
+    let branch = repo.current_branch();
+    repo.create_file("refresh.txt", "refresh");
+    repo.commit("refresh commit");
+    repo.git(&["push", "-u", "origin", &branch]);
+
+    repo.simulate_remote_commit("main-update.txt", "main update", "main update");
+
+    let output = repo.run_stax(&["refresh", "--no-submit", "--force", "--verbose"]);
+    assert!(
+        output.status.success(),
+        "refresh --verbose failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("Sync timing summary:"),
+        "Expected sync timing summary, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains(&format!("restack branch {}", branch)),
+        "Expected restack branch timing breakdown, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("git rebase"),
+        "Expected git rebase timing detail, got: {}",
+        stdout
+    );
+}
+
+#[test]
 fn test_refresh_no_pr_pushes_current_stack() {
     let repo = TestRepo::new_with_remote();
     configure_submit_remote(&repo);
@@ -2945,6 +2983,43 @@ fn test_sync_with_restack_flag() {
     // Remote file should be accessible (after restack onto updated main)
     repo.run_stax(&["checkout", &feature_branch]);
     // The remote.txt should be in our history now
+}
+
+#[test]
+fn test_sync_verbose_restack_shows_branch_timing_breakdown() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "feature-restack-verbose"]);
+    let feature_branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &feature_branch]);
+
+    repo.simulate_remote_commit("remote.txt", "content", "Remote update");
+
+    let output = repo.run_stax(&["sync", "--restack", "--force", "--verbose"]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains(&format!("restack branch {}", feature_branch)),
+        "Expected verbose restack branch timing header, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("provenance scan"),
+        "Expected provenance timing in verbose restack output, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("git rebase"),
+        "Expected git rebase timing in verbose restack output, got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -9811,7 +9886,8 @@ mod forge_mock_tests {
             })
             .count();
         assert_eq!(
-            patch_402_calls, 0,
+            patch_402_calls,
+            0,
             "Expected PR #402 base NOT to be retargeted when push failed. Requests: {:?}",
             requests
                 .iter()
@@ -9979,7 +10055,8 @@ mod forge_mock_tests {
             })
             .count();
         assert_eq!(
-            patch_502_calls, 0,
+            patch_502_calls,
+            0,
             "Expected PR #502 base NOT to be retargeted when push failed. Requests: {:?}",
             requests
                 .iter()

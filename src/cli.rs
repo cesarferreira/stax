@@ -385,6 +385,9 @@ enum Commands {
         /// Avoid hard reset when updating trunk
         #[arg(long)]
         safe: bool,
+        /// Show detailed sync/restack/submit timing
+        #[arg(long)]
+        verbose: bool,
         /// Auto-stash and auto-pop dirty target worktrees during sync/restack
         #[arg(long)]
         auto_stash_pop: bool,
@@ -1760,8 +1763,9 @@ pub fn run() -> Result<()> {
             no_submit,
             force,
             safe,
+            verbose,
             auto_stash_pop,
-        } => commands::refresh::run(no_pr, no_submit, force, safe, auto_stash_pop),
+        } => commands::refresh::run(no_pr, no_submit, force, safe, verbose, auto_stash_pop),
         Commands::Checkout {
             branch,
             pr,

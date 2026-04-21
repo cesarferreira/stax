@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 pub struct GitRepo {
     repo: Repository,
@@ -1138,10 +1139,34 @@ impl GitRepo {
         fallback_upstream: &str,
         auto_stash_pop: bool,
     ) -> Result<RebaseResult> {
+        Ok(self
+            .rebase_branch_onto_with_provenance_timing(
+                branch,
+                onto,
+                fallback_upstream,
+                auto_stash_pop,
+            )?
+            .result)
+    }
+
+    pub fn rebase_branch_onto_with_provenance_timing(
+        &self,
+        branch: &str,
+        onto: &str,
+        fallback_upstream: &str,
+        auto_stash_pop: bool,
+    ) -> Result<RebaseOutcome> {
+        let mut timings = RebaseTimings::default();
+
+        let prepare_started_at = Instant::now();
         let (_current_workdir, target_workdir) = self.prepare_branch_rebase_context(branch)?;
+        timings.prepare_context = prepare_started_at.elapsed();
 
         let mut stashed = false;
-        if self.is_dirty_at(&target_workdir)? {
+        let dirty_check_started_at = Instant::now();
+        let target_is_dirty = self.is_dirty_at(&target_workdir)?;
+        timings.dirty_check = dirty_check_started_at.elapsed();
+        if target_is_dirty {
             if !auto_stash_pop {
                 anyhow::bail!(
                     "Cannot restack '{}': worktree '{}' has uncommitted changes. \
@@ -1150,9 +1175,12 @@ Use --auto-stash-pop or stash/commit changes first.",
                     target_workdir.display()
                 );
             }
+            let auto_stash_push_started_at = Instant::now();
             stashed = self.stash_push_at(&target_workdir)?;
+            timings.auto_stash_push = auto_stash_push_started_at.elapsed();
         }
 
+        let provenance_started_at = Instant::now();
         let can_use_fallback_upstream = !fallback_upstream.trim().is_empty()
             && self.is_ancestor(fallback_upstream, branch).unwrap_or(false);
         let inferred_upstream = self
@@ -1163,7 +1191,9 @@ Use --auto-stash-pop or stash/commit changes first.",
         } else {
             None
         };
+        timings.provenance_scan = provenance_started_at.elapsed();
 
+        let git_rebase_started_at = Instant::now();
         let rebase_result = if let Some(upstream) = upstream_for_rebase.as_deref() {
             self.rebase_onto_upstream_in_path(&target_workdir, onto, upstream)
                 .with_context(|| {
@@ -1185,6 +1215,7 @@ Use --auto-stash-pop or stash/commit changes first.",
                 )
             })
         };
+        timings.git_rebase = git_rebase_started_at.elapsed();
 
         let result = match rebase_result {
             Ok(result) => result,
@@ -1200,6 +1231,7 @@ Use --auto-stash-pop or stash/commit changes first.",
         };
 
         if stashed && result == RebaseResult::Success {
+            let auto_stash_pop_started_at = Instant::now();
             self.stash_pop_at(&target_workdir).with_context(|| {
                 format!(
                     "Rebased '{}' successfully, but failed to auto-pop stash in '{}'",
@@ -1207,9 +1239,10 @@ Use --auto-stash-pop or stash/commit changes first.",
                     target_workdir.display()
                 )
             })?;
+            timings.auto_stash_pop = auto_stash_pop_started_at.elapsed();
         }
 
-        Ok(result)
+        Ok(RebaseOutcome { result, timings })
     }
 
     /// Rebase current branch onto target
@@ -2042,10 +2075,37 @@ Use --auto-stash-pop or stash/commit changes first.",
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RebaseResult {
     Success,
     Conflict,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RebaseTimings {
+    pub prepare_context: Duration,
+    pub dirty_check: Duration,
+    pub auto_stash_push: Duration,
+    pub provenance_scan: Duration,
+    pub git_rebase: Duration,
+    pub auto_stash_pop: Duration,
+}
+
+impl RebaseTimings {
+    pub fn total(&self) -> Duration {
+        self.prepare_context
+            + self.dirty_check
+            + self.auto_stash_push
+            + self.provenance_scan
+            + self.git_rebase
+            + self.auto_stash_pop
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RebaseOutcome {
+    pub result: RebaseResult,
+    pub timings: RebaseTimings,
 }
 
 #[derive(Debug, Clone)]
