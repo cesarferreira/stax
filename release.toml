@@ -4,11 +4,14 @@ publish = true
 push = true
 tag-name = "v{{version}}"
 
-# Automatically update CHANGELOG.md during release
-pre-release-replacements = [
-  {file="CHANGELOG.md", search="## \\[Unreleased\\]", replace="## [{{version}}]", exactly=1},
-  {file="CHANGELOG.md", search="ReleaseDate", replace="{{date}}", exactly=1},
-  {file="CHANGELOG.md", search="<!-- next-header -->", replace="<!-- next-header -->\n## [Unreleased] - ReleaseDate\n", exactly=1},
-  {file="CHANGELOG.md", search="\\[Unreleased\\]: https://github.com/cesarferreira/stax/compare/v[0-9]+\\.[0-9]+\\.[0-9]+\\.\\.\\.HEAD", replace="[{{version}}]: https://github.com/cesarferreira/stax/compare/v{{prev_version}}...v{{version}}", exactly=1},
-  {file="CHANGELOG.md", search="<!-- next-url -->", replace="<!-- next-url -->\n[Unreleased]: https://github.com/cesarferreira/stax/compare/v{{version}}...HEAD", exactly=1},
+# Finalize CHANGELOG.md inside cargo-release's release commit.
+pre-release-hook = [
+  "python3",
+  "scripts/prepare_release.py",
+  "--release-version",
+  "{{version}}",
+  "--previous-version",
+  "{{prev_version}}",
+  "--release-date",
+  "{{date}}",
 ]

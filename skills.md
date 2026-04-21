@@ -131,15 +131,15 @@ sw <name>                      # Quick-switch (shell alias installed by stax set
 ### Contributor Release Workflow
 
 ```bash
-make release                     # Regenerate CHANGELOG.md from commits, then cargo release (minor)
+make release                     # Run cargo release (minor); hook finalizes CHANGELOG.md inside the release commit
 make release LEVEL=patch         # Same flow with a patch bump
-just release-patch               # Patch release with generated changelog notes
-just release-minor               # Minor release with generated changelog notes
-just release-major               # Major release with generated changelog notes
-just release-dry patch           # Dry-run cargo release only; does not rewrite CHANGELOG.md
+just release-patch               # Patch release with hook-generated changelog notes
+just release-minor               # Minor release with hook-generated changelog notes
+just release-major               # Major release with hook-generated changelog notes
+just release-dry patch           # Dry-run cargo release only; hook leaves CHANGELOG.md untouched
 ```
 
-Release prep rewrites the `Unreleased` section from non-merge commits since the latest `v*` tag before `cargo release` promotes that block into the new versioned section. Prefixes map to changelog sections as follows: `feat` → `Added`, `fix` → `Fixed`, `docs` → `Documentation`, everything else → `Changed`.
+Release prep rewrites the next released changelog entry from non-merge commits since the latest `v*` tag inside `cargo release`'s pre-release hook, refreshes the compare links, and restores an empty `Unreleased` header for follow-up work. Prefixes map to changelog sections as follows: `feat` → `Added`, `fix` → `Fixed`, `docs` → `Documentation`, everything else → `Changed`.
 
 ### Create and Edit Branches
 

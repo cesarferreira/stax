@@ -142,15 +142,12 @@ demo: install
 
 # Bump and release (patch/minor/major)
 release-patch:
-    python3 scripts/prepare_release.py
     cargo release patch --execute --no-confirm
 
 release-minor:
-    python3 scripts/prepare_release.py
     cargo release minor --execute --no-confirm
 
 release-major:
-    python3 scripts/prepare_release.py
     cargo release major --execute --no-confirm
 
 # Dry-run release to see what would happen
