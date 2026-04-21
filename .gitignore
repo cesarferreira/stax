@@ -10,3 +10,5 @@ Cargo.lock
 .claude
 .serena
 docs/plans/
+__pycache__/
+*.pyc
