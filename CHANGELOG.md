@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+- Merge (when-ready): Preserve the relative stack chain when rebasing remaining branches instead of flattening every descendant onto trunk (#311)
+
 ## [0.56.0] - 2026-04-21
 
 ### Changed

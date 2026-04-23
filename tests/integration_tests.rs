@@ -10064,4 +10064,193 @@ mod forge_mock_tests {
                 .collect::<Vec<_>>()
         );
     }
+
+    /// Regression for #311: `merge --when-ready` must preserve the relative
+    /// stack chain of remaining branches rather than flattening every
+    /// descendant onto trunk. For a stack `main <- a <- b <- c <- d`, merging
+    /// `a` and `b` should leave `c` based on `main` and `d` based on `c`.
+    #[tokio::test]
+    async fn test_merge_when_ready_preserves_remaining_chain() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        // Build a four-branch stack and push each to the fake remote.
+        let mut branches: Vec<String> = Vec::new();
+        for name in ["chain-a", "chain-b", "chain-c", "chain-d"] {
+            let output = run_stax_with_env(&repo, home.path(), &["bc", name]);
+            assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+            let branch = repo.current_branch();
+            let filename = format!("{}.txt", name);
+            repo.create_file(&filename, &format!("{} content\n", name));
+            repo.commit(&format!("{} commit", name));
+            let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch]);
+            assert!(push.status.success(), "{}", TestRepo::stderr(&push));
+            branches.push(branch);
+        }
+        let branch_a = branches[0].clone();
+        let branch_b = branches[1].clone();
+        let branch_c = branches[2].clone();
+        let branch_d = branches[3].clone();
+
+        // Run merge --when-ready from branch_b so a+b are merged and c+d are
+        // the remaining chain that needs rebasing.
+        let checkout = git_with_env(&repo, home.path(), &["checkout", &branch_b]);
+        assert!(checkout.status.success(), "{}", TestRepo::stderr(&checkout));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/601",
+                    "id": 601,
+                    "number": 601,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": branch_a, "sha": "sha-a", "label": format!("test:{}", branch_a) },
+                    "base": { "ref": "main", "sha": "main-sha" }
+                },
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/602",
+                    "id": 602,
+                    "number": 602,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": branch_b, "sha": "sha-b", "label": format!("test:{}", branch_b) },
+                    "base": { "ref": branch_a, "sha": "sha-a" }
+                },
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/603",
+                    "id": 603,
+                    "number": 603,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": branch_c, "sha": "sha-c", "label": format!("test:{}", branch_c) },
+                    "base": { "ref": branch_b, "sha": "sha-b" }
+                },
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/604",
+                    "id": 604,
+                    "number": 604,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": branch_d, "sha": "sha-d", "label": format!("test:{}", branch_d) },
+                    "base": { "ref": branch_c, "sha": "sha-c" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        for (pr_id, head_ref, head_sha, base_ref, base_sha) in [
+            (601u64, &branch_a, "sha-a", "main", "main-sha"),
+            (602u64, &branch_b, "sha-b", &branch_a, "sha-a"),
+            (603u64, &branch_c, "sha-c", &branch_b, "sha-b"),
+            (604u64, &branch_d, "sha-d", &branch_c, "sha-c"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/repos/test/repo/pulls/{}", pr_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "url": format!("https://api.github.com/repos/test/repo/pulls/{}", pr_id),
+                    "id": pr_id,
+                    "number": pr_id,
+                    "state": "open",
+                    "draft": false,
+                    "merged_at": null,
+                    "mergeable": true,
+                    "mergeable_state": "clean",
+                    "head": { "ref": head_ref, "sha": head_sha, "label": format!("test:{}", head_ref) },
+                    "base": { "ref": base_ref, "sha": base_sha }
+                })))
+                .mount(&mock_server)
+                .await;
+        }
+
+        // Accept PATCH retargets on any of the remaining PRs — the assertion
+        // below inspects the body to verify each got the correct new base.
+        for pr_id in [602u64, 603, 604] {
+            Mock::given(method("PATCH"))
+                .and(path(format!("/repos/test/repo/pulls/{}", pr_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "url": format!("https://api.github.com/repos/test/repo/pulls/{}", pr_id),
+                    "id": pr_id,
+                    "number": pr_id,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "placeholder", "sha": "placeholder", "label": "test:placeholder" },
+                    "base": { "ref": "main", "sha": "main-sha" }
+                })))
+                .mount(&mock_server)
+                .await;
+        }
+
+        for pr_id in [601u64, 602] {
+            Mock::given(method("PUT"))
+                .and(path(format!("/repos/test/repo/pulls/{}/merge", pr_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "sha": format!("merge-{}-commit", pr_id),
+                    "merged": true,
+                    "message": "Pull Request successfully merged"
+                })))
+                .mount(&mock_server)
+                .await;
+        }
+
+        let merge_output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &[
+                "merge",
+                "--when-ready",
+                "--yes",
+                "--no-delete",
+                "--timeout",
+                "1",
+                "--interval",
+                "1",
+                "--no-sync",
+            ],
+        );
+        assert!(
+            merge_output.status.success(),
+            "Merge-when-ready failed: {}\n{}",
+            TestRepo::stderr(&merge_output),
+            TestRepo::stdout(&merge_output)
+        );
+
+        let requests = mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+
+        // Find the PATCH request for PR #603 (c) — it should retarget to main.
+        let patch_603 = requests
+            .iter()
+            .find(|r| {
+                r.method.as_str() == "PATCH" && r.url.path() == "/repos/test/repo/pulls/603"
+            })
+            .expect("PR #603 should have been retargeted");
+        let payload_603: serde_json::Value = serde_json::from_slice(&patch_603.body).unwrap();
+        assert_eq!(
+            payload_603["base"], "main",
+            "PR #603 (branch c) must be retargeted to main"
+        );
+
+        // Find the PATCH request for PR #604 (d) — it must retarget to branch c,
+        // NOT to main (the regression #311 was flattening this to main).
+        let patch_604 = requests
+            .iter()
+            .find(|r| {
+                r.method.as_str() == "PATCH" && r.url.path() == "/repos/test/repo/pulls/604"
+            })
+            .expect("PR #604 should have been retargeted");
+        let payload_604: serde_json::Value = serde_json::from_slice(&patch_604.body).unwrap();
+        assert_eq!(
+            payload_604["base"], branch_c,
+            "PR #604 (branch d) must keep its base on branch c, not flatten to trunk"
+        );
+    }
 }
