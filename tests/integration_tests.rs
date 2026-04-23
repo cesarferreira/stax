@@ -380,6 +380,15 @@ impl TestRepo {
             .expect("Failed to run git command")
     }
 
+    /// Run a raw git command in a specific directory.
+    fn git_in(&self, cwd: &Path, args: &[&str]) -> Output {
+        hermetic_git_command()
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("Failed to run git command")
+    }
+
     /// Create a two-branch stack where the parent restacks cleanly and the child conflicts.
     fn create_restack_progress_conflict_scenario(&self) -> (String, String) {
         self.run_stax(&["bc", "progress-parent"]);
@@ -2359,6 +2368,83 @@ fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
             name
         );
     }
+}
+
+#[test]
+fn test_refresh_auto_stash_pop_restores_dirty_linked_worktree() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "refresh-auto-stash-base"]);
+    let base = repo.current_branch();
+    repo.create_file("base.txt", "base\n");
+    repo.commit("base commit");
+
+    repo.run_stax(&["bc", "refresh-auto-stash-tip"]);
+    let tip = repo.current_branch();
+    repo.create_file("tip.txt", "tip\n");
+    repo.commit("tip commit");
+
+    let wt_root = test_tempdir();
+    let base_worktree = wt_root.path().join("refresh-base-wt");
+    let add_worktree = repo.git(&["worktree", "add", base_worktree.to_str().unwrap(), &base]);
+    assert!(
+        add_worktree.status.success(),
+        "failed to add linked worktree\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&add_worktree),
+        TestRepo::stderr(&add_worktree)
+    );
+
+    let dirty_file = base_worktree.join("scratch.txt");
+    fs::write(&dirty_file, "local scratch\n").expect("write dirty linked-worktree file");
+
+    repo.simulate_remote_commit("main-update.txt", "main update\n", "main update");
+
+    let output = repo.run_stax(&["refresh", "--no-submit", "--force", "--auto-stash-pop"]);
+    assert!(
+        output.status.success(),
+        "refresh --auto-stash-pop failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    assert_eq!(repo.current_branch(), tip, "refresh should restore original branch");
+
+    let status = repo.git_in(&base_worktree, &["status", "--porcelain"]);
+    assert!(
+        status.status.success(),
+        "failed to read linked worktree status\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&status),
+        TestRepo::stderr(&status)
+    );
+    let status_out = TestRepo::stdout(&status);
+    assert!(
+        status_out.contains("scratch.txt"),
+        "dirty linked-worktree changes should be restored, got:\n{}",
+        status_out
+    );
+    assert_eq!(
+        fs::read_to_string(&dirty_file).expect("read restored dirty file"),
+        "local scratch\n"
+    );
+
+    let stash_list = repo.git_in(&base_worktree, &["stash", "list"]);
+    assert!(stash_list.status.success());
+    assert!(
+        TestRepo::stdout(&stash_list).trim().is_empty(),
+        "expected no leftover auto-stash entries, got:\n{}",
+        TestRepo::stdout(&stash_list)
+    );
+
+    let base_rebased = repo.git(&["merge-base", "--is-ancestor", "main", &base]);
+    assert!(
+        base_rebased.status.success(),
+        "base branch should be restacked onto refreshed main"
+    );
+    let tip_rebased = repo.git(&["merge-base", "--is-ancestor", &base, &tip]);
+    assert!(
+        tip_rebased.status.success(),
+        "tip branch should remain stacked on refreshed base"
+    );
 }
 
 #[test]
