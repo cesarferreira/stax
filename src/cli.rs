@@ -388,6 +388,12 @@ enum Commands {
         /// Show detailed sync/restack/submit timing
         #[arg(long)]
         verbose: bool,
+        /// Accept submit defaults without confirmation
+        #[arg(short, long)]
+        yes: bool,
+        /// Use submit defaults instead of prompting for PR details
+        #[arg(long)]
+        no_prompt: bool,
         /// Auto-stash and auto-pop dirty target worktrees during sync/restack
         #[arg(long)]
         auto_stash_pop: bool,
@@ -1764,8 +1770,19 @@ pub fn run() -> Result<()> {
             force,
             safe,
             verbose,
+            yes,
+            no_prompt,
             auto_stash_pop,
-        } => commands::refresh::run(no_pr, no_submit, force, safe, verbose, auto_stash_pop),
+        } => commands::refresh::run(
+            no_pr,
+            no_submit,
+            force,
+            safe,
+            verbose,
+            yes,
+            no_prompt,
+            auto_stash_pop,
+        ),
         Commands::Checkout {
             branch,
             pr,

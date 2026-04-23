@@ -222,6 +222,7 @@ stax refresh                       # Sync, restack, then submit
 stax refresh --no-pr               # Push only after sync/restack
 stax refresh --no-submit           # Sync/restack only
 stax refresh --force               # Force sync without prompts first
+stax refresh --yes --no-prompt     # Full refresh without submit prompts
 stax refresh --verbose             # Show detailed sync/restack/submit timings
 
 stax restack                       # Restack current branch onto parent
