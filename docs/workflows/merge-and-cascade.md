@@ -95,5 +95,5 @@ The "bottom PR merged, catch me up" command. Prints the plan up front, then runs
 | `st refresh --no-pr` | sync → restack → push |
 | `st refresh --no-submit` | sync → restack |
 | `st refresh --force` | force the sync step instead of prompting |
-| `st refresh --yes --no-prompt` | run the full sync/restack/submit flow without submit prompts |
+| `st refresh --force --yes --no-prompt` | run the full sync/restack/submit flow without prompts |
 | `st refresh --verbose` | show detailed sync/restack/submit timing |

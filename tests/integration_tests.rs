@@ -6808,10 +6808,14 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        let output = run_stax_with_env(&repo, home.path(), &["refresh", "--yes", "--no-prompt"]);
+        let output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["refresh", "--force", "--yes", "--no-prompt"],
+        );
         assert!(
             output.status.success(),
-            "refresh --yes --no-prompt failed\nstdout: {}\nstderr: {}",
+            "refresh --force --yes --no-prompt failed\nstdout: {}\nstderr: {}",
             TestRepo::stdout(&output),
             TestRepo::stderr(&output)
         );
