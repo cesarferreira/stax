@@ -231,6 +231,8 @@ fn test_refresh_help() {
     assert!(stdout.contains("force"));
     assert!(stdout.contains("safe"));
     assert!(stdout.contains("verbose"));
+    assert!(stdout.contains("--yes"));
+    assert!(stdout.contains("--no-prompt"));
 }
 
 #[test]

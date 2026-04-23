@@ -153,6 +153,7 @@ st ss
 
 # 4. After the bottom PR merges on GitHub…
 st refresh         # sync trunk, restack this stack, update PRs
+st refresh --force --yes --no-prompt  # same flow without prompts
 ```
 
 Picked the wrong trunk? Run `st trunk main` or `st init --trunk <branch>` to reconfigure.
@@ -252,6 +253,7 @@ st config --set-ai
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--remote`, `--all`) |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
 | `st refresh` | Sync trunk, restack current stack, then push/update PRs |
+| `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |
 | `st refresh --verbose` | Include detailed sync/restack/submit timing |
 | `st restack` | Rebase current stack onto parents locally |
 | `st cascade` | Restack + push + open/update PRs |

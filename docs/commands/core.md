@@ -31,6 +31,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
 | `st restack` | Rebase current stack onto parents locally (no fetch) |
 | `st refresh` | `sync --restack` **plus** push and update PRs |
+| `st refresh --force --yes --no-prompt` | Full refresh flow without sync or submit prompts |
 | `st refresh --verbose` | Same as `st refresh`, with detailed sync/restack/submit timing |
 
 ## Navigation and recovery

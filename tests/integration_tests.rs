@@ -6829,6 +6829,98 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
+    async fn test_refresh_yes_no_prompt_creates_pr_on_mock_github() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "refresh-non-interactive"]);
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+
+        repo.create_file("feature.txt", "content\n");
+        repo.commit("Feature commit");
+        let branch = repo.current_branch();
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/88",
+                "id": 88,
+                "number": 88,
+                "state": "open",
+                "title": "Feature commit",
+                "draft": true,
+                "body": "",
+                "head": { "ref": branch.clone(), "sha": "aaaa", "label": format!("test:{}", branch) },
+                "base": { "ref": "main", "sha": "bbbb", "label": "test:main" },
+                "html_url": "https://github.com/test/repo/pull/88"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/88/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/88"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/88",
+                "id": 88,
+                "number": 88,
+                "state": "open",
+                "title": "Feature commit",
+                "draft": true,
+                "body": "",
+                "head": { "ref": branch.clone(), "sha": "aaaa", "label": format!("test:{}", branch) },
+                "base": { "ref": "main", "sha": "bbbb", "label": "test:main" },
+                "html_url": "https://github.com/test/repo/pull/88"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["refresh", "--force", "--yes", "--no-prompt"],
+        );
+        assert!(
+            output.status.success(),
+            "refresh --force --yes --no-prompt failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let pr_create = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "POST" && request.url.path() == "/repos/test/repo/pulls"
+            })
+            .expect("missing PR create request");
+        let payload: serde_json::Value = serde_json::from_slice(&pr_create.body).unwrap();
+        assert_eq!(payload["head"], branch);
+        assert_eq!(payload["base"], "main");
+        assert_eq!(payload["title"], "Feature commit");
+        assert_eq!(payload["draft"], true);
+    }
+
+    #[tokio::test]
     async fn test_submit_persists_pr_info_for_existing_pr() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;

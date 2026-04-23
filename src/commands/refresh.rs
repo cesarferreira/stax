@@ -9,6 +9,8 @@ pub fn run(
     force: bool,
     safe: bool,
     verbose: bool,
+    yes: bool,
+    no_prompt: bool,
     auto_stash_pop: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
@@ -50,13 +52,13 @@ pub fn run(
 
     commands::submit::run(
         commands::submit::SubmitScope::Stack,
-        false,  // draft
-        false,  // publish
-        no_pr,  // no_pr
-        false,  // no_fetch
-        false,  // force
-        false,  // yes
-        false,  // no_prompt
+        false, // draft
+        false, // publish
+        no_pr, // no_pr
+        false, // no_fetch
+        false, // force
+        yes,
+        no_prompt,
         vec![], // reviewers
         vec![], // labels
         vec![], // assignees
