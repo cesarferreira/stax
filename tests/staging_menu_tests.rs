@@ -1,21 +1,58 @@
 //! Tests for the shared "no files staged" menu used by `stax modify` and
 //! `stax create -m`.
 //!
-//! Interactive menu branches (stage all, `--patch`, continue, abort) are
-//! hard to drive from integration tests because `dialoguer::Select` reads
-//! `/dev/tty` rather than stdin — piping keystrokes into the child process
-//! has no effect. These tests therefore lock in the observable behaviour
-//! that this PR must preserve:
+//! The interactive menu branches are driven through a pseudo-terminal because
+//! `dialoguer::Select` reads `/dev/tty` rather than stdin. Non-interactive
+//! tests still lock in the observable behaviour that this flow must preserve:
 //!
 //! - Non-TTY: bail immediately with an actionable error (no menu shown).
 //! - `-a/--all`: bypass the menu entirely and force-stage.
 //! - Pre-staged index: skip the menu and commit what's staged.
 //!
-//! The interactive paths are exercised manually; see the PR description.
-
 mod common;
 
 use common::{OutputAssertions, TestRepo};
+
+fn select_menu_option(index: usize) -> String {
+    let downs = "\\033[B".repeat(index);
+    format!("sleep 1; printf '{}\\r'", downs)
+}
+
+fn select_patch_and_stage_first_hunk() -> String {
+    let downs = "\\033[B";
+    format!("sleep 1; printf '{}\\r'; sleep 1; printf 'y\\n'", downs)
+}
+
+fn head_file(repo: &TestRepo, path: &str) -> String {
+    let output = repo.git(&["show", &format!("HEAD:{path}")]);
+    assert!(
+        output.status.success(),
+        "failed to read {path} from HEAD: {}",
+        TestRepo::stderr(&output)
+    );
+    TestRepo::stdout(&output)
+}
+
+fn assert_status_contains(repo: &TestRepo, path: &str) {
+    let status = repo.git(&["status", "--porcelain"]);
+    assert!(status.status.success(), "{}", TestRepo::stderr(&status));
+    let stdout = TestRepo::stdout(&status);
+    assert!(
+        stdout.contains(path),
+        "expected status to contain {path}, got:\n{}",
+        stdout
+    );
+}
+
+fn assert_status_clean(repo: &TestRepo) {
+    let status = repo.git(&["status", "--porcelain"]);
+    assert!(status.status.success(), "{}", TestRepo::stderr(&status));
+    assert!(
+        TestRepo::stdout(&status).trim().is_empty(),
+        "expected clean status, got:\n{}",
+        TestRepo::stdout(&status)
+    );
+}
 
 // =============================================================================
 // stax modify
@@ -98,6 +135,88 @@ fn modify_proceeds_when_something_is_pre_staged() {
         "unstaged file should remain unstaged, got: {}",
         diff_out
     );
+}
+
+#[test]
+fn modify_interactive_stage_all_amends_changes() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["bc", "feature-menu-stage-all"]).assert_success();
+    repo.create_file("feature.txt", "initial\n");
+    repo.commit("Initial feature");
+    let sha_before = repo.head_sha();
+
+    repo.create_file("feature.txt", "modified through menu\n");
+
+    let script = select_menu_option(0);
+    let output = common::run_stax_in_script(&repo.path(), &["modify"], &script);
+    output.assert_success();
+
+    assert_ne!(sha_before, repo.head_sha(), "modify should amend HEAD");
+    assert_eq!(head_file(&repo, "feature.txt"), "modified through menu\n");
+    assert_status_clean(&repo);
+}
+
+#[test]
+fn modify_interactive_patch_amends_selected_hunk() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["bc", "feature-menu-patch"]).assert_success();
+    repo.create_file("feature.txt", "initial\n");
+    repo.commit("Initial feature");
+    let sha_before = repo.head_sha();
+
+    repo.create_file("feature.txt", "patched through menu\n");
+
+    let script = select_patch_and_stage_first_hunk();
+    let output = common::run_stax_in_script(&repo.path(), &["modify"], &script);
+    output.assert_success();
+
+    assert_ne!(sha_before, repo.head_sha(), "modify should amend HEAD");
+    assert_eq!(head_file(&repo, "feature.txt"), "patched through menu\n");
+    assert_status_clean(&repo);
+}
+
+#[test]
+fn modify_interactive_continue_amends_message_only() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["bc", "feature-menu-continue"]).assert_success();
+    repo.create_file("feature.txt", "initial\n");
+    repo.commit("Initial feature");
+    let sha_before = repo.head_sha();
+
+    repo.create_file("feature.txt", "left unstaged\n");
+
+    let script = select_menu_option(2);
+    let output = common::run_stax_in_script(
+        &repo.path(),
+        &["modify", "-m", "Updated message only"],
+        &script,
+    );
+    output.assert_success();
+
+    assert_ne!(sha_before, repo.head_sha(), "message-only amend rewrites HEAD");
+    let subject = repo.git(&["log", "-1", "--pretty=%s"]);
+    assert!(subject.status.success(), "{}", TestRepo::stderr(&subject));
+    assert_eq!(TestRepo::stdout(&subject).trim(), "Updated message only");
+    assert_status_contains(&repo, "feature.txt");
+}
+
+#[test]
+fn modify_interactive_abort_keeps_head_and_worktree() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["bc", "feature-menu-abort"]).assert_success();
+    repo.create_file("feature.txt", "initial\n");
+    repo.commit("Initial feature");
+    let sha_before = repo.head_sha();
+
+    repo.create_file("feature.txt", "left after abort\n");
+
+    let script = select_menu_option(3);
+    let output = common::run_stax_in_script(&repo.path(), &["modify"], &script);
+    output.assert_success();
+    output.assert_stdout_contains("Aborted");
+
+    assert_eq!(sha_before, repo.head_sha(), "abort should not rewrite HEAD");
+    assert_status_contains(&repo, "feature.txt");
 }
 
 // =============================================================================
@@ -183,4 +302,80 @@ fn create_m_proceeds_when_something_is_pre_staged() {
         "unstaged file should still be unstaged, got: {}",
         status_out
     );
+}
+
+#[test]
+fn create_m_interactive_stage_all_commits_changes() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    repo.create_file("feature.txt", "created through menu\n");
+
+    let script = select_menu_option(0);
+    let output =
+        common::run_stax_in_script(&repo.path(), &["create", "-m", "menu stage all"], &script);
+    output.assert_success();
+
+    assert!(repo.current_branch().contains("menu-stage-all"));
+    assert_eq!(head_file(&repo, "feature.txt"), "created through menu\n");
+    assert_status_clean(&repo);
+}
+
+#[test]
+fn create_m_interactive_patch_commits_selected_hunk() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    repo.create_file("README.md", "# Test Repo\n\npatched through menu\n");
+
+    let script = select_patch_and_stage_first_hunk();
+    let output =
+        common::run_stax_in_script(&repo.path(), &["create", "-m", "menu patch"], &script);
+    output.assert_success();
+
+    assert!(repo.current_branch().contains("menu-patch"));
+    assert_eq!(
+        head_file(&repo, "README.md"),
+        "# Test Repo\n\npatched through menu\n"
+    );
+    assert_status_clean(&repo);
+}
+
+#[test]
+fn create_m_interactive_empty_branch_keeps_worktree_changes() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    let main_sha = repo.head_sha();
+    repo.create_file("feature.txt", "left for later\n");
+
+    let script = select_menu_option(2);
+    let output =
+        common::run_stax_in_script(&repo.path(), &["create", "-m", "menu empty"], &script);
+    output.assert_success();
+
+    assert!(repo.current_branch().contains("menu-empty"));
+    assert_eq!(repo.head_sha(), main_sha, "empty branch should not commit");
+    assert_status_contains(&repo, "feature.txt");
+}
+
+#[test]
+fn create_m_interactive_abort_leaves_no_branch() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    let main_sha = repo.head_sha();
+    repo.create_file("feature.txt", "left after abort\n");
+
+    let script = select_menu_option(3);
+    let output =
+        common::run_stax_in_script(&repo.path(), &["create", "-m", "menu abort"], &script);
+    output.assert_success();
+    output.assert_stdout_contains("Aborted");
+
+    assert_eq!(repo.current_branch(), "main");
+    assert_eq!(repo.head_sha(), main_sha, "abort should not commit");
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|branch| branch.contains("menu-abort")),
+        "abort should not create a branch, got: {:?}",
+        branches
+    );
+    assert_status_contains(&repo, "feature.txt");
 }
