@@ -3,6 +3,7 @@
 //! Dependent PR branches are updated via GitHub's "Update branch" endpoint (`PUT .../update-branch`).
 
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
+use crate::commands::merge::{update_pr_base_unless_current, PrBaseUpdate};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
@@ -224,19 +225,26 @@ pub fn run(
                     ),
                 );
 
-                match rt.block_on(async {
-                    client
-                        .update_pr_base(next_branch.pr_number, &scope.trunk)
-                        .await
-                }) {
-                    Ok(()) => LiveTimer::maybe_finish_ok(update_base_timer, "done"),
+                match update_pr_base_unless_current(
+                    &rt,
+                    &client,
+                    next_branch.pr_number,
+                    &scope.trunk,
+                    &next_branch.branch,
+                ) {
+                    Ok(PrBaseUpdate::Updated) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "done")
+                    }
+                    Ok(PrBaseUpdate::AlreadyTargeted) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "already on base")
+                    }
                     Err(e) => {
                         LiveTimer::maybe_finish_err(update_base_timer, "failed");
                         failed_pr = Some((
                             branch_name,
                             pr_number,
                             format!(
-                                "Failed to retarget dependent PR #{}: {}",
+                                "Failed to retarget dependent PR #{}: {:#}",
                                 next_branch.pr_number, e
                             ),
                         ));
@@ -284,19 +292,26 @@ pub fn run(
                     ),
                 );
 
-                match rt.block_on(async {
-                    client
-                        .update_pr_base(next_branch.pr_number, &scope.trunk)
-                        .await
-                }) {
-                    Ok(()) => LiveTimer::maybe_finish_ok(update_base_timer, "done"),
+                match update_pr_base_unless_current(
+                    &rt,
+                    &client,
+                    next_branch.pr_number,
+                    &scope.trunk,
+                    &next_branch.branch,
+                ) {
+                    Ok(PrBaseUpdate::Updated) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "done")
+                    }
+                    Ok(PrBaseUpdate::AlreadyTargeted) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "already on base")
+                    }
                     Err(e) => {
                         LiveTimer::maybe_finish_err(update_base_timer, "failed");
                         failed_pr = Some((
                             branch_name,
                             pr_number,
                             format!(
-                                "Failed to retarget dependent PR #{}: {}",
+                                "Failed to retarget dependent PR #{}: {:#}",
                                 next_branch.pr_number, e
                             ),
                         ));
@@ -351,14 +366,23 @@ pub fn run(
                 !quiet,
                 &format!("Retargeting #{} to {}...", pr_num, scope.trunk),
             );
-            match rt.block_on(async { client.update_pr_base(pr_num, &scope.trunk).await }) {
-                Ok(()) => LiveTimer::maybe_finish_ok(base_timer, "done"),
+            match update_pr_base_unless_current(
+                &rt,
+                &client,
+                pr_num,
+                &scope.trunk,
+                &remaining.branch,
+            ) {
+                Ok(PrBaseUpdate::Updated) => LiveTimer::maybe_finish_ok(base_timer, "done"),
+                Ok(PrBaseUpdate::AlreadyTargeted) => {
+                    LiveTimer::maybe_finish_ok(base_timer, "already on base")
+                }
                 Err(e) => {
                     LiveTimer::maybe_finish_err(base_timer, "failed");
                     failed_pr = Some((
                         remaining.branch.clone(),
                         pr_num,
-                        format!("Failed to retarget PR #{}: {}", pr_num, e),
+                        format!("Failed to retarget PR #{}: {:#}", pr_num, e),
                     ));
                     break;
                 }

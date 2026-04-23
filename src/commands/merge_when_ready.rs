@@ -1,5 +1,8 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
-use crate::commands::merge::{rebase_and_finalize_remaining_branch, sync_head_after_push};
+use crate::commands::merge::{
+    rebase_and_finalize_remaining_branch, sync_head_after_push, update_pr_base_unless_current,
+    PrBaseUpdate,
+};
 use crate::commands::merge_rebase::{
     fetch_remote_for_descendant_rebase, rebase_descendant_onto_remote_trunk_with_provenance,
 };
@@ -324,18 +327,23 @@ pub fn run(
                     ),
                 );
 
-                match rt.block_on(async {
-                    client
-                        .update_pr_base(next_branch.pr_number, &scope.trunk)
-                        .await
-                }) {
-                    Ok(()) => {
+                match update_pr_base_unless_current(
+                    &rt,
+                    &client,
+                    next_branch.pr_number,
+                    &scope.trunk,
+                    &next_branch.branch,
+                ) {
+                    Ok(PrBaseUpdate::Updated) => {
                         LiveTimer::maybe_finish_ok(update_base_timer, "done");
+                    }
+                    Ok(PrBaseUpdate::AlreadyTargeted) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "already on base");
                     }
                     Err(e) => {
                         LiveTimer::maybe_finish_err(update_base_timer, "failed");
                         let reason = format!(
-                            "Failed to retarget dependent PR #{}: {}",
+                            "Failed to retarget dependent PR #{}: {:#}",
                             next_branch.pr_number, e
                         );
                         branches[idx].status = LandStatus::Failed(reason.clone());

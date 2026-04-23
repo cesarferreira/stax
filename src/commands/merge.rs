@@ -17,6 +17,9 @@ use std::io::Write;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+const DUPLICATE_PR_BASE_RECHECK_TIMEOUT: Duration = Duration::from_secs(2);
+const DUPLICATE_PR_BASE_RECHECK_INTERVAL: Duration = Duration::from_millis(200);
+
 /// Information about a branch in the merge scope
 #[derive(Debug, Clone)]
 struct MergeBranchInfo {
@@ -35,6 +38,12 @@ struct MergeScope {
     remaining: Vec<MergeBranchInfo>,
     /// The trunk branch name
     trunk: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrBaseUpdate {
+    Updated,
+    AlreadyTargeted,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -291,9 +300,18 @@ pub fn run(
                     &format!("Retargeting #{} to {}...", next_pr, scope.trunk),
                 );
 
-                match rt.block_on(async { client.update_pr_base(next_pr, &scope.trunk).await }) {
-                    Ok(()) => {
+                match update_pr_base_unless_current(
+                    &rt,
+                    &client,
+                    next_pr,
+                    &scope.trunk,
+                    &next_branch.branch,
+                ) {
+                    Ok(PrBaseUpdate::Updated) => {
                         LiveTimer::maybe_finish_ok(update_base_timer, "done");
+                    }
+                    Ok(PrBaseUpdate::AlreadyTargeted) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "already on base");
                     }
                     Err(e) => {
                         LiveTimer::maybe_finish_err(update_base_timer, "failed");
@@ -681,12 +699,12 @@ fn print_merge_preview(scope: &MergeScope, method: &MergeMethod) {
     println!();
 
     // Print branches to merge
-    print_branch_box(&scope.to_merge, true);
+    print_branch_box(&scope.to_merge, true, &scope.trunk);
 
     // Print remaining branches if any
     if !scope.remaining.is_empty() {
         println!();
-        print_branch_box(&scope.remaining, false);
+        print_branch_box(&scope.remaining, false, &scope.trunk);
     }
 
     println!();
@@ -698,7 +716,7 @@ fn print_merge_preview(scope: &MergeScope, method: &MergeMethod) {
 }
 
 /// Print branch info as a checklist
-fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
+fn print_branch_box(branches: &[MergeBranchInfo], included: bool, trunk: &str) {
     println!();
 
     for (idx, branch) in branches.iter().enumerate() {
@@ -750,18 +768,18 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
                 println!("{}", mergeable_check);
 
                 // Merge target
-                let merge_into = if branch.position == 1 {
-                    "main".to_string()
-                } else {
-                    "main (after rebase)".to_string()
-                };
+                let merge_into = merge_target_label(branch.position, trunk);
                 println!("  {} Merge into {}", "→".dimmed(), merge_into);
             } else {
                 println!("  {} Fetching status...", "○".yellow());
             }
         } else {
             println!("  {} Not included in this merge", "·".dimmed());
-            println!("  {} Will be rebased onto main", "→".dimmed());
+            println!(
+                "  {} Will be rebased onto {}",
+                "→".dimmed(),
+                remaining_rebase_target_label(idx, branches, trunk)
+            );
         }
 
         // Add spacing between branches
@@ -771,6 +789,26 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool) {
     }
 
     println!();
+}
+
+fn merge_target_label(position: usize, trunk: &str) -> String {
+    if position == 1 {
+        trunk.to_string()
+    } else {
+        format!("{trunk} (after rebase)")
+    }
+}
+
+fn remaining_rebase_target_label<'a>(
+    idx: usize,
+    branches: &'a [MergeBranchInfo],
+    trunk: &'a str,
+) -> &'a str {
+    if idx == 0 {
+        trunk
+    } else {
+        &branches[idx - 1].branch
+    }
 }
 
 /// Strip ANSI codes for length calculation
@@ -972,6 +1010,93 @@ fn summarize_git_stderr(stderr: &[u8]) -> String {
         .to_string()
 }
 
+/// Retarget a PR base unless the forge already reports the desired base.
+///
+/// The preflight read validates that the PR number still belongs to the
+/// expected stack branch when that read succeeds. GitHub can sometimes return a
+/// duplicate base/head validation after the retarget has effectively applied, so
+/// that specific error is treated as idempotent only after a follow-up read
+/// confirms the intended base.
+pub(crate) fn update_pr_base_unless_current(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    new_base: &str,
+    expected_head: &str,
+) -> Result<PrBaseUpdate> {
+    // Best-effort read: if this fails, let PATCH run and surface the real forge error.
+    if let Ok(current_pr) = rt.block_on(async { client.get_pr_with_head(pr_number).await }) {
+        ensure_pr_head_matches(pr_number, &current_pr.head, expected_head)?;
+
+        if current_pr.info.base == new_base {
+            return Ok(PrBaseUpdate::AlreadyTargeted);
+        }
+    }
+
+    let update_result = rt.block_on(async { client.update_pr_base(pr_number, new_base).await });
+    match update_result {
+        Ok(()) => Ok(PrBaseUpdate::Updated),
+        Err(e) => {
+            if is_duplicate_pr_base_error(&e, new_base, expected_head)
+                && pr_base_matches_after_duplicate_error(rt, client, pr_number, new_base)
+            {
+                return Ok(PrBaseUpdate::AlreadyTargeted);
+            }
+
+            Err(e).with_context(|| format!("failed to retarget PR #{} to {}", pr_number, new_base))
+        }
+    }
+}
+
+fn ensure_pr_head_matches(pr_number: u64, actual_head: &str, expected_head: &str) -> Result<()> {
+    if actual_head != expected_head {
+        anyhow::bail!(
+            "PR #{} is for head branch '{}', expected '{}'",
+            pr_number,
+            actual_head,
+            expected_head
+        );
+    }
+
+    Ok(())
+}
+
+/// Re-read a PR briefly after GitHub reports a duplicate base/head pair.
+///
+/// This covers a stale-response race: the update endpoint can reject a retarget
+/// as a duplicate even though subsequent PR reads show the same PR now targets
+/// the requested base.
+fn pr_base_matches_after_duplicate_error(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    new_base: &str,
+) -> bool {
+    let deadline = Instant::now() + DUPLICATE_PR_BASE_RECHECK_TIMEOUT;
+
+    loop {
+        if let Ok(pr) = rt.block_on(async { client.get_pr(pr_number).await }) {
+            if pr.base == new_base {
+                return true;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return false;
+        }
+
+        std::thread::sleep(DUPLICATE_PR_BASE_RECHECK_INTERVAL);
+    }
+}
+
+/// Detect GitHub's duplicate base/head validation for the exact target pair.
+fn is_duplicate_pr_base_error(error: &anyhow::Error, new_base: &str, expected_head: &str) -> bool {
+    let message = format!("{:#}", error);
+    message.contains("A pull request already exists")
+        && message.contains(&format!("base branch '{}'", new_base))
+        && message.contains(&format!("head branch '{}'", expected_head))
+}
+
 /// Push a rebased remaining-stack branch and — only on success — retarget its
 /// PR base. Surfaces push or retarget failures via the supplied `LiveTimer`;
 /// on any failure the PR base is left pointing at the previous parent so the
@@ -1007,9 +1132,7 @@ fn finalize_remaining_branch_push(
     }
 
     if let Some(pr_num) = pr_number {
-        if let Err(e) =
-            rt.block_on(async { client.update_pr_base(pr_num, new_base).await })
-        {
+        if let Err(e) = update_pr_base_unless_current(rt, client, pr_num, new_base, branch) {
             LiveTimer::maybe_finish_err(timer, &format!("retarget failed: {:#}", e));
             return Ok(());
         }
@@ -1251,6 +1374,62 @@ mod tests {
         assert_eq!(scope.to_merge.len(), 2);
         assert_eq!(scope.remaining.len(), 1);
         assert_eq!(scope.trunk, "main");
+    }
+
+    #[test]
+    fn test_merge_target_label_uses_configured_trunk() {
+        assert_eq!(merge_target_label(1, "master"), "master");
+        assert_eq!(merge_target_label(2, "master"), "master (after rebase)");
+    }
+
+    #[test]
+    fn test_remaining_rebase_target_label_preserves_remaining_chain() {
+        let branches = vec![
+            MergeBranchInfo {
+                branch: "feature-b".to_string(),
+                pr_number: Some(2),
+                pr_status: None,
+                is_current: false,
+                position: 2,
+            },
+            MergeBranchInfo {
+                branch: "feature-c".to_string(),
+                pr_number: Some(3),
+                pr_status: None,
+                is_current: false,
+                position: 3,
+            },
+        ];
+
+        assert_eq!(
+            remaining_rebase_target_label(0, &branches, "master"),
+            "master"
+        );
+        assert_eq!(
+            remaining_rebase_target_label(1, &branches, "master"),
+            "feature-b"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_pr_base_error_matches_requested_base_and_head() {
+        let err = anyhow::anyhow!(
+            "GitHub: Validation Failed\nErrors:\n- {{\"message\":\"A pull request already exists for base branch 'master' and head branch 'jonny/feature'\"}}"
+        );
+
+        assert!(is_duplicate_pr_base_error(&err, "master", "jonny/feature"));
+        assert!(!is_duplicate_pr_base_error(&err, "main", "jonny/feature"));
+        assert!(!is_duplicate_pr_base_error(&err, "master", "other/feature"));
+    }
+
+    #[test]
+    fn test_pr_head_mismatch_bails() {
+        let err = ensure_pr_head_matches(42, "wrong-head", "expected-head")
+            .expect_err("head mismatch should fail");
+        let message = format!("{:#}", err);
+
+        assert!(message.contains("PR #42 is for head branch 'wrong-head'"));
+        assert!(message.contains("expected 'expected-head'"));
     }
 
     #[test]
