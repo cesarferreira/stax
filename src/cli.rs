@@ -602,6 +602,9 @@ enum Commands {
         /// Insert below current branch (reparent current and descendants)
         #[arg(long, conflicts_with_all = ["insert", "from"])]
         below: bool,
+        /// Skip pre-commit and commit-msg hooks
+        #[arg(long = "no-verify", short = 'n')]
+        no_verify: bool,
     },
 
     /// Open the current branch PR or list repo pull requests
@@ -964,6 +967,9 @@ enum Commands {
         /// Insert below current branch (reparent current and descendants)
         #[arg(long, conflicts_with_all = ["insert", "from"])]
         below: bool,
+        /// Skip pre-commit and commit-msg hooks
+        #[arg(long = "no-verify", short = 'n')]
+        no_verify: bool,
     },
     #[command(hide = true)]
     Bu {
@@ -1134,6 +1140,9 @@ enum BranchCommands {
         /// Insert below current branch (reparent current and descendants)
         #[arg(long, conflicts_with_all = ["insert", "from"])]
         below: bool,
+        /// Skip pre-commit and commit-msg hooks
+        #[arg(long = "no-verify", short = 'n')]
+        no_verify: bool,
     },
 
     /// Checkout a branch in the stack
@@ -1842,7 +1851,10 @@ pub fn run() -> Result<()> {
             prefix,
             insert,
             below,
-        } => commands::branch::create::run(name, message, from, prefix, all, insert, below),
+            no_verify,
+        } => commands::branch::create::run(
+            name, message, from, prefix, all, insert, below, no_verify,
+        ),
         Commands::Pr { command } => match command.unwrap_or(PrCommands::Open) {
             PrCommands::Open => commands::pr::run_open(),
             PrCommands::List { limit, json } => commands::pr::run_list(limit, json),
@@ -1958,7 +1970,10 @@ pub fn run() -> Result<()> {
                 prefix,
                 insert,
                 below,
-            } => commands::branch::create::run(name, message, from, prefix, all, insert, below),
+                no_verify,
+            } => commands::branch::create::run(
+                name, message, from, prefix, all, insert, below, no_verify,
+            ),
             BranchCommands::Checkout {
                 branch,
                 pr,
@@ -2048,7 +2063,10 @@ pub fn run() -> Result<()> {
             prefix,
             insert,
             below,
-        } => commands::branch::create::run(name, message, from, prefix, all, insert, below),
+            no_verify,
+        } => commands::branch::create::run(
+            name, message, from, prefix, all, insert, below, no_verify,
+        ),
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
         Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
@@ -2356,9 +2374,9 @@ fn print_worktree_help() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        check_interactive_terminal_with_probe, detect_interactive_stdio, has_interactive_terminal,
         Cli, CliSubcommand, CommandPolicy, Commands, InteractiveTerminalCheck, RestackSubmitAfter,
-        StackCommands, WorktreeCommands,
+        StackCommands, WorktreeCommands, check_interactive_terminal_with_probe,
+        detect_interactive_stdio, has_interactive_terminal,
     };
     use clap::Parser;
     use std::cell::Cell;

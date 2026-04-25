@@ -185,6 +185,7 @@ st wt go ui-polish --run "cursor ." --tmux
 
 - `-m "msg"` set commit message (with nothing staged in a TTY: menu for stage all, `--patch`, empty branch, or abort)
 - `-am "msg"` stage all and commit
+- `-n`, `--no-verify` skip pre-commit and commit-msg hooks when creating a commit
 - `--insert` reparent children of the current branch onto the new branch
 - `--below` create from the current branch's parent and reparent the current branch onto the new branch; combines with `-m`/`-am` to commit on the new lower branch
 - `st branch create --message "msg" --prefix feature/`

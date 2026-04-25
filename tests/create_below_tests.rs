@@ -214,6 +214,51 @@ fn test_create_below_restores_original_metadata_when_commit_fails() {
 }
 
 #[test]
+#[cfg(unix)]
+fn test_create_below_no_verify_skips_hook() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    let branches = repo.create_stack(&["below-no-verify-parent", "below-no-verify-current"]);
+    let current = &branches[1];
+    let current_before = repo.get_commit_sha(current);
+
+    repo.run_stax(&["checkout", current]).assert_success();
+    repo.create_file("skip-below-hook.txt", "work that should commit\n");
+    install_failing_pre_commit_hook(&repo);
+
+    let output = repo.run_stax(&[
+        "create",
+        "-a",
+        "-m",
+        "Skip below hook",
+        "--below",
+        "--no-verify",
+    ]);
+    output.assert_success();
+    output.assert_stdout_contains("Committed: Skip below hook");
+
+    let new_branch = repo.current_branch();
+    assert!(
+        new_branch.to_lowercase().contains("skip-below-hook"),
+        "Expected generated skip-below-hook branch, got: {}",
+        new_branch
+    );
+
+    let subject = repo.git(&["log", "-1", "--pretty=%s"]);
+    assert!(subject.status.success(), "{}", TestRepo::stderr(&subject));
+    assert_eq!(TestRepo::stdout(&subject).trim(), "Skip below hook");
+    assert_eq!(
+        repo.get_commit_sha(current),
+        current_before,
+        "original branch should not advance when committing below it"
+    );
+
+    repo.run_stax(&["checkout", current]).assert_success();
+    assert_current_parent_contains(&repo, "skip-below-hook");
+}
+
+#[test]
 fn test_create_below_rejects_from() {
     let repo = TestRepo::new();
     repo.run_stax(&["status"]).assert_success();
