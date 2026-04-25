@@ -57,7 +57,7 @@ stax branch ...|b              # Branch subcommands
 stax upstack ...|us            # Descendant-scope commands
 stax downstack ...|ds          # Ancestor-scope commands
 
-stax create|c                  # Create stacked branch (menu when nothing staged)
+stax create|c                  # Create stacked branch (--below inserts under current)
 stax modify|m                  # Amend current commit (menu when nothing staged)
 stax rename                    # Rename current branch
 stax detach                    # Remove branch from stack, reparent children
@@ -150,6 +150,8 @@ stax create -a                     # Stage all before creating
 stax create -am "message"          # Stage all + commit (bypasses menu)
 stax create --from <branch>        # Create from explicit base
 stax create --prefix feature/      # Override branch prefix
+stax create <name> --below         # Insert new branch below current
+stax create --below -am "message"  # Commit on new lower branch
 stax bc <name>                     # Hidden shortcut alias
 
 stax m                             # Amend current commit (TTY menu if nothing staged)

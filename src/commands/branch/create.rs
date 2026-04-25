@@ -14,7 +14,7 @@
 //!   `rollback_create` cleanup.
 //!
 //! Both flows share `create_branch_with_banner` for the create → metadata →
-//! `--insert` → checkout → summary sequence.
+//! `--insert`/`--below` placement → checkout → summary sequence.
 //!
 //! When the user passes `-m` but nothing is staged and `-a` wasn't supplied,
 //! `stax create` offers the shared staging menu (see
@@ -43,6 +43,11 @@ enum StageMode {
     All,
 }
 
+struct CreatePlacement {
+    parent_branch: String,
+    below_current_meta: Option<BranchMetadata>,
+}
+
 pub fn run(
     name: Option<String>,
     message: Option<String>,
@@ -50,11 +55,14 @@ pub fn run(
     prefix: Option<String>,
     all: bool,
     insert: bool,
+    below: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let config = Config::load()?;
     let current = repo.current_branch()?;
-    let parent_branch = from.unwrap_or_else(|| current.clone());
+    let placement = resolve_create_placement(&repo, &current, from, insert, below)?;
+    let parent_branch = placement.parent_branch;
+    let below_current_meta = placement.below_current_meta;
     let generated_from_message = name.is_none() && message.is_some();
 
     if repo.branch_commit(&parent_branch).is_err() {
@@ -177,6 +185,7 @@ pub fn run(
         &parent_branch,
         &branch_name,
         insert,
+        below_current_meta.as_ref(),
     )?;
 
     // Stage/commit behavior:
@@ -188,7 +197,12 @@ pub fn run(
 
         if stage_mode == StageMode::All || needs_stage_all {
             if let Err(e) = staging::stage_all(workdir) {
-                rollback_create(&repo, &current, &branch_name);
+                rollback_create_and_restore(
+                    &repo,
+                    &current,
+                    &branch_name,
+                    below_current_meta.as_ref(),
+                );
                 return Err(e);
             }
         }
@@ -200,7 +214,14 @@ pub fn run(
             if staging::is_staging_area_empty(workdir)? {
                 println!("{}", "No changes to commit".dimmed());
             } else {
-                commit_or_rollback(workdir, &msg, &repo, &current, &branch_name)?;
+                commit_or_rollback(
+                    workdir,
+                    &msg,
+                    &repo,
+                    &current,
+                    &branch_name,
+                    below_current_meta.as_ref(),
+                )?;
                 println!("Committed: {}", msg.cyan());
             }
         } else if stage_mode == StageMode::All {
@@ -230,6 +251,7 @@ fn commit_or_rollback(
     repo: &GitRepo,
     original: &str,
     new_branch: &str,
+    restore_original_meta: Option<&BranchMetadata>,
 ) -> Result<()> {
     let status = Command::new("git")
         .args(["commit", "-m", message])
@@ -238,14 +260,14 @@ fn commit_or_rollback(
     match status {
         Ok(s) if s.success() => Ok(()),
         Ok(_) => {
-            rollback_create(repo, original, new_branch);
+            rollback_create_and_restore(repo, original, new_branch, restore_original_meta);
             bail!(
                 "Commit failed (pre-commit hook or other error). \
                  Branch rolled back. Fix the issue and retry."
             );
         }
         Err(e) => {
-            rollback_create(repo, original, new_branch);
+            rollback_create_and_restore(repo, original, new_branch, restore_original_meta);
             Err(anyhow::Error::from(e).context("Failed to run git commit"))
         }
     }
@@ -269,6 +291,18 @@ fn rollback_create(repo: &GitRepo, original_branch: &str, new_branch: &str) {
     }
     let _ = repo.delete_branch(new_branch, true);
     let _ = BranchMetadata::delete(repo.inner(), new_branch);
+}
+
+fn rollback_create_and_restore(
+    repo: &GitRepo,
+    original_branch: &str,
+    new_branch: &str,
+    restore_original_meta: Option<&BranchMetadata>,
+) {
+    if let Some(meta) = restore_original_meta {
+        let _ = meta.write(repo.inner(), original_branch);
+    }
+    rollback_create(repo, original_branch, new_branch);
 }
 
 /// Graphite-style commit-first flow: commit on the current branch, then split
@@ -303,7 +337,7 @@ fn run_commit_first(
     // make. Fall back to creating an empty branch — same shape as the
     // branch-first path without the trailing commit.
     if staging::is_staging_area_empty(workdir)? {
-        create_branch_with_banner(repo, config, current, current, branch_name, insert)?;
+        create_branch_with_banner(repo, config, current, current, branch_name, insert, None)?;
         println!("{}", "No changes to commit".dimmed());
         print_tips(config);
         return Ok(());
@@ -397,7 +431,7 @@ fn rollback_after_commit(workdir: &Path, old_sha: &str, new_branch: Option<&str>
 }
 
 /// Create `branch_name` stacked on `parent_branch`, write stax metadata,
-/// apply `--insert` reparenting, check out the new branch, and print the
+/// apply `--insert`/`--below` reparenting, check out the new branch, and print the
 /// "Created and switched…" banner. On any failure, undo all of it with
 /// `rollback_create` so the caller sees a clean failure.
 ///
@@ -405,7 +439,7 @@ fn rollback_after_commit(workdir: &Path, old_sha: &str, new_branch: Option<&str>
 /// where `rollback_create` checks out on failure. For the commit-first
 /// no-changes fallback `original == parent_branch == current`; for the
 /// branch-first flow `original == current`, and `parent_branch` may or may not
-/// equal it (the `--from` case).
+/// equal it (the `--from` and `--below` cases).
 ///
 /// The caller owns whatever comes next — the trailing "No changes to commit"
 /// note, the stage/commit block, or the tips line.
@@ -416,6 +450,7 @@ fn create_branch_with_banner(
     parent_branch: &str,
     branch_name: &str,
     insert: bool,
+    below_current_meta: Option<&BranchMetadata>,
 ) -> Result<()> {
     if parent_branch == original {
         repo.create_branch(branch_name)?;
@@ -437,8 +472,15 @@ fn create_branch_with_banner(
         }
     }
 
+    if let Some(current_meta) = below_current_meta {
+        if let Err(e) = apply_below_reparenting(repo, original, branch_name, current_meta) {
+            rollback_create_and_restore(repo, original, branch_name, below_current_meta);
+            return Err(e);
+        }
+    }
+
     if let Err(e) = repo.checkout(branch_name) {
-        rollback_create(repo, original, branch_name);
+        rollback_create_and_restore(repo, original, branch_name, below_current_meta);
         return Err(e);
     }
 
@@ -450,6 +492,57 @@ fn create_branch_with_banner(
     );
 
     Ok(())
+}
+
+fn resolve_create_placement(
+    repo: &GitRepo,
+    current: &str,
+    from: Option<String>,
+    insert: bool,
+    below: bool,
+) -> Result<CreatePlacement> {
+    if insert && below {
+        bail!("`--insert` and `--below` cannot be used together");
+    }
+    if below && from.is_some() {
+        bail!("`--below` cannot be used with `--from`");
+    }
+
+    if below {
+        let meta = resolve_below_current_metadata(repo, current)?;
+        return Ok(CreatePlacement {
+            parent_branch: meta.parent_branch_name.clone(),
+            below_current_meta: Some(meta),
+        });
+    }
+
+    Ok(CreatePlacement {
+        parent_branch: from.unwrap_or_else(|| current.to_string()),
+        below_current_meta: None,
+    })
+}
+
+fn resolve_below_current_metadata(repo: &GitRepo, current: &str) -> Result<BranchMetadata> {
+    let trunk = repo.trunk_branch()?;
+    if current == trunk {
+        bail!("Cannot create a branch below trunk. Checkout a stacked branch first.");
+    }
+
+    let meta = BranchMetadata::read(repo.inner(), current)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Branch '{}' is not tracked by stax. Run `st branch track` first.",
+            current
+        )
+    })?;
+
+    if meta.parent_branch_name == current {
+        bail!(
+            "Cannot create a branch below '{}': branch metadata points to itself as parent.",
+            current
+        );
+    }
+
+    Ok(meta)
 }
 
 /// Reparent children of `parent_branch` onto `new_branch` and print the usual
@@ -494,6 +587,50 @@ fn apply_insert_reparenting(repo: &GitRepo, parent_branch: &str, new_branch: &st
     println!(
         "{}",
         "Run `stax restack --all` to rebase the reparented branches.".yellow()
+    );
+
+    Ok(())
+}
+
+/// Insert `new_branch` between `current_branch` and its current parent.
+/// Descendant metadata stays untouched: moving the subtree root makes all
+/// descendants follow it while preserving their relative structure.
+fn apply_below_reparenting(
+    repo: &GitRepo,
+    current_branch: &str,
+    new_branch: &str,
+    current_meta: &BranchMetadata,
+) -> Result<()> {
+    let new_parent_rev = repo.branch_commit(new_branch)?;
+    let parent_revision = repo
+        .merge_base(new_branch, current_branch)
+        .unwrap_or(new_parent_rev);
+    let updated = BranchMetadata {
+        parent_branch_name: new_branch.to_string(),
+        parent_branch_revision: parent_revision,
+        ..current_meta.clone()
+    };
+    updated.write(repo.inner(), current_branch)?;
+
+    let descendants = Stack::load(repo)?.descendants(current_branch);
+
+    println!(
+        "Reparented '{}' onto '{}'",
+        current_branch.green(),
+        new_branch.green()
+    );
+    if !descendants.is_empty() {
+        println!(
+            "  {} descendant branch(es) moved with it:",
+            descendants.len().to_string().cyan()
+        );
+        for descendant in &descendants {
+            println!("    {}", descendant.dimmed());
+        }
+    }
+    println!(
+        "{}",
+        "Run `stax restack` to rebase the moved branches onto their new parent.".yellow()
     );
 
     Ok(())

@@ -249,6 +249,7 @@ st config --set-ai
 | `st` | Launch interactive TUI |
 | `st ls` / `st ll` | Show stack (with PR status / with PR URLs and details) |
 | `st create <name>` | Create a branch stacked on current |
+| `st create <name> --below` | Insert a new branch below current |
 | `st ss` | Submit the full stack, open/update linked PRs |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--remote`, `--all`) |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
