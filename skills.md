@@ -148,6 +148,7 @@ stax create <name>                 # Create branch stacked on current
 stax create -m "message"           # Use commit message (TTY menu if nothing staged)
 stax create -a                     # Stage all before creating
 stax create -am "message"          # Stage all + commit (bypasses menu)
+stax create -n -am "message"       # Stage all + commit, skipping hooks
 stax create --from <branch>        # Create from explicit base
 stax create --prefix feature/      # Override branch prefix
 stax bc <name>                     # Hidden shortcut alias

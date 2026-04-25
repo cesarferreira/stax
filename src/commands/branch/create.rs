@@ -50,6 +50,7 @@ pub fn run(
     prefix: Option<String>,
     all: bool,
     insert: bool,
+    no_verify: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let config = Config::load()?;
@@ -166,6 +167,7 @@ pub fn run(
                 stage_mode,
                 needs_stage_all,
                 insert,
+                no_verify,
             );
         }
     }
@@ -200,7 +202,7 @@ pub fn run(
             if staging::is_staging_area_empty(workdir)? {
                 println!("{}", "No changes to commit".dimmed());
             } else {
-                commit_or_rollback(workdir, &msg, &repo, &current, &branch_name)?;
+                commit_or_rollback(workdir, &msg, &repo, &current, &branch_name, no_verify)?;
                 println!("Committed: {}", msg.cyan());
             }
         } else if stage_mode == StageMode::All {
@@ -219,6 +221,33 @@ pub fn run(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy)]
+struct GitCommitOptions {
+    quiet: bool,
+    no_verify: bool,
+}
+
+fn run_git_commit(
+    workdir: &Path,
+    message: &str,
+    options: GitCommitOptions,
+) -> Result<std::process::ExitStatus> {
+    let mut args = vec!["commit"];
+    if options.quiet {
+        args.push("--quiet");
+    }
+    if options.no_verify {
+        args.push("--no-verify");
+    }
+    args.extend(["-m", message]);
+
+    Command::new("git")
+        .args(&args)
+        .current_dir(workdir)
+        .status()
+        .context("Failed to run git commit")
+}
+
 /// Run `git commit -m <msg>` on the currently checked-out branch. On any
 /// failure (spawn error, non-zero exit, hook rejection), invoke
 /// `rollback_create` to clean up the partially-created branch before
@@ -230,11 +259,16 @@ fn commit_or_rollback(
     repo: &GitRepo,
     original: &str,
     new_branch: &str,
+    no_verify: bool,
 ) -> Result<()> {
-    let status = Command::new("git")
-        .args(["commit", "-m", message])
-        .current_dir(workdir)
-        .status();
+    let status = run_git_commit(
+        workdir,
+        message,
+        GitCommitOptions {
+            quiet: false,
+            no_verify,
+        },
+    );
     match status {
         Ok(s) if s.success() => Ok(()),
         Ok(_) => {
@@ -291,6 +325,7 @@ fn run_commit_first(
     stage_mode: StageMode,
     needs_stage_all: bool,
     insert: bool,
+    no_verify: bool,
 ) -> Result<()> {
     let workdir = repo.workdir()?;
 
@@ -317,11 +352,14 @@ fn run_commit_first(
     // "[<branch> <sha>] <msg>" summary that would otherwise show the commit
     // landing on the original branch — we move it off a few calls later and
     // print our own summary. Pre-commit hook output is not suppressed by -q.
-    let commit_status = Command::new("git")
-        .args(["commit", "--quiet", "-m", message])
-        .current_dir(workdir)
-        .status()
-        .context("Failed to run git commit")?;
+    let commit_status = run_git_commit(
+        workdir,
+        message,
+        GitCommitOptions {
+            quiet: true,
+            no_verify,
+        },
+    )?;
 
     if !commit_status.success() {
         bail!(
