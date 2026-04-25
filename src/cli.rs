@@ -599,6 +599,9 @@ enum Commands {
         /// Insert between current branch and its children (reparent children)
         #[arg(long)]
         insert: bool,
+        /// Skip pre-commit and commit-msg hooks
+        #[arg(long = "no-verify", short = 'n')]
+        no_verify: bool,
     },
 
     /// Open the current branch PR or list repo pull requests
@@ -958,6 +961,9 @@ enum Commands {
         /// Insert between current branch and its children (reparent children)
         #[arg(long)]
         insert: bool,
+        /// Skip pre-commit and commit-msg hooks
+        #[arg(long = "no-verify", short = 'n')]
+        no_verify: bool,
     },
     #[command(hide = true)]
     Bu {
@@ -1125,6 +1131,9 @@ enum BranchCommands {
         /// Insert between current branch and its children (reparent children)
         #[arg(long)]
         insert: bool,
+        /// Skip pre-commit and commit-msg hooks
+        #[arg(long = "no-verify", short = 'n')]
+        no_verify: bool,
     },
 
     /// Checkout a branch in the stack
@@ -1832,7 +1841,8 @@ pub fn run() -> Result<()> {
             from,
             prefix,
             insert,
-        } => commands::branch::create::run(name, message, from, prefix, all, insert),
+            no_verify,
+        } => commands::branch::create::run(name, message, from, prefix, all, insert, no_verify),
         Commands::Pr { command } => match command.unwrap_or(PrCommands::Open) {
             PrCommands::Open => commands::pr::run_open(),
             PrCommands::List { limit, json } => commands::pr::run_list(limit, json),
@@ -1947,7 +1957,8 @@ pub fn run() -> Result<()> {
                 from,
                 prefix,
                 insert,
-            } => commands::branch::create::run(name, message, from, prefix, all, insert),
+                no_verify,
+            } => commands::branch::create::run(name, message, from, prefix, all, insert, no_verify),
             BranchCommands::Checkout {
                 branch,
                 pr,
@@ -2036,7 +2047,8 @@ pub fn run() -> Result<()> {
             from,
             prefix,
             insert,
-        } => commands::branch::create::run(name, message, from, prefix, all, insert),
+            no_verify,
+        } => commands::branch::create::run(name, message, from, prefix, all, insert, no_verify),
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
         Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
