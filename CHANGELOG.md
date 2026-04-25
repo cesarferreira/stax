@@ -8,8 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.57.0] - 2026-04-25
+
+### Added
+- Support non-interactive submit (#327)
+- Add --below placement (#333)
+
+### Changed
+- Stop tracking Python bytecode from release prep (#321)
+- Cover auto-stash-pop linked worktree flow (#326)
+- Automate interactive menu paths (#328)
+- Fix redundant merge PR base retargets (#329)
+
 ### Fixed
-- Merge (when-ready): Preserve the relative stack chain when rebasing remaining branches instead of flattening every descendant onto trunk (#311)
+- Preserve remaining stack chain on rebase (#311) (#318)
 
 ## [0.56.0] - 2026-04-21
 
@@ -157,7 +169,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.56.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.57.0...HEAD
+[0.57.0]: https://github.com/cesarferreira/stax/compare/v0.56.0...v0.57.0
 [0.56.0]: https://github.com/cesarferreira/stax/compare/v0.55.0...v0.56.0
 [0.55.0]: https://github.com/cesarferreira/stax/compare/v0.54.0...v0.55.0
 [0.54.0]: https://github.com/cesarferreira/stax/compare/v0.53.0...v0.54.0
