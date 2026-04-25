@@ -5,6 +5,7 @@
 //! polls until all PRs are merged.  Finishes with auto-sync and a desktop
 //! notification — the same "land and walk away" experience as Graphite.
 
+use crate::commands::merge::{update_pr_base_unless_current, PrBaseUpdate};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
@@ -73,6 +74,9 @@ pub fn run(
         );
     }
 
+    let rt = tokio::runtime::Runtime::new()?;
+    let _enter = rt.enter();
+
     let client = ForgeClient::new(&remote_info).context(
         "Failed to connect to the configured forge. Check your token and remote configuration.",
     )?;
@@ -81,9 +85,6 @@ pub fn run(
         ForgeType::GitLab => "merge train",
         _ => "merge queue",
     };
-
-    let rt = tokio::runtime::Runtime::new()?;
-    let _enter = rt.enter();
 
     let (to_queue, trunk) = calculate_queue_scope(&stack, &current, all);
 
@@ -224,14 +225,19 @@ pub fn run(
             &format!("Retargeting #{} to {}...", branch.pr_number, trunk),
         );
 
-        match rt.block_on(async { client.update_pr_base(branch.pr_number, &trunk).await }) {
-            Ok(()) => LiveTimer::maybe_finish_ok(retarget_timer, "done"),
+        let retarget_result =
+            update_pr_base_unless_current(&rt, &client, branch.pr_number, &trunk, &branch.branch);
+        match retarget_result {
+            Ok(PrBaseUpdate::Updated) => LiveTimer::maybe_finish_ok(retarget_timer, "done"),
+            Ok(PrBaseUpdate::AlreadyTargeted) => {
+                LiveTimer::maybe_finish_ok(retarget_timer, "already on base")
+            }
             Err(e) => {
                 LiveTimer::maybe_finish_err(retarget_timer, "failed");
                 failed = Some((
                     branch.branch.clone(),
                     branch.pr_number,
-                    format!("Failed to retarget PR: {}", e),
+                    format!("Failed to retarget PR: {:#}", e),
                 ));
                 break;
             }
@@ -265,17 +271,24 @@ pub fn run(
                             branch.pr_number, branch.original_base
                         ),
                     );
-                    match rt.block_on(async {
-                        client
-                            .update_pr_base(branch.pr_number, &branch.original_base)
-                            .await
-                    }) {
-                        Ok(()) => LiveTimer::maybe_finish_ok(rollback_timer, "restored"),
+                    match update_pr_base_unless_current(
+                        &rt,
+                        &client,
+                        branch.pr_number,
+                        &branch.original_base,
+                        &branch.branch,
+                    ) {
+                        Ok(PrBaseUpdate::Updated) => {
+                            LiveTimer::maybe_finish_ok(rollback_timer, "restored")
+                        }
+                        Ok(PrBaseUpdate::AlreadyTargeted) => {
+                            LiveTimer::maybe_finish_ok(rollback_timer, "already restored")
+                        }
                         Err(rb_err) => {
                             LiveTimer::maybe_finish_err(rollback_timer, "rollback failed");
                             if !quiet {
                                 println!(
-                                    "      {} Could not restore original base: {}",
+                                    "      {} Could not restore original base: {:#}",
                                     "⚠".yellow(),
                                     rb_err
                                 );
