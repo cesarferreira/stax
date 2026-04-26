@@ -137,7 +137,9 @@ fn test_create_below_with_message_commits_on_new_branch() {
     repo.run_stax(&["status"]).assert_success();
 
     let branches = repo.create_stack(&["below-message-parent", "below-message-current"]);
+    let parent = &branches[0];
     let current = &branches[1];
+    let parent_before = repo.get_commit_sha(parent);
     let current_before = repo.get_commit_sha(current);
 
     repo.run_stax(&["checkout", current]).assert_success();
@@ -157,6 +159,17 @@ fn test_create_below_with_message_commits_on_new_branch() {
     let subject = repo.git(&["log", "-1", "--pretty=%s"]);
     assert!(subject.status.success(), "{}", TestRepo::stderr(&subject));
     assert_eq!(TestRepo::stdout(&subject).trim(), "Prep below");
+    let commit_parent = repo.git(&["rev-parse", "HEAD^"]);
+    assert!(
+        commit_parent.status.success(),
+        "{}",
+        TestRepo::stderr(&commit_parent)
+    );
+    assert_eq!(
+        TestRepo::stdout(&commit_parent).trim(),
+        parent_before,
+        "below commit should be based on the original parent"
+    );
     assert_eq!(
         repo.get_commit_sha(current),
         current_before,
@@ -188,6 +201,7 @@ fn test_create_below_restores_original_metadata_when_commit_fails() {
 
     let output = repo.run_stax(&["create", "-a", "-m", "Fail below", "--below"]);
     output.assert_failure();
+    output.assert_stderr_contains("No branch was created");
 
     assert_eq!(
         repo.current_branch(),
@@ -210,6 +224,16 @@ fn test_create_below_restores_original_metadata_when_commit_fails() {
     assert!(
         repo.path().join("fail-below.txt").exists(),
         "rollback should preserve the user's working-tree file"
+    );
+
+    repo.run_stax(&["create", "-a", "-m", "Fail below", "--below"])
+        .assert_failure();
+    assert!(
+        !repo
+            .list_branches()
+            .iter()
+            .any(|branch| branch.to_lowercase().contains("fail-below-2")),
+        "retry should not drift into a suffixed branch"
     );
 }
 

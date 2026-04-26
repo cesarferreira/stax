@@ -7,18 +7,27 @@
 //! retrying with the same message does not drift into `mybranch-2`,
 //! `mybranch-3`, etc.
 //!
-//! A legacy rollback path still exists for the less common branch-first flow
-//! (e.g. `st create -m "msg" --from <other>`); this file covers both.
+//! The same safety property applies when `-m` commits from a non-current
+//! parent (`--from <other>` / `--below`): stax commits before creating the
+//! destination branch, then writes refs and metadata only after success.
 //!
 //! Most tests require Unix (pre-commit hooks use `#!/bin/sh` and chmod).
 
 mod common;
 
+#[cfg(unix)]
+use common::stax_bin;
 use common::{OutputAssertions, TestRepo};
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::thread;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 /// Install a pre-commit hook that always fails.
 #[cfg(unix)]
@@ -30,11 +39,82 @@ fn install_failing_pre_commit_hook(repo: &TestRepo) {
     fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+#[cfg(unix)]
+fn install_waiting_pre_commit_hook(repo: &TestRepo) {
+    let hooks_dir = repo.path().join(".git").join("hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    let hook_path = hooks_dir.join("pre-commit");
+    fs::write(
+        &hook_path,
+        "#!/bin/sh\n\
+         touch .git/hooks/pre-commit-started\n\
+         while [ ! -f .git/hooks/pre-commit-release ]; do sleep 1; done\n",
+    )
+    .unwrap();
+    fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 /// Remove the pre-commit hook.
 #[cfg(unix)]
 fn remove_pre_commit_hook(repo: &TestRepo) {
     let hook_path = repo.path().join(".git").join("hooks").join("pre-commit");
     let _ = std::fs::remove_file(hook_path);
+}
+
+#[cfg(unix)]
+fn wait_for_hook_start(repo: &TestRepo) {
+    let marker = repo
+        .path()
+        .join(".git")
+        .join("hooks")
+        .join("pre-commit-started");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if marker.exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("pre-commit hook did not start");
+}
+
+#[cfg(unix)]
+fn run_stax_until_hook_then_interrupt(repo: &TestRepo, args: &[&str]) -> std::process::Output {
+    let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let child = Command::new(stax_bin())
+        .args(args)
+        .current_dir(repo.path())
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("STAX_GITHUB_TOKEN")
+        .env_remove("STAX_SHELL_INTEGRATION")
+        .env_remove("GH_TOKEN")
+        .env("GIT_CONFIG_GLOBAL", null_path)
+        .env("GIT_CONFIG_SYSTEM", null_path)
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stax");
+
+    wait_for_hook_start(repo);
+
+    let pid = child.id().to_string();
+    let status = Command::new("kill")
+        .args(["-INT", &pid])
+        .status()
+        .expect("send SIGINT to stax process");
+    assert!(status.success(), "failed to interrupt stax process {pid}");
+
+    fs::write(
+        repo.path()
+            .join(".git")
+            .join("hooks")
+            .join("pre-commit-release"),
+        "",
+    )
+    .expect("release waiting pre-commit hook");
+
+    child.wait_with_output().expect("wait for interrupted stax")
 }
 
 #[test]
@@ -313,17 +393,12 @@ fn create_rollback_then_succeed_after_hook_removed() {
     );
 }
 
-/// The `--from <other> -m "msg"` path still uses branch-first + the
-/// `rollback_create` fallback (commit-first only applies when the new branch
-/// stacks on the current branch). Guard that path: a failing hook must roll
-/// back the branch so retry is clean, just like the commit-first path.
-///
 /// `-m` is passed without a positional name so the branch name is derived
 /// from the message — when both are given, stax uses the positional name and
 /// discards the message, which would suppress the commit entirely.
 #[test]
 #[cfg(unix)]
-fn create_from_other_branch_with_failing_hook_rolls_back() {
+fn create_from_other_branch_with_failing_hook_leaves_no_branch() {
     let repo = TestRepo::new();
     repo.run_stax(&["init"]).assert_success();
 
@@ -346,8 +421,8 @@ fn create_from_other_branch_with_failing_hook_rolls_back() {
     ]);
     output.assert_failure();
 
-    // The branch must have been rolled back — no orphan, and the error must
-    // name the rollback so users know what happened.
+    // The branch must never be created — no orphan, and retries do not drift
+    // into a suffixed name.
     assert!(
         !repo
             .list_branches()
@@ -356,7 +431,201 @@ fn create_from_other_branch_with_failing_hook_rolls_back() {
         "new branch must be rolled back after hook failure. Branches: {:?}",
         repo.list_branches(),
     );
-    output.assert_stderr_contains("rolled back");
+    output.assert_stderr_contains("No branch was created");
+
+    repo.run_stax(&[
+        "create",
+        "--from",
+        &branches[0],
+        "-a",
+        "-m",
+        "off sibling feature",
+    ])
+    .assert_failure();
+    assert!(
+        !repo
+            .list_branches()
+            .iter()
+            .any(|b| b.contains("off-sibling-feature-2")),
+        "retry must not drift into a suffixed branch. Branches: {:?}",
+        repo.list_branches(),
+    );
+}
+
+#[test]
+fn create_from_other_branch_with_message_commits_on_requested_parent() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    let branches = repo.create_stack(&["sibling-parent"]);
+    let parent = &branches[0];
+    let parent_before = repo.get_commit_sha(parent);
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    let main_before = repo.get_commit_sha("main");
+    repo.create_file("from-parent.txt", "work for explicit parent\n");
+
+    let output = repo.run_stax(&["create", "--from", parent, "-a", "-m", "off sibling parent"]);
+    output.assert_success();
+    output.assert_stdout_contains("Committed: off sibling parent");
+
+    assert_eq!(
+        repo.get_commit_sha("main"),
+        main_before,
+        "original branch should not advance when creating from another parent"
+    );
+
+    let commit_parent = repo.git(&["rev-parse", "HEAD^"]);
+    assert!(
+        commit_parent.status.success(),
+        "{}",
+        TestRepo::stderr(&commit_parent)
+    );
+    assert_eq!(TestRepo::stdout(&commit_parent).trim(), parent_before);
+
+    let stax_parent = repo.get_current_parent();
+    assert!(
+        stax_parent.as_deref().is_some_and(|p| p == parent),
+        "new branch metadata should point at requested parent, got: {:?}",
+        stax_parent
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn create_from_other_branch_interrupted_commit_leaves_no_branch_and_retries_cleanly() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    let branches = repo.create_stack(&["interrupt-parent"]);
+    let parent = &branches[0];
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    repo.create_file("interrupt.txt", "work interrupted during commit\n");
+    install_waiting_pre_commit_hook(&repo);
+
+    let output = run_stax_until_hook_then_interrupt(
+        &repo,
+        &[
+            "create",
+            "--from",
+            parent,
+            "-a",
+            "-m",
+            "interrupted from parent",
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "interrupted create should fail\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    assert_eq!(
+        repo.current_branch(),
+        "main",
+        "interrupted create should restore the original branch"
+    );
+    assert!(
+        !repo
+            .list_branches()
+            .iter()
+            .any(|b| b.contains("interrupted-from-parent")),
+        "interrupted create must not leave a destination branch. Branches: {:?}",
+        repo.list_branches(),
+    );
+
+    remove_pre_commit_hook(&repo);
+    repo.run_stax(&[
+        "create",
+        "--from",
+        parent,
+        "-a",
+        "-m",
+        "interrupted from parent",
+    ])
+    .assert_success();
+
+    let branch = repo.current_branch();
+    assert!(
+        branch.contains("interrupted-from-parent") && !branch.contains("interrupted-from-parent-2"),
+        "retry should use the original branch name, got: {}",
+        branch
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn create_below_interrupted_commit_leaves_no_branch_and_retries_cleanly() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    let branches = repo.create_stack(&["interrupt-below-parent", "interrupt-below-current"]);
+    let parent = &branches[0];
+    let current = &branches[1];
+    let current_before = repo.get_commit_sha(current);
+
+    repo.run_stax(&["checkout", current]).assert_success();
+    repo.create_file(
+        "interrupt-below.txt",
+        "work interrupted during below commit\n",
+    );
+    install_waiting_pre_commit_hook(&repo);
+
+    let output = run_stax_until_hook_then_interrupt(
+        &repo,
+        &["create", "--below", "-a", "-m", "interrupted below parent"],
+    );
+    assert!(
+        !output.status.success(),
+        "interrupted create --below should fail\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    assert_eq!(
+        repo.current_branch(),
+        *current,
+        "interrupted create --below should restore the original branch"
+    );
+    assert_eq!(
+        repo.get_commit_sha(current),
+        current_before,
+        "interrupted create --below should not advance the original branch"
+    );
+    assert!(
+        !repo
+            .list_branches()
+            .iter()
+            .any(|b| b.contains("interrupted-below-parent")),
+        "interrupted create --below must not leave a destination branch. Branches: {:?}",
+        repo.list_branches(),
+    );
+
+    remove_pre_commit_hook(&repo);
+    repo.run_stax(&["create", "--below", "-a", "-m", "interrupted below parent"])
+        .assert_success();
+
+    let branch = repo.current_branch();
+    assert!(
+        branch.contains("interrupted-below-parent")
+            && !branch.contains("interrupted-below-parent-2"),
+        "retry should use the original branch name, got: {}",
+        branch
+    );
+
+    repo.run_stax(&["checkout", current]).assert_success();
+    let stax_parent = repo.get_current_parent();
+    assert!(
+        stax_parent
+            .as_deref()
+            .is_some_and(|p| p.contains("interrupted-below-parent")),
+        "original branch should be reparented onto retry branch, got: {:?}",
+        stax_parent
+    );
+
+    repo.run_stax(&["checkout", parent]).assert_success();
 }
 
 #[test]

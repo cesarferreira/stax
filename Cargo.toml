@@ -50,6 +50,7 @@ termimad = "0.34"
 
 # Error handling
 anyhow = "1"
+signal-hook = "0.3"
 
 # Clipboard (text-only — skip image support to avoid pulling in the image crate)
 arboard = { version = "3", default-features = false }
