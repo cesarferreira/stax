@@ -117,6 +117,45 @@ fn create_with_successful_commit_still_works() {
     );
 }
 
+#[test]
+#[cfg(unix)]
+fn create_no_verify_skips_hook_in_commit_first_flow() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    repo.create_file("test.txt", "hello");
+    install_failing_pre_commit_hook(&repo);
+
+    let output = repo.run_stax(&["create", "-a", "-m", "skip hook", "--no-verify"]);
+    output.assert_success();
+
+    assert!(
+        repo.current_branch().contains("skip-hook"),
+        "Should be on the created branch. Current: {}",
+        repo.current_branch()
+    );
+    let subject = repo.git(&["log", "-1", "--pretty=%s"]);
+    assert!(subject.status.success(), "{}", TestRepo::stderr(&subject));
+    assert_eq!(TestRepo::stdout(&subject).trim(), "skip hook");
+}
+
+#[test]
+#[cfg(unix)]
+fn create_no_verify_works_via_bc_alias() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+    repo.create_file("alias.txt", "hello");
+    install_failing_pre_commit_hook(&repo);
+
+    repo.run_stax(&["bc", "-a", "-m", "alias skip hook", "-n"])
+        .assert_success();
+
+    assert!(
+        repo.current_branch().contains("alias-skip-hook"),
+        "Should be on the created branch. Current: {}",
+        repo.current_branch()
+    );
+}
+
 /// Verifies the commit-first ordering: on success, the new commit lives only
 /// on the new branch and `main`'s HEAD does not advance.
 #[test]
@@ -318,4 +357,38 @@ fn create_from_other_branch_with_failing_hook_rolls_back() {
         repo.list_branches(),
     );
     output.assert_stderr_contains("rolled back");
+}
+
+#[test]
+#[cfg(unix)]
+fn branch_create_no_verify_skips_hook_in_branch_first_flow() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    let branches = repo.create_stack(&["sibling"]);
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    install_failing_pre_commit_hook(&repo);
+    repo.create_file("wip.txt", "wip");
+
+    let output = repo.run_stax(&[
+        "branch",
+        "create",
+        "--from",
+        &branches[0],
+        "-a",
+        "-m",
+        "off sibling no verify",
+        "-n",
+    ]);
+    output.assert_success();
+
+    assert!(
+        repo.current_branch().contains("off-sibling-no-verify"),
+        "Should be on the created branch. Current: {}",
+        repo.current_branch()
+    );
+    let subject = repo.git(&["log", "-1", "--pretty=%s"]);
+    assert!(subject.status.success(), "{}", TestRepo::stderr(&subject));
+    assert_eq!(TestRepo::stdout(&subject).trim(), "off sibling no verify");
 }

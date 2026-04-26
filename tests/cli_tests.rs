@@ -1055,6 +1055,8 @@ fn test_branch_create_help_flags() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("from"));
     assert!(stdout.contains("prefix"));
+    assert!(stdout.contains("-n"));
+    assert!(stdout.contains("--no-verify"));
 }
 
 #[test]
@@ -1124,6 +1126,7 @@ fn fp_parity_bc_branch_create() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("message")); // -m flag
     assert!(stdout.contains("from")); // --from flag
+    assert!(stdout.contains("no-verify")); // -n/--no-verify flag
 }
 
 #[test]
@@ -1314,6 +1317,8 @@ fn gt_parity_create_am_flags() {
     assert!(stdout.contains("--all"));
     assert!(stdout.contains("-m"));
     assert!(stdout.contains("--message"));
+    assert!(stdout.contains("-n"));
+    assert!(stdout.contains("--no-verify"));
 }
 
 #[test]
