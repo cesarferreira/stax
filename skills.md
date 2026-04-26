@@ -154,6 +154,8 @@ stax create --prefix feature/      # Override branch prefix
 stax create <name> --below         # Insert new branch below current
 stax create --below -am "message"  # Commit on new lower branch
 stax bc <name>                     # Hidden shortcut alias
+# create -m/-am commits before branch creation, including --from/--below,
+# so hook failures or interrupts do not leave orphan branches or -2 retries.
 
 stax m                             # Amend current commit (TTY menu if nothing staged)
 stax m -a                          # Stage all + amend (bypasses menu)

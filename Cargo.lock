@@ -3375,6 +3375,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "signal-hook",
  "tempfile",
  "termimad",
  "tokio",

@@ -2,16 +2,16 @@
 //!
 //! Two flows live in this file:
 //!
-//! - **Commit-first** (the default when `-m "msg"` is used and the new branch
-//!   stacks on the current branch): `git commit` runs on the current branch
-//!   *before* any stax ref is created. On hook failure or Ctrl+C nothing is
-//!   touched — no orphan branch, no `mybranch-2` drift on retry. The new
-//!   commit is then split off to the new branch and the current branch ref is
-//!   moved back to its pre-commit SHA.
-//! - **Branch-first** (everything else: name-only `st create`, `--from
-//!   <other>`, no-op `-m` with a clean tree): create the branch and switch to
-//!   it first, then optionally commit. Failures here use the legacy
-//!   `rollback_create` cleanup.
+//! - **Commit-first** (`-m "msg"`): `git commit` runs *before* any destination
+//!   branch ref is created. When the requested parent is the current branch, the
+//!   commit is made on the current branch and then split off. For `--from` and
+//!   `--below`, the commit is made on a detached checkout of the requested
+//!   parent so the new commit has the right base without advancing that parent.
+//!   On hook failure or Ctrl+C no destination branch exists, so retries do not
+//!   drift to `mybranch-2`, `mybranch-3`, etc.
+//! - **Branch-first** (everything else: name-only `st create`, no-op `-m` with
+//!   a clean tree): create the branch and switch to it first. Failures here use
+//!   the legacy `rollback_create` cleanup.
 //!
 //! Both flows share `create_branch_with_banner` for the create → metadata →
 //! `--insert`/`--below` placement → checkout → summary sequence.
@@ -25,12 +25,16 @@ use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::remote;
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use console::Term;
-use dialoguer::{Input, Select, theme::ColorfulTheme};
+use dialoguer::{theme::ColorfulTheme, Input, Select};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StageMode {
@@ -157,27 +161,26 @@ pub fn run(
 
     let commit_message = if skip_commit { None } else { commit_message };
 
-    // Commit-first path: when the user supplied -m and the new branch stacks on
-    // the current branch, run the commit on the current branch BEFORE creating
-    // or switching to the new branch. If pre-commit hooks fail (or the user
-    // hits Ctrl+C) we exit with no refs touched: no orphan branch, no name
-    // drift to `-2`/`-3`, and the user stays on their original branch with
-    // their working tree preserved. Only on a successful commit do we split
-    // it off to the new branch and move the parent ref back.
+    // Commit-first path: when the user supplied -m, run the commit BEFORE
+    // creating or switching to the destination branch. If pre-commit hooks fail
+    // (or the user hits Ctrl+C) we exit with no destination refs touched: no
+    // orphan branch, no name drift to `-2`/`-3`, and the user can retry the same
+    // command. Only after a successful commit do we create metadata and move
+    // into the requested placement.
     if let Some(msg) = commit_message.as_deref() {
-        if parent_branch == current {
-            return run_commit_first(
-                &repo,
-                &config,
-                &current,
-                &branch_name,
-                msg,
-                stage_mode,
-                needs_stage_all,
-                insert,
-                no_verify,
-            );
-        }
+        return run_commit_first(
+            &repo,
+            &config,
+            &current,
+            &parent_branch,
+            &branch_name,
+            msg,
+            stage_mode,
+            needs_stage_all,
+            insert,
+            below_current_meta.as_ref(),
+            no_verify,
+        );
     }
 
     create_branch_with_banner(
@@ -209,25 +212,7 @@ pub fn run(
             }
         }
 
-        // Only commit if -m was provided. This block only runs for the
-        // `--from <other>` + `-m` path; the common `-m` without `--from` case
-        // returns early via `run_commit_first`.
-        if let Some(msg) = commit_message {
-            if staging::is_staging_area_empty(workdir)? {
-                println!("{}", "No changes to commit".dimmed());
-            } else {
-                commit_or_rollback(
-                    workdir,
-                    &msg,
-                    &repo,
-                    &current,
-                    &branch_name,
-                    below_current_meta.as_ref(),
-                    no_verify,
-                )?;
-                println!("Committed: {}", msg.cyan());
-            }
-        } else if stage_mode == StageMode::All {
+        if stage_mode == StageMode::All {
             println!("{}", "Changes staged".dimmed());
         }
     }
@@ -241,71 +226,6 @@ pub fn run(
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy)]
-struct GitCommitOptions {
-    quiet: bool,
-    no_verify: bool,
-}
-
-fn run_git_commit(
-    workdir: &Path,
-    message: &str,
-    options: GitCommitOptions,
-) -> Result<std::process::ExitStatus> {
-    let mut args = vec!["commit"];
-    if options.quiet {
-        args.push("--quiet");
-    }
-    if options.no_verify {
-        args.push("--no-verify");
-    }
-    args.extend(["-m", message]);
-
-    Command::new("git")
-        .args(&args)
-        .current_dir(workdir)
-        .status()
-        .context("Failed to run git commit")
-}
-
-/// Run `git commit -m <msg>` on the currently checked-out branch. On any
-/// failure (spawn error, non-zero exit, hook rejection), invoke
-/// `rollback_create` to clean up the partially-created branch before
-/// returning the error. Used only by the branch-first path — commit-first
-/// runs its own bare `git commit` because there's nothing to roll back yet.
-fn commit_or_rollback(
-    workdir: &Path,
-    message: &str,
-    repo: &GitRepo,
-    original: &str,
-    new_branch: &str,
-    restore_original_meta: Option<&BranchMetadata>,
-    no_verify: bool,
-) -> Result<()> {
-    let status = run_git_commit(
-        workdir,
-        message,
-        GitCommitOptions {
-            quiet: false,
-            no_verify,
-        },
-    );
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(_) => {
-            rollback_create_and_restore(repo, original, new_branch, restore_original_meta);
-            bail!(
-                "Commit failed (pre-commit hook or other error). \
-                 Branch rolled back. Fix the issue and retry."
-            );
-        }
-        Err(e) => {
-            rollback_create_and_restore(repo, original, new_branch, restore_original_meta);
-            Err(anyhow::Error::from(e).context("Failed to run git commit"))
-        }
-    }
 }
 
 /// Best-effort rollback: unstage changes, checkout the original branch,
@@ -340,112 +260,222 @@ fn rollback_create_and_restore(
     rollback_create(repo, original_branch, new_branch);
 }
 
-/// Graphite-style commit-first flow: commit on the current branch, then split
-/// the new commit off to a new branch and move the current branch ref back.
+/// Graphite-style commit-first flow: commit before creating the destination
+/// branch, then split the new commit off to a new branch.
 ///
 /// The key property: nothing observable changes until `git commit` returns
 /// successfully. If pre-commit hooks reject the commit, or the user hits
-/// Ctrl+C during the commit, no branch is created, no metadata is written,
-/// and HEAD is untouched — so retrying the exact same command is a clean
-/// operation that does not drift into `mybranch-2`, `mybranch-3`, etc.
+/// Ctrl+C during the commit, no destination branch is created and no metadata
+/// is written — so retrying the exact same command is a clean operation that
+/// does not drift into `mybranch-2`, `mybranch-3`, etc.
 ///
-/// Precondition: `parent_branch == current` (i.e. no explicit `--from`).
+/// When `parent_branch != current` (`--from` or `--below`), we check out the
+/// parent detached before committing. That makes the resulting commit's parent
+/// correct without advancing the requested parent branch.
 #[allow(clippy::too_many_arguments)]
 fn run_commit_first(
     repo: &GitRepo,
     config: &Config,
     current: &str,
+    parent_branch: &str,
     branch_name: &str,
     message: &str,
     stage_mode: StageMode,
     needs_stage_all: bool,
     insert: bool,
+    below_current_meta: Option<&BranchMetadata>,
     no_verify: bool,
 ) -> Result<()> {
     let workdir = repo.workdir()?;
+    let committing_on_current = parent_branch == current;
+    let parent_sha = repo.branch_commit(parent_branch)?;
+
+    if !committing_on_current {
+        checkout_detached_for_commit(workdir, parent_branch)?;
+    }
 
     // Stage (if requested) BEFORE the commit so hooks see the final tree.
     if stage_mode == StageMode::All || needs_stage_all {
-        staging::stage_all(workdir)?;
+        if let Err(e) = staging::stage_all(workdir) {
+            restore_after_failed_pre_branch_commit(repo, workdir, current, committing_on_current);
+            return Err(e);
+        }
     }
 
     // If nothing is staged by the time we reach here, there is no commit to
     // make. Fall back to creating an empty branch — same shape as the
     // branch-first path without the trailing commit.
-    if staging::is_staging_area_empty(workdir)? {
-        create_branch_with_banner(repo, config, current, current, branch_name, insert, None)?;
+    let staging_area_empty = match staging::is_staging_area_empty(workdir) {
+        Ok(empty) => empty,
+        Err(e) => {
+            restore_after_failed_pre_branch_commit(repo, workdir, current, committing_on_current);
+            return Err(e);
+        }
+    };
+
+    if staging_area_empty {
+        create_branch_with_banner(
+            repo,
+            config,
+            current,
+            parent_branch,
+            branch_name,
+            insert,
+            below_current_meta,
+        )?;
         println!("{}", "No changes to commit".dimmed());
         print_tips(config);
         return Ok(());
     }
 
-    // Capture the pre-commit SHA so we can move the current branch back to it
-    // after splitting the new commit off.
-    let old_parent_sha = repo.branch_commit(current)?;
+    // Run the commit before the destination branch exists. `--quiet`
+    // suppresses git's "[<branch> <sha>] <msg>" summary that would otherwise
+    // mention the temporary commit location; we print our own summary after
+    // the commit is split off. Pre-commit hook output is not suppressed by -q.
+    let commit = match run_git_commit(workdir, message, true, no_verify) {
+        Ok(commit) => commit,
+        Err(e) => {
+            restore_after_failed_pre_branch_commit(repo, workdir, current, committing_on_current);
+            return Err(e);
+        }
+    };
 
-    // Run the commit on the current branch. `--quiet` suppresses git's
-    // "[<branch> <sha>] <msg>" summary that would otherwise show the commit
-    // landing on the original branch — we move it off a few calls later and
-    // print our own summary. Pre-commit hook output is not suppressed by -q.
-    let commit_status = run_git_commit(
-        workdir,
-        message,
-        GitCommitOptions {
-            quiet: true,
-            no_verify,
-        },
-    )?;
+    if !commit.status.success() {
+        restore_after_failed_pre_branch_commit(repo, workdir, current, committing_on_current);
+        if commit.interrupted {
+            bail!(
+                "Commit interrupted. \
+                 No branch was created — fix the issue and retry with the same command."
+            );
+        } else {
+            bail!(
+                "Commit failed (pre-commit hook or other error). \
+                 No branch was created — fix the issue and retry with the same command."
+            );
+        }
+    }
 
-    if !commit_status.success() {
+    if commit.interrupted {
+        rollback_after_commit(
+            workdir,
+            current,
+            &parent_sha,
+            None,
+            repo,
+            committing_on_current,
+            below_current_meta,
+        );
         bail!(
-            "Commit failed (pre-commit hook or other error). \
+            "Commit interrupted. \
              No branch was created — fix the issue and retry with the same command."
         );
     }
 
-    // From here on the commit exists on the current branch. Any failure must
-    // undo the commit with a soft reset so the user's working tree and staged
-    // changes are preserved.
-    let new_sha = repo.branch_commit(current)?;
+    // From here on the commit exists either on the current branch or on a
+    // detached HEAD at `parent_branch`. Any failure must preserve the user's
+    // staged work and avoid leaving a destination branch behind.
+    let new_sha = match repo.rev_parse("HEAD") {
+        Ok(sha) => sha,
+        Err(e) => {
+            rollback_after_commit(
+                workdir,
+                current,
+                &parent_sha,
+                None,
+                repo,
+                committing_on_current,
+                below_current_meta,
+            );
+            return Err(e);
+        }
+    };
 
     if let Err(e) = repo.create_branch_at_commit(branch_name, &new_sha) {
-        rollback_after_commit(workdir, &old_parent_sha, None, repo);
+        rollback_after_commit(
+            workdir,
+            current,
+            &parent_sha,
+            None,
+            repo,
+            committing_on_current,
+            below_current_meta,
+        );
         return Err(e);
     }
 
-    let meta = BranchMetadata::new(current, &old_parent_sha);
+    let meta = BranchMetadata::new(parent_branch, &parent_sha);
     if let Err(e) = meta.write(repo.inner(), branch_name) {
-        rollback_after_commit(workdir, &old_parent_sha, Some(branch_name), repo);
+        rollback_after_commit(
+            workdir,
+            current,
+            &parent_sha,
+            Some(branch_name),
+            repo,
+            committing_on_current,
+            below_current_meta,
+        );
         return Err(e);
     }
 
     if insert {
-        if let Err(e) = apply_insert_reparenting(repo, current, branch_name) {
-            rollback_after_commit(workdir, &old_parent_sha, Some(branch_name), repo);
+        if let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name) {
+            rollback_after_commit(
+                workdir,
+                current,
+                &parent_sha,
+                Some(branch_name),
+                repo,
+                committing_on_current,
+                below_current_meta,
+            );
             return Err(e);
         }
     }
 
-    // Move the current branch ref back to the pre-commit SHA. The new commit
-    // now lives only on `branch_name`.
-    let current_ref = format!("refs/heads/{}", current);
-    if let Err(e) = repo.update_ref(&current_ref, &old_parent_sha) {
-        rollback_after_commit(workdir, &old_parent_sha, Some(branch_name), repo);
-        return Err(e);
+    if let Some(current_meta) = below_current_meta {
+        if let Err(e) = apply_below_reparenting(repo, current, branch_name, current_meta) {
+            rollback_after_commit(
+                workdir,
+                current,
+                &parent_sha,
+                Some(branch_name),
+                repo,
+                committing_on_current,
+                below_current_meta,
+            );
+            return Err(e);
+        }
     }
 
-    // Switch to the new branch. HEAD still points at `current` (now at the old
-    // SHA) while the working tree matches the new commit; `git checkout` moves
-    // HEAD without touching the working tree since it's already correct. If
-    // this fails there's nothing to undo — the commit lives on the new branch,
-    // `current` is reset — the user just needs `git checkout <new>` manually.
+    if committing_on_current {
+        // Move the current branch ref back to the pre-commit SHA. The new commit
+        // now lives only on `branch_name`.
+        let current_ref = format!("refs/heads/{}", current);
+        if let Err(e) = repo.update_ref(&current_ref, &parent_sha) {
+            rollback_after_commit(
+                workdir,
+                current,
+                &parent_sha,
+                Some(branch_name),
+                repo,
+                committing_on_current,
+                below_current_meta,
+            );
+            return Err(e);
+        }
+    }
+
+    // Switch to the new branch. In the current-parent case HEAD still points at
+    // `current` (now at the old SHA) while the working tree matches the new
+    // commit; in the detached-parent case HEAD already points at the new commit.
+    // `git checkout` only moves HEAD in both cases.
     repo.checkout(branch_name)?;
 
-    print_remote_parent_warning(repo, config, current);
+    print_remote_parent_warning(repo, config, parent_branch);
     println!(
         "Created and switched to branch '{}' (stacked on {})",
         branch_name.green(),
-        current.blue()
+        parent_branch.blue()
     );
     println!("Committed: {}", message.cyan());
     print_tips(config);
@@ -453,12 +483,136 @@ fn run_commit_first(
     Ok(())
 }
 
+struct GitCommitResult {
+    status: ExitStatus,
+    interrupted: bool,
+}
+
+struct CommitSignalGuard {
+    interrupted: Arc<AtomicBool>,
+    registrations: Vec<signal_hook::SigId>,
+}
+
+impl CommitSignalGuard {
+    fn install() -> Result<Self> {
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let sigint = signal_hook::flag::register(
+            signal_hook::consts::signal::SIGINT,
+            Arc::clone(&interrupted),
+        )
+        .context("Failed to install SIGINT handler")?;
+        let sigterm = match signal_hook::flag::register(
+            signal_hook::consts::signal::SIGTERM,
+            Arc::clone(&interrupted),
+        ) {
+            Ok(registration) => registration,
+            Err(e) => {
+                let _ = signal_hook::low_level::unregister(sigint);
+                return Err(anyhow::Error::from(e).context("Failed to install SIGTERM handler"));
+            }
+        };
+
+        Ok(Self {
+            interrupted,
+            registrations: vec![sigint, sigterm],
+        })
+    }
+
+    fn interrupted(&self) -> bool {
+        self.interrupted.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for CommitSignalGuard {
+    fn drop(&mut self) {
+        for registration in self.registrations.drain(..) {
+            let _ = signal_hook::low_level::unregister(registration);
+        }
+    }
+}
+
+fn run_git_commit(
+    workdir: &Path,
+    message: &str,
+    quiet: bool,
+    no_verify: bool,
+) -> Result<GitCommitResult> {
+    let guard = CommitSignalGuard::install()?;
+    let mut args = vec!["commit"];
+    if quiet {
+        args.push("--quiet");
+    }
+    if no_verify {
+        args.push("--no-verify");
+    }
+    args.extend(["-m", message]);
+
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(workdir)
+        .status()
+        .context("Failed to run git commit")?;
+    let interrupted = guard.interrupted();
+
+    Ok(GitCommitResult {
+        status,
+        interrupted,
+    })
+}
+
+fn checkout_detached_for_commit(workdir: &Path, parent_branch: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["checkout", "--detach", parent_branch])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to run git checkout --detach")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!(
+            "Failed to prepare commit on '{}': {}",
+            parent_branch,
+            stderr
+        );
+    }
+
+    Ok(())
+}
+
+fn restore_after_failed_pre_branch_commit(
+    repo: &GitRepo,
+    workdir: &Path,
+    original_branch: &str,
+    committing_on_current: bool,
+) {
+    if committing_on_current {
+        return;
+    }
+
+    let _ = Command::new("git")
+        .args(["reset"])
+        .current_dir(workdir)
+        .status();
+    let _ = repo.checkout(original_branch);
+}
+
 /// Undo the partial state left by `run_commit_first` when a step after
 /// `git commit` (branch creation, metadata write, ref update) fails.
 ///
 /// `--soft` keeps the working tree and index exactly as git left them after
 /// the successful commit, so the user can retry without re-staging.
-fn rollback_after_commit(workdir: &Path, old_sha: &str, new_branch: Option<&str>, repo: &GitRepo) {
+fn rollback_after_commit(
+    workdir: &Path,
+    original_branch: &str,
+    old_sha: &str,
+    new_branch: Option<&str>,
+    repo: &GitRepo,
+    committing_on_current: bool,
+    restore_original_meta: Option<&BranchMetadata>,
+) {
+    if let Some(meta) = restore_original_meta {
+        let _ = meta.write(repo.inner(), original_branch);
+    }
     if let Some(name) = new_branch {
         let _ = BranchMetadata::delete(repo.inner(), name);
         let _ = repo.delete_branch(name, true);
@@ -467,6 +621,10 @@ fn rollback_after_commit(workdir: &Path, old_sha: &str, new_branch: Option<&str>
         .args(["reset", "--soft", old_sha])
         .current_dir(workdir)
         .status();
+
+    if !committing_on_current {
+        let _ = repo.checkout(original_branch);
+    }
 }
 
 /// Create `branch_name` stacked on `parent_branch`, write stax metadata,
@@ -861,7 +1019,11 @@ fn run_wizard(workdir: &Path, parent_branch: &str) -> Result<(String, Option<Str
             .with_prompt("Commit message (Enter to skip)")
             .allow_empty(true)
             .interact_text()?;
-        if m.is_empty() { None } else { Some(m) }
+        if m.is_empty() {
+            None
+        } else {
+            Some(m)
+        }
     } else {
         None
     };
