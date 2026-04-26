@@ -767,26 +767,12 @@ fn submit_after_restack(quiet: bool) -> Result<()> {
 
     crate::commands::submit::run(
         crate::commands::submit::SubmitScope::Stack,
-        false,  // draft
-        false,  // publish
-        false,  // no_pr
-        false,  // no_fetch
-        false,  // force
-        true,   // yes
-        true,   // no_prompt
-        vec![], // reviewers
-        vec![], // labels
-        vec![], // assignees
-        quiet,
-        false, // open
-        false, // verbose
-        None,  // template
-        false, // no_template
-        false, // edit
-        false, // ai_body
-        false, // rerequest_review
-        false, // squash
-        false, // update_title
+        crate::commands::submit::SubmitOptions {
+            yes: true,
+            no_prompt: true,
+            quiet,
+            ..Default::default()
+        },
     )?;
 
     Ok(())

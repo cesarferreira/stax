@@ -183,6 +183,8 @@ stax ss                            # Alias for submit
 stax submit --draft                # Create draft PRs
 stax submit --no-pr                # Push only (no PR create/update)
 stax submit --no-fetch             # Skip git fetch
+stax submit --no-verify            # Skip pre-push hooks while pushing
+stax submit -n                     # Short for --no-verify
 stax submit --open                 # Open current PR after submit
 stax submit --reviewers a,b        # Set reviewers
 stax submit --labels bug,urgent    # Set labels

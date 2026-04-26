@@ -40,6 +40,32 @@ impl SubmitScope {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct SubmitOptions {
+    pub draft: bool,
+    pub publish: bool,
+    pub no_pr: bool,
+    pub no_fetch: bool,
+    pub no_verify: bool,
+    /// Deprecated; kept for CLI compatibility (currently a no-op).
+    pub force: bool,
+    pub yes: bool,
+    pub no_prompt: bool,
+    pub reviewers: Vec<String>,
+    pub labels: Vec<String>,
+    pub assignees: Vec<String>,
+    pub quiet: bool,
+    pub open: bool,
+    pub verbose: bool,
+    pub template: Option<String>,
+    pub no_template: bool,
+    pub edit: bool,
+    pub ai_body: bool,
+    pub rerequest_review: bool,
+    pub squash: bool,
+    pub update_title: bool,
+}
+
 struct PrPlan {
     branch: String,
     parent: String,
@@ -88,30 +114,31 @@ fn resolve_is_draft_without_prompt(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    scope: SubmitScope,
-    draft: bool,
-    publish: bool,
-    no_pr: bool,
-    no_fetch: bool,
-    force: bool, // deprecated; kept for CLI compatibility — see issue #222
-    yes: bool,
-    no_prompt: bool,
-    reviewers: Vec<String>,
-    labels: Vec<String>,
-    assignees: Vec<String>,
-    quiet: bool,
-    open: bool,
-    verbose: bool,
-    template: Option<String>,
-    no_template: bool,
-    edit: bool,
-    ai_body: bool,
-    rerequest_review: bool,
-    squash: bool,
-    update_title: bool,
-) -> Result<()> {
+pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
+    let SubmitOptions {
+        draft,
+        publish,
+        no_pr,
+        no_fetch,
+        no_verify,
+        force,
+        yes,
+        no_prompt,
+        reviewers,
+        labels,
+        assignees,
+        quiet,
+        open,
+        verbose,
+        template,
+        no_template,
+        edit,
+        ai_body,
+        rerequest_review,
+        squash,
+        update_title,
+    } = options;
+
     if force && !quiet {
         eprintln!(
             "  {} --force is deprecated and has no effect (see issue #222)",
@@ -928,7 +955,7 @@ pub fn run(
             // Get local OID before push (this is what we're pushing)
             let local_oid = repo.branch_commit(&plan.branch).ok();
 
-            match push_branch(repo.workdir()?, &remote_info.name, &plan.branch) {
+            match push_branch(repo.workdir()?, &remote_info.name, &plan.branch, no_verify) {
                 Ok(()) => {
                     // Record after-OIDs
                     if let Some(ref mut tx) = tx {
@@ -1424,9 +1451,20 @@ fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()>
     Ok(())
 }
 
-fn push_branch(workdir: &std::path::Path, remote: &str, branch: &str) -> Result<()> {
+fn push_branch(
+    workdir: &std::path::Path,
+    remote: &str,
+    branch: &str,
+    no_verify: bool,
+) -> Result<()> {
+    let mut args = vec!["push", "--force-with-lease"];
+    if no_verify {
+        args.push("--no-verify");
+    }
+    args.extend(["-u", remote, branch]);
+
     let status = Command::new("git")
-        .args(["push", "--force-with-lease", "-u", remote, branch])
+        .args(args)
         .current_dir(workdir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

@@ -204,6 +204,7 @@ fn test_submit_alias_ss() {
     assert!(stdout.contains("reviewers"));
     assert!(stdout.contains("labels"));
     assert!(stdout.contains("assignees"));
+    assert!(stdout.contains("no-verify"));
     assert!(stdout.contains("no-prompt"));
     assert!(stdout.contains("yes"));
 }
@@ -421,6 +422,11 @@ fn test_scoped_submit_subcommand_help_flags() {
         assert!(
             stdout.contains("--no-fetch"),
             "Expected --no-fetch in {:?}",
+            args
+        );
+        assert!(
+            stdout.contains("--no-verify"),
+            "Expected --no-verify in {:?}",
             args
         );
         assert!(stdout.contains("--open"), "Expected --open in {:?}", args);

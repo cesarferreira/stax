@@ -52,26 +52,13 @@ pub fn run(
 
     commands::submit::run(
         commands::submit::SubmitScope::Stack,
-        false, // draft
-        false, // publish
-        no_pr, // no_pr
-        false, // no_fetch
-        false, // force
-        yes,
-        no_prompt,
-        vec![], // reviewers
-        vec![], // labels
-        vec![], // assignees
-        false,  // quiet
-        false,  // open
-        verbose,
-        None,  // template
-        false, // no_template
-        false, // edit
-        false, // ai_body
-        false, // rerequest_review
-        false, // squash
-        false, // update_title
+        commands::submit::SubmitOptions {
+            no_pr,
+            yes,
+            no_prompt,
+            verbose,
+            ..Default::default()
+        },
     )?;
 
     restore_original_branch(&repo, &workdir, &original)

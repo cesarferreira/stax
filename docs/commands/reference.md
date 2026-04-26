@@ -197,7 +197,8 @@ st wt go ui-polish --run "cursor ." --tmux
 
 ### `st submit`
 
-- `--draft` / `--publish` / `--no-pr` / `--no-fetch` / `--open` / `--quiet` / `--verbose`
+- `--draft` / `--publish` / `--no-pr` / `--no-fetch` / `--no-verify` / `--open` / `--quiet` / `--verbose`
+- `--no-verify` (`-n`) skips pre-push hooks while pushing branches
 - `--reviewers alice,bob --labels bug,urgent --assignees alice`
 - `--squash` squash commits on each branch before pushing
 - `--ai-body` generate PR body with AI
