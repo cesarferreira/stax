@@ -1250,16 +1250,13 @@ pub fn run(
                         let updated_meta = BranchMetadata {
                             parent_branch_name: parent_branch_name.clone(),
                             parent_branch_revision: new_parent_rev.clone(),
-                            pr_info: live_stack
-                                .branches
-                                .get(branch.as_str())
-                                .and_then(|br| {
-                                    br.pr_number.map(|n| PrInfo {
-                                        number: n,
-                                        state: br.pr_state.clone().unwrap_or_default(),
-                                        is_draft: br.pr_is_draft,
-                                    })
-                                }),
+                            pr_info: live_stack.branches.get(branch.as_str()).and_then(|br| {
+                                br.pr_number.map(|n| PrInfo {
+                                    number: n,
+                                    state: br.pr_state.clone().unwrap_or_default(),
+                                    is_draft: br.pr_is_draft,
+                                })
+                            }),
                         };
                         updated_meta.write(repo.inner(), branch)?;
 

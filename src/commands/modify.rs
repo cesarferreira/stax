@@ -1,6 +1,4 @@
-use crate::commands::staging::{
-    self, ContinueLabel, StagingAction,
-};
+use crate::commands::staging::{self, ContinueLabel, StagingAction};
 use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
@@ -66,8 +64,7 @@ pub fn run(
             StagingAction::Abort => {
                 println!(
                     "{}",
-                    "Aborted. Stage files with `git add` first, or use `stax modify -a`."
-                        .dimmed()
+                    "Aborted. Stage files with `git add` first, or use `stax modify -a`.".dimmed()
                 );
                 return Ok(());
             }

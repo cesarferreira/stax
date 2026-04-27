@@ -2383,9 +2383,9 @@ fn print_worktree_help() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
+        check_interactive_terminal_with_probe, detect_interactive_stdio, has_interactive_terminal,
         Cli, CliSubcommand, CommandPolicy, Commands, InteractiveTerminalCheck, RestackSubmitAfter,
-        StackCommands, WorktreeCommands, check_interactive_terminal_with_probe,
-        detect_interactive_stdio, has_interactive_terminal,
+        StackCommands, WorktreeCommands,
     };
     use clap::Parser;
     use std::cell::Cell;
