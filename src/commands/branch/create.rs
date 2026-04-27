@@ -52,6 +52,7 @@ struct CreatePlacement {
     below_current_meta: Option<BranchMetadata>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     name: Option<String>,
     message: Option<String>,

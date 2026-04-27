@@ -3,6 +3,7 @@ use crate::git::{local_branch_exists_in, GitRepo};
 use anyhow::Result;
 use colored::Colorize;
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     no_pr: bool,
     no_submit: bool,
