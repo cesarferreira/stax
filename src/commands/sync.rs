@@ -1,12 +1,11 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
-use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::commands::worktree::{
     remove::remove_worktree_with_hooks,
     shared::{compute_worktree_details, worktree_removal_blockers_for_cleanup},
 };
 use crate::config::Config;
-use crate::engine::{BranchMetadata, Stack};
+use crate::engine::{BranchMetadata, PrInfo, Stack};
 use crate::errors::ConflictStopped;
 use crate::forge::ForgeClient;
 use crate::git::repo::BranchDeleteResolution;
@@ -1168,16 +1167,13 @@ pub fn run(
             } else {
                 Vec::new()
             };
-        // Normalize parents for branches whose parent was squash-merged into trunk,
-        // so the rebase uses the correct --onto boundary.
-        normalize_scope_parents_for_restack(&repo, &scope_order, quiet)?;
-
-        // Reload stack to use fresh metadata after sync/deletion and normalization steps.
-        let restack_stack = Stack::load(&repo)?;
+        // Load stack once; orphaned parents are handled in Stack::load (parent → trunk,
+        // needs_restack). Keep the stack in memory and update it after each rebase.
+        let mut live_stack = Stack::load(&repo)?;
         let branches_to_restack: Vec<String> = scope_order
             .iter()
             .filter(|branch| {
-                restack_stack
+                live_stack
                     .branches
                     .get(branch.as_str())
                     .map(|br| br.needs_restack)
@@ -1217,7 +1213,6 @@ pub fn run(
             let mut restacked_branches = 0usize;
 
             for (index, branch) in scope_order.iter().enumerate() {
-                let live_stack = Stack::load(&repo)?;
                 let needs_restack = live_stack
                     .branches
                     .get(branch.as_str())
@@ -1227,29 +1222,66 @@ pub fn run(
                     continue;
                 }
 
-                let restack_timer = LiveTimer::maybe_new(!quiet, &format!("Restack {}", branch));
+                let (parent_branch_name, parent_branch_revision) =
+                    match live_stack.branches.get(branch.as_str()) {
+                        Some(br) if br.parent.is_some() && br.parent_revision.is_some() => (
+                            br.parent.clone().unwrap(),
+                            br.parent_revision.clone().unwrap(),
+                        ),
+                        _ => match BranchMetadata::read(repo.inner(), branch)? {
+                            Some(m) => (m.parent_branch_name, m.parent_branch_revision),
+                            None => continue,
+                        },
+                    };
 
-                let meta = match BranchMetadata::read(repo.inner(), branch)? {
-                    Some(meta) => meta,
-                    None => continue,
-                };
+                let restack_timer = LiveTimer::maybe_new(!quiet, &format!("Restack {}", branch));
 
                 let rebase = repo.rebase_branch_onto_with_provenance_timing(
                     branch,
-                    &meta.parent_branch_name,
-                    &meta.parent_branch_revision,
+                    &parent_branch_name,
+                    &parent_branch_revision,
                     auto_stash_pop,
                 )?;
 
                 match rebase.result {
                     RebaseResult::Success => {
                         let metadata_update_started_at = Instant::now();
-                        let parent_commit = repo.branch_commit(&meta.parent_branch_name)?;
+                        let new_parent_rev = repo.branch_commit(&parent_branch_name)?;
                         let updated_meta = BranchMetadata {
-                            parent_branch_revision: parent_commit,
-                            ..meta
+                            parent_branch_name: parent_branch_name.clone(),
+                            parent_branch_revision: new_parent_rev.clone(),
+                            pr_info: live_stack
+                                .branches
+                                .get(branch.as_str())
+                                .and_then(|br| {
+                                    br.pr_number.map(|n| PrInfo {
+                                        number: n,
+                                        state: br.pr_state.clone().unwrap_or_default(),
+                                        is_draft: br.pr_is_draft,
+                                    })
+                                }),
                         };
                         updated_meta.write(repo.inner(), branch)?;
+
+                        if let Some(br) = live_stack.branches.get_mut(branch.as_str()) {
+                            br.needs_restack = false;
+                            br.parent_revision = Some(new_parent_rev.clone());
+                        }
+                        let children: Vec<String> = live_stack
+                            .branches
+                            .get(branch.as_str())
+                            .map(|br| br.children.clone())
+                            .unwrap_or_default();
+                        for child in &children {
+                            if let Some(child_br) = live_stack.branches.get_mut(child) {
+                                child_br.needs_restack = child_br
+                                    .parent_revision
+                                    .as_deref()
+                                    .map(|rev| rev != new_parent_rev.as_str())
+                                    .unwrap_or(true);
+                            }
+                        }
+
                         let metadata_update = metadata_update_started_at.elapsed();
 
                         // Record after-OID
@@ -1288,7 +1320,7 @@ pub fn run(
                             &repo,
                             &RestackConflictContext {
                                 branch,
-                                parent_branch: &meta.parent_branch_name,
+                                parent_branch: &parent_branch_name,
                                 completed_branches: &completed_branches,
                                 remaining_branches: scope_order.len().saturating_sub(index + 1),
                                 continue_commands: &[
