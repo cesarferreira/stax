@@ -7,7 +7,7 @@
 - Bare commands that default to a TUI/dashboard must gate on both `stdin` and `stdout` being terminals and otherwise fall back to help or a non-interactive view; never assume `st`/`st wt` is launched from a full TTY.
 - TUI/dashboard launch checks must also preflight the terminal input backend before entering the alternate screen; `isatty` alone is insufficient under constrained environments such as low file-descriptor limits.
 - TUI/dashboard startup must render from cheap repo data first and defer expensive per-item Git or tmux inspection until after the first paint; do not block initial draw on full worktree/branch status scans.
-- Read-only status/list commands (`st ls`, `st ll`, `st log`) must avoid broad Git subprocess scans for data available from libgit2, especially remote refs, worktrees, and rebase-state checks; first-run latency is part of the user-visible contract.
+- Read-only status/list commands (`st ls`, `st ll`, `st log`) must avoid broad Git subprocess scans for data available from libgit2 and must batch or parallelize unavoidable per-branch graph walks; first-run latency is part of the user-visible contract.
 - Background TUI loaders must distinguish queued work from actively running work; only mark an item as `loading` once its worker starts, or selection changes can leave stale loading state behind.
 - TUI/dashboard actions that shell back into `stax` must exit the alternate screen and drop live app/repo state before spawning the nested command; running child `stax` commands from inside an active dashboard can hit `EMFILE` in large repos.
 - When adding or changing CLI commands/flags, update both `README.md` and `docs/` command references in the same change and verify parity against `stax --help` before marking docs complete.
