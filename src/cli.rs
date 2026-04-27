@@ -28,6 +28,9 @@ struct SubmitOptions {
     /// Skip git fetch and use cached remote-tracking refs
     #[arg(long = "no-fetch", action = clap::ArgAction::SetTrue)]
     no_fetch: bool,
+    /// Skip pre-push hooks when pushing branches
+    #[arg(long = "no-verify", short = 'n')]
+    no_verify: bool,
     /// Deprecated: kept for CLI compatibility (currently a no-op)
     #[arg(long, hide = true)]
     force: bool,
@@ -76,6 +79,34 @@ struct SubmitOptions {
     /// Update existing PR titles when the tip commit subject has changed
     #[arg(long)]
     update_title: bool,
+}
+
+impl From<SubmitOptions> for commands::submit::SubmitOptions {
+    fn from(submit: SubmitOptions) -> Self {
+        Self {
+            draft: submit.draft,
+            publish: submit.publish,
+            no_pr: submit.no_pr,
+            no_fetch: submit.no_fetch,
+            no_verify: submit.no_verify,
+            force: submit.force,
+            yes: submit.yes,
+            no_prompt: submit.no_prompt,
+            reviewers: submit.reviewers,
+            labels: submit.labels,
+            assignees: submit.assignees,
+            quiet: submit.quiet,
+            open: submit.open,
+            verbose: submit.verbose,
+            template: submit.template,
+            no_template: submit.no_template,
+            edit: submit.edit,
+            ai_body: submit.ai_body,
+            rerequest_review: submit.rerequest_review,
+            squash: submit.squash,
+            update_title: submit.update_title,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -1441,29 +1472,7 @@ enum IssueCommands {
 }
 
 fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Result<()> {
-    commands::submit::run(
-        scope,
-        submit.draft,
-        submit.publish,
-        submit.no_pr,
-        submit.no_fetch,
-        submit.force,
-        submit.yes,
-        submit.no_prompt,
-        submit.reviewers,
-        submit.labels,
-        submit.assignees,
-        submit.quiet,
-        submit.open,
-        submit.verbose,
-        submit.template,
-        submit.no_template,
-        submit.edit,
-        submit.ai_body,
-        submit.rerequest_review,
-        submit.squash,
-        submit.update_title,
-    )
+    commands::submit::run(scope, submit.into())
 }
 
 fn print_subcommand_help(name: &str) -> Result<()> {

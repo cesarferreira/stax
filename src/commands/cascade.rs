@@ -40,26 +40,12 @@ pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
     } else {
         commands::submit::run(
             commands::submit::SubmitScope::Stack,
-            false,  // draft
-            false,  // publish
-            no_pr,  // no_pr (push but skip PR creation/updates)
-            false,  // no_fetch
-            false,  // force
-            true,   // yes
-            true,   // no_prompt
-            vec![], // reviewers
-            vec![], // labels
-            vec![], // assignees
-            false,  // quiet
-            false,  // open
-            false,  // verbose
-            None,   // template
-            false,  // no_template
-            false,  // edit
-            false,  // ai_body
-            false,  // rerequest_review
-            false,  // squash
-            false,  // update_title
+            commands::submit::SubmitOptions {
+                no_pr,
+                yes: true,
+                no_prompt: true,
+                ..Default::default()
+            },
         )?;
     }
 
