@@ -77,10 +77,23 @@ impl Stack {
                 if let Some(parent) = branches.get_mut(&parent_name) {
                     parent.children.push(name.clone());
                 } else {
-                    // Parent doesn't exist - this branch is orphaned
-                    // Treat it as a direct child of trunk
+                    // Parent doesn't exist - this branch is orphaned.
+                    // Treat it as a direct child of trunk and mark it for restack so
+                    // the restack loop will rebase it onto trunk.  We preserve
+                    // parent_revision (the deleted branch's tip SHA) so that
+                    // `git rebase --onto trunk <old_parent_sha> branch` replays only
+                    // the branch's own commits and not the deleted parent's commits.
                     orphaned_branches.push(name.clone());
                 }
+            }
+        }
+
+        // Reparent orphaned branches to trunk in-memory so the restack loop
+        // picks them up with the correct parent.
+        for name in &orphaned_branches {
+            if let Some(br) = branches.get_mut(name) {
+                br.parent = Some(trunk.clone());
+                br.needs_restack = true;
             }
         }
 
