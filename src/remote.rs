@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
-use git2::{ConfigLevel, Repository};
+use git2::{BranchType, ConfigLevel, Repository};
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
@@ -200,6 +200,22 @@ pub fn get_remote_branches(workdir: &Path, remote: &str) -> Result<Vec<String>> 
         .filter_map(|s| s.trim().strip_prefix(&prefix))
         .map(|s| s.to_string())
         .collect();
+
+    Ok(branches)
+}
+
+pub fn get_remote_branches_from_repo(repo: &Repository, remote: &str) -> Result<Vec<String>> {
+    let prefix = format!("{}/", remote);
+    let mut branches = Vec::new();
+
+    for branch in repo.branches(Some(BranchType::Remote))? {
+        let (branch, _) = branch?;
+        if let Some(name) = branch.name()? {
+            if let Some(short) = name.strip_prefix(&prefix) {
+                branches.push(short.to_string());
+            }
+        }
+    }
 
     Ok(branches)
 }

@@ -73,7 +73,7 @@ pub fn run(
     let git_dir = repo.git_dir()?;
 
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
-    let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
+    let remote_branches = remote::get_remote_branches_from_repo(repo.inner(), config.remote_name())
         .unwrap_or_default()
         .into_iter()
         .collect::<HashSet<_>>();
@@ -145,12 +145,8 @@ pub fn run(
 
     let mut branch_statuses: Vec<BranchStatusJson> = Vec::new();
     let mut branch_status_map: HashMap<String, BranchStatusJson> = HashMap::new();
-    let linked_worktrees_by_branch: HashMap<String, String> = repo
-        .list_worktrees()?
-        .into_iter()
-        .filter(|worktree| !worktree.is_main && !worktree.is_prunable)
-        .filter_map(|worktree| worktree.branch.map(|branch| (branch, worktree.name)))
-        .collect();
+    let linked_worktrees_by_branch: HashMap<String, String> =
+        repo.linked_worktree_names_by_branch()?;
 
     for name in &ordered_branches {
         let info = stack.branches.get(name);

@@ -4,6 +4,8 @@ use common::{OutputAssertions, TestRepo};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use tempfile::TempDir;
 
 fn setup_stack_with_worktrees(with_remote: bool) -> (TestRepo, String, String, PathBuf, PathBuf) {
     let repo = if with_remote {
@@ -61,6 +63,101 @@ fn branch_needs_restack(status: &Value, branch: &str) -> Option<bool> {
             .find(|b| b["name"].as_str() == Some(branch))
             .and_then(|b| b["needs_restack"].as_bool())
     })
+}
+
+#[cfg(unix)]
+fn real_git_path() -> String {
+    let output = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .expect("resolve git path");
+    assert!(
+        output.status.success(),
+        "failed to resolve git path: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+#[cfg(unix)]
+fn git_shim_path(dir: &TempDir) -> PathBuf {
+    let path = dir.path().join("git");
+    fs::write(
+        &path,
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_SHIM_LOG"
+exec "$REAL_GIT" "$@"
+"#,
+    )
+    .expect("write git shim");
+
+    let mut perms = fs::metadata(&path)
+        .expect("git shim metadata")
+        .permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).expect("make git shim executable");
+    path
+}
+
+#[cfg(unix)]
+#[test]
+fn status_uses_cached_repo_data_without_git_subprocess_scans() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["create", "A"]).assert_success();
+    let branch = repo.current_branch();
+    repo.create_file("a.txt", "A1\n");
+    repo.commit("A commit");
+    repo.git(&["push", "-u", "origin", &branch])
+        .assert_success();
+
+    repo.run_stax(&["checkout", "main"]).assert_success();
+    let wt_a = repo.path().join("wt-a");
+    repo.git(&["worktree", "add", wt_a.to_str().unwrap(), &branch])
+        .assert_success();
+
+    let shim_dir = TempDir::new().expect("git shim tempdir");
+    git_shim_path(&shim_dir);
+    let log_path = shim_dir.path().join("git.log");
+    let path_env = format!(
+        "{}:{}",
+        shim_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let log_env = log_path.to_string_lossy().into_owned();
+    let real_git = real_git_path();
+
+    let output = repo.run_stax_with_env(
+        &["status"],
+        &[
+            ("PATH", path_env.as_str()),
+            ("GIT_SHIM_LOG", log_env.as_str()),
+            ("REAL_GIT", real_git.as_str()),
+        ],
+    );
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("☁") && stdout.contains("↳"),
+        "expected status to preserve remote and linked-worktree indicators, got:\n{}",
+        stdout
+    );
+
+    let git_calls = fs::read_to_string(&log_path).unwrap_or_default();
+    for forbidden in [
+        "rev-parse --git-dir",
+        "branch -r --format=%(refname)",
+        "worktree list --porcelain",
+    ] {
+        assert!(
+            !git_calls.lines().any(|line| line == forbidden),
+            "status should not call `{}`; git calls were:\n{}",
+            forbidden,
+            git_calls
+        );
+    }
 }
 
 #[test]

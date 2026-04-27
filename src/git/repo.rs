@@ -398,6 +398,60 @@ impl GitRepo {
         Self::list_worktrees_in(self.workdir()?)
     }
 
+    pub fn linked_worktree_names_by_branch(&self) -> Result<HashMap<String, String>> {
+        let main_path = self
+            .repo
+            .commondir()
+            .parent()
+            .map(Self::normalize_path)
+            .unwrap_or_else(|| {
+                Self::normalize_path(self.workdir().unwrap_or_else(|_| Path::new(".")))
+            });
+
+        let mut entries: Vec<(PathBuf, Option<String>, bool)> = vec![(main_path, None, false)];
+
+        let worktree_names = self.repo.worktrees()?;
+        for name in worktree_names.iter().flatten() {
+            let worktree = self.repo.find_worktree(name)?;
+            let is_prunable = worktree.is_prunable(None).unwrap_or(false);
+            let path = Self::normalize_path(worktree.path());
+            let branch = Repository::open(worktree.path()).ok().and_then(|repo| {
+                repo.head()
+                    .ok()
+                    .filter(|head| head.is_branch())
+                    .and_then(|head| head.shorthand().map(str::to_string))
+            });
+            entries.push((path, branch, is_prunable));
+        }
+
+        let label_candidates = entries
+            .iter()
+            .enumerate()
+            .map(|(idx, (path, branch, _))| WorktreeLabelCandidate {
+                is_main: idx == 0,
+                path: path.clone(),
+                basename: if idx == 0 {
+                    "main".to_string()
+                } else {
+                    worktree_basename(path)
+                },
+                branch: branch.clone(),
+            })
+            .collect::<Vec<_>>();
+        let labels = derive_worktree_names(&label_candidates);
+
+        let mut by_branch = HashMap::new();
+        for (idx, (_, branch, is_prunable)) in entries.into_iter().enumerate().skip(1) {
+            if !is_prunable {
+                if let Some(branch) = branch {
+                    by_branch.insert(branch, labels[idx].clone());
+                }
+            }
+        }
+
+        Ok(by_branch)
+    }
+
     pub fn list_worktrees_in(cwd: &Path) -> Result<Vec<WorktreeInfo>> {
         let output = run_git_in(cwd, &["worktree", "list", "--porcelain"])?;
         if !output.status.success() {
@@ -1176,7 +1230,8 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Check if a rebase is in progress
     pub fn rebase_in_progress(&self) -> Result<bool> {
-        self.rebase_in_progress_at(self.workdir()?)
+        let git_dir = self.repo.path();
+        Ok(git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists())
     }
 
     /// Check whether a rebase is in progress inside the given worktree path.
