@@ -272,6 +272,7 @@ mod tests {
             StackBranch {
                 name: name.to_string(),
                 parent: parent.map(str::to_string),
+                parent_revision: None,
                 children: vec![],
                 needs_restack: false,
                 pr_number: None,

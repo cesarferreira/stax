@@ -618,6 +618,7 @@ mod tests {
             StackBranch {
                 name: "auth".to_string(),
                 parent: Some("main".to_string()),
+                parent_revision: None,
                 children: vec!["auth-api".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -631,6 +632,7 @@ mod tests {
             StackBranch {
                 name: "auth-api".to_string(),
                 parent: Some("auth".to_string()),
+                parent_revision: None,
                 children: vec!["auth-ui".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -644,6 +646,7 @@ mod tests {
             StackBranch {
                 name: "auth-ui".to_string(),
                 parent: Some("auth-api".to_string()),
+                parent_revision: None,
                 children: vec![],
                 needs_restack: false,
                 pr_number: None,
@@ -657,6 +660,7 @@ mod tests {
             StackBranch {
                 name: "hotfix".to_string(),
                 parent: Some("main".to_string()),
+                parent_revision: None,
                 children: vec![],
                 needs_restack: false,
                 pr_number: None,
@@ -670,6 +674,7 @@ mod tests {
             StackBranch {
                 name: "main".to_string(),
                 parent: None,
+                parent_revision: None,
                 children: vec!["auth".to_string(), "hotfix".to_string()],
                 needs_restack: false,
                 pr_number: None,

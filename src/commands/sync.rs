@@ -2179,11 +2179,6 @@ fn print_restack_branch_timings(restack_branch_timings: &[RestackBranchTiming]) 
         }
         println!(
             "    {:<31} {}",
-            "provenance scan",
-            format_duration(timing.rebase_timings.provenance_scan).dimmed()
-        );
-        println!(
-            "    {:<31} {}",
             "git rebase",
             format_duration(timing.rebase_timings.git_rebase).dimmed()
         );

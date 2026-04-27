@@ -879,6 +879,7 @@ mod tests {
             StackBranch {
                 name: "main".to_string(),
                 parent: None,
+                parent_revision: None,
                 children: vec!["feature-a".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -892,6 +893,7 @@ mod tests {
             StackBranch {
                 name: "feature-a".to_string(),
                 parent: Some("main".to_string()),
+                parent_revision: None,
                 children: vec!["feature-b".to_string()],
                 needs_restack: false,
                 pr_number: Some(1),
@@ -905,6 +907,7 @@ mod tests {
             StackBranch {
                 name: "feature-b".to_string(),
                 parent: Some("feature-a".to_string()),
+                parent_revision: None,
                 children: vec!["feature-c".to_string()],
                 needs_restack: false,
                 pr_number: Some(2),
@@ -918,6 +921,7 @@ mod tests {
             StackBranch {
                 name: "feature-c".to_string(),
                 parent: Some("feature-b".to_string()),
+                parent_revision: None,
                 children: vec![],
                 needs_restack: false,
                 pr_number: Some(3),

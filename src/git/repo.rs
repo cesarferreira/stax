@@ -990,27 +990,8 @@ impl GitRepo {
             .collect())
     }
 
-    fn rev_list_reverse_range(&self, cwd: &Path, range: &str) -> Result<Vec<String>> {
-        let output = self.run_git(cwd, &["rev-list", "--reverse", "--no-merges", range])?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            anyhow::bail!(
-                "git rev-list --reverse --no-merges {} failed: {}",
-                range,
-                stderr
-            );
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(ToString::to_string)
-            .collect())
-    }
-
-    /// Max commits in `merge_base..trunk` for patch-id provenance; beyond this we skip the
-    /// expensive `git log -p` path (see sync merged-branch detection).
+    /// Max commits in `merge_base..trunk` for patch-id merged-branch detection; beyond this we
+    /// skip the expensive `git log -p` path (see `is_branch_merged_equivalent_to_trunk`).
     pub(crate) const PATCH_ID_TRUNK_COMMIT_CAP: usize = 200;
 
     pub(crate) fn rev_list_count(&self, cwd: &Path, range: &str) -> Result<usize> {
@@ -1042,96 +1023,11 @@ impl GitRepo {
             .collect())
     }
 
-    fn patch_id_for_commit(&self, cwd: &Path, commit: &str) -> Result<Option<String>> {
-        let output = self.run_git(
-            cwd,
-            &[
-                "show",
-                "--no-color",
-                "--pretty=format:",
-                "--no-ext-diff",
-                commit,
-            ],
-        )?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            anyhow::bail!("git show {} failed: {}", commit, stderr);
-        }
-
-        Ok(self
-            .run_patch_id_from_input(cwd, &output.stdout)?
-            .into_iter()
-            .next())
-    }
-
-    fn infer_patch_id_upstream(
-        &self,
-        cwd: &Path,
-        branch: &str,
-        onto: &str,
-        fallback_upstream: &str,
-    ) -> Result<Option<String>> {
-        if fallback_upstream.trim().is_empty() {
-            return Ok(None);
-        }
-
-        if !self.is_ancestor(fallback_upstream, branch)? {
-            return Ok(None);
-        }
-
-        let branch_range = format!("{}..{}", fallback_upstream, branch);
-        let branch_commits = self.rev_list_reverse_range(cwd, &branch_range)?;
-        if branch_commits.len() < 2 {
-            return Ok(None);
-        }
-
-        let merge_base = match self.merge_base_refs(onto, branch) {
-            Ok(base) => base,
-            Err(_) => return Ok(None),
-        };
-        let onto_range = format!("{}..{}", merge_base, onto);
-        let onto_patch_ids = self.patch_ids_for_range(cwd, &onto_range)?;
-        if onto_patch_ids.is_empty() {
-            return Ok(None);
-        }
-
-        let mut integrated_prefix = 0usize;
-        for commit in &branch_commits {
-            let Some(patch_id) = self.patch_id_for_commit(cwd, commit)? else {
-                break;
-            };
-            if onto_patch_ids.contains(&patch_id) {
-                integrated_prefix += 1;
-            } else {
-                break;
-            }
-        }
-
-        if integrated_prefix == 0 || integrated_prefix >= branch_commits.len() {
-            return Ok(None);
-        }
-
-        Ok(Some(branch_commits[integrated_prefix - 1].clone()))
-    }
-
-    /// Infer a precise upstream marker for `git rebase --onto` based on patch-id provenance.
-    #[allow(dead_code)] // Exposed for tests and future diagnostics surfaces.
-    pub fn infer_rebase_upstream_by_patch_id(
-        &self,
-        branch: &str,
-        onto: &str,
-        fallback_upstream: &str,
-    ) -> Result<String> {
-        let workdir = self.workdir()?;
-        Ok(self
-            .infer_patch_id_upstream(workdir, branch, onto, fallback_upstream)?
-            .unwrap_or_else(|| fallback_upstream.to_string()))
-    }
-
-    /// Rebase a branch onto `onto` while preserving provenance from `fallback_upstream`.
+    /// Rebase a branch onto `onto` using the stored parent revision as upstream.
     ///
-    /// If patch-id analysis identifies a prefix already integrated into `onto`, this uses
-    /// `git rebase --onto <onto> <adjusted-upstream>` to replay only novel commits.
+    /// Runs `git rebase --onto <onto> <fallback_upstream> <branch>` when
+    /// `fallback_upstream` is a valid ancestor of `branch` (the normal case).
+    /// This matches freephite's restack strategy: fast, simple, no patch-id scanning.
     pub fn rebase_branch_onto_with_provenance(
         &self,
         branch: &str,
@@ -1180,18 +1076,16 @@ Use --auto-stash-pop or stash/commit changes first.",
             timings.auto_stash_push = auto_stash_push_started_at.elapsed();
         }
 
-        let provenance_started_at = Instant::now();
-        let can_use_fallback_upstream = !fallback_upstream.trim().is_empty()
-            && self.is_ancestor(fallback_upstream, branch).unwrap_or(false);
-        let inferred_upstream = self
-            .infer_patch_id_upstream(&target_workdir, branch, onto, fallback_upstream)
-            .unwrap_or(None);
-        let upstream_for_rebase = if can_use_fallback_upstream {
-            Some(inferred_upstream.unwrap_or_else(|| fallback_upstream.to_string()))
-        } else {
-            None
-        };
-        timings.provenance_scan = provenance_started_at.elapsed();
+        // Use the stored parent revision as upstream when it is a valid ancestor
+        // of the branch.  This is the same strategy freephite uses:
+        //   git rebase --onto <onto> <parent_branch_revision> <branch>
+        // No patch-id scanning; the old provenance path was the main source of
+        // slowness (O(N) `git log -p` per branch) and spurious conflicts.
+        let upstream_for_rebase = (!fallback_upstream.trim().is_empty()
+            && self
+                .is_ancestor(fallback_upstream, branch)
+                .unwrap_or(false))
+        .then(|| fallback_upstream.to_string());
 
         let git_rebase_started_at = Instant::now();
         let rebase_result = if let Some(upstream) = upstream_for_rebase.as_deref() {
@@ -2086,7 +1980,6 @@ pub struct RebaseTimings {
     pub prepare_context: Duration,
     pub dirty_check: Duration,
     pub auto_stash_push: Duration,
-    pub provenance_scan: Duration,
     pub git_rebase: Duration,
     pub auto_stash_pop: Duration,
 }
@@ -2096,7 +1989,6 @@ impl RebaseTimings {
         self.prepare_context
             + self.dirty_check
             + self.auto_stash_push
-            + self.provenance_scan
             + self.git_rebase
             + self.auto_stash_pop
     }
@@ -2263,52 +2155,6 @@ mod tests {
         let debug_str = format!("{:?}", commit);
         assert!(debug_str.contains("abc123"));
         assert!(debug_str.contains("Test commit"));
-    }
-
-    #[test]
-    fn test_rebase_branch_onto_with_provenance_replays_only_novel_commits() {
-        let dir = TempDir::new().expect("tempdir");
-        let path = dir.path();
-
-        run_git(path, &["init", "-b", "main"]);
-        run_git(path, &["config", "user.email", "test@example.com"]);
-        run_git(path, &["config", "user.name", "Test User"]);
-
-        fs::write(path.join("README.md"), "base\n").expect("write readme");
-        run_git(path, &["add", "README.md"]);
-        run_git(path, &["commit", "-m", "Initial commit"]);
-        let base_sha = run_git_stdout(path, &["rev-parse", "HEAD"]);
-
-        run_git(path, &["checkout", "-b", "feature"]);
-        fs::write(path.join("a1.txt"), "A1\n").expect("write a1");
-        run_git(path, &["add", "a1.txt"]);
-        run_git(path, &["commit", "-m", "A1"]);
-        let a1_sha = run_git_stdout(path, &["rev-parse", "HEAD"]);
-
-        fs::write(path.join("a2.txt"), "A2\n").expect("write a2");
-        run_git(path, &["add", "a2.txt"]);
-        run_git(path, &["commit", "-m", "A2"]);
-        let a2_sha = run_git_stdout(path, &["rev-parse", "HEAD"]);
-
-        fs::write(path.join("b.txt"), "B\n").expect("write b");
-        run_git(path, &["add", "b.txt"]);
-        run_git(path, &["commit", "-m", "B"]);
-
-        run_git(path, &["checkout", "main"]);
-        run_git(path, &["cherry-pick", &a1_sha]);
-        run_git(path, &["cherry-pick", &a2_sha]);
-
-        let repo = GitRepo {
-            repo: Repository::open(path).expect("open repo"),
-        };
-
-        let result = repo
-            .rebase_branch_onto_with_provenance("feature", "main", &base_sha, false)
-            .expect("rebase with provenance");
-        assert_eq!(result, RebaseResult::Success);
-
-        let unique_count = run_git_stdout(path, &["rev-list", "--count", "main..feature"]);
-        assert_eq!(unique_count, "1");
     }
 
     #[test]

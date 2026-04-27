@@ -1,5 +1,4 @@
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
-use crate::commands::restack_parent::normalize_scope_parents_for_restack;
 use crate::engine::{BranchMetadata, Stack};
 use crate::errors::ConflictStopped;
 use crate::git::{GitRepo, RebaseResult};
@@ -13,7 +12,6 @@ use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitAfterRestack {
@@ -71,16 +69,15 @@ pub fn run(
         }
     }
 
+    let _ = yes; // `yes` is preserved in the CLI API but no longer used during restack itself
     run_impl(
         &repo,
         all,
         stop_here,
         dry_run,
-        yes,
         quiet,
         auto_stash_pop,
         submit_after,
-        r#continue,
         None,
         completed_from_receipt,
     )
@@ -96,11 +93,9 @@ pub(crate) fn resume_after_rebase(
         false,
         false,
         false,
-        true,
         false,
         auto_stash_pop,
         SubmitAfterRestack::No,
-        true,
         restore_branch,
         HashSet::new(),
     )
@@ -112,18 +107,16 @@ fn run_impl(
     all: bool,
     stop_here: bool,
     dry_run: bool,
-    yes: bool,
     quiet: bool,
     mut auto_stash_pop: bool,
     submit_after: SubmitAfterRestack,
-    skip_prediction: bool,
     restore_branch: Option<String>,
     completed_from_receipt: HashSet<String>,
 ) -> Result<()> {
     let current = repo.current_branch()?;
     let current_workdir = normalized_workdir(repo)?;
     let restore_branch = restore_branch.unwrap_or_else(|| current.clone());
-    let mut stack = Stack::load(repo)?;
+    let stack = Stack::load(repo)?;
 
     let mut stashed_worktrees: Vec<PathBuf> = Vec::new();
     let mut stashed_worktree_set: HashSet<PathBuf> = HashSet::new();
@@ -197,11 +190,6 @@ fn run_impl(
         });
     }
 
-    let normalized = normalize_scope_parents_for_restack(repo, &scope_branches, quiet)?;
-    if normalized > 0 {
-        stack = Stack::load(repo)?;
-    }
-
     let branches_to_restack = branches_needing_restack(&stack, &scope_branches);
 
     if branches_to_restack.is_empty() {
@@ -212,8 +200,8 @@ fn run_impl(
         return Ok(());
     }
 
-    // Predict conflicts before proceeding
-    if !skip_prediction {
+    // For --dry-run, do a pre-flight conflict check and then exit without rebasing.
+    if dry_run {
         let timer = LiveTimer::maybe_new(!quiet, "Checking for conflicts...");
         let branch_parent_pairs: Vec<(String, String)> = branches_to_restack
             .iter()
@@ -248,21 +236,8 @@ fn run_impl(
             println!();
         }
 
-        if dry_run {
-            restore_stashed_worktrees(repo, &stashed_worktrees, quiet)?;
-            return Ok(());
-        }
-
-        if !predictions.is_empty() && !yes {
-            let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt("Conflicts predicted. Continue with restack?")
-                .default(true)
-                .interact()?;
-            if !confirm {
-                restore_stashed_worktrees(repo, &stashed_worktrees, quiet)?;
-                return Ok(());
-            }
-        }
+        restore_stashed_worktrees(repo, &stashed_worktrees, quiet)?;
+        return Ok(());
     }
 
     let branch_word = if scope_branches.len() == 1 {
@@ -297,12 +272,16 @@ fn run_impl(
 
     let mut summary: Vec<(String, String)> = Vec::new();
 
+    // Load the stack once and keep it in memory.  After each successful rebase
+    // we update the cached `needs_restack` flag for the rebased branch and its
+    // direct children so subsequent iterations don't need another disk read.
+    let mut live_stack = Stack::load(repo)?;
+
     for (index, branch) in scope_branches.iter().enumerate() {
         if completed_from_receipt.contains(branch) {
             continue;
         }
 
-        let live_stack = Stack::load(repo)?;
         let needs_restack = live_stack
             .branches
             .get(branch)
@@ -312,15 +291,23 @@ fn run_impl(
             continue;
         }
 
-        // Get metadata
-        let meta = match BranchMetadata::read(repo.inner(), branch)? {
-            Some(m) => m,
-            None => continue,
+        // Retrieve parent name and stored revision from the in-memory cache.
+        // Fall back to a metadata ref read only when the cache lacks the data
+        // (shouldn't happen in practice, but keeps the code defensive).
+        let (parent_branch_name, parent_branch_revision) = match live_stack.branches.get(branch) {
+            Some(br) if br.parent.is_some() && br.parent_revision.is_some() => (
+                br.parent.clone().unwrap(),
+                br.parent_revision.clone().unwrap(),
+            ),
+            _ => match BranchMetadata::read(repo.inner(), branch)? {
+                Some(m) => (m.parent_branch_name, m.parent_branch_revision),
+                None => continue,
+            },
         };
 
         let restack_timer = LiveTimer::maybe_new(
             !quiet,
-            &format!("{} onto {}", branch, meta.parent_branch_name),
+            &format!("{} onto {}", branch, parent_branch_name),
         );
 
         // Pre-stash dirty target worktrees so the rebase can proceed
@@ -337,22 +324,55 @@ fn run_impl(
             }
         }
 
-        // Rebase using provenance-aware upstream inference to avoid replaying
-        // already-integrated commits after squash/cherry-pick merges.
         match repo.rebase_branch_onto_with_provenance(
             branch,
-            &meta.parent_branch_name,
-            &meta.parent_branch_revision,
+            &parent_branch_name,
+            &parent_branch_revision,
             auto_stash_pop,
         )? {
             RebaseResult::Success => {
                 // Update metadata with new parent revision
-                let new_parent_rev = repo.branch_commit(&meta.parent_branch_name)?;
+                let new_parent_rev = repo.branch_commit(&parent_branch_name)?;
                 let updated_meta = BranchMetadata {
-                    parent_branch_revision: new_parent_rev,
-                    ..meta
+                    parent_branch_name: parent_branch_name.clone(),
+                    parent_branch_revision: new_parent_rev.clone(),
+                    pr_info: live_stack
+                        .branches
+                        .get(branch)
+                        .and_then(|br| {
+                            br.pr_number.map(|n| crate::engine::PrInfo {
+                                number: n,
+                                state: br.pr_state.clone().unwrap_or_default(),
+                                is_draft: br.pr_is_draft,
+                            })
+                        }),
                 };
                 updated_meta.write(repo.inner(), branch)?;
+
+                // Update in-memory stack so subsequent branches see the new
+                // parent revision without reloading from disk.
+                if let Some(br) = live_stack.branches.get_mut(branch) {
+                    br.needs_restack = false;
+                    br.parent_revision = Some(new_parent_rev.clone());
+                }
+                // Direct children of this branch now have an updated parent tip
+                // so their needs_restack status must be recalculated.
+                let children: Vec<String> = live_stack
+                    .branches
+                    .get(branch)
+                    .map(|br| br.children.clone())
+                    .unwrap_or_default();
+                for child in &children {
+                    if let Some(child_br) = live_stack.branches.get_mut(child) {
+                        // The stored parent_revision in the child still points to the
+                        // old parent tip, so needs_restack becomes true.
+                        child_br.needs_restack = child_br
+                            .parent_revision
+                            .as_deref()
+                            .map(|rev| rev != new_parent_rev.as_str())
+                            .unwrap_or(true);
+                    }
+                }
 
                 // Record the after-OID for this branch
                 tx.record_after(repo, branch)?;
@@ -373,7 +393,7 @@ fn run_impl(
                     repo,
                     &RestackConflictContext {
                         branch,
-                        parent_branch: &meta.parent_branch_name,
+                        parent_branch: &parent_branch_name,
                         completed_branches: &completed_branches,
                         remaining_branches: scope_branches.len().saturating_sub(index + 1),
                         continue_commands: &[
@@ -416,9 +436,6 @@ fn run_impl(
             println!("  {} {} {}", symbol, branch, status);
         }
     }
-
-    // Check for merged branches and offer to delete them
-    cleanup_merged_branches(repo, quiet, yes)?;
 
     restore_stashed_worktrees(repo, &stashed_worktrees, quiet)?;
 
@@ -500,237 +517,6 @@ fn branches_needing_restack(stack: &Stack, scope: &[String]) -> Vec<String> {
 }
 
 /// Check for merged branches and prompt to delete them
-fn cleanup_merged_branches(repo: &GitRepo, quiet: bool, auto_confirm: bool) -> Result<()> {
-    if quiet {
-        return Ok(());
-    }
-
-    let workdir = repo.workdir()?;
-
-    // Only check stax-tracked branches (not all local branches) for merge status.
-    // Also exclude the currently checked-out branch — we never offer to delete it.
-    let stack = Stack::load(repo)?;
-    let current = repo.current_branch()?;
-    let tracked: Vec<String> = stack
-        .branches
-        .keys()
-        .filter(|b| *b != &stack.trunk && *b != &current)
-        .cloned()
-        .collect();
-
-    let timer = LiveTimer::maybe_new(!quiet, "Checking for merged branches...");
-    let mut merged = Vec::new();
-    for branch in &tracked {
-        if repo
-            .is_branch_merged_equivalent_to_trunk(branch)
-            .unwrap_or(false)
-        {
-            merged.push(branch.clone());
-        }
-    }
-    LiveTimer::maybe_finish_timed(timer);
-
-    if merged.is_empty() {
-        return Ok(());
-    }
-
-    let branch_word = if merged.len() == 1 {
-        "branch"
-    } else {
-        "branches"
-    };
-
-    println!();
-    println!(
-        "{}",
-        format!("Found {} merged {}:", merged.len(), branch_word).dimmed()
-    );
-    for branch in &merged {
-        println!("  {} {}", "▸".bright_black(), branch.yellow());
-    }
-    println!();
-
-    let confirm = if auto_confirm {
-        true
-    } else {
-        Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(format!("Delete {} merged {}?", merged.len(), branch_word))
-            .default(true)
-            .interact()?
-    };
-
-    if !confirm {
-        return Ok(());
-    }
-
-    for branch in &merged {
-        let live_stack = Stack::load(repo)?;
-        let recorded_parent_branch = live_stack
-            .branches
-            .get(branch)
-            .and_then(|b| b.parent.clone())
-            .unwrap_or_else(|| live_stack.trunk.clone());
-        let parent_branch = if repo.branch_commit(&recorded_parent_branch).is_ok() {
-            recorded_parent_branch.clone()
-        } else if recorded_parent_branch != live_stack.trunk
-            && repo.branch_commit(&live_stack.trunk).is_ok()
-        {
-            live_stack.trunk.clone()
-        } else {
-            recorded_parent_branch.clone()
-        };
-
-        let children: Vec<String> = live_stack
-            .branches
-            .iter()
-            .filter(|(_, info)| info.parent.as_deref() == Some(branch.as_str()))
-            .map(|(name, _)| name.clone())
-            .collect();
-
-        if !children.is_empty() && repo.branch_commit(&parent_branch).is_err() {
-            println!(
-                "  {} {}",
-                "⚠".yellow(),
-                format!(
-                    "Skipped deleting {}: couldn't resolve local fallback parent '{}'.",
-                    branch, parent_branch
-                )
-                .dimmed()
-            );
-            continue;
-        }
-
-        let merged_branch_tip = repo.branch_commit(branch).ok();
-        for child in &children {
-            if let Some(child_meta) = BranchMetadata::read(repo.inner(), child)? {
-                let old_parent_boundary = merged_branch_tip
-                    .clone()
-                    .unwrap_or_else(|| child_meta.parent_branch_revision.clone());
-                let updated_meta = BranchMetadata {
-                    parent_branch_name: parent_branch.clone(),
-                    parent_branch_revision: old_parent_boundary,
-                    ..child_meta
-                };
-                updated_meta.write(repo.inner(), child)?;
-                println!(
-                    "  {} {}",
-                    "↪".cyan(),
-                    format!("Reparented {} → {}", child, parent_branch).dimmed()
-                );
-            }
-        }
-
-        let branch_existed_before = local_branch_exists(workdir, branch);
-        let delete_output = if branch_existed_before {
-            Some(
-                Command::new("git")
-                    .args(["branch", "-D", branch])
-                    .current_dir(workdir)
-                    .output(),
-            )
-        } else {
-            None
-        };
-
-        let (local_deleted, local_worktree_blocked) = match delete_output {
-            Some(Ok(out)) => {
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                (out.status.success(), stderr.contains("used by worktree"))
-            }
-            Some(Err(_)) | None => (false, false),
-        };
-
-        let local_still_exists = local_branch_exists(workdir, branch);
-        let metadata_deleted = if !local_still_exists {
-            let _ = BranchMetadata::delete(repo.inner(), branch);
-            true
-        } else {
-            false
-        };
-
-        if local_deleted {
-            println!(
-                "  {} {}",
-                "✓".green(),
-                format!("Deleted {}", branch).dimmed()
-            );
-        } else if !branch_existed_before || !local_still_exists {
-            println!(
-                "  {} {}",
-                "✓".green(),
-                format!("{} already absent locally", branch).dimmed()
-            );
-            if metadata_deleted {
-                println!(
-                    "  {} {}",
-                    "↷".cyan(),
-                    format!("Removed metadata for {}", branch).dimmed()
-                );
-            }
-        } else if local_worktree_blocked {
-            println!(
-                "  {} {}",
-                "⚠".yellow(),
-                format!(
-                    "Kept {}: branch is checked out in another worktree.",
-                    branch
-                )
-                .dimmed()
-            );
-            if let Ok(Some(resolution)) = repo.branch_delete_resolution(branch) {
-                if let Some(remove_cmd) = resolution.remove_worktree_cmd() {
-                    println!(
-                        "  {} {}",
-                        "↷".yellow(),
-                        "Run to remove that worktree:".dimmed()
-                    );
-                    println!("    {}", remove_cmd.cyan());
-                }
-                println!(
-                    "  {} {}",
-                    "↷".yellow(),
-                    if resolution.worktree.is_main {
-                        "Run to free the branch in the main worktree:".dimmed()
-                    } else {
-                        "Or keep the worktree and free the branch:".dimmed()
-                    }
-                );
-                println!("    {}", resolution.switch_branch_cmd().cyan());
-            }
-            println!(
-                "  {} {}",
-                "↷".yellow(),
-                "Metadata kept because the local branch still exists.".dimmed()
-            );
-        } else {
-            println!(
-                "  {} {}",
-                "○".dimmed(),
-                format!("Skipped {}", branch).dimmed()
-            );
-            if !metadata_deleted {
-                println!(
-                    "  {} {}",
-                    "↷".yellow(),
-                    "Metadata kept because the local branch still exists.".dimmed()
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn local_branch_exists(workdir: &Path, branch: &str) -> bool {
-    let local_ref = format!("refs/heads/{}", branch);
-    Command::new("git")
-        .args(["show-ref", "--verify", "--quiet", &local_ref])
-        .current_dir(workdir)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
 fn should_submit_after_restack(
     summary: &[(String, String)],
     quiet: bool,
