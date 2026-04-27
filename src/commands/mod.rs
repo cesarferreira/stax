@@ -38,7 +38,6 @@ pub mod resolve;
 pub(crate) mod resolve_pr;
 pub mod restack;
 pub(crate) mod restack_conflict;
-pub(crate) mod restack_parent;
 pub mod set_trunk;
 pub mod shell_setup;
 pub mod skills;

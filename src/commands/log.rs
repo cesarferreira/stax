@@ -611,6 +611,7 @@ mod tests {
         StackBranch {
             name: String::new(),
             parent: parent.map(str::to_string),
+            parent_revision: None,
             children,
             needs_restack: false,
             pr_number: None,
@@ -629,6 +630,7 @@ mod tests {
             StackBranch {
                 name: trunk.clone(),
                 parent: None,
+                parent_revision: None,
                 children: vec!["branch-0".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -649,6 +651,7 @@ mod tests {
                     } else {
                         format!("branch-{}", i - 1)
                     }),
+                    parent_revision: None,
                     children: child.into_iter().collect(),
                     needs_restack: false,
                     pr_number: None,
@@ -684,6 +687,7 @@ mod tests {
             StackBranch {
                 name: "main".to_string(),
                 parent: None,
+                parent_revision: None,
                 children: vec!["a".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -715,6 +719,7 @@ mod tests {
             StackBranch {
                 name: "main".to_string(),
                 parent: None,
+                parent_revision: None,
                 children: vec!["a".to_string()],
                 needs_restack: false,
                 pr_number: None,

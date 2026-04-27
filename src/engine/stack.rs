@@ -9,6 +9,9 @@ use std::collections::{HashMap, HashSet};
 pub struct StackBranch {
     pub name: String,
     pub parent: Option<String>,
+    /// Stored SHA of the parent at the time this branch was last rebased.
+    /// `None` for trunk (which has no parent).
+    pub parent_revision: Option<String>,
     pub children: Vec<String>,
     pub needs_restack: bool,
     pub pr_number: Option<u64>,
@@ -50,6 +53,7 @@ impl Stack {
                     StackBranch {
                         name: branch_name.clone(),
                         parent: Some(meta.parent_branch_name.clone()),
+                        parent_revision: Some(meta.parent_branch_revision.clone()),
                         children: Vec::new(),
                         needs_restack,
                         pr_number: meta.pr_info.as_ref().map(|p| p.number),
@@ -73,10 +77,23 @@ impl Stack {
                 if let Some(parent) = branches.get_mut(&parent_name) {
                     parent.children.push(name.clone());
                 } else {
-                    // Parent doesn't exist - this branch is orphaned
-                    // Treat it as a direct child of trunk
+                    // Parent doesn't exist - this branch is orphaned.
+                    // Treat it as a direct child of trunk and mark it for restack so
+                    // the restack loop will rebase it onto trunk.  We preserve
+                    // parent_revision (the deleted branch's tip SHA) so that
+                    // `git rebase --onto trunk <old_parent_sha> branch` replays only
+                    // the branch's own commits and not the deleted parent's commits.
                     orphaned_branches.push(name.clone());
                 }
+            }
+        }
+
+        // Reparent orphaned branches to trunk in-memory so the restack loop
+        // picks them up with the correct parent.
+        for name in &orphaned_branches {
+            if let Some(br) = branches.get_mut(name) {
+                br.parent = Some(trunk.clone());
+                br.needs_restack = true;
             }
         }
 
@@ -94,6 +111,7 @@ impl Stack {
             StackBranch {
                 name: trunk.clone(),
                 parent: None,
+                parent_revision: None,
                 children: trunk_children,
                 needs_restack: false,
                 pr_number: None,
@@ -243,6 +261,7 @@ mod tests {
             StackBranch {
                 name: "main".to_string(),
                 parent: None,
+                parent_revision: None,
                 children: vec!["feature-a".to_string(), "feature-b".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -256,6 +275,7 @@ mod tests {
             StackBranch {
                 name: "feature-a".to_string(),
                 parent: Some("main".to_string()),
+                parent_revision: Some("sha-main-0".to_string()),
                 children: vec!["feature-a-1".to_string()],
                 needs_restack: false,
                 pr_number: Some(1),
@@ -269,6 +289,7 @@ mod tests {
             StackBranch {
                 name: "feature-a-1".to_string(),
                 parent: Some("feature-a".to_string()),
+                parent_revision: Some("sha-feature-a-0".to_string()),
                 children: vec!["feature-a-2".to_string()],
                 needs_restack: true,
                 pr_number: Some(2),
@@ -282,6 +303,7 @@ mod tests {
             StackBranch {
                 name: "feature-a-2".to_string(),
                 parent: Some("feature-a-1".to_string()),
+                parent_revision: Some("sha-feature-a-1-0".to_string()),
                 children: vec![],
                 needs_restack: false,
                 pr_number: None,
@@ -295,6 +317,7 @@ mod tests {
             StackBranch {
                 name: "feature-b".to_string(),
                 parent: Some("main".to_string()),
+                parent_revision: Some("sha-main-0".to_string()),
                 children: vec![],
                 needs_restack: true,
                 pr_number: Some(3),
@@ -412,6 +435,7 @@ mod tests {
             StackBranch {
                 name: "main".to_string(),
                 parent: None,
+                parent_revision: None,
                 children: vec![],
                 needs_restack: false,
                 pr_number: None,
@@ -424,6 +448,7 @@ mod tests {
             StackBranch {
                 name: "a".to_string(),
                 parent: Some("b".to_string()),
+                parent_revision: None,
                 children: vec!["b".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -436,6 +461,7 @@ mod tests {
             StackBranch {
                 name: "b".to_string(),
                 parent: Some("a".to_string()),
+                parent_revision: None,
                 children: vec!["a".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -461,6 +487,7 @@ mod tests {
             StackBranch {
                 name: "main".to_string(),
                 parent: None,
+                parent_revision: None,
                 children: vec!["a".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -473,6 +500,7 @@ mod tests {
             StackBranch {
                 name: "a".to_string(),
                 parent: Some("main".to_string()),
+                parent_revision: None,
                 children: vec!["b".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -485,6 +513,7 @@ mod tests {
             StackBranch {
                 name: "b".to_string(),
                 parent: Some("a".to_string()),
+                parent_revision: None,
                 children: vec!["a".to_string()],
                 needs_restack: false,
                 pr_number: None,
@@ -544,6 +573,7 @@ mod tests {
         let branch = StackBranch {
             name: "test".to_string(),
             parent: Some("parent".to_string()),
+            parent_revision: Some("abc123".to_string()),
             children: vec!["child".to_string()],
             needs_restack: true,
             pr_number: Some(42),
@@ -560,6 +590,7 @@ mod tests {
         let branch = StackBranch {
             name: "test".to_string(),
             parent: None,
+            parent_revision: None,
             children: vec![],
             needs_restack: false,
             pr_number: None,
