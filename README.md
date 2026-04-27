@@ -32,7 +32,7 @@
 One giant PR is slow to review and risky to merge. A stack of small PRs is the answer — but managing stacks by hand with `git rebase --onto` is a footgun. **stax** makes stacks a first-class Git primitive.
 
 - **Stack, don't wait.** Keep shipping on top of in-review PRs. `st create`, `st ss`, done.
-- **Native-fast.** A single Rust binary that starts in ~25ms. `st ls` benches ~16× faster than Graphite/Freephite on this repo.
+- **Native-fast.** A single Rust binary that starts in ~25ms. `st ls` benches ~70× faster than Graphite and ~215× faster than Freephite on this repo.
 - **Agent-native.** Run parallel AI agents on isolated branches (`st lane`), auto-resolve rebase conflicts (`st resolve`), and generate PR bodies from real diffs.
 - **Undo-first.** Every destructive op snapshots state. `st undo` / `st redo` rescue risky rebases instantly.
 - **Batteries-included TUI.** Run bare `st` to browse the stack, inspect diffs, and watch CI hydrate live.
@@ -276,7 +276,7 @@ Benchmarked with `hyperfine` on this repo. Absolute times vary by repo and machi
 
 | Benchmark      | stax     | vs [Freephite](https://github.com/bradymadden97/freephite) | vs [Graphite](https://github.com/withgraphite/graphite-cli) |
 |----------------|----------|-----------------|----------------|
-| `st ls`        | baseline | **16.25×** faster | **10.05×** faster |
+| `st ls`        | baseline | **214.76×** faster | **69.72×** faster |
 | `st rs` (sync) | baseline | **2.41×** faster  | —              |
 
 stax is wire-compatible with Freephite/Graphite for common stacked-branch workflows.
