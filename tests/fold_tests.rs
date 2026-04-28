@@ -1,33 +1,31 @@
-//! Branch fold command integration tests
+//! Branch fold command integration tests.
 //!
-//! Tests for the `branch fold` command that merges a branch into its parent.
-//! Note: The fold command is interactive (requires confirmation), so we test
-//! error cases that exit before the confirmation prompt.
+//! Covers the post-graphite-parity rewrite: commits are preserved (not
+//! squashed), descendants of the folded branch are reparented onto the
+//! surviving branch, and `--keep` lets the current branch's name survive
+//! while the parent ref is deleted.
 
 mod common;
 
 use common::{OutputAssertions, TestRepo};
 
 // =============================================================================
-// Error Case Tests (these don't require confirmation)
+// Error / precondition tests (no confirmation required — fold bails early)
 // =============================================================================
 
 #[test]
 fn test_fold_into_trunk_not_allowed() {
     let repo = TestRepo::new();
-
-    // Create a branch directly from main
     repo.create_stack(&["feature-1"]);
     assert!(repo.current_branch_contains("feature-1"));
 
-    // Try to fold into trunk - should fail before confirmation
     let output = repo.run_stax(&["branch", "fold"]);
+    let combined = format!(
+        "{}{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
 
-    let stdout = TestRepo::stdout(&output);
-    let stderr = TestRepo::stderr(&output);
-    let combined = format!("{}{}", stdout, stderr);
-
-    // Should indicate we can't fold into trunk
     assert!(
         combined.contains("trunk")
             || combined.contains("Cannot fold")
@@ -38,50 +36,20 @@ fn test_fold_into_trunk_not_allowed() {
 }
 
 #[test]
-fn test_fold_with_children_not_allowed() {
-    let repo = TestRepo::new();
-
-    // Create a stack: main -> feature-1 -> feature-2
-    let branches = repo.create_stack(&["feature-1", "feature-2"]);
-
-    // Go to feature-1 (which has feature-2 as child)
-    repo.run_stax(&["checkout", &branches[0]]);
-    assert!(repo.current_branch_contains("feature-1"));
-
-    // Try to fold - should fail because it has children
-    let output = repo.run_stax(&["branch", "fold"]);
-
-    let stdout = TestRepo::stdout(&output);
-    let stderr = TestRepo::stderr(&output);
-    let combined = format!("{}{}", stdout, stderr);
-
-    // Should indicate we can't fold due to children
-    assert!(
-        combined.contains("children")
-            || combined.contains("child")
-            || combined.contains("Cannot fold"),
-        "Expected message about children, got: {}",
-        combined
-    );
-}
-
-#[test]
 fn test_fold_untracked_branch_fails() {
     let repo = TestRepo::new();
 
-    // Create an untracked branch directly with git
     repo.git(&["checkout", "-b", "untracked-branch"]);
     repo.create_file("test.txt", "content");
     repo.commit("Untracked commit");
 
-    // Try to fold - should fail because branch is not tracked
     let output = repo.run_stax(&["branch", "fold"]);
+    let combined = format!(
+        "{}{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
 
-    let stdout = TestRepo::stdout(&output);
-    let stderr = TestRepo::stderr(&output);
-    let combined = format!("{}{}", stdout, stderr);
-
-    // Should indicate branch is not tracked
     assert!(
         combined.contains("not tracked") || combined.contains("track") || !output.status.success(),
         "Expected message about tracking or failure, got: {}",
@@ -93,21 +61,17 @@ fn test_fold_untracked_branch_fails() {
 fn test_fold_on_trunk_not_allowed() {
     let repo = TestRepo::new();
 
-    // Create a branch so stax is initialized
     repo.create_stack(&["feature-1"]);
-
-    // Go back to trunk
     repo.run_stax(&["t"]);
     assert_eq!(repo.current_branch(), "main");
 
-    // Try to fold on trunk - should fail
     let output = repo.run_stax(&["branch", "fold"]);
+    let combined = format!(
+        "{}{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
 
-    let stdout = TestRepo::stdout(&output);
-    let stderr = TestRepo::stderr(&output);
-    let combined = format!("{}{}", stdout, stderr);
-
-    // Should indicate can't fold on trunk (not tracked or similar)
     assert!(
         combined.contains("trunk") || combined.contains("not tracked") || !output.status.success(),
         "Expected failure on trunk, got: {}",
@@ -119,50 +83,64 @@ fn test_fold_on_trunk_not_allowed() {
 fn test_fold_no_commits_to_fold() {
     let repo = TestRepo::new();
 
-    // Create a branch chain but with same commit as parent
+    // main → feature-1 (with commit) → empty-branch (same SHA as feature-1)
     repo.run_stax(&["bc", "feature-1"]);
     let feature1 = repo.current_branch();
     repo.create_file("f1.txt", "content");
     repo.commit("Feature 1");
 
-    // Create child without additional commits
-    repo.run_stax(&["bc", "feature-2"]);
-    // No commit here - same as parent
-
-    // Delete child's branch so feature-1 has no children
-    let feature2 = repo.current_branch();
-    repo.run_stax(&["checkout", &feature1]);
-    repo.run_stax(&["branch", "delete", &feature2, "--force"]);
-
-    // Now create a new branch from feature-1 without any new commits
-    // Actually, the branch creation itself creates a commit in our helper
-    // So we need a different approach
-
-    // Create a branch that points to the same commit as parent
     repo.git(&["checkout", "-b", "empty-branch"]);
-
-    // Track it with stax
     repo.run_stax(&["branch", "track", "--parent", &feature1]);
 
-    // Now try to fold - should say no commits to fold
-    let output = repo.run_stax(&["branch", "fold"]);
+    let output = repo.run_stax(&["branch", "fold", "--yes"]);
+    let combined = format!(
+        "{}{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
 
-    let stdout = TestRepo::stdout(&output);
-    let stderr = TestRepo::stderr(&output);
-    let combined = format!("{}{}", stdout, stderr);
-
-    // Should indicate no commits to fold
     assert!(
-        combined.contains("No commits")
-            || combined.contains("no commits")
-            || combined.contains("0 commit"),
-        "Expected 'no commits' message, got: {}",
+        combined.to_lowercase().contains("no commits")
+            || combined.contains("0 commit")
+            || combined.contains("Nothing to fold"),
+        "Expected 'no commits' / 'Nothing to fold' message, got: {}",
+        combined
+    );
+}
+
+#[test]
+fn test_fold_with_dirty_working_tree_refused() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-1"]);
+    repo.create_file("f1.txt", "content");
+    repo.commit("Feature 1");
+
+    repo.run_stax(&["bc", "feature-2"]);
+    repo.create_file("f2.txt", "content");
+    repo.commit("Feature 2");
+
+    // Make the working tree dirty
+    repo.create_file("dirty.txt", "uncommitted");
+
+    let output = repo.run_stax(&["branch", "fold", "--yes"]);
+    let combined = format!(
+        "{}{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    assert!(!output.status.success(), "Fold should refuse a dirty tree");
+    assert!(
+        combined.to_lowercase().contains("uncommitted")
+            || combined.to_lowercase().contains("dirty"),
+        "Expected dirty-tree error, got: {}",
         combined
     );
 }
 
 // =============================================================================
-// Help and Alias Tests
+// Help / alias tests
 // =============================================================================
 
 #[test]
@@ -171,7 +149,6 @@ fn test_fold_help() {
 
     let output = repo.run_stax(&["branch", "fold", "--help"]);
     output.assert_success();
-
     let stdout = TestRepo::stdout(&output);
     assert!(
         stdout.contains("--keep") || stdout.contains("-k"),
@@ -186,10 +163,7 @@ fn test_fold_help() {
 #[test]
 fn test_fold_alias_f() {
     let repo = TestRepo::new();
-
-    // b f should work as alias for branch fold
-    let output = repo.run_stax(&["b", "f", "--help"]);
-    output.assert_success();
+    repo.run_stax(&["b", "f", "--help"]).assert_success();
 }
 
 #[test]
@@ -198,7 +172,6 @@ fn test_fold_keep_flag_in_help() {
 
     let output = repo.run_stax(&["branch", "fold", "--help"]);
     output.assert_success();
-
     let stdout = TestRepo::stdout(&output);
     assert!(
         stdout.contains("keep") || stdout.contains("Keep"),
@@ -207,95 +180,213 @@ fn test_fold_keep_flag_in_help() {
     );
 }
 
+#[test]
+fn test_fold_top_level_alias_help() {
+    let repo = TestRepo::new();
+    let output = repo.run_stax(&["fold", "--help"]);
+    output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+    assert!(stdout.contains("Fold") || stdout.contains("fold"));
+}
+
 // =============================================================================
-// Fold Scenario Setup Tests
-// These test the preconditions for fold without running interactive fold
+// Behavioural tests (post-rewrite)
 // =============================================================================
 
 #[test]
-fn test_fold_scenario_valid_setup() {
+fn test_fold_default_mode_basic_collapses_leaf() {
     let repo = TestRepo::new();
 
-    // Create: main -> feature-1 -> feature-2 (no children)
-    repo.run_stax(&["bc", "feature-1"]);
-    repo.create_file("f1.txt", "content 1");
-    repo.commit("Feature 1 commit");
+    // main → A (commits a-file) → B (commits b-file)
+    repo.run_stax(&["bc", "A"]);
+    let a = repo.current_branch();
+    repo.create_file("a.txt", "from A");
+    repo.commit("A commit");
 
-    repo.run_stax(&["bc", "feature-2"]);
-    repo.create_file("f2.txt", "content 2");
-    repo.commit("Feature 2 commit");
+    repo.run_stax(&["bc", "B"]);
+    let b = repo.current_branch();
+    repo.create_file("b.txt", "from B");
+    repo.commit("B commit");
 
-    // feature-2 has no children, so fold should be possible
-    // (would require confirmation in real scenario)
+    // Fold leaf B into A
+    let output = repo.run_stax(&["branch", "fold", "--yes"]);
+    output.assert_success();
 
-    // Verify the setup is correct for fold
-    let json = repo.get_status_json();
-    let branches = json["branches"].as_array().unwrap();
+    // B no longer exists
+    assert!(
+        !repo.list_branches().iter().any(|name| name == &b),
+        "Folded branch '{}' should be deleted, branches: {:?}",
+        b,
+        repo.list_branches()
+    );
 
-    let f2_branch = branches
+    // We are checked out on the survivor (A)
+    assert_eq!(repo.current_branch(), a, "Should end up on A");
+
+    // Both files are present (commits preserved, not squashed away)
+    assert!(repo.path().join("a.txt").exists(), "a.txt should be on A");
+    assert!(
+        repo.path().join("b.txt").exists(),
+        "b.txt (from B) should now live on A after fold"
+    );
+}
+
+#[test]
+fn test_fold_keep_mode_basic_keeps_current_name() {
+    let repo = TestRepo::new();
+
+    // main → A → B (leaf)
+    repo.run_stax(&["bc", "A"]);
+    let a = repo.current_branch();
+    repo.create_file("a.txt", "from A");
+    repo.commit("A commit");
+
+    repo.run_stax(&["bc", "B"]);
+    let b = repo.current_branch();
+    repo.create_file("b.txt", "from B");
+    repo.commit("B commit");
+
+    // Fold with --keep: B's name survives, A is deleted
+    let output = repo.run_stax(&["branch", "fold", "--keep", "--yes"]);
+    output.assert_success();
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|name| name == &a),
+        "--keep should delete the parent ref '{}', branches: {:?}",
+        a,
+        branches
+    );
+    assert!(
+        branches.iter().any(|name| name == &b),
+        "--keep should preserve the current branch '{}', branches: {:?}",
+        b,
+        branches
+    );
+
+    assert_eq!(repo.current_branch(), b, "Should still be on B");
+
+    // B is now reparented onto trunk (since A — its old parent — was the
+    // only intermediate branch and trunk is A's parent).
+    assert_eq!(
+        repo.get_current_parent().as_deref(),
+        Some("main"),
+        "B's parent should now be the grandparent (main)"
+    );
+
+    assert!(repo.path().join("a.txt").exists());
+    assert!(repo.path().join("b.txt").exists());
+}
+
+#[test]
+fn test_fold_with_descendants_reparents_them() {
+    let repo = TestRepo::new();
+
+    // main → A → B → C
+    repo.run_stax(&["bc", "A"]);
+    repo.create_file("a.txt", "from A");
+    repo.commit("A commit");
+
+    repo.run_stax(&["bc", "B"]);
+    let b = repo.current_branch();
+    repo.create_file("b.txt", "from B");
+    repo.commit("B commit");
+
+    repo.run_stax(&["bc", "C"]);
+    let c = repo.current_branch();
+    repo.create_file("c.txt", "from C");
+    repo.commit("C commit");
+
+    // Move to B and fold it (B has child C)
+    repo.run_stax(&["checkout", &b]);
+
+    let output = repo.run_stax(&["branch", "fold", "--yes"]);
+    output.assert_success();
+
+    // B is gone
+    assert!(
+        !repo.list_branches().iter().any(|name| name == &b),
+        "B should be deleted after fold"
+    );
+
+    // C is now a child of A (the survivor)
+    let parent_of_c_json = repo.get_status_json();
+    let c_branch = parent_of_c_json["branches"]
+        .as_array()
+        .unwrap()
         .iter()
-        .find(|b| b["name"].as_str().unwrap_or("").contains("feature-2"))
-        .expect("Should find feature-2");
-
-    // feature-2 should have feature-1 as parent (not trunk)
+        .find(|b| b["name"].as_str() == Some(&c))
+        .expect("C should still be tracked");
+    let c_parent = c_branch["parent"].as_str().unwrap_or("");
     assert!(
-        f2_branch["parent"]
-            .as_str()
-            .unwrap_or("")
-            .contains("feature-1"),
-        "feature-2 should have feature-1 as parent"
-    );
-
-    // feature-2 should have commits ahead of its parent
-    let ahead = f2_branch["ahead"].as_i64().unwrap_or(0);
-    assert!(ahead > 0, "feature-2 should have commits ahead: {}", ahead);
-}
-
-#[test]
-fn test_fold_scenario_branch_with_children_detected() {
-    let repo = TestRepo::new();
-
-    // Create: main -> feature-1 -> feature-2
-    repo.run_stax(&["bc", "feature-1"]);
-    let feature1 = repo.current_branch();
-    repo.create_file("f1.txt", "content 1");
-    repo.commit("Feature 1 commit");
-
-    repo.run_stax(&["bc", "feature-2"]);
-    repo.create_file("f2.txt", "content 2");
-    repo.commit("Feature 2 commit");
-
-    // feature-1 has feature-2 as child
-    let children = repo.get_children(&feature1);
-    assert!(
-        !children.is_empty(),
-        "feature-1 should have children: {:?}",
-        children
-    );
-    assert!(
-        children.iter().any(|c| c.contains("feature-2")),
-        "feature-1 should have feature-2 as child"
+        c_parent.ends_with('A') || c_parent == "A",
+        "C's parent should be A after fold, got '{}'",
+        c_parent
     );
 }
 
 #[test]
-fn test_fold_scenario_parent_is_not_trunk() {
+fn test_fold_top_level_alias_works() {
     let repo = TestRepo::new();
 
-    // Create: main -> feature-1 -> feature-2
-    repo.run_stax(&["bc", "feature-1"]);
-    repo.create_file("f1.txt", "content");
-    repo.commit("Feature 1");
+    repo.run_stax(&["bc", "A"]);
+    repo.create_file("a.txt", "from A");
+    repo.commit("A commit");
 
-    repo.run_stax(&["bc", "feature-2"]);
+    repo.run_stax(&["bc", "B"]);
+    let b = repo.current_branch();
+    repo.create_file("b.txt", "from B");
+    repo.commit("B commit");
 
-    // Check parent is feature-1, not trunk
-    let parent = repo.get_current_parent();
-    assert!(parent.is_some(), "feature-2 should have a parent");
+    // `stax fold` (no `branch` prefix) should match `gt fold`'s ergonomics
+    let output = repo.run_stax(&["fold", "--yes"]);
+    output.assert_success();
+
     assert!(
-        parent.unwrap().contains("feature-1"),
-        "feature-2's parent should be feature-1"
+        !repo.list_branches().iter().any(|name| name == &b),
+        "B should be deleted via top-level fold"
     );
+}
 
-    // This means fold would work (parent is not trunk)
+#[test]
+fn test_fold_undo_restores_state() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "A"]);
+    let a = repo.current_branch();
+    repo.create_file("a.txt", "from A");
+    repo.commit("A commit");
+
+    repo.run_stax(&["bc", "B"]);
+    let b = repo.current_branch();
+    repo.create_file("b.txt", "from B");
+    repo.commit("B commit");
+
+    let b_sha_before = repo.get_commit_sha(&b);
+    let a_sha_before = repo.get_commit_sha(&a);
+
+    repo.run_stax(&["branch", "fold", "--yes"]).assert_success();
+
+    // Undo
+    let undo = repo.run_stax(&["undo", "--yes"]);
+    undo.assert_success();
+
+    // B exists again, both at original SHAs
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|name| name == &b),
+        "Undo should restore '{}', branches: {:?}",
+        b,
+        branches
+    );
+    assert_eq!(
+        repo.get_commit_sha(&b),
+        b_sha_before,
+        "B should be at original SHA after undo"
+    );
+    assert_eq!(
+        repo.get_commit_sha(&a),
+        a_sha_before,
+        "A should be at original SHA after undo"
+    );
 }

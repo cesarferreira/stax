@@ -29,6 +29,7 @@ pub enum OpKind {
     Detach,
     Fix,
     Edit,
+    Fold,
 }
 
 impl OpKind {
@@ -44,6 +45,7 @@ impl OpKind {
             OpKind::Detach => "detach",
             OpKind::Fix => "stack fix",
             OpKind::Edit => "edit",
+            OpKind::Fold => "fold",
         }
     }
 }

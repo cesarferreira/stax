@@ -14,11 +14,18 @@
 //! tx.finish_ok()?;  // Or tx.finish_err("message")?;
 //! ```
 
-use super::receipt::{OpKind, OpReceipt, PlanSummary};
+use super::receipt::{LocalRefEntry, OpKind, OpReceipt, PlanSummary};
 use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
 use std::path::PathBuf;
+
+/// Suffix appended to the entry label for branch-metadata ref backups so
+/// they don't collide with the `refs/heads/<branch>` entry for the same
+/// branch in the receipt.
+pub const METADATA_REF_LABEL_SUFFIX: &str = "@meta";
+
+const METADATA_REF_PREFIX: &str = "refs/branch-metadata/";
 
 /// A transaction wrapper for history-rewriting operations
 pub struct Transaction {
@@ -78,6 +85,25 @@ impl Transaction {
         for branch in branches {
             self.plan_branch(repo, branch)?;
         }
+        Ok(())
+    }
+
+    /// Plan a branch-metadata ref to be modified (under `refs/branch-metadata/`).
+    ///
+    /// Used by operations like `fold` that mutate or delete stax metadata. The
+    /// metadata blob's OID is captured so that `stax undo` can restore it via
+    /// the same `update-ref`-based mechanism it uses for branch heads.
+    pub fn plan_metadata_ref(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
+        let refname = format!("{}{}", METADATA_REF_PREFIX, branch);
+        let oid = repo.rev_parse(&refname).ok();
+        let label = format!("{}{}", branch, METADATA_REF_LABEL_SUFFIX);
+        self.receipt.local_refs.push(LocalRefEntry {
+            branch: label,
+            refname,
+            existed_before: oid.is_some(),
+            oid_before: oid,
+            oid_after: None,
+        });
         Ok(())
     }
 
@@ -152,6 +178,23 @@ impl Transaction {
     pub fn record_after(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
         let oid = repo.branch_commit(branch)?;
         self.receipt.update_local_ref_after(branch, &oid);
+        Ok(())
+    }
+
+    /// Record the after-OID for a branch-metadata ref. Pass `branch` (not the
+    /// `@meta` label); the lookup re-derives the label internally.
+    pub fn record_metadata_ref_after(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
+        let refname = format!("{}{}", METADATA_REF_PREFIX, branch);
+        let oid = repo.rev_parse(&refname).ok();
+        let label = format!("{}{}", branch, METADATA_REF_LABEL_SUFFIX);
+        if let Some(entry) = self
+            .receipt
+            .local_refs
+            .iter_mut()
+            .find(|e| e.branch == label)
+        {
+            entry.oid_after = oid;
+        }
         Ok(())
     }
 

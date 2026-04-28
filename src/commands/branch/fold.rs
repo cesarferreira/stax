@@ -1,204 +1,288 @@
+//! Fold the current branch into its parent (`gt fold` parity).
+//!
+//! Default mode collapses the *current* branch into the *parent* branch:
+//! the parent ref is force-updated to the current branch's tip (commits are
+//! preserved, not squashed), the current branch ref is deleted, descendants
+//! of the current branch are re-parented onto the parent, and any
+//! "siblings" (other children of the parent) are rebased onto the new
+//! parent tip.
+//!
+//! `--keep` mode keeps the *current* branch's name as the surviving ref;
+//! the parent ref is deleted instead, and the current branch's metadata is
+//! updated to point at the grandparent.
+//!
+//! In both modes the surviving ref ends up at the same SHA (the current
+//! branch's tip), so descendants of the current branch only need a metadata
+//! re-parent. Siblings need an actual rebase because their previous base
+//! (the old parent tip) is no longer the tip of any tracked branch.
+
 use crate::engine::{BranchMetadata, Stack};
-use crate::git::GitRepo;
-use anyhow::{Context, Result};
+use crate::git::{GitRepo, RebaseResult};
+use crate::ops::receipt::OpKind;
+use crate::ops::tx::Transaction;
+use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
-use std::process::Command;
 
-/// Fold the current branch into its parent (merge commits into parent)
 pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
     let repo = GitRepo::open()?;
-    let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
-    let workdir = repo.workdir()?;
+    let current = repo.current_branch()?;
 
-    // Check if current branch is tracked
-    let meta = BranchMetadata::read(repo.inner(), &current)?
-        .context("Current branch is not tracked. Use 'stax branch track' first.")?;
+    if current == stack.trunk {
+        bail!("Cannot fold trunk. Checkout a stacked branch first.");
+    }
 
-    let parent = &meta.parent_branch_name;
+    if repo.is_dirty()? {
+        bail!("Working tree has uncommitted changes. Commit or stash them before folding.");
+    }
 
-    // Don't fold into trunk
-    if parent == &stack.trunk {
+    if repo.rebase_in_progress()? {
+        bail!("A rebase is in progress. Run `stax continue` or `stax abort` first.");
+    }
+
+    let current_meta = BranchMetadata::read(repo.inner(), &current)?.with_context(|| {
+        format!(
+            "Branch '{}' is not tracked. Run `stax branch track` first.",
+            current
+        )
+    })?;
+    let parent = current_meta.parent_branch_name.clone();
+
+    if parent == stack.trunk {
         println!(
             "{}",
-            "Cannot fold into trunk. Use 'stax submit' to merge into trunk via PR.".yellow()
+            "Cannot fold into trunk. Use `stax submit` to merge the branch into trunk via a PR."
+                .yellow()
         );
         return Ok(());
     }
 
-    // Check if current branch has children
-    if let Some(branch_info) = stack.branches.get(&current) {
-        if !branch_info.children.is_empty() {
-            println!("{}", "Cannot fold: this branch has children.".red());
-            println!("Children: {}", branch_info.children.join(", ").cyan());
-            println!();
-            println!("Please fold or delete child branches first.");
-            return Ok(());
-        }
-    }
+    let parent_meta = BranchMetadata::read(repo.inner(), &parent)?.with_context(|| {
+        format!(
+            "Parent branch '{}' is not tracked, so its parent cannot be determined.",
+            parent
+        )
+    })?;
+    let grandparent = parent_meta.parent_branch_name.clone();
+    let grandparent_revision = parent_meta.parent_branch_revision.clone();
 
-    // Count commits to fold
-    let output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..HEAD", parent)])
-        .current_dir(workdir)
-        .output()
-        .context("Failed to count commits")?;
+    let kids: Vec<String> = stack.children(&current);
+    let siblings: Vec<String> = stack
+        .children(&parent)
+        .into_iter()
+        .filter(|name| name != &current)
+        .collect();
 
-    let commit_count: usize = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .unwrap_or(0);
+    let current_tip = repo
+        .branch_commit(&current)
+        .with_context(|| format!("Could not resolve commit for '{}'", current))?;
+    let old_parent_tip = repo
+        .branch_commit(&parent)
+        .with_context(|| format!("Could not resolve commit for '{}'", parent))?;
 
-    if commit_count == 0 {
-        println!("{}", "No commits to fold.".yellow());
+    let (commits_folded_in, _) = repo
+        .commits_ahead_behind(&parent, &current)
+        .unwrap_or((0, 0));
+
+    if commits_folded_in == 0 && kids.is_empty() && siblings.is_empty() {
+        println!(
+            "{}",
+            "Nothing to fold: branch has no commits ahead of parent and no descendants/siblings."
+                .yellow()
+        );
         return Ok(());
     }
 
+    let (survivor, discarded) = if keep_branch {
+        (current.clone(), parent.clone())
+    } else {
+        (parent.clone(), current.clone())
+    };
+
     println!(
-        "Folding '{}' ({} commit(s)) into '{}'",
+        "Fold plan: collapse '{}' into '{}'",
         current.cyan(),
-        commit_count.to_string().cyan(),
-        parent.green()
+        parent.cyan()
     );
-
-    // Show the commits
-    let log_output = Command::new("git")
-        .args(["log", "--oneline", &format!("{}..HEAD", parent)])
-        .current_dir(workdir)
-        .output()
-        .context("Failed to show commits")?;
-
-    println!();
-    println!("{}", "Commits to fold:".bold());
-    for line in String::from_utf8_lossy(&log_output.stdout).lines() {
-        println!("  {}", line.dimmed());
+    println!(
+        "  {} {} commit(s) preserved on '{}'",
+        "▸".dimmed(),
+        commits_folded_in.to_string().cyan(),
+        survivor.green()
+    );
+    println!(
+        "  {} '{}' will be deleted",
+        "▸".dimmed(),
+        discarded.red()
+    );
+    if !kids.is_empty() {
+        println!(
+            "  {} {} child branch(es) re-parented onto '{}': {}",
+            "▸".dimmed(),
+            kids.len().to_string().cyan(),
+            survivor.green(),
+            kids.join(", ").dimmed()
+        );
+    }
+    if !siblings.is_empty() {
+        println!(
+            "  {} {} sibling branch(es) will be rebased onto '{}': {}",
+            "▸".dimmed(),
+            siblings.len().to_string().cyan(),
+            survivor.green(),
+            siblings.join(", ").dimmed()
+        );
     }
     println!();
 
-    // Confirm (unless --yes flag)
-    let action = if keep_branch {
-        "fold"
-    } else {
-        "fold and delete"
-    };
     if !skip_confirm {
-        let confirm = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(format!("{}  '{}' into '{}'?", action, current, parent))
+        let confirmed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt(format!("Fold '{}' into '{}'?", current, parent))
             .default(true)
             .interact()?;
-
-        if !confirm {
+        if !confirmed {
             println!("{}", "Aborted.".red());
             return Ok(());
         }
     }
 
-    // Checkout parent
-    print!("Checking out {}... ", parent.cyan());
-    let checkout_status = Command::new("git")
-        .args(["checkout", parent])
-        .current_dir(workdir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("Failed to checkout parent")?;
-
-    if !checkout_status.success() {
-        println!("{}", "failed".red());
-        anyhow::bail!("Failed to checkout parent branch");
+    let mut tx = Transaction::begin(OpKind::Fold, &repo, false)?;
+    tx.plan_branch(&repo, &parent)?;
+    tx.plan_branch(&repo, &current)?;
+    for sibling in &siblings {
+        tx.plan_branch(&repo, sibling)?;
     }
-    println!("{}", "done".green());
-
-    // Merge current branch into parent
-    print!("Merging {}... ", current.cyan());
-    let merge_status = Command::new("git")
-        .args(["merge", "--squash", &current])
-        .current_dir(workdir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("Failed to merge")?;
-
-    if !merge_status.success() {
-        println!("{}", "failed".red());
-
-        // Abort merge and reset working tree
-        let _ = Command::new("git")
-            .args(["merge", "--abort"])
-            .current_dir(workdir)
-            .status();
-
-        // Reset any staged changes from the failed squash merge
-        let _ = Command::new("git")
-            .args(["reset", "--hard", "HEAD"])
-            .current_dir(workdir)
-            .status();
-
-        // Restore original branch
-        let _ = Command::new("git")
-            .args(["checkout", &current])
-            .current_dir(workdir)
-            .status();
-
-        anyhow::bail!(
-            "Failed to merge branch. There may be conflicts.\n\
-             Restored to branch '{}'.",
-            current
-        );
+    tx.plan_metadata_ref(&repo, &parent)?;
+    tx.plan_metadata_ref(&repo, &current)?;
+    for kid in &kids {
+        tx.plan_metadata_ref(&repo, kid)?;
     }
-    println!("{}", "done".green());
+    for sibling in &siblings {
+        tx.plan_metadata_ref(&repo, sibling)?;
+    }
+    tx.snapshot()?;
 
-    // Commit the merge
-    print!("Committing... ");
-    let commit_msg = format!("Fold {} into {}", current, parent);
-    let commit_status = Command::new("git")
-        .args(["commit", "-m", &commit_msg])
-        .current_dir(workdir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("Failed to commit")?;
-
-    if !commit_status.success() {
-        // Maybe nothing to commit
-        println!("{}", "no changes".yellow());
+    if keep_branch {
+        // Survivor = current. The current ref already has the right SHA; just
+        // delete the parent ref and re-parent current onto grandparent.
+        repo.delete_ref(&format!("refs/heads/{}", parent))
+            .with_context(|| format!("Failed to delete parent branch '{}'", parent))?;
     } else {
-        println!("{}", "done".green());
+        // Survivor = parent. Switch to parent (so we can delete current),
+        // force-update the parent ref to current's tip, then delete current.
+        repo.checkout(&parent)
+            .with_context(|| format!("Failed to checkout '{}'", parent))?;
+        repo.update_ref(&format!("refs/heads/{}", parent), &current_tip)
+            .with_context(|| format!("Failed to fast-forward '{}' to {}", parent, current_tip))?;
+        repo.reset_hard(&current_tip)
+            .with_context(|| format!("Failed to reset working tree to {}", current_tip))?;
+        repo.delete_ref(&format!("refs/heads/{}", current))
+            .with_context(|| format!("Failed to delete '{}'", current))?;
     }
+    tx.record_after(&repo, &parent).ok();
+    tx.record_after(&repo, &current).ok();
 
-    // Delete the old branch unless --keep
     if !keep_branch {
-        print!("Deleting {}... ", current.cyan());
-        let delete_status = Command::new("git")
-            .args(["branch", "-D", &current])
-            .current_dir(workdir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .context("Failed to delete branch")?;
-
-        if delete_status.success() {
-            // Also delete metadata
-            let _ = BranchMetadata::delete(repo.inner(), &current);
-            println!("{}", "done".green());
-        } else {
-            println!("{}", "failed".yellow());
+        for kid in &kids {
+            let meta = BranchMetadata::read(repo.inner(), kid)?.with_context(|| {
+                format!(
+                    "Child branch '{}' is missing metadata; cannot reparent.",
+                    kid
+                )
+            })?;
+            let updated = BranchMetadata {
+                parent_branch_name: parent.clone(),
+                ..meta
+            };
+            updated.write(repo.inner(), kid)?;
+            tx.record_metadata_ref_after(&repo, kid)?;
         }
     }
 
-    // Update parent's metadata (it may need restack now)
-    if let Some(parent_meta) = BranchMetadata::read(repo.inner(), parent)? {
-        let parent_commit = repo.branch_commit(&parent_meta.parent_branch_name)?;
-        let updated_parent = BranchMetadata {
-            parent_branch_revision: parent_commit,
-            ..parent_meta
+    if keep_branch {
+        let updated = BranchMetadata {
+            parent_branch_name: grandparent.clone(),
+            parent_branch_revision: grandparent_revision.clone(),
+            ..current_meta.clone()
         };
-        updated_parent.write(repo.inner(), parent)?;
+        updated.write(repo.inner(), &current)?;
+        tx.record_metadata_ref_after(&repo, &current)?;
+    }
+
+    BranchMetadata::delete(repo.inner(), &discarded)
+        .with_context(|| format!("Failed to delete metadata for '{}'", discarded))?;
+    tx.record_metadata_ref_after(&repo, &discarded)?;
+
+    let mut completed_siblings: Vec<String> = Vec::new();
+    for sibling in &siblings {
+        let result = repo
+            .rebase_branch_onto_with_provenance(sibling, &survivor, &old_parent_tip, false)
+            .with_context(|| format!("Failed to rebase sibling '{}'", sibling))?;
+
+        match result {
+            RebaseResult::Success => {
+                tx.push_completed_branch(sibling);
+                tx.record_after(&repo, sibling)?;
+                let new_parent_revision = repo.branch_commit(&survivor)?;
+                if let Some(meta) = BranchMetadata::read(repo.inner(), sibling)? {
+                    let updated = BranchMetadata {
+                        parent_branch_name: survivor.clone(),
+                        parent_branch_revision: new_parent_revision,
+                        ..meta
+                    };
+                    updated.write(repo.inner(), sibling)?;
+                }
+                tx.record_metadata_ref_after(&repo, sibling)?;
+                completed_siblings.push(sibling.clone());
+            }
+            RebaseResult::Conflict => {
+                let _ = repo.rebase_abort();
+                let msg = format!(
+                    "Conflict while rebasing sibling '{}' onto '{}'. The fold's structural \
+                     changes are applied (refs and child metadata updated). {} sibling(s) \
+                     rebased before the conflict. Run `stax undo` to roll back the entire \
+                     fold, or rebase the remaining siblings manually.",
+                    sibling,
+                    survivor,
+                    completed_siblings.len()
+                );
+                tx.finish_err(&msg, Some("rebase"), Some(sibling))?;
+                bail!(msg);
+            }
+        }
+    }
+
+    tx.finish_ok()?;
+
+    if repo.current_branch()? != survivor {
+        let _ = repo.checkout(&survivor);
     }
 
     println!();
-    println!("{} Folded '{}' into '{}'", "✓".green(), current, parent);
+    println!(
+        "{} Folded '{}' into '{}'.",
+        "✓".green().bold(),
+        current.cyan(),
+        parent.cyan()
+    );
+    println!("  Surviving branch: {}", survivor.green().bold());
+
+    let discarded_pr = if keep_branch {
+        parent_meta.pr_info.as_ref().map(|p| p.number)
+    } else {
+        current_meta.pr_info.as_ref().map(|p| p.number)
+    };
+    if let Some(pr_number) = discarded_pr {
+        println!();
+        println!(
+            "{} '{}' had PR #{}. Close it manually with: {}",
+            "ⓘ".blue(),
+            discarded.dimmed(),
+            pr_number,
+            format!("gh pr close {}", pr_number).cyan()
+        );
+    }
 
     Ok(())
 }
