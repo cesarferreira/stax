@@ -2,36 +2,31 @@
 //!
 //! Covers the post-graphite-parity rewrite: commits are preserved (not
 //! squashed), descendants of the folded branch are reparented onto the
-//! surviving branch, and `--keep` lets the current branch's name survive
-//! while the parent ref is deleted.
+//! surviving branch, siblings are rebased, and `--keep` lets the current
+//! branch's name survive while the parent ref is deleted.
 
 mod common;
 
 use common::{OutputAssertions, TestRepo};
 
+fn combined(output: &std::process::Output) -> String {
+    format!("{}{}", TestRepo::stdout(output), TestRepo::stderr(output))
+}
+
 // =============================================================================
-// Error / precondition tests (no confirmation required — fold bails early)
+// Preconditions — fold bails before the confirmation prompt
 // =============================================================================
 
 #[test]
 fn test_fold_into_trunk_not_allowed() {
     let repo = TestRepo::new();
     repo.create_stack(&["feature-1"]);
-    assert!(repo.current_branch_contains("feature-1"));
 
     let output = repo.run_stax(&["branch", "fold"]);
-    let combined = format!(
-        "{}{}",
-        TestRepo::stdout(&output),
-        TestRepo::stderr(&output)
-    );
-
     assert!(
-        combined.contains("trunk")
-            || combined.contains("Cannot fold")
-            || combined.contains("submit"),
-        "Expected message about trunk, got: {}",
-        combined
+        combined(&output).contains("Cannot fold into trunk"),
+        "expected 'Cannot fold into trunk' message, got: {}",
+        combined(&output)
     );
 }
 
@@ -44,67 +39,49 @@ fn test_fold_untracked_branch_fails() {
     repo.commit("Untracked commit");
 
     let output = repo.run_stax(&["branch", "fold"]);
-    let combined = format!(
-        "{}{}",
-        TestRepo::stdout(&output),
-        TestRepo::stderr(&output)
-    );
-
+    output.assert_failure();
     assert!(
-        combined.contains("not tracked") || combined.contains("track") || !output.status.success(),
-        "Expected message about tracking or failure, got: {}",
-        combined
+        combined(&output).contains("not tracked"),
+        "expected 'not tracked' in: {}",
+        combined(&output)
     );
 }
 
 #[test]
-fn test_fold_on_trunk_not_allowed() {
+fn test_fold_when_on_trunk_bails() {
     let repo = TestRepo::new();
-
     repo.create_stack(&["feature-1"]);
     repo.run_stax(&["t"]);
     assert_eq!(repo.current_branch(), "main");
 
     let output = repo.run_stax(&["branch", "fold"]);
-    let combined = format!(
-        "{}{}",
-        TestRepo::stdout(&output),
-        TestRepo::stderr(&output)
-    );
-
+    output.assert_failure();
     assert!(
-        combined.contains("trunk") || combined.contains("not tracked") || !output.status.success(),
-        "Expected failure on trunk, got: {}",
-        combined
+        combined(&output).contains("Cannot fold trunk"),
+        "expected 'Cannot fold trunk' in: {}",
+        combined(&output)
     );
 }
 
 #[test]
-fn test_fold_no_commits_to_fold() {
+fn test_fold_with_no_changes_is_a_noop() {
     let repo = TestRepo::new();
 
-    // main → feature-1 (with commit) → empty-branch (same SHA as feature-1)
     repo.run_stax(&["bc", "feature-1"]);
     let feature1 = repo.current_branch();
     repo.create_file("f1.txt", "content");
     repo.commit("Feature 1");
 
+    // Empty branch off feature-1 (same SHA, no kids, no siblings)
     repo.git(&["checkout", "-b", "empty-branch"]);
     repo.run_stax(&["branch", "track", "--parent", &feature1]);
 
     let output = repo.run_stax(&["branch", "fold", "--yes"]);
-    let combined = format!(
-        "{}{}",
-        TestRepo::stdout(&output),
-        TestRepo::stderr(&output)
-    );
-
+    output.assert_success();
     assert!(
-        combined.to_lowercase().contains("no commits")
-            || combined.contains("0 commit")
-            || combined.contains("Nothing to fold"),
-        "Expected 'no commits' / 'Nothing to fold' message, got: {}",
-        combined
+        combined(&output).contains("Nothing to fold"),
+        "expected 'Nothing to fold' in: {}",
+        combined(&output)
     );
 }
 
@@ -120,84 +97,50 @@ fn test_fold_with_dirty_working_tree_refused() {
     repo.create_file("f2.txt", "content");
     repo.commit("Feature 2");
 
-    // Make the working tree dirty
     repo.create_file("dirty.txt", "uncommitted");
 
     let output = repo.run_stax(&["branch", "fold", "--yes"]);
-    let combined = format!(
-        "{}{}",
-        TestRepo::stdout(&output),
-        TestRepo::stderr(&output)
-    );
-
-    assert!(!output.status.success(), "Fold should refuse a dirty tree");
+    output.assert_failure();
     assert!(
-        combined.to_lowercase().contains("uncommitted")
-            || combined.to_lowercase().contains("dirty"),
-        "Expected dirty-tree error, got: {}",
-        combined
+        combined(&output).contains("uncommitted"),
+        "expected 'uncommitted' in: {}",
+        combined(&output)
     );
 }
 
 // =============================================================================
-// Help / alias tests
+// Help / alias surface
 // =============================================================================
 
 #[test]
-fn test_fold_help() {
+fn test_fold_help_surfaces() {
     let repo = TestRepo::new();
 
-    let output = repo.run_stax(&["branch", "fold", "--help"]);
-    output.assert_success();
-    let stdout = TestRepo::stdout(&output);
-    assert!(
-        stdout.contains("--keep") || stdout.contains("-k"),
-        "Expected --keep flag in help"
-    );
-    assert!(
-        stdout.contains("fold") || stdout.contains("Fold"),
-        "Expected 'fold' in help"
-    );
-}
-
-#[test]
-fn test_fold_alias_f() {
-    let repo = TestRepo::new();
-    repo.run_stax(&["b", "f", "--help"]).assert_success();
-}
-
-#[test]
-fn test_fold_keep_flag_in_help() {
-    let repo = TestRepo::new();
-
-    let output = repo.run_stax(&["branch", "fold", "--help"]);
-    output.assert_success();
-    let stdout = TestRepo::stdout(&output);
-    assert!(
-        stdout.contains("keep") || stdout.contains("Keep"),
-        "Expected 'keep' in fold help: {}",
-        stdout
-    );
-}
-
-#[test]
-fn test_fold_top_level_alias_help() {
-    let repo = TestRepo::new();
-    let output = repo.run_stax(&["fold", "--help"]);
-    output.assert_success();
-    let stdout = TestRepo::stdout(&output);
-    assert!(stdout.contains("Fold") || stdout.contains("fold"));
+    for args in [
+        &["branch", "fold", "--help"][..],
+        &["b", "f", "--help"][..],
+        &["fold", "--help"][..],
+    ] {
+        let output = repo.run_stax(args);
+        output.assert_success();
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            stdout.contains("--keep") || stdout.contains("-k"),
+            "expected --keep in `{:?}` help: {}",
+            args,
+            stdout
+        );
+    }
 }
 
 // =============================================================================
-// Behavioural tests (post-rewrite)
+// Behaviour
 // =============================================================================
 
 #[test]
 fn test_fold_default_mode_basic_collapses_leaf() {
     let repo = TestRepo::new();
 
-    // main → A (commits a-file) → B (commits b-file)
     repo.run_stax(&["bc", "A"]);
     let a = repo.current_branch();
     repo.create_file("a.txt", "from A");
@@ -208,26 +151,19 @@ fn test_fold_default_mode_basic_collapses_leaf() {
     repo.create_file("b.txt", "from B");
     repo.commit("B commit");
 
-    // Fold leaf B into A
-    let output = repo.run_stax(&["branch", "fold", "--yes"]);
-    output.assert_success();
+    repo.run_stax(&["branch", "fold", "--yes"]).assert_success();
 
-    // B no longer exists
+    let branches = repo.list_branches();
     assert!(
-        !repo.list_branches().iter().any(|name| name == &b),
-        "Folded branch '{}' should be deleted, branches: {:?}",
-        b,
-        repo.list_branches()
+        !branches.iter().any(|n| n == &b),
+        "B should be deleted, branches: {:?}",
+        branches
     );
-
-    // We are checked out on the survivor (A)
-    assert_eq!(repo.current_branch(), a, "Should end up on A");
-
-    // Both files are present (commits preserved, not squashed away)
+    assert_eq!(repo.current_branch(), a, "should end up on A");
     assert!(repo.path().join("a.txt").exists(), "a.txt should be on A");
     assert!(
         repo.path().join("b.txt").exists(),
-        "b.txt (from B) should now live on A after fold"
+        "b.txt (from B) should now live on A — commits preserved, not squashed"
     );
 }
 
@@ -235,7 +171,6 @@ fn test_fold_default_mode_basic_collapses_leaf() {
 fn test_fold_keep_mode_basic_keeps_current_name() {
     let repo = TestRepo::new();
 
-    // main → A → B (leaf)
     repo.run_stax(&["bc", "A"]);
     let a = repo.current_branch();
     repo.create_file("a.txt", "from A");
@@ -246,36 +181,28 @@ fn test_fold_keep_mode_basic_keeps_current_name() {
     repo.create_file("b.txt", "from B");
     repo.commit("B commit");
 
-    // Fold with --keep: B's name survives, A is deleted
-    let output = repo.run_stax(&["branch", "fold", "--keep", "--yes"]);
-    output.assert_success();
+    repo.run_stax(&["branch", "fold", "--keep", "--yes"])
+        .assert_success();
 
     let branches = repo.list_branches();
     assert!(
-        !branches.iter().any(|name| name == &a),
+        !branches.iter().any(|n| n == &a),
         "--keep should delete the parent ref '{}', branches: {:?}",
         a,
         branches
     );
     assert!(
-        branches.iter().any(|name| name == &b),
-        "--keep should preserve the current branch '{}', branches: {:?}",
+        branches.iter().any(|n| n == &b),
+        "--keep should preserve '{}', branches: {:?}",
         b,
         branches
     );
-
-    assert_eq!(repo.current_branch(), b, "Should still be on B");
-
-    // B is now reparented onto trunk (since A — its old parent — was the
-    // only intermediate branch and trunk is A's parent).
+    assert_eq!(repo.current_branch(), b);
     assert_eq!(
         repo.get_current_parent().as_deref(),
         Some("main"),
         "B's parent should now be the grandparent (main)"
     );
-
-    assert!(repo.path().join("a.txt").exists());
-    assert!(repo.path().join("b.txt").exists());
 }
 
 #[test]
@@ -284,6 +211,7 @@ fn test_fold_with_descendants_reparents_them() {
 
     // main → A → B → C
     repo.run_stax(&["bc", "A"]);
+    let a = repo.current_branch();
     repo.create_file("a.txt", "from A");
     repo.commit("A commit");
 
@@ -297,32 +225,128 @@ fn test_fold_with_descendants_reparents_them() {
     repo.create_file("c.txt", "from C");
     repo.commit("C commit");
 
-    // Move to B and fold it (B has child C)
     repo.run_stax(&["checkout", &b]);
+    repo.run_stax(&["branch", "fold", "--yes"]).assert_success();
 
-    let output = repo.run_stax(&["branch", "fold", "--yes"]);
-    output.assert_success();
-
-    // B is gone
     assert!(
-        !repo.list_branches().iter().any(|name| name == &b),
-        "B should be deleted after fold"
+        !repo.list_branches().iter().any(|n| n == &b),
+        "B should be deleted"
     );
 
-    // C is now a child of A (the survivor)
-    let parent_of_c_json = repo.get_status_json();
-    let c_branch = parent_of_c_json["branches"]
+    let json = repo.get_status_json();
+    let c_parent = json["branches"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|b| b["name"].as_str() == Some(&c))
-        .expect("C should still be tracked");
-    let c_parent = c_branch["parent"].as_str().unwrap_or("");
+        .find(|br| br["name"].as_str() == Some(&c))
+        .expect("C should still be tracked")["parent"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    assert_eq!(c_parent, a, "C's parent should be A after fold");
+}
+
+#[test]
+fn test_fold_keep_mode_with_descendants_keeps_kid_pointing_at_survivor() {
+    let repo = TestRepo::new();
+
+    // main → A → B → C, then `fold --keep` from B.
+    // Survivor=B; A is deleted. C's parent_branch_name was B (now survivor)
+    // and stays B — kids of `current` need no metadata change in --keep mode.
+    repo.run_stax(&["bc", "A"]);
+    let a = repo.current_branch();
+    repo.create_file("a.txt", "from A");
+    repo.commit("A commit");
+
+    repo.run_stax(&["bc", "B"]);
+    let b = repo.current_branch();
+    repo.create_file("b.txt", "from B");
+    repo.commit("B commit");
+
+    repo.run_stax(&["bc", "C"]);
+    let c = repo.current_branch();
+    repo.create_file("c.txt", "from C");
+    repo.commit("C commit");
+
+    repo.run_stax(&["checkout", &b]);
+    repo.run_stax(&["branch", "fold", "--keep", "--yes"])
+        .assert_success();
+
+    let branches = repo.list_branches();
+    assert!(branches.iter().any(|n| n == &b), "B should survive --keep");
     assert!(
-        c_parent.ends_with('A') || c_parent == "A",
-        "C's parent should be A after fold, got '{}'",
-        c_parent
+        !branches.iter().any(|n| n == &a),
+        "A ('{}') should be deleted, branches: {:?}",
+        a,
+        branches
     );
+
+    let json = repo.get_status_json();
+    let c_parent = json["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|br| br["name"].as_str() == Some(&c))
+        .expect("C should still be tracked")["parent"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    assert_eq!(c_parent, b, "C's parent should still be B (the survivor)");
+}
+
+#[test]
+fn test_fold_with_sibling_rebases_it_onto_survivor() {
+    let repo = TestRepo::new();
+
+    // main → A → B  (target of fold)
+    //          → S  (sibling — touches different files so rebase is conflict-free)
+    repo.run_stax(&["bc", "A"]);
+    let a = repo.current_branch();
+    repo.create_file("a.txt", "from A");
+    repo.commit("A commit");
+
+    repo.run_stax(&["bc", "B"]);
+    let b = repo.current_branch();
+    repo.create_file("b.txt", "from B");
+    repo.commit("B commit");
+
+    repo.run_stax(&["checkout", &a]);
+    repo.run_stax(&["bc", "S"]);
+    let s = repo.current_branch();
+    repo.create_file("s.txt", "from S");
+    repo.commit("S commit");
+
+    repo.run_stax(&["checkout", &b]);
+    repo.run_stax(&["branch", "fold", "--yes"]).assert_success();
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|n| n == &s),
+        "sibling S should survive, branches: {:?}",
+        branches
+    );
+
+    repo.run_stax(&["checkout", &s]);
+    assert!(
+        repo.path().join("s.txt").exists(),
+        "S's own file should remain"
+    );
+    assert!(
+        repo.path().join("b.txt").exists(),
+        "S should now have B's commits underneath (rebased onto survivor)"
+    );
+
+    let json = repo.get_status_json();
+    let s_parent = json["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|br| br["name"].as_str() == Some(&s))
+        .expect("S should be tracked")["parent"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    assert_eq!(s_parent, a, "S's parent should be the survivor (A)");
 }
 
 #[test]
@@ -338,12 +362,9 @@ fn test_fold_top_level_alias_works() {
     repo.create_file("b.txt", "from B");
     repo.commit("B commit");
 
-    // `stax fold` (no `branch` prefix) should match `gt fold`'s ergonomics
-    let output = repo.run_stax(&["fold", "--yes"]);
-    output.assert_success();
-
+    repo.run_stax(&["fold", "--yes"]).assert_success();
     assert!(
-        !repo.list_branches().iter().any(|name| name == &b),
+        !repo.list_branches().iter().any(|n| n == &b),
         "B should be deleted via top-level fold"
     );
 }
@@ -362,31 +383,74 @@ fn test_fold_undo_restores_state() {
     repo.create_file("b.txt", "from B");
     repo.commit("B commit");
 
-    let b_sha_before = repo.get_commit_sha(&b);
-    let a_sha_before = repo.get_commit_sha(&a);
+    let b_sha = repo.get_commit_sha(&b);
+    let a_sha = repo.get_commit_sha(&a);
 
     repo.run_stax(&["branch", "fold", "--yes"]).assert_success();
+    repo.run_stax(&["undo", "--yes"]).assert_success();
 
-    // Undo
-    let undo = repo.run_stax(&["undo", "--yes"]);
-    undo.assert_success();
-
-    // B exists again, both at original SHAs
-    let branches = repo.list_branches();
     assert!(
-        branches.iter().any(|name| name == &b),
-        "Undo should restore '{}', branches: {:?}",
-        b,
-        branches
+        repo.list_branches().iter().any(|n| n == &b),
+        "undo should restore B"
     );
-    assert_eq!(
-        repo.get_commit_sha(&b),
-        b_sha_before,
-        "B should be at original SHA after undo"
+    assert_eq!(repo.get_commit_sha(&b), b_sha, "B back to original SHA");
+    assert_eq!(repo.get_commit_sha(&a), a_sha, "A back to original SHA");
+}
+
+#[test]
+fn test_fold_orphaned_pr_hint_when_pr_info_present() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "A"]);
+    let a = repo.current_branch();
+    repo.create_file("a.txt", "from A");
+    repo.commit("A commit");
+
+    repo.run_stax(&["bc", "B"]);
+    let b = repo.current_branch();
+    repo.create_file("b.txt", "from B");
+    repo.commit("B commit");
+
+    // Inject pr_info onto B by writing a metadata blob directly. Avoids
+    // needing a real GitHub remote in the test.
+    let pr_json = format!(
+        r#"{{"parentBranchName":"{}","parentBranchRevision":"{}","prInfo":{{"number":4242,"state":"OPEN","isDraft":false}}}}"#,
+        a,
+        repo.get_commit_sha(&a)
     );
-    assert_eq!(
-        repo.get_commit_sha(&a),
-        a_sha_before,
-        "A should be at original SHA after undo"
+    let mut child = std::process::Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repo.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(pr_json.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let blob_hash = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    repo.git(&[
+        "update-ref",
+        &format!("refs/branch-metadata/{}", b),
+        &blob_hash,
+    ]);
+
+    let output = repo.run_stax(&["branch", "fold", "--yes"]);
+    output.assert_success();
+    let out = combined(&output);
+    assert!(
+        out.contains("PR #4242"),
+        "expected orphaned-PR hint to mention PR #4242, got: {}",
+        out
+    );
+    assert!(
+        out.contains("gh pr close 4242"),
+        "expected gh pr close hint, got: {}",
+        out
     );
 }

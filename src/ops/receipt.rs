@@ -173,6 +173,29 @@ impl OpReceipt {
         });
     }
 
+    /// Add a branch-metadata ref (`refs/branch-metadata/<branch>`) to track.
+    ///
+    /// The label gets a `@meta` suffix so it doesn't collide with the
+    /// matching `add_local_ref(branch, ...)` entry — both can coexist for
+    /// one branch, which `fold` relies on.
+    pub fn add_metadata_ref(&mut self, branch: &str, oid_before: Option<&str>) {
+        self.local_refs.push(LocalRefEntry {
+            branch: format!("{}{}", branch, super::tx::METADATA_REF_LABEL_SUFFIX),
+            refname: crate::git::refs::metadata_refname(branch),
+            existed_before: oid_before.is_some(),
+            oid_before: oid_before.map(|s| s.to_string()),
+            oid_after: None,
+        });
+    }
+
+    /// Update the after-OID for a branch-metadata ref entry.
+    pub fn update_metadata_ref_after(&mut self, branch: &str, oid_after: Option<&str>) {
+        let label = format!("{}{}", branch, super::tx::METADATA_REF_LABEL_SUFFIX);
+        if let Some(entry) = self.local_refs.iter_mut().find(|e| e.branch == label) {
+            entry.oid_after = oid_after.map(|s| s.to_string());
+        }
+    }
+
     /// Add a remote ref to track
     pub fn add_remote_ref(&mut self, remote: &str, branch: &str, oid_before: Option<&str>) {
         self.remote_refs.push(RemoteRefEntry {

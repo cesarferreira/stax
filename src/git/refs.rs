@@ -3,13 +3,28 @@ use git2::Repository;
 use std::path::Path;
 use std::process::Command;
 
-const METADATA_REF_PREFIX: &str = "refs/branch-metadata/";
+pub(crate) const METADATA_REF_PREFIX: &str = "refs/branch-metadata/";
+
+/// Build the full ref name for a branch's stax metadata blob.
+pub(crate) fn metadata_refname(branch: &str) -> String {
+    format!("{}{}", METADATA_REF_PREFIX, branch)
+}
+
+/// Resolve a branch's metadata-ref OID via libgit2 (no subprocess).
+/// Returns `None` if the ref is missing.
+pub(crate) fn metadata_ref_oid(repo: &Repository, branch: &str) -> Option<String> {
+    let refname = metadata_refname(branch);
+    repo.find_reference(&refname)
+        .ok()
+        .and_then(|r| r.target())
+        .map(|oid| oid.to_string())
+}
 const STAX_TRUNK_REF: &str = "refs/stax/trunk";
 const STAX_PREV_BRANCH_REF: &str = "refs/stax/prev-branch";
 
 /// Read metadata JSON for a branch from git refs
 pub fn read_metadata(repo: &Repository, branch: &str) -> Result<Option<String>> {
-    let ref_name = format!("{}{}", METADATA_REF_PREFIX, branch);
+    let ref_name = metadata_refname(branch);
 
     match repo.find_reference(&ref_name) {
         Ok(reference) => {
@@ -46,7 +61,7 @@ pub fn write_metadata(repo: &Repository, branch: &str, json: &str) -> Result<()>
     let hash = String::from_utf8(output.stdout)?.trim().to_string();
 
     // Update the ref to point to the blob
-    let ref_name = format!("{}{}", METADATA_REF_PREFIX, branch);
+    let ref_name = metadata_refname(branch);
     let status = Command::new("git")
         .args(["update-ref", &ref_name, &hash])
         .current_dir(workdir)
@@ -62,7 +77,7 @@ pub fn write_metadata(repo: &Repository, branch: &str, json: &str) -> Result<()>
 
 /// Delete metadata ref for a branch
 pub fn delete_metadata(repo: &Repository, branch: &str) -> Result<()> {
-    let ref_name = format!("{}{}", METADATA_REF_PREFIX, branch);
+    let ref_name = metadata_refname(branch);
     let workdir = repo
         .workdir()
         .context("Repository has no working directory")?;

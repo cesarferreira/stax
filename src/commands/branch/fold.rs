@@ -66,6 +66,10 @@ pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
     })?;
     let grandparent = parent_meta.parent_branch_name.clone();
     let grandparent_revision = parent_meta.parent_branch_revision.clone();
+    // Capture PR numbers up front so the orphaned-PR hint at the end of the
+    // function doesn't need to outlive the metadata moves below.
+    let current_pr = current_meta.pr_info.as_ref().map(|p| p.number);
+    let parent_pr = parent_meta.pr_info.as_ref().map(|p| p.number);
 
     let kids: Vec<String> = stack.children(&current);
     let siblings: Vec<String> = stack
@@ -111,11 +115,7 @@ pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
         commits_folded_in.to_string().cyan(),
         survivor.green()
     );
-    println!(
-        "  {} '{}' will be deleted",
-        "▸".dimmed(),
-        discarded.red()
-    );
+    println!("  {} '{}' will be deleted", "▸".dimmed(), discarded.red());
     if !kids.is_empty() {
         println!(
             "  {} {} child branch(es) re-parented onto '{}': {}",
@@ -164,22 +164,23 @@ pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
     tx.snapshot()?;
 
     if keep_branch {
-        // Survivor = current. The current ref already has the right SHA; just
-        // delete the parent ref and re-parent current onto grandparent.
-        repo.delete_ref(&format!("refs/heads/{}", parent))
+        // delete_branch (vs raw delete_ref) carries the worktree-checkout
+        // safety check, which matters if `parent` is checked out elsewhere.
+        repo.delete_branch(&parent, true)
             .with_context(|| format!("Failed to delete parent branch '{}'", parent))?;
     } else {
-        // Survivor = parent. Switch to parent (so we can delete current),
-        // force-update the parent ref to current's tip, then delete current.
         repo.checkout(&parent)
             .with_context(|| format!("Failed to checkout '{}'", parent))?;
         repo.update_ref(&format!("refs/heads/{}", parent), &current_tip)
             .with_context(|| format!("Failed to fast-forward '{}' to {}", parent, current_tip))?;
         repo.reset_hard(&current_tip)
             .with_context(|| format!("Failed to reset working tree to {}", current_tip))?;
-        repo.delete_ref(&format!("refs/heads/{}", current))
+        repo.delete_branch(&current, true)
             .with_context(|| format!("Failed to delete '{}'", current))?;
     }
+    // After deletion, `branch_commit(discarded)` errors — record_after surfaces
+    // that as Err which we intentionally swallow; the receipt entry stays at
+    // oid_after=None, which is exactly what undo needs to recreate the ref.
     tx.record_after(&repo, &parent).ok();
     tx.record_after(&repo, &current).ok();
 
@@ -198,13 +199,11 @@ pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
             updated.write(repo.inner(), kid)?;
             tx.record_metadata_ref_after(&repo, kid)?;
         }
-    }
-
-    if keep_branch {
+    } else {
         let updated = BranchMetadata {
             parent_branch_name: grandparent.clone(),
             parent_branch_revision: grandparent_revision.clone(),
-            ..current_meta.clone()
+            ..current_meta
         };
         updated.write(repo.inner(), &current)?;
         tx.record_metadata_ref_after(&repo, &current)?;
@@ -224,11 +223,12 @@ pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
             RebaseResult::Success => {
                 tx.push_completed_branch(sibling);
                 tx.record_after(&repo, sibling)?;
-                let new_parent_revision = repo.branch_commit(&survivor)?;
                 if let Some(meta) = BranchMetadata::read(repo.inner(), sibling)? {
                     let updated = BranchMetadata {
                         parent_branch_name: survivor.clone(),
-                        parent_branch_revision: new_parent_revision,
+                        // Survivor's tip equals current_tip (we either force-
+                        // updated parent → current_tip, or kept current as-is).
+                        parent_branch_revision: current_tip.clone(),
                         ..meta
                     };
                     updated.write(repo.inner(), sibling)?;
@@ -238,17 +238,16 @@ pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
             }
             RebaseResult::Conflict => {
                 let _ = repo.rebase_abort();
+                // Don't repeat the "stax undo" hint — tx.finish_err prints it.
                 let msg = format!(
-                    "Conflict while rebasing sibling '{}' onto '{}'. The fold's structural \
-                     changes are applied (refs and child metadata updated). {} sibling(s) \
-                     rebased before the conflict. Run `stax undo` to roll back the entire \
-                     fold, or rebase the remaining siblings manually.",
+                    "Conflict rebasing sibling '{}' onto '{}'. The fold's structural \
+                     changes are applied; {} sibling(s) rebased before the conflict.",
                     sibling,
                     survivor,
                     completed_siblings.len()
                 );
                 tx.finish_err(&msg, Some("rebase"), Some(sibling))?;
-                bail!(msg);
+                bail!("{}", msg);
             }
         }
     }
@@ -268,11 +267,7 @@ pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
     );
     println!("  Surviving branch: {}", survivor.green().bold());
 
-    let discarded_pr = if keep_branch {
-        parent_meta.pr_info.as_ref().map(|p| p.number)
-    } else {
-        current_meta.pr_info.as_ref().map(|p| p.number)
-    };
+    let discarded_pr = if keep_branch { parent_pr } else { current_pr };
     if let Some(pr_number) = discarded_pr {
         println!();
         println!(
