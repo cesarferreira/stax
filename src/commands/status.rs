@@ -22,6 +22,10 @@ fn column_color(column: usize) -> colored::Color {
     stack_palette::lane_color(column)
 }
 
+fn restack_label() -> String {
+    format!("{}", "(needs restack)".white())
+}
+
 #[derive(Serialize, Clone)]
 struct BranchStatusJson {
     name: String,
@@ -325,7 +329,7 @@ pub fn run(
                 info_str.push_str(&commits_str);
             }
             if entry.needs_restack {
-                info_str.push_str(&format!(" {}", "(needs restack)".bright_yellow()));
+                info_str.push_str(&format!(" {}", restack_label()));
             }
 
             // Only show PR info in verbose mode (ll command)
@@ -711,6 +715,16 @@ mod tests {
                 b: 113
             }
         );
+    }
+
+    #[test]
+    fn status_restack_label_is_white() {
+        colored::control::set_override(true);
+
+        let label = restack_label();
+
+        colored::control::unset_override();
+        assert_eq!(label, "\u{1b}[37m(needs restack)\u{1b}[0m");
     }
 }
 

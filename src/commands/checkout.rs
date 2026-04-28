@@ -53,6 +53,10 @@ fn checkout_lane_color(column: usize) -> CheckoutColor {
     CheckoutColor::new(stack_palette::lane_console_color(column), false)
 }
 
+fn restack_label() -> String {
+    render_stderr("(needs restack)", Style::new().for_stderr().white())
+}
+
 fn render_stderr<T: Display>(value: T, style: Style) -> String {
     format!("{}", style.apply_to(value))
 }
@@ -358,7 +362,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
             }
         }
         if needs_restack {
-            info_str.push_str(&format!(" {}", "(needs restack)".bright_yellow()));
+            info_str.push_str(&format!(" {}", restack_label()));
         }
 
         let display = truncate_display(&format!("{}{}", tree, info_str), max_width);
@@ -774,5 +778,16 @@ mod tests {
             assert_eq!(color.color, lane_console_color(column));
             assert!(!color.bright);
         }
+    }
+
+    #[test]
+    fn checkout_restack_label_is_white() {
+        let previous = console::colors_enabled_stderr();
+        console::set_colors_enabled_stderr(true);
+
+        let label = restack_label();
+
+        console::set_colors_enabled_stderr(previous);
+        assert_eq!(label, "\u{1b}[37m(needs restack)\u{1b}[0m");
     }
 }
