@@ -1,3 +1,4 @@
+use crate::commands::stack_palette;
 use crate::commands::worktree::{go, shared::emit_shell_message};
 use crate::config::Config;
 use crate::engine::Stack;
@@ -12,17 +13,6 @@ use std::collections::HashSet;
 use std::fmt::Display;
 use std::path::Path;
 
-// Colors for different columns (matching status.rs)
-const COLUMN_COLORS: &[CheckoutColor] = &[
-    CheckoutColor::new(Color::Cyan, false),
-    CheckoutColor::new(Color::Green, false),
-    CheckoutColor::new(Color::Magenta, false),
-    CheckoutColor::new(Color::Blue, false),
-    CheckoutColor::new(Color::Cyan, true),
-    CheckoutColor::new(Color::Green, true),
-    CheckoutColor::new(Color::Magenta, true),
-    CheckoutColor::new(Color::Blue, true),
-];
 const LINKED_WORKTREE_GLYPH: &str = "↳";
 const BRIGHT_BLUE: CheckoutColor = CheckoutColor::new(Color::Blue, true);
 const BRIGHT_CYAN: CheckoutColor = CheckoutColor::new(Color::Cyan, true);
@@ -57,6 +47,10 @@ fn checkout_style(spec: CheckoutColor) -> Style {
     } else {
         style
     }
+}
+
+fn checkout_lane_color(column: usize) -> CheckoutColor {
+    CheckoutColor::new(stack_palette::lane_console_color(column), false)
 }
 
 fn render_stderr<T: Display>(value: T, style: Style) -> String {
@@ -324,7 +318,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
         let mut tree = String::new();
         let mut visual_width = 0;
         for col in 0..=db.column {
-            let col_color = COLUMN_COLORS[col % COLUMN_COLORS.len()];
+            let col_color = checkout_lane_color(col);
             if col == db.column {
                 let circle = if is_current { "◉" } else { "○" };
                 tree.push_str(&render_stderr(circle, checkout_style(col_color)));
@@ -348,7 +342,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
         let mut info_str =
             render_presence_markers(has_remote, show_worktree_column, has_linked_worktree);
 
-        let branch_color = COLUMN_COLORS[db.column % COLUMN_COLORS.len()];
+        let branch_color = checkout_lane_color(db.column);
         if is_current {
             info_str.push_str(&render_stderr(branch, checkout_style(branch_color).bold()));
         } else {
@@ -385,13 +379,13 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
     let mut trunk_tree = String::new();
     let mut trunk_visual_width = 0;
     let trunk_circle = if is_trunk_current { "◉" } else { "○" };
-    let trunk_color = COLUMN_COLORS[0];
+    let trunk_color = checkout_lane_color(0);
     trunk_tree.push_str(&render_stderr(trunk_circle, checkout_style(trunk_color)));
     trunk_visual_width += 1;
 
     if trunk_child_max_col >= 1 {
         for col in 1..=trunk_child_max_col {
-            let col_color = COLUMN_COLORS[col % COLUMN_COLORS.len()];
+            let col_color = checkout_lane_color(col);
             if col < trunk_child_max_col {
                 trunk_tree.push_str(&render_stderr("─┴", checkout_style(col_color)));
             } else {
@@ -749,7 +743,7 @@ mod tests {
         let previous = console::colors_enabled_stderr();
         console::set_colors_enabled_stderr(true);
 
-        let styled = render_stderr("branch", checkout_style(COLUMN_COLORS[0]).bold());
+        let styled = render_stderr("branch", checkout_style(checkout_lane_color(0)).bold());
 
         console::set_colors_enabled_stderr(previous);
         assert!(styled.contains("\x1b["));
@@ -765,5 +759,20 @@ mod tests {
             strip_ansi(&render_presence_markers(false, true, false)),
             "      "
         );
+    }
+
+    #[test]
+    fn checkout_lane_palette_uses_same_vivid_rgb_as_status() {
+        use crate::commands::stack_palette::{lane_console_color, lane_rgb};
+
+        assert_eq!(lane_rgb(0), (56, 189, 248));
+        assert_eq!(lane_rgb(5), (248, 113, 113));
+        assert_eq!(lane_rgb(8), lane_rgb(0));
+
+        for column in 0..8 {
+            let color = checkout_lane_color(column);
+            assert_eq!(color.color, lane_console_color(column));
+            assert!(!color.bright);
+        }
     }
 }

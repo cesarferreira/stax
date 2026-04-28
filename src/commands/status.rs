@@ -1,32 +1,25 @@
 use crate::cache::CiCache;
+use crate::commands::stack_palette;
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::GitRepo;
 use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
-use colored::{Color, Colorize};
+use colored::Colorize;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
-// Colors for different columns (fp-style: each column has its own color)
-// Avoiding yellow since it's used for "needs restack" indicator
-const COLUMN_COLORS: &[Color] = &[
-    Color::Cyan,
-    Color::Green,
-    Color::Magenta,
-    Color::Blue,
-    Color::BrightCyan,
-    Color::BrightGreen,
-    Color::BrightMagenta,
-    Color::BrightBlue,
-];
 const LINKED_WORKTREE_GLYPH: &str = "↳";
 
 /// Represents a branch in the display with its column position
 struct DisplayBranch {
     name: String,
     column: usize,
+}
+
+fn column_color(column: usize) -> colored::Color {
+    stack_palette::lane_color(column)
 }
 
 #[derive(Serialize, Clone)]
@@ -271,7 +264,7 @@ pub fn run(
         let mut visual_width = 0;
         // Draw columns 0 to db.column
         for col in 0..=db.column {
-            let col_color = COLUMN_COLORS[col % COLUMN_COLORS.len()];
+            let col_color = column_color(col);
             if col == db.column {
                 // This is our column - draw circle
                 let circle = if is_current { "◉" } else { "○" };
@@ -312,7 +305,7 @@ pub fn run(
         }
 
         // Color branch names to match their column in the graph
-        let branch_color = COLUMN_COLORS[db.column % COLUMN_COLORS.len()];
+        let branch_color = column_color(db.column);
         if is_current {
             info_str.push_str(&format!("{}", branch.color(branch_color).bold()));
         } else {
@@ -376,14 +369,14 @@ pub fn run(
     let mut trunk_visual_width = 0;
 
     let trunk_circle = if is_trunk_current { "◉" } else { "○" };
-    let trunk_color = COLUMN_COLORS[0];
+    let trunk_color = column_color(0);
     trunk_tree.push_str(&format!("{}", trunk_circle.color(trunk_color)));
     trunk_visual_width += 1;
 
     // Show connectors only for trunk children columns: ─┴ for middle, ─┘ for last
     if trunk_child_max_col >= 1 {
         for col in 1..=trunk_child_max_col {
-            let col_color = COLUMN_COLORS[col % COLUMN_COLORS.len()];
+            let col_color = column_color(col);
             if col < trunk_child_max_col {
                 trunk_tree.push_str(&format!("{}", "─┴".color(col_color)));
             } else {
@@ -700,6 +693,24 @@ mod tests {
         let names: Vec<&str> = result.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(names, vec!["b", "a"]);
         assert_eq!(max_column, 0);
+    }
+
+    #[test]
+    fn status_lane_palette_is_shared_vivid_rgb() {
+        use crate::commands::stack_palette::{lane_color, lane_rgb};
+
+        assert_eq!(lane_rgb(0), (56, 189, 248));
+        assert_eq!(lane_rgb(4), (251, 146, 60));
+        assert_eq!(lane_rgb(8), lane_rgb(0));
+        assert_eq!(column_color(0), lane_color(0));
+        assert_eq!(
+            column_color(5),
+            colored::Color::TrueColor {
+                r: 248,
+                g: 113,
+                b: 113
+            }
+        );
     }
 }
 

@@ -1,6 +1,7 @@
 # Lessons
 
 - When changing the `stax co` UI, match the `stax ls` visual language (colors, tree/indentation) and confirm it visually. Do not ship a redesign without verifying the output looks like the `ls` tree and that selection emphasis is obvious.
+- Stack tree lane colors must come from `src/commands/stack_palette.rs`; do not duplicate per-command color arrays or `st ls`/`st co` will drift.
 - Interactive prompts rendered on `stderr` must style item text against `stderr` and gate interactivity on `stdin` + `stderr`; shell integration can capture stdout for `--shell-output` while dialoguer prompts still run on stderr.
 - TUI changes must be checked at standard terminal widths (around 80 columns); keep one-line summaries and footers compact, and prefer a single contextual action over listing every shortcut.
 - If interactive lists scroll the terminal on navigation, clear and position the cursor before invoking the dialog to avoid rendering into the lower viewport.
