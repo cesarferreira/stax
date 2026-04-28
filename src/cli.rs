@@ -726,6 +726,23 @@ enum Commands {
         yes: bool,
     },
 
+    /// Fold the current branch into its parent (collapse a branch boundary).
+    ///
+    /// Top-level alias of `stax branch fold`, mirroring `gt fold`. Commits are
+    /// preserved (not squashed); descendants of the current branch are
+    /// reparented onto the parent; siblings are rebased onto the new parent
+    /// tip. With `--keep`, the surviving branch keeps the *current* name and
+    /// the parent ref is deleted instead.
+    Fold {
+        /// Keep the current branch's name as the surviving ref (delete the
+        /// parent ref instead)
+        #[arg(short, long)]
+        keep: bool,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+
     /// Move the current branch (and its descendants) onto a new parent.
     ///
     /// Equivalent to `stax upstack onto`; kept as a top-level alias for
@@ -1898,6 +1915,7 @@ pub fn run() -> Result<()> {
             commands::copy::run(target)
         }
         Commands::Detach { branch, yes } => commands::detach::run(branch, yes),
+        Commands::Fold { keep, yes } => commands::branch::fold::run(keep, yes),
         Commands::Reorder { yes } => commands::reorder::run(yes),
         Commands::Edit { yes, no_verify } => commands::edit::run(yes, no_verify),
         Commands::Validate => commands::stack_cmd::run_validate(),

@@ -15,10 +15,15 @@
 //! ```
 
 use super::receipt::{OpKind, OpReceipt, PlanSummary};
-use crate::git::GitRepo;
+use crate::git::{refs, GitRepo};
 use anyhow::Result;
 use colored::Colorize;
 use std::path::PathBuf;
+
+/// Suffix appended to the entry label for branch-metadata ref backups so
+/// they don't collide with the `refs/heads/<branch>` entry for the same
+/// branch in the receipt.
+pub const METADATA_REF_LABEL_SUFFIX: &str = "@meta";
 
 /// A transaction wrapper for history-rewriting operations
 pub struct Transaction {
@@ -78,6 +83,18 @@ impl Transaction {
         for branch in branches {
             self.plan_branch(repo, branch)?;
         }
+        Ok(())
+    }
+
+    /// Plan a branch-metadata ref to be modified (under `refs/branch-metadata/`).
+    ///
+    /// Used by operations like `fold` that mutate or delete stax metadata. The
+    /// metadata blob's OID is captured so that `stax undo` can restore it via
+    /// the same `update-ref`-based mechanism it uses for branch heads. Uses
+    /// libgit2 (no subprocess) since fold may invoke this in a per-branch loop.
+    pub fn plan_metadata_ref(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
+        let oid = refs::metadata_ref_oid(repo.inner(), branch);
+        self.receipt.add_metadata_ref(branch, oid.as_deref());
         Ok(())
     }
 
@@ -152,6 +169,18 @@ impl Transaction {
     pub fn record_after(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
         let oid = repo.branch_commit(branch)?;
         self.receipt.update_local_ref_after(branch, &oid);
+        Ok(())
+    }
+
+    /// Record the after-OID for a branch-metadata ref. Pass `branch` (not the
+    /// `@meta` label); the lookup re-derives the label internally. The ref
+    /// may be absent (e.g., metadata was deleted) — that's recorded as
+    /// `oid_after = None`, which `stax undo` handles by re-creating the ref
+    /// from `oid_before`.
+    pub fn record_metadata_ref_after(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
+        let oid = refs::metadata_ref_oid(repo.inner(), branch);
+        self.receipt
+            .update_metadata_ref_after(branch, oid.as_deref());
         Ok(())
     }
 

@@ -58,7 +58,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st branch reparent` | | Change parent |
 | `st branch submit` | `bs` | Submit current branch only |
 | `st branch delete` | | Delete branch |
-| `st branch fold` | | Fold branch into parent |
+| `st fold` / `st branch fold` | `b f` | Fold current branch into its parent (preserves commits, reparents descendants, rebases siblings; `--keep` keeps current name) |
 | `st branch squash` | | Squash commits |
 | `st detach` | | Remove branch from stack, reparent children |
 | `st reorder` | | Interactively reorder branches in stack |
