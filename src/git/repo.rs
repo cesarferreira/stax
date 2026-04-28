@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
+use std::thread;
 use std::time::{Duration, Instant};
 
 pub struct GitRepo {
@@ -398,6 +399,64 @@ impl GitRepo {
         Self::list_worktrees_in(self.workdir()?)
     }
 
+    /// Lightweight alternative to [`Self::list_worktrees`] for the status/ls path.
+    /// Returns a `branch → display label` map using libgit2 worktree APIs, avoiding
+    /// the `git worktree list --porcelain` subprocess. Use `list_worktrees()` when
+    /// you need the full `WorktreeInfo` model (stale/prunable details, paths, etc.).
+    pub fn linked_worktree_names_by_branch(&self) -> Result<HashMap<String, String>> {
+        let main_path = self
+            .repo
+            .commondir()
+            .parent()
+            .map(Self::normalize_path)
+            .unwrap_or_else(|| {
+                Self::normalize_path(self.workdir().unwrap_or_else(|_| Path::new(".")))
+            });
+
+        let mut entries: Vec<(PathBuf, Option<String>, bool)> = vec![(main_path, None, false)];
+
+        let worktree_names = self.repo.worktrees()?;
+        for name in worktree_names.iter().flatten() {
+            let worktree = self.repo.find_worktree(name)?;
+            let is_prunable = worktree.is_prunable(None).unwrap_or(false);
+            let path = Self::normalize_path(worktree.path());
+            let branch = Repository::open(worktree.path()).ok().and_then(|repo| {
+                repo.head()
+                    .ok()
+                    .filter(|head| head.is_branch())
+                    .and_then(|head| head.shorthand().map(str::to_string))
+            });
+            entries.push((path, branch, is_prunable));
+        }
+
+        let label_candidates = entries
+            .iter()
+            .enumerate()
+            .map(|(idx, (path, branch, _))| WorktreeLabelCandidate {
+                is_main: idx == 0,
+                path: path.clone(),
+                basename: if idx == 0 {
+                    "main".to_string()
+                } else {
+                    worktree_basename(path)
+                },
+                branch: branch.clone(),
+            })
+            .collect::<Vec<_>>();
+        let labels = derive_worktree_names(&label_candidates);
+
+        let mut by_branch = HashMap::new();
+        for (idx, (_, branch, is_prunable)) in entries.into_iter().enumerate().skip(1) {
+            if !is_prunable {
+                if let Some(branch) = branch {
+                    by_branch.insert(branch, labels[idx].clone());
+                }
+            }
+        }
+
+        Ok(by_branch)
+    }
+
     pub fn list_worktrees_in(cwd: &Path) -> Result<Vec<WorktreeInfo>> {
         let output = run_git_in(cwd, &["worktree", "list", "--porcelain"])?;
         if !output.status.success() {
@@ -752,10 +811,44 @@ impl GitRepo {
 
     /// Get commits ahead/behind between two branches (uses libgit2, no subprocess)
     pub fn commits_ahead_behind(&self, base: &str, head: &str) -> Result<(usize, usize)> {
-        let base_oid = self.resolve_to_oid(base)?;
-        let head_oid = self.resolve_to_oid(head)?;
+        let base_oid = Self::resolve_to_oid_in(&self.repo, base)?;
+        let head_oid = Self::resolve_to_oid_in(&self.repo, head)?;
         let (ahead, behind) = self.repo.graph_ahead_behind(head_oid, base_oid)?;
         Ok((ahead, behind))
+    }
+
+    /// Get ahead/behind counts for multiple branch pairs concurrently.
+    pub fn commits_ahead_behind_many(
+        &self,
+        pairs: &[(String, String)],
+    ) -> Vec<Result<(usize, usize)>> {
+        let repo_path = self.repo.path().to_path_buf();
+        let handles = pairs
+            .iter()
+            .map(|(base, head)| {
+                let repo_path = repo_path.clone();
+                let base = base.clone();
+                let head = head.clone();
+                thread::spawn(move || {
+                    let repo = Repository::open(&repo_path).with_context(|| {
+                        format!("Failed to open git repository at '{}'", repo_path.display())
+                    })?;
+                    let base_oid = Self::resolve_to_oid_in(&repo, &base)?;
+                    let head_oid = Self::resolve_to_oid_in(&repo, &head)?;
+                    let (ahead, behind) = repo.graph_ahead_behind(head_oid, base_oid)?;
+                    Ok((ahead, behind))
+                })
+            })
+            .collect::<Vec<_>>();
+
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| anyhow::bail!("ahead/behind worker panicked"))
+            })
+            .collect()
     }
 
     /// Get commit messages between base and head (commits on head not in base)
@@ -789,26 +882,30 @@ impl GitRepo {
 
     /// Resolve a branch name or ref to an OID
     fn resolve_to_oid(&self, refspec: &str) -> Result<git2::Oid> {
+        Self::resolve_to_oid_in(&self.repo, refspec)
+    }
+
+    fn resolve_to_oid_in(repo: &Repository, refspec: &str) -> Result<git2::Oid> {
         // Try as local branch first
-        if let Ok(branch) = self.repo.find_branch(refspec, BranchType::Local) {
+        if let Ok(branch) = repo.find_branch(refspec, BranchType::Local) {
             if let Some(oid) = branch.get().target() {
                 return Ok(oid);
             }
         }
         // Try as remote branch (e.g., "origin/main")
-        if let Ok(branch) = self.repo.find_branch(refspec, BranchType::Remote) {
+        if let Ok(branch) = repo.find_branch(refspec, BranchType::Remote) {
             if let Some(oid) = branch.get().target() {
                 return Ok(oid);
             }
         }
         // Try as reference
-        if let Ok(reference) = self.repo.find_reference(refspec) {
+        if let Ok(reference) = repo.find_reference(refspec) {
             if let Some(oid) = reference.target() {
                 return Ok(oid);
             }
         }
         // Try revparse
-        let obj = self.repo.revparse_single(refspec)?;
+        let obj = repo.revparse_single(refspec)?;
         Ok(obj.id())
     }
 
@@ -1082,9 +1179,7 @@ Use --auto-stash-pop or stash/commit changes first.",
         // No patch-id scanning; the old provenance path was the main source of
         // slowness (O(N) `git log -p` per branch) and spurious conflicts.
         let upstream_for_rebase = (!fallback_upstream.trim().is_empty()
-            && self
-                .is_ancestor(fallback_upstream, branch)
-                .unwrap_or(false))
+            && self.is_ancestor(fallback_upstream, branch).unwrap_or(false))
         .then(|| fallback_upstream.to_string());
 
         let git_rebase_started_at = Instant::now();
@@ -1176,7 +1271,8 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Check if a rebase is in progress
     pub fn rebase_in_progress(&self) -> Result<bool> {
-        self.rebase_in_progress_at(self.workdir()?)
+        let git_dir = self.repo.path();
+        Ok(git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists())
     }
 
     /// Check whether a rebase is in progress inside the given worktree path.
@@ -2133,6 +2229,54 @@ mod tests {
                 .expect("canonical workdir"),
             std::fs::canonicalize(path).expect("canonical temp repo path")
         );
+    }
+
+    #[test]
+    fn test_commits_ahead_behind_many_matches_single_queries() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+
+        run_git(path, &["checkout", "-b", "feature-a"]);
+        fs::write(path.join("a.txt"), "a\n").expect("write a");
+        run_git(path, &["add", "a.txt"]);
+        run_git(path, &["commit", "-m", "Feature A"]);
+
+        run_git(path, &["checkout", "main"]);
+        fs::write(path.join("main.txt"), "main\n").expect("write main");
+        run_git(path, &["add", "main.txt"]);
+        run_git(path, &["commit", "-m", "Main update"]);
+
+        run_git(path, &["checkout", "-b", "feature-b"]);
+        fs::write(path.join("b.txt"), "b\n").expect("write b");
+        run_git(path, &["add", "b.txt"]);
+        run_git(path, &["commit", "-m", "Feature B"]);
+
+        let repo = GitRepo {
+            repo: Repository::open(path).expect("open repo"),
+        };
+        let pairs = vec![
+            ("main".to_string(), "feature-a".to_string()),
+            ("main".to_string(), "feature-b".to_string()),
+        ];
+
+        let batch = repo.commits_ahead_behind_many(&pairs);
+
+        assert_eq!(batch.len(), pairs.len());
+        for ((base, head), result) in pairs.iter().zip(batch) {
+            assert_eq!(
+                result.expect("batch ahead/behind"),
+                repo.commits_ahead_behind(base, head)
+                    .expect("single ahead/behind")
+            );
+        }
     }
 
     #[test]

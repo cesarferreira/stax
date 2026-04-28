@@ -305,10 +305,8 @@ fn run_impl(
             },
         };
 
-        let restack_timer = LiveTimer::maybe_new(
-            !quiet,
-            &format!("{} onto {}", branch, parent_branch_name),
-        );
+        let restack_timer =
+            LiveTimer::maybe_new(!quiet, &format!("{} onto {}", branch, parent_branch_name));
 
         // Pre-stash dirty target worktrees so the rebase can proceed
         let target_workdir = repo.branch_rebase_target_workdir(branch)?;
@@ -336,16 +334,13 @@ fn run_impl(
                 let updated_meta = BranchMetadata {
                     parent_branch_name: parent_branch_name.clone(),
                     parent_branch_revision: new_parent_rev.clone(),
-                    pr_info: live_stack
-                        .branches
-                        .get(branch)
-                        .and_then(|br| {
-                            br.pr_number.map(|n| crate::engine::PrInfo {
-                                number: n,
-                                state: br.pr_state.clone().unwrap_or_default(),
-                                is_draft: br.pr_is_draft,
-                            })
-                        }),
+                    pr_info: live_stack.branches.get(branch).and_then(|br| {
+                        br.pr_number.map(|n| crate::engine::PrInfo {
+                            number: n,
+                            state: br.pr_state.clone().unwrap_or_default(),
+                            is_draft: br.pr_is_draft,
+                        })
+                    }),
                 };
                 updated_meta.write(repo.inner(), branch)?;
 

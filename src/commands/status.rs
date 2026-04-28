@@ -73,10 +73,6 @@ pub fn run(
     let git_dir = repo.git_dir()?;
 
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
-    let remote_branches = remote::get_remote_branches(workdir, config.remote_name())
-        .unwrap_or_default()
-        .into_iter()
-        .collect::<HashSet<_>>();
 
     // By default show all branches. Use --current to show only current stack.
     let allowed_branches = if let Some(ref filter) = stack_filter {
@@ -133,6 +129,11 @@ pub fn run(
     let mut ordered_branches: Vec<String> =
         display_branches.iter().map(|b| b.name.clone()).collect();
     ordered_branches.push(stack.trunk.clone());
+    let remote_branches = remote::get_existing_remote_branches_from_repo(
+        repo.inner(),
+        config.remote_name(),
+        &ordered_branches,
+    );
 
     // Load CI cache (refresh happens in `stax ci`)
     let cache = CiCache::load(git_dir);
@@ -145,30 +146,32 @@ pub fn run(
 
     let mut branch_statuses: Vec<BranchStatusJson> = Vec::new();
     let mut branch_status_map: HashMap<String, BranchStatusJson> = HashMap::new();
-    let linked_worktrees_by_branch: HashMap<String, String> = repo
-        .list_worktrees()?
-        .into_iter()
-        .filter(|worktree| !worktree.is_main && !worktree.is_prunable)
-        .filter_map(|worktree| worktree.branch.map(|branch| (branch, worktree.name)))
-        .collect();
+    let linked_worktrees_by_branch: HashMap<String, String> =
+        repo.linked_worktree_names_by_branch()?;
+    let ahead_behind_pairs = ordered_branches
+        .iter()
+        .map(|name| {
+            let base = if name == &stack.trunk {
+                format!("{}/{}", config.remote_name(), name)
+            } else {
+                stack
+                    .branches
+                    .get(name)
+                    .and_then(|b| b.parent.clone())
+                    .unwrap_or_else(|| stack.trunk.clone())
+            };
+            (base, name.clone())
+        })
+        .collect::<Vec<_>>();
+    let ahead_behind = repo.commits_ahead_behind_many(&ahead_behind_pairs);
 
-    for name in &ordered_branches {
+    for (idx, name) in ordered_branches.iter().enumerate() {
         let info = stack.branches.get(name);
         let parent = info.and_then(|b| b.parent.clone());
-        let is_trunk = name == &stack.trunk;
-
-        // For trunk, compare against remote tracking branch (e.g., origin/main)
-        // For other branches, compare against parent (using libgit2, no subprocess)
-        let (ahead, behind) = if is_trunk {
-            let remote_ref = format!("{}/{}", config.remote_name(), name);
-            repo.commits_ahead_behind(&remote_ref, name)
-                .unwrap_or((0, 0))
-        } else {
-            parent
-                .as_deref()
-                .and_then(|p| repo.commits_ahead_behind(p, name).ok())
-                .unwrap_or((0, 0))
-        };
+        let (ahead, behind) = ahead_behind
+            .get(idx)
+            .and_then(|result| result.as_ref().ok().copied())
+            .unwrap_or((0, 0));
         // Only compute line stats for JSON output (expensive subprocess per branch)
         let (lines_added, lines_deleted) = if json {
             parent

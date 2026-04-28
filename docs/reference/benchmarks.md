@@ -4,50 +4,50 @@ Absolute times vary by repo and machine. These `hyperfine` samples were captured
 
 | Command | [stax](https://github.com/cesarferreira/stax) | [freephite](https://github.com/bradymadden97/freephite) | [graphite](https://github.com/withgraphite/graphite-cli) |
 |---|---:|---:|---:|
-| `ls` | **45.5 ms** | 739.7 ms | 457.7 ms |
+| `ls` | **11.2 ms** | 2.413 s | 783.3 ms |
 | `rs` | **2.807 s** | 6.769 s | — |
 
 ```text
   ls — mean execution time (lower is better)
 
-  stax       ███                                                 45.5 ms
-  graphite   ███████████████████████████████                    457.7 ms
-  freephite  ██████████████████████████████████████████████████ 739.7 ms
+  stax       ▏                                                   11.2 ms
+  graphite   ████████████████                                    783.3 ms
+  freephite  ██████████████████████████████████████████████████  2.413 s
              ┬─────────┬─────────┬─────────┬─────────┬─────────┬
-             0        150       300       450       600       750 ms
+             0        500      1000      1500      2000      2500 ms
 ```
 
 `gt sync` was not captured, so the `rs` row has no Graphite comparison.
 
 **Summary**
 
-- `st ls` was ~**16.25×** faster than `fp ls`
-- `st ls` was ~**10.05×** faster than `gt ls`
+- `st ls` was ~**214.76×** faster than `fp ls`
+- `st ls` was ~**69.72×** faster than `gt ls`
 - `st rs` was ~**2.41×** faster than `fp rs`
 
 ## `ls`
 
 ```bash
-hyperfine 'stax ls' 'fp ls' 'gt ls' --warmup 2
+hyperfine 'stax ls' 'fp ls' 'gt ls' --warmup 5
 ```
 
 ```text
 Benchmark 1: stax ls
-  Time (mean ± σ):      45.5 ms ±   6.9 ms    [User: 10.0 ms, System: 12.0 ms]
-  Range (min … max):    40.3 ms …  89.5 ms    59 runs
+  Time (mean ± σ):      11.2 ms ±   0.8 ms    [User: 13.8 ms, System: 11.0 ms]
+  Range (min … max):     9.7 ms …  13.9 ms    174 runs
 
 Benchmark 2: fp ls
-  Time (mean ± σ):     739.7 ms ±  23.9 ms    [User: 353.1 ms, System: 208.9 ms]
-  Range (min … max):   705.2 ms … 769.8 ms    10 runs
+  Time (mean ± σ):      2.413 s ±  0.011 s    [User: 0.406 s, System: 0.250 s]
+  Range (min … max):    2.396 s …  2.427 s    10 runs
 
 Benchmark 3: gt ls
-  Time (mean ± σ):     457.7 ms ±  96.8 ms    [User: 239.3 ms, System: 88.4 ms]
-  Range (min … max):   355.0 ms … 647.4 ms    10 runs
+  Time (mean ± σ):     783.3 ms ±  38.0 ms    [User: 223.6 ms, System: 71.3 ms]
+  Range (min … max):   749.5 ms … 835.8 ms    10 runs
 
 Summary
   stax ls ran
-   10.05 ± 2.61 times faster than gt ls
-   16.25 ± 2.50 times faster than fp ls
+   69.72 ± 6.02 times faster than gt ls
+   214.76 ± 15.35 times faster than fp ls
 ```
 
 ## `rs`

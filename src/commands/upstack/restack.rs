@@ -99,11 +99,7 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
             },
         };
 
-        println!(
-            "  {} onto {}",
-            branch.white(),
-            parent_branch_name.blue()
-        );
+        println!("  {} onto {}", branch.white(), parent_branch_name.blue());
 
         match repo.rebase_branch_onto_with_provenance(
             branch,

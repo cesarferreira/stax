@@ -61,7 +61,8 @@ fn assert_status_clean(repo: &TestRepo) {
 #[test]
 fn modify_non_tty_bails_when_nothing_staged() {
     let repo = TestRepo::new();
-    repo.run_stax(&["bc", "feature-modify-bail"]).assert_success();
+    repo.run_stax(&["bc", "feature-modify-bail"])
+        .assert_success();
     repo.create_file("feature.txt", "initial");
     repo.commit("Initial feature");
 
@@ -140,7 +141,8 @@ fn modify_proceeds_when_something_is_pre_staged() {
 #[test]
 fn modify_interactive_stage_all_amends_changes() {
     let repo = TestRepo::new();
-    repo.run_stax(&["bc", "feature-menu-stage-all"]).assert_success();
+    repo.run_stax(&["bc", "feature-menu-stage-all"])
+        .assert_success();
     repo.create_file("feature.txt", "initial\n");
     repo.commit("Initial feature");
     let sha_before = repo.head_sha();
@@ -159,7 +161,8 @@ fn modify_interactive_stage_all_amends_changes() {
 #[test]
 fn modify_interactive_patch_amends_selected_hunk() {
     let repo = TestRepo::new();
-    repo.run_stax(&["bc", "feature-menu-patch"]).assert_success();
+    repo.run_stax(&["bc", "feature-menu-patch"])
+        .assert_success();
     repo.create_file("feature.txt", "initial\n");
     repo.commit("Initial feature");
     let sha_before = repo.head_sha();
@@ -178,7 +181,8 @@ fn modify_interactive_patch_amends_selected_hunk() {
 #[test]
 fn modify_interactive_continue_amends_message_only() {
     let repo = TestRepo::new();
-    repo.run_stax(&["bc", "feature-menu-continue"]).assert_success();
+    repo.run_stax(&["bc", "feature-menu-continue"])
+        .assert_success();
     repo.create_file("feature.txt", "initial\n");
     repo.commit("Initial feature");
     let sha_before = repo.head_sha();
@@ -193,7 +197,11 @@ fn modify_interactive_continue_amends_message_only() {
     );
     output.assert_success();
 
-    assert_ne!(sha_before, repo.head_sha(), "message-only amend rewrites HEAD");
+    assert_ne!(
+        sha_before,
+        repo.head_sha(),
+        "message-only amend rewrites HEAD"
+    );
     let subject = repo.git(&["log", "-1", "--pretty=%s"]);
     assert!(subject.status.success(), "{}", TestRepo::stderr(&subject));
     assert_eq!(TestRepo::stdout(&subject).trim(), "Updated message only");
@@ -203,7 +211,8 @@ fn modify_interactive_continue_amends_message_only() {
 #[test]
 fn modify_interactive_abort_keeps_head_and_worktree() {
     let repo = TestRepo::new();
-    repo.run_stax(&["bc", "feature-menu-abort"]).assert_success();
+    repo.run_stax(&["bc", "feature-menu-abort"])
+        .assert_success();
     repo.create_file("feature.txt", "initial\n");
     repo.commit("Initial feature");
     let sha_before = repo.head_sha();
@@ -327,8 +336,7 @@ fn create_m_interactive_patch_commits_selected_hunk() {
     repo.create_file("README.md", "# Test Repo\n\npatched through menu\n");
 
     let script = select_patch_and_stage_first_hunk();
-    let output =
-        common::run_stax_in_script(&repo.path(), &["create", "-m", "menu patch"], &script);
+    let output = common::run_stax_in_script(&repo.path(), &["create", "-m", "menu patch"], &script);
     output.assert_success();
 
     assert!(repo.current_branch().contains("menu-patch"));
@@ -347,8 +355,7 @@ fn create_m_interactive_empty_branch_keeps_worktree_changes() {
     repo.create_file("feature.txt", "left for later\n");
 
     let script = select_menu_option(2);
-    let output =
-        common::run_stax_in_script(&repo.path(), &["create", "-m", "menu empty"], &script);
+    let output = common::run_stax_in_script(&repo.path(), &["create", "-m", "menu empty"], &script);
     output.assert_success();
 
     assert!(repo.current_branch().contains("menu-empty"));
@@ -364,8 +371,7 @@ fn create_m_interactive_abort_leaves_no_branch() {
     repo.create_file("feature.txt", "left after abort\n");
 
     let script = select_menu_option(3);
-    let output =
-        common::run_stax_in_script(&repo.path(), &["create", "-m", "menu abort"], &script);
+    let output = common::run_stax_in_script(&repo.path(), &["create", "-m", "menu abort"], &script);
     output.assert_success();
     output.assert_stdout_contains("Aborted");
 

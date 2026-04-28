@@ -204,6 +204,21 @@ pub fn get_remote_branches(workdir: &Path, remote: &str) -> Result<Vec<String>> 
     Ok(branches)
 }
 
+pub fn get_existing_remote_branches_from_repo(
+    repo: &Repository,
+    remote: &str,
+    branches: &[String],
+) -> HashSet<String> {
+    branches
+        .iter()
+        .filter(|branch| {
+            repo.find_reference(&format!("refs/remotes/{}/{}", remote, branch))
+                .is_ok()
+        })
+        .cloned()
+        .collect()
+}
+
 /// Remote branch names from `git ls-remote --heads` (no object transfer).
 pub fn ls_remote_heads(workdir: &Path, remote: &str) -> Result<HashSet<String>> {
     let output = Command::new("git")
@@ -443,6 +458,68 @@ mod tests {
 
         let url = get_remote_url(path, "origin").unwrap();
         assert_eq!(url, "https://github.com/test/repo.git");
+    }
+
+    #[test]
+    fn test_get_existing_remote_branches_from_repo_checks_only_requested_branches() {
+        let dir = TempDir::new().expect("Failed to create temp dir");
+        let path = dir.path();
+
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to init git repo");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to set email");
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to set name");
+
+        std::fs::write(path.join("README.md"), "base\n").expect("Failed to write file");
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to add file");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to commit");
+        Command::new("git")
+            .args(["update-ref", "refs/remotes/origin/main", "HEAD"])
+            .current_dir(path)
+            .output()
+            .expect("Failed to create remote main ref");
+        Command::new("git")
+            .args([
+                "update-ref",
+                "refs/remotes/origin/feature/with-slash",
+                "HEAD",
+            ])
+            .current_dir(path)
+            .output()
+            .expect("Failed to create remote feature ref");
+
+        let repo = Repository::open(path).expect("Failed to open repo");
+        let branches = vec![
+            "main".to_string(),
+            "feature/with-slash".to_string(),
+            "missing".to_string(),
+        ];
+
+        let existing = get_existing_remote_branches_from_repo(&repo, "origin", &branches);
+
+        assert!(existing.contains("main"));
+        assert!(existing.contains("feature/with-slash"));
+        assert!(!existing.contains("missing"));
+        assert_eq!(existing.len(), 2);
     }
 
     #[test]
