@@ -54,7 +54,21 @@ fn checkout_lane_color(column: usize) -> CheckoutColor {
 }
 
 fn restack_label() -> String {
-    render_stderr("(needs restack)", Style::new().for_stderr().white())
+    render_stderr("(needs restack)", Style::new().for_stderr().white().bold())
+}
+
+fn behind_label(behind: usize) -> String {
+    render_stderr(
+        format!("{} behind", behind),
+        Style::new().for_stderr().red(),
+    )
+}
+
+fn ahead_label(ahead: usize) -> String {
+    render_stderr(
+        format!("{} ahead", ahead),
+        Style::new().for_stderr().green(),
+    )
 }
 
 fn render_stderr<T: Display>(value: T, style: Style) -> String {
@@ -355,10 +369,10 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
 
         if ahead > 0 || behind > 0 {
             if behind > 0 {
-                info_str.push_str(&format!(" {}", format!("{} behind", behind).red()));
+                info_str.push_str(&format!(" {}", behind_label(behind)));
             }
             if ahead > 0 {
-                info_str.push_str(&format!(" {}", format!("{} ahead", ahead).green()));
+                info_str.push_str(&format!(" {}", ahead_label(ahead)));
             }
         }
         if needs_restack {
@@ -602,6 +616,20 @@ mod tests {
     use crate::engine::stack::StackBranch;
     use regex::Regex;
     use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    static STDERR_COLOR_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_stderr_colors_enabled<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = STDERR_COLOR_LOCK
+            .lock()
+            .expect("stderr color lock poisoned");
+        let previous = console::colors_enabled_stderr();
+        console::set_colors_enabled_stderr(true);
+        let result = f();
+        console::set_colors_enabled_stderr(previous);
+        result
+    }
 
     fn test_stack() -> Stack {
         // main (trunk)
@@ -744,12 +772,9 @@ mod tests {
 
     #[test]
     fn test_checkout_style_uses_stderr_color_channel() {
-        let previous = console::colors_enabled_stderr();
-        console::set_colors_enabled_stderr(true);
-
-        let styled = render_stderr("branch", checkout_style(checkout_lane_color(0)).bold());
-
-        console::set_colors_enabled_stderr(previous);
+        let styled = with_stderr_colors_enabled(|| {
+            render_stderr("branch", checkout_style(checkout_lane_color(0)).bold())
+        });
         assert!(styled.contains("\x1b["));
     }
 
@@ -781,13 +806,15 @@ mod tests {
     }
 
     #[test]
-    fn checkout_restack_label_is_white() {
-        let previous = console::colors_enabled_stderr();
-        console::set_colors_enabled_stderr(true);
+    fn checkout_restack_label_is_bold_white() {
+        let label = with_stderr_colors_enabled(restack_label);
+        assert_eq!(label, "\u{1b}[37m\u{1b}[1m(needs restack)\u{1b}[0m");
+    }
 
-        let label = restack_label();
-
-        console::set_colors_enabled_stderr(previous);
-        assert_eq!(label, "\u{1b}[37m(needs restack)\u{1b}[0m");
+    #[test]
+    fn checkout_status_labels_use_stderr_colors() {
+        let (behind, ahead) = with_stderr_colors_enabled(|| (behind_label(4), ahead_label(6)));
+        assert_eq!(behind, "\u{1b}[31m4 behind\u{1b}[0m");
+        assert_eq!(ahead, "\u{1b}[32m6 ahead\u{1b}[0m");
     }
 }
