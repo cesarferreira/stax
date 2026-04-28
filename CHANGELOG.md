@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.62.0] - 2026-04-28
+
+### Added
+- Match `gt fold` semantics — preserve commits, reparent descendants, fix `--keep` (#344)
+
 ## [0.61.0] - 2026-04-28
 
 ### Changed
@@ -197,7 +202,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.61.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.62.0...HEAD
+[0.62.0]: https://github.com/cesarferreira/stax/compare/v0.61.0...v0.62.0
 [0.61.0]: https://github.com/cesarferreira/stax/compare/v0.60.0...v0.61.0
 [0.60.0]: https://github.com/cesarferreira/stax/compare/v0.59.0...v0.60.0
 [0.59.0]: https://github.com/cesarferreira/stax/compare/v0.58.0...v0.59.0
