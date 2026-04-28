@@ -503,7 +503,7 @@ Symbols:
 
 1. Keep branches small and reviewable.
 2. Sync often (`stax rs`).
-3. Restack after merges (`stax rs --restack`).
+3. Restack after merges (`stax rs --restack`); squash-merged local parents collapse to their updated parent before descendants rebase.
 4. Prefer amend flow (`stax m`) to keep one commit per branch.
 5. Validate and repair metadata (`stax validate`, `stax fix`) before deep stack surgery.
 6. Check stack shape (`stax ls` / `stax ll`) before submit or merge.

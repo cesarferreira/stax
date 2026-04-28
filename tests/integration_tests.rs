@@ -1662,6 +1662,60 @@ fn test_restack_after_parent_change() {
 }
 
 #[test]
+fn test_restack_collapses_squash_merged_parent_before_child() {
+    let repo = TestRepo::new();
+
+    repo.create_file("shared.txt", "base\n");
+    repo.commit("Add shared base");
+
+    repo.run_stax(&["bc", "squash-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("shared.txt", "parent part 1\n");
+    repo.commit("Parent part 1");
+    repo.create_file("shared.txt", "parent part 2\n");
+    repo.commit("Parent part 2");
+
+    repo.run_stax(&["bc", "squash-child"]);
+    let child = repo.current_branch();
+    repo.create_file("child.txt", "child-only\n");
+    repo.commit("Child only");
+
+    repo.run_stax(&["t"]);
+    let squash = repo.git(&["merge", "--squash", &parent]);
+    assert!(
+        squash.status.success(),
+        "Failed to squash merge parent:\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&squash),
+        TestRepo::stderr(&squash)
+    );
+    repo.commit("Squash parent into main");
+    let main_after_squash = repo.get_commit_sha("main");
+
+    repo.run_stax(&["checkout", &child]);
+    let output = repo.run_stax(&["restack", "--quiet"]);
+    assert!(
+        output.status.success(),
+        "restack should not replay squash-merged parent commits\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    assert_eq!(
+        repo.get_commit_sha(&parent),
+        main_after_squash,
+        "squash-merged parent should be collapsed to main before restacking child"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("shared.txt")).unwrap(),
+        "parent part 2\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("child.txt")).unwrap(),
+        "child-only\n"
+    );
+}
+
+#[test]
 fn test_restack_auto_normalizes_missing_parent() {
     let repo = TestRepo::new();
 

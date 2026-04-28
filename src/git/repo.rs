@@ -1008,6 +1008,20 @@ impl GitRepo {
         self.rebase_with_args_in_path(cwd, &["rebase", "--onto", onto, upstream])
     }
 
+    fn reset_hard_in_path(&self, cwd: &Path, target: &str) -> Result<()> {
+        let output = self.run_git(cwd, &["reset", "--hard", target])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git reset --hard {} failed in '{}': {}",
+                target,
+                cwd.display(),
+                stderr
+            );
+        }
+        Ok(())
+    }
+
     /// Resolve the worktree path where a branch rebase would run.
     /// Returns the linked worktree path if one exists, otherwise the main workdir.
     pub(crate) fn branch_rebase_target_workdir(&self, branch: &str) -> Result<PathBuf> {
@@ -1041,6 +1055,48 @@ impl GitRepo {
         }
 
         Ok((current_workdir, target_workdir))
+    }
+
+    /// Return true when merging `branch` into `base` would leave `base` unchanged.
+    ///
+    /// This catches squash merges where the branch commits are not ancestors of
+    /// `base`, but the branch's net tree changes are already present there.
+    fn branch_is_integrated_into(&self, base: &str, branch: &str) -> Result<bool> {
+        let merge_base = match self.merge_base_refs(base, branch) {
+            Ok(base) => base,
+            Err(_) => return Ok(false),
+        };
+
+        let output = self.run_git(
+            self.workdir()?,
+            &[
+                "merge-tree",
+                "--write-tree",
+                "--no-messages",
+                "--merge-base",
+                &merge_base,
+                base,
+                branch,
+            ],
+        )?;
+
+        if !output.status.success() {
+            return Ok(false);
+        }
+
+        let merged_tree = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| {
+                let trimmed = line.trim();
+                (!trimmed.is_empty()).then_some(trimmed.to_string())
+            });
+        let Some(merged_tree) = merged_tree else {
+            return Ok(false);
+        };
+
+        let base_oid = self.resolve_to_oid(base)?;
+        let base_tree = self.repo.find_commit(base_oid)?.tree_id().to_string();
+        Ok(merged_tree == base_tree)
     }
 
     fn run_patch_id_from_input(&self, cwd: &Path, input: &[u8]) -> Result<Vec<String>> {
@@ -1173,6 +1229,34 @@ Use --auto-stash-pop or stash/commit changes first.",
             timings.auto_stash_push = auto_stash_push_started_at.elapsed();
         }
 
+        let git_rebase_started_at = Instant::now();
+        if self
+            .branch_is_integrated_into(onto, branch)
+            .unwrap_or(false)
+        {
+            self.reset_hard_in_path(&target_workdir, onto)
+                .with_context(|| format!("Failed to move '{}' to '{}'", branch, onto))?;
+            timings.git_rebase = git_rebase_started_at.elapsed();
+
+            if stashed {
+                let auto_stash_pop_started_at = Instant::now();
+                self.stash_pop_at(&target_workdir).with_context(|| {
+                    format!(
+                        "Moved '{}' to '{}' successfully, but failed to auto-pop stash in '{}'",
+                        branch,
+                        onto,
+                        target_workdir.display()
+                    )
+                })?;
+                timings.auto_stash_pop = auto_stash_pop_started_at.elapsed();
+            }
+
+            return Ok(RebaseOutcome {
+                result: RebaseResult::Success,
+                timings,
+            });
+        }
+
         // Use the stored parent revision as upstream when it is a valid ancestor
         // of the branch.  This is the same strategy freephite uses:
         //   git rebase --onto <onto> <parent_branch_revision> <branch>
@@ -1182,7 +1266,6 @@ Use --auto-stash-pop or stash/commit changes first.",
             && self.is_ancestor(fallback_upstream, branch).unwrap_or(false))
         .then(|| fallback_upstream.to_string());
 
-        let git_rebase_started_at = Instant::now();
         let rebase_result = if let Some(upstream) = upstream_for_rebase.as_deref() {
             self.rebase_onto_upstream_in_path(&target_workdir, onto, upstream)
                 .with_context(|| {
@@ -2025,18 +2108,7 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Hard reset to a specific ref/OID
     pub fn reset_hard(&self, target: &str) -> Result<()> {
-        let status = Command::new("git")
-            .args(["reset", "--hard", target])
-            .current_dir(self.workdir()?)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .context("Failed to run git reset --hard")?;
-
-        if !status.success() {
-            anyhow::bail!("git reset --hard {} failed", target);
-        }
-        Ok(())
+        self.reset_hard_in_path(self.workdir()?, target)
     }
 
     /// Enable git rerere (reuse recorded resolution) for this repository

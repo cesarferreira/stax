@@ -38,6 +38,7 @@ st rs --restack
 ```
 
 `rs` pulls trunk and deletes the merged branch; `--restack` rebases the rest onto updated trunk and updates PR bases.
+If your repo squash-merges PRs, restack collapses local branches whose net changes are already in their parent before rebasing descendants, so already-landed commits are not replayed.
 
 ## Related
 
