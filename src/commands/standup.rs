@@ -87,6 +87,10 @@ pub enum SummaryStyle {
     Slack,
 }
 
+fn standup_progress_enabled(json: bool, plain_text: bool) -> bool {
+    !json && !plain_text
+}
+
 /// All collected standup activity in one place.
 struct StandupData {
     hours: i64,
@@ -161,11 +165,31 @@ pub fn run(
         bail!("--style only applies when used with --summary");
     }
 
-    let data = collect_standup_data(all, hours)?;
+    let show_progress = standup_progress_enabled(json, plain_text);
+
+    let collect_timer = LiveTimer::maybe_new_stderr(show_progress, "Collecting standup context...");
+    let data = match collect_standup_data(all, hours) {
+        Ok(data) => {
+            LiveTimer::maybe_finish_ok(collect_timer, "done");
+            data
+        }
+        Err(err) => {
+            LiveTimer::maybe_finish_err(collect_timer, "failed");
+            return Err(err);
+        }
+    };
+
     let (jit_summary, jit_error) = if jit {
+        let jit_timer = LiveTimer::maybe_new_stderr(show_progress, "Loading Jira context...");
         match collect_jit_summary(30) {
-            Ok(summary) => (Some(summary), None),
-            Err(err) => (None, Some(err.to_string())),
+            Ok(summary) => {
+                LiveTimer::maybe_finish_ok(jit_timer, "done");
+                (Some(summary), None)
+            }
+            Err(err) => {
+                LiveTimer::maybe_finish_warn(jit_timer, "unavailable");
+                (None, Some(err.to_string()))
+            }
         }
     } else {
         (None, None)
@@ -179,7 +203,7 @@ pub fn run(
                 jit_summary.as_ref(),
                 agent_flag.as_deref(),
                 model_flag.as_deref(),
-                true,
+                false,
                 summary_style,
             )?;
             let mut out = serde_json::json!({ "summary": raw.trim() });
@@ -197,7 +221,7 @@ pub fn run(
                 jit_summary.as_ref(),
                 agent_flag.as_deref(),
                 model_flag.as_deref(),
-                true,
+                false,
                 summary_style,
             )?;
             println!("{}", raw.trim());
@@ -216,7 +240,7 @@ pub fn run(
                 jit_summary.as_ref(),
                 agent_flag.as_deref(),
                 model_flag.as_deref(),
-                true,
+                show_progress,
                 summary_style,
             )?;
             println!("{}", raw.trim());
@@ -236,7 +260,7 @@ pub fn run(
             jit_summary.as_ref(),
             agent_flag.as_deref(),
             model_flag.as_deref(),
-            false,
+            show_progress,
             summary_style,
         )?;
         print_summary_card(raw.trim());
@@ -619,7 +643,7 @@ fn generate_summary(
     jit: Option<&JitSummary>,
     agent_flag: Option<&str>,
     model_flag: Option<&str>,
-    quiet: bool,
+    show_progress: bool,
     summary_style: SummaryStyle,
 ) -> Result<String> {
     let mut config = Config::load()?;
@@ -649,13 +673,13 @@ fn generate_summary(
         .or_else(|| config.ai.model_for("standup").map(String::from));
     let prompt = build_standup_prompt(data, jit, summary_style);
 
-    if quiet {
+    if !show_progress {
         let raw = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt)?;
         return Ok(raw);
     }
 
     generate::print_using_agent(&agent, model.as_deref());
-    let timer = LiveTimer::new("Generating standup summary...");
+    let timer = LiveTimer::new_stderr("Generating standup summary...");
     let result = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt);
     timer.finish_timed();
     result
@@ -1376,6 +1400,18 @@ mod tests {
         assert!(prompt.contains("feature-1"));
         assert!(prompt.contains("continue/polish/test/shepherd the specific work"));
         assert!(prompt.contains("Do not write generic Today bullets"));
+    }
+
+    #[test]
+    fn test_standup_progress_enabled_for_human_output() {
+        assert!(standup_progress_enabled(false, false));
+    }
+
+    #[test]
+    fn test_standup_progress_disabled_for_machine_readable_output() {
+        assert!(!standup_progress_enabled(true, false));
+        assert!(!standup_progress_enabled(false, true));
+        assert!(!standup_progress_enabled(true, true));
     }
 
     #[test]

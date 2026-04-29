@@ -9,6 +9,8 @@ st standup --all           # include all stacks
 st standup --json          # raw activity as JSON
 ```
 
+Human-readable standup output shows progress while stax collects Git/forge/Jira context. Use `--json` for machine-readable output without progress lines.
+
 ![Standup summary](../assets/standup.png)
 
 Shows merged PRs, opened PRs, recent pushes, and items needing attention. Works with GitHub, GitLab, and Gitea.
@@ -79,6 +81,8 @@ st standup --summary --style slack # Slack-ready Yesterday/Today bullets
 st standup --summary --plain-text  # raw text, pipe-friendly
 st standup --summary --json        # {"summary": "..."}
 ```
+
+Progress feedback is shown for the default card and Slack styles while context collection and AI generation run. Use `--summary --plain-text` or `--summary --json` when stdout must contain only the generated summary.
 
 ### Prerequisites
 
