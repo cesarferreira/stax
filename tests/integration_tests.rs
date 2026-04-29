@@ -2205,6 +2205,80 @@ fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
 }
 
 #[test]
+fn test_refresh_no_submit_handles_squash_merged_middle_branch() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "refresh-squash-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent 1\n");
+    repo.commit("Parent commit 1");
+    repo.create_file("parent.txt", "parent 1\nparent 2\n");
+    repo.commit("Parent commit 2");
+    repo.git(&["push", "-u", "origin", &parent]);
+
+    repo.run_stax(&["bc", "refresh-squash-child"]);
+    let child = repo.current_branch();
+    repo.create_file("child.txt", "child change\n");
+    repo.commit("Child commit");
+    repo.git(&["push", "-u", "origin", &child]);
+
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let clone_dir = test_tempdir();
+    let run_remote_git = |args: &[&str]| {
+        let output = hermetic_git_command()
+            .args(args)
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to run git in remote clone");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_remote_git(&["clone", remote_path.to_str().unwrap(), "."]);
+    run_remote_git(&["checkout", "-B", "main", "origin/main"]);
+    run_remote_git(&["config", "user.email", "merger@test.com"]);
+    run_remote_git(&["config", "user.name", "Merger"]);
+    run_remote_git(&["fetch", "origin", &parent]);
+    run_remote_git(&["merge", "--squash", &format!("origin/{}", parent)]);
+    run_remote_git(&["commit", "-m", "Squash merge parent"]);
+    run_remote_git(&["push", "origin", "main"]);
+    run_remote_git(&["push", "origin", "--delete", &parent]);
+
+    repo.run_stax(&["checkout", &child]);
+
+    let output = repo.run_stax(&["refresh", "--no-submit", "--force"]);
+    assert!(
+        output.status.success(),
+        "refresh --no-submit failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        !TestRepo::stdout(&output).contains("conflict"),
+        "Expected refresh to use provenance-aware sync restack without conflict.\nstdout: {}",
+        TestRepo::stdout(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.iter().any(|b| b == &parent),
+        "Expected merged parent branch to be deleted"
+    );
+
+    let count_output = repo.git(&["rev-list", "--count", &format!("main..{}", child)]);
+    assert!(count_output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&count_output.stdout).trim(),
+        "1",
+        "Expected child to keep only novel commits after refresh restack"
+    );
+}
+
+#[test]
 fn test_refresh_auto_stash_pop_restores_dirty_linked_worktree() {
     let repo = TestRepo::new_with_remote();
 
