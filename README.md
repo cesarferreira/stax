@@ -231,6 +231,7 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 ```bash
 st generate --pr-body      # draft/refresh PR body from branch diff + context
 st standup --summary       # spoken-style daily engineering summary
+st standup --summary --style slack  # Slack-ready Yesterday/Today bullets
 ```
 
 Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different agent/model. Configure with:

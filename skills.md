@@ -76,6 +76,7 @@ stax copy [--pr]               # Copy branch name or PR URL
 stax ci                        # CI status
 stax standup                   # Recent activity summary
 stax standup --summary         # AI-generated spoken standup update (colored card)
+stax standup --summary --style slack  # AI-generated Slack-ready Yesterday/Today bullets
 stax standup --summary --jit   # AI standup plus Jira next-up context via jit (github.com/cesarferreira/jit)
 stax changelog <from> [to]     # Changelog between refs
 stax generate --pr-body        # AI PR body generation
@@ -300,6 +301,7 @@ stax ci --verbose                  # Compact summary cards
 stax standup --hours 48            # Summarize recent activity window
 stax standup --all --json          # All stacks in JSON
 stax standup --summary             # AI spoken standup — colored card, word-wrapped
+stax standup --summary --style slack  # AI Slack-ready Yesterday/Today bullets
 stax standup --summary --agent claude  # Override AI agent for one run
 stax standup --summary --plain-text    # Raw text output (pipe-friendly)
 stax standup --summary --json          # {"summary": "..."} JSON

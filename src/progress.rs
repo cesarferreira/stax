@@ -6,6 +6,12 @@ use std::sync::{
 };
 use std::time::Duration;
 
+#[derive(Clone, Copy)]
+enum TimerOutput {
+    Stdout,
+    Stderr,
+}
+
 /// A live spinning timer that updates in-place while a long-running operation runs.
 ///
 /// Usage:
@@ -19,10 +25,19 @@ pub struct LiveTimer {
     message: String,
     stop_flag: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    output: TimerOutput,
 }
 
 impl LiveTimer {
     pub fn new(message: &str) -> Self {
+        Self::new_with_output(message, TimerOutput::Stdout)
+    }
+
+    pub fn new_stderr(message: &str) -> Self {
+        Self::new_with_output(message, TimerOutput::Stderr)
+    }
+
+    fn new_with_output(message: &str, output: TimerOutput) -> Self {
         let bar = ProgressBar::new_spinner();
         bar.set_style(
             ProgressStyle::default_spinner()
@@ -52,6 +67,7 @@ impl LiveTimer {
             message: message.to_string(),
             stop_flag,
             thread: Some(thread),
+            output,
         }
     }
 
@@ -65,10 +81,26 @@ impl LiveTimer {
         }
     }
 
+    /// Create a timer that prints its completion row on stderr.
+    pub fn maybe_new_stderr(enabled: bool, message: &str) -> Option<Self> {
+        if enabled {
+            Some(Self::new_stderr(message))
+        } else {
+            None
+        }
+    }
+
     fn stop_thread(&mut self) {
         self.stop_flag.store(true, Ordering::Relaxed);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
+        }
+    }
+
+    fn finish_line(&self, line: String) {
+        match self.output {
+            TimerOutput::Stdout => println!("{}", line),
+            TimerOutput::Stderr => eprintln!("{}", line),
         }
     }
 
@@ -78,13 +110,13 @@ impl LiveTimer {
         self.stop_thread();
         self.bar.finish_and_clear();
         let time_str = format!("{:.3}s", elapsed.as_secs_f64());
-        println!(
+        self.finish_line(format!(
             "  {} {:<35} {} {}",
             "✓".green(),
             self.message,
             suffix.green(),
             time_str.dimmed()
-        );
+        ));
     }
 
     /// Finish by printing a check mark, the step label, and its elapsed time as a timed table row:
@@ -94,12 +126,12 @@ impl LiveTimer {
         self.stop_thread();
         self.bar.finish_and_clear();
         let time_str = format!("{:.3}s", elapsed.as_secs_f64());
-        println!(
+        self.finish_line(format!(
             "  {} {:<35} {}",
             "✓".green(),
             self.message,
             time_str.dimmed()
-        );
+        ));
     }
 
     /// Finish as skipped/deferred — tabular row with a `○` icon and dimmed reason.
@@ -107,31 +139,31 @@ impl LiveTimer {
     pub fn finish_skipped(mut self, reason: &str) {
         self.stop_thread();
         self.bar.finish_and_clear();
-        println!(
+        self.finish_line(format!(
             "  {} {:<35} {}",
             "○".dimmed(),
             self.message,
             reason.dimmed()
-        );
+        ));
     }
 
     /// Finish with a yellow suffix (partial success / warning).
     pub fn finish_warn(mut self, suffix: &str) {
         self.stop_thread();
         self.bar.finish_and_clear();
-        println!(
+        self.finish_line(format!(
             "  {} {:<35} {}",
             "⚠".yellow(),
             self.message,
             suffix.yellow()
-        );
+        ));
     }
 
     /// Finish with a red suffix (failure).
     pub fn finish_err(mut self, suffix: &str) {
         self.stop_thread();
         self.bar.finish_and_clear();
-        println!("  {} {}", self.message, suffix.red());
+        self.finish_line(format!("  {} {}", self.message, suffix.red()));
     }
 
     // --- Option<LiveTimer> helpers ---

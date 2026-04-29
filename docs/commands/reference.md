@@ -249,6 +249,7 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 
 - `--all` / `--hours 48` / `--json`
 - `--summary` · `--summary --agent claude` · `--summary --hours 48`
+- `--summary --style slack`
 - `--summary --plain-text` / `--summary --json` / `--summary --jit`
 
 ### `st pr` / `st issue`

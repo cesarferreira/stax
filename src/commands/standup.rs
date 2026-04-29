@@ -80,6 +80,17 @@ struct JitSummary {
     next_up: Vec<JitTicket>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SummaryStyle {
+    #[default]
+    Spoken,
+    Slack,
+}
+
+fn standup_progress_enabled(json: bool, plain_text: bool) -> bool {
+    !json && !plain_text
+}
+
 /// All collected standup activity in one place.
 struct StandupData {
     hours: i64,
@@ -145,16 +156,40 @@ pub fn run(
     agent_flag: Option<String>,
     model_flag: Option<String>,
     plain_text: bool,
+    summary_style: SummaryStyle,
 ) -> Result<()> {
     if plain_text && !summary {
         bail!("--plain-text only applies when used with --summary");
     }
+    if summary_style != SummaryStyle::Spoken && !summary {
+        bail!("--style only applies when used with --summary");
+    }
 
-    let data = collect_standup_data(all, hours)?;
+    let show_progress = standup_progress_enabled(json, plain_text);
+
+    let collect_timer = LiveTimer::maybe_new_stderr(show_progress, "Collecting standup context...");
+    let data = match collect_standup_data(all, hours) {
+        Ok(data) => {
+            LiveTimer::maybe_finish_ok(collect_timer, "done");
+            data
+        }
+        Err(err) => {
+            LiveTimer::maybe_finish_err(collect_timer, "failed");
+            return Err(err);
+        }
+    };
+
     let (jit_summary, jit_error) = if jit {
+        let jit_timer = LiveTimer::maybe_new_stderr(show_progress, "Loading Jira context...");
         match collect_jit_summary(30) {
-            Ok(summary) => (Some(summary), None),
-            Err(err) => (None, Some(err.to_string())),
+            Ok(summary) => {
+                LiveTimer::maybe_finish_ok(jit_timer, "done");
+                (Some(summary), None)
+            }
+            Err(err) => {
+                LiveTimer::maybe_finish_warn(jit_timer, "unavailable");
+                (None, Some(err.to_string()))
+            }
         }
     } else {
         (None, None)
@@ -168,7 +203,8 @@ pub fn run(
                 jit_summary.as_ref(),
                 agent_flag.as_deref(),
                 model_flag.as_deref(),
-                true,
+                false,
+                summary_style,
             )?;
             let mut out = serde_json::json!({ "summary": raw.trim() });
             if jit {
@@ -185,7 +221,27 @@ pub fn run(
                 jit_summary.as_ref(),
                 agent_flag.as_deref(),
                 model_flag.as_deref(),
-                true,
+                false,
+                summary_style,
+            )?;
+            println!("{}", raw.trim());
+            return Ok(());
+        }
+        if summary_style == SummaryStyle::Slack {
+            if let Some(err) = &jit_error {
+                eprintln!(
+                    "{} {}",
+                    "Warning:".yellow().bold(),
+                    format!("could not load jit context ({})", err).dimmed()
+                );
+            }
+            let raw = generate_summary(
+                &data,
+                jit_summary.as_ref(),
+                agent_flag.as_deref(),
+                model_flag.as_deref(),
+                show_progress,
+                summary_style,
             )?;
             println!("{}", raw.trim());
             return Ok(());
@@ -204,7 +260,8 @@ pub fn run(
             jit_summary.as_ref(),
             agent_flag.as_deref(),
             model_flag.as_deref(),
-            false,
+            show_progress,
+            summary_style,
         )?;
         print_summary_card(raw.trim());
         return Ok(());
@@ -437,7 +494,11 @@ pub fn run(
     Ok(())
 }
 
-fn build_standup_prompt(data: &StandupData, jit: Option<&JitSummary>) -> String {
+fn build_standup_prompt(
+    data: &StandupData,
+    jit: Option<&JitSummary>,
+    summary_style: SummaryStyle,
+) -> String {
     let period = if data.hours == 24 {
         "last 24 hours".to_string()
     } else {
@@ -445,16 +506,35 @@ fn build_standup_prompt(data: &StandupData, jit: Option<&JitSummary>) -> String 
     };
 
     let mut prompt = String::new();
-    prompt.push_str(
-        "You are writing a standup update that will be spoken out loud in a team meeting. \
-        Write 2-3 short, natural sentences in first person. \
-        Focus on WHAT was worked on, not git mechanics. \
-        Do NOT mention PR numbers, branch names, commit counts, or Jira ticket IDs — those are noise. \
-        Do NOT list items — write flowing sentences like a human would say them. \
-        If there are branches needing restack or cleanup, just say something vague like \
-        \"I also have some branch cleanup to do\" — don't enumerate them. \
-        Past tense for finished work, present/future for what's next.\n\n",
-    );
+    match summary_style {
+        SummaryStyle::Spoken => prompt.push_str(
+            "You are writing a standup update that will be spoken out loud in a team meeting. \
+            Write 2-3 short, natural sentences in first person. \
+            Focus on WHAT was worked on, not git mechanics. \
+            Do NOT mention PR numbers, branch names, commit counts, or Jira ticket IDs — those are noise. \
+            Do NOT list items — write flowing sentences like a human would say them. \
+            If there are branches needing restack or cleanup, just say something vague like \
+            \"I also have some branch cleanup to do\" — don't enumerate them. \
+            Past tense for finished work, present/future for what's next.\n\n",
+        ),
+        SummaryStyle::Slack => prompt.push_str(
+            "You are writing a Slack standup update in the style of a team standup thread. \
+            Write in first person with exactly these two headings:\n\
+            Yesterday:\n\
+            Today:\n\
+            Under each heading, write 2-5 concise bullets using the `•` bullet character. \
+            Use Yesterday for completed or progressed work from the activity window. \
+            Use Today intelligently: carry unfinished or in-flight work forward into Today. \
+            If a branch, opened PR, Jira ticket with a PR, or recent branch work appears unfinished, \
+            say that you'll continue/polish/test/shepherd the specific work. \
+            Do not write generic Today bullets like \"Follow up on review feedback\", \
+            \"Do some branch/stack cleanup\", or \"Pick up the next Jira item\" unless there is no more specific signal. \
+            Focus on WHAT was worked on, not git mechanics. \
+            Do not include a name, timestamp, avatar, reactions, or preamble. \
+            Do not mention PR numbers, branch names, commit counts, or Jira ticket IDs unless the item would be unclear without it. \
+            Do not wrap the update in code fences.\n\n",
+        ),
+    }
     prompt.push_str(&format!("Activity from the {}:\n\n", period));
 
     if !data.merged_prs.is_empty() {
@@ -471,6 +551,29 @@ fn build_standup_prompt(data: &StandupData, jit: Option<&JitSummary>) -> String 
             prompt.push_str(&format!("- {}\n", pr.title));
         }
         prompt.push('\n');
+    }
+
+    if summary_style == SummaryStyle::Slack {
+        let recent_work: Vec<_> = data
+            .recent_pushes
+            .iter()
+            .filter(|push| push.commit_count > 0)
+            .collect();
+        if !recent_work.is_empty() {
+            prompt.push_str("Recent branch work that may continue today:\n");
+            for push in recent_work {
+                let commit_word = if push.commit_count == 1 {
+                    "commit"
+                } else {
+                    "commits"
+                };
+                prompt.push_str(&format!(
+                    "- {} ({} {}, most recent {})\n",
+                    push.branch, push.commit_count, commit_word, push.age
+                ));
+            }
+            prompt.push('\n');
+        }
     }
 
     // Deduplicate reviews by PR number so the same PR doesn't appear multiple times
@@ -525,7 +628,13 @@ fn build_standup_prompt(data: &StandupData, jit: Option<&JitSummary>) -> String 
         }
     }
 
-    prompt.push_str("Write only the standup update — no preamble, no labels, just the sentences.");
+    match summary_style {
+        SummaryStyle::Spoken => prompt.push_str(
+            "Write only the standup update — no preamble, no labels, just the sentences.",
+        ),
+        SummaryStyle::Slack => prompt
+            .push_str("Write only the Slack message — no preamble, no explanation, no code fence."),
+    }
     prompt
 }
 
@@ -534,7 +643,8 @@ fn generate_summary(
     jit: Option<&JitSummary>,
     agent_flag: Option<&str>,
     model_flag: Option<&str>,
-    quiet: bool,
+    show_progress: bool,
+    summary_style: SummaryStyle,
 ) -> Result<String> {
     let mut config = Config::load()?;
 
@@ -561,15 +671,15 @@ fn generate_summary(
     let model = model_flag
         .map(String::from)
         .or_else(|| config.ai.model_for("standup").map(String::from));
-    let prompt = build_standup_prompt(data, jit);
+    let prompt = build_standup_prompt(data, jit, summary_style);
 
-    if quiet {
+    if !show_progress {
         let raw = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt)?;
         return Ok(raw);
     }
 
     generate::print_using_agent(&agent, model.as_deref());
-    let timer = LiveTimer::new("Generating standup summary...");
+    let timer = LiveTimer::new_stderr("Generating standup summary...");
     let result = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt);
     timer.finish_timed();
     result
@@ -1216,6 +1326,92 @@ mod tests {
         assert!(json.contains("\"number\": 42"));
         assert!(json.contains("\"commit_count\": 3"));
         assert!(json.contains("feature-2"));
+    }
+
+    fn sample_standup_data() -> StandupData {
+        StandupData {
+            hours: 24,
+            current_branch: "feature-1".to_string(),
+            trunk: "main".to_string(),
+            merged_prs: vec![PrActivity {
+                number: 42,
+                title: "Add Slack-style standup summaries".to_string(),
+                timestamp: Utc::now() - Duration::hours(3),
+                url: "https://example.com/pulls/42".to_string(),
+            }],
+            opened_prs: vec![PrActivity {
+                number: 43,
+                title: "Wire summary style option through CLI".to_string(),
+                timestamp: Utc::now() - Duration::hours(1),
+                url: "https://example.com/pulls/43".to_string(),
+            }],
+            reviews_received: vec![],
+            reviews_given: vec![ReviewActivity {
+                pr_number: 44,
+                pr_title: "Review teammate branch".to_string(),
+                reviewer: "teammate".to_string(),
+                state: "COMMENTED".to_string(),
+                timestamp: Utc::now() - Duration::hours(2),
+                is_received: false,
+            }],
+            recent_pushes: vec![PushActivity {
+                branch: "feature-1".to_string(),
+                commit_count: 2,
+                age: "1h ago".to_string(),
+            }],
+            needs_attention: NeedsAttention {
+                branches_needing_restack: vec!["feature-1".to_string()],
+                ci_failing: vec![],
+                prs_with_requested_changes: vec![],
+            },
+        }
+    }
+
+    #[test]
+    fn test_build_standup_prompt_spoken_style_requests_sentences() {
+        let data = sample_standup_data();
+        let prompt = build_standup_prompt(&data, None, SummaryStyle::Spoken);
+
+        assert!(prompt.contains("spoken out loud"));
+        assert!(prompt.contains("Do NOT list items"));
+        assert!(prompt.contains("Write only the standup update"));
+    }
+
+    #[test]
+    fn test_build_standup_prompt_slack_style_requests_yesterday_today_bullets() {
+        let data = sample_standup_data();
+        let prompt = build_standup_prompt(&data, None, SummaryStyle::Slack);
+
+        assert!(prompt.contains("Slack"));
+        assert!(prompt.contains("Yesterday:"));
+        assert!(prompt.contains("Today:"));
+        assert!(prompt.contains("•"));
+        assert!(prompt.contains("Do not include a name, timestamp, avatar, reactions, or preamble"));
+        assert!(!prompt.contains("Do NOT list items"));
+    }
+
+    #[test]
+    fn test_build_standup_prompt_slack_style_carries_forward_unfinished_work() {
+        let data = sample_standup_data();
+        let prompt = build_standup_prompt(&data, None, SummaryStyle::Slack);
+
+        assert!(prompt.contains("carry unfinished or in-flight work forward into Today"));
+        assert!(prompt.contains("Recent branch work that may continue today:"));
+        assert!(prompt.contains("feature-1"));
+        assert!(prompt.contains("continue/polish/test/shepherd the specific work"));
+        assert!(prompt.contains("Do not write generic Today bullets"));
+    }
+
+    #[test]
+    fn test_standup_progress_enabled_for_human_output() {
+        assert!(standup_progress_enabled(false, false));
+    }
+
+    #[test]
+    fn test_standup_progress_disabled_for_machine_readable_output() {
+        assert!(!standup_progress_enabled(true, false));
+        assert!(!standup_progress_enabled(false, true));
+        assert!(!standup_progress_enabled(true, true));
     }
 
     #[test]
