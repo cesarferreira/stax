@@ -6,16 +6,24 @@ use crate::git::repo::WorktreeInfo;
 use crate::git::{checkout_branch_in, refs, GitRepo};
 use anyhow::Result;
 use colored::Colorize;
-use console::{truncate_str, Color, Style};
+use console::{colors_enabled_stderr, measure_text_width, truncate_str, Color, Style};
 use crossterm::terminal;
-use dialoguer::{theme::ColorfulTheme, FuzzySelect};
+use dialoguer::{
+    theme::{ColorfulTheme, Theme},
+    FuzzySelect,
+};
+use fuzzy_matcher::skim::SkimMatcherV2;
 use std::collections::HashSet;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::path::Path;
 
 const LINKED_WORKTREE_GLYPH: &str = "↳";
 const BRIGHT_BLUE: CheckoutColor = CheckoutColor::new(Color::Blue, true);
 const BRIGHT_CYAN: CheckoutColor = CheckoutColor::new(Color::Cyan, true);
+const CHECKOUT_PICKER_ITEM_SEPARATOR: char = '\u{1f}';
+const ACTIVE_ROW_BACKGROUND: &str = "\u{1b}[48;5;236m";
+const CHECKOUT_BRANCH_STYLE: &str = "\u{1b}[1;96m";
+const ANSI_RESET: &str = "\u{1b}[0m";
 
 #[derive(Clone, Copy)]
 struct CheckoutColor {
@@ -38,6 +46,47 @@ struct DisplayBranch {
 struct CheckoutRow {
     branch: String,
     display: String,
+    active_display: String,
+}
+
+struct CheckoutPickerTheme {
+    inner: ColorfulTheme,
+}
+
+impl Default for CheckoutPickerTheme {
+    fn default() -> Self {
+        Self {
+            inner: ColorfulTheme::default(),
+        }
+    }
+}
+
+impl Theme for CheckoutPickerTheme {
+    fn format_fuzzy_select_prompt_item(
+        &self,
+        f: &mut dyn fmt::Write,
+        text: &str,
+        active: bool,
+        _highlight_matches: bool,
+        _matcher: &SkimMatcherV2,
+        _search_term: &str,
+    ) -> fmt::Result {
+        if active {
+            write!(f, "{}", checkout_picker_item_display(text, true))
+        } else {
+            write!(f, "  {}", checkout_picker_item_display(text, false))
+        }
+    }
+
+    fn format_fuzzy_select_prompt(
+        &self,
+        f: &mut dyn fmt::Write,
+        prompt: &str,
+        search_term: &str,
+        bytes_pos: usize,
+    ) -> fmt::Result {
+        Theme::format_fuzzy_select_prompt(&self.inner, f, prompt, search_term, bytes_pos)
+    }
 }
 
 fn checkout_style(spec: CheckoutColor) -> Style {
@@ -73,6 +122,75 @@ fn ahead_label(ahead: usize) -> String {
 
 fn render_stderr<T: Display>(value: T, style: Style) -> String {
     format!("{}", style.apply_to(value))
+}
+
+fn checkout_completion_message(branch: &str) -> String {
+    format!(
+        "{} {}.",
+        "Checked out".green().bold(),
+        branch.bright_cyan().bold()
+    )
+}
+
+fn already_on_message(branch: &str) -> String {
+    format!(
+        "{} {}.",
+        "Already on".yellow().bold(),
+        branch.bright_cyan().bold()
+    )
+}
+
+fn checkout_completion_shell_message(branch: &str) -> String {
+    format!("Checked out {CHECKOUT_BRANCH_STYLE}{branch}{ANSI_RESET}.")
+}
+
+fn already_on_shell_message(branch: &str) -> String {
+    format!("Already on {CHECKOUT_BRANCH_STYLE}{branch}{ANSI_RESET}.")
+}
+
+fn active_checkout_row(text: &str, min_width: usize) -> String {
+    let mut row = text.to_string();
+    let visible_width = measure_text_width(text);
+    if visible_width < min_width {
+        row.push_str(&" ".repeat(min_width - visible_width));
+    }
+
+    if !colors_enabled_stderr() {
+        return row;
+    }
+
+    let mut highlighted = String::with_capacity(row.len() + ACTIVE_ROW_BACKGROUND.len() * 4);
+    highlighted.push_str(ACTIVE_ROW_BACKGROUND);
+
+    let mut remaining = row.as_str();
+    while let Some(reset_index) = remaining.find(ANSI_RESET) {
+        let end = reset_index + ANSI_RESET.len();
+        highlighted.push_str(&remaining[..end]);
+        highlighted.push_str(ACTIVE_ROW_BACKGROUND);
+        remaining = &remaining[end..];
+    }
+    highlighted.push_str(remaining);
+    highlighted.push_str(ANSI_RESET);
+    highlighted
+}
+
+fn checkout_picker_item(branch: &str, display: &str, active_display: &str) -> String {
+    format!(
+        "{branch}{CHECKOUT_PICKER_ITEM_SEPARATOR}{display}{CHECKOUT_PICKER_ITEM_SEPARATOR}{active_display}"
+    )
+}
+
+fn checkout_picker_item_display(item: &str, active: bool) -> &str {
+    let mut parts = item.splitn(3, CHECKOUT_PICKER_ITEM_SEPARATOR);
+    let _search_text = parts.next();
+    let inactive_display = parts.next();
+    let active_display = parts.next();
+
+    match (inactive_display, active_display) {
+        (Some(_inactive), Some(active_item)) if active => active_item,
+        (Some(inactive), Some(_)) => inactive,
+        _ => item,
+    }
 }
 
 pub fn run(
@@ -160,19 +278,13 @@ pub fn run(
                     return Ok(());
                 }
 
-                let items: Vec<String> = rows.iter().map(|r| r.display.clone()).collect();
+                let items: Vec<String> = rows
+                    .iter()
+                    .map(|r| checkout_picker_item(&r.branch, &r.display, &r.active_display))
+                    .collect();
                 let branch_names: Vec<String> = rows.iter().map(|r| r.branch.clone()).collect();
 
-                let theme = ColorfulTheme {
-                    active_item_style: console::Style::new().for_stderr().black().on_white().bold(),
-                    active_item_prefix: console::style("▶".to_string())
-                        .for_stderr()
-                        .black()
-                        .on_white()
-                        .bold(),
-                    inactive_item_prefix: console::style(" ".to_string()).for_stderr(),
-                    ..ColorfulTheme::default()
-                };
+                let theme = CheckoutPickerTheme::default();
 
                 let term = console::Term::stderr();
                 if term.is_term() {
@@ -186,10 +298,11 @@ pub fn run(
                     .unwrap_or(0);
 
                 let selection = FuzzySelect::with_theme(&theme)
-                    .with_prompt("Checkout a branch (type to filter)")
+                    .with_prompt("Checkout a branch (autocomplete or arrow keys)")
                     .items(&items)
                     .default(default_index)
                     .highlight_matches(false) // Disabled - conflicts with ANSI colors
+                    .report(false)
                     .interact()?;
 
                 branch_names[selection].clone()
@@ -230,9 +343,9 @@ pub fn run(
         )?;
     } else if target == current {
         if shell_output {
-            emit_shell_message(&format!("Already on '{}'", target));
+            emit_shell_message(&already_on_shell_message(&target));
         } else {
-            println!("Already on '{}'", target);
+            println!("{}", already_on_message(&target));
         }
     } else {
         if let Err(e) = refs::write_prev_branch_at(&workdir, &current) {
@@ -240,9 +353,9 @@ pub fn run(
         }
         checkout_branch_in(&workdir, &target)?;
         if shell_output {
-            emit_shell_message(&format!("Switched to branch '{}'", target));
+            emit_shell_message(&checkout_completion_shell_message(&target));
         } else {
-            println!("Switched to branch '{}'", target);
+            println!("{}", checkout_completion_message(&target));
         }
     }
 
@@ -310,7 +423,8 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
     }
 
     let tree_target_width = (max_column + 1) * 2;
-    let max_width = terminal_width().saturating_sub(1);
+    let picker_row_width = terminal_width().saturating_sub(1);
+    let item_width = picker_row_width.saturating_sub(2);
     let mut rows = Vec::new();
 
     for (i, db) in display_branches.iter().enumerate() {
@@ -379,10 +493,19 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
             info_str.push_str(&format!(" {}", restack_label()));
         }
 
-        let display = truncate_display(&format!("{}{}", tree, info_str), max_width);
+        let display = truncate_display(&format!("{}{}", tree, info_str), item_width);
+        let active_display = active_checkout_row(
+            &format!(
+                "{} {}",
+                render_stderr("›", Style::new().for_stderr().cyan().bold()),
+                display
+            ),
+            picker_row_width,
+        );
         rows.push(CheckoutRow {
             branch: branch.clone(),
             display,
+            active_display,
         });
     }
 
@@ -447,10 +570,19 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
         }
     }
 
-    let trunk_display = truncate_display(&format!("{}{}", trunk_tree, trunk_info), max_width);
+    let trunk_display = truncate_display(&format!("{}{}", trunk_tree, trunk_info), item_width);
+    let active_trunk_display = active_checkout_row(
+        &format!(
+            "{} {}",
+            render_stderr("›", Style::new().for_stderr().cyan().bold()),
+            trunk_display
+        ),
+        picker_row_width,
+    );
     rows.push(CheckoutRow {
         branch: stack.trunk.clone(),
         display: trunk_display,
+        active_display: active_trunk_display,
     });
 
     Ok(rows)
@@ -816,5 +948,82 @@ mod tests {
         let (behind, ahead) = with_stderr_colors_enabled(|| (behind_label(4), ahead_label(6)));
         assert_eq!(behind, "\u{1b}[31m4 behind\u{1b}[0m");
         assert_eq!(ahead, "\u{1b}[32m6 ahead\u{1b}[0m");
+    }
+
+    #[test]
+    fn checkout_completion_message_colors_status_and_branch() {
+        colored::control::set_override(true);
+        let message = checkout_completion_message("feature/payments-api");
+        colored::control::unset_override();
+
+        assert_eq!(strip_ansi(&message), "Checked out feature/payments-api.");
+        assert!(
+            message.contains("\u{1b}[32m") || message.contains("\u{1b}[1;32m"),
+            "Expected success text to include green styling, got: {message:?}"
+        );
+        assert!(
+            message.contains("\u{1b}[96m") || message.contains("\u{1b}[1;96m"),
+            "Expected branch text to include bright cyan styling, got: {message:?}"
+        );
+    }
+
+    #[test]
+    fn checkout_picker_item_uses_active_display_for_selected_row() {
+        let item = checkout_picker_item("feature/auth", "inactive row", "active row");
+
+        assert_eq!(checkout_picker_item_display(&item, false), "inactive row");
+        assert_eq!(checkout_picker_item_display(&item, true), "active row");
+    }
+
+    #[test]
+    fn active_checkout_row_uses_background_instead_of_guide_line() {
+        let active = with_stderr_colors_enabled(|| active_checkout_row("○   feature/auth", 20));
+
+        assert_eq!(strip_ansi(&active), "○   feature/auth    ");
+        assert!(
+            active.contains("\u{1b}[48;5;236m"),
+            "Expected active row background styling, got: {active:?}"
+        );
+        assert!(
+            !strip_ansi(&active).contains("───"),
+            "Active row should not draw a guide line: {active:?}"
+        );
+    }
+
+    #[test]
+    fn active_checkout_row_pads_colored_text_by_visible_width() {
+        let active = with_stderr_colors_enabled(|| {
+            active_checkout_row(
+                &render_stderr("○", checkout_style(checkout_lane_color(0))),
+                4,
+            )
+        });
+
+        assert_eq!(strip_ansi(&active), "○   ");
+    }
+
+    #[test]
+    fn active_picker_row_keeps_prefix_inside_row_width() {
+        let theme = CheckoutPickerTheme::default();
+        let active_display =
+            with_stderr_colors_enabled(|| active_checkout_row("› ○ feature/auth", 16));
+        let item = checkout_picker_item("feature/auth", "○ feature/auth", &active_display);
+        let mut rendered = String::new();
+
+        with_stderr_colors_enabled(|| {
+            Theme::format_fuzzy_select_prompt_item(
+                &theme,
+                &mut rendered,
+                &item,
+                true,
+                false,
+                &SkimMatcherV2::default(),
+                "",
+            )
+        })
+        .expect("format active picker item");
+
+        assert_eq!(strip_ansi(&rendered).chars().count(), 16);
+        assert!(strip_ansi(&rendered).starts_with('›'));
     }
 }

@@ -43,6 +43,7 @@ serde_json = "1"
 dialoguer = { version = "0.12", features = ["fuzzy-select", "editor"] }
 console = "0.16"
 colored = "3"
+fuzzy-matcher = "0.3"
 indicatif = "0.18"
 ratatui = "0.30"
 crossterm = "0.29"
