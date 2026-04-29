@@ -1,4 +1,7 @@
 use colored::Colorize;
+use serde::Deserialize;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 use update_informer::{registry, Check};
@@ -16,17 +19,21 @@ fn update_checks_disabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Detect how stax was installed based on binary path
+/// Detect how stax was installed based on binary path and installer metadata.
 pub(crate) fn detect_install_method() -> InstallMethod {
     match std::env::current_exe() {
-        Ok(path) => install_method_from_path(&path.to_string_lossy()),
-        Err(_) => InstallMethod::Cargo, // Default fallback
+        Ok(path) => {
+            let cargo_home = cargo_home_from_binary_path(&path).or_else(default_cargo_home);
+            install_method_from_path(&path, cargo_home.as_deref())
+        }
+        Err(_) => InstallMethod::Unknown,
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InstallMethod {
     Cargo,
+    CargoBinstall,
     Homebrew,
     Unknown,
 }
@@ -34,11 +41,52 @@ pub(crate) enum InstallMethod {
 impl InstallMethod {
     pub(crate) fn upgrade_command(&self) -> &'static str {
         match self {
-            InstallMethod::Cargo => "cargo install stax",
+            InstallMethod::Cargo => "cargo install stax --locked",
+            InstallMethod::CargoBinstall => "cargo binstall stax --force",
             InstallMethod::Homebrew => "brew upgrade stax",
-            InstallMethod::Unknown => "upgrade stax",
+            InstallMethod::Unknown => "manual upgrade required",
         }
     }
+}
+
+#[derive(Deserialize)]
+struct BinstallRecord {
+    name: String,
+}
+
+fn cargo_home_from_binary_path(path: &Path) -> Option<PathBuf> {
+    let bin_dir = path.parent()?;
+    if bin_dir.file_name()? == "bin" && bin_dir.parent()?.file_name()? == ".cargo" {
+        bin_dir.parent().map(Path::to_path_buf)
+    } else {
+        None
+    }
+}
+
+fn default_cargo_home() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("CARGO_HOME") {
+        return Some(PathBuf::from(path));
+    }
+
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join(".cargo"))
+}
+
+fn binstall_metadata_contains_stax(cargo_home: Option<&Path>) -> bool {
+    let Some(cargo_home) = cargo_home else {
+        return false;
+    };
+    let metadata_path = cargo_home.join("binstall").join("crates-v1.json");
+    let Ok(metadata) = fs::read_to_string(metadata_path) else {
+        return false;
+    };
+
+    // cargo-binstall stores concatenated JSON objects rather than a JSON array.
+    let stream = serde_json::Deserializer::from_str(&metadata).into_iter::<BinstallRecord>();
+    stream
+        .filter_map(Result::ok)
+        .any(|record| record.name == PKG_NAME)
 }
 
 /// Spawn a background thread to check for updates.
@@ -87,11 +135,16 @@ pub fn show_update_notification() {
 }
 
 /// Parse install method from a given path (for testing)
-fn install_method_from_path(path: &str) -> InstallMethod {
+fn install_method_from_path(path: &Path, cargo_home: Option<&Path>) -> InstallMethod {
+    let path = path.to_string_lossy();
     if path.contains("/homebrew/") || path.contains("/Cellar/") {
         InstallMethod::Homebrew
     } else if path.contains(".cargo/bin") {
-        InstallMethod::Cargo
+        if binstall_metadata_contains_stax(cargo_home) {
+            InstallMethod::CargoBinstall
+        } else {
+            InstallMethod::Cargo
+        }
     } else {
         InstallMethod::Unknown
     }
@@ -105,7 +158,7 @@ mod tests {
     fn test_detect_homebrew_arm() {
         let path = "/opt/homebrew/bin/stax";
         assert!(matches!(
-            install_method_from_path(path),
+            install_method_from_path(Path::new(path), None),
             InstallMethod::Homebrew
         ));
     }
@@ -114,7 +167,7 @@ mod tests {
     fn test_detect_homebrew_cellar_arm() {
         let path = "/opt/homebrew/Cellar/stax/0.5.0/bin/stax";
         assert!(matches!(
-            install_method_from_path(path),
+            install_method_from_path(Path::new(path), None),
             InstallMethod::Homebrew
         ));
     }
@@ -123,7 +176,7 @@ mod tests {
     fn test_detect_homebrew_intel() {
         let path = "/usr/local/Cellar/stax/0.5.0/bin/stax";
         assert!(matches!(
-            install_method_from_path(path),
+            install_method_from_path(Path::new(path), None),
             InstallMethod::Homebrew
         ));
     }
@@ -132,7 +185,7 @@ mod tests {
     fn test_detect_cargo() {
         let path = "/Users/cesar/.cargo/bin/stax";
         assert!(matches!(
-            install_method_from_path(path),
+            install_method_from_path(Path::new(path), None),
             InstallMethod::Cargo
         ));
     }
@@ -141,7 +194,7 @@ mod tests {
     fn test_detect_cargo_linux() {
         let path = "/home/user/.cargo/bin/stax";
         assert!(matches!(
-            install_method_from_path(path),
+            install_method_from_path(Path::new(path), None),
             InstallMethod::Cargo
         ));
     }
@@ -150,7 +203,7 @@ mod tests {
     fn test_detect_unknown_usr_local_bin() {
         let path = "/usr/local/bin/stax";
         assert!(matches!(
-            install_method_from_path(path),
+            install_method_from_path(Path::new(path), None),
             InstallMethod::Unknown
         ));
     }
@@ -159,14 +212,43 @@ mod tests {
     fn test_detect_unknown_custom_path() {
         let path = "/opt/mytools/stax";
         assert!(matches!(
-            install_method_from_path(path),
+            install_method_from_path(Path::new(path), None),
             InstallMethod::Unknown
         ));
     }
 
     #[test]
     fn test_upgrade_command_cargo() {
-        assert_eq!(InstallMethod::Cargo.upgrade_command(), "cargo install stax");
+        assert_eq!(
+            InstallMethod::Cargo.upgrade_command(),
+            "cargo install stax --locked"
+        );
+    }
+
+    #[test]
+    fn test_detect_cargo_binstall() {
+        let temp = tempfile::tempdir().expect("temp cargo home");
+        let metadata_dir = temp.path().join("binstall");
+        fs::create_dir_all(&metadata_dir).expect("metadata dir");
+        fs::write(
+            metadata_dir.join("crates-v1.json"),
+            r#"{"name":"other"}{"name":"stax"}"#,
+        )
+        .expect("metadata");
+
+        let path = "/home/user/.cargo/bin/stax";
+        assert!(matches!(
+            install_method_from_path(Path::new(path), Some(temp.path())),
+            InstallMethod::CargoBinstall
+        ));
+    }
+
+    #[test]
+    fn test_upgrade_command_cargo_binstall() {
+        assert_eq!(
+            InstallMethod::CargoBinstall.upgrade_command(),
+            "cargo binstall stax --force"
+        );
     }
 
     #[test]
@@ -179,6 +261,9 @@ mod tests {
 
     #[test]
     fn test_upgrade_command_unknown() {
-        assert_eq!(InstallMethod::Unknown.upgrade_command(), "upgrade stax");
+        assert_eq!(
+            InstallMethod::Unknown.upgrade_command(),
+            "manual upgrade required"
+        );
     }
 }

@@ -36,7 +36,12 @@ fn run_upgrade_command(install_method: InstallMethod) -> Result<std::process::Ex
     let mut command = match install_method {
         InstallMethod::Cargo => {
             let mut command = Command::new("cargo");
-            command.args(["install", "stax"]);
+            command.args(["install", "stax", "--locked"]);
+            command
+        }
+        InstallMethod::CargoBinstall => {
+            let mut command = Command::new("cargo");
+            command.args(["binstall", "stax", "--force"]);
             command
         }
         InstallMethod::Homebrew => {
@@ -45,22 +50,9 @@ fn run_upgrade_command(install_method: InstallMethod) -> Result<std::process::Ex
             command
         }
         InstallMethod::Unknown => {
-            #[cfg(windows)]
-            let mut command = {
-                let mut command = Command::new("cmd");
-                command.args(["/C", "upgrade stax"]);
-                command
-            };
-
-            #[cfg(not(windows))]
-            let command = {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-                let mut command = Command::new(shell);
-                command.args(["-c", "upgrade stax"]);
-                command
-            };
-
-            command
+            bail!(
+                "Unknown stax installation method. Reinstall or upgrade manually using one of the documented methods: `brew upgrade stax`, `cargo binstall stax --force`, or `cargo install stax --locked`."
+            );
         }
     };
 
