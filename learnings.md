@@ -1,6 +1,7 @@
-# Lessons
+# learnings.md
 
 - When changing the `stax co` UI, match the `stax ls` visual language (colors, tree/indentation) and confirm it visually. Do not ship a redesign without verifying the output looks like the `ls` tree and that selection emphasis is obvious.
+- When using `dialoguer::FuzzySelect` with pre-colored ANSI rows, do not rely on `ColorfulTheme::active_item_style` while `highlight_matches(false)` is set. Use a custom `Theme` with explicit active/inactive row renderings so selected-row styling still applies without corrupting ANSI color output.
 - Stack tree lane colors must come from `src/commands/stack_palette.rs`; do not duplicate per-command color arrays or `st ls`/`st co` will drift.
 - Interactive prompts rendered on `stderr` must style item text against `stderr` and gate interactivity on `stdin` + `stderr`; shell integration can capture stdout for `--shell-output` while dialoguer prompts still run on stderr.
 - TUI changes must be checked at standard terminal widths (around 80 columns); keep one-line summaries and footers compact, and prefer a single contextual action over listing every shortcut.
@@ -36,7 +37,7 @@
 - Dirty-worktree removal must use the same force/blocker policy across `wt rm`, `wt cleanup`, and `sync`: if the user confirmed "remove anyway" or passed `--force`, the eventual `git worktree remove` call must also be forced, and prompts must not promise a removal path that still falls through to a non-forced Git command.
 - When routing to an existing worktree, preserve a unique selector such as the worktree path or checked-out branch; never round-trip through the display basename because different worktrees can share the same leaf directory name.
 - Branch-switching commands in very large repos must drop live libgit2 repository handles before spawning `git checkout` or writing prev-branch refs; use path-based `git` subprocesses for the final handoff so checkout still works under file-descriptor pressure.
-- When a command needs to reopen a repository after an FD-heavy libgit2 phase, reopen from a saved repo path (`git_dir`/worktree path) instead of rediscovering `.`; `Repository::discover(\".\")` can fail under `EMFILE` even when the repo path is already known.
+- When a command needs to reopen a repository after an FD-heavy libgit2 phase, reopen from a saved repo path (`git_dir`/worktree path) instead of rediscovering `.`; `Repository::discover(".")` can fail under `EMFILE` even when the repo path is already known.
 - Stack/branch graph traversal in user-facing commands must be iterative and cycle-safe; do not recurse over metadata graphs that can be deep or corrupted by local refs.
 - For stack-merge flows that delete merged branches, always rebase and retarget descendant branches/PR bases before cleanup; deleting a base branch first can auto-close descendant PRs on GitHub.
 - Any descendant-rebase path (`merge`, `merge --when-ready`, `restack`, `upstack restack`, `sync --restack`) must preserve provenance boundaries (`parent_branch_revision` / old parent tip) and use provenance-aware rebase logic; plain `git rebase <trunk>` will replay already-integrated parent history after squash merges.

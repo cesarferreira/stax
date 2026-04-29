@@ -1019,6 +1019,34 @@ fn test_checkout_explicit_branch() {
 }
 
 #[test]
+fn test_checkout_explicit_branch_prints_clean_completion() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-1"]);
+    let feature_branch = repo.current_branch();
+    repo.run_stax(&["t"]);
+
+    let output = repo.run_stax(&["checkout", &feature_branch]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains(&format!("Checked out {}.", feature_branch)),
+        "Expected clean checkout completion, got:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Switched to branch"),
+        "Expected stax-native checkout wording, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn test_checkout_trunk_flag() {
     let repo = TestRepo::new();
 
