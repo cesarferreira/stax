@@ -23,6 +23,7 @@ Generate a concise spoken-style summary using your configured AI agent:
 st standup --summary
 st standup --summary --hours 48
 st standup --summary --agent claude
+st standup --summary --style slack  # Slack-ready Yesterday/Today bullets
 st standup --summary --jit       # add Jira context via jit
 ```
 
@@ -52,10 +53,29 @@ The summary is word-wrapped into a card fit to your terminal width:
 
 Key phrases are highlighted: completed work in green, new work in cyan, reviews in blue, upcoming tasks in yellow.
 
+For a copy-ready Slack update, use the Slack style:
+
+```bash
+st standup --summary --style slack
+```
+
+It prints plain text with the same shape as a team standup thread, carrying unfinished branch, PR, or Jira work into `Today` when the activity shows something is still in flight:
+
+```text
+Yesterday:
+• finished the billing webhook retry fix
+• opened the reporting dashboard cleanup for review
+
+Today:
+• handle review feedback
+• prepare the next analytics task
+```
+
 ### Output formats
 
 ```bash
 st standup --summary               # spinner + colored card (default)
+st standup --summary --style slack # Slack-ready Yesterday/Today bullets
 st standup --summary --plain-text  # raw text, pipe-friendly
 st standup --summary --json        # {"summary": "..."}
 ```

@@ -1564,6 +1564,42 @@ fn test_ci_command_flags() {
     );
 }
 
+// ============================================================================
+// Standup Command Tests
+// ============================================================================
+
+#[test]
+fn test_standup_command_flags_include_summary_style() {
+    let output = stax(&["standup", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--style"),
+        "Expected --style flag: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("spoken") && stdout.contains("slack"),
+        "Expected spoken and slack style values: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_standup_style_requires_summary() {
+    let output = stax(&["standup", "--style", "slack"]);
+    assert!(
+        !output.status.success(),
+        "expected standup --style slack without --summary to fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--summary"),
+        "expected error to mention --summary, got: {}",
+        stderr
+    );
+}
+
 #[test]
 fn test_submit_short_dash_f_is_rejected() {
     let output = stax(&["ss", "-f", "--help"]);

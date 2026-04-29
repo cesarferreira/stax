@@ -13,6 +13,7 @@
 - Background TUI loaders must distinguish queued work from actively running work; only mark an item as `loading` once its worker starts, or selection changes can leave stale loading state behind.
 - TUI/dashboard actions that shell back into `stax` must exit the alternate screen and drop live app/repo state before spawning the nested command; running child `stax` commands from inside an active dashboard can hit `EMFILE` in large repos.
 - When adding or changing CLI commands/flags, update both `README.md` and `docs/` command references in the same change and verify parity against `stax --help` before marking docs complete.
+- AI standup prompts that ask for `Today` must include concrete in-flight signals (recent branch work, opened PRs, or Jira tickets with PRs) and tell the model to carry unfinished work forward; otherwise the model fills missing context with generic review/cleanup/backlog bullets.
 - When a feature has both command docs and workflow guides, keep one canonical docs page for the command surface and have workflow pages link back to it instead of duplicating subcommand semantics.
 - Shell integration snippets that define common command names (`stax`, `st`, `sw`) must clear conflicting aliases first; zsh expands aliases while parsing function definitions and can abort shell startup otherwise.
 - Shared bash/zsh shell snippets must use shell-specific command lookup (`whence -p` in zsh, `type -P` in bash) when they need the real binary path; bash-only flags in shared wrappers can break every `st`/`stax` invocation on zsh.

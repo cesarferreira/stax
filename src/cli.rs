@@ -126,6 +126,21 @@ impl From<RestackSubmitAfter> for commands::restack::SubmitAfterRestack {
     }
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum StandupSummaryStyle {
+    Spoken,
+    Slack,
+}
+
+impl From<StandupSummaryStyle> for commands::standup::SummaryStyle {
+    fn from(value: StandupSummaryStyle) -> Self {
+        match value {
+            StandupSummaryStyle::Spoken => commands::standup::SummaryStyle::Spoken,
+            StandupSummaryStyle::Slack => commands::standup::SummaryStyle::Slack,
+        }
+    }
+}
+
 #[derive(Args, Clone, Default)]
 struct WorktreeLaunchArgs {
     /// Launch an AI agent after entering the worktree
@@ -837,6 +852,9 @@ enum Commands {
         /// Summarize standup using AI agent
         #[arg(long)]
         summary: bool,
+        /// AI summary style (spoken or Slack-ready bullets)
+        #[arg(long, value_enum, requires = "summary")]
+        style: Option<StandupSummaryStyle>,
         /// Include Jira sprint context from `jit` (https://github.com/cesarferreira/jit)
         #[arg(long)]
         jit: bool,
@@ -1938,11 +1956,22 @@ pub fn run() -> Result<()> {
             all,
             hours,
             summary,
+            style,
             jit,
             agent,
             model,
             plain_text,
-        } => commands::standup::run(json, all, hours, summary, jit, agent, model, plain_text),
+        } => commands::standup::run(
+            json,
+            all,
+            hours,
+            summary,
+            jit,
+            agent,
+            model,
+            plain_text,
+            style.map(Into::into).unwrap_or_default(),
+        ),
         Commands::Generate {
             pr_body,
             edit,
