@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.63.0] - 2026-04-29
+
+### Changed
+- Style checkout picker rows with active background (#345)
+
 ## [0.62.1] - 2026-04-28
 
 ### Changed
@@ -207,7 +212,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.62.1...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.63.0...HEAD
+[0.63.0]: https://github.com/cesarferreira/stax/compare/v0.62.1...v0.63.0
 [0.62.1]: https://github.com/cesarferreira/stax/compare/v0.62.0...v0.62.1
 [0.62.0]: https://github.com/cesarferreira/stax/compare/v0.61.0...v0.62.0
 [0.61.0]: https://github.com/cesarferreira/stax/compare/v0.60.0...v0.61.0
