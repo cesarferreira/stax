@@ -22,6 +22,7 @@ const BRIGHT_BLUE: CheckoutColor = CheckoutColor::new(Color::Blue, true);
 const BRIGHT_CYAN: CheckoutColor = CheckoutColor::new(Color::Cyan, true);
 const CHECKOUT_PICKER_ITEM_SEPARATOR: char = '\u{1f}';
 const ACTIVE_ROW_BACKGROUND: &str = "\u{1b}[48;5;236m";
+const CHECKOUT_BRANCH_STYLE: &str = "\u{1b}[1;96m";
 const ANSI_RESET: &str = "\u{1b}[0m";
 
 #[derive(Clone, Copy)]
@@ -137,6 +138,14 @@ fn already_on_message(branch: &str) -> String {
         "Already on".yellow().bold(),
         branch.bright_cyan().bold()
     )
+}
+
+fn checkout_completion_shell_message(branch: &str) -> String {
+    format!("Checked out {CHECKOUT_BRANCH_STYLE}{branch}{ANSI_RESET}.")
+}
+
+fn already_on_shell_message(branch: &str) -> String {
+    format!("Already on {CHECKOUT_BRANCH_STYLE}{branch}{ANSI_RESET}.")
 }
 
 fn active_checkout_row(text: &str, min_width: usize) -> String {
@@ -334,7 +343,7 @@ pub fn run(
         )?;
     } else if target == current {
         if shell_output {
-            emit_shell_message(&format!("Already on {}.", target));
+            emit_shell_message(&already_on_shell_message(&target));
         } else {
             println!("{}", already_on_message(&target));
         }
@@ -344,7 +353,7 @@ pub fn run(
         }
         checkout_branch_in(&workdir, &target)?;
         if shell_output {
-            emit_shell_message(&format!("Checked out {}.", target));
+            emit_shell_message(&checkout_completion_shell_message(&target));
         } else {
             println!("{}", checkout_completion_message(&target));
         }

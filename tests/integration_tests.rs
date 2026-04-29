@@ -1047,6 +1047,34 @@ fn test_checkout_explicit_branch_prints_clean_completion() {
 }
 
 #[test]
+fn test_checkout_shell_output_colors_branch_in_completion_message() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["bc", "feature-1"]);
+    let feature_branch = repo.current_branch();
+    repo.run_stax(&["t"]);
+
+    let output = repo.run_stax(&["checkout", &feature_branch, "--shell-output"]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains(&format!("STAX_SHELL_MESSAGE=Checked out ")),
+        "Expected shell completion message, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains(&format!("\u{1b}[1;96m{}\u{1b}[0m", feature_branch)),
+        "Expected colored branch in shell completion message, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn test_checkout_trunk_flag() {
     let repo = TestRepo::new();
 
