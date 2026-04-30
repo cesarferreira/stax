@@ -7,7 +7,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | Command | What it does |
 |---|---|
 | `st` | Launch the interactive TUI |
-| `st ls` | Show stack with PR and rebase status |
+| `st ls` | Show stack with PR, rebase, and metadata-repair status |
 | `st ll` | Like `st ls` plus PR URLs and detail |
 | `st create <name>` | Create a branch stacked on current |
 | `st create <name> --below` | Insert a new branch below current |

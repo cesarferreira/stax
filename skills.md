@@ -487,6 +487,7 @@ stax wt cleanup      # bulk-remove merged/detached lanes
 ```
 ◉  feature/validation 1↑         # ◉ = current branch, 1↑ = commits ahead of parent
 ○  feature/auth 1↓ 2↑ ⟳          # ⟳ = needs restack
+○  feature/old-base (missing parent: feature/base)
 │ ○    ☁ feature/payments PR #42 # ☁ = has remote, PR #N = open PR
 ○─┘    ☁ main                    # trunk branch
 ```
@@ -499,6 +500,7 @@ Symbols:
 - `↑` = commits ahead of parent
 - `↓` = commits behind parent
 - `⟳` = needs restacking (parent changed)
+- `(missing parent: X)` = branch metadata points to a deleted/missing parent; run `stax fix --yes`
 - `PR #N` = open PR
 
 ## Best Practices

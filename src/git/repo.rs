@@ -2220,22 +2220,6 @@ mod tests {
         );
     }
 
-    fn run_git_stdout(path: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(path)
-            .output()
-            .expect("failed to run git");
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout: {}\nstderr: {}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
-    }
-
     #[test]
     fn test_format_duration_just_now() {
         assert_eq!(format_duration(0), "just now");
