@@ -248,7 +248,7 @@ st config --set-ai
 | Command | What it does |
 |---|---|
 | `st` | Launch interactive TUI |
-| `st ls` / `st ll` | Show stack (with PR status / with PR URLs and details) |
+| `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st create <name>` | Create a branch stacked on current |
 | `st create <name> --below` | Insert a new branch below current |
 | `st ss` | Submit the full stack, open/update linked PRs |

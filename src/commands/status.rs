@@ -1,7 +1,7 @@
 use crate::cache::CiCache;
 use crate::commands::stack_palette;
 use crate::config::Config;
-use crate::engine::Stack;
+use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
@@ -26,6 +26,13 @@ fn restack_label() -> String {
     format!("{}", "(needs restack)".white().bold())
 }
 
+fn missing_parent_label(parent: &str) -> String {
+    format!(
+        "{}",
+        format!("(missing parent: {})", parent).yellow().bold()
+    )
+}
+
 #[derive(Serialize, Clone)]
 struct BranchStatusJson {
     name: String,
@@ -34,6 +41,7 @@ struct BranchStatusJson {
     is_trunk: bool,
     linked_worktree: Option<String>,
     needs_restack: bool,
+    missing_parent: Option<String>,
     pr_number: Option<u64>,
     pr_state: Option<String>,
     pr_is_draft: Option<bool>,
@@ -131,6 +139,7 @@ pub fn run(
         config.remote_name(),
         &ordered_branches,
     );
+    let missing_parent_by_branch = collect_missing_parent_branches(&repo, &stack);
 
     // Load CI cache (refresh happens in `stax ci`)
     let cache = CiCache::load(git_dir);
@@ -190,6 +199,7 @@ pub fn run(
         let pr_number = info.and_then(|b| b.pr_number);
         let pr_url = pr_number.and_then(|n| remote_info.as_ref().map(|r| r.pr_url(n)));
         let ci_state = ci_states.get(name).cloned();
+        let missing_parent = missing_parent_by_branch.get(name).cloned();
 
         let entry = BranchStatusJson {
             name: name.clone(),
@@ -198,6 +208,7 @@ pub fn run(
             is_trunk: name == &stack.trunk,
             linked_worktree: linked_worktrees_by_branch.get(name).cloned(),
             needs_restack: info.map(|b| b.needs_restack).unwrap_or(false),
+            missing_parent,
             pr_number,
             pr_state,
             pr_is_draft: info.and_then(|b| b.pr_is_draft),
@@ -230,6 +241,13 @@ pub fn run(
             let pr_state = entry.pr_state.clone().unwrap_or_default();
             let pr_number = entry.pr_number.map(|n| n.to_string()).unwrap_or_default();
             let ci_state = entry.ci_state.clone().unwrap_or_default();
+            let stack_status = if let Some(parent) = &entry.missing_parent {
+                format!("missing-parent:{}", parent)
+            } else if entry.needs_restack {
+                "restack".to_string()
+            } else {
+                String::new()
+            };
             println!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 entry.name,
@@ -239,7 +257,7 @@ pub fn run(
                 pr_number,
                 pr_state,
                 ci_state,
-                if entry.needs_restack { "restack" } else { "" }
+                stack_status
             );
         }
         return Ok(());
@@ -328,7 +346,9 @@ pub fn run(
                 }
                 info_str.push_str(&commits_str);
             }
-            if entry.needs_restack {
+            if let Some(parent) = &entry.missing_parent {
+                info_str.push_str(&format!(" {}", missing_parent_label(parent)));
+            } else if entry.needs_restack {
                 info_str.push_str(&format!(" {}", restack_label()));
             }
 
@@ -444,17 +464,40 @@ pub fn run(
         );
     }
 
-    // Show restack hint
+    // Show stack health hints
     let needs_restack = stack.needs_restack();
+    let restack_only: Vec<String> = needs_restack
+        .into_iter()
+        .filter(|branch| !missing_parent_by_branch.contains_key(branch))
+        .collect();
     let config = Config::load().unwrap_or_default();
-    if !quiet && config.ui.tips && !needs_restack.is_empty() {
+    let mut printed_stack_hint = false;
+    if !quiet && config.ui.tips && !missing_parent_by_branch.is_empty() {
         println!();
+        let count = missing_parent_by_branch.len();
+        println!(
+            "{} Run {} to repair.",
+            format!(
+                "! {} {} {} missing parent metadata.",
+                count,
+                if count == 1 { "branch" } else { "branches" },
+                if count == 1 { "has" } else { "have" }
+            )
+            .bright_yellow(),
+            "stax fix --yes".bright_cyan()
+        );
+        printed_stack_hint = true;
+    }
+    if !quiet && config.ui.tips && !restack_only.is_empty() {
+        if !printed_stack_hint {
+            println!();
+        }
         println!(
             "{} Run {} to rebase.",
             format!(
                 "⇅ {} {} need restacking.",
-                needs_restack.len(),
-                if needs_restack.len() == 1 {
+                restack_only.len(),
+                if restack_only.len() == 1 {
                     "branch"
                 } else {
                     "branches"
@@ -463,6 +506,7 @@ pub fn run(
             .bright_yellow(),
             "stax rs --restack".bright_cyan()
         );
+        printed_stack_hint = true;
     }
 
     // Show additional stats only in verbose mode (ll command)
@@ -485,7 +529,7 @@ pub fn run(
 
         // Only show summary if there are branches to show
         if total_branches > 0 {
-            if needs_restack.is_empty() {
+            if !printed_stack_hint {
                 println!(); // Add newline if we didn't already print restack hint
             }
             let mut stats = vec![format!(
@@ -588,6 +632,25 @@ fn collect_display_branches_with_nesting(
             }
         }
     }
+}
+
+fn collect_missing_parent_branches(repo: &GitRepo, stack: &Stack) -> HashMap<String, String> {
+    let mut missing = HashMap::new();
+
+    for name in stack.branches.keys().filter(|name| *name != &stack.trunk) {
+        let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), name) else {
+            continue;
+        };
+        let parent = meta.parent_branch_name.trim();
+        if parent.is_empty() || parent == stack.trunk {
+            continue;
+        }
+        if repo.branch_commit(parent).is_err() {
+            missing.insert(name.clone(), parent.to_string());
+        }
+    }
+
+    missing
 }
 
 #[cfg(test)]

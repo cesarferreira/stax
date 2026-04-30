@@ -26,6 +26,7 @@ st checkout --child 1     # jump to first child
 ```text
 ○        feature/validation 1↑
 ◉        feature/auth       1↓ 2↑ ⟳
+○        feature/old-base   (missing parent: feature/base)
 │ ○    ☁ feature/payments   PR #42
 ○─┘    ☁ main
 ```
@@ -38,4 +39,5 @@ st checkout --child 1     # jump to first child
 | `1↑` | Commits ahead of parent |
 | `1↓` | Commits behind parent |
 | `⟳` | Needs restack |
+| `(missing parent: X)` | Metadata points to a deleted or missing parent; run `st fix --yes` |
 | `PR #42` | Open pull request |

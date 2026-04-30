@@ -97,13 +97,13 @@ impl Stack {
             }
         }
 
-        // Collect direct children of trunk (including orphaned branches)
-        let mut trunk_children: Vec<String> = branches
+        // Collect direct children of trunk, including orphaned branches that
+        // were reparented to trunk above.
+        let trunk_children: Vec<String> = branches
             .values()
             .filter(|b| b.parent.as_ref() == Some(&trunk))
             .map(|b| b.name.clone())
             .collect();
-        trunk_children.extend(orphaned_branches);
 
         // Add trunk as a root
         branches.insert(
