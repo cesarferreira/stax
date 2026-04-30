@@ -49,6 +49,63 @@ struct CachedDiff {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct DiffRequest {
+    branch: String,
+    parent: String,
+    key: String,
+}
+
+impl DiffRequest {
+    fn new(branch: String, parent: String) -> Self {
+        let key = format!("{}...{}", parent, branch);
+        Self {
+            branch,
+            parent,
+            key,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum DiffUpdate {
+    Loaded {
+        request: DiffRequest,
+        diff: CachedDiff,
+    },
+    Unavailable {
+        request: DiffRequest,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct BranchDetails {
+    ahead: usize,
+    behind: usize,
+    has_remote: bool,
+    unpushed: usize,
+    unpulled: usize,
+    commits: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct BranchDetailsRequest {
+    name: String,
+    parent: Option<String>,
+}
+
+#[derive(Debug)]
+enum BranchDetailsUpdate {
+    Loaded {
+        branch: String,
+        details: BranchDetails,
+    },
+    Unavailable {
+        branch: String,
+    },
+    Done,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchCiSummary {
     pub overall_status: Option<String>,
     pub total: usize,
@@ -217,6 +274,19 @@ pub struct BranchDisplay {
     pub pr_state: Option<String>,
     pub ci_state: Option<String>,
     pub commits: Vec<String>,
+    pub details_loaded: bool,
+}
+
+impl BranchDisplay {
+    fn apply_details(&mut self, details: BranchDetails) {
+        self.ahead = details.ahead;
+        self.behind = details.behind;
+        self.has_remote = details.has_remote;
+        self.unpushed = details.unpushed;
+        self.unpulled = details.unpulled;
+        self.commits = details.commits;
+        self.details_loaded = true;
+    }
 }
 
 /// Which pane is focused
@@ -340,6 +410,11 @@ pub struct App {
     ci_loader: Option<Receiver<CiUpdate>>,
     ci_loading_branch: Option<String>,
     ci_queued_branch: Option<String>,
+    branch_details_queued: bool,
+    branch_details_loader: Option<Receiver<BranchDetailsUpdate>>,
+    diff_loader: Option<Receiver<DiffUpdate>>,
+    diff_loading: Option<DiffRequest>,
+    diff_queued: Option<DiffRequest>,
 }
 
 impl App {
@@ -387,6 +462,11 @@ impl App {
             ci_loader: None,
             ci_loading_branch: None,
             ci_queued_branch: None,
+            branch_details_queued: false,
+            branch_details_loader: None,
+            diff_loader: None,
+            diff_loading: None,
+            diff_queued: None,
         };
 
         app.refresh_branches()?;
@@ -395,7 +475,7 @@ impl App {
         } else {
             app.select_current_branch();
         }
-        app.update_diff();
+        app.queue_diff_refresh_for_selected();
         app.queue_ci_refresh_for_selected();
 
         Ok(app)
@@ -408,7 +488,8 @@ impl App {
         self.branches = self.build_branch_list()?;
         self.diff_cache.clear();
         self.needs_refresh = false;
-        self.update_diff();
+        self.branch_details_queued = true;
+        self.queue_diff_refresh_for_selected();
         self.queue_ci_refresh_for_selected();
         Ok(())
     }
@@ -425,7 +506,7 @@ impl App {
 
         if trunk_children.is_empty() {
             // Only trunk exists
-            branches.push(self.create_branch_display(trunk, 0, true)?);
+            branches.push(self.create_branch_display(trunk, 0, true));
             return Ok(branches);
         }
 
@@ -439,7 +520,7 @@ impl App {
         }
 
         // Add trunk at the end
-        branches.push(self.create_branch_display(trunk, 0, true)?);
+        branches.push(self.create_branch_display(trunk, 0, true));
 
         Ok(branches)
     }
@@ -470,7 +551,7 @@ impl App {
             if frame.expanded {
                 visiting.remove(&frame.branch);
                 if emitted.insert(frame.branch.clone()) {
-                    result.push(self.create_branch_display(&frame.branch, frame.column, false)?);
+                    result.push(self.create_branch_display(&frame.branch, frame.column, false));
                 }
                 continue;
             }
@@ -507,68 +588,33 @@ impl App {
         Ok(())
     }
 
-    fn create_branch_display(
-        &self,
-        branch: &str,
-        column: usize,
-        is_trunk: bool,
-    ) -> Result<BranchDisplay> {
+    fn create_branch_display(&self, branch: &str, column: usize, is_trunk: bool) -> BranchDisplay {
         let is_current = branch == self.current_branch;
         let info = self.stack.branches.get(branch);
-
-        let (ahead, behind) = if let Some(info) = info {
-            if let Some(parent) = &info.parent {
-                self.repo
-                    .commits_ahead_behind(parent, branch)
-                    .unwrap_or((0, 0))
-            } else {
-                (0, 0)
-            }
-        } else {
-            (0, 0)
-        };
-
         let needs_restack = info.map(|i| i.needs_restack).unwrap_or(false);
-        let has_remote = self.repo.has_remote(branch);
-
-        // Get ahead/behind vs remote
-        let (unpushed, unpulled) = self.repo.commits_vs_remote(branch).unwrap_or((0, 0));
-
         let pr_number = info.and_then(|i| i.pr_number);
         let pr_state = info.and_then(|i| i.pr_state.clone());
         let parent = info.and_then(|i| i.parent.clone());
-
-        // Get commits for this branch
-        let commits = if let Some(parent) = &parent {
-            self.repo
-                .commits_between(parent, branch)
-                .unwrap_or_default()
-                .into_iter()
-                .take(10)
-                .collect()
-        } else {
-            Vec::new()
-        };
-
         let ci_state = self.cache.get_ci_state(branch);
 
-        Ok(BranchDisplay {
+        BranchDisplay {
             name: branch.to_string(),
             parent,
             column,
             is_current,
             is_trunk,
-            ahead,
-            behind,
+            ahead: 0,
+            behind: 0,
             needs_restack,
-            has_remote,
-            unpushed,
-            unpulled,
+            has_remote: false,
+            unpushed: 0,
+            unpulled: 0,
             pr_number,
             pr_state,
             ci_state,
-            commits,
-        })
+            commits: Vec::new(),
+            details_loaded: is_trunk,
+        }
     }
 
     /// Select the current branch in the list
@@ -576,6 +622,7 @@ impl App {
         if let Some(idx) = self.branches.iter().position(|b| b.is_current) {
             self.selected_index = idx;
         }
+        self.queue_diff_refresh_for_selected();
         self.queue_ci_refresh_for_selected();
     }
 
@@ -583,13 +630,13 @@ impl App {
     pub fn select_branch(&mut self, branch: &str) {
         if let Some(idx) = self.branches.iter().position(|b| b.name == branch) {
             self.selected_index = idx;
-            self.update_diff();
+            self.queue_diff_refresh_for_selected();
             self.queue_ci_refresh_for_selected();
             return;
         }
 
         self.select_current_branch();
-        self.update_diff();
+        self.queue_diff_refresh_for_selected();
     }
 
     /// Get the currently selected branch
@@ -613,7 +660,7 @@ impl App {
 
         if len > 0 && self.selected_index > 0 {
             self.selected_index -= 1;
-            self.update_diff();
+            self.queue_diff_refresh_for_selected();
             self.queue_ci_refresh_for_selected();
         }
     }
@@ -628,7 +675,7 @@ impl App {
 
         if len > 0 && self.selected_index < len - 1 {
             self.selected_index += 1;
-            self.update_diff();
+            self.queue_diff_refresh_for_selected();
             self.queue_ci_refresh_for_selected();
         }
     }
@@ -728,8 +775,8 @@ impl App {
         self.move_picker_selected = 0;
     }
 
-    /// Update the diff for the currently selected branch
-    pub fn update_diff(&mut self) {
+    /// Queue a background diff refresh for the currently selected branch.
+    pub fn queue_diff_refresh_for_selected(&mut self) {
         self.selected_diff.clear();
         self.diff_stat.clear();
         self.diff_scroll = 0;
@@ -742,58 +789,32 @@ impl App {
             None => return,
         };
 
-        let cache_key = format!("{}...{}", parent_name, branch_name);
-        if let Some(cached) = self.diff_cache.get(&cache_key) {
+        let request = DiffRequest::new(branch_name, parent_name);
+        if let Some(cached) = self.diff_cache.get(&request.key) {
             self.diff_stat = cached.stat.clone();
             self.selected_diff = cached.lines.clone();
             return;
         }
 
-        // Get diff stat
-        if let Ok(stats) = self.repo.diff_stat(&branch_name, &parent_name) {
-            self.diff_stat = stats
-                .into_iter()
-                .map(|(file, additions, deletions)| DiffStatLine {
-                    file,
-                    additions,
-                    deletions,
-                })
-                .collect();
+        if self.diff_loading.as_ref() == Some(&request) {
+            return;
         }
 
-        // Get full diff
-        if let Ok(lines) = self.repo.diff_against_parent(&branch_name, &parent_name) {
-            self.selected_diff = lines
-                .into_iter()
-                .map(|line| {
-                    let line_type = if line.starts_with("+++") || line.starts_with("---") {
-                        DiffLineType::Header
-                    } else if line.starts_with('+') {
-                        DiffLineType::Addition
-                    } else if line.starts_with('-') {
-                        DiffLineType::Deletion
-                    } else if line.starts_with("@@") {
-                        DiffLineType::Hunk
-                    } else if line.starts_with("diff ") || line.starts_with("index ") {
-                        DiffLineType::Header
-                    } else {
-                        DiffLineType::Context
-                    };
-                    DiffLine {
-                        content: line,
-                        line_type,
-                    }
-                })
-                .collect();
-        }
+        self.diff_queued = Some(request);
+    }
 
-        self.diff_cache.insert(
-            cache_key,
-            CachedDiff {
-                stat: self.diff_stat.clone(),
-                lines: self.selected_diff.clone(),
-            },
-        );
+    pub fn is_selected_diff_loading(&self) -> bool {
+        let Some(request) = self.selected_diff_request() else {
+            return false;
+        };
+
+        self.diff_queued.as_ref() == Some(&request) || self.diff_loading.as_ref() == Some(&request)
+    }
+
+    fn selected_diff_request(&self) -> Option<DiffRequest> {
+        let branch = self.selected_branch()?;
+        let parent = branch.parent.as_ref()?;
+        Some(DiffRequest::new(branch.name.clone(), parent.clone()))
     }
 
     /// Calculate total scrollable lines in diff view (stats header + diff content)
@@ -832,8 +853,12 @@ impl App {
     }
 
     pub fn refresh_background(&mut self) {
+        self.poll_branch_details_updates();
+        self.poll_diff_updates();
         self.poll_ci_updates();
+        self.spawn_branch_details_loader_if_needed();
         self.queue_ci_refresh_for_selected();
+        self.spawn_diff_loader_if_needed();
         self.spawn_ci_loader_if_needed();
     }
 
@@ -876,6 +901,10 @@ impl App {
             return;
         };
 
+        if !selected.details_loaded {
+            return;
+        }
+
         if !selected.has_remote {
             self.ci_states.insert(
                 branch,
@@ -908,6 +937,124 @@ impl App {
 
         if should_queue {
             self.ci_queued_branch = Some(branch);
+        }
+    }
+
+    fn spawn_branch_details_loader_if_needed(&mut self) {
+        if !self.branch_details_queued || self.branch_details_loader.is_some() {
+            return;
+        }
+
+        let requests = self
+            .branches
+            .iter()
+            .filter(|branch| !branch.is_trunk)
+            .map(|branch| BranchDetailsRequest {
+                name: branch.name.clone(),
+                parent: branch.parent.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        self.branch_details_queued = false;
+        self.branch_details_loader = (!requests.is_empty())
+            .then(|| spawn_branch_details_loader(self.git_dir.clone(), requests));
+    }
+
+    fn poll_branch_details_updates(&mut self) {
+        loop {
+            let update = match self.branch_details_loader.as_ref() {
+                Some(loader) => match loader.try_recv() {
+                    Ok(update) => Some(update),
+                    Err(TryRecvError::Empty) => None,
+                    Err(TryRecvError::Disconnected) => {
+                        self.branch_details_loader = None;
+                        None
+                    }
+                },
+                None => None,
+            };
+
+            let Some(update) = update else {
+                break;
+            };
+            self.apply_branch_details_update(update);
+        }
+    }
+
+    fn apply_branch_details_update(&mut self, update: BranchDetailsUpdate) {
+        match update {
+            BranchDetailsUpdate::Loaded { branch, details } => {
+                if let Some(branch_display) =
+                    self.branches.iter_mut().find(|item| item.name == branch)
+                {
+                    branch_display.apply_details(details);
+                }
+            }
+            BranchDetailsUpdate::Unavailable { branch } => {
+                if let Some(branch_display) =
+                    self.branches.iter_mut().find(|item| item.name == branch)
+                {
+                    branch_display.details_loaded = true;
+                }
+            }
+            BranchDetailsUpdate::Done => {
+                self.branch_details_loader = None;
+            }
+        }
+    }
+
+    fn poll_diff_updates(&mut self) {
+        loop {
+            let update = match self.diff_loader.as_ref() {
+                Some(loader) => match loader.try_recv() {
+                    Ok(update) => Some(update),
+                    Err(TryRecvError::Empty) => None,
+                    Err(TryRecvError::Disconnected) => {
+                        self.diff_loader = None;
+                        self.diff_loading = None;
+                        None
+                    }
+                },
+                None => None,
+            };
+
+            let Some(update) = update else {
+                break;
+            };
+            self.apply_diff_update(update);
+        }
+    }
+
+    fn spawn_diff_loader_if_needed(&mut self) {
+        if self.diff_loader.is_some() {
+            return;
+        }
+
+        let Some(request) = self.diff_queued.take() else {
+            return;
+        };
+
+        self.diff_loading = Some(request.clone());
+        self.diff_loader = Some(spawn_diff_loader(self.git_dir.clone(), request));
+    }
+
+    fn apply_diff_update(&mut self, update: DiffUpdate) {
+        let request = match update {
+            DiffUpdate::Loaded { request, diff } => {
+                self.diff_cache.insert(request.key.clone(), diff.clone());
+                if self.selected_diff_request().as_ref() == Some(&request) {
+                    self.diff_stat = diff.stat;
+                    self.selected_diff = diff.lines;
+                    self.diff_scroll = 0;
+                }
+                request
+            }
+            DiffUpdate::Unavailable { request } => request,
+        };
+
+        if self.diff_loading.as_ref() == Some(&request) {
+            self.diff_loader = None;
+            self.diff_loading = None;
         }
     }
 
@@ -1334,6 +1481,127 @@ fn branch_average_secs(repo: &GitRepo, checks: &[CheckRunInfo]) -> Option<u64> {
         .or_else(|| checks.iter().filter_map(|check| check.average_secs).max())
 }
 
+fn diff_line_type(line: &str) -> DiffLineType {
+    if line.starts_with("+++") || line.starts_with("---") {
+        DiffLineType::Header
+    } else if line.starts_with('+') {
+        DiffLineType::Addition
+    } else if line.starts_with('-') {
+        DiffLineType::Deletion
+    } else if line.starts_with("@@") {
+        DiffLineType::Hunk
+    } else if line.starts_with("diff ") || line.starts_with("index ") {
+        DiffLineType::Header
+    } else {
+        DiffLineType::Context
+    }
+}
+
+fn load_branch_details(repo: &GitRepo, request: &BranchDetailsRequest) -> BranchDetails {
+    let (ahead, behind) = request
+        .parent
+        .as_deref()
+        .and_then(|parent| repo.commits_ahead_behind(parent, &request.name).ok())
+        .unwrap_or((0, 0));
+    let has_remote = repo.has_remote(&request.name);
+    let (unpushed, unpulled) = repo.commits_vs_remote(&request.name).unwrap_or((0, 0));
+    let commits = request
+        .parent
+        .as_deref()
+        .and_then(|parent| repo.commits_between(parent, &request.name).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .take(10)
+        .collect();
+
+    BranchDetails {
+        ahead,
+        behind,
+        has_remote,
+        unpushed,
+        unpulled,
+        commits,
+    }
+}
+
+fn spawn_branch_details_loader(
+    repo_path: PathBuf,
+    requests: Vec<BranchDetailsRequest>,
+) -> Receiver<BranchDetailsUpdate> {
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let repo = match GitRepo::open_from_path(&repo_path) {
+            Ok(repo) => repo,
+            Err(_) => {
+                for request in requests {
+                    let _ = sender.send(BranchDetailsUpdate::Unavailable {
+                        branch: request.name,
+                    });
+                }
+                let _ = sender.send(BranchDetailsUpdate::Done);
+                return;
+            }
+        };
+
+        for request in requests {
+            let details = load_branch_details(&repo, &request);
+            let _ = sender.send(BranchDetailsUpdate::Loaded {
+                branch: request.name,
+                details,
+            });
+        }
+
+        let _ = sender.send(BranchDetailsUpdate::Done);
+    });
+
+    receiver
+}
+
+fn spawn_diff_loader(repo_path: PathBuf, request: DiffRequest) -> Receiver<DiffUpdate> {
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        let repo = match GitRepo::open_from_path(&repo_path) {
+            Ok(repo) => repo,
+            Err(_) => {
+                let _ = sender.send(DiffUpdate::Unavailable { request });
+                return;
+            }
+        };
+
+        let stat = match repo.diff_stat(&request.branch, &request.parent) {
+            Ok(stats) => stats
+                .into_iter()
+                .map(|(file, additions, deletions)| DiffStatLine {
+                    file,
+                    additions,
+                    deletions,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+        let lines = match repo.diff_against_parent(&request.branch, &request.parent) {
+            Ok(lines) => lines
+                .into_iter()
+                .map(|line| DiffLine {
+                    line_type: diff_line_type(&line),
+                    content: line,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+        let _ = sender.send(DiffUpdate::Loaded {
+            request,
+            diff: CachedDiff { stat, lines },
+        });
+    });
+
+    receiver
+}
+
 fn run_in_tokio_runtime<T, F, Fut>(operation: F) -> Result<T>
 where
     F: FnOnce() -> Result<Fut>,
@@ -1421,18 +1689,156 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
 #[cfg(test)]
 mod tests {
     use super::{
-        live_ci_summary_text, run_in_tokio_runtime, substring_filter_indices, BranchCiSummary,
+        live_ci_summary_text, run_in_tokio_runtime, substring_filter_indices, App, BranchCiSummary,
+        BranchDisplay, DiffRequest, FocusedPane, Mode,
     };
+    use crate::cache::CiCache;
+    use crate::engine::Stack;
+    use crate::git::GitRepo;
     use anyhow::{anyhow, Result};
     use chrono::{TimeZone, Utc};
     use std::future::Ready;
+    use std::process::Command;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
+    use tempfile::TempDir;
 
     fn names(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let null_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", null_path)
+            .env("GIT_CONFIG_SYSTEM", null_path)
+            .output()
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {} failed\nstdout: {}\nstderr: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn test_repo() -> (TempDir, GitRepo) {
+        let tempdir = TempDir::new().expect("temp repo");
+        let path = tempdir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        std::fs::write(path.join("README.md"), "hello\n").expect("write README");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "initial"]);
+
+        let repo = GitRepo::open_from_path(&path.join(".git")).expect("open test repo");
+        repo.set_trunk("main").expect("set trunk");
+        (tempdir, repo)
+    }
+
+    fn skeleton_branch(name: &str, parent: Option<&str>, is_current: bool) -> BranchDisplay {
+        BranchDisplay {
+            name: name.to_string(),
+            parent: parent.map(str::to_string),
+            column: 0,
+            is_current,
+            is_trunk: parent.is_none(),
+            ahead: 0,
+            behind: 0,
+            needs_restack: false,
+            has_remote: false,
+            unpushed: 0,
+            unpulled: 0,
+            pr_number: None,
+            pr_state: None,
+            ci_state: None,
+            commits: Vec::new(),
+            details_loaded: parent.is_none(),
+        }
+    }
+
+    fn minimal_app(repo: GitRepo, branches: Vec<BranchDisplay>) -> App {
+        let git_dir = repo.git_dir().expect("git dir").to_path_buf();
+        let stack = Stack::load(&repo).expect("load stack");
+        App {
+            stack,
+            cache: CiCache::load(&git_dir),
+            repo,
+            git_dir,
+            current_branch: "main".to_string(),
+            selected_index: 0,
+            branches,
+            mode: Mode::Normal,
+            search_query: String::new(),
+            filtered_indices: Vec::new(),
+            input_buffer: String::new(),
+            input_cursor: 0,
+            selected_diff: Vec::new(),
+            diff_scroll: 0,
+            focused_pane: FocusedPane::Stack,
+            diff_stat: Vec::new(),
+            status_message: None,
+            status_set_at: None,
+            should_quit: false,
+            pending_command: None,
+            needs_refresh: false,
+            reorder_state: None,
+            move_picker_source: String::new(),
+            move_picker_candidates: Vec::new(),
+            move_picker_query: String::new(),
+            move_picker_selected: 0,
+            diff_cache: Default::default(),
+            ci_states: Default::default(),
+            ci_loader: None,
+            ci_loading_branch: None,
+            ci_queued_branch: None,
+            branch_details_queued: false,
+            branch_details_loader: None,
+            diff_loader: None,
+            diff_loading: None,
+            diff_queued: None,
+        }
+    }
+
+    #[test]
+    fn skeleton_branch_defers_expensive_fields_until_background_details_load() {
+        let branch = skeleton_branch("feature", Some("main"), false);
+
+        assert!(!branch.details_loaded);
+        assert_eq!(branch.ahead, 0);
+        assert_eq!(branch.behind, 0);
+        assert!(!branch.has_remote);
+        assert_eq!(branch.unpushed, 0);
+        assert_eq!(branch.unpulled, 0);
+        assert!(branch.commits.is_empty());
+    }
+
+    #[test]
+    fn selecting_next_branch_queues_diff_without_loading_patch_synchronously() {
+        let (_tempdir, repo) = test_repo();
+        let mut app = minimal_app(
+            repo,
+            vec![
+                skeleton_branch("main", None, true),
+                skeleton_branch("feature", Some("main"), false),
+            ],
+        );
+
+        app.select_next();
+
+        assert_eq!(app.selected_index, 1);
+        assert_eq!(
+            app.diff_queued,
+            Some(DiffRequest::new("feature".to_string(), "main".to_string()))
+        );
+        assert!(app.selected_diff.is_empty());
+        assert!(app.diff_stat.is_empty());
     }
 
     #[test]

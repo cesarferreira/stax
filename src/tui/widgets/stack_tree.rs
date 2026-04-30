@@ -211,6 +211,10 @@ pub fn render_stack_tree(f: &mut Frame, app: &App, area: Rect) {
 
                 let mut status_spans: Vec<Span> = Vec::new();
 
+                if !branch.details_loaded && !branch.is_trunk {
+                    status_spans.push(Span::styled(" …", Style::default().fg(Color::Yellow)));
+                }
+
                 if branch.unpushed > 0 {
                     status_spans.push(Span::styled(
                         format!(" {}⬆", branch.unpushed),
@@ -326,6 +330,7 @@ mod tests {
             pr_state: None,
             ci_state: None,
             commits: Vec::new(),
+            details_loaded: true,
         }
     }
 
@@ -346,6 +351,7 @@ mod tests {
             pr_state: None,
             ci_state: None,
             commits: Vec::new(),
+            details_loaded: true,
         }
     }
 
