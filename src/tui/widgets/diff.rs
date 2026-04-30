@@ -48,11 +48,21 @@ pub fn render_diff(f: &mut Frame, app: &App, area: Rect) {
         .split(inner);
 
     f.render_widget(Paragraph::new(header_lines), chunks[0]);
-    f.render_widget(Paragraph::new(build_patch_lines(app, branch)), chunks[1]);
+    f.render_widget(
+        Paragraph::new(build_patch_lines(app, branch, chunks[1].height as usize)),
+        chunks[1],
+    );
 }
 
 fn build_diff_header(app: &App) -> Vec<Line<'static>> {
     if app.diff_stat.is_empty() {
+        if app.is_selected_diff_loading() {
+            return vec![Line::from(vec![Span::styled(
+                "Loading file summary...",
+                Style::default().fg(Color::Yellow),
+            )])];
+        }
+
         return vec![Line::from(vec![Span::styled(
             "No file summary available",
             Style::default().fg(Color::DarkGray),
@@ -127,8 +137,19 @@ fn build_diff_header(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-fn build_patch_lines(app: &App, branch: Option<&BranchDisplay>) -> Vec<Line<'static>> {
+fn build_patch_lines(
+    app: &App,
+    branch: Option<&BranchDisplay>,
+    visible_height: usize,
+) -> Vec<Line<'static>> {
     if app.selected_diff.is_empty() {
+        if app.is_selected_diff_loading() {
+            return vec![Line::from(Span::styled(
+                "Loading patch in the background...",
+                Style::default().fg(Color::Yellow),
+            ))];
+        }
+
         if branch.map(|b| b.is_trunk).unwrap_or(true) {
             return vec![Line::from(Span::styled(
                 "No patch for trunk",
@@ -144,9 +165,7 @@ fn build_patch_lines(app: &App, branch: Option<&BranchDisplay>) -> Vec<Line<'sta
         }
     }
 
-    app.selected_diff
-        .iter()
-        .skip(app.diff_scroll)
+    visible_diff_lines(&app.selected_diff, app.diff_scroll, visible_height)
         .map(|diff_line| {
             let style = match diff_line.line_type {
                 DiffLineType::Addition => Style::default().fg(Color::Green),
@@ -161,4 +180,50 @@ fn build_patch_lines(app: &App, branch: Option<&BranchDisplay>) -> Vec<Line<'sta
             Line::from(Span::styled(diff_line.content.clone(), style))
         })
         .collect()
+}
+
+fn visible_diff_lines(
+    lines: &[crate::tui::app::DiffLine],
+    scroll: usize,
+    visible_height: usize,
+) -> impl Iterator<Item = &crate::tui::app::DiffLine> {
+    lines.iter().skip(scroll).take(visible_height.max(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visible_diff_lines;
+    use crate::tui::app::{DiffLine, DiffLineType};
+
+    fn line(content: &str) -> DiffLine {
+        DiffLine {
+            content: content.to_string(),
+            line_type: DiffLineType::Context,
+        }
+    }
+
+    #[test]
+    fn visible_diff_lines_limits_rendering_to_viewport_height() {
+        let lines = ["a", "b", "c", "d"]
+            .into_iter()
+            .map(line)
+            .collect::<Vec<_>>();
+
+        let visible = visible_diff_lines(&lines, 1, 2)
+            .map(|line| line.content.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(visible, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn visible_diff_lines_keeps_one_line_for_zero_height_area() {
+        let lines = ["a", "b"].into_iter().map(line).collect::<Vec<_>>();
+
+        let visible = visible_diff_lines(&lines, 0, 0)
+            .map(|line| line.content.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(visible, vec!["a"]);
+    }
 }

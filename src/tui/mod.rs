@@ -81,8 +81,6 @@ fn run_app(
             app.refresh_branches()?;
         }
 
-        app.refresh_background();
-
         // Clear stale status messages
         app.clear_stale_status();
 
@@ -125,6 +123,8 @@ fn run_app(
             }
             return Ok(TuiOutcome::Quit);
         }
+
+        app.refresh_background();
     }
 }
 

@@ -62,7 +62,12 @@ fn build_details_content(app: &App, branch: &BranchDisplay) -> Vec<Line<'static>
         Span::raw(branch_actions(branch)),
     ]));
 
-    if let Some(parent) = &branch.parent {
+    if !branch.details_loaded && !branch.is_trunk {
+        lines.push(Line::from(vec![Span::styled(
+            "Loading branch details...",
+            Style::default().fg(Color::Yellow),
+        )]));
+    } else if let Some(parent) = &branch.parent {
         lines.push(Line::from(vec![
             Span::styled("Base: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
@@ -208,6 +213,8 @@ fn branch_actions(branch: &BranchDisplay) -> String {
 fn remote_summary(branch: &BranchDisplay) -> String {
     if branch.is_trunk {
         "local".to_string()
+    } else if !branch.details_loaded {
+        "loading".to_string()
     } else if !branch.has_remote {
         "not pushed".to_string()
     } else if branch.unpushed == 0 && branch.unpulled == 0 {
@@ -224,7 +231,7 @@ fn remote_summary(branch: &BranchDisplay) -> String {
 fn remote_summary_style(branch: &BranchDisplay) -> Style {
     if branch.is_trunk {
         Style::default().fg(Color::DarkGray)
-    } else if !branch.has_remote {
+    } else if !branch.details_loaded || !branch.has_remote {
         Style::default().fg(Color::Yellow)
     } else if branch.unpulled > 0 {
         Style::default().fg(Color::Magenta)
@@ -332,6 +339,7 @@ mod tests {
             pr_state: None,
             ci_state: None,
             commits: vec!["add thing".to_string()],
+            details_loaded: true,
         }
     }
 
