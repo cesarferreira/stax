@@ -9,43 +9,61 @@ use ratatui::{
 };
 use std::collections::HashMap;
 
-/// Main UI render function
-pub fn render(f: &mut Frame, app: &App) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DashboardLayout {
+    stack: Rect,
+    summary: Rect,
+    patch: Rect,
+    status: Rect,
+}
+
+fn dashboard_layout(area: Rect) -> DashboardLayout {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),    // Main content
             Constraint::Length(4), // Status bar
         ])
-        .split(f.area());
+        .split(area);
 
-    // Main content: left panel (stack) + right panel (summary + diff/reorder preview)
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
         .split(chunks[0]);
 
-    render_stack_tree(f, app, main_chunks[0]);
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(8),     // stack
+            Constraint::Length(10), // branch summary
+        ])
+        .split(main_chunks[0]);
 
-    if matches!(app.mode, Mode::Reorder)
-        || matches!(app.mode, Mode::Confirm(ConfirmAction::ApplyReorder))
-    {
-        render_reorder_preview(f, app, main_chunks[1]);
+    DashboardLayout {
+        stack: left_chunks[0],
+        summary: left_chunks[1],
+        patch: main_chunks[1],
+        status: chunks[1],
+    }
+}
+
+/// Main UI render function
+pub fn render(f: &mut Frame, app: &App) {
+    let show_reorder_preview = matches!(app.mode, Mode::Reorder)
+        || matches!(app.mode, Mode::Confirm(ConfirmAction::ApplyReorder));
+    let layout = dashboard_layout(f.area());
+
+    render_stack_tree(f, app, layout.stack);
+    render_details(f, app, layout.summary);
+
+    if show_reorder_preview {
+        render_reorder_preview(f, app, layout.patch);
     } else {
-        let right_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(10), // branch summary
-                Constraint::Min(3),     // patch view
-            ])
-            .split(main_chunks[1]);
-
-        render_details(f, app, right_chunks[0]);
-        render_diff(f, app, right_chunks[1]);
+        render_diff(f, app, layout.patch);
     }
 
     // Status bar
-    render_status_bar(f, app, chunks[1]);
+    render_status_bar(f, app, layout.status);
 
     // Modal overlays
     match &app.mode {
@@ -585,7 +603,31 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::build_tree_prefix;
+    use super::{build_tree_prefix, dashboard_layout};
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn dashboard_layout_places_summary_under_stack() {
+        let layout = dashboard_layout(Rect::new(0, 0, 100, 40));
+
+        assert_eq!(layout.stack.x, 0);
+        assert_eq!(layout.summary.x, 0);
+        assert_eq!(layout.summary.y, layout.stack.y + layout.stack.height);
+        assert_eq!(layout.summary.width, layout.stack.width);
+        assert!(layout.patch.x > layout.stack.x);
+        assert_eq!(layout.patch.y, 0);
+        assert_eq!(layout.patch.height, 36);
+    }
+
+    #[test]
+    fn dashboard_layout_keeps_reorder_preview_on_right() {
+        let layout = dashboard_layout(Rect::new(0, 0, 100, 40));
+
+        assert_eq!(layout.summary.x, layout.stack.x);
+        assert!(layout.patch.x > layout.summary.x);
+        assert_eq!(layout.patch.y, 0);
+        assert_eq!(layout.patch.height, 36);
+    }
 
     #[test]
     fn tree_prefix_root_column() {
