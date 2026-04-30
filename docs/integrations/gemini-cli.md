@@ -18,9 +18,10 @@ curl -o GEMINI.md https://raw.githubusercontent.com/cesarferreira/stax/main/skil
 
 Gemini CLI loads hierarchical instructions from `GEMINI.md`, which gives it stax-aware workflow guidance.
 
-## 3. Use Gemini with AI PR body generation
+## 3. Use Gemini with AI PR generation
 
 ```bash
+st submit --ai
 st generate --pr-body --agent gemini
 st generate --pr-body --agent gemini --model gemini-2.5-flash
 ```

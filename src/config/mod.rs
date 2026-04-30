@@ -114,7 +114,7 @@ pub struct AiConfig {
     /// Model to use with the AI agent (default: agent's own default)
     #[serde(default)]
     pub model: Option<String>,
-    /// Per-feature overrides for PR body generation (`stax generate`, `stax submit --ai-body`)
+    /// Per-feature overrides for PR generation (`stax generate`, `stax submit --ai`)
     #[serde(default, skip_serializing_if = "AiFeatureConfig::is_empty")]
     pub generate: AiFeatureConfig,
     /// Per-feature overrides for standup summaries (`stax standup --summary`)

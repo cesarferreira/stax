@@ -296,7 +296,7 @@ fn which_exists(command: &str) -> bool {
 // Model resolution
 // ---------------------------------------------------------------------------
 
-fn resolve_model(
+pub(crate) fn resolve_model(
     cli_flag: Option<&str>,
     config: &Config,
     agent: &str,

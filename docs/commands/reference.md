@@ -117,6 +117,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st standup` | Recent activity (`--summary` for AI spoken version; `--jit` for Jira context) |
 | `st changelog [from] [to]` | Generate changelog (auto-resolves last tag when `from` omitted) |
 | `st generate --pr-body` | Generate PR body with AI |
+| `st ss --ai` | Submit with AI-generated PR title/body suggestions |
 
 ## Utilities
 
@@ -201,7 +202,7 @@ st wt go ui-polish --run "cursor ." --tmux
 - `--no-verify` (`-n`) skips pre-push hooks while pushing branches
 - `--reviewers alice,bob --labels bug,urgent --assignees alice`
 - `--squash` squash commits on each branch before pushing
-- `--ai-body` generate PR body with AI
+- `--ai` generate PR title and body with AI; narrow with `--title` or `--body`
 - `--template <name>` / `--no-template` / `--edit`
 - `--rerequest-review` / `--update-title`
 - `--yes` / `--no-prompt`

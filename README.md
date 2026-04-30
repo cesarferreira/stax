@@ -226,9 +226,10 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 
 → [TUI guide](docs/interface/tui.md)
 
-### AI PR bodies and standups
+### AI PR details and standups
 
 ```bash
+st ss --ai --yes          # generate PR titles/bodies during submit
 st generate --pr-body      # draft/refresh PR body from branch diff + context
 st standup --summary       # spoken-style daily engineering summary
 st standup --summary --style slack  # Slack-ready Yesterday/Today bullets
@@ -264,6 +265,7 @@ st config --set-ai
 | `st wt` | Open the worktree dashboard |
 | `st resolve` | AI-resolve an in-progress rebase conflict |
 | `st generate --pr-body` | Draft/refresh PR body with AI |
+| `st ss --ai` | Submit with AI-generated PR title/body suggestions |
 | `st standup` | Summarize recent engineering activity |
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |

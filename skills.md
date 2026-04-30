@@ -193,7 +193,10 @@ stax submit --assignees alice      # Set assignees
 stax submit --template backend     # Use named PR template
 stax submit --no-template          # Skip template picker
 stax submit --edit                 # Always edit PR body
-stax submit --ai-body              # Generate PR body with AI
+stax submit --ai                   # Generate PR title/body with AI
+stax submit --ai --title           # Generate/update PR title only
+stax submit --ai --body            # Generate/update PR body only
+stax submit --ai --yes             # Accept generated new-PR details
 stax submit --rerequest-review     # Re-request existing reviewers on update
 
 # ~/.config/stax/config.toml

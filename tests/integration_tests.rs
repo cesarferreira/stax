@@ -6099,6 +6099,41 @@ mod forge_mock_tests {
         fs::write(&config_path, config).expect("Failed to write config");
     }
 
+    fn write_test_config_with_ai(home: &Path, api_base_url: &str, stack_links: Option<&str>) {
+        let config_dir = home.join(".config").join("stax");
+        std::fs::create_dir_all(&config_dir).expect("Failed to create config dir");
+        let config_path = config_dir.join("config.toml");
+        let mut config = format!("[remote]\napi_base_url = \"{}\"\n", api_base_url);
+        if let Some(mode) = stack_links {
+            config.push_str(&format!("\n[submit]\nstack_links = \"{}\"\n", mode));
+        }
+        config.push_str("\n[ai.generate]\nagent = \"claude\"\n");
+        fs::write(&config_path, config).expect("Failed to write config");
+    }
+
+    fn write_fake_claude(home: &Path, response: &str) -> PathBuf {
+        let bin_dir = home.join("bin");
+        fs::create_dir_all(&bin_dir).expect("Failed to create fake AI bin dir");
+        let path = bin_dir.join("claude");
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\ncat >/dev/null\ncat <<'JSON'\n{}\nJSON\n",
+                response
+            ),
+        )
+        .expect("Failed to write fake claude");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                .expect("Failed to chmod fake claude");
+        }
+
+        bin_dir
+    }
+
     fn ensure_empty_gitconfig(home: &Path) -> std::path::PathBuf {
         let path = home.join("gitconfig");
         if !path.exists() {
@@ -6300,6 +6335,103 @@ mod forge_mock_tests {
         })
     }
 
+    fn github_pull_fixture_with_details(
+        number: u64,
+        head_branch: &str,
+        base_branch: &str,
+        title: &str,
+        body: &str,
+    ) -> serde_json::Value {
+        let mut pr = github_pull_fixture(number, head_branch, base_branch, "aaaa");
+        pr["title"] = serde_json::json!(title);
+        pr["body"] = serde_json::json!(body);
+        pr["html_url"] = serde_json::json!(format!("https://github.com/test/repo/pull/{}", number));
+        pr
+    }
+
+    async fn mount_github_new_pr_flow(
+        mock_server: &MockServer,
+        number: u64,
+        branch: &str,
+        title: &str,
+        body: &str,
+    ) {
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "url": format!("https://api.github.com/repos/test/repo/pulls/{}", number),
+                "id": number,
+                "number": number,
+                "state": "open",
+                "title": title,
+                "body": body,
+                "draft": true,
+                "head": { "ref": branch, "sha": "aaaa", "label": format!("test:{}", branch) },
+                "base": { "ref": "main", "sha": "bbbb" },
+                "html_url": format!("https://github.com/test/repo/pull/{}", number)
+            })))
+            .mount(mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/issues/{}/comments", number)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/pulls/{}", number)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                github_pull_fixture_with_details(number, branch, "main", title, body),
+            ))
+            .mount(mock_server)
+            .await;
+    }
+
+    async fn mount_github_existing_pr(
+        mock_server: &MockServer,
+        number: u64,
+        branch: &str,
+        title: &str,
+        body: &str,
+    ) {
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                github_pull_fixture_with_details(number, branch, "main", title, body)
+            ])))
+            .mount(mock_server)
+            .await;
+    }
+
+    async fn mount_github_stack_links_off_sync(
+        mock_server: &MockServer,
+        number: u64,
+        branch: &str,
+        title: &str,
+        body: &str,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/issues/{}/comments", number)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/pulls/{}", number)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                github_pull_fixture_with_details(number, branch, "main", title, body),
+            ))
+            .mount(mock_server)
+            .await;
+    }
+
     fn gitlab_mr_fixture(
         iid: u64,
         title: &str,
@@ -6434,6 +6566,33 @@ mod forge_mock_tests {
             .env("GIT_CONFIG_GLOBAL", &gitconfig)
             .env("GIT_CONFIG_SYSTEM", &gitconfig)
             .env(token_env, "mock-token")
+            .env("STAX_DISABLE_UPDATE_CHECK", "1");
+        command.output().expect("Failed to execute stax")
+    }
+
+    fn run_stax_with_token_env_and_path(
+        repo: &TestRepo,
+        home: &Path,
+        token_env: &str,
+        path_prefix: &Path,
+        args: &[&str],
+    ) -> Output {
+        let gitconfig = ensure_empty_gitconfig(home);
+        let path = match std::env::var("PATH") {
+            Ok(current) if !current.is_empty() => {
+                format!("{}:{}", path_prefix.display(), current)
+            }
+            _ => path_prefix.display().to_string(),
+        };
+        let mut command = Command::new(stax_bin());
+        command
+            .args(args)
+            .current_dir(repo.path())
+            .env("HOME", home)
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env("GIT_CONFIG_SYSTEM", &gitconfig)
+            .env(token_env, "mock-token")
+            .env("PATH", path)
             .env("STAX_DISABLE_UPDATE_CHECK", "1");
         command.output().expect("Failed to execute stax")
     }
@@ -6760,6 +6919,342 @@ mod forge_mock_tests {
             "Expected lane PR number in metadata, got: {}",
             metadata
         );
+    }
+
+    #[tokio::test]
+    async fn test_submit_ai_yes_uses_generated_title_and_body_for_new_pr() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_ai(home.path(), &mock_server.uri(), Some("off"));
+        let ai_bin = write_fake_claude(
+            home.path(),
+            r###"{"title":"AI submit title","body":"## Summary\n\nAI generated body."}"###,
+        );
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_token_env_and_path(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &ai_bin,
+            &["bc", "feature-ai-submit"],
+        );
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+        let branch = repo.current_branch();
+        repo.create_file("ai-submit.txt", "ai submit\n");
+        repo.commit("Add AI submit flow");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "title": "AI submit title",
+                "body": "## Summary\n\nAI generated body.",
+                "draft": true,
+                "head": { "ref": branch.clone(), "sha": "aaaa", "label": format!("test:{}", branch) },
+                "base": { "ref": "main", "sha": "bbbb" },
+                "html_url": "https://github.com/test/repo/pull/42"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "title": "AI submit title",
+                "body": "## Summary\n\nAI generated body.",
+                "draft": true,
+                "head": { "ref": branch.clone(), "sha": "aaaa", "label": format!("test:{}", branch) },
+                "base": { "ref": "main", "sha": "bbbb" },
+                "html_url": "https://github.com/test/repo/pull/42"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env_and_path(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &ai_bin,
+            &["submit", "--ai", "--yes", "--no-prompt"],
+        );
+        assert!(
+            output.status.success(),
+            "submit --ai failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let pr_create = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "POST" && request.url.path() == "/repos/test/repo/pulls"
+            })
+            .expect("missing PR create request");
+        let payload: serde_json::Value = serde_json::from_slice(&pr_create.body).unwrap();
+        assert_eq!(payload["title"], "AI submit title");
+        assert_eq!(payload["body"], "## Summary\n\nAI generated body.");
+        assert_eq!(payload["head"], branch);
+        assert_eq!(payload["draft"], true);
+    }
+
+    #[tokio::test]
+    async fn test_submit_body_scope_yes_uses_default_title_for_new_pr() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_ai(home.path(), &mock_server.uri(), Some("off"));
+        let ai_bin = write_fake_claude(home.path(), r###"{"body":"AI body only"}"###);
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_token_env_and_path(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &ai_bin,
+            &["bc", "feature-body-scope"],
+        );
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+        let branch = repo.current_branch();
+        repo.create_file("body-scope.txt", "body scope\n");
+        repo.commit("Add AI body scope");
+
+        mount_github_new_pr_flow(
+            &mock_server,
+            43,
+            &branch,
+            "Add AI body scope",
+            "AI body only",
+        )
+        .await;
+
+        let output = run_stax_with_token_env_and_path(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &ai_bin,
+            &["submit", "--ai", "--body", "--yes", "--no-prompt"],
+        );
+        assert!(
+            output.status.success(),
+            "submit --ai --body failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let pr_create = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "POST" && request.url.path() == "/repos/test/repo/pulls"
+            })
+            .expect("missing PR create request");
+        let payload: serde_json::Value = serde_json::from_slice(&pr_create.body).unwrap();
+        assert_eq!(payload["title"], "Add AI body scope");
+        assert_eq!(payload["body"], "AI body only");
+    }
+
+    #[tokio::test]
+    async fn test_submit_ai_yes_falls_back_to_default_new_pr_details() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_ai(home.path(), &mock_server.uri(), Some("off"));
+        let ai_bin = write_fake_claude(home.path(), "not json");
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_token_env_and_path(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &ai_bin,
+            &["bc", "feature-ai-fallback"],
+        );
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+        let branch = repo.current_branch();
+        repo.create_file("ai-fallback.txt", "ai fallback\n");
+        repo.commit("Add AI fallback");
+        let default_body = "## Summary\n\n- Add AI fallback";
+
+        mount_github_new_pr_flow(&mock_server, 44, &branch, "Add AI fallback", default_body).await;
+
+        let output = run_stax_with_token_env_and_path(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &ai_bin,
+            &["submit", "--ai", "--yes", "--no-prompt"],
+        );
+        assert!(
+            output.status.success(),
+            "submit --ai fallback failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let pr_create = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "POST" && request.url.path() == "/repos/test/repo/pulls"
+            })
+            .expect("missing PR create request");
+        let payload: serde_json::Value = serde_json::from_slice(&pr_create.body).unwrap();
+        assert_eq!(payload["title"], "Add AI fallback");
+        assert_eq!(payload["body"], default_body);
+    }
+
+    #[tokio::test]
+    async fn test_submit_plain_ai_yes_skips_existing_pr_content_updates() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
+        let repo = setup_branch_with_remote(home.path(), "feature-ai-existing-skip");
+        let branch = repo.current_branch();
+
+        mount_github_existing_pr(&mock_server, 45, &branch, "Existing title", "Existing body")
+            .await;
+        mount_github_stack_links_off_sync(
+            &mock_server,
+            45,
+            &branch,
+            "Existing title",
+            "Existing body",
+        )
+        .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--ai", "--yes"]);
+        assert!(
+            output.status.success(),
+            "submit --ai --yes existing skip failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(
+            !requests.iter().any(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/45"
+            }),
+            "plain --ai --yes should not patch existing PR content"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submit_ai_title_body_yes_updates_existing_pr_content() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_ai(home.path(), &mock_server.uri(), Some("off"));
+        let ai_bin = write_fake_claude(
+            home.path(),
+            r###"{"title":"AI refreshed title","body":"AI refreshed body"}"###,
+        );
+        let repo = setup_branch_with_remote(home.path(), "feature-ai-existing-update");
+        let branch = repo.current_branch();
+
+        mount_github_existing_pr(&mock_server, 46, &branch, "Existing title", "Existing body")
+            .await;
+        mount_github_stack_links_off_sync(
+            &mock_server,
+            46,
+            &branch,
+            "AI refreshed title",
+            "AI refreshed body",
+        )
+        .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/46"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                github_pull_fixture_with_details(
+                    46,
+                    &branch,
+                    "main",
+                    "AI refreshed title",
+                    "AI refreshed body",
+                ),
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_token_env_and_path(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &ai_bin,
+            &[
+                "submit",
+                "--ai",
+                "--title",
+                "--body",
+                "--yes",
+                "--no-prompt",
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "submit existing --ai --title --body failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let title_patch = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/pulls/46"
+                    && serde_json::from_slice::<serde_json::Value>(&request.body)
+                        .ok()
+                        .and_then(|payload| payload.get("title").cloned())
+                        .is_some()
+            })
+            .expect("missing existing PR title patch");
+        let title_payload: serde_json::Value = serde_json::from_slice(&title_patch.body).unwrap();
+        assert_eq!(title_payload["title"], "AI refreshed title");
+
+        let body_patch = find_body_patch(&requests, "/repos/test/repo/pulls/46");
+        let body_payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
+        assert_eq!(body_payload["body"], "AI refreshed body");
     }
 
     #[tokio::test]

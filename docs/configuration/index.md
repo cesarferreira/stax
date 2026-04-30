@@ -40,7 +40,7 @@ Main config path: `~/.config/stax/config.toml`.
 # model = "claude-sonnet-4-5-20250929"
 
 # Per-feature overrides — optional, fall back to [ai] above
-[ai.generate]   # st generate --pr-body
+[ai.generate]   # st generate --pr-body, st submit --ai
 # agent = "codex"
 # model = "o4-mini"
 

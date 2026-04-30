@@ -1,4 +1,4 @@
-# PR templates and AI PR bodies
+# PR templates and AI PR details
 
 ## PR templates
 
@@ -30,7 +30,22 @@ Use `.github/PULL_REQUEST_TEMPLATE/` with one file per template:
 | `--no-template` | Skip template entirely |
 | `--edit` | Always open the editor |
 
-## AI PR body generation
+## AI PR details during submit
+
+Generate PR titles and bodies while submitting:
+
+```bash
+st ss --ai                  # suggest title/body and prompt before updating
+st bs --ai --body           # current branch only, body generation only
+st ss --ai --yes            # accept generated details for new PRs
+st ss --ai --body --yes     # refresh existing PR bodies automatically
+```
+
+`--title` and `--body` narrow what AI generates. Without either modifier, `--ai` targets both title and body.
+
+For existing PRs, interactive `--ai` asks whether to update title, body, both, or skip. With `--yes`, plain `--ai` leaves existing PR content alone; explicit `--title` and/or `--body` updates those fields automatically.
+
+## AI PR body refresh
 
 Generate or update a PR body using diff, commits, and template:
 
@@ -88,12 +103,6 @@ To forget the saved AI pairing and re-prompt:
 ```bash
 st config --reset-ai
 st config --reset-ai --no-prompt   # clear without opening picker
-```
-
-You can also generate during submit:
-
-```bash
-st submit --ai-body
 ```
 
 ### Stack graph placement

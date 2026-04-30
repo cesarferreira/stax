@@ -67,9 +67,15 @@ struct SubmitOptions {
     /// Always open editor for PR body
     #[arg(long)]
     edit: bool,
-    /// Generate PR body using AI (claude, codex, or gemini)
+    /// Generate PR title and body using AI
     #[arg(long)]
-    ai_body: bool,
+    ai: bool,
+    /// With --ai, generate/update PR title only
+    #[arg(long, requires = "ai")]
+    title: bool,
+    /// With --ai, generate/update PR body only
+    #[arg(long, requires = "ai")]
+    body: bool,
     /// Re-request review from existing reviewers when updating PRs
     #[arg(long)]
     rerequest_review: bool,
@@ -101,7 +107,9 @@ impl From<SubmitOptions> for commands::submit::SubmitOptions {
             template: submit.template,
             no_template: submit.no_template,
             edit: submit.edit,
-            ai_body: submit.ai_body,
+            ai: submit.ai,
+            title: submit.title,
+            body: submit.body,
             rerequest_review: submit.rerequest_review,
             squash: submit.squash,
             update_title: submit.update_title,
@@ -2664,6 +2672,39 @@ mod tests {
     fn ss_still_parses_as_top_level_submit() {
         let cli = parse_cli(&["stax", "ss"]);
         assert!(matches!(cli.command, Some(Commands::Submit { .. })));
+    }
+
+    #[test]
+    fn submit_ai_flags_parse_for_full_title_and_body_generation() {
+        let cli = parse_cli(&["stax", "ss", "--ai", "--title", "--body", "--yes"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Submit { submit }) if submit.ai
+                && submit.title
+                && submit.body
+                && submit.yes
+        ));
+    }
+
+    #[test]
+    fn branch_submit_body_scope_modifier_parses() {
+        let cli = parse_cli(&["stax", "bs", "--ai", "--body"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Bs { submit }) if submit.ai && !submit.title && submit.body
+        ));
+    }
+
+    #[test]
+    fn title_and_body_modifiers_require_ai() {
+        assert!(try_parse_cli(&["stax", "submit", "--title"]).is_err());
+        assert!(try_parse_cli(&["stax", "submit", "--body"]).is_err());
+    }
+
+    #[test]
+    fn removed_legacy_body_flag_is_rejected() {
+        let removed_flag = ["--ai", "-body"].concat();
+        assert!(try_parse_cli(&["stax", "submit", &removed_flag]).is_err());
     }
 
     #[test]
