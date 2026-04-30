@@ -17,9 +17,10 @@ curl -o ~/.config/opencode/skills/stax/SKILL.md https://raw.githubusercontent.co
 
 OpenCode loads skills from `~/.config/opencode/skills/<name>/SKILL.md`.
 
-## 3. Use OpenCode with AI PR generation
+## 3. Use OpenCode with AI create/PR generation
 
 ```bash
+st create --ai -a --yes
 st submit --ai
 st generate --pr-body --agent opencode
 st generate --pr-body --agent opencode --model opencode/gpt-5.1-codex

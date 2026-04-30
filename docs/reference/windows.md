@@ -15,7 +15,7 @@ All core stax features work on Windows without modification:
 - Sync and cleanup: `st rs`, `st sync`
 - Undo/redo: `st undo`, `st redo`
 - Interactive TUI: bare `st`
-- AI generation: `st generate --pr-body`, `st standup --summary`
+- AI generation: `st create --ai`, `st generate --pr-body`, `st standup --summary`
 - Worktree commands: `st wt c/go/ls/ll/cleanup/rm <name>/prune/restack`
 - Browser opening: `st pr`, `st open` (uses `cmd /c start`)
 - Auth: `st auth`, `st auth --from-gh`, `STAX_GITHUB_TOKEN`

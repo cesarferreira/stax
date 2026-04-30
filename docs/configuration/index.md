@@ -40,7 +40,7 @@ Main config path: `~/.config/stax/config.toml`.
 # model = "claude-sonnet-4-5-20250929"
 
 # Per-feature overrides — optional, fall back to [ai] above
-[ai.generate]   # st generate --pr-body, st submit --ai
+[ai.generate]   # st create --ai, st generate --pr-body, st submit --ai
 # agent = "codex"
 # model = "o4-mini"
 
@@ -89,11 +89,11 @@ The first time you run an AI-powered command without a configured agent (e.g. `s
 
 ### Resolution order
 
-For every AI-powered command, agent and model are resolved in this order:
+For AI-powered commands, agent and model are resolved in this order:
 
 | Priority | Source |
 |---|---|
-| 1 | CLI flag (`--agent`, `--model`) |
+| 1 | CLI flag (`--agent`, `--model`) where the command exposes one |
 | 2 | Per-feature config (`[ai.generate]`, `[ai.standup]`, …) |
 | 3 | Global config (`[ai]`) |
 | 4 | Interactive first-use prompt (persisted) |

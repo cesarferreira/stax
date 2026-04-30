@@ -1364,6 +1364,8 @@ fn gt_parity_create_am_flags() {
     assert!(stdout.contains("--message"));
     assert!(stdout.contains("-n"));
     assert!(stdout.contains("--no-verify"));
+    assert!(stdout.contains("--ai"));
+    assert!(stdout.contains("--yes"));
 }
 
 #[test]

@@ -33,7 +33,7 @@ One giant PR is slow to review and risky to merge. A stack of small PRs is the a
 
 - **Stack, don't wait.** Keep shipping on top of in-review PRs. `st create`, `st ss`, done.
 - **Native-fast.** A single Rust binary that starts in ~25ms. `st ls` benches ~70× faster than Graphite and ~215× faster than Freephite on this repo.
-- **Agent-native.** Run parallel AI agents on isolated branches (`st lane`), auto-resolve rebase conflicts (`st resolve`), and generate PR bodies from real diffs.
+- **Agent-native.** Run parallel AI agents on isolated branches (`st lane`), auto-resolve rebase conflicts (`st resolve`), and generate branch names, commit messages, and PR details from real diffs.
 - **Undo-first.** Every destructive op snapshots state. `st undo` / `st redo` rescue risky rebases instantly.
 - **Batteries-included TUI.** Run bare `st` to browse the stack, inspect diffs, and watch CI hydrate live.
 
@@ -226,16 +226,17 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 
 → [TUI guide](docs/interface/tui.md)
 
-### AI PR details and standups
+### AI branch names, PR details, and standups
 
 ```bash
+st create --ai -a --yes   # generate branch name + first commit message
 st ss --ai --yes          # generate PR titles/bodies during submit
 st generate --pr-body      # draft/refresh PR body from branch diff + context
 st standup --summary       # spoken-style daily engineering summary
 st standup --summary --style slack  # Slack-ready Yesterday/Today bullets
 ```
 
-Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different agent/model. Configure with:
+Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different agent/model. `st create --ai`, `st submit --ai`, and `st generate --pr-body` share the `generate` setting. Configure with:
 
 ```bash
 st config --set-ai
@@ -251,6 +252,7 @@ st config --set-ai
 | `st` | Launch interactive TUI |
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st create <name>` | Create a branch stacked on current |
+| `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current |
 | `st ss` | Submit the full stack, open/update linked PRs |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--remote`, `--all`) |
@@ -264,6 +266,7 @@ st config --set-ai
 | `st lane <name> "<task>"` | Spawn an AI agent on a new lane |
 | `st wt` | Open the worktree dashboard |
 | `st resolve` | AI-resolve an in-progress rebase conflict |
+| `st create --ai` | Generate a branch name from local changes |
 | `st generate --pr-body` | Draft/refresh PR body with AI |
 | `st ss --ai` | Submit with AI-generated PR title/body suggestions |
 | `st standup` | Summarize recent engineering activity |

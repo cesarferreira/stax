@@ -644,6 +644,12 @@ enum Commands {
         /// Commit message (also used as branch name if no name provided)
         #[arg(short, long)]
         message: Option<String>,
+        /// Generate missing branch name and/or first commit message with AI
+        #[arg(long)]
+        ai: bool,
+        /// Accept generated AI values without prompting
+        #[arg(short, long)]
+        yes: bool,
         /// Base branch to create from (defaults to current)
         #[arg(long)]
         from: Option<String>,
@@ -1029,6 +1035,12 @@ enum Commands {
         all: bool,
         #[arg(short, long)]
         message: Option<String>,
+        /// Generate missing branch name and/or first commit message with AI
+        #[arg(long)]
+        ai: bool,
+        /// Accept generated AI values without prompting
+        #[arg(short, long)]
+        yes: bool,
         /// Base branch to create from (defaults to current)
         #[arg(long)]
         from: Option<String>,
@@ -1202,6 +1214,12 @@ enum BranchCommands {
         /// Commit message (also used as branch name if no name provided)
         #[arg(short, long)]
         message: Option<String>,
+        /// Generate missing branch name and/or first commit message with AI
+        #[arg(long)]
+        ai: bool,
+        /// Accept generated AI values without prompting
+        #[arg(short, long)]
+        yes: bool,
         /// Base branch to create from (defaults to current)
         #[arg(long)]
         from: Option<String>,
@@ -1899,13 +1917,15 @@ pub fn run() -> Result<()> {
             name,
             all,
             message,
+            ai,
+            yes,
             from,
             prefix,
             insert,
             below,
             no_verify,
         } => commands::branch::create::run(
-            name, message, from, prefix, all, insert, below, no_verify,
+            name, message, from, prefix, all, insert, below, no_verify, ai, yes,
         ),
         Commands::Pr { command } => match command.unwrap_or(PrCommands::Open) {
             PrCommands::Open => commands::pr::run_open(),
@@ -2030,13 +2050,15 @@ pub fn run() -> Result<()> {
                 name,
                 all,
                 message,
+                ai,
+                yes,
                 from,
                 prefix,
                 insert,
                 below,
                 no_verify,
             } => commands::branch::create::run(
-                name, message, from, prefix, all, insert, below, no_verify,
+                name, message, from, prefix, all, insert, below, no_verify, ai, yes,
             ),
             BranchCommands::Checkout {
                 branch,
@@ -2123,13 +2145,15 @@ pub fn run() -> Result<()> {
             name,
             all,
             message,
+            ai,
+            yes,
             from,
             prefix,
             insert,
             below,
             no_verify,
         } => commands::branch::create::run(
-            name, message, from, prefix, all, insert, below, no_verify,
+            name, message, from, prefix, all, insert, below, no_verify, ai, yes,
         ),
         Commands::Bu { count } => commands::navigate::up(count),
         Commands::Bd { count } => commands::navigate::down(count),
@@ -2683,6 +2707,45 @@ mod tests {
                 && submit.title
                 && submit.body
                 && submit.yes
+        ));
+    }
+
+    #[test]
+    fn create_ai_flags_parse_for_generated_branch_details() {
+        let cli = parse_cli(&["stax", "create", "--ai", "--yes"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Create {
+                ai: true,
+                yes: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn branch_create_ai_flags_parse() {
+        let cli = parse_cli(&["stax", "branch", "create", "--ai", "-a"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Branch(super::BranchCommands::Create {
+                ai: true,
+                all: true,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn hidden_bc_ai_flags_parse() {
+        let cli = parse_cli(&["stax", "bc", "--ai", "--yes"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Bc {
+                ai: true,
+                yes: true,
+                ..
+            })
         ));
     }
 

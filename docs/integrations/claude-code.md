@@ -9,9 +9,10 @@ curl -o ~/.claude/skills/stax.md https://raw.githubusercontent.com/cesarferreira
 
 Enables workflow assistance for stacked branch creation, submit flows, and related operations.
 
-## Use Claude with AI PR generation
+## Use Claude with AI create/PR generation
 
 ```bash
+st create --ai -a --yes
 st submit --ai
 st generate --pr-body --agent claude
 st generate --pr-body --agent claude --model claude-opus-4-5

@@ -30,6 +30,19 @@ Use `.github/PULL_REQUEST_TEMPLATE/` with one file per template:
 | `--no-template` | Skip template entirely |
 | `--edit` | Always open the editor |
 
+## AI branch names and first commits
+
+Generate the missing `st create` inputs from local changes:
+
+```bash
+st create --ai                  # branch name from local changes
+st create --ai -a --yes         # branch name + first commit message, stage all
+st create api-work --ai -a      # keep branch name, generate commit message
+st create --ai -m "Add API"     # keep commit message, generate branch name
+```
+
+`--yes` accepts generated values without the review prompts. It does not stage files by itself; use `-a` or pre-stage changes when you want `st create --ai` to create the first commit.
+
 ## AI PR details during submit
 
 Generate PR titles and bodies while submitting:
