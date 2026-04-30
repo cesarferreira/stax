@@ -49,6 +49,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | Command | Alias | Description |
 |---|---|---|
 | `st create <name>` | `c`, `bc` | Create stacked branch (TTY menu when nothing staged and `-m`) |
+| `st create --ai` | | Generate a branch name from local changes (`-a` also generates a first commit message) |
 | `st create <name> --below` | | Insert a new branch below current |
 | `st modify` | `m` | Amend staged changes into current commit (`-a` stages all, `-r` restacks after) |
 | `st rename` | | Rename current branch |
@@ -117,6 +118,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st standup` | Recent activity (`--summary` for AI spoken version; `--jit` for Jira context) |
 | `st changelog [from] [to]` | Generate changelog (auto-resolves last tag when `from` omitted) |
 | `st generate --pr-body` | Generate PR body with AI |
+| `st ss --ai` | Submit with AI-generated PR title/body suggestions |
 
 ## Utilities
 
@@ -185,6 +187,10 @@ st wt go ui-polish --run "cursor ." --tmux
 
 - `-m "msg"` set commit message (with nothing staged in a TTY: menu for stage all, `--patch`, empty branch, or abort)
 - `-am "msg"` stage all and commit
+- `--ai` generate missing branch name and/or first commit message from local changes
+- `--ai -a --yes` stage all changes, generate branch name + commit message, and skip AI value review prompts
+- `st create <name> --ai -a` keeps `<name>` and generates the first commit message
+- `st create --ai -m "msg"` keeps the commit message and generates the branch name
 - `-n`, `--no-verify` skip pre-commit and commit-msg hooks when creating a commit
 - `-m` / `-am` create the commit before creating the destination branch, including with `--from` and `--below`, so hook failures or interrupts do not leave orphan branches
 - `--insert` reparent children of the current branch onto the new branch
@@ -201,7 +207,7 @@ st wt go ui-polish --run "cursor ." --tmux
 - `--no-verify` (`-n`) skips pre-push hooks while pushing branches
 - `--reviewers alice,bob --labels bug,urgent --assignees alice`
 - `--squash` squash commits on each branch before pushing
-- `--ai-body` generate PR body with AI
+- `--ai` generate PR title and body with AI; narrow with `--title` or `--body`
 - `--template <name>` / `--no-template` / `--edit`
 - `--rerequest-review` / `--update-title`
 - `--yes` / `--no-prompt`

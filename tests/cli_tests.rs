@@ -467,6 +467,9 @@ fn test_scoped_submit_subcommand_help_flags() {
         );
         assert!(stdout.contains("--open"), "Expected --open in {:?}", args);
         assert!(stdout.contains("--yes"), "Expected --yes in {:?}", args);
+        assert!(stdout.contains("--ai"), "Expected --ai in {:?}", args);
+        assert!(stdout.contains("--title"), "Expected --title in {:?}", args);
+        assert!(stdout.contains("--body"), "Expected --body in {:?}", args);
         assert!(
             stdout.contains("--no-prompt"),
             "Expected --no-prompt in {:?}",
@@ -1361,6 +1364,8 @@ fn gt_parity_create_am_flags() {
     assert!(stdout.contains("--message"));
     assert!(stdout.contains("-n"));
     assert!(stdout.contains("--no-verify"));
+    assert!(stdout.contains("--ai"));
+    assert!(stdout.contains("--yes"));
 }
 
 #[test]

@@ -36,7 +36,9 @@ pub fn run(reset_ai: bool, no_prompt: bool, yes: bool, set_ai: bool) -> Result<(
 
     println!();
     println!("{}", "Per-feature AI overrides:".blue().bold());
-    println!(r#"  [ai.generate]  # PR body generation (stax generate, stax submit --ai-body)"#);
+    println!(
+        r#"  [ai.generate]  # create/PR generation (stax create --ai, stax generate, stax submit --ai)"#
+    );
     println!(r#"  [ai.standup]   # standup summaries (stax standup --summary)"#);
     println!(r#"  [ai.resolve]   # conflict resolution (stax resolve)"#);
     println!(r#"  [ai.lane]      # interactive AI lanes (stax lane)"#);
@@ -54,7 +56,7 @@ fn set_ai_interactive() -> Result<()> {
         ),
         (
             "generate",
-            "generate        (PR body — stax generate, stax submit --ai-body)",
+            "generate        (create/PR details — stax create --ai, stax generate, stax submit --ai)",
         ),
         (
             "standup",

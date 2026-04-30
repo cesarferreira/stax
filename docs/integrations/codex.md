@@ -9,9 +9,11 @@ curl -o "${CODEX_HOME:-$HOME/.codex}/skills/stax/SKILL.md" https://raw.githubuse
 
 Enables workflow assistance for stacked branch creation, submit flows, and related operations.
 
-## Use Codex with AI PR body generation
+## Use Codex with AI create/PR generation
 
 ```bash
+st create --ai -a --yes
+st submit --ai
 st generate --pr-body --agent codex
 st generate --pr-body --agent codex --model gpt-5.3-codex
 ```

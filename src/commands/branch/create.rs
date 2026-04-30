@@ -24,11 +24,14 @@ use crate::commands::staging::{self, ContinueLabel, StagingAction};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
+use crate::progress::LiveTimer;
 use crate::remote;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use console::Term;
 use dialoguer::{theme::ColorfulTheme, Input, Select};
+use serde::Deserialize;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 use std::sync::{
@@ -52,6 +55,318 @@ struct CreatePlacement {
     below_current_meta: Option<BranchMetadata>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AiCreateTargets {
+    branch: bool,
+    message: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AiCreateDetails {
+    branch: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawAiCreateDetails {
+    branch: Option<String>,
+    branch_name: Option<String>,
+    message: Option<String>,
+    commit_message: Option<String>,
+}
+
+const MAX_AI_CREATE_DIFF_BYTES: usize = 80_000;
+
+fn resolve_ai_create_targets(
+    ai: bool,
+    name: Option<&str>,
+    message: Option<&str>,
+    all: bool,
+    has_staged_changes: bool,
+    has_uncommitted_changes: bool,
+    can_prompt_for_staging: bool,
+) -> Result<Option<AiCreateTargets>> {
+    if !ai {
+        return Ok(None);
+    }
+
+    let targets = AiCreateTargets {
+        branch: name.is_none(),
+        message: message.is_none()
+            && (all || has_staged_changes || (has_uncommitted_changes && can_prompt_for_staging)),
+    };
+
+    Ok((targets.branch || targets.message).then_some(targets))
+}
+
+fn generate_ai_create_details(
+    workdir: &Path,
+    config: &mut Config,
+    targets: AiCreateTargets,
+    stage_all: bool,
+    non_interactive: bool,
+) -> Result<AiCreateDetails> {
+    use crate::commands::generate;
+
+    let (agent, model) = if non_interactive {
+        let agent = generate::resolve_agent_non_interactive(None, config, "generate")?;
+        let model = generate::resolve_model(None, config, &agent, "generate")?;
+        (agent, model)
+    } else if config.ai.generate.agent.is_some() {
+        let agent = config
+            .ai
+            .agent_for("generate")
+            .context("No AI agent configured for create generation")?
+            .to_string();
+        let model = generate::resolve_model(None, config, &agent, "generate")?;
+        (agent, model)
+    } else {
+        generate::prompt_for_feature_ai(config, "generate")?
+    };
+
+    generate::print_using_agent(&agent, model.as_deref());
+
+    let context_timer = LiveTimer::maybe_new(true, "Collecting branch context...");
+    let status = git_stdout(workdir, &["status", "--short", "--untracked-files=all"]);
+    let staged_diff = git_stdout(workdir, &["diff", "--cached"]);
+    let unstaged_diff = git_stdout(workdir, &["diff"]);
+    LiveTimer::maybe_finish_ok(context_timer, "done");
+
+    let prompt =
+        build_ai_create_details_prompt(&status, &staged_diff, &unstaged_diff, targets, stage_all);
+
+    let generation_timer = LiveTimer::maybe_new(true, "Generating AI create details...");
+    let raw = match generate::invoke_ai_agent(&agent, model.as_deref(), &prompt) {
+        Ok(raw) => raw,
+        Err(err) => {
+            LiveTimer::maybe_finish_warn(generation_timer, "failed");
+            return Err(err);
+        }
+    };
+
+    match parse_ai_create_details(&raw, targets) {
+        Ok(details) => {
+            LiveTimer::maybe_finish_ok(generation_timer, "done");
+            Ok(details)
+        }
+        Err(err) => {
+            LiveTimer::maybe_finish_warn(generation_timer, "failed");
+            Err(err)
+        }
+    }
+}
+
+fn resolve_ai_create_details_for_use(
+    mut details: AiCreateDetails,
+    targets: AiCreateTargets,
+    auto_accept: bool,
+) -> Result<AiCreateDetails> {
+    if auto_accept {
+        return Ok(details);
+    }
+
+    if targets.branch {
+        let suggested = details
+            .branch
+            .clone()
+            .context("AI agent did not return a branch")?;
+        let branch: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Branch name")
+            .default(suggested)
+            .interact_text()?;
+        details.branch = Some(require_non_empty(branch, "branch")?);
+    }
+
+    if targets.message {
+        let suggested = details
+            .message
+            .clone()
+            .context("AI agent did not return a commit message")?;
+        let message: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Commit message")
+            .default(suggested)
+            .interact_text()?;
+        details.message = Some(require_non_empty(message, "commit message")?);
+    }
+
+    Ok(details)
+}
+
+fn parse_ai_create_details(raw: &str, targets: AiCreateTargets) -> Result<AiCreateDetails> {
+    let json = extract_ai_json(raw);
+    let parsed: RawAiCreateDetails = serde_json::from_str(&json)
+        .context("AI agent did not return JSON create details with branch/message fields")?;
+
+    let branch = parsed
+        .branch
+        .or(parsed.branch_name)
+        .and_then(non_empty_trimmed);
+    let message = parsed
+        .message
+        .or(parsed.commit_message)
+        .and_then(non_empty_trimmed);
+
+    if targets.branch && branch.is_none() {
+        bail!("AI agent did not return a non-empty branch");
+    }
+    if targets.message && message.is_none() {
+        bail!("AI agent did not return a non-empty commit message");
+    }
+
+    Ok(AiCreateDetails {
+        branch: targets.branch.then_some(branch).flatten(),
+        message: targets.message.then_some(message).flatten(),
+    })
+}
+
+fn build_ai_create_details_prompt(
+    status: &str,
+    staged_diff: &str,
+    unstaged_diff: &str,
+    targets: AiCreateTargets,
+    stage_all: bool,
+) -> String {
+    let mut prompt = String::new();
+
+    match (targets.branch, targets.message) {
+        (true, true) => prompt
+            .push_str("Generate a branch name and first commit message for these changes.\n\n"),
+        (true, false) => prompt.push_str("Generate a branch name for these changes.\n\n"),
+        (false, true) => prompt.push_str("Generate a first commit message for these changes.\n\n"),
+        (false, false) => prompt.push_str("Summarize these changes.\n\n"),
+    }
+
+    prompt.push_str("Return only a compact JSON object with these string fields: ");
+    match (targets.branch, targets.message) {
+        (true, true) => prompt.push_str("\"branch\" and \"message\""),
+        (true, false) => prompt.push_str("\"branch\""),
+        (false, true) => prompt.push_str("\"message\""),
+        (false, false) => prompt.push_str(""),
+    }
+    prompt.push_str(". Do not include markdown fences or explanatory text.\n\n");
+
+    if targets.branch {
+        prompt.push_str(
+            "Branch requirements:\n- Short lowercase slug suitable for a Git branch\n- No spaces\n- No prefix like feature/ unless the change clearly needs a nested branch name\n\n",
+        );
+    }
+
+    if targets.message {
+        prompt.push_str(
+            "Commit message requirements:\n- Imperative mood\n- Concise subject line\n- No trailing period\n\n",
+        );
+    }
+
+    if stage_all {
+        prompt.push_str("The command will stage all changes before committing.\n\n");
+    } else {
+        prompt.push_str(
+            "Only already-staged changes are guaranteed to be committed; unstaged changes may be used for naming context.\n\n",
+        );
+    }
+
+    if !status.is_empty() {
+        prompt.push_str("Git status:\n```\n");
+        prompt.push_str(status);
+        prompt.push_str("\n```\n\n");
+    }
+
+    if !staged_diff.is_empty() {
+        prompt.push_str("Staged diff:\n```diff\n");
+        prompt.push_str(&truncate_ai_create_diff(staged_diff));
+        prompt.push_str("\n```\n\n");
+    }
+
+    if !unstaged_diff.is_empty() {
+        prompt.push_str("Unstaged diff:\n```diff\n");
+        prompt.push_str(&truncate_ai_create_diff(unstaged_diff));
+        prompt.push_str("\n```\n\n");
+    }
+
+    prompt
+}
+
+fn git_stdout(workdir: &Path, args: &[&str]) -> String {
+    Command::new("git")
+        .args(args)
+        .current_dir(workdir)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+fn truncate_ai_create_diff(diff: &str) -> String {
+    if diff.len() <= MAX_AI_CREATE_DIFF_BYTES {
+        return diff.to_string();
+    }
+
+    let safe_end = safe_char_boundary(diff, MAX_AI_CREATE_DIFF_BYTES);
+    let safe = &diff[..safe_end];
+    let cut = safe.rfind('\n').unwrap_or(safe.len());
+    format!(
+        "{}\n\n... (diff truncated, showing first ~80KB of {} total) ...",
+        &safe[..cut],
+        format_ai_bytes(diff.len())
+    )
+}
+
+fn safe_char_boundary(value: &str, max: usize) -> usize {
+    let mut end = max.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+fn format_ai_bytes(bytes: usize) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1}MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{}B", bytes)
+    }
+}
+
+fn extract_ai_json(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let unfenced = if trimmed.starts_with("```") {
+        let without_opening = trimmed.lines().skip(1).collect::<Vec<_>>().join("\n");
+        without_opening
+            .trim()
+            .strip_suffix("```")
+            .unwrap_or(without_opening.trim())
+            .trim()
+            .to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    if unfenced.starts_with('{') && unfenced.ends_with('}') {
+        return unfenced;
+    }
+
+    match (unfenced.find('{'), unfenced.rfind('}')) {
+        (Some(start), Some(end)) if start < end => unfenced[start..=end].to_string(),
+        _ => unfenced,
+    }
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn require_non_empty(value: String, field: &str) -> Result<String> {
+    non_empty_trimmed(value).with_context(|| format!("{} cannot be empty", field))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     name: Option<String>,
@@ -62,18 +377,53 @@ pub fn run(
     insert: bool,
     below: bool,
     no_verify: bool,
+    ai: bool,
+    yes: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
-    let config = Config::load()?;
+    let mut config = Config::load()?;
     let current = repo.current_branch()?;
     let placement = resolve_create_placement(&repo, &current, from, insert, below)?;
     let parent_branch = placement.parent_branch;
     let below_current_meta = placement.below_current_meta;
-    let generated_from_message = name.is_none() && message.is_some();
 
     if repo.branch_commit(&parent_branch).is_err() {
         anyhow::bail!("Branch '{}' does not exist", parent_branch);
     }
+
+    let workdir = repo.workdir()?;
+    let has_staged_changes = !staging::is_staging_area_empty(workdir)?;
+    let has_uncommitted_changes = staging::has_uncommitted_changes(workdir);
+    let non_interactive =
+        yes || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal();
+    let can_prompt_for_staging = !non_interactive;
+    let ai_targets = resolve_ai_create_targets(
+        ai,
+        name.as_deref(),
+        message.as_deref(),
+        all,
+        has_staged_changes,
+        has_uncommitted_changes,
+        can_prompt_for_staging,
+    )?;
+    let ai_details = match ai_targets {
+        Some(targets) => {
+            let details =
+                generate_ai_create_details(workdir, &mut config, targets, all, non_interactive)?;
+            Some(resolve_ai_create_details_for_use(
+                details,
+                targets,
+                non_interactive,
+            )?)
+        }
+        None => None,
+    };
+    let ai_branch = ai_details
+        .as_ref()
+        .and_then(|details| details.branch.clone());
+    let ai_message = ai_details
+        .as_ref()
+        .and_then(|details| details.message.clone());
 
     // Get the branch name from either name or message
     // When using -m, the message is used for both branch name and commit message.
@@ -81,13 +431,36 @@ pub fn run(
     // it offers an interactive menu (or bails in non-TTY). Use -a/--all to
     // skip the menu and force-stage.
     // When neither name nor message is provided, launch interactive wizard.
-    let (input, commit_message, stage_mode) = match (&name, &message) {
-        (Some(n), _) => (
-            n.clone(),
-            None,
-            if all { StageMode::All } else { StageMode::None },
-        ),
-        (None, Some(m)) => (
+    let (input, commit_message, stage_mode, generated_from_message) = if let Some(n) = &name {
+        let commit_message = ai_message;
+        let stage_mode = if commit_message.is_some() {
+            if all {
+                StageMode::All
+            } else {
+                StageMode::ExistingOnly
+            }
+        } else if all {
+            StageMode::All
+        } else {
+            StageMode::None
+        };
+        (n.clone(), commit_message, stage_mode, false)
+    } else if let Some(generated_branch) = ai_branch {
+        let commit_message = message.clone().or(ai_message);
+        let stage_mode = if commit_message.is_some() {
+            if all {
+                StageMode::All
+            } else {
+                StageMode::ExistingOnly
+            }
+        } else if all {
+            StageMode::All
+        } else {
+            StageMode::None
+        };
+        (generated_branch, commit_message, stage_mode, true)
+    } else if let Some(m) = &message {
+        (
             m.clone(),
             Some(m.clone()),
             if all {
@@ -95,18 +468,15 @@ pub fn run(
             } else {
                 StageMode::ExistingOnly
             },
-        ),
-        (None, None) => {
-            if !Term::stderr().is_term() {
-                bail!(
-                    "Branch name required. Use: stax create <name> or stax create -m \"message\""
-                );
-            }
-            // Launch interactive wizard
-            let (wizard_name, wizard_msg, wizard_stage) =
-                run_wizard(repo.workdir()?, &parent_branch)?;
-            (wizard_name, wizard_msg, wizard_stage)
+            true,
+        )
+    } else {
+        if !Term::stderr().is_term() {
+            bail!("Branch name required. Use: stax create <name> or stax create -m \"message\"");
         }
+        // Launch interactive wizard
+        let (wizard_name, wizard_msg, wizard_stage) = run_wizard(repo.workdir()?, &parent_branch)?;
+        (wizard_name, wizard_msg, wizard_stage, false)
     };
 
     // Format the branch name according to config
@@ -1031,4 +1401,109 @@ fn run_wizard(workdir: &Path, parent_branch: &str) -> Result<(String, Option<Str
 
     println!();
     Ok((name, msg, stage_mode))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn targets(branch: bool, message: bool) -> AiCreateTargets {
+        AiCreateTargets { branch, message }
+    }
+
+    #[test]
+    fn ai_create_targets_plain_ai_generates_branch_and_message_for_all_changes() {
+        let resolved =
+            resolve_ai_create_targets(true, None, None, true, false, true, false).unwrap();
+
+        assert_eq!(resolved, Some(targets(true, true)));
+    }
+
+    #[test]
+    fn ai_create_targets_named_branch_generates_commit_message_only() {
+        let resolved =
+            resolve_ai_create_targets(true, Some("manual-branch"), None, false, true, true, false)
+                .unwrap();
+
+        assert_eq!(resolved, Some(targets(false, true)));
+    }
+
+    #[test]
+    fn ai_create_targets_manual_message_generates_branch_only() {
+        let resolved = resolve_ai_create_targets(
+            true,
+            None,
+            Some("Manual commit message"),
+            true,
+            false,
+            true,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(resolved, Some(targets(true, false)));
+    }
+
+    #[test]
+    fn ai_create_targets_skips_ai_when_no_field_needs_generation() {
+        let resolved = resolve_ai_create_targets(
+            true,
+            Some("manual-branch"),
+            None,
+            false,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn ai_create_targets_do_not_generate_message_without_commit_path() {
+        let resolved =
+            resolve_ai_create_targets(true, None, None, false, false, true, false).unwrap();
+
+        assert_eq!(resolved, Some(targets(true, false)));
+    }
+
+    #[test]
+    fn parse_ai_create_details_accepts_fenced_json() {
+        let parsed = parse_ai_create_details(
+            "```json\n{\"branch\":\"add-ai-create\",\"message\":\"Add AI create\"}\n```",
+            targets(true, true),
+        )
+        .unwrap();
+
+        assert_eq!(parsed.branch.as_deref(), Some("add-ai-create"));
+        assert_eq!(parsed.message.as_deref(), Some("Add AI create"));
+    }
+
+    #[test]
+    fn parse_ai_create_details_requires_requested_fields() {
+        let err = parse_ai_create_details(r#"{"message":"Only a message"}"#, targets(true, false))
+            .unwrap_err();
+        assert!(err.to_string().contains("non-empty branch"));
+
+        let err = parse_ai_create_details(r#"{"branch":"only-branch"}"#, targets(false, true))
+            .unwrap_err();
+        assert!(err.to_string().contains("non-empty commit message"));
+    }
+
+    #[test]
+    fn build_ai_create_prompt_mentions_only_requested_fields() {
+        let prompt = build_ai_create_details_prompt(
+            " M src/lib.rs",
+            "diff --git a/src/lib.rs b/src/lib.rs",
+            "",
+            targets(false, true),
+            true,
+        );
+
+        assert!(prompt.contains("\"message\""));
+        assert!(!prompt.contains("\"branch\" and \"message\""));
+        assert!(prompt.contains("The command will stage all changes before committing."));
+        assert!(prompt.contains("diff --git"));
+    }
 }

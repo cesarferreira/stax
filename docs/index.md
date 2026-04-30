@@ -31,7 +31,7 @@
 | Understand worktree-aware behavior | [Multi-worktree behavior](workflows/multi-worktree.md) |
 | Recover from a bad rewrite | [Undo and redo](safety/undo-redo.md) |
 | Validate or repair stack metadata | [Stack health](commands/stack-health.md) |
-| Generate PR bodies / standup summaries | [Reporting](workflows/reporting.md) · [PR templates + AI](integrations/pr-templates-and-ai.md) |
+| Generate branch names, PR bodies, or standup summaries | [Reporting](workflows/reporting.md) · [PR templates + AI](integrations/pr-templates-and-ai.md) |
 | Configure auth, naming, or AI agents | [Configuration](configuration/index.md) |
 | Cut a release with auto-generated changelog | [Release workflow](workflows/releasing.md) |
 | Use stax alongside a specific AI tool | [Integrations](integrations/claude-code.md) |

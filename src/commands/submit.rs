@@ -15,6 +15,7 @@ use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Editor, Input, Select};
+use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -60,7 +61,9 @@ pub struct SubmitOptions {
     pub template: Option<String>,
     pub no_template: bool,
     pub edit: bool,
-    pub ai_body: bool,
+    pub ai: bool,
+    pub title: bool,
+    pub body: bool,
     pub rerequest_review: bool,
     pub squash: bool,
     pub update_title: bool,
@@ -75,9 +78,12 @@ struct PrPlan {
     tip_commit_subject: Option<String>,
     /// Whether the tip commit subject differs from the existing PR title.
     needs_title_update: bool,
+    existing_pr_title: Option<String>,
     // For new PRs, we'll collect these upfront
     title: Option<String>,
     body: Option<String>,
+    ai_title_update: Option<String>,
+    generated_body_update: Option<String>,
     is_draft: Option<bool>,
     // Track if this is a no-op (already synced)
     needs_push: bool,
@@ -96,6 +102,120 @@ struct SubmitPhaseTimings {
 
 const PR_TYPE_OPTIONS: [&str; 2] = ["Create as draft", "Publish immediately"];
 const PR_TYPE_DEFAULT_INDEX: usize = 0;
+const MAX_AI_DIFF_BYTES: usize = 80_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AiPrTargets {
+    title: bool,
+    body: bool,
+    explicit_scope: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AiPrDetails {
+    title: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct AiAgentSelection {
+    agent: String,
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawAiPrDetails {
+    title: Option<String>,
+    body: Option<String>,
+}
+
+fn resolve_ai_targets(
+    ai: bool,
+    title: bool,
+    body: bool,
+    update_title: bool,
+) -> Result<Option<AiPrTargets>> {
+    if !ai {
+        if title {
+            anyhow::bail!("--title requires --ai");
+        }
+        if body {
+            anyhow::bail!("--body requires --ai");
+        }
+        return Ok(None);
+    }
+
+    let explicit_scope = title || body;
+    let targets = AiPrTargets {
+        title: if explicit_scope { title } else { true },
+        body: if explicit_scope { body } else { true },
+        explicit_scope,
+    };
+
+    if update_title && targets.title {
+        anyhow::bail!("--update-title cannot be combined with AI title generation");
+    }
+
+    Ok(Some(targets))
+}
+
+fn existing_ai_targets_for_auto_accept(targets: AiPrTargets) -> Option<AiPrTargets> {
+    targets.explicit_scope.then_some(targets)
+}
+
+fn parse_ai_pr_details(raw: &str, targets: AiPrTargets) -> Result<AiPrDetails> {
+    let json = extract_ai_json(raw);
+    let parsed: RawAiPrDetails = serde_json::from_str(&json)
+        .context("AI agent did not return JSON PR details with title/body fields")?;
+
+    let title = parsed.title.and_then(non_empty_trimmed);
+    let body = parsed.body.and_then(non_empty_trimmed);
+
+    if targets.title && title.is_none() {
+        anyhow::bail!("AI agent did not return a non-empty title");
+    }
+    if targets.body && body.is_none() {
+        anyhow::bail!("AI agent did not return a non-empty body");
+    }
+
+    Ok(AiPrDetails {
+        title: targets.title.then_some(title).flatten(),
+        body: targets.body.then_some(body).flatten(),
+    })
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn extract_ai_json(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let unfenced = if trimmed.starts_with("```") {
+        let without_opening = trimmed.lines().skip(1).collect::<Vec<_>>().join("\n");
+        without_opening
+            .trim()
+            .strip_suffix("```")
+            .unwrap_or(without_opening.trim())
+            .trim()
+            .to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    if unfenced.starts_with('{') && unfenced.ends_with('}') {
+        return unfenced;
+    }
+
+    match (unfenced.find('{'), unfenced.rfind('}')) {
+        (Some(start), Some(end)) if start < end => unfenced[start..=end].to_string(),
+        _ => unfenced,
+    }
+}
 
 fn resolve_is_draft_without_prompt(
     draft_flag_set: bool,
@@ -133,11 +253,16 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         template,
         no_template,
         edit,
-        ai_body,
+        ai,
+        title: ai_title,
+        body: body_scope,
         rerequest_review,
         squash,
         update_title,
     } = options;
+
+    let ai_targets = resolve_ai_targets(ai, ai_title, body_scope, update_title)?;
+    let auto_accept_prompts = yes || no_prompt;
 
     if force && !quiet {
         eprintln!(
@@ -150,7 +275,6 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let stack = Stack::load(&repo)?;
     let config = Config::load()?;
     let stack_links_mode = config.submit.stack_links;
-    let _ = yes; // Used for future auto-confirm features
 
     // Track if --draft was explicitly passed (we'll ask interactively if not)
     let draft_flag_set = draft;
@@ -503,8 +627,11 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 existing_pr_is_draft: None,
                 tip_commit_subject: None,
                 needs_title_update: false,
+                existing_pr_title: None,
                 title: None,
                 body: None,
+                ai_title_update: None,
+                generated_body_update: None,
                 is_draft: None,
                 needs_push,
                 needs_pr_update: false,
@@ -687,8 +814,11 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 existing_pr_is_draft: existing_pr.as_ref().map(|pr| pr.info.is_draft),
                 tip_commit_subject,
                 needs_title_update,
+                existing_pr_title: existing_pr.as_ref().map(|pr| pr.title.clone()),
                 title: None,
                 body: None,
+                ai_title_update: None,
+                generated_body_update: None,
                 is_draft: None,
                 needs_push,
                 needs_pr_update,
@@ -743,7 +873,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         }
     }
 
-    // Collect PR details for new PRs BEFORE pushing (skip empty branches)
+    // Collect PR details and AI update choices BEFORE pushing (skip empty branches).
     if !no_pr {
         // Discover all available PR templates
         let discovered_templates = if no_template {
@@ -751,6 +881,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         } else {
             discover_pr_templates(repo.workdir()?).unwrap_or_default()
         };
+        let mut ai_agent_selection: Option<AiAgentSelection> = None;
         let new_prs: Vec<_> = plans
             .iter()
             .filter(|p| p.existing_pr.is_none() && !p.is_empty)
@@ -783,8 +914,8 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     );
                 }
                 found
-            } else if no_prompt {
-                // --no-prompt: use first template if exactly one exists
+            } else if auto_accept_prompts {
+                // Non-interactive/auto-accept: use first template if exactly one exists
                 if discovered_templates.len() == 1 {
                     Some(discovered_templates[0].clone())
                 } else {
@@ -808,53 +939,76 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 println!("  {}", plan.branch.cyan());
             }
 
-            let title = if no_prompt {
-                default_title
-            } else {
-                Input::with_theme(&ColorfulTheme::default())
-                    .with_prompt("  Title")
-                    .default(default_title)
-                    .interact_text()?
-            };
-
-            let body = if ai_body {
-                // --ai-body flag: generate body using AI agent
-                if !quiet {
-                    println!("    {}", "Generating PR body with AI...".dimmed());
-                }
-                let ai_body_result = generate_ai_body(
+            let ai_details = if let Some(targets) = ai_targets {
+                match generate_ai_pr_details(
                     repo.workdir()?,
                     &plan.parent,
                     &plan.branch,
                     template_content,
-                );
-                match ai_body_result {
-                    Ok(generated) => {
-                        if edit {
-                            Editor::new().edit(&generated)?.unwrap_or(generated)
-                        } else {
-                            generated
-                        }
-                    }
+                    targets,
+                    &mut ai_agent_selection,
+                    auto_accept_prompts,
+                    quiet,
+                ) {
+                    Ok(details) => Some(details),
                     Err(e) => {
                         if !quiet {
                             eprintln!(
-                                "    {} AI generation failed: {}. Falling back to default.",
+                                "    {} AI generation failed: {}. Falling back to defaults.",
                                 "⚠".yellow(),
                                 e
                             );
                         }
-                        default_body
+                        finish_default_pr_detail_progress(
+                            quiet,
+                            &plan.branch,
+                            "PR details",
+                            "fallback",
+                        );
+                        None
                     }
                 }
-            } else if no_prompt {
-                default_body
+            } else {
+                None
+            };
+
+            if let Some(targets) = ai_targets {
+                if !targets.title {
+                    finish_default_pr_detail_progress(quiet, &plan.branch, "PR title", "done");
+                }
+                if !targets.body {
+                    finish_default_pr_detail_progress(quiet, &plan.branch, "PR body", "done");
+                }
+            }
+
+            let suggested_title = ai_details
+                .as_ref()
+                .and_then(|details| details.title.clone())
+                .unwrap_or(default_title);
+            let suggested_body = ai_details
+                .as_ref()
+                .and_then(|details| details.body.clone())
+                .unwrap_or(default_body);
+
+            let title = if auto_accept_prompts {
+                suggested_title
+            } else {
+                Input::with_theme(&ColorfulTheme::default())
+                    .with_prompt("  Title")
+                    .default(suggested_title)
+                    .interact_text()?
+            };
+
+            let body = if auto_accept_prompts {
+                suggested_body
             } else if edit {
                 // --edit flag: always open editor
-                Editor::new().edit(&default_body)?.unwrap_or(default_body)
+                Editor::new()
+                    .edit(&suggested_body)?
+                    .unwrap_or(suggested_body)
             } else {
                 // Interactive prompt
-                let options = if default_body.trim().is_empty() {
+                let options = if suggested_body.trim().is_empty() {
                     vec!["Edit", "Skip (leave empty)"]
                 } else {
                     vec!["Use default", "Edit", "Skip (leave empty)"]
@@ -867,15 +1021,17 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     .interact()?;
 
                 match options[choice] {
-                    "Use default" => default_body,
-                    "Edit" => Editor::new().edit(&default_body)?.unwrap_or(default_body),
+                    "Use default" => suggested_body,
+                    "Edit" => Editor::new()
+                        .edit(&suggested_body)?
+                        .unwrap_or(suggested_body),
                     _ => String::new(),
                 }
             };
 
             // Ask about draft vs publish (only if --draft/--publish wasn't explicitly set)
             let is_draft = if let Some(is_draft) =
-                resolve_is_draft_without_prompt(draft_flag_set, publish, draft, no_prompt)
+                resolve_is_draft_without_prompt(draft_flag_set, publish, draft, auto_accept_prompts)
             {
                 is_draft
             } else {
@@ -890,6 +1046,112 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             plan.title = Some(title);
             plan.body = Some(body);
             plan.is_draft = Some(is_draft);
+        }
+
+        if let Some(targets) = ai_targets {
+            let should_consider_existing_ai =
+                !auto_accept_prompts || existing_ai_targets_for_auto_accept(targets).is_some();
+            if should_consider_existing_ai {
+                let existing_prs: Vec<_> = plans
+                    .iter()
+                    .filter(|p| p.existing_pr.is_some() && !p.is_empty)
+                    .collect();
+                if !existing_prs.is_empty() && !quiet {
+                    println!();
+                    println!("{}", "Existing PR AI updates:".bold());
+                }
+
+                for plan in &mut plans {
+                    let Some(pr_number) = plan.existing_pr else {
+                        continue;
+                    };
+                    if plan.is_empty {
+                        continue;
+                    }
+
+                    let selected_targets = if auto_accept_prompts {
+                        existing_ai_targets_for_auto_accept(targets)
+                    } else {
+                        if !quiet {
+                            println!("  {} #{}", plan.branch.cyan(), pr_number);
+                        }
+                        prompt_existing_ai_targets(targets, &plan.branch, pr_number)?
+                    };
+
+                    let Some(selected_targets) = selected_targets else {
+                        if !quiet && !auto_accept_prompts {
+                            println!("    {}", "Skipping AI content update".dimmed());
+                        }
+                        continue;
+                    };
+
+                    let selected_template = if !selected_targets.body || no_template {
+                        None
+                    } else if let Some(ref template_name) = template {
+                        let found = discovered_templates
+                            .iter()
+                            .find(|t| t.name == *template_name)
+                            .cloned();
+
+                        if found.is_none() && !quiet {
+                            eprintln!(
+                                "  {} Template '{}' not found, using no template",
+                                "!".yellow(),
+                                template_name
+                            );
+                        }
+                        found
+                    } else if auto_accept_prompts {
+                        if discovered_templates.len() == 1 {
+                            Some(discovered_templates[0].clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        select_template_interactive(&discovered_templates)?
+                    };
+                    let template_content = selected_template.as_ref().map(|t| t.content.as_str());
+
+                    match generate_ai_pr_details(
+                        repo.workdir()?,
+                        &plan.parent,
+                        &plan.branch,
+                        template_content,
+                        selected_targets,
+                        &mut ai_agent_selection,
+                        auto_accept_prompts,
+                        quiet,
+                    ) {
+                        Ok(details) => {
+                            if let Some(title) = details.title {
+                                if plan.existing_pr_title.as_deref() == Some(title.as_str()) {
+                                    if !quiet {
+                                        println!(
+                                            "    {}",
+                                            "AI title matches existing title".dimmed()
+                                        );
+                                    }
+                                } else {
+                                    plan.ai_title_update = Some(title);
+                                }
+                            }
+                            if let Some(body) = details.body {
+                                plan.generated_body_update = Some(body);
+                            }
+                        }
+                        Err(e) => {
+                            if !quiet {
+                                eprintln!(
+                                    "    {} AI generation failed for existing PR #{}: {}",
+                                    "⚠".yellow(),
+                                    pr_number,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1003,9 +1265,13 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     }
 
     // Check if anything needs to be done (exclude empty branches)
-    let any_pr_work = plans
-        .iter()
-        .any(|p| !p.is_empty && (p.existing_pr.is_none() || p.needs_pr_update));
+    let any_pr_work = plans.iter().any(|p| {
+        !p.is_empty
+            && (p.existing_pr.is_none()
+                || p.needs_pr_update
+                || p.ai_title_update.is_some()
+                || p.generated_body_update.is_some())
+    });
 
     let any_existing_prs = plans.iter().any(|p| !p.is_empty && p.existing_pr.is_some());
 
@@ -1079,6 +1345,16 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                                 .await?;
                         }
                     }
+
+                    apply_ai_pr_content_updates(
+                        &client,
+                        existing_pr_number,
+                        &plan.branch,
+                        plan.ai_title_update.as_deref(),
+                        plan.generated_body_update.as_deref(),
+                        quiet,
+                    )
+                    .await?;
 
                     apply_pr_metadata(&client, existing_pr_number, &reviewers, &labels, &assignees)
                         .await?;
@@ -1193,6 +1469,16 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         }
                         LiveTimer::maybe_finish_ok(title_timer, "done");
                     }
+
+                    apply_ai_pr_content_updates(
+                        &client,
+                        existing_pr_number,
+                        &plan.branch,
+                        plan.ai_title_update.as_deref(),
+                        plan.generated_body_update.as_deref(),
+                        quiet,
+                    )
+                    .await?;
 
                     // No-op - just add to pr_infos for summary
                     pr_infos.push(StackPrInfo {
@@ -1746,6 +2032,259 @@ fn render_commit_list(commit_messages: &[String]) -> String {
         .join("\n")
 }
 
+fn prompt_existing_ai_targets(
+    targets: AiPrTargets,
+    branch: &str,
+    pr_number: u64,
+) -> Result<Option<AiPrTargets>> {
+    let items = existing_ai_prompt_items(targets);
+    let labels: Vec<_> = items.iter().map(|(label, _)| *label).collect();
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(format!("  AI update for {} #{}", branch, pr_number))
+        .items(&labels)
+        .default(0)
+        .interact()?;
+
+    Ok(items[choice].1)
+}
+
+fn existing_ai_prompt_items(targets: AiPrTargets) -> Vec<(&'static str, Option<AiPrTargets>)> {
+    let mut items: Vec<(&str, Option<AiPrTargets>)> = vec![("Skip", None)];
+
+    match (targets.title, targets.body) {
+        (true, true) => {
+            items.push((
+                "Update title",
+                Some(AiPrTargets {
+                    title: true,
+                    body: false,
+                    explicit_scope: true,
+                }),
+            ));
+            items.push((
+                "Update body",
+                Some(AiPrTargets {
+                    title: false,
+                    body: true,
+                    explicit_scope: true,
+                }),
+            ));
+            items.push((
+                "Update title and body",
+                Some(AiPrTargets {
+                    title: true,
+                    body: true,
+                    explicit_scope: true,
+                }),
+            ));
+        }
+        (true, false) => items.push(("Update title", Some(targets))),
+        (false, true) => items.push(("Update body", Some(targets))),
+        (false, false) => {}
+    }
+
+    items
+}
+
+fn finish_default_pr_detail_progress(quiet: bool, branch: &str, field: &str, suffix: &str) {
+    let timer = LiveTimer::maybe_new(
+        !quiet,
+        &format!("    Using default {} for {}...", field, branch),
+    );
+    if suffix == "fallback" {
+        LiveTimer::maybe_finish_warn(timer, suffix);
+    } else {
+        LiveTimer::maybe_finish_ok(timer, suffix);
+    }
+}
+
+fn resolve_ai_agent_selection(
+    cache: &mut Option<AiAgentSelection>,
+    non_interactive: bool,
+) -> Result<AiAgentSelection> {
+    if let Some(selection) = cache {
+        return Ok(selection.clone());
+    }
+
+    use super::generate;
+
+    let mut config = Config::load()?;
+    let (agent, model) = if non_interactive {
+        let agent = generate::resolve_agent_non_interactive(None, &config, "generate")?;
+        let model = generate::resolve_model(None, &config, &agent, "generate")?;
+        (agent, model)
+    } else if config.ai.generate.agent.is_some() {
+        let agent = config
+            .ai
+            .agent_for("generate")
+            .context("No AI agent configured for PR generation")?
+            .to_string();
+        let model = generate::resolve_model(None, &config, &agent, "generate")?;
+        (agent, model)
+    } else {
+        generate::prompt_for_feature_ai(&mut config, "generate")?
+    };
+
+    let selection = AiAgentSelection { agent, model };
+    *cache = Some(selection.clone());
+    Ok(selection)
+}
+
+fn generate_ai_pr_details(
+    workdir: &Path,
+    parent: &str,
+    branch: &str,
+    template: Option<&str>,
+    targets: AiPrTargets,
+    selection_cache: &mut Option<AiAgentSelection>,
+    non_interactive: bool,
+    quiet: bool,
+) -> Result<AiPrDetails> {
+    use super::generate;
+
+    let selection = resolve_ai_agent_selection(selection_cache, non_interactive)?;
+    if !quiet {
+        generate::print_using_agent(&selection.agent, selection.model.as_deref());
+    }
+
+    let context_timer = LiveTimer::maybe_new(
+        !quiet,
+        &format!("    Collecting PR context for {}...", branch),
+    );
+    let diff_stat = generate::get_diff_stat(workdir, parent, branch);
+    let diff = generate::get_full_diff(workdir, parent, branch);
+    let commits = collect_commit_messages(workdir, parent, branch);
+    LiveTimer::maybe_finish_ok(context_timer, "done");
+
+    let prompt = build_ai_pr_details_prompt(&diff_stat, &diff, &commits, template, targets);
+
+    let generation_timer = LiveTimer::maybe_new(
+        !quiet,
+        &format!("    Generating AI PR details for {}...", branch),
+    );
+    let raw = match generate::invoke_ai_agent(&selection.agent, selection.model.as_deref(), &prompt)
+    {
+        Ok(raw) => raw,
+        Err(err) => {
+            LiveTimer::maybe_finish_warn(generation_timer, "failed");
+            return Err(err);
+        }
+    };
+
+    match parse_ai_pr_details(&raw, targets) {
+        Ok(details) => {
+            LiveTimer::maybe_finish_ok(generation_timer, "done");
+            Ok(details)
+        }
+        Err(err) => {
+            LiveTimer::maybe_finish_warn(generation_timer, "failed");
+            Err(err)
+        }
+    }
+}
+
+fn build_ai_pr_details_prompt(
+    diff_stat: &str,
+    diff: &str,
+    commits: &[String],
+    template: Option<&str>,
+    targets: AiPrTargets,
+) -> String {
+    let mut prompt = String::new();
+
+    match (targets.title, targets.body) {
+        (true, true) => {
+            prompt.push_str("Generate a pull request title and body for the following changes.\n\n")
+        }
+        (true, false) => {
+            prompt.push_str("Generate a pull request title for the following changes.\n\n")
+        }
+        (false, true) => {
+            prompt.push_str("Generate a pull request body for the following changes.\n\n")
+        }
+        (false, false) => prompt.push_str("Summarize the following changes.\n\n"),
+    }
+
+    prompt.push_str("Return only a compact JSON object with these string fields: ");
+    let fields = match (targets.title, targets.body) {
+        (true, true) => "\"title\" and \"body\"",
+        (true, false) => "\"title\"",
+        (false, true) => "\"body\"",
+        (false, false) => "",
+    };
+    prompt.push_str(fields);
+    prompt.push_str(". Do not include markdown fences or explanatory text.\n\n");
+
+    if targets.title {
+        prompt.push_str("Title requirements:\n- Concise PR title, no trailing period\n- Describe the user-visible change, not the implementation mechanics\n\n");
+    }
+
+    if targets.body {
+        if let Some(tmpl) = template {
+            prompt.push_str("Use this PR template as the body structure. Fill in each section based on the changes:\n\n");
+            prompt.push_str(tmpl);
+            prompt.push_str("\n\n");
+        } else {
+            prompt.push_str("Body requirements:\n- Markdown\n- Include a clear Summary section\n- Mention important tests or validation only when supported by the diff or commits\n\n");
+        }
+    }
+
+    if !commits.is_empty() {
+        prompt.push_str("Commit messages:\n");
+        for msg in commits {
+            prompt.push_str(&format!("- {}\n", msg));
+        }
+        prompt.push('\n');
+    }
+
+    if !diff_stat.is_empty() {
+        prompt.push_str("Diff stat:\n```\n");
+        prompt.push_str(diff_stat);
+        prompt.push_str("\n```\n\n");
+    }
+
+    if !diff.is_empty() {
+        prompt.push_str("Full diff:\n```diff\n");
+        prompt.push_str(&truncate_ai_diff(diff));
+        prompt.push_str("\n```\n\n");
+    }
+
+    prompt
+}
+
+fn truncate_ai_diff(diff: &str) -> String {
+    if diff.len() <= MAX_AI_DIFF_BYTES {
+        return diff.to_string();
+    }
+
+    let safe_end = safe_char_boundary(diff, MAX_AI_DIFF_BYTES);
+    let safe = &diff[..safe_end];
+    let cut = safe.rfind('\n').unwrap_or(safe.len());
+    format!(
+        "{}\n\n... (diff truncated, showing first ~80KB of {} total) ...",
+        &safe[..cut],
+        format_ai_bytes(diff.len())
+    )
+}
+
+fn safe_char_boundary(value: &str, max: usize) -> usize {
+    let mut end = max.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+fn format_ai_bytes(bytes: usize) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1}MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{}B", bytes)
+    }
+}
+
 // Deprecated: Use github::pr_template::discover_pr_templates instead
 #[allow(dead_code)]
 fn load_pr_template(workdir: &Path) -> Option<String> {
@@ -1806,6 +2345,35 @@ async fn apply_pr_metadata(
 
     if !assignees.is_empty() {
         client.add_assignees(pr_number, assignees).await?;
+    }
+
+    Ok(())
+}
+
+async fn apply_ai_pr_content_updates(
+    client: &ForgeClient,
+    pr_number: u64,
+    branch: &str,
+    title: Option<&str>,
+    body: Option<&str>,
+    quiet: bool,
+) -> Result<()> {
+    if let Some(title) = title {
+        let timer = LiveTimer::maybe_new(
+            !quiet,
+            &format!("Updating AI title for {} #{}...", branch, pr_number),
+        );
+        client.update_pr_title(pr_number, title).await?;
+        LiveTimer::maybe_finish_ok(timer, "done");
+    }
+
+    if let Some(body) = body {
+        let timer = LiveTimer::maybe_new(
+            !quiet,
+            &format!("Updating AI body for {} #{}...", branch, pr_number),
+        );
+        client.update_pr_body(pr_number, body).await?;
+        LiveTimer::maybe_finish_ok(timer, "done");
     }
 
     Ok(())
@@ -1877,41 +2445,13 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
-/// Generate a PR body using an AI agent (for --ai-body flag).
-/// Loads agent/model from config, collects diff and commits, invokes the AI CLI.
-fn generate_ai_body(
-    workdir: &Path,
-    parent: &str,
-    branch: &str,
-    template: Option<&str>,
-) -> Result<String> {
-    use super::generate;
-
-    let config = Config::load()?;
-    let agent = config
-        .ai
-        .agent_for("generate")
-        .context(
-            "No AI agent configured. Run `stax generate --pr-body` first to set up, \
-             or add [ai] agent = \"claude\" (or \"codex\" / \"gemini\" / \"opencode\") to ~/.config/stax/config.toml",
-        )?
-        .to_string();
-
-    let model = config.ai.model_for("generate").map(String::from);
-
-    generate::print_using_agent(&agent, model.as_deref());
-
-    let diff_stat = generate::get_diff_stat(workdir, parent, branch);
-    let diff = generate::get_full_diff(workdir, parent, branch);
-    let commits = collect_commit_messages(workdir, parent, branch);
-    let prompt = generate::build_ai_prompt(&diff_stat, &diff, &commits, template);
-
-    generate::invoke_ai_agent(&agent, model.as_deref(), &prompt)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{resolve_is_draft_without_prompt, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS};
+    use super::{
+        build_ai_pr_details_prompt, existing_ai_prompt_items, existing_ai_targets_for_auto_accept,
+        parse_ai_pr_details, resolve_ai_targets, resolve_is_draft_without_prompt, truncate_ai_diff,
+        AiPrTargets, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS,
+    };
 
     #[test]
     fn no_prompt_defaults_to_draft() {
@@ -1957,5 +2497,287 @@ mod tests {
     fn interactive_default_option_is_draft() {
         assert_eq!(PR_TYPE_DEFAULT_INDEX, 0);
         assert_eq!(PR_TYPE_OPTIONS[PR_TYPE_DEFAULT_INDEX], "Create as draft");
+    }
+
+    #[test]
+    fn ai_without_modifiers_targets_title_and_body() {
+        assert_eq!(
+            resolve_ai_targets(true, false, false, false).unwrap(),
+            Some(AiPrTargets {
+                title: true,
+                body: true,
+                explicit_scope: false,
+            })
+        );
+    }
+
+    #[test]
+    fn body_scope_targets_body_only() {
+        assert_eq!(
+            resolve_ai_targets(true, false, true, false).unwrap(),
+            Some(AiPrTargets {
+                title: false,
+                body: true,
+                explicit_scope: true,
+            })
+        );
+    }
+
+    #[test]
+    fn title_scope_targets_title_only() {
+        assert_eq!(
+            resolve_ai_targets(true, true, false, false).unwrap(),
+            Some(AiPrTargets {
+                title: true,
+                body: false,
+                explicit_scope: true,
+            })
+        );
+    }
+
+    #[test]
+    fn title_and_body_scope_targets_both_explicitly() {
+        assert_eq!(
+            resolve_ai_targets(true, true, true, false).unwrap(),
+            Some(AiPrTargets {
+                title: true,
+                body: true,
+                explicit_scope: true,
+            })
+        );
+    }
+
+    #[test]
+    fn title_and_body_modifiers_require_ai() {
+        let err = resolve_ai_targets(false, true, false, false).unwrap_err();
+        assert!(err.to_string().contains("--title requires --ai"));
+
+        let err = resolve_ai_targets(false, false, true, false).unwrap_err();
+        assert!(err.to_string().contains("--body requires --ai"));
+    }
+
+    #[test]
+    fn update_title_conflicts_when_ai_generates_title() {
+        let err = resolve_ai_targets(true, false, false, true).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--update-title cannot be combined"));
+
+        let err = resolve_ai_targets(true, true, false, true).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--update-title cannot be combined"));
+
+        assert!(resolve_ai_targets(true, false, true, true).is_ok());
+    }
+
+    #[test]
+    fn auto_accept_plain_ai_skips_existing_pr_content_updates() {
+        let targets = resolve_ai_targets(true, false, false, false)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(existing_ai_targets_for_auto_accept(targets), None);
+    }
+
+    #[test]
+    fn auto_accept_explicit_title_updates_existing_pr_title() {
+        let targets = resolve_ai_targets(true, true, false, false)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            existing_ai_targets_for_auto_accept(targets),
+            Some(AiPrTargets {
+                title: true,
+                body: false,
+                explicit_scope: true,
+            })
+        );
+    }
+
+    #[test]
+    fn auto_accept_explicit_body_updates_existing_pr_body() {
+        let targets = resolve_ai_targets(true, false, true, false)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            existing_ai_targets_for_auto_accept(targets),
+            Some(AiPrTargets {
+                title: false,
+                body: true,
+                explicit_scope: true,
+            })
+        );
+    }
+
+    #[test]
+    fn auto_accept_explicit_title_and_body_updates_existing_pr_both() {
+        let targets = resolve_ai_targets(true, true, true, false)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            existing_ai_targets_for_auto_accept(targets),
+            Some(AiPrTargets {
+                title: true,
+                body: true,
+                explicit_scope: true,
+            })
+        );
+    }
+
+    #[test]
+    fn existing_ai_prompt_choices_match_requested_scope() {
+        let full = AiPrTargets {
+            title: true,
+            body: true,
+            explicit_scope: false,
+        };
+        let labels: Vec<_> = existing_ai_prompt_items(full)
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Skip",
+                "Update title",
+                "Update body",
+                "Update title and body"
+            ]
+        );
+
+        let title_only = AiPrTargets {
+            title: true,
+            body: false,
+            explicit_scope: true,
+        };
+        let labels: Vec<_> = existing_ai_prompt_items(title_only)
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(labels, vec!["Skip", "Update title"]);
+
+        let body_only = AiPrTargets {
+            title: false,
+            body: true,
+            explicit_scope: true,
+        };
+        let labels: Vec<_> = existing_ai_prompt_items(body_only)
+            .into_iter()
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(labels, vec!["Skip", "Update body"]);
+    }
+
+    #[test]
+    fn parses_ai_pr_details_json() {
+        let targets = AiPrTargets {
+            title: true,
+            body: true,
+            explicit_scope: false,
+        };
+
+        let details = parse_ai_pr_details(
+            r###"{"title":"Improve submit AI","body":"## Summary\n\nAdds AI PR details."}"###,
+            targets,
+        )
+        .unwrap();
+
+        assert_eq!(details.title.as_deref(), Some("Improve submit AI"));
+        assert_eq!(
+            details.body.as_deref(),
+            Some("## Summary\n\nAdds AI PR details.")
+        );
+    }
+
+    #[test]
+    fn parses_ai_pr_details_from_json_fence() {
+        let targets = AiPrTargets {
+            title: false,
+            body: true,
+            explicit_scope: true,
+        };
+
+        let details =
+            parse_ai_pr_details("```json\n{\"body\":\"Only update the body\"}\n```", targets)
+                .unwrap();
+
+        assert_eq!(details.title, None);
+        assert_eq!(details.body.as_deref(), Some("Only update the body"));
+    }
+
+    #[test]
+    fn parse_ai_pr_details_requires_requested_fields() {
+        let targets = AiPrTargets {
+            title: true,
+            body: false,
+            explicit_scope: true,
+        };
+        let err = parse_ai_pr_details(r###"{"body":"Body only"}"###, targets).unwrap_err();
+        assert!(err.to_string().contains("non-empty title"));
+
+        let targets = AiPrTargets {
+            title: false,
+            body: true,
+            explicit_scope: true,
+        };
+        let err = parse_ai_pr_details(r###"{"title":"Title only"}"###, targets).unwrap_err();
+        assert!(err.to_string().contains("non-empty body"));
+    }
+
+    #[test]
+    fn ai_prompt_for_title_only_requests_title_json_without_body_rules() {
+        let prompt = build_ai_pr_details_prompt(
+            "src/lib.rs | 1 +",
+            "diff --git a/src/lib.rs b/src/lib.rs",
+            &["Add scoped submit AI".to_string()],
+            Some("## Summary\n{{COMMITS}}"),
+            AiPrTargets {
+                title: true,
+                body: false,
+                explicit_scope: true,
+            },
+        );
+
+        assert!(prompt.contains("Generate a pull request title"));
+        assert!(prompt.contains("\"title\""));
+        assert!(!prompt.contains("\"body\""));
+        assert!(prompt.contains("Title requirements:"));
+        assert!(!prompt.contains("Use this PR template"));
+    }
+
+    #[test]
+    fn ai_prompt_for_body_only_uses_template_and_body_json() {
+        let prompt = build_ai_pr_details_prompt(
+            "",
+            "",
+            &[],
+            Some("## Summary\n{{COMMITS}}"),
+            AiPrTargets {
+                title: false,
+                body: true,
+                explicit_scope: true,
+            },
+        );
+
+        assert!(prompt.contains("Generate a pull request body"));
+        assert!(prompt.contains("\"body\""));
+        assert!(!prompt.contains("\"title\""));
+        assert!(prompt.contains("Use this PR template as the body structure"));
+        assert!(prompt.contains("## Summary"));
+    }
+
+    #[test]
+    fn truncate_ai_diff_does_not_split_utf8() {
+        let mut diff = "a".repeat(MAX_AI_DIFF_BYTES - 1);
+        diff.push('é');
+        diff.push_str("\nrest");
+
+        let truncated = truncate_ai_diff(&diff);
+        assert!(truncated.contains("diff truncated"));
+        assert!(truncated.is_char_boundary(truncated.len()));
     }
 }
