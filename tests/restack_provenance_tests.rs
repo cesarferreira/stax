@@ -169,6 +169,121 @@ fn test_stack_restack_with_drifted_revisions_succeeds() {
 }
 
 // =============================================================================
+// sync --restack path (the actual command the user hit: `st rs --restack`)
+// =============================================================================
+
+/// `stax sync --restack` goes through a different code path in sync.rs than
+/// plain `stax restack`.  Verify it succeeds even when parentBranchRevision
+/// is drifted to a non-ancestor SHA.
+#[test]
+fn test_sync_restack_with_drifted_revision_succeeds() {
+    let repo = TestRepo::new_with_remote();
+
+    // Create a feature branch via stax and push it
+    repo.git(&["checkout", "-b", "sync-feature"]);
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", "sync-feature"]);
+
+    // Advance remote main (simulating another developer's push)
+    repo.simulate_remote_commit("main-remote.txt", "remote content", "Remote main commit");
+
+    // Fetch so local main can advance
+    repo.git(&["fetch", "origin"]);
+    repo.git(&["checkout", "main"]);
+    repo.git(&["merge", "--ff-only", "origin/main"]);
+
+    let new_main_sha = repo.get_commit_sha("HEAD");
+
+    // Corrupt metadata: point stored revision to new main HEAD (not in feature ancestry)
+    write_branch_metadata_raw(&repo, "sync-feature", "main", &new_main_sha);
+
+    repo.git(&["checkout", "sync-feature"]);
+
+    // Run sync --restack — this is the exact command the user runs as `st rs --restack`
+    let output = repo.run_stax(&["sync", "--restack", "--quiet"]);
+    output.assert_success();
+    assert!(
+        !repo.has_rebase_in_progress(),
+        "Rebase should not be in progress after successful sync --restack"
+    );
+}
+
+// =============================================================================
+// Behavioral proof: restack with drifted revision preserves only feature commits
+// =============================================================================
+
+/// When stored revision is not in feature's ancestry (triggering the old is_ancestor=FALSE
+/// path), restack must still apply ONLY the feature's own commits on top of the new
+/// parent — not replay any main history.
+///
+/// Setup: feature branches at M1. Main adds M2, M3.
+/// Stored parentBranchRevision = M2 (a main-only commit NOT in feature's history).
+///   → needs_restack: M2 ≠ M3 (current main) → TRUE → restack fires
+///   → old code: is_ancestor(M2, feature) = FALSE → falls back to plain `git rebase main`
+///   → new code: always `git rebase --onto main M2 feature`
+/// Both replay only {F1, F2}. We verify the outcome: exactly 2 commits atop main.
+#[test]
+fn test_restack_with_non_ancestor_revision_preserves_only_feature_commits() {
+    let repo = TestRepo::new();
+
+    // Create feature with exactly 2 commits, branched at initial commit
+    repo.git(&["checkout", "-b", "count-feature"]);
+    repo.create_file("f1.txt", "file one");
+    repo.commit("Feature commit 1");
+    repo.create_file("f2.txt", "file two");
+    repo.commit("Feature commit 2");
+
+    // Advance main: add M2 first, capture its SHA, then add M3
+    repo.git(&["checkout", "main"]);
+    repo.create_file("m1.txt", "main one");
+    repo.commit("Main commit 1");
+    let mid_main_sha = repo.get_commit_sha("HEAD"); // M2 — NOT in feature's history
+
+    repo.create_file("m2.txt", "main two");
+    repo.commit("Main commit 2"); // M3 — current main HEAD
+
+    // Store parentBranchRevision = M2 (not in feature history, not equal to current main)
+    // This triggers needs_restack (M2 ≠ M3) and hits the non-ancestor path.
+    write_branch_metadata_raw(&repo, "count-feature", "main", &mid_main_sha);
+    repo.run_stax(&["set-trunk", "main"]);
+
+    repo.git(&["checkout", "count-feature"]);
+    let output = repo.run_stax(&["restack", "--yes", "--quiet"]);
+    output.assert_success();
+    assert!(!repo.has_rebase_in_progress());
+
+    // Verify: feature must be exactly 2 commits ahead of main (its own commits only)
+    let log_out = repo.git(&["log", "--oneline", "main..count-feature"]);
+    let log_str = String::from_utf8_lossy(&log_out.stdout).to_string();
+    let feature_only: Vec<&str> = log_str
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+
+    assert_eq!(
+        feature_only.len(),
+        2,
+        "After restack, feature should have exactly 2 commits on top of main \
+         (no extra main commits replayed).\nGot {} commit(s):\n{}",
+        feature_only.len(),
+        feature_only.join("\n")
+    );
+
+    // Verify feature is 0 commits behind main (fully rebased)
+    let behind_out = repo.git(&["rev-list", "--count", "count-feature..main"]);
+    let behind = String::from_utf8_lossy(&behind_out.stdout)
+        .trim()
+        .parse::<usize>()
+        .unwrap_or(99);
+    assert_eq!(
+        behind, 0,
+        "Feature should be 0 commits behind main after restack, got {} behind",
+        behind
+    );
+}
+
+// =============================================================================
 // Genuine conflict is still reported correctly (no regression)
 // =============================================================================
 
