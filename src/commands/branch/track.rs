@@ -85,7 +85,13 @@ pub fn run(parent: Option<String>, all_prs: bool) -> Result<()> {
         }
     };
 
-    let parent_rev = repo.branch_commit(&parent_branch)?;
+    // Use the divergence point (merge-base) rather than the parent's current tip.
+    // This matches freephite's `trackBranch` which stores `getMergeBase(branch, parent)`.
+    // Storing the tip would make the stored revision a non-ancestor of `current`,
+    // which causes `git rebase --onto` to scope the replay incorrectly.
+    let parent_rev = repo
+        .merge_base(&parent_branch, &current)
+        .or_else(|_| repo.branch_commit(&parent_branch))?;
 
     // Create metadata
     let meta = BranchMetadata::new(&parent_branch, &parent_rev);
@@ -205,7 +211,13 @@ fn run_track_all_prs() -> Result<()> {
             trunk.clone()
         };
 
-        let parent_rev = match repo.branch_commit(&parent_branch) {
+        // Use the divergence point (merge-base) rather than the parent's current tip.
+        // Matches freephite's `trackBranch`: store `getMergeBase(branch, parent)` so
+        // that `git rebase --onto` scopes the replay to only the branch's own commits.
+        let parent_rev = match repo
+            .merge_base(&parent_branch, &pr.head_branch)
+            .or_else(|_| repo.branch_commit(&parent_branch))
+        {
             Ok(rev) => rev,
             Err(_) => {
                 eprintln!(
