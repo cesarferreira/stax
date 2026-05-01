@@ -185,10 +185,17 @@ pub fn run_update(dry_run: bool) -> Result<()> {
     println!("Fetching latest skills from GitHub…");
     let remote_body = fetch_remote_skills()?;
 
-    let remote_version =
-        extract_skills_version(&remote_body).unwrap_or_else(|| PKG_VERSION.to_string());
+    let remote_body_version = extract_skills_version(&remote_body);
 
-    println!("Remote version: {}", format!("v{remote_version}").green());
+    if let Some(v) = &remote_body_version {
+        println!(
+            "Remote skills.md marker: {}  (target: {})",
+            format!("v{v}").dimmed(),
+            format!("v{PKG_VERSION}").green(),
+        );
+    } else {
+        println!("Target version: {}", format!("v{PKG_VERSION}").green());
+    }
     println!();
 
     let mut updated = 0usize;
@@ -203,9 +210,13 @@ pub fn run_update(dry_run: bool) -> Result<()> {
             .ok()
             .and_then(|c| extract_skills_version(&c));
 
+        // Compare against the local PKG_VERSION (what `build_content` stamps
+        // into the file), not against the remote skills.md marker. This keeps
+        // `skills update` and `skills list` consistent, and works even when the
+        // upstream skills.md marker hasn't been bumped for a release.
         let needs_update = installed_version
             .as_deref()
-            .map(|v| v != remote_version)
+            .map(|v| v != PKG_VERSION)
             .unwrap_or(true);
 
         let file_exists = path.exists();
@@ -333,6 +344,22 @@ mod tests {
         assert!(content.starts_with("---\n"));
         assert!(content.contains("stax_version:"));
         assert!(content.contains("# Skills"));
+    }
+
+    /// Frontmatter `stax_version` (always written as `PKG_VERSION`) must take
+    /// precedence over an older `<!-- stax-skills-version: ... -->` marker that
+    /// may be stuck in the upstream skills.md body. This is what makes
+    /// `skills update` and `skills list` agree on freshness.
+    #[test]
+    fn test_extracted_version_after_build_is_pkg_version() {
+        let loc = &SKILL_LOCATIONS[0]; // Codex — has_frontmatter = true
+        let body = "<!-- stax-skills-version: 0.50.2 -->\n# Skills\n";
+        let written = build_content(body, loc);
+        assert_eq!(
+            extract_skills_version(&written).as_deref(),
+            Some(PKG_VERSION),
+            "frontmatter PKG_VERSION should win over a stale body marker",
+        );
     }
 
     #[test]

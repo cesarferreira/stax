@@ -734,6 +734,167 @@ async fn test_shell_setup_install_skills_flag_installs_skills() {
     );
 }
 
+/// Regression: `skills update` used to compare against the upstream
+/// `skills.md` body marker, while `skills list` compared against the local
+/// `PKG_VERSION`. When the upstream marker was stale, `update` would skip
+/// files that `list` immediately reported as out of date.
+///
+/// This test reproduces the user's scenario:
+/// 1. Codex skill file is pre-installed with frontmatter pinned to "0.50.2".
+/// 2. Remote `skills.md` body marker is also stuck at "0.50.2" (stale).
+/// 3. Local `stax` binary is at `PKG_VERSION` (something newer in CI/dev).
+///
+/// After `stax skills update`, the file must be rewritten to `PKG_VERSION`
+/// so that `stax skills list` reports it as current.
+#[tokio::test]
+async fn test_skills_update_rewrites_when_pkg_version_advances_past_stale_marker() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = tempdir().expect("temp home");
+
+    Mock::given(method("GET"))
+        .and(path("/skills.md"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let codex_skill = home.path().join(".codex/skills/stax/SKILL.md");
+    fs::create_dir_all(codex_skill.parent().expect("parent dir")).expect("mkdir codex skill dir");
+    fs::write(
+        &codex_skill,
+        "---\nname: stax\nstax_version: \"0.50.2\"\n---\n\n<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n",
+    )
+    .expect("seed stale codex skill");
+
+    let pkg_version = env!("CARGO_PKG_VERSION");
+    assert_ne!(
+        pkg_version, "0.50.2",
+        "this test relies on the crate version being newer than the seeded 0.50.2",
+    );
+
+    let update_output = Command::new(stax_bin())
+        .args(["skills", "update"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env(
+            "STAX_SKILLS_URL",
+            format!("{}/skills.md", mock_server.uri()),
+        )
+        .output()
+        .expect("run stax skills update");
+    assert!(update_output.status.success(), "{:?}", update_output);
+
+    let update_stdout = String::from_utf8_lossy(&update_output.stdout);
+    assert!(
+        update_stdout.contains("Codex") && update_stdout.contains("updated"),
+        "expected Codex to be updated, not skipped:\n{}",
+        update_stdout
+    );
+    assert!(
+        !update_stdout.contains("Codex already up to date"),
+        "Codex must not be reported as up-to-date when its frontmatter is at v0.50.2 \
+         and local PKG_VERSION is v{pkg_version}:\n{}",
+        update_stdout
+    );
+
+    let rewritten = fs::read_to_string(&codex_skill).expect("read rewritten codex skill");
+    assert!(
+        rewritten.contains(&format!("stax_version: \"{pkg_version}\"")),
+        "expected file to be stamped with PKG_VERSION v{pkg_version}, got:\n{}",
+        rewritten
+    );
+
+    let list_output = Command::new(stax_bin())
+        .args(["skills", "list"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .expect("run stax skills list");
+    assert!(list_output.status.success(), "{:?}", list_output);
+
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(
+        list_stdout.contains("Codex"),
+        "list output missing Codex line:\n{}",
+        list_stdout
+    );
+    assert!(
+        !list_stdout.contains("→ v"),
+        "list must not show an upgrade arrow for Codex after update:\n{}",
+        list_stdout
+    );
+    assert!(
+        list_stdout.contains(&format!("(v{pkg_version})")),
+        "list must show Codex at v{pkg_version}:\n{}",
+        list_stdout
+    );
+}
+
+/// Happy path: when the installed skill file already matches `PKG_VERSION`,
+/// `skills update` should skip it (independent of what the upstream marker says).
+#[tokio::test]
+async fn test_skills_update_skips_when_already_at_pkg_version() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = tempdir().expect("temp home");
+
+    Mock::given(method("GET"))
+        .and(path("/skills.md"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let pkg_version = env!("CARGO_PKG_VERSION");
+    let codex_skill = home.path().join(".codex/skills/stax/SKILL.md");
+    fs::create_dir_all(codex_skill.parent().expect("parent dir")).expect("mkdir codex skill dir");
+    fs::write(
+        &codex_skill,
+        format!(
+            "---\nname: stax\nstax_version: \"{pkg_version}\"\n---\n\n<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n",
+        ),
+    )
+    .expect("seed up-to-date codex skill");
+
+    let mtime_before = fs::metadata(&codex_skill)
+        .expect("stat codex skill")
+        .modified()
+        .expect("mtime");
+
+    let output = Command::new(stax_bin())
+        .args(["skills", "update"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env(
+            "STAX_SKILLS_URL",
+            format!("{}/skills.md", mock_server.uri()),
+        )
+        .output()
+        .expect("run stax skills update");
+    assert!(output.status.success(), "{:?}", output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Codex") && stdout.contains("already up to date"),
+        "expected Codex to be skipped:\n{}",
+        stdout
+    );
+
+    let mtime_after = fs::metadata(&codex_skill)
+        .expect("stat codex skill")
+        .modified()
+        .expect("mtime");
+    assert_eq!(
+        mtime_before, mtime_after,
+        "file at PKG_VERSION must not be rewritten",
+    );
+}
+
 #[tokio::test]
 async fn test_shell_setup_interactive_prompt_can_decline_skills_install() {
     ensure_crypto_provider();
