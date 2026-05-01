@@ -1178,9 +1178,13 @@ impl GitRepo {
 
     /// Rebase a branch onto `onto` using the stored parent revision as upstream.
     ///
-    /// Runs `git rebase --onto <onto> <fallback_upstream> <branch>` when
-    /// `fallback_upstream` is a valid ancestor of `branch` (the normal case).
-    /// This matches freephite's restack strategy: fast, simple, no patch-id scanning.
+    /// When `fallback_upstream` is non-empty, always runs:
+    ///   `git rebase --onto <onto> <fallback_upstream> <branch>`
+    /// This is exactly freephite's restack strategy: replay only the commits that
+    /// sit between the stored divergence point and the branch tip, regardless of
+    /// whether that point is still a reachable ancestor.  Falling back to plain
+    /// `git rebase <onto>` (no `--onto`) recomputes the merge-base from scratch
+    /// and can replay hundreds of unrelated commits, causing spurious conflicts.
     pub fn rebase_branch_onto_with_provenance(
         &self,
         branch: &str,
@@ -1257,24 +1261,18 @@ Use --auto-stash-pop or stash/commit changes first.",
             });
         }
 
-        // Use the stored parent revision as upstream when it is a valid ancestor
-        // of the branch.  This is the same strategy freephite uses:
-        //   git rebase --onto <onto> <parent_branch_revision> <branch>
-        // No patch-id scanning; the old provenance path was the main source of
-        // slowness (O(N) `git log -p` per branch) and spurious conflicts.
-        let upstream_for_rebase = (!fallback_upstream.trim().is_empty()
-            && self.is_ancestor(fallback_upstream, branch).unwrap_or(false))
-        .then(|| fallback_upstream.to_string());
-
-        let rebase_result = if let Some(upstream) = upstream_for_rebase.as_deref() {
-            self.rebase_onto_upstream_in_path(&target_workdir, onto, upstream)
+        // Always prefer `git rebase --onto <onto> <upstream> <branch>` when the
+        // caller supplies a stored upstream (parent_branch_revision).  This
+        // confines the replay to the branch's own commits and avoids re-applying
+        // thousands of trunk commits when the stored revision is no longer a
+        // reachable ancestor (e.g. after squash-merges or metadata drift).
+        // Only fall back to plain `git rebase <onto>` when no upstream is provided.
+        let rebase_result = if !fallback_upstream.trim().is_empty() {
+            self.rebase_onto_upstream_in_path(&target_workdir, onto, fallback_upstream)
                 .with_context(|| {
                     format!(
                         "Failed to rebase '{}' onto '{}' with upstream '{}' in '{}'",
-                        branch,
-                        onto,
-                        upstream,
-                        target_workdir.display()
+                        branch, onto, fallback_upstream, target_workdir.display()
                     )
                 })
         } else {
