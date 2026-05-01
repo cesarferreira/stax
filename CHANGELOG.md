@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.66.1] - 2026-05-01
+
+### Fixed
+- Compare against PKG_VERSION instead of stale upstream marker
+
+### Documentation
+- Drop per-agent install snippets from skill body
+
 ## [0.66.0] - 2026-05-01
 
 ### Changed
@@ -236,7 +244,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.66.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.66.1...HEAD
+[0.66.1]: https://github.com/cesarferreira/stax/compare/v0.66.0...v0.66.1
 [0.66.0]: https://github.com/cesarferreira/stax/compare/v0.65.1...v0.66.0
 [0.65.1]: https://github.com/cesarferreira/stax/compare/v0.65.0...v0.65.1
 [0.65.0]: https://github.com/cesarferreira/stax/compare/v0.64.0...v0.65.0
