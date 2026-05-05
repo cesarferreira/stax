@@ -151,18 +151,18 @@ pub fn run(
     json: bool,
     all: bool,
     hours: i64,
-    summary: bool,
+    ai: bool,
     jit: bool,
     agent_flag: Option<String>,
     model_flag: Option<String>,
     plain_text: bool,
     summary_style: SummaryStyle,
 ) -> Result<()> {
-    if plain_text && !summary {
-        bail!("--plain-text only applies when used with --summary");
+    if plain_text && !ai {
+        bail!("--plain-text only applies when used with --ai");
     }
-    if summary_style != SummaryStyle::Spoken && !summary {
-        bail!("--style only applies when used with --summary");
+    if summary_style != SummaryStyle::Spoken && !ai {
+        bail!("--style only applies when used with --ai");
     }
 
     let show_progress = standup_progress_enabled(json, plain_text);
@@ -195,8 +195,8 @@ pub fn run(
         (None, None)
     };
 
-    if summary {
-        // --summary --json → {"summary": "..."}
+    if ai {
+        // --ai --json → {"summary": "..."}
         if json {
             let raw = generate_summary(
                 &data,
@@ -214,7 +214,7 @@ pub fn run(
             println!("{}", serde_json::to_string_pretty(&out)?);
             return Ok(());
         }
-        // --summary --plain-text → raw text, no spinner, no colors
+        // --ai --plain-text → raw text, no spinner, no colors
         if plain_text {
             let raw = generate_summary(
                 &data,
@@ -254,7 +254,7 @@ pub fn run(
             );
             println!();
         }
-        // --summary alone → spinner + card with colors
+        // --ai alone → spinner + card with colors
         let raw = generate_summary(
             &data,
             jit_summary.as_ref(),

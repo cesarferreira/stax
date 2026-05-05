@@ -54,6 +54,7 @@ fn write_built_in_sound(kind: BuiltInSound) -> Result<tempfile::NamedTempFile, S
     Ok(file)
 }
 
+#[allow(clippy::needless_return)]
 fn play_sound_file(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {

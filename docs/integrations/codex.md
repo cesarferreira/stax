@@ -16,6 +16,8 @@ st create --ai -a --yes
 st submit --ai
 st generate --pr-body --agent codex
 st generate --pr-body --agent codex --model gpt-5.3-codex
+st gen --pr-title --agent codex
+st gen --commit-msg --agent codex
 ```
 
 When `codex` is selected, stax tries OpenAI's live Models API first (using `OPENAI_API_KEY`) before falling back to its local Codex defaults.

@@ -50,7 +50,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 
 | Command | What it does |
 |---|---|
-| `st standup` | Summarize recent activity (`--summary` for AI version, `--summary --style slack` for Slack-ready bullets) |
+| `st standup` | Summarize recent activity (`--ai` for AI version, `--ai --style slack` for Slack-ready bullets) |
 | `st pr` / `st pr list` | Open current PR in browser · list open PRs |
 | `st issue list` | List open issues |
 | `st changelog` | Generate changelog between refs (auto-resolves last tag) |

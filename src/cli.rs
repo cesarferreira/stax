@@ -868,7 +868,7 @@ enum Commands {
 
     /// Generate standup summary of recent activity
     Standup {
-        /// Output raw JSON (standup data, or summary JSON when combined with --summary)
+        /// Output raw JSON (standup data, or summary JSON when combined with --ai)
         #[arg(long)]
         json: bool,
         /// Show all stacks (not just current)
@@ -877,11 +877,11 @@ enum Commands {
         /// Time window in hours (default: 24)
         #[arg(long, default_value = "24")]
         hours: i64,
-        /// Summarize standup using AI agent
+        /// Summarize standup using AI
         #[arg(long)]
-        summary: bool,
+        ai: bool,
         /// AI summary style (spoken or Slack-ready bullets)
-        #[arg(long, value_enum, requires = "summary")]
+        #[arg(long, value_enum, requires = "ai")]
         style: Option<StandupSummaryStyle>,
         /// Include Jira sprint context from `jit` (https://github.com/cesarferreira/jit)
         #[arg(long)]
@@ -897,12 +897,19 @@ enum Commands {
         plain_text: bool,
     },
 
-    /// Generate content using AI
+    /// Generate content using AI (interactive picker if no artifact flag is given)
+    #[command(alias = "gen")]
     Generate {
-        /// Generate PR body from diff and update the PR
+        /// Generate and update the current PR's body
         #[arg(long)]
         pr_body: bool,
-        /// Open editor to review before updating
+        /// Generate and update the current PR's title
+        #[arg(long)]
+        pr_title: bool,
+        /// Amend the HEAD commit message using AI
+        #[arg(long)]
+        commit_msg: bool,
+        /// Open editor to review before applying
         #[arg(long)]
         edit: bool,
         /// Disable interactive prompts (use defaults)
@@ -912,12 +919,12 @@ enum Commands {
         #[arg(long)]
         agent: Option<String>,
         /// Model to use with the AI agent. Defaults to config or agent's default
-        #[arg(long)]
+        #[arg(long, requires = "agent")]
         model: Option<String>,
-        /// PR template name to use (e.g. feature, bugfix). Skips template selection prompt
+        /// PR template name to use (e.g. feature, bugfix). Skips template selection prompt (--pr-body only)
         #[arg(long)]
         template: Option<String>,
-        /// Skip PR template entirely
+        /// Skip PR template entirely (--pr-body only)
         #[arg(long)]
         no_template: bool,
     },
@@ -2012,7 +2019,7 @@ pub fn run() -> Result<()> {
             json,
             all,
             hours,
-            summary,
+            ai,
             style,
             jit,
             agent,
@@ -2022,7 +2029,7 @@ pub fn run() -> Result<()> {
             json,
             all,
             hours,
-            summary,
+            ai,
             jit,
             agent,
             model,
@@ -2031,18 +2038,25 @@ pub fn run() -> Result<()> {
         ),
         Commands::Generate {
             pr_body,
+            pr_title,
+            commit_msg,
             edit,
             no_prompt,
             agent,
             model,
             template,
             no_template,
-        } => {
-            if !pr_body {
-                anyhow::bail!("Please specify what to generate. Usage: stax generate --pr-body");
-            }
-            commands::generate::run(edit, no_prompt, agent, model, template, no_template)
-        }
+        } => commands::generate::run(
+            pr_body,
+            pr_title,
+            commit_msg,
+            edit,
+            no_prompt,
+            agent,
+            model,
+            template,
+            no_template,
+        ),
         Commands::Changelog {
             from,
             to,

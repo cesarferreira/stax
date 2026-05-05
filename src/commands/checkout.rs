@@ -3,15 +3,15 @@ use crate::commands::worktree::{go, shared::emit_shell_message};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::repo::WorktreeInfo;
-use crate::git::{GitRepo, checkout_branch_in, refs};
+use crate::git::{checkout_branch_in, refs, GitRepo};
 use crate::remote;
 use anyhow::Result;
 use colored::Colorize;
-use console::{Color, Style, colors_enabled_stderr, measure_text_width, truncate_str};
+use console::{colors_enabled_stderr, measure_text_width, truncate_str, Color, Style};
 use crossterm::terminal;
 use dialoguer::{
-    FuzzySelect,
     theme::{ColorfulTheme, Theme},
+    FuzzySelect,
 };
 use fuzzy_matcher::skim::SkimMatcherV2;
 use std::collections::HashSet;
@@ -50,16 +50,9 @@ struct CheckoutRow {
     active_display: String,
 }
 
+#[derive(Default)]
 struct CheckoutPickerTheme {
     inner: ColorfulTheme,
-}
-
-impl Default for CheckoutPickerTheme {
-    fn default() -> Self {
-        Self {
-            inner: ColorfulTheme::default(),
-        }
-    }
 }
 
 impl Theme for CheckoutPickerTheme {
@@ -92,7 +85,11 @@ impl Theme for CheckoutPickerTheme {
 
 fn checkout_style(spec: CheckoutColor) -> Style {
     let style = Style::new().for_stderr().fg(spec.color);
-    if spec.bright { style.bright() } else { style }
+    if spec.bright {
+        style.bright()
+    } else {
+        style
+    }
 }
 
 fn checkout_lane_color(column: usize) -> CheckoutColor {
@@ -429,8 +426,11 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
     ordered_branches.push(stack.trunk.clone());
 
     // Only check remote existence for the branches we're displaying (fast)
-    let remote_branches =
-        remote::get_existing_remote_branches_from_repo(repo.inner(), config.remote_name(), &ordered_branches);
+    let remote_branches = remote::get_existing_remote_branches_from_repo(
+        repo.inner(),
+        config.remote_name(),
+        &ordered_branches,
+    );
 
     // Batch all ahead/behind queries in parallel threads
     let ahead_behind_pairs = ordered_branches

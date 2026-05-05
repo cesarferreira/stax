@@ -116,9 +116,9 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st issue list` | List open issues |
 | `st comments` | Show PR comments |
 | `st copy` · `st copy --pr` | Copy branch name · PR URL |
-| `st standup` | Recent activity (`--summary` for AI spoken version; `--jit` for Jira context) |
+| `st standup` | Recent activity (`--ai` for AI spoken version; `--jit` for Jira context) |
 | `st changelog [from] [to]` | Generate changelog (auto-resolves last tag when `from` omitted) |
-| `st generate --pr-body` | Generate PR body with AI |
+| `st generate` · `st gen` | AI generation: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
 | `st ss --ai` | Submit with AI-generated PR title/body suggestions |
 
 ## Utilities
@@ -257,19 +257,22 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 ### `st standup`
 
 - `--all` / `--hours 48` / `--json`
-- `--summary` · `--summary --agent claude` · `--summary --hours 48`
-- `--summary --style slack`
-- `--summary --plain-text` / `--summary --json` / `--summary --jit`
+- `--ai` · `--ai --agent claude` · `--ai --hours 48`
+- `--ai --style slack`
+- `--ai --plain-text` / `--ai --json` / `--ai --jit`
 
 ### `st pr` / `st issue`
 
 - `st pr list --limit 50 --json`
 - `st issue list --limit 50 --json`
 
-### `st generate --pr-body`
+### `st generate` · `st gen`
 
-- `--template <name>` / `--no-template` / `--no-prompt` / `--edit`
-- `--agent <name>` / `--model <name>`
+- Bare `st gen` opens an interactive picker (PR body, PR title, commit message).
+- `--pr-body` — refresh the open PR body from the branch diff (PR templates: `--template` / `--no-template`).
+- `--pr-title` — refresh the open PR title from the branch diff.
+- `--commit-msg` — amend `HEAD` with an AI-generated message from the last commit’s patch.
+- Shared: `--no-prompt` / `--edit` / `--agent <name>` / `--model <name>` (`--model` requires `--agent`).
 
 ### `st changelog`
 

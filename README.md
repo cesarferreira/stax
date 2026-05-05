@@ -231,12 +231,15 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 ```bash
 st create --ai -a --yes   # generate branch name + first commit message
 st ss --ai --yes          # generate PR titles/bodies during submit
-st generate --pr-body      # draft/refresh PR body from branch diff + context
-st standup --summary       # spoken-style daily engineering summary
-st standup --summary --style slack  # Slack-ready Yesterday/Today bullets
+st gen                    # interactive: PR body, PR title, or commit message (AI)
+st generate --pr-body     # non-interactive: refresh PR body from branch diff + context
+st generate --pr-title    # non-interactive: refresh PR title from branch diff
+st generate --commit-msg  # non-interactive: amend HEAD commit message with AI
+st standup --ai           # spoken-style daily engineering summary
+st standup --ai --style slack  # Slack-ready Yesterday/Today bullets
 ```
 
-Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different agent/model. `st create --ai`, `st submit --ai`, and `st generate --pr-body` share the `generate` setting. Configure with:
+Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different agent/model. `st create --ai`, `st submit --ai`, and `st generate` / `st gen` (PR body/title, commit message) share the `generate` setting. Configure with:
 
 ```bash
 st config --set-ai
@@ -268,7 +271,7 @@ st config --set-ai
 | `st wt` | Open the worktree dashboard |
 | `st resolve` | AI-resolve an in-progress rebase conflict |
 | `st create --ai` | Generate a branch name from local changes |
-| `st generate --pr-body` | Draft/refresh PR body with AI |
+| `st gen` / `st generate` | AI: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
 | `st ss --ai` | Submit with AI-generated PR title/body suggestions |
 | `st standup` | Summarize recent engineering activity |
 | `st undo` / `st redo` | Recover / reapply risky operations |

@@ -26,10 +26,7 @@ fn read_parent_revision(repo: &TestRepo, branch: &str) -> String {
     let json = String::from_utf8(out.stdout).expect("non-utf8 metadata");
     // Parse parentBranchRevision from the JSON (simple substring extraction)
     let key = r#""parentBranchRevision":""#;
-    let start = json
-        .find(key)
-        .expect("parentBranchRevision key missing")
-        + key.len();
+    let start = json.find(key).expect("parentBranchRevision key missing") + key.len();
     let end = json[start..].find('"').expect("closing quote missing") + start;
     json[start..end].to_string()
 }

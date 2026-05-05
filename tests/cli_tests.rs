@@ -1152,10 +1152,44 @@ fn test_generate_help_includes_no_prompt_flag() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--pr-body"));
+    assert!(stdout.contains("--pr-title"));
+    assert!(stdout.contains("--commit-msg"));
     assert!(stdout.contains("--no-prompt"));
     assert!(stdout.contains("--edit"));
     assert!(stdout.contains("--template"));
     assert!(stdout.contains("--no-template"));
+}
+
+#[test]
+fn test_gen_alias_matches_generate_help() {
+    let gen = stax(&["gen", "--help"]);
+    let generate = stax(&["generate", "--help"]);
+    assert!(gen.status.success(), "gen --help should succeed");
+    assert!(generate.status.success(), "generate --help should succeed");
+    assert_eq!(
+        String::from_utf8_lossy(&gen.stdout),
+        String::from_utf8_lossy(&generate.stdout),
+        "gen and generate help should match"
+    );
+}
+
+#[test]
+fn test_generate_rejects_multiple_artifact_flags() {
+    let output = stax(&["generate", "--pr-body", "--pr-title"]);
+    assert!(
+        !output.status.success(),
+        "expected mutually exclusive artifact flags to fail"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Only one of --pr-body"),
+        "expected mutual exclusion error, got: {}",
+        combined
+    );
 }
 
 #[test]
@@ -1781,7 +1815,7 @@ fn test_ci_command_flags() {
 // ============================================================================
 
 #[test]
-fn test_standup_command_flags_include_summary_style() {
+fn test_standup_command_flags_include_ai_and_style() {
     let output = stax(&["standup", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1790,6 +1824,7 @@ fn test_standup_command_flags_include_summary_style() {
         "Expected --style flag: {}",
         stdout
     );
+    assert!(stdout.contains("--ai"), "Expected --ai flag: {}", stdout);
     assert!(
         stdout.contains("spoken") && stdout.contains("slack"),
         "Expected spoken and slack style values: {}",
@@ -1798,16 +1833,16 @@ fn test_standup_command_flags_include_summary_style() {
 }
 
 #[test]
-fn test_standup_style_requires_summary() {
+fn test_standup_style_requires_ai() {
     let output = stax(&["standup", "--style", "slack"]);
     assert!(
         !output.status.success(),
-        "expected standup --style slack without --summary to fail"
+        "expected standup --style slack without --ai to fail"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("--summary"),
-        "expected error to mention --summary, got: {}",
+        stderr.contains("--ai"),
+        "expected error to mention --ai, got: {}",
         stderr
     );
 }
