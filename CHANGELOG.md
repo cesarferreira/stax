@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.68.0] - 2026-05-05
+
+### Changed
+- Compact checkout divergence labels (#357)
+- Optimize install
+- Make checkout, restack, and sync faster (#358)
+- Add AI generation hub and rename standup flag (#359)
+
+### Fixed
+- Use resolve_model guard in resolve command to prevent cross-agent model bleed
+
 ## [0.67.1] - 2026-05-05
 
 ### Changed
@@ -257,7 +268,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.67.1...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.68.0...HEAD
+[0.68.0]: https://github.com/cesarferreira/stax/compare/v0.67.1...v0.68.0
 [0.67.1]: https://github.com/cesarferreira/stax/compare/v0.67.0...v0.67.1
 [0.67.0]: https://github.com/cesarferreira/stax/compare/v0.66.1...v0.67.0
 [0.66.1]: https://github.com/cesarferreira/stax/compare/v0.66.0...v0.66.1
