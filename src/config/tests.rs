@@ -56,10 +56,42 @@ fn test_default_config() {
     assert_eq!(config.remote.name, "origin");
     assert_eq!(config.remote.base_url, "https://github.com");
     assert_eq!(config.submit.stack_links, StackLinksMode::Comment);
+    assert!(!config.ci.alert);
+    assert!(config.ci.success_alert_sound.is_none());
+    assert!(config.ci.error_alert_sound.is_none());
     assert!(config.ui.tips);
     assert!(config.auth.use_gh_cli);
     assert!(!config.auth.allow_github_token_env);
     assert!(config.auth.gh_hostname.is_none());
+}
+
+#[test]
+fn test_ci_alert_config_round_trip() {
+    let config: Config = toml::from_str(
+        r#"
+[ci]
+alert = true
+success_alert_sound = "/tmp/ci-success.wav"
+error_alert_sound = "/tmp/ci-error.wav"
+"#,
+    )
+    .unwrap();
+
+    assert!(config.ci.alert);
+    assert_eq!(
+        config.ci.success_alert_sound.as_deref(),
+        Some("/tmp/ci-success.wav")
+    );
+    assert_eq!(
+        config.ci.error_alert_sound.as_deref(),
+        Some("/tmp/ci-error.wav")
+    );
+
+    let encoded = toml::to_string(&config).unwrap();
+    assert!(encoded.contains("[ci]"));
+    assert!(encoded.contains("alert = true"));
+    assert!(encoded.contains("success_alert_sound = \"/tmp/ci-success.wav\""));
+    assert!(encoded.contains("error_alert_sound = \"/tmp/ci-error.wav\""));
 }
 
 #[test]

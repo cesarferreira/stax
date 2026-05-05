@@ -16,6 +16,8 @@ pub struct Config {
     #[serde(default)]
     pub submit: SubmitConfig,
     #[serde(default)]
+    pub ci: CiConfig,
+    #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
     pub ai: AiConfig,
@@ -79,6 +81,19 @@ pub struct SubmitConfig {
     /// Where stax-managed stack links should be synced on submit.
     #[serde(default)]
     pub stack_links: StackLinksMode,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct CiConfig {
+    /// Play a sound when `stax ci --watch` exits after CI completion.
+    #[serde(default)]
+    pub alert: bool,
+    /// Optional custom sound file for successful CI completion alerts.
+    #[serde(default)]
+    pub success_alert_sound: Option<String>,
+    /// Optional custom sound file for failed CI completion alerts.
+    #[serde(default)]
+    pub error_alert_sound: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

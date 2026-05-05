@@ -13,6 +13,7 @@ mod engine;
 pub mod errors;
 mod forge;
 mod git;
+mod notifications;
 mod ops;
 mod progress;
 mod remote;

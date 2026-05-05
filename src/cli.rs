@@ -1,7 +1,7 @@
 use crate::{commands, config::Config, errors::ConflictStopped, git::GitRepo, tui, update};
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use std::{io::IsTerminal, time::Duration};
+use std::{io::IsTerminal, path::PathBuf, time::Duration};
 
 const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
 
@@ -706,6 +706,20 @@ enum Commands {
         /// Watch CI until completion (polls periodically)
         #[arg(long, short)]
         watch: bool,
+        /// Play success/error sounds when --watch exits; optionally pass one sound file for both
+        #[arg(
+            long,
+            short = 'a',
+            value_name = "SOUND",
+            num_args = 0..=1,
+            require_equals = false,
+            requires = "watch",
+            conflicts_with = "no_alert"
+        )]
+        alert: Option<Option<PathBuf>>,
+        /// Disable configured CI completion alerts for this run
+        #[arg(long, requires = "watch", conflicts_with = "alert")]
+        no_alert: bool,
         /// Polling interval in seconds (default: 15)
         #[arg(long, default_value = "15")]
         interval: u64,
@@ -1943,9 +1957,24 @@ pub fn run() -> Result<()> {
             json,
             refresh,
             watch,
+            alert,
+            no_alert,
             interval,
             verbose,
-        } => commands::ci::run(all, stack, json, refresh, watch, interval, verbose),
+        } => commands::ci::run(
+            all,
+            stack,
+            json,
+            refresh,
+            watch,
+            alert.map(|value| match value {
+                Some(path) => commands::ci::CiAlertSoundArg::Path(path),
+                None => commands::ci::CiAlertSoundArg::DefaultSound,
+            }),
+            no_alert,
+            interval,
+            verbose,
+        ),
         Commands::Split {
             hunk,
             file,
