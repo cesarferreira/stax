@@ -1764,6 +1764,16 @@ fn test_ci_command_flags() {
         "Expected --refresh flag: {}",
         stdout
     );
+    assert!(
+        stdout.contains("--alert"),
+        "Expected --alert flag: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("--no-alert"),
+        "Expected --no-alert flag: {}",
+        stdout
+    );
 }
 
 // ============================================================================

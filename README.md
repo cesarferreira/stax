@@ -256,6 +256,7 @@ st config --set-ai
 | `st create <name> --below` | Insert a new branch below current |
 | `st ss` | Submit the full stack, open/update linked PRs |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--remote`, `--all`) |
+| `st ci -w --alert` | Watch CI until completion, then play success/error sounds |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
 | `st refresh` | Sync trunk, restack current stack, then push/update PRs |
 | `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |

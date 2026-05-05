@@ -286,9 +286,18 @@ stax ci                            # CI for current branch (elapsed/ETA + avg fr
 stax ci --stack                    # CI for current stack
 stax ci --all                      # CI for all tracked branches
 stax ci --watch --interval 30      # Watch CI, custom poll interval
+stax ci --watch --alert            # Watch CI, play built-in success/error sounds
+stax ci --watch --alert /path/to/sound.wav  # Use one custom sound for either outcome
+stax ci --watch --no-alert         # Suppress configured completion sounds for one run
 stax ci --refresh                  # Force refresh (bypass cache)
 stax ci --json                     # Machine-readable output
 stax ci --verbose                  # Compact summary cards
+
+# ~/.config/stax/config.toml
+[ci]
+alert = true                       # Play success/error sounds for stax ci --watch
+success_alert_sound = "/path/to/ci-success.wav"  # optional, built-in when omitted
+error_alert_sound = "/path/to/ci-error.wav"      # optional, built-in when omitted
 
 stax standup --hours 48            # Summarize recent activity window
 stax standup --all --json          # All stacks in JSON

@@ -5,6 +5,7 @@ use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::github::GitHubClient;
+use crate::notifications::{self, BuiltInSound, Sound};
 use crate::remote::RemoteInfo;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -12,6 +13,7 @@ use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// CI status for a branch
@@ -23,6 +25,30 @@ pub struct BranchCiStatus {
     pub overall_status: Option<String>,
     pub check_runs: Vec<CheckRunInfo>,
     pub pr_number: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CiAlertSoundArg {
+    DefaultSound,
+    Path(PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CiAlertSounds {
+    success: CiAlertSound,
+    error: CiAlertSound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CiAlertSound {
+    BuiltIn(BuiltInSound),
+    CustomPath(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CiAlertOutcome {
+    Success,
+    Error,
 }
 
 /// Raw timing data returned by calculate_branch_timing
@@ -252,6 +278,8 @@ pub fn run(
     json: bool,
     _refresh: bool,
     watch: bool,
+    alert_arg: Option<CiAlertSoundArg>,
+    no_alert: bool,
     interval: u64,
     verbose: bool,
 ) -> Result<()> {
@@ -307,6 +335,7 @@ pub fn run(
     let client = ForgeClient::new(&remote)?;
 
     if watch {
+        let alert = resolve_ci_alert_sounds(&config, alert_arg, no_alert);
         return run_watch_mode(
             &repo,
             &rt,
@@ -317,6 +346,7 @@ pub fn run(
             interval,
             json,
             verbose,
+            alert,
         );
     }
 
@@ -777,6 +807,70 @@ fn all_checks_complete(statuses: &[BranchCiStatus]) -> bool {
     })
 }
 
+fn resolve_ci_alert_sounds(
+    config: &Config,
+    alert_arg: Option<CiAlertSoundArg>,
+    no_alert: bool,
+) -> Option<CiAlertSounds> {
+    if no_alert {
+        return None;
+    }
+
+    match alert_arg {
+        Some(CiAlertSoundArg::DefaultSound) => Some(CiAlertSounds::built_in()),
+        Some(CiAlertSoundArg::Path(path)) => Some(CiAlertSounds {
+            success: CiAlertSound::CustomPath(path.clone()),
+            error: CiAlertSound::CustomPath(path),
+        }),
+        None if config.ci.alert => Some(CiAlertSounds {
+            success: config_alert_sound(&config.ci.success_alert_sound, BuiltInSound::Success),
+            error: config_alert_sound(&config.ci.error_alert_sound, BuiltInSound::Error),
+        }),
+        None => None,
+    }
+}
+
+impl CiAlertSounds {
+    fn built_in() -> Self {
+        Self {
+            success: CiAlertSound::BuiltIn(BuiltInSound::Success),
+            error: CiAlertSound::BuiltIn(BuiltInSound::Error),
+        }
+    }
+
+    fn for_outcome(&self, outcome: CiAlertOutcome) -> &CiAlertSound {
+        match outcome {
+            CiAlertOutcome::Success => &self.success,
+            CiAlertOutcome::Error => &self.error,
+        }
+    }
+}
+
+fn config_alert_sound(path: &Option<String>, built_in: BuiltInSound) -> CiAlertSound {
+    path.as_ref()
+        .map(|path| CiAlertSound::CustomPath(PathBuf::from(path)))
+        .unwrap_or(CiAlertSound::BuiltIn(built_in))
+}
+
+fn play_ci_alert(alert: Option<&CiAlertSounds>, outcome: CiAlertOutcome) {
+    let Some(alert) = alert else {
+        return;
+    };
+
+    let sound = match alert.for_outcome(outcome) {
+        CiAlertSound::BuiltIn(kind) => Sound::BuiltIn(*kind),
+        CiAlertSound::CustomPath(path) => Sound::Path(path.clone()),
+    };
+
+    if let Err(err) = notifications::play_sound(&sound) {
+        eprintln!(
+            "{} Could not play CI alert sound: {}",
+            "warning:".yellow().bold(),
+            err
+        );
+    }
+}
+
 /// Run watch mode - poll CI status until all checks complete
 #[allow(clippy::too_many_arguments)]
 fn run_watch_mode(
@@ -789,6 +883,7 @@ fn run_watch_mode(
     interval: u64,
     json: bool,
     verbose: bool,
+    alert: Option<CiAlertSounds>,
 ) -> Result<()> {
     let poll_duration = Duration::from_secs(interval);
     let mut iteration = 0;
@@ -869,6 +964,12 @@ fn run_watch_mode(
             }
 
             record_ci_history(repo, &statuses);
+            let alert_outcome = if has_failure {
+                CiAlertOutcome::Error
+            } else {
+                CiAlertOutcome::Success
+            };
+            play_ci_alert(alert.as_ref(), alert_outcome);
             return Ok(());
         }
 
@@ -1430,6 +1531,91 @@ mod tests {
 
         let result = dedup_check_runs(vec![build, test]);
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn ci_alert_resolution_prefers_cli_path_over_config() {
+        let mut config = Config::default();
+        config.ci.alert = true;
+        config.ci.success_alert_sound = Some("/tmp/config-success.wav".to_string());
+        config.ci.error_alert_sound = Some("/tmp/config-error.wav".to_string());
+
+        let alert = resolve_ci_alert_sounds(
+            &config,
+            Some(CiAlertSoundArg::Path("/tmp/cli.wav".into())),
+            false,
+        );
+
+        assert_eq!(
+            alert,
+            Some(CiAlertSounds {
+                success: CiAlertSound::CustomPath("/tmp/cli.wav".into()),
+                error: CiAlertSound::CustomPath("/tmp/cli.wav".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn ci_alert_resolution_uses_built_in_defaults() {
+        let mut config = Config::default();
+        config.ci.alert = true;
+
+        let alert = resolve_ci_alert_sounds(&config, None, false);
+
+        assert_eq!(
+            alert,
+            Some(CiAlertSounds {
+                success: CiAlertSound::BuiltIn(BuiltInSound::Success),
+                error: CiAlertSound::BuiltIn(BuiltInSound::Error),
+            })
+        );
+    }
+
+    #[test]
+    fn ci_alert_resolution_uses_config_success_and_error_sounds() {
+        let mut config = Config::default();
+        config.ci.alert = true;
+        config.ci.success_alert_sound = Some("/tmp/success.wav".to_string());
+        config.ci.error_alert_sound = Some("/tmp/error.wav".to_string());
+
+        let alert = resolve_ci_alert_sounds(&config, None, false);
+
+        assert_eq!(
+            alert,
+            Some(CiAlertSounds {
+                success: CiAlertSound::CustomPath("/tmp/success.wav".into()),
+                error: CiAlertSound::CustomPath("/tmp/error.wav".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn ci_alert_resolution_defaults_missing_error_sound_only() {
+        let mut config = Config::default();
+        config.ci.alert = true;
+        config.ci.success_alert_sound = Some("/tmp/success.wav".to_string());
+
+        let alert = resolve_ci_alert_sounds(&config, None, false);
+
+        assert_eq!(
+            alert,
+            Some(CiAlertSounds {
+                success: CiAlertSound::CustomPath("/tmp/success.wav".into()),
+                error: CiAlertSound::BuiltIn(BuiltInSound::Error),
+            })
+        );
+    }
+
+    #[test]
+    fn ci_alert_resolution_no_alert_disables_config() {
+        let mut config = Config::default();
+        config.ci.alert = true;
+        config.ci.success_alert_sound = Some("/tmp/config-success.wav".to_string());
+        config.ci.error_alert_sound = Some("/tmp/config-error.wav".to_string());
+
+        let alert = resolve_ci_alert_sounds(&config, None, true);
+
+        assert_eq!(alert, None);
     }
 
     #[test]

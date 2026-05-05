@@ -146,3 +146,25 @@ fn test_ci_combined_flags() {
         stderr
     );
 }
+
+#[test]
+fn test_ci_alert_flags_are_recognized() {
+    let repo = TestRepo::new();
+
+    for args in [
+        vec!["ci", "--watch", "--alert"],
+        vec!["ci", "--watch", "--alert", "/tmp/ci-done.wav"],
+        vec!["ci", "--watch", "--no-alert"],
+    ] {
+        let output = repo.run_stax(&args);
+        let stderr = TestRepo::stderr(&output);
+        assert!(
+            !stderr.contains("unrecognized")
+                && !stderr.contains("unknown")
+                && !stderr.contains("unexpected"),
+            "CI alert flags should be accepted for {:?}: {}",
+            args,
+            stderr
+        );
+    }
+}

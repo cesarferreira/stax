@@ -27,6 +27,11 @@ Main config path: `~/.config/stax/config.toml`.
 [submit]
 # stack_links = "comment" # "comment" | "body" | "both" | "off"
 
+[ci]
+# alert = false
+# success_alert_sound = "/path/to/ci-success.wav"
+# error_alert_sound = "/path/to/ci-error.wav"
+
 [auth]
 # use_gh_cli = true
 # allow_github_token_env = false
@@ -115,6 +120,17 @@ When stax invokes an AI agent it prints a confirmation line to stderr:
 st config --reset-ai              # clear + re-prompt
 st config --reset-ai --no-prompt  # clear only
 ```
+
+## CI watch alerts
+
+```toml
+[ci]
+alert = true
+# success_alert_sound = "/path/to/ci-success.wav"
+# error_alert_sound = "/path/to/ci-error.wav"
+```
+
+When `alert` is true, `st ci --watch` plays bundled success/error sounds after CI completes. Set either path to override one outcome while keeping the other bundled default.
 
 ## Branch naming format
 

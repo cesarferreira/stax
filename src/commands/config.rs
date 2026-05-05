@@ -35,6 +35,13 @@ pub fn run(reset_ai: bool, no_prompt: bool, yes: bool, set_ai: bool) -> Result<(
     println!(r#"  # Example: stack_links = "body""#);
 
     println!();
+    println!("{}", "CI watch alerts:".blue().bold());
+    println!("  [ci]");
+    println!(r#"  alert = false"#);
+    println!(r#"  # success_alert_sound = "/path/to/ci-success.wav"  # optional"#);
+    println!(r#"  # error_alert_sound = "/path/to/ci-error.wav"      # optional"#);
+
+    println!();
     println!("{}", "Per-feature AI overrides:".blue().bold());
     println!(
         r#"  [ai.generate]  # create/PR generation (stax create --ai, stax generate, stax submit --ai)"#

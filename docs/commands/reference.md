@@ -109,6 +109,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 |---|---|
 | `st ci` | CI status for current branch (with elapsed/ETA learned from recent runs) |
 | `st ci --stack` / `--all` / `--watch` | Scope and watch modes |
+| `st ci -w --alert` / `--alert <file>` / `--no-alert` | Success/error completion sounds for watch mode |
 | `st ci --verbose` / `--json` | Summary cards · JSON output |
 | `st pr` · `st pr open` | Open current branch PR |
 | `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
@@ -250,6 +251,8 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 ### `st ci`
 
 - `--stack` / `--all` / `--watch` / `--interval 30` / `--json`
+- `--watch --alert` plays built-in success/error sounds; `--watch --alert <file>` uses one custom sound for either outcome; `--watch --no-alert` suppresses `[ci] alert = true` for one run.
+- Config can enable alerts by default with `[ci] alert = true`; set `success_alert_sound` and/or `error_alert_sound` to override the per-outcome built-in sounds.
 
 ### `st standup`
 
