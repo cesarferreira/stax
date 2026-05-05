@@ -23,7 +23,12 @@ use std::process::{Command, Stdio};
 // going through stax commands.
 // ---------------------------------------------------------------------------
 
-fn write_branch_metadata_raw(repo: &TestRepo, branch: &str, parent_name: &str, parent_revision: &str) {
+fn write_branch_metadata_raw(
+    repo: &TestRepo,
+    branch: &str,
+    parent_name: &str,
+    parent_revision: &str,
+) {
     let json = format!(
         r#"{{"parentBranchName":"{}","parentBranchRevision":"{}"}}"#,
         parent_name, parent_revision
@@ -256,10 +261,7 @@ fn test_restack_with_non_ancestor_revision_preserves_only_feature_commits() {
     // Verify: feature must be exactly 2 commits ahead of main (its own commits only)
     let log_out = repo.git(&["log", "--oneline", "main..count-feature"]);
     let log_str = String::from_utf8_lossy(&log_out.stdout).to_string();
-    let feature_only: Vec<&str> = log_str
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .collect();
+    let feature_only: Vec<&str> = log_str.lines().filter(|l| !l.trim().is_empty()).collect();
 
     assert_eq!(
         feature_only.len(),

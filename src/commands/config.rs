@@ -46,7 +46,7 @@ pub fn run(reset_ai: bool, no_prompt: bool, yes: bool, set_ai: bool) -> Result<(
     println!(
         r#"  [ai.generate]  # create/PR generation (stax create --ai, stax generate, stax submit --ai)"#
     );
-    println!(r#"  [ai.standup]   # standup summaries (stax standup --summary)"#);
+    println!(r#"  [ai.standup]   # standup summaries (stax standup --ai)"#);
     println!(r#"  [ai.resolve]   # conflict resolution (stax resolve)"#);
     println!(r#"  [ai.lane]      # interactive AI lanes (stax lane)"#);
     println!(r#"  # Each accepts optional `agent` and `model` keys."#);
@@ -67,7 +67,7 @@ fn set_ai_interactive() -> Result<()> {
         ),
         (
             "standup",
-            "standup         (standup summary — stax standup --summary)",
+            "standup         (standup summary — stax standup --ai)",
         ),
         (
             "resolve",

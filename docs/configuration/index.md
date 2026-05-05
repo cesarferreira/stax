@@ -45,11 +45,11 @@ Main config path: `~/.config/stax/config.toml`.
 # model = "claude-sonnet-4-5-20250929"
 
 # Per-feature overrides — optional, fall back to [ai] above
-[ai.generate]   # st create --ai, st generate --pr-body, st submit --ai
+[ai.generate]   # st create --ai, st gen / st generate, st submit --ai
 # agent = "codex"
 # model = "o4-mini"
 
-[ai.standup]    # st standup --summary
+[ai.standup]    # st standup --ai
 # agent = "gemini"
 # model = "gemini-2.5-pro"
 
@@ -90,7 +90,7 @@ You're asked which feature to configure (`generate`, `standup`, `resolve`, `lane
 
 ### First-use prompting
 
-The first time you run an AI-powered command without a configured agent (e.g. `st standup --summary`), stax opens the picker automatically and persists the choice for future runs — no manual config editing required.
+The first time you run an AI-powered command without a configured agent (e.g. `st standup --ai`), stax opens the picker automatically and persists the choice for future runs — no manual config editing required.
 
 ### Resolution order
 

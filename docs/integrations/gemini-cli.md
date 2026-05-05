@@ -25,6 +25,8 @@ st create --ai -a --yes
 st submit --ai
 st generate --pr-body --agent gemini
 st generate --pr-body --agent gemini --model gemini-2.5-flash
+st gen --pr-title --agent gemini
+st gen --commit-msg --agent gemini
 ```
 
 ## Related

@@ -132,7 +132,7 @@ pub struct AiConfig {
     /// Per-feature overrides for create/PR generation (`stax create --ai`, `stax generate`, `stax submit --ai`)
     #[serde(default, skip_serializing_if = "AiFeatureConfig::is_empty")]
     pub generate: AiFeatureConfig,
-    /// Per-feature overrides for standup summaries (`stax standup --summary`)
+    /// Per-feature overrides for standup summaries (`stax standup --ai`)
     #[serde(default, skip_serializing_if = "AiFeatureConfig::is_empty")]
     pub standup: AiFeatureConfig,
     /// Per-feature overrides for conflict resolution (`stax resolve`)

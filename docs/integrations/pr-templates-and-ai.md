@@ -58,13 +58,25 @@ st ss --ai --body --yes     # refresh existing PR bodies automatically
 
 For existing PRs, interactive `--ai` asks whether to update title, body, both, or skip. With `--yes`, plain `--ai` leaves existing PR content alone; explicit `--title` and/or `--body` updates those fields automatically.
 
+## AI generation hub (`st gen` / `st generate`)
+
+Bare `st gen` (alias of `st generate`) opens an interactive picker: refresh **PR body**, refresh **PR title**, or amend **HEAD** with a new commit message. For scripting, pass exactly one artifact flag:
+
+```bash
+st gen --pr-body
+st gen --pr-title
+st gen --commit-msg
+```
+
+`--template` / `--no-template` apply only to `--pr-body`. `--model` requires `--agent` on the same run.
+
 ## AI PR body refresh
 
 Generate or update a PR body using diff, commits, and template:
 
 ```bash
 st generate --pr-body
-st generate --pr-body --no-prompt   # skip final review prompt
+st gen --pr-body --no-prompt   # skip final review prompt
 ```
 
 ### Prerequisites
@@ -103,7 +115,7 @@ st generate --pr-body --no-prompt
 | Flag | Behavior |
 |---|---|
 | `--agent <name>` | Override configured agent for one run |
-| `--model <name>` | Override model for one run |
+| `--model <name>` | Override model for one run (**requires** `--agent` on the same command) |
 | `--no-prompt` | Skip picker/review prompts, use defaults |
 | `--edit` | Review/edit generated body before update |
 | `--template <name>` | Use a specific PR template |
@@ -130,10 +142,12 @@ stack_links = "body"   # or "both"
 ### More examples
 
 ```bash
-st generate --pr-body --agent codex
-st generate --pr-body --model claude-haiku-4-5-20251001
+st generate --pr-body --agent codex --model gpt-5.3-codex
+st generate --pr-body --agent claude --model claude-haiku-4-5-20251001
 st generate --pr-body --agent gemini --model gemini-2.5-flash
 st generate --pr-body --agent opencode
 st generate --pr-body --edit
 st generate --pr-body --template feature
+st gen --pr-title --agent claude
+st gen --commit-msg --agent codex
 ```

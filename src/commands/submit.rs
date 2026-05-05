@@ -2130,6 +2130,7 @@ fn resolve_ai_agent_selection(
     Ok(selection)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_ai_pr_details(
     workdir: &Path,
     parent: &str,

@@ -37,11 +37,83 @@ fn models_file() -> &'static ModelsFile {
 
 const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
 
+#[derive(Clone, Copy, Debug)]
+enum GenerateTarget {
+    PrBody,
+    PrTitle,
+    CommitMsg,
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
+    pr_body: bool,
+    pr_title: bool,
+    commit_msg: bool,
+    edit: bool,
+    no_prompt: bool,
+    agent_flag: Option<String>,
+    model_flag: Option<String>,
+    template_flag: Option<String>,
+    no_template: bool,
+) -> Result<()> {
+    let artifact_count = [pr_body, pr_title, commit_msg]
+        .iter()
+        .filter(|&&flag| flag)
+        .count();
+    if artifact_count > 1 {
+        bail!("Only one of --pr-body, --pr-title, or --commit-msg may be set at a time");
+    }
+
+    let selected = if pr_body {
+        Some(GenerateTarget::PrBody)
+    } else if pr_title {
+        Some(GenerateTarget::PrTitle)
+    } else if commit_msg {
+        Some(GenerateTarget::CommitMsg)
+    } else {
+        None
+    };
+
+    let target = if let Some(t) = selected {
+        t
+    } else {
+        let options = [
+            "PR body     — refresh the open PR's body from current diff",
+            "PR title    — refresh the open PR's title from current diff",
+            "Commit msg  — amend the HEAD commit message from current diff",
+        ];
+        let choice = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("What do you want to generate?")
+            .items(options)
+            .default(0)
+            .interact()?;
+        match choice {
+            0 => GenerateTarget::PrBody,
+            1 => GenerateTarget::PrTitle,
+            2 => GenerateTarget::CommitMsg,
+            _ => unreachable!(),
+        }
+    };
+
+    match target {
+        GenerateTarget::PrBody => generate_pr_body(
+            edit,
+            no_prompt,
+            agent_flag,
+            model_flag,
+            template_flag,
+            no_template,
+        ),
+        GenerateTarget::PrTitle => generate_pr_title(edit, no_prompt, agent_flag, model_flag),
+        GenerateTarget::CommitMsg => generate_commit_msg(edit, no_prompt, agent_flag, model_flag),
+    }
+}
+
+fn generate_pr_body(
     edit: bool,
     no_prompt: bool,
     agent_flag: Option<String>,
@@ -194,6 +266,355 @@ pub fn run(
     );
 
     Ok(())
+}
+
+fn generate_pr_title(
+    edit: bool,
+    no_prompt: bool,
+    agent_flag: Option<String>,
+    model_flag: Option<String>,
+) -> Result<()> {
+    let config = Config::load()?;
+    let repo = GitRepo::open()?;
+    let workdir = repo.workdir()?.to_path_buf();
+    let stack = Stack::load(&repo)?;
+    let current_branch = repo.current_branch()?;
+
+    let branch_info = stack
+        .branches
+        .get(&current_branch)
+        .context("Current branch is not tracked by stax. Run `stax branch track` first.")?;
+
+    let parent = branch_info
+        .parent
+        .as_deref()
+        .context("Current branch has no parent set")?;
+
+    let meta = BranchMetadata::read(repo.inner(), &current_branch)?
+        .context("No metadata for current branch")?;
+
+    let pr_number = meta
+        .pr_info
+        .as_ref()
+        .filter(|p| p.number > 0)
+        .map(|p| p.number)
+        .context("No PR found for current branch. Submit first with `stax submit` or `stax ss`.")?;
+
+    let mut config = config;
+    let agent = resolve_agent(agent_flag.as_deref(), &mut config, no_prompt)?;
+    let model = resolve_model(model_flag.as_deref(), &config, &agent, "generate")?;
+
+    println!("{}", "Collecting context...".dimmed());
+    let diff_stat = get_diff_stat(&workdir, parent, &current_branch);
+    let diff = get_full_diff(&workdir, parent, &current_branch);
+    let commits = collect_commit_messages(&workdir, parent, &current_branch);
+
+    if diff.trim().is_empty() && commits.is_empty() {
+        bail!("No changes found between {} and {}", parent, current_branch);
+    }
+
+    let prompt = build_ai_title_json_prompt(&diff_stat, &diff, &commits);
+    print_using_agent(&agent, model.as_deref());
+    let raw = invoke_ai_agent(&agent, model.as_deref(), &prompt)?;
+    let title = parse_ai_pr_title_json(&raw)?;
+
+    let final_title = if edit {
+        Editor::new().edit(&title)?.unwrap_or(title)
+    } else if no_prompt {
+        title
+    } else {
+        println!();
+        println!("{}", "─── Generated PR Title ───".blue().bold());
+        println!("{}", title);
+        println!("{}", "───────────────────────────".blue().bold());
+        println!();
+
+        let options = vec!["Use as-is", "Edit in $EDITOR", "Cancel"];
+        let choice = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("What would you like to do?")
+            .items(&options)
+            .default(0)
+            .interact()?;
+
+        match choice {
+            0 => title,
+            1 => Editor::new().edit(&title)?.unwrap_or(title),
+            _ => {
+                println!("{}", "Cancelled.".yellow());
+                return Ok(());
+            }
+        }
+    };
+
+    print!("  Updating PR #{} title... ", pr_number.to_string().cyan());
+    std::io::stdout().flush().ok();
+
+    let remote_info = remote::RemoteInfo::from_repo(&repo, &config)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _enter = runtime.enter();
+    let client = ForgeClient::new(&remote_info)?;
+
+    runtime.block_on(async { client.update_pr_title(pr_number, &final_title).await })?;
+
+    println!("{}", "done".green());
+    println!(
+        "  {} PR #{} title updated successfully",
+        "✓".green().bold(),
+        pr_number
+    );
+
+    Ok(())
+}
+
+fn generate_commit_msg(
+    edit: bool,
+    no_prompt: bool,
+    agent_flag: Option<String>,
+    model_flag: Option<String>,
+) -> Result<()> {
+    let config = Config::load()?;
+    let repo = GitRepo::open()?;
+    let workdir = repo.workdir()?.to_path_buf();
+    let stack = Stack::load(&repo)?;
+    let current_branch = repo.current_branch()?;
+
+    stack
+        .branches
+        .get(&current_branch)
+        .context("Current branch is not tracked by stax. Run `stax branch track` first.")?;
+
+    let mut config = config;
+    let agent = resolve_agent(agent_flag.as_deref(), &mut config, no_prompt)?;
+    let model = resolve_model(model_flag.as_deref(), &config, &agent, "generate")?;
+
+    println!("{}", "Collecting context...".dimmed());
+    let current_message = get_head_full_commit_message(&workdir)?;
+    let patch = get_head_commit_patch(&workdir)?;
+
+    if current_message.trim().is_empty() && patch.trim().is_empty() {
+        bail!("No HEAD commit message or patch found");
+    }
+
+    let prompt = build_commit_message_prompt(&current_message, &patch);
+    print_using_agent(&agent, model.as_deref());
+    let raw = invoke_ai_agent(&agent, model.as_deref(), &prompt)?;
+    let message = normalize_plain_ai_message(&raw);
+
+    if message.trim().is_empty() {
+        bail!("AI agent returned an empty response");
+    }
+
+    let final_message = if edit {
+        Editor::new().edit(&message)?.unwrap_or(message)
+    } else if no_prompt {
+        message
+    } else {
+        println!();
+        println!("{}", "─── Generated commit message ───".blue().bold());
+        println!("{}", message);
+        println!("{}", "─────────────────────────────────".blue().bold());
+        println!();
+
+        let options = vec!["Use as-is", "Edit in $EDITOR", "Cancel"];
+        let choice = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("What would you like to do?")
+            .items(&options)
+            .default(0)
+            .interact()?;
+
+        match choice {
+            0 => message,
+            1 => Editor::new().edit(&message)?.unwrap_or(message),
+            _ => {
+                println!("{}", "Cancelled.".yellow());
+                return Ok(());
+            }
+        }
+    };
+
+    let status = Command::new("git")
+        .args(["commit", "--amend", "-m", &final_message])
+        .current_dir(&workdir)
+        .status()
+        .context("failed to spawn git commit")?;
+
+    if !status.success() {
+        bail!("git commit --amend failed");
+    }
+
+    println!("  {} HEAD commit message updated", "✓".green().bold());
+
+    Ok(())
+}
+
+fn get_head_full_commit_message(workdir: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(workdir)
+        .output()
+        .context("failed to run git log")?;
+    if !output.status.success() {
+        bail!(
+            "git log failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string())
+}
+
+fn get_head_commit_patch(workdir: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .args(["show", "--pretty=format:", "--no-color", "HEAD"])
+        .current_dir(workdir)
+        .output()
+        .context("failed to run git show")?;
+    if !output.status.success() {
+        bail!(
+            "git show failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn build_commit_message_prompt(current_message: &str, patch: &str) -> String {
+    let mut prompt = String::new();
+    prompt.push_str(
+        "Generate a concise replacement git commit message for the commit at HEAD.\n\
+        Follow conventional-commit style when it fits the change. \
+        Return only the commit message text, with no markdown fences and no preamble or explanation.\n\n",
+    );
+    if !current_message.trim().is_empty() {
+        prompt.push_str("Current commit message:\n");
+        prompt.push_str(current_message.trim_end());
+        prompt.push_str("\n\n");
+    }
+    if !patch.trim().is_empty() {
+        let truncated = truncate_diff_for_title_prompt(patch);
+        prompt.push_str("Patch introduced by this commit:\n```diff\n");
+        prompt.push_str(&truncated);
+        prompt.push_str("\n```\n\n");
+    }
+    prompt
+}
+
+#[derive(Deserialize)]
+struct RawAiPrTitle {
+    title: Option<String>,
+}
+
+fn parse_ai_pr_title_json(raw: &str) -> Result<String> {
+    let json = extract_ai_json_blob(raw);
+    let parsed: RawAiPrTitle =
+        serde_json::from_str(&json).context("AI agent did not return JSON with a title field")?;
+    parsed
+        .title
+        .and_then(|t| {
+            let s = t.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        })
+        .context("AI agent did not return a non-empty title")
+}
+
+fn extract_ai_json_blob(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let unfenced = if trimmed.starts_with("```") {
+        let without_opening = trimmed.lines().skip(1).collect::<Vec<_>>().join("\n");
+        without_opening
+            .trim()
+            .strip_suffix("```")
+            .unwrap_or(without_opening.trim())
+            .trim()
+            .to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    if unfenced.starts_with('{') && unfenced.ends_with('}') {
+        return unfenced;
+    }
+
+    match (unfenced.find('{'), unfenced.rfind('}')) {
+        (Some(start), Some(end)) if start < end => unfenced[start..=end].to_string(),
+        _ => unfenced,
+    }
+}
+
+fn build_ai_title_json_prompt(diff_stat: &str, diff: &str, commits: &[String]) -> String {
+    let mut prompt = String::new();
+    prompt.push_str("Generate a pull request title for the following changes.\n\n");
+    prompt.push_str(
+        "Return only a compact JSON object with string field \"title\". \
+        Do not include markdown fences or explanatory text.\n\n",
+    );
+    prompt.push_str(
+        "Title requirements:\n- Concise PR title, no trailing period\n\
+        - Describe the user-visible change, not the implementation mechanics\n\n",
+    );
+
+    if !commits.is_empty() {
+        prompt.push_str("Commit messages:\n");
+        for msg in commits {
+            prompt.push_str(&format!("- {}\n", msg));
+        }
+        prompt.push('\n');
+    }
+
+    if !diff_stat.is_empty() {
+        prompt.push_str("Diff stat:\n```\n");
+        prompt.push_str(diff_stat);
+        prompt.push_str("\n```\n\n");
+    }
+
+    if !diff.is_empty() {
+        prompt.push_str("Full diff:\n```diff\n");
+        prompt.push_str(&truncate_diff_for_title_prompt(diff));
+        prompt.push_str("\n```\n\n");
+    }
+
+    prompt
+}
+
+fn truncate_diff_for_title_prompt(diff: &str) -> String {
+    if diff.len() <= MAX_DIFF_BYTES {
+        return diff.to_string();
+    }
+    let safe_end = safe_utf8_cut(diff, MAX_DIFF_BYTES);
+    let safe = &diff[..safe_end];
+    let cut = safe.rfind('\n').unwrap_or(safe.len());
+    format!(
+        "{}\n\n... (diff truncated, showing first ~80KB of {} total) ...",
+        &safe[..cut],
+        format_bytes(diff.len())
+    )
+}
+
+fn safe_utf8_cut(value: &str, max: usize) -> usize {
+    let mut end = max.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+fn normalize_plain_ai_message(raw: &str) -> String {
+    let t = raw.trim();
+    if t.starts_with("```") {
+        let stripped: String = t
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.trim_start().starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return stripped.trim().to_string();
+    }
+    t.to_string()
 }
 
 // ---------------------------------------------------------------------------

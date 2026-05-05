@@ -60,11 +60,14 @@ stax comments                  # Show current PR comments
 stax copy [--pr]               # Copy branch name or PR URL
 stax ci                        # CI status
 stax standup                   # Recent activity summary
-stax standup --summary         # AI-generated spoken standup update (colored card)
-stax standup --summary --style slack  # AI-generated Slack-ready Yesterday/Today bullets
-stax standup --summary --jit   # AI standup plus Jira next-up context via jit (github.com/cesarferreira/jit)
+stax standup --ai              # AI-generated spoken standup update (colored card)
+stax standup --ai --style slack  # AI-generated Slack-ready Yesterday/Today bullets
+stax standup --ai --jit   # AI standup plus Jira next-up context via jit (github.com/cesarferreira/jit)
 stax changelog <from> [to]     # Changelog between refs
-stax generate --pr-body        # AI PR body generation
+stax generate                  # Interactive picker: PR body, PR title, or commit message (AI)
+stax gen --pr-body             # Non-interactive: refresh open PR body from diff
+stax gen --pr-title            # Non-interactive: refresh open PR title from diff
+stax gen --commit-msg          # Non-interactive: amend HEAD commit message from diff
 
 stax auth [status]             # GitHub auth setup/status
 stax config                    # Print config path + contents
@@ -301,18 +304,21 @@ error_alert_sound = "/path/to/ci-error.wav"      # optional, built-in when omitt
 
 stax standup --hours 48            # Summarize recent activity window
 stax standup --all --json          # All stacks in JSON
-stax standup --summary             # AI spoken standup — colored card, word-wrapped
-stax standup --summary --style slack  # AI Slack-ready Yesterday/Today bullets
-stax standup --summary --agent claude  # Override AI agent for one run
-stax standup --summary --plain-text    # Raw text output (pipe-friendly)
-stax standup --summary --json          # {"summary": "..."} JSON
-stax standup --summary --jit           # Add Jira context via jit (github.com/cesarferreira/jit)
+stax standup --ai             # AI spoken standup — colored card, word-wrapped
+stax standup --ai --style slack  # AI Slack-ready Yesterday/Today bullets
+stax standup --ai --agent claude  # Override AI agent for one run
+stax standup --ai --plain-text    # Raw text output (pipe-friendly)
+stax standup --ai --json          # {"summary": "..."} JSON
+stax standup --ai --jit           # Add Jira context via jit (github.com/cesarferreira/jit)
 
 stax changelog v1.2.0 HEAD         # Changelog from ref to ref
 stax changelog v1.2.0 --path src/  # Filter by path
 stax changelog v1.2.0 --json       # JSON output
 
-stax generate --pr-body            # Generate and update PR body with AI
+stax gen                           # Interactive AI picker (PR body / title / commit msg)
+stax generate --pr-body            # Refresh PR body with AI (non-interactive)
+stax gen --pr-title                # Refresh PR title with AI
+stax gen --commit-msg              # Amend HEAD commit message with AI
 stax generate --pr-body --edit     # Open editor before update
 stax generate --pr-body --agent codex --model gpt-5
 ```

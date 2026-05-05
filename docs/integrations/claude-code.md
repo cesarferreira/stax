@@ -16,6 +16,8 @@ st create --ai -a --yes
 st submit --ai
 st generate --pr-body --agent claude
 st generate --pr-body --agent claude --model claude-opus-4-5
+st gen --pr-title --agent claude
+st gen --commit-msg --agent claude
 ```
 
 ## Related
