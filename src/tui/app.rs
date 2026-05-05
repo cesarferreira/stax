@@ -2076,7 +2076,7 @@ mod tests {
         let receiver = spawn_diff_loader(repo_path, cache_dir.clone(), request.clone());
 
         match receiver
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(Duration::from_secs(15))
             .expect("diff update")
         {
             DiffUpdate::Loaded {

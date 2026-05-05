@@ -5,7 +5,6 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
-use std::thread;
 use std::time::{Duration, Instant};
 
 pub struct GitRepo {
@@ -822,37 +821,121 @@ impl GitRepo {
         Ok((ahead, behind))
     }
 
-    /// Get ahead/behind counts for multiple branch pairs concurrently.
+    /// Get ahead/behind counts for multiple branch pairs.
+    ///
+    /// Results are cached by (base_sha, head_sha) in `.git/stax/ahead-behind-cache.json`.
+    /// Cache entries self-invalidate when either ref moves (push, rebase, fetch)
+    /// because the SHA changes → cache miss → recomputed.
+    ///
+    /// For cache misses, runs `git rev-list --left-right --count base...head` in
+    /// parallel subprocesses. Git uses the commit-graph file when present (O(1) per
+    /// lookup), and even without it its traversal is better optimised than libgit2's
+    /// for repos with deep history.
     pub fn commits_ahead_behind_many(
         &self,
         pairs: &[(String, String)],
     ) -> Vec<Result<(usize, usize)>> {
-        let repo_path = self.repo.path().to_path_buf();
-        let handles = pairs
+        let git_dir = self.repo.path().to_path_buf();
+        let workdir = match self.workdir() {
+            Ok(w) => w.to_path_buf(),
+            Err(e) => {
+                let msg = e.to_string();
+                return pairs
+                    .iter()
+                    .map(|_| Err(anyhow::anyhow!("{}", msg)))
+                    .collect();
+            }
+        };
+
+        // Resolve current tip OIDs for all pairs in the main thread (fast ref
+        // lookups on the already-open repo — no extra Repository::open() needed).
+        let shas: Vec<Option<(String, String)>> = pairs
             .iter()
             .map(|(base, head)| {
-                let repo_path = repo_path.clone();
-                let base = base.clone();
-                let head = head.clone();
-                thread::spawn(move || {
-                    let repo = Repository::open(&repo_path).with_context(|| {
-                        format!("Failed to open git repository at '{}'", repo_path.display())
-                    })?;
-                    let base_oid = Self::resolve_to_oid_in(&repo, &base)?;
-                    let head_oid = Self::resolve_to_oid_in(&repo, &head)?;
-                    let (ahead, behind) = repo.graph_ahead_behind(head_oid, base_oid)?;
-                    Ok((ahead, behind))
-                })
+                let base_sha = Self::resolve_to_oid_in(&self.repo, base)
+                    .ok()
+                    .map(|o| o.to_string());
+                let head_sha = Self::resolve_to_oid_in(&self.repo, head)
+                    .ok()
+                    .map(|o| o.to_string());
+                base_sha.zip(head_sha)
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        handles
+        let mut cache = crate::cache::AheadBehindCache::load(&git_dir);
+        let mut results: Vec<Option<(usize, usize)>> = vec![None; pairs.len()];
+
+        // Collect indices that need computation (cache misses).
+        let mut misses: Vec<(usize, String, String)> = Vec::new();
+        for (i, ((base, head), sha_pair)) in pairs.iter().zip(shas.iter()).enumerate() {
+            if let Some((base_sha, head_sha)) = sha_pair {
+                if let Some(cached) = cache.get(base_sha, head_sha) {
+                    results[i] = Some(cached);
+                    continue;
+                }
+            }
+            misses.push((i, base.clone(), head.clone()));
+        }
+
+        if !misses.is_empty() {
+            // Compute all misses in parallel git subprocesses.
+            let handles: Vec<_> = misses
+                .iter()
+                .map(|(_, base, head)| {
+                    let workdir = workdir.clone();
+                    let range = format!("{}...{}", base, head);
+                    std::thread::spawn(move || -> Result<(usize, usize)> {
+                        let output = Command::new("git")
+                            .args(["rev-list", "--left-right", "--count", &range])
+                            .current_dir(&workdir)
+                            .output()
+                            .context("git rev-list failed")?;
+
+                        if !output.status.success() {
+                            return Ok((0, 0));
+                        }
+
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let parts: Vec<&str> = stdout.trim().split('\t').collect();
+                        if parts.len() != 2 {
+                            return Ok((0, 0));
+                        }
+                        // left  = commits in base not in head → behind
+                        // right = commits in head not in base → ahead
+                        let behind: usize = parts[0].parse().unwrap_or(0);
+                        let ahead: usize = parts[1].parse().unwrap_or(0);
+                        Ok((ahead, behind))
+                    })
+                })
+                .collect();
+
+            let computed: Vec<Result<(usize, usize)>> = handles
+                .into_iter()
+                .map(|h| {
+                    h.join()
+                        .unwrap_or_else(|_| anyhow::bail!("ahead/behind worker panicked"))
+                })
+                .collect();
+
+            let mut cache_dirty = false;
+            for ((orig_idx, _, _), result) in misses.iter().zip(computed.iter()) {
+                if let Ok(&val) = result.as_ref() {
+                    results[*orig_idx] = Some(val);
+                    if let Some((base_sha, head_sha)) = &shas[*orig_idx] {
+                        cache.set(base_sha, head_sha, val.0, val.1);
+                        cache_dirty = true;
+                    }
+                }
+            }
+
+            if cache_dirty {
+                let _ = cache.save(&git_dir); // best-effort
+            }
+        }
+
+        results
             .into_iter()
-            .map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|_| anyhow::bail!("ahead/behind worker panicked"))
-            })
+            .map(|r| r.map(Ok).unwrap_or_else(|| Ok((0, 0))))
             .collect()
     }
 
@@ -1203,6 +1286,30 @@ impl GitRepo {
                 onto,
                 fallback_upstream,
                 auto_stash_pop,
+                true,
+            )?
+            .result)
+    }
+
+    /// Like [`rebase_branch_onto_with_provenance`] but skips the squash-merge
+    /// integration check (`git merge-tree --write-tree`). Safe to use when the
+    /// caller already knows the branch has not been squash-merged (e.g. its PR
+    /// is still open). Avoids a multi-second `git merge-tree` call per branch
+    /// in large repos.
+    pub fn rebase_branch_onto_with_provenance_no_squash_check(
+        &self,
+        branch: &str,
+        onto: &str,
+        fallback_upstream: &str,
+        auto_stash_pop: bool,
+    ) -> Result<RebaseResult> {
+        Ok(self
+            .rebase_branch_onto_with_provenance_timing(
+                branch,
+                onto,
+                fallback_upstream,
+                auto_stash_pop,
+                false,
             )?
             .result)
     }
@@ -1213,6 +1320,7 @@ impl GitRepo {
         onto: &str,
         fallback_upstream: &str,
         auto_stash_pop: bool,
+        check_squash_merge: bool,
     ) -> Result<RebaseOutcome> {
         let mut timings = RebaseTimings::default();
 
@@ -1239,9 +1347,10 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
 
         let git_rebase_started_at = Instant::now();
-        if self
-            .branch_is_integrated_into(onto, branch)
-            .unwrap_or(false)
+        if check_squash_merge
+            && self
+                .branch_is_integrated_into(onto, branch)
+                .unwrap_or(false)
         {
             self.reset_hard_in_path(&target_workdir, onto)
                 .with_context(|| format!("Failed to move '{}' to '{}'", branch, onto))?;

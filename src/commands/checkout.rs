@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::repo::WorktreeInfo;
 use crate::git::{GitRepo, checkout_branch_in, refs};
+use crate::remote;
 use anyhow::Result;
 use colored::Colorize;
 use console::{Color, Style, colors_enabled_stderr, measure_text_width, truncate_str};
@@ -388,7 +389,6 @@ fn route_checkout_to_worktree(
 
 fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<Vec<CheckoutRow>> {
     let config = Config::load()?;
-    let remote_branches = repo.remote_branch_names(config.remote_name())?;
     let linked_worktrees_by_branch: HashSet<String> = repo
         .list_worktrees()?
         .into_iter()
@@ -423,6 +423,33 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
         )?;
     }
 
+    // Build ordered list of all branches we care about (displayed + trunk)
+    let mut ordered_branches: Vec<String> =
+        display_branches.iter().map(|db| db.name.clone()).collect();
+    ordered_branches.push(stack.trunk.clone());
+
+    // Only check remote existence for the branches we're displaying (fast)
+    let remote_branches =
+        remote::get_existing_remote_branches_from_repo(repo.inner(), config.remote_name(), &ordered_branches);
+
+    // Batch all ahead/behind queries in parallel threads
+    let ahead_behind_pairs = ordered_branches
+        .iter()
+        .map(|name| {
+            let base = if name == &stack.trunk {
+                format!("{}/{}", config.remote_name(), name)
+            } else {
+                stack
+                    .branches
+                    .get(name)
+                    .and_then(|b| b.parent.clone())
+                    .unwrap_or_else(|| stack.trunk.clone())
+            };
+            (base, name.clone())
+        })
+        .collect::<Vec<_>>();
+    let ahead_behind = repo.commits_ahead_behind_many(&ahead_behind_pairs);
+
     let tree_target_width = (max_column + 1) * 2;
     let picker_row_width = terminal_width().saturating_sub(1);
     let item_width = picker_row_width.saturating_sub(2);
@@ -432,9 +459,9 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
         let branch = &db.name;
         let is_current = branch == current;
         let entry = stack.branches.get(branch);
-        let parent = entry.and_then(|b| b.parent.as_deref());
-        let (ahead, behind) = parent
-            .and_then(|p| repo.commits_ahead_behind(p, branch).ok())
+        let (ahead, behind) = ahead_behind
+            .get(i)
+            .and_then(|r| r.as_ref().ok().copied())
             .unwrap_or((0, 0));
         let needs_restack = entry.map(|b| b.needs_restack).unwrap_or(false);
         let has_pr = entry.and_then(|b| b.pr_number).is_some();
@@ -549,11 +576,11 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
         trunk_info.push_str(&render_stderr(&stack.trunk, checkout_style(trunk_color)));
     }
 
-    let (ahead, behind) = repo
-        .commits_ahead_behind(
-            &format!("{}/{}", config.remote_name(), stack.trunk),
-            &stack.trunk,
-        )
+    // Trunk is the last entry in ahead_behind (appended after display_branches)
+    let trunk_idx = display_branches.len();
+    let (ahead, behind) = ahead_behind
+        .get(trunk_idx)
+        .and_then(|r| r.as_ref().ok().copied())
         .unwrap_or((0, 0));
     trunk_info.push_str(&divergence_labels(ahead, behind));
 

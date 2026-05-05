@@ -189,6 +189,54 @@ impl TuiDiffCache {
     }
 }
 
+/// Cache for ahead/behind commit counts, keyed by (base_sha:head_sha).
+///
+/// The key encodes the current tip OIDs of both refs, so the cache
+/// self-invalidates automatically: if either branch moves (push, rebase,
+/// fetch), the SHA changes and the entry becomes a miss.
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct AheadBehindCache {
+    /// "base_sha:head_sha" → (ahead, behind)
+    pub entries: HashMap<String, (usize, usize)>,
+}
+
+impl AheadBehindCache {
+    fn cache_path(git_dir: &std::path::Path) -> PathBuf {
+        git_dir.join("stax").join("ahead-behind-cache.json")
+    }
+
+    pub fn load(git_dir: &std::path::Path) -> Self {
+        let path = Self::cache_path(git_dir);
+        if !path.exists() {
+            return Self::default();
+        }
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, git_dir: &std::path::Path) -> Result<()> {
+        let path = Self::cache_path(git_dir);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, serde_json::to_string(self)?)?;
+        Ok(())
+    }
+
+    pub fn get(&self, base_sha: &str, head_sha: &str) -> Option<(usize, usize)> {
+        self.entries
+            .get(&format!("{}:{}", base_sha, head_sha))
+            .copied()
+    }
+
+    pub fn set(&mut self, base_sha: &str, head_sha: &str, ahead: usize, behind: usize) {
+        self.entries
+            .insert(format!("{}:{}", base_sha, head_sha), (ahead, behind));
+    }
+}
+
 fn current_unix_time() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

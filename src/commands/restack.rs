@@ -322,12 +322,30 @@ fn run_impl(
             }
         }
 
-        match repo.rebase_branch_onto_with_provenance(
-            branch,
-            &parent_branch_name,
-            &parent_branch_revision,
-            auto_stash_pop,
-        )? {
+        // Skip the expensive git merge-tree squash-merge check when the PR is
+        // still open or in draft — an unmerged PR cannot be squash-integrated.
+        let pr_state = live_stack
+            .branches
+            .get(branch)
+            .and_then(|br| br.pr_state.as_deref())
+            .unwrap_or("");
+        let pr_is_open = matches!(pr_state.to_uppercase().as_str(), "OPEN" | "DRAFT");
+        let rebase_result = if pr_is_open {
+            repo.rebase_branch_onto_with_provenance_no_squash_check(
+                branch,
+                &parent_branch_name,
+                &parent_branch_revision,
+                auto_stash_pop,
+            )
+        } else {
+            repo.rebase_branch_onto_with_provenance(
+                branch,
+                &parent_branch_name,
+                &parent_branch_revision,
+                auto_stash_pop,
+            )
+        };
+        match rebase_result? {
             RebaseResult::Success => {
                 // Update metadata with new parent revision
                 let new_parent_rev = repo.branch_commit(&parent_branch_name)?;
