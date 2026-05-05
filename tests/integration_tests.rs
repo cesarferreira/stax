@@ -720,7 +720,7 @@ fn test_status_with_branches() {
 }
 
 #[test]
-fn test_status_orders_behind_before_ahead() {
+fn test_status_uses_compact_ahead_then_behind_labels() {
     let repo = TestRepo::new();
 
     // Create a branch and commit on it (ahead of parent)
@@ -734,7 +734,7 @@ fn test_status_orders_behind_before_ahead() {
     repo.create_file("main.txt", "main");
     repo.commit("Main commit");
 
-    // Use ll (verbose status) to get text output with "behind" and "ahead" words
+    // Use ll (verbose status) to exercise the same text renderer as `st ls`.
     let output = repo.run_stax(&["ll"]);
     assert!(
         output.status.success(),
@@ -748,16 +748,22 @@ fn test_status_orders_behind_before_ahead() {
         .find(|line| line.contains(&branch_name))
         .expect("Expected branch line in status output");
 
-    let behind_pos = line
-        .find("behind")
-        .expect("Expected 'behind' in status output line");
+    assert!(
+        !line.contains("behind") && !line.contains("ahead"),
+        "Expected compact divergence labels without words, got: {}",
+        line
+    );
+
     let ahead_pos = line
-        .find("ahead")
-        .expect("Expected 'ahead' in status output line");
+        .find("1↑")
+        .expect("Expected compact ahead label in status output line");
+    let behind_pos = line
+        .find("1↓")
+        .expect("Expected compact behind label in status output line");
 
     assert!(
-        behind_pos < ahead_pos,
-        "Expected 'behind' before 'ahead' in status output line: {}",
+        ahead_pos < behind_pos,
+        "Expected ahead label before behind label in status output line: {}",
         line
     );
 }
