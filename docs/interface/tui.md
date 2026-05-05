@@ -16,7 +16,7 @@ stax
 - Keyboard-driven checkout, restack, submit, create, rename, delete
 - Reorder mode for reparenting branches
 
-The dashboard renders immediately from local stack data, then fetches live CI for the selected branch in the background. While checks are running, the stack row shows a completed/total counter and the summary pane expands with pass/fail/running counts plus elapsed/ETA.
+The dashboard renders immediately from local stack data, then fetches live CI for the selected branch in the background. Diffs are loaded lazily and cached under the repo's common `.git/stax` directory, so reopening the TUI can show unchanged branch patches immediately. While checks are running, the stack row shows a completed/total counter and the summary pane expands with pass/fail/running counts plus elapsed/ETA.
 
 The main `st` TUI is focused on stacks and patches. Worktree management lives in the dedicated [`st wt` dashboard](../worktrees/index.md#dashboard).
 

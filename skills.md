@@ -510,7 +510,7 @@ Symbols:
 
 ## Tips
 
-- Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background so you can see running checks without blocking the dashboard.
+- Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, and unchanged branch diffs can be reused from the repo-local TUI cache on reopen.
 - Use `stax --help` or `stax <command> --help` for exact flags.
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.
 - Use `--yes` for non-interactive scripting.

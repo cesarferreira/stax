@@ -1,4 +1,4 @@
-use crate::cache::CiCache;
+use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
 use crate::ci::{history, CheckRunInfo};
 use crate::config::Config;
 use crate::engine::{build_parent_candidates, Stack};
@@ -377,6 +377,7 @@ pub struct App {
     pub cache: CiCache,
     pub repo: GitRepo,
     git_dir: PathBuf,
+    diff_cache_dir: PathBuf,
     pub current_branch: String,
     pub selected_index: usize,
     pub branches: Vec<BranchDisplay>,
@@ -427,6 +428,7 @@ impl App {
         let current_branch = repo.current_branch()?;
         let git_dir = repo.git_dir()?;
         let cache = CiCache::load(git_dir);
+        let diff_cache_dir = repo.common_git_dir()?;
         let git_dir = git_dir.to_path_buf();
         let status_set_at = initial_status.as_ref().map(|_| Instant::now());
 
@@ -435,6 +437,7 @@ impl App {
             cache,
             repo,
             git_dir,
+            diff_cache_dir,
             current_branch,
             selected_index: 0,
             branches: Vec::new(),
@@ -796,6 +799,13 @@ impl App {
             return;
         }
 
+        if let Some(cached) = self.load_persisted_diff(&request) {
+            self.diff_cache.insert(request.key.clone(), cached.clone());
+            self.diff_stat = cached.stat;
+            self.selected_diff = cached.lines;
+            return;
+        }
+
         if self.diff_loading.as_ref() == Some(&request) {
             return;
         }
@@ -1035,7 +1045,17 @@ impl App {
         };
 
         self.diff_loading = Some(request.clone());
-        self.diff_loader = Some(spawn_diff_loader(self.git_dir.clone(), request));
+        self.diff_loader = Some(spawn_diff_loader(
+            self.git_dir.clone(),
+            self.diff_cache_dir.clone(),
+            request,
+        ));
+    }
+
+    fn load_persisted_diff(&self, request: &DiffRequest) -> Option<CachedDiff> {
+        let key = persistent_diff_cache_key(&self.repo, request)?;
+        let cache = TuiDiffCache::load(&self.diff_cache_dir);
+        cache.get(&key).map(cached_diff_from_disk)
     }
 
     fn apply_diff_update(&mut self, update: DiffUpdate) {
@@ -1497,6 +1517,87 @@ fn diff_line_type(line: &str) -> DiffLineType {
     }
 }
 
+fn diff_line_type_name(line_type: &DiffLineType) -> &'static str {
+    match line_type {
+        DiffLineType::Header => "header",
+        DiffLineType::Addition => "addition",
+        DiffLineType::Deletion => "deletion",
+        DiffLineType::Context => "context",
+        DiffLineType::Hunk => "hunk",
+    }
+}
+
+fn diff_line_type_from_name(name: &str, content: &str) -> DiffLineType {
+    match name {
+        "header" => DiffLineType::Header,
+        "addition" => DiffLineType::Addition,
+        "deletion" => DiffLineType::Deletion,
+        "context" => DiffLineType::Context,
+        "hunk" => DiffLineType::Hunk,
+        _ => diff_line_type(content),
+    }
+}
+
+fn cached_diff_to_disk(diff: &CachedDiff) -> DiskCachedDiff {
+    DiskCachedDiff {
+        stat: diff
+            .stat
+            .iter()
+            .map(|line| DiskDiffStat {
+                file: line.file.clone(),
+                additions: line.additions,
+                deletions: line.deletions,
+            })
+            .collect(),
+        lines: diff
+            .lines
+            .iter()
+            .map(|line| DiskDiffLine {
+                content: line.content.clone(),
+                line_type: diff_line_type_name(&line.line_type).to_string(),
+            })
+            .collect(),
+    }
+}
+
+fn cached_diff_from_disk(diff: &DiskCachedDiff) -> CachedDiff {
+    CachedDiff {
+        stat: diff
+            .stat
+            .iter()
+            .map(|line| DiffStatLine {
+                file: line.file.clone(),
+                additions: line.additions,
+                deletions: line.deletions,
+            })
+            .collect(),
+        lines: diff
+            .lines
+            .iter()
+            .map(|line| DiffLine {
+                content: line.content.clone(),
+                line_type: diff_line_type_from_name(&line.line_type, &line.content),
+            })
+            .collect(),
+    }
+}
+
+fn persistent_diff_cache_key(repo: &GitRepo, request: &DiffRequest) -> Option<String> {
+    let parent_oid = repo.rev_parse(&request.parent).ok()?;
+    let branch_oid = repo.rev_parse(&request.branch).ok()?;
+    let merge_base_oid = repo
+        .merge_base_refs(&request.parent, &request.branch)
+        .ok()?;
+
+    Some(TuiDiffCache::key(
+        &request.parent,
+        &request.branch,
+        &parent_oid,
+        &branch_oid,
+        &merge_base_oid,
+    ))
+}
+
 fn load_branch_details(repo: &GitRepo, request: &BranchDetailsRequest) -> BranchDetails {
     let (ahead, behind) = request
         .parent
@@ -1558,7 +1659,11 @@ fn spawn_branch_details_loader(
     receiver
 }
 
-fn spawn_diff_loader(repo_path: PathBuf, request: DiffRequest) -> Receiver<DiffUpdate> {
+fn spawn_diff_loader(
+    repo_path: PathBuf,
+    diff_cache_dir: PathBuf,
+    request: DiffRequest,
+) -> Receiver<DiffUpdate> {
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
@@ -1593,10 +1698,14 @@ fn spawn_diff_loader(repo_path: PathBuf, request: DiffRequest) -> Receiver<DiffU
             Err(_) => Vec::new(),
         };
 
-        let _ = sender.send(DiffUpdate::Loaded {
-            request,
-            diff: CachedDiff { stat, lines },
-        });
+        let diff = CachedDiff { stat, lines };
+        if let Some(key) = persistent_diff_cache_key(&repo, &request) {
+            let mut cache = TuiDiffCache::load(&diff_cache_dir);
+            cache.insert(key, cached_diff_to_disk(&diff));
+            let _ = cache.save(&diff_cache_dir);
+        }
+
+        let _ = sender.send(DiffUpdate::Loaded { request, diff });
     });
 
     receiver
@@ -1689,10 +1798,11 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
 #[cfg(test)]
 mod tests {
     use super::{
-        live_ci_summary_text, run_in_tokio_runtime, substring_filter_indices, App, BranchCiSummary,
-        BranchDisplay, DiffRequest, FocusedPane, Mode,
+        live_ci_summary_text, run_in_tokio_runtime, spawn_diff_loader, substring_filter_indices,
+        App, BranchCiSummary, BranchDisplay, DiffLineType, DiffRequest, DiffUpdate, FocusedPane,
+        Mode,
     };
-    use crate::cache::CiCache;
+    use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
     use crate::engine::Stack;
     use crate::git::GitRepo;
     use anyhow::{anyhow, Result};
@@ -1703,6 +1813,7 @@ mod tests {
         atomic::{AtomicBool, Ordering},
         Arc,
     };
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn names(values: &[&str]) -> Vec<String> {
@@ -1765,12 +1876,14 @@ mod tests {
 
     fn minimal_app(repo: GitRepo, branches: Vec<BranchDisplay>) -> App {
         let git_dir = repo.git_dir().expect("git dir").to_path_buf();
+        let diff_cache_dir = repo.common_git_dir().expect("common git dir");
         let stack = Stack::load(&repo).expect("load stack");
         App {
             stack,
             cache: CiCache::load(&git_dir),
             repo,
             git_dir,
+            diff_cache_dir,
             current_branch: "main".to_string(),
             selected_index: 0,
             branches,
@@ -1839,6 +1952,147 @@ mod tests {
         );
         assert!(app.selected_diff.is_empty());
         assert!(app.diff_stat.is_empty());
+    }
+
+    #[test]
+    fn selecting_branch_uses_persisted_diff_cache_when_refs_match() {
+        let (_tempdir, repo) = test_repo();
+        let workdir = repo.workdir().expect("workdir").to_path_buf();
+        run_git(&workdir, &["switch", "-c", "feature"]);
+        std::fs::write(workdir.join("README.md"), "hello\nfeature\n").expect("write README");
+        run_git(&workdir, &["add", "README.md"]);
+        run_git(&workdir, &["commit", "-m", "feature"]);
+
+        let parent_oid = repo.rev_parse("main").expect("main oid");
+        let branch_oid = repo.rev_parse("feature").expect("feature oid");
+        let merge_base_oid = repo.merge_base_refs("main", "feature").expect("merge base");
+        let cache_dir = repo.common_git_dir().expect("common git dir");
+        let mut disk_cache = TuiDiffCache::default();
+        disk_cache.insert(
+            TuiDiffCache::key("main", "feature", &parent_oid, &branch_oid, &merge_base_oid),
+            DiskCachedDiff {
+                stat: vec![DiskDiffStat {
+                    file: "README.md".to_string(),
+                    additions: 1,
+                    deletions: 0,
+                }],
+                lines: vec![DiskDiffLine {
+                    content: "cached diff line".to_string(),
+                    line_type: "context".to_string(),
+                }],
+            },
+        );
+        disk_cache.save(&cache_dir).expect("save cache");
+
+        let mut app = minimal_app(
+            repo,
+            vec![
+                skeleton_branch("main", None, false),
+                skeleton_branch("feature", Some("main"), true),
+            ],
+        );
+
+        app.select_next();
+
+        assert_eq!(app.diff_queued, None);
+        assert_eq!(app.selected_diff.len(), 1);
+        assert_eq!(app.selected_diff[0].content, "cached diff line");
+        assert_eq!(app.selected_diff[0].line_type, DiffLineType::Context);
+        assert_eq!(app.diff_stat.len(), 1);
+        assert_eq!(app.diff_stat[0].file, "README.md");
+    }
+
+    #[test]
+    fn selecting_branch_ignores_persisted_diff_cache_when_branch_tip_changes() {
+        let (_tempdir, repo) = test_repo();
+        let workdir = repo.workdir().expect("workdir").to_path_buf();
+        run_git(&workdir, &["switch", "-c", "feature"]);
+        std::fs::write(workdir.join("README.md"), "hello\nfeature\n").expect("write README");
+        run_git(&workdir, &["add", "README.md"]);
+        run_git(&workdir, &["commit", "-m", "feature"]);
+
+        let old_branch_oid = repo.rev_parse("feature").expect("old feature oid");
+        let parent_oid = repo.rev_parse("main").expect("main oid");
+        let merge_base_oid = repo.merge_base_refs("main", "feature").expect("merge base");
+        let cache_dir = repo.common_git_dir().expect("common git dir");
+        let mut disk_cache = TuiDiffCache::default();
+        disk_cache.insert(
+            TuiDiffCache::key(
+                "main",
+                "feature",
+                &parent_oid,
+                &old_branch_oid,
+                &merge_base_oid,
+            ),
+            DiskCachedDiff {
+                stat: vec![DiskDiffStat {
+                    file: "README.md".to_string(),
+                    additions: 1,
+                    deletions: 0,
+                }],
+                lines: vec![DiskDiffLine {
+                    content: "stale cached diff line".to_string(),
+                    line_type: "context".to_string(),
+                }],
+            },
+        );
+        disk_cache.save(&cache_dir).expect("save cache");
+
+        std::fs::write(workdir.join("README.md"), "hello\nfeature\nupdated\n")
+            .expect("write README");
+        run_git(&workdir, &["add", "README.md"]);
+        run_git(&workdir, &["commit", "-m", "update feature"]);
+
+        let mut app = minimal_app(
+            repo,
+            vec![
+                skeleton_branch("main", None, false),
+                skeleton_branch("feature", Some("main"), true),
+            ],
+        );
+
+        app.select_next();
+
+        assert_eq!(
+            app.diff_queued,
+            Some(DiffRequest::new("feature".to_string(), "main".to_string()))
+        );
+        assert!(app.selected_diff.is_empty());
+        assert!(app.diff_stat.is_empty());
+    }
+
+    #[test]
+    fn diff_loader_persists_loaded_diff_for_reopen() {
+        let (_tempdir, repo) = test_repo();
+        let workdir = repo.workdir().expect("workdir").to_path_buf();
+        run_git(&workdir, &["switch", "-c", "feature"]);
+        std::fs::write(workdir.join("README.md"), "hello\nfeature\n").expect("write README");
+        run_git(&workdir, &["add", "README.md"]);
+        run_git(&workdir, &["commit", "-m", "feature"]);
+
+        let repo_path = repo.git_dir().expect("git dir").to_path_buf();
+        let cache_dir = repo.common_git_dir().expect("common git dir");
+        let request = DiffRequest::new("feature".to_string(), "main".to_string());
+        let receiver = spawn_diff_loader(repo_path, cache_dir.clone(), request.clone());
+
+        match receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("diff update")
+        {
+            DiffUpdate::Loaded {
+                request: loaded, ..
+            } => assert_eq!(loaded, request),
+            DiffUpdate::Unavailable { .. } => panic!("diff should load"),
+        }
+
+        let parent_oid = repo.rev_parse("main").expect("main oid");
+        let branch_oid = repo.rev_parse("feature").expect("feature oid");
+        let merge_base_oid = repo.merge_base_refs("main", "feature").expect("merge base");
+        let key = TuiDiffCache::key("main", "feature", &parent_oid, &branch_oid, &merge_base_oid);
+        let cache = TuiDiffCache::load(&cache_dir);
+        let cached = cache.get(&key).expect("persisted diff");
+        assert_eq!(cached.stat.len(), 1);
+        assert!(cached.lines.iter().any(|line| line.content == "+feature"));
     }
 
     #[test]
