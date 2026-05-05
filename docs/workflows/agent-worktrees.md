@@ -90,7 +90,7 @@ Supported `--agent` values: `claude`, `codex`, `gemini`, `opencode`.
 
 ```bash
 st lane api-tests   --agent gemini
-st lane api-tests   --agent opencode --model opencode/gpt-5.1-codex
+st lane api-tests   --agent opencode --model opencode/gpt-5.5-fast
 st lane review-pass --agent codex "address the open PR comments"
 ```
 

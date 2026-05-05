@@ -323,7 +323,7 @@ stax generate --pr-body --agent codex --model gpt-5
 stax lane                                         # Interactive lane picker (create or resume)
 stax lane add-dark-mode "Add dark mode"           # Start a named lane with a prompt
 stax lane add-dark-mode --agent codex             # Start a lane with a specific agent
-stax lane add-dark-mode --agent codex --model gpt-5.4  # Override model too
+stax lane add-dark-mode --agent codex --model gpt-5.5-fast  # Override model too
 stax lane add-dark-mode                           # Re-enter the lane (reattaches tmux session)
 stax lane add-dark-mode "new prompt" --no-tmux    # Force direct terminal (no tmux)
 
