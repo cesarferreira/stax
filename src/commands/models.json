@@ -6,6 +6,8 @@
     { "id": "claude-sonnet-4-5-20250929",  "description": "Sonnet 4.5 · previous gen" }
   ],
   "codex": [
+    { "id": "gpt-5.5",       "description": "GPT-5.5 · latest · balanced" },
+    { "id": "gpt-5.5-fast",  "description": "GPT-5.5 Fast · fast · balanced" },
     { "id": "gpt-5.4",       "description": "GPT-5.4 · latest · balanced" },
     { "id": "gpt-5.4-pro",   "description": "GPT-5.4 Pro · most capable · premium" },
     { "id": "gpt-5.4-mini",  "description": "GPT-5.4 Mini · fast · balanced" },
@@ -18,6 +20,8 @@
     { "id": "gemini-2.5-flash-lite", "description": "Gemini 2.5 Flash-Lite · fastest · cheapest" }
   ],
   "opencode": [
+    { "id": "opencode/gpt-5.5",      "description": "GPT-5.5 via OpenCode" },
+    { "id": "opencode/gpt-5.5-fast", "description": "GPT-5.5 Fast via OpenCode" },
     { "id": "opencode/gpt-5.1-codex", "description": "GPT-5.1 Codex via OpenCode" }
   ]
 }

@@ -924,7 +924,16 @@ mod tests {
     #[test]
     fn known_models_include_opencode_defaults() {
         let models = known_models_for("opencode");
+        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.5"));
+        assert!(models.iter().any(|m| m.id == "opencode/gpt-5.5-fast"));
         assert!(models.iter().any(|m| m.id == "opencode/gpt-5.1-codex"));
+    }
+
+    #[test]
+    fn known_models_include_codex_gpt_5_5_defaults() {
+        let models = known_models_for("codex");
+        assert!(models.iter().any(|m| m.id == "gpt-5.5"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.5-fast"));
     }
 
     #[test]
@@ -1004,8 +1013,19 @@ mod tests {
 
     #[test]
     fn known_agent_for_model_recognizes_newer_codex_family_models() {
+        assert_eq!(known_agent_for_model("gpt-5.5"), Some("codex"));
+        assert_eq!(known_agent_for_model("gpt-5.5-fast"), Some("codex"));
         assert_eq!(known_agent_for_model("gpt-5.4"), Some("codex"));
         assert_eq!(known_agent_for_model("gpt-5.4-pro"), Some("codex"));
+    }
+
+    #[test]
+    fn known_agent_for_model_recognizes_opencode_gpt_5_5_models() {
+        assert_eq!(known_agent_for_model("opencode/gpt-5.5"), Some("opencode"));
+        assert_eq!(
+            known_agent_for_model("opencode/gpt-5.5-fast"),
+            Some("opencode")
+        );
     }
 
     #[test]
