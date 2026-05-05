@@ -26,6 +26,25 @@ fn restack_label() -> String {
     format!("{}", "(needs restack)".white().bold())
 }
 
+fn behind_label(behind: usize) -> String {
+    format!("{}", format!("{}↓", behind).red())
+}
+
+fn ahead_label(ahead: usize) -> String {
+    format!("{}", format!("{}↑", ahead).green())
+}
+
+fn divergence_labels(ahead: usize, behind: usize) -> String {
+    let mut labels = String::new();
+    if ahead > 0 {
+        labels.push_str(&format!(" {}", ahead_label(ahead)));
+    }
+    if behind > 0 {
+        labels.push_str(&format!(" {}", behind_label(behind)));
+    }
+    labels
+}
+
 fn missing_parent_label(parent: &str) -> String {
     format!(
         "{}",
@@ -335,17 +354,7 @@ pub fn run(
         }
 
         if let Some(entry) = entry {
-            // Show commits ahead/behind and restack status (always show full text)
-            if entry.ahead > 0 || entry.behind > 0 {
-                let mut commits_str = String::new();
-                if entry.behind > 0 {
-                    commits_str.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
-                }
-                if entry.ahead > 0 {
-                    commits_str.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
-                }
-                info_str.push_str(&commits_str);
-            }
+            info_str.push_str(&divergence_labels(entry.ahead, entry.behind));
             if let Some(parent) = &entry.missing_parent {
                 info_str.push_str(&format!(" {}", missing_parent_label(parent)));
             } else if entry.needs_restack {
@@ -441,14 +450,7 @@ pub fn run(
 
     // Show commits ahead/behind for trunk (compared to origin)
     if let Some(entry) = branch_status_map.get(&stack.trunk) {
-        if entry.ahead > 0 || entry.behind > 0 {
-            if entry.behind > 0 {
-                trunk_info.push_str(&format!(" {}", format!("{} behind", entry.behind).red()));
-            }
-            if entry.ahead > 0 {
-                trunk_info.push_str(&format!(" {}", format!("{} ahead", entry.ahead).green()));
-            }
-        }
+        trunk_info.push_str(&divergence_labels(entry.ahead, entry.behind));
     }
 
     println!("{}{}", trunk_tree, trunk_info);

@@ -25,7 +25,7 @@ st checkout --child 1     # jump to first child
 
 ```text
 ○        feature/validation 1↑
-◉        feature/auth       1↓ 2↑ ⟳
+◉        feature/auth       2↑ 1↓ ⟳
 ○        feature/old-base   (missing parent: feature/base)
 │ ○    ☁ feature/payments   PR #42
 ○─┘    ☁ main

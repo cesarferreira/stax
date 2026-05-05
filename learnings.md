@@ -1,6 +1,7 @@
 # learnings.md
 
 - When changing the `stax co` UI, match the `stax ls` visual language (colors, tree/indentation) and confirm it visually. Do not ship a redesign without verifying the output looks like the `ls` tree and that selection emphasis is obvious.
+- Ahead/behind label changes must cover both `stax co` and `stax ls` renderers; checkout and status format divergence labels separately, so verify both command outputs.
 - When using `dialoguer::FuzzySelect` with pre-colored ANSI rows, do not rely on `ColorfulTheme::active_item_style` while `highlight_matches(false)` is set. Use a custom `Theme` with explicit active/inactive row renderings so selected-row styling still applies without corrupting ANSI color output.
 - Stack tree lane colors must come from `src/commands/stack_palette.rs`; do not duplicate per-command color arrays or `st ls`/`st co` will drift.
 - Interactive prompts rendered on `stderr` must style item text against `stderr` and gate interactivity on `stdin` + `stderr`; shell integration can capture stdout for `--shell-output` while dialoguer prompts still run on stderr.

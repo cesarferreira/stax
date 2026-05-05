@@ -487,7 +487,7 @@ stax wt cleanup      # bulk-remove merged/detached lanes
 
 ```
 ◉  feature/validation 1↑         # ◉ = current branch, 1↑ = commits ahead of parent
-○  feature/auth 1↓ 2↑ ⟳          # ⟳ = needs restack
+○  feature/auth 2↑ 1↓ ⟳          # ⟳ = needs restack
 ○  feature/old-base (missing parent: feature/base)
 │ ○    ☁ feature/payments PR #42 # ☁ = has remote, PR #N = open PR
 ○─┘    ☁ main                    # trunk branch

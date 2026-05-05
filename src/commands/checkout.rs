@@ -3,14 +3,14 @@ use crate::commands::worktree::{go, shared::emit_shell_message};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::repo::WorktreeInfo;
-use crate::git::{checkout_branch_in, refs, GitRepo};
+use crate::git::{GitRepo, checkout_branch_in, refs};
 use anyhow::Result;
 use colored::Colorize;
-use console::{colors_enabled_stderr, measure_text_width, truncate_str, Color, Style};
+use console::{Color, Style, colors_enabled_stderr, measure_text_width, truncate_str};
 use crossterm::terminal;
 use dialoguer::{
-    theme::{ColorfulTheme, Theme},
     FuzzySelect,
+    theme::{ColorfulTheme, Theme},
 };
 use fuzzy_matcher::skim::SkimMatcherV2;
 use std::collections::HashSet;
@@ -91,11 +91,7 @@ impl Theme for CheckoutPickerTheme {
 
 fn checkout_style(spec: CheckoutColor) -> Style {
     let style = Style::new().for_stderr().fg(spec.color);
-    if spec.bright {
-        style.bright()
-    } else {
-        style
-    }
+    if spec.bright { style.bright() } else { style }
 }
 
 fn checkout_lane_color(column: usize) -> CheckoutColor {
@@ -107,17 +103,22 @@ fn restack_label() -> String {
 }
 
 fn behind_label(behind: usize) -> String {
-    render_stderr(
-        format!("{} behind", behind),
-        Style::new().for_stderr().red(),
-    )
+    render_stderr(format!("{}↓", behind), Style::new().for_stderr().red())
 }
 
 fn ahead_label(ahead: usize) -> String {
-    render_stderr(
-        format!("{} ahead", ahead),
-        Style::new().for_stderr().green(),
-    )
+    render_stderr(format!("{}↑", ahead), Style::new().for_stderr().green())
+}
+
+fn divergence_labels(ahead: usize, behind: usize) -> String {
+    let mut labels = String::new();
+    if ahead > 0 {
+        labels.push_str(&format!(" {}", ahead_label(ahead)));
+    }
+    if behind > 0 {
+        labels.push_str(&format!(" {}", behind_label(behind)));
+    }
+    labels
 }
 
 fn render_stderr<T: Display>(value: T, style: Style) -> String {
@@ -481,14 +482,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
             info_str.push_str(&render_stderr(branch, checkout_style(branch_color)));
         }
 
-        if ahead > 0 || behind > 0 {
-            if behind > 0 {
-                info_str.push_str(&format!(" {}", behind_label(behind)));
-            }
-            if ahead > 0 {
-                info_str.push_str(&format!(" {}", ahead_label(ahead)));
-            }
-        }
+        info_str.push_str(&divergence_labels(ahead, behind));
         if needs_restack {
             info_str.push_str(&format!(" {}", restack_label()));
         }
@@ -561,14 +555,7 @@ fn build_checkout_rows(stack: &Stack, repo: &GitRepo, current: &str) -> Result<V
             &stack.trunk,
         )
         .unwrap_or((0, 0));
-    if ahead > 0 || behind > 0 {
-        if behind > 0 {
-            trunk_info.push_str(&format!(" {}", format!("{} behind", behind).red()));
-        }
-        if ahead > 0 {
-            trunk_info.push_str(&format!(" {}", format!("{} ahead", ahead).green()));
-        }
-    }
+    trunk_info.push_str(&divergence_labels(ahead, behind));
 
     let trunk_display = truncate_display(&format!("{}{}", trunk_tree, trunk_info), item_width);
     let active_trunk_display = active_checkout_row(
@@ -946,8 +933,17 @@ mod tests {
     #[test]
     fn checkout_status_labels_use_stderr_colors() {
         let (behind, ahead) = with_stderr_colors_enabled(|| (behind_label(4), ahead_label(6)));
-        assert_eq!(behind, "\u{1b}[31m4 behind\u{1b}[0m");
-        assert_eq!(ahead, "\u{1b}[32m6 ahead\u{1b}[0m");
+        assert_eq!(behind, "\u{1b}[31m4↓\u{1b}[0m");
+        assert_eq!(ahead, "\u{1b}[32m6↑\u{1b}[0m");
+    }
+
+    #[test]
+    fn checkout_divergence_labels_match_compact_ahead_then_behind_order() {
+        let labels = with_stderr_colors_enabled(|| divergence_labels(3, 1));
+        assert_eq!(strip_ansi(&labels), " 3↑ 1↓");
+        assert!(labels.find("3↑").unwrap() < labels.find("1↓").unwrap());
+        assert!(labels.contains("\u{1b}[32m3↑\u{1b}[0m"));
+        assert!(labels.contains("\u{1b}[31m1↓\u{1b}[0m"));
     }
 
     #[test]
