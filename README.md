@@ -222,7 +222,7 @@ st redo
   <img alt="stax TUI" src="assets/tui.png" width="760">
 </p>
 
-Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summaries and patches, watching live CI hydrate, and running common ops without leaving the terminal.
+Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summaries and cached patches, watching live CI hydrate, and running common ops without leaving the terminal.
 
 → [TUI guide](docs/interface/tui.md)
 

@@ -286,6 +286,11 @@ impl GitRepo {
         Ok(self.repo.path())
     }
 
+    /// Get the common .git directory shared by linked worktrees.
+    pub fn common_git_dir(&self) -> Result<PathBuf> {
+        Ok(self.repo.commondir().to_path_buf())
+    }
+
     fn run_git(&self, cwd: &Path, args: &[&str]) -> Result<Output> {
         Command::new("git")
             .args(args)
@@ -1272,7 +1277,10 @@ Use --auto-stash-pop or stash/commit changes first.",
                 .with_context(|| {
                     format!(
                         "Failed to rebase '{}' onto '{}' with upstream '{}' in '{}'",
-                        branch, onto, fallback_upstream, target_workdir.display()
+                        branch,
+                        onto,
+                        fallback_upstream,
+                        target_workdir.display()
                     )
                 })
         } else {

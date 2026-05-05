@@ -5,6 +5,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const MAX_TUI_DIFF_CACHE_ENTRIES: usize = 128;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BranchCacheEntry {
     pub ci_state: Option<String>,
@@ -84,6 +86,114 @@ impl CiCache {
         let valid_set: std::collections::HashSet<_> = valid_branches.iter().collect();
         self.branches.retain(|k, _| valid_set.contains(k));
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DiskDiffLine {
+    pub content: String,
+    pub line_type: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DiskDiffStat {
+    pub file: String,
+    pub additions: usize,
+    pub deletions: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DiskCachedDiff {
+    pub stat: Vec<DiskDiffStat>,
+    pub lines: Vec<DiskDiffLine>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct TuiDiffCacheEntry {
+    pub diff: DiskCachedDiff,
+    pub updated_at: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct TuiDiffCache {
+    pub entries: HashMap<String, TuiDiffCacheEntry>,
+}
+
+impl TuiDiffCache {
+    fn cache_path(git_dir: &std::path::Path) -> PathBuf {
+        git_dir.join("stax").join("tui-diff-cache.json")
+    }
+
+    pub fn key(
+        _parent: &str,
+        _branch: &str,
+        parent_oid: &str,
+        branch_oid: &str,
+        merge_base_oid: &str,
+    ) -> String {
+        format!("v1:{parent_oid}:{branch_oid}:{merge_base_oid}")
+    }
+
+    pub fn load(git_dir: &std::path::Path) -> Self {
+        let path = Self::cache_path(git_dir);
+        if !path.exists() {
+            return Self::default();
+        }
+
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, git_dir: &std::path::Path) -> Result<()> {
+        let path = Self::cache_path(git_dir);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(&path, json)?;
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&DiskCachedDiff> {
+        self.entries.get(key).map(|entry| &entry.diff)
+    }
+
+    pub fn insert(&mut self, key: String, diff: DiskCachedDiff) {
+        self.entries.insert(
+            key,
+            TuiDiffCacheEntry {
+                diff,
+                updated_at: current_unix_time(),
+            },
+        );
+        self.prune_old_entries();
+    }
+
+    fn prune_old_entries(&mut self) {
+        if self.entries.len() <= MAX_TUI_DIFF_CACHE_ENTRIES {
+            return;
+        }
+
+        let mut entries = self
+            .entries
+            .iter()
+            .map(|(key, entry)| (key.clone(), entry.updated_at))
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|(_, updated_at)| *updated_at);
+
+        let remove_count = self.entries.len() - MAX_TUI_DIFF_CACHE_ENTRIES;
+        for (key, _) in entries.into_iter().take(remove_count) {
+            self.entries.remove(&key);
+        }
+    }
+}
+
+fn current_unix_time() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
