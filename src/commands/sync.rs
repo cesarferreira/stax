@@ -274,26 +274,10 @@ pub fn run(
     let local_trunk_before_sync = resolve_ref_oid(&workdir, &stack.trunk);
     let remote_trunk_after_fetch = resolve_ref_oid(&workdir, &remote_trunk_ref);
 
-    // Kick off the trunk diff stats (`git diff --numstat old..new`) in the background
-    // immediately — in large repos this can take 10-15s. It runs in parallel with the
-    // remaining sync steps. We join it with a short timeout at the footer; if it hasn't
-    // finished by then we skip the line stats rather than block.
-    let (trunk_stats_tx, trunk_stats_rx) = std::sync::mpsc::channel();
-    {
-        let workdir_bg = workdir.clone();
-        let trunk_branch_bg = stack.trunk.clone();
-        let local_before_bg = local_trunk_before_sync.clone();
-        let remote_after_bg = remote_trunk_after_fetch.clone();
-        std::thread::spawn(move || {
-            let result = summarize_trunk_sync(
-                &workdir_bg,
-                &trunk_branch_bg,
-                local_before_bg.as_deref(),
-                remote_after_bg.as_deref(),
-            );
-            let _ = trunk_stats_tx.send(result);
-        });
-    }
+    // Channel for background trunk diff stats — spawned after trunk update completes so
+    // resolve_ref_oid sees the updated local ref. The thread then runs in parallel with
+    // merged-branch detection and optional restack, which are the expensive steps.
+    let (trunk_stats_tx, trunk_stats_rx) = std::sync::mpsc::channel::<Option<TrunkSummary>>();
 
     // 2. Update trunk branch (before merged branch detection, so detection works correctly)
     // Note: If we're not on trunk, we use a refspec fetch which may fail if local trunk
@@ -494,6 +478,26 @@ pub fn run(
         format!("update {}", stack.trunk),
         update_trunk_started_at.elapsed(),
     ));
+
+    // Kick off trunk diff stats now that trunk is updated. Runs in parallel with
+    // merged-branch detection and optional restack (the expensive steps).
+    // We join with a short timeout at the footer; if not done we skip +N/-M stats.
+    {
+        let workdir_bg = workdir.clone();
+        let trunk_branch_bg = stack.trunk.clone();
+        let local_before_bg = local_trunk_before_sync.clone();
+        let remote_after_bg = remote_trunk_after_fetch.clone();
+        let tx = trunk_stats_tx.clone();
+        std::thread::spawn(move || {
+            let result = summarize_trunk_sync(
+                &workdir_bg,
+                &trunk_branch_bg,
+                local_before_bg.as_deref(),
+                remote_after_bg.as_deref(),
+            );
+            let _ = tx.send(result);
+        });
+    }
 
     // 3. Delete merged branches
     let repo = if delete_merged {

@@ -329,7 +329,7 @@ fn run_impl(
             .get(branch)
             .and_then(|br| br.pr_state.as_deref())
             .unwrap_or("");
-        let pr_is_open = matches!(pr_state.to_uppercase().as_str(), "OPEN" | "DRAFT" | "");
+        let pr_is_open = matches!(pr_state.to_uppercase().as_str(), "OPEN" | "DRAFT");
         let rebase_result = if pr_is_open {
             repo.rebase_branch_onto_with_provenance_no_squash_check(
                 branch,
