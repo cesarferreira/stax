@@ -133,7 +133,6 @@ pub fn run(
     let current = repo.current_branch()?;
     let workdir = repo.workdir()?.to_path_buf();
     let reopen_repo_path = repo.git_dir()?.to_path_buf();
-    let trunk_branch = stack.trunk.clone();
     let config = Config::load()?;
     let remote_name = config.remote_name().to_string();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
@@ -274,6 +273,27 @@ pub fn run(
 
     let local_trunk_before_sync = resolve_ref_oid(&workdir, &stack.trunk);
     let remote_trunk_after_fetch = resolve_ref_oid(&workdir, &remote_trunk_ref);
+
+    // Kick off the trunk diff stats (`git diff --numstat old..new`) in the background
+    // immediately — in large repos this can take 10-15s. It runs in parallel with the
+    // remaining sync steps. We join it with a short timeout at the footer; if it hasn't
+    // finished by then we skip the line stats rather than block.
+    let (trunk_stats_tx, trunk_stats_rx) = std::sync::mpsc::channel();
+    {
+        let workdir_bg = workdir.clone();
+        let trunk_branch_bg = stack.trunk.clone();
+        let local_before_bg = local_trunk_before_sync.clone();
+        let remote_after_bg = remote_trunk_after_fetch.clone();
+        std::thread::spawn(move || {
+            let result = summarize_trunk_sync(
+                &workdir_bg,
+                &trunk_branch_bg,
+                local_before_bg.as_deref(),
+                remote_after_bg.as_deref(),
+            );
+            let _ = trunk_stats_tx.send(result);
+        });
+    }
 
     // 2. Update trunk branch (before merged branch detection, so detection works correctly)
     // Note: If we're not on trunk, we use a refspec fetch which may fail if local trunk
@@ -1241,6 +1261,7 @@ pub fn run(
                     &parent_branch_name,
                     &parent_branch_revision,
                     auto_stash_pop,
+                    true,
                 )?;
 
                 match rebase.result {
@@ -1369,12 +1390,13 @@ pub fn run(
         }
     }
 
-    stats.trunk = summarize_trunk_sync(
-        &workdir,
-        &trunk_branch,
-        local_trunk_before_sync.as_deref(),
-        remote_trunk_after_fetch.as_deref(),
-    );
+    // Collect background trunk diff stats. Give it up to 1s to finish (it will have
+    // been running in parallel throughout the sync). If it's still not done, skip the
+    // line stats — saving 10-15s on large repos is worth omitting +N/-M from the footer.
+    stats.trunk = trunk_stats_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .ok()
+        .flatten();
 
     if verbose && !quiet {
         println!();
