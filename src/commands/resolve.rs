@@ -119,10 +119,12 @@ to ~/.config/stax/config.toml, or pass --agent <name>.",
 
     generate::validate_agent_name(&agent)?;
 
-    let model = model_flag
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .or_else(|| config.ai.model_for("resolve").map(String::from));
+    let model = generate::resolve_model(
+        model_flag.as_deref().filter(|s| !s.trim().is_empty()),
+        &config,
+        &agent,
+        "resolve",
+    )?;
 
     Ok((agent, model))
 }
