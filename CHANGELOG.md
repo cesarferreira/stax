@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.67.1] - 2026-05-05
+
+### Changed
+- Add GPT-5.5 model defaults (#356)
+
 ## [0.67.0] - 2026-05-05
 
 ### Added
@@ -252,7 +257,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.67.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.67.1...HEAD
+[0.67.1]: https://github.com/cesarferreira/stax/compare/v0.67.0...v0.67.1
 [0.67.0]: https://github.com/cesarferreira/stax/compare/v0.66.1...v0.67.0
 [0.66.1]: https://github.com/cesarferreira/stax/compare/v0.66.0...v0.66.1
 [0.66.0]: https://github.com/cesarferreira/stax/compare/v0.65.1...v0.66.0
