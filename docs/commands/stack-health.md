@@ -37,25 +37,27 @@ Repairs:
 - Deletes invalid metadata
 - Reports branches that need restack
 
-## Restack preflight advisory
+## Restack preflight repair
 
 Before rebasing each branch, `st restack`, `st upstack restack`, and `st rs --restack`
 compare the stored `parentBranchRevision` against `merge-base(parent, branch)`.
 When the stored boundary would force git to replay a much larger range than the
-merge-base, stax prints a non-fatal advisory:
+merge-base, stax automatically uses the merge-base as the rebase boundary for
+that operation and prints a non-fatal notice:
 
 ```text
-  preflight: 'feature-x' stored boundary will replay 312 commit(s); merge-base would replay 2.
-    Tip: if conflicts hit unrelated files, abort and run `stax branch reparent --parent main --branch feature-x` to retarget at the merge-base.
+  preflight: 'feature-x' stored boundary would replay 312 commit(s); using merge-base boundary (2 commit(s)).
+    Stax will rebase 'feature-x' with the merge-base boundary to avoid replaying unrelated history from 'main'.
 ```
 
 This usually means metadata drifted (e.g. branch tracked late) or `git merge main`
-was run on the branch instead of restack — both produce conflicts on files you
-never edited. Resolve by aborting the rebase and running the suggested
-`stax branch reparent` to repair the boundary, then restack again.
+was run on the branch instead of restack — both can produce conflicts on files
+you never edited. The repair happens automatically; after a successful restack,
+metadata is refreshed to the current parent tip as usual.
 
-Disable globally with `[restack] preflight_warn = false` in
-`~/.config/stax/config.toml`. The advisory is also suppressed by `--quiet`.
+Silence the notice with `[restack] preflight_warn = false` in
+`~/.config/stax/config.toml` or with `--quiet`. Disable the automatic correction
+with `[restack] preflight_auto_repair = false`.
 
 ## `st run <cmd>` (alias: `st test <cmd>`)
 
