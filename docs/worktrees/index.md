@@ -177,7 +177,7 @@ By default, managed worktrees live outside the repository at:
 ~/.stax/worktrees/<repo>
 ```
 
-Override in `~/.config/stax/config.toml`:
+Override in `~/.config/stax/config.toml`, or in a repo-local `.config/stax/config.toml`:
 
 ```toml
 [worktree]

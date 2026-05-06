@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::remote::ForgeType;
@@ -382,7 +382,24 @@ impl Config {
 
     /// Get the config file path
     pub fn path() -> Result<PathBuf> {
+        if std::env::var("STAX_CONFIG_DIR").is_err() {
+            if let Some(path) = Self::repo_local_path()? {
+                return Ok(path);
+            }
+        }
+
         Ok(Self::dir()?.join("config.toml"))
+    }
+
+    /// Get the repo-local config file path when the current directory is inside
+    /// a git repository and `.config/stax/config.toml` exists at its root.
+    fn repo_local_path() -> Result<Option<PathBuf>> {
+        let Some(root) = git_root()? else {
+            return Ok(None);
+        };
+
+        let path = root.join(".config").join("stax").join("config.toml");
+        Ok(path.exists().then_some(path))
     }
 
     /// Get the credentials file path (separate from config, not for dotfiles)
@@ -782,6 +799,26 @@ impl Config {
     pub fn remote_forge_override(&self) -> Option<ForgeType> {
         self.remote.forge
     }
+}
+
+fn git_root() -> Result<Option<PathBuf>> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output();
+
+    let Ok(output) = output else {
+        return Ok(None);
+    };
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let root = String::from_utf8(output.stdout)?.trim().to_string();
+    if root.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(Path::new(&root).to_path_buf()))
 }
 
 #[cfg(test)]

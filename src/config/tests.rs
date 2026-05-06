@@ -29,6 +29,13 @@ fn write_auth_config(
     fs::write(config_dir.join("config.toml"), contents).unwrap();
 }
 
+fn restore_env_var(name: &str, value: Option<String>) {
+    match value {
+        Some(value) => env::set_var(name, value),
+        None => env::remove_var(name),
+    }
+}
+
 #[cfg(unix)]
 fn write_mock_gh(home: &Path, script_body: &str) -> String {
     use std::os::unix::fs::PermissionsExt;
@@ -45,6 +52,115 @@ fn write_mock_gh(home: &Path, script_body: &str) -> String {
 
     let original_path = env::var("PATH").unwrap_or_default();
     format!("{}:{}", bin_dir.display(), original_path)
+}
+
+#[test]
+fn config_path_prefers_repo_local_config_when_present() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let original_dir = env::current_dir().unwrap();
+    let temp_dir =
+        std::env::temp_dir().join(format!("stax-test-local-config-{}", std::process::id()));
+    let repo_dir = temp_dir.join("repo");
+    let config_dir = repo_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(config_dir.join("config.toml"), "[ui]\ntips = false\n").unwrap();
+    fs::create_dir_all(temp_dir.join("home")).unwrap();
+
+    env::set_var("HOME", temp_dir.join("home"));
+    env::remove_var("STAX_CONFIG_DIR");
+    Command::new("git")
+        .arg("init")
+        .current_dir(&repo_dir)
+        .output()
+        .unwrap();
+    env::set_current_dir(&repo_dir).unwrap();
+
+    assert_eq!(
+        Config::path().unwrap().canonicalize().unwrap(),
+        config_dir.join("config.toml").canonicalize().unwrap()
+    );
+    assert!(!Config::load().unwrap().ui.tips);
+
+    env::set_current_dir(original_dir).unwrap();
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn config_path_uses_global_config_when_repo_local_config_is_absent() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let original_dir = env::current_dir().unwrap();
+    let temp_dir =
+        std::env::temp_dir().join(format!("stax-test-global-config-{}", std::process::id()));
+    let repo_dir = temp_dir.join("repo");
+    let home_dir = temp_dir.join("home");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&home_dir).unwrap();
+
+    env::set_var("HOME", &home_dir);
+    env::remove_var("STAX_CONFIG_DIR");
+    Command::new("git")
+        .arg("init")
+        .current_dir(&repo_dir)
+        .output()
+        .unwrap();
+    env::set_current_dir(&repo_dir).unwrap();
+
+    assert_eq!(
+        Config::path().unwrap(),
+        home_dir.join(".config").join("stax").join("config.toml")
+    );
+
+    env::set_current_dir(original_dir).unwrap();
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn config_path_env_override_wins_over_repo_local_config() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let original_dir = env::current_dir().unwrap();
+    let temp_dir =
+        std::env::temp_dir().join(format!("stax-test-env-config-{}", std::process::id()));
+    let repo_dir = temp_dir.join("repo");
+    let local_config_dir = repo_dir.join(".config").join("stax");
+    let override_config_dir = temp_dir.join("override-stax");
+
+    fs::create_dir_all(&local_config_dir).unwrap();
+    fs::create_dir_all(&override_config_dir).unwrap();
+    fs::write(local_config_dir.join("config.toml"), "[ui]\ntips = false\n").unwrap();
+
+    env::set_var("HOME", temp_dir.join("home"));
+    env::set_var("STAX_CONFIG_DIR", &override_config_dir);
+    Command::new("git")
+        .arg("init")
+        .current_dir(&repo_dir)
+        .output()
+        .unwrap();
+    env::set_current_dir(&repo_dir).unwrap();
+
+    assert_eq!(
+        Config::path().unwrap(),
+        override_config_dir.join("config.toml")
+    );
+
+    env::set_current_dir(original_dir).unwrap();
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+    let _ = fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
