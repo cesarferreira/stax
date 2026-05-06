@@ -1,6 +1,6 @@
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
 use crate::config::Config;
-use crate::engine::{BranchMetadata, Stack};
+use crate::engine::{restack_preflight, BranchMetadata, Stack};
 use crate::errors::ConflictStopped;
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
@@ -100,6 +100,16 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
         };
 
         println!("  {} onto {}", branch.white(), parent_branch_name.blue());
+
+        let preflight_config = Config::load().unwrap_or_default();
+        restack_preflight::maybe_warn(
+            &repo,
+            &preflight_config,
+            branch,
+            &parent_branch_name,
+            &parent_branch_revision,
+            false,
+        );
 
         match repo.rebase_branch_onto_with_provenance(
             branch,

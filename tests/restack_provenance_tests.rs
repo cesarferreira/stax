@@ -472,6 +472,165 @@ fn test_merging_main_into_feature_inflates_stored_replay_range() {
     );
 }
 
+// =============================================================================
+// Preflight advisory: warn before rebase when stored boundary inflates the range
+// =============================================================================
+
+/// Helper: build the merge-from-main fixture used by the preflight tests.
+/// Returns the configured branch name.
+fn build_merge_from_main_fixture(repo: &TestRepo) -> String {
+    const PRE_MERGE_TRUNK: usize = 30;
+    const POST_MERGE_TRUNK: usize = 5;
+
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "preflight-feature"]);
+    repo.create_file("p1.txt", "p1");
+    repo.commit("preflight commit 1");
+
+    repo.git(&["checkout", "main"]);
+    for i in 0..PRE_MERGE_TRUNK {
+        repo.create_file(&format!("pre_pf_{i}.txt"), "x");
+        repo.commit(&format!("trunk pre {i}"));
+    }
+
+    repo.git(&["checkout", "preflight-feature"]);
+    repo.git(&[
+        "merge",
+        "main",
+        "--no-edit",
+        "-m",
+        "Merge branch 'main' into preflight-feature",
+    ]);
+    repo.create_file("p2.txt", "p2");
+    repo.commit("preflight commit 2");
+
+    repo.git(&["checkout", "main"]);
+    for i in 0..POST_MERGE_TRUNK {
+        repo.create_file(&format!("post_pf_{i}.txt"), "y");
+        repo.commit(&format!("trunk post {i}"));
+    }
+
+    write_branch_metadata_raw(repo, "preflight-feature", "main", &fork_point);
+    repo.run_stax(&["set-trunk", "main"]);
+    repo.git(&["checkout", "preflight-feature"]);
+
+    "preflight-feature".to_string()
+}
+
+/// When stored boundary drift inflates the replay range, restack should print
+/// a `preflight:` advisory before rebasing.
+#[test]
+fn test_restack_preflight_warns_when_stored_range_dominates_merge_base() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    let _branch = build_merge_from_main_fixture(&repo);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stdout.contains("preflight:") || stderr.contains("preflight:"),
+        "expected a preflight advisory; stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+    assert!(
+        stdout.contains("stax branch reparent") || stderr.contains("stax branch reparent"),
+        "expected a repair hint pointing at `stax branch reparent`"
+    );
+}
+
+/// `restack.preflight_warn = false` in the config must silence the advisory.
+#[test]
+fn test_restack_preflight_silenced_by_config() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+    std::fs::write(
+        config_dir.path().join("config.toml"),
+        "[restack]\npreflight_warn = false\n",
+    )
+    .expect("write config");
+
+    let _branch = build_merge_from_main_fixture(&repo);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        !stdout.contains("preflight:") && !stderr.contains("preflight:"),
+        "preflight advisory should be silenced when restack.preflight_warn=false; \
+         stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+}
+
+/// `--quiet` must also silence the advisory regardless of config.
+#[test]
+fn test_restack_preflight_silenced_by_quiet_flag() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    let _branch = build_merge_from_main_fixture(&repo);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes", "--quiet"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        !stdout.contains("preflight:") && !stderr.contains("preflight:"),
+        "preflight advisory should respect --quiet; stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+}
+
+/// Linear branch with stored boundary far behind but small actual divergence
+/// (no merges from main) should NOT trigger the advisory because merge-base
+/// matches the stored boundary's effective replay set.
+#[test]
+fn test_restack_preflight_silent_on_clean_linear_branch() {
+    let repo = TestRepo::new();
+    let config_dir = tempfile::TempDir::new().expect("create config dir");
+
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "linear-quiet"]);
+    repo.create_file("lq1.txt", "x");
+    repo.commit("linear 1");
+    repo.create_file("lq2.txt", "y");
+    repo.commit("linear 2");
+
+    repo.git(&["checkout", "main"]);
+    for i in 0..40 {
+        repo.create_file(&format!("lq_trunk_{i}.txt"), "t");
+        repo.commit(&format!("linear trunk {i}"));
+    }
+
+    write_branch_metadata_raw(&repo, "linear-quiet", "main", &fork_point);
+    repo.run_stax(&["set-trunk", "main"]);
+    repo.git(&["checkout", "linear-quiet"]);
+
+    let output = repo.run_stax_with_env(
+        &["restack", "--yes"],
+        &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        !stdout.contains("preflight:") && !stderr.contains("preflight:"),
+        "linear branch should not trigger preflight advisory; \
+         stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+}
 
 // =============================================================================
 // Genuine conflict is still reported correctly (no regression)
