@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::repo::WorktreeInfo;
 use crate::git::{checkout_branch_in, refs, GitRepo};
+use crate::progress::LiveTimer;
 use crate::remote;
 use anyhow::Result;
 use colored::Colorize;
@@ -350,7 +351,9 @@ pub fn run(
         if let Err(e) = refs::write_prev_branch_at(&workdir, &current) {
             eprintln!("Warning: failed to save previous branch: {}", e);
         }
+        let timer = LiveTimer::maybe_new(!shell_output, &format!("Checking out {}...", target));
         checkout_branch_in(&workdir, &target)?;
+        LiveTimer::maybe_finish_ok(timer, "done");
         if shell_output {
             emit_shell_message(&checkout_completion_shell_message(&target));
         } else {
@@ -744,7 +747,12 @@ fn checkout_by_pr(repo: &GitRepo, pr_num: u64, shell_output: bool) -> Result<()>
 
     // Checkout the branch
     let workdir = repo.workdir()?;
+    let timer = LiveTimer::maybe_new(
+        !shell_output,
+        &format!("Checking out {}...", target_branch),
+    );
     checkout_branch_in(workdir, &target_branch)?;
+    LiveTimer::maybe_finish_ok(timer, "done");
 
     if shell_output {
         let message = format!("Checked out PR #{}: {}", pr_num, target_branch);
