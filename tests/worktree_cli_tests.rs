@@ -5,12 +5,6 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-fn clean_home(repo: &TestRepo) -> String {
-    let home = repo.path().join(".test-home");
-    fs::create_dir_all(home.join(".config").join("stax")).expect("create clean home");
-    home.to_string_lossy().into_owned()
-}
-
 fn default_worktree_root(repo: &TestRepo, home: &str) -> PathBuf {
     let repo_name = repo
         .path()
@@ -245,6 +239,18 @@ done
     )
 }
 
+fn push_remote_only_branch(repo: &TestRepo, branch: &str, file: &str, content: &str) -> String {
+    repo.git(&["checkout", "-B", branch, "main"])
+        .assert_success();
+    repo.create_file(file, content);
+    repo.commit(&format!("Commit {}", branch));
+    let sha = repo.head_sha();
+    repo.git(&["push", "-u", "origin", branch]).assert_success();
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.git(&["branch", "-D", branch]).assert_success();
+    sha
+}
+
 #[test]
 fn wt_without_subcommand_prints_help_noninteractive() {
     let repo = TestRepo::new();
@@ -268,7 +274,7 @@ fn wt_without_subcommand_prints_help_noninteractive() {
 #[test]
 fn wt_create_without_name_creates_random_lane() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     let out = repo.run_stax_with_env(&["wt", "c"], &[("HOME", home.as_str())]);
     out.assert_success();
@@ -319,9 +325,107 @@ fn wt_create_without_name_creates_random_lane() {
 }
 
 #[test]
+fn wt_create_checks_out_remote_only_branch() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    let remote_sha = push_remote_only_branch(
+        &repo,
+        "remote-only",
+        "remote.txt",
+        "remote branch content\n",
+    );
+
+    let out = repo.run_stax_with_env(
+        &["wt", "c", "remote-only", "--no-verify"],
+        &[("HOME", home.as_str())],
+    );
+    out.assert_success()
+        .assert_stderr_contains("Checked out existing branch")
+        .assert_stderr_contains("remote-only");
+
+    let worktree_path = default_worktree_root(&repo, &home).join("remote-only");
+    assert!(
+        worktree_path.join("remote.txt").exists(),
+        "expected remote branch file to exist in worktree"
+    );
+    assert_eq!(repo.get_commit_sha("remote-only"), remote_sha);
+    assert_eq!(repo.get_commit_sha("origin/remote-only"), remote_sha);
+
+    let upstream_remote = repo.git(&["config", "branch.remote-only.remote"]);
+    upstream_remote
+        .assert_success()
+        .assert_stdout_contains("origin");
+    let upstream_merge = repo.git(&["config", "branch.remote-only.merge"]);
+    upstream_merge
+        .assert_success()
+        .assert_stdout_contains("refs/heads/remote-only");
+}
+
+#[test]
+fn wt_create_accepts_remote_qualified_branch_name() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    let remote_sha = push_remote_only_branch(
+        &repo,
+        "remote-qualified",
+        "qualified.txt",
+        "remote branch content\n",
+    );
+
+    let out = repo.run_stax_with_env(
+        &["wt", "c", "origin/remote-qualified", "--no-verify"],
+        &[("HOME", home.as_str())],
+    );
+    out.assert_success()
+        .assert_stderr_contains("Checked out existing branch")
+        .assert_stderr_contains("remote-qualified");
+
+    let worktree_path = default_worktree_root(&repo, &home).join("remote-qualified");
+    assert!(
+        worktree_path.join("qualified.txt").exists(),
+        "expected remote branch file to exist in worktree"
+    );
+    assert_eq!(repo.get_commit_sha("remote-qualified"), remote_sha);
+
+    let accidental_ref = repo.git(&[
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/heads/origin/remote-qualified",
+    ]);
+    assert!(
+        !accidental_ref.status.success(),
+        "remote-qualified input should not create refs/heads/origin/remote-qualified"
+    );
+}
+
+#[test]
+fn wt_create_rejects_ambiguous_remote_branch_suffix() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    push_remote_only_branch(&repo, "team-a/shared", "team-a.txt", "a\n");
+    push_remote_only_branch(&repo, "team-b/shared", "team-b.txt", "b\n");
+
+    let out = repo.run_stax_with_env(
+        &["wt", "c", "shared", "--no-verify"],
+        &[("HOME", home.as_str())],
+    );
+    out.assert_failure()
+        .assert_stderr_contains("Multiple remote branches match 'shared'")
+        .assert_stderr_contains("origin/team-a/shared")
+        .assert_stderr_contains("origin/team-b/shared");
+
+    let worktrees = linked_worktree_dirs_default(&repo, &home);
+    assert!(
+        worktrees.is_empty(),
+        "ambiguous remote suffix should not create a worktree"
+    );
+}
+
+#[test]
 fn wt_create_reuses_existing_worktree_target() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["create", "feature-lane"], &[("HOME", home.as_str())])
         .assert_success();
@@ -349,7 +453,7 @@ fn wt_create_reuses_existing_worktree_target() {
 #[test]
 fn wt_create_with_agent_launches_in_new_worktree() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
     let bin_dir = repo.path().join("fake-bin");
     fs::create_dir_all(&bin_dir).expect("create fake bin");
     let log_path = repo.path().join("codex.log");
@@ -420,7 +524,7 @@ done
 #[test]
 fn wt_tmux_creates_then_attaches_existing_session() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
     let (_bin_dir, path_env, tmux_log, agent_log) = setup_fake_tmux_env(&repo);
     let tmux_state = repo.path().join("tmux-state");
     let tmux_state_str = tmux_state.to_string_lossy().into_owned();
@@ -487,7 +591,7 @@ fn wt_tmux_creates_then_attaches_existing_session() {
 #[test]
 fn wt_tmux_switches_client_when_already_inside_tmux() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
     let (_bin_dir, path_env, tmux_log, agent_log) = setup_fake_tmux_env(&repo);
     let tmux_state = repo.path().join("tmux-state");
     let tmux_state_str = tmux_state.to_string_lossy().into_owned();
@@ -521,7 +625,7 @@ fn wt_tmux_switches_client_when_already_inside_tmux() {
 #[test]
 fn lane_existing_tmux_session_with_prompt_opens_new_window() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
     let (_bin_dir, path_env, tmux_log, agent_log) = setup_fake_tmux_env(&repo);
     let tmux_state = repo.path().join("tmux-state");
     let tmux_state_str = tmux_state.to_string_lossy().into_owned();
@@ -584,7 +688,7 @@ fn lane_existing_tmux_session_with_prompt_opens_new_window() {
 #[test]
 fn wt_create_prints_cd_hint_when_shell_env_is_set_without_shell_wrapper() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     let out = repo.run_stax_with_env(
         &["wt", "c", "shell-env-lane"],
@@ -614,7 +718,7 @@ fn wt_create_prints_cd_hint_when_shell_env_is_set_without_shell_wrapper() {
 #[test]
 fn wt_go_prints_cd_hint_when_shell_env_is_set_without_shell_wrapper() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["wt", "c", "go-shell-env"], &[("HOME", home.as_str())])
         .assert_success();
@@ -647,7 +751,7 @@ fn wt_go_prints_cd_hint_when_shell_env_is_set_without_shell_wrapper() {
 #[test]
 fn wt_create_without_shell_integration_suggests_install() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     let out = repo.run_stax_with_env(&["wt", "c", "install-shell"], &[("HOME", home.as_str())]);
     out.assert_success();
@@ -668,7 +772,7 @@ fn wt_create_without_shell_integration_suggests_install() {
 #[test]
 fn wt_go_without_shell_integration_suggests_install() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["wt", "c", "go-install-shell"], &[("HOME", home.as_str())])
         .assert_success();
@@ -695,7 +799,7 @@ fn wt_go_without_shell_integration_suggests_install() {
 #[test]
 fn wt_ls_stays_compact_and_wt_ll_shows_status() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["wt", "c", "status-lane"], &[("HOME", home.as_str())])
         .assert_success();
@@ -820,7 +924,7 @@ fn wt_remove_accepts_disambiguated_path_suffix_for_detached_duplicates() {
 #[test]
 fn wt_create_respects_explicit_repo_local_root_dir() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
     write_worktree_config(&home, ".worktrees");
 
     let out = repo.run_stax_with_env(&["wt", "c", "local-root"], &[("HOME", home.as_str())]);
@@ -841,7 +945,7 @@ fn wt_create_respects_explicit_repo_local_root_dir() {
 #[test]
 fn wt_prune_cleans_stale_git_worktree_entries() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["wt", "c", "prune-me"], &[("HOME", home.as_str())])
         .assert_success();
@@ -875,7 +979,7 @@ fn wt_prune_cleans_stale_git_worktree_entries() {
 #[test]
 fn wt_cleanup_prunes_and_removes_safe_candidates() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["wt", "c", "merged-lane"], &[("HOME", home.as_str())])
         .assert_success();
@@ -943,7 +1047,7 @@ fn wt_cleanup_prunes_and_removes_safe_candidates() {
 #[test]
 fn wt_cleanup_dry_run_previews_without_applying() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["wt", "c", "merged-lane"], &[("HOME", home.as_str())])
         .assert_success();
@@ -1096,7 +1200,7 @@ fn wt_remove_confirmed_dirty_worktree_uses_forced_git_remove() {
 #[test]
 fn wt_remove_without_name_removes_current_worktree() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["wt", "c", "remove-me"], &[("HOME", home.as_str())])
         .assert_success();
@@ -1113,7 +1217,7 @@ fn wt_remove_without_name_removes_current_worktree() {
 #[test]
 fn wt_remove_delete_branch_from_current_worktree_removes_branch_too() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["wt", "c", "remove-branch"], &[("HOME", home.as_str())])
         .assert_success();
@@ -1145,7 +1249,7 @@ fn wt_remove_delete_branch_from_current_worktree_removes_branch_too() {
 #[test]
 fn wt_restack_only_touches_stax_managed_worktrees() {
     let repo = TestRepo::new();
-    let home = clean_home(&repo);
+    let home = repo.clean_home();
 
     repo.run_stax_with_env(&["wt", "c", "managed-lane"], &[("HOME", home.as_str())])
         .assert_success();

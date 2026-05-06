@@ -464,11 +464,59 @@ pub fn worktree_matches(worktree: &WorktreeInfo, name: &str) -> bool {
             .unwrap_or(false)
 }
 
-pub fn resolve_branch_name(repo: &GitRepo, config: &Config, input: &str) -> Result<(String, bool)> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedBranchSource {
+    Local,
+    Remote { remote_ref: String },
+    New,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedBranchName {
+    pub name: String,
+    pub source: ResolvedBranchSource,
+}
+
+impl ResolvedBranchName {
+    pub fn is_existing(&self) -> bool {
+        matches!(
+            self.source,
+            ResolvedBranchSource::Local | ResolvedBranchSource::Remote { .. }
+        )
+    }
+
+    pub fn needs_base_branch(&self) -> bool {
+        matches!(self.source, ResolvedBranchSource::New)
+    }
+
+    pub fn source_label(&self, repo: &GitRepo, base_branch: Option<&str>) -> String {
+        if let Some(base_branch) = base_branch {
+            return if repo.has_remote(base_branch) {
+                format!("origin/{}", base_branch)
+            } else {
+                base_branch.to_string()
+            };
+        }
+
+        match &self.source {
+            ResolvedBranchSource::Remote { remote_ref } => remote_ref.clone(),
+            ResolvedBranchSource::Local | ResolvedBranchSource::New => self.name.clone(),
+        }
+    }
+}
+
+pub fn resolve_branch_name(
+    repo: &GitRepo,
+    config: &Config,
+    input: &str,
+) -> Result<ResolvedBranchName> {
     let branches = repo.list_branches()?;
 
     if let Some(branch) = branches.iter().find(|branch| branch.as_str() == input) {
-        return Ok((branch.clone(), true));
+        return Ok(ResolvedBranchName {
+            name: branch.clone(),
+            source: ResolvedBranchSource::Local,
+        });
     }
 
     let suffix_matches: Vec<String> = branches
@@ -476,9 +524,6 @@ pub fn resolve_branch_name(repo: &GitRepo, config: &Config, input: &str) -> Resu
         .filter(|branch| branch.ends_with(&format!("/{}", input)))
         .cloned()
         .collect();
-    if suffix_matches.len() == 1 {
-        return Ok((suffix_matches[0].clone(), true));
-    }
     if suffix_matches.len() > 1 {
         bail!(
             "Multiple branches match '{}': {}",
@@ -486,10 +531,134 @@ pub fn resolve_branch_name(repo: &GitRepo, config: &Config, input: &str) -> Resu
             suffix_matches.join(", ")
         );
     }
+    if suffix_matches.len() == 1 {
+        return Ok(ResolvedBranchName {
+            name: suffix_matches[0].clone(),
+            source: ResolvedBranchSource::Local,
+        });
+    }
+
+    let remote_name = config.remote_name();
+    let remote_prefix = format!("{}/", remote_name);
+    let mut remote_branches: Vec<String> = repo
+        .remote_branch_names(remote_name)?
+        .into_iter()
+        .filter(|branch| branch != "HEAD")
+        .collect();
+    remote_branches.sort();
+
+    if let Some(remote_branch) = input.strip_prefix(&remote_prefix) {
+        if remote_branch.is_empty() {
+            bail!("Remote branch name cannot be empty.");
+        }
+
+        if branches.iter().any(|branch| branch == remote_branch) {
+            return Ok(ResolvedBranchName {
+                name: remote_branch.to_string(),
+                source: ResolvedBranchSource::Local,
+            });
+        }
+
+        if remote_branches
+            .iter()
+            .any(|branch| branch.as_str() == remote_branch)
+        {
+            return Ok(ResolvedBranchName {
+                name: remote_branch.to_string(),
+                source: ResolvedBranchSource::Remote {
+                    remote_ref: input.to_string(),
+                },
+            });
+        }
+
+        bail!("Remote branch '{}' not found.", input);
+    }
+
+    if remote_branches
+        .iter()
+        .any(|branch| branch.as_str() == input)
+    {
+        return Ok(ResolvedBranchName {
+            name: input.to_string(),
+            source: ResolvedBranchSource::Remote {
+                remote_ref: format!("{}{}", remote_prefix, input),
+            },
+        });
+    }
+
+    let remote_suffix_matches: Vec<String> = remote_branches
+        .iter()
+        .filter(|branch| branch.ends_with(&format!("/{}", input)))
+        .cloned()
+        .collect();
+    if remote_suffix_matches.len() == 1 {
+        let branch = remote_suffix_matches[0].clone();
+        return Ok(ResolvedBranchName {
+            name: branch.clone(),
+            source: ResolvedBranchSource::Remote {
+                remote_ref: format!("{}{}", remote_prefix, branch),
+            },
+        });
+    }
+    if remote_suffix_matches.len() > 1 {
+        let matches = remote_suffix_matches
+            .iter()
+            .map(|branch| format!("{}{}", remote_prefix, branch))
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!("Multiple remote branches match '{}': {}", input, matches);
+    }
 
     let formatted = config.format_branch_name(input);
     let exists = branches.iter().any(|branch| branch == &formatted);
-    Ok((formatted, exists))
+    if exists {
+        return Ok(ResolvedBranchName {
+            name: formatted,
+            source: ResolvedBranchSource::Local,
+        });
+    }
+
+    if remote_branches
+        .iter()
+        .any(|branch| branch.as_str() == formatted)
+    {
+        return Ok(ResolvedBranchName {
+            name: formatted.clone(),
+            source: ResolvedBranchSource::Remote {
+                remote_ref: format!("{}{}", remote_prefix, formatted),
+            },
+        });
+    }
+
+    Ok(ResolvedBranchName {
+        name: formatted,
+        source: ResolvedBranchSource::New,
+    })
+}
+
+pub fn create_worktree_for_resolved_branch(
+    repo: &GitRepo,
+    resolved_branch: &ResolvedBranchName,
+    worktree_path: &Path,
+    base_branch: Option<&str>,
+) -> Result<()> {
+    match &resolved_branch.source {
+        ResolvedBranchSource::Local => {
+            repo.worktree_create(&resolved_branch.name, worktree_path)?;
+        }
+        ResolvedBranchSource::Remote { remote_ref } => {
+            repo.worktree_create_tracking_branch(&resolved_branch.name, worktree_path, remote_ref)?;
+        }
+        ResolvedBranchSource::New => {
+            let from_branch = base_branch.context("Base branch is required for a new branch")?;
+            repo.worktree_create_new_branch(&resolved_branch.name, worktree_path, from_branch)?;
+            let parent_rev = repo.branch_commit(from_branch)?;
+            let meta = BranchMetadata::new(from_branch, &parent_rev);
+            meta.write(repo.inner(), &resolved_branch.name)?;
+        }
+    }
+
+    Ok(())
 }
 
 pub fn derive_unique_worktree_name(repo: &GitRepo, branch: &str) -> Result<String> {
