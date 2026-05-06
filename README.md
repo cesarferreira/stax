@@ -204,6 +204,13 @@ st resolve
 st resolve --agent codex --model gpt-5.3-codex
 ```
 
+Before each rebase, stax also runs a **preflight advisory** that compares the
+stored parent boundary against `merge-base(parent, branch)`. When they diverge
+sharply — the “my restack hit conflicts on files I never touched” case — stax
+prints a one-line warning and points at `stax branch reparent` to repair the
+boundary. Disable globally with `[restack] preflight_warn = false`, or per-run
+with `--quiet`.
+
 ### Undo / redo
 
 `restack`, `submit`, and `reorder` each snapshot branch state before they touch anything. Recovery is one command away.

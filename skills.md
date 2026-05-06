@@ -234,6 +234,7 @@ stax restack --continue            # Continue after conflicts
 stax restack --dry-run             # Predict conflicts only
 stax restack --submit-after yes    # ask|yes|no
 stax restack --auto-stash-pop      # Stash/pop dirty target worktrees
+stax restack --quiet               # Also silences the preflight advisory below
 
 stax cascade                       # Restack bottom-up then submit
 stax cascade --no-pr               # Push only, skip PR updates
@@ -423,6 +424,21 @@ stax restack
 git add -A
 stax continue
 ```
+
+If conflicts touch files you never edited on this branch, look for the
+`preflight:` advisory printed at the start of restack — it indicates the
+stored `parentBranchRevision` is far out of step with `merge-base(parent, branch)`
+(common after `git merge main` into the branch, or when the branch was tracked
+late). Fix the boundary instead of resolving conflicts blindly:
+
+```bash
+stax abort
+stax branch reparent --parent main --branch <current>   # retargets at merge-base
+stax restack
+```
+
+Disable the advisory globally with `[restack] preflight_warn = false` in
+`~/.config/stax/config.toml`, or per-run with `--quiet`.
 
 ### Repair Broken Metadata
 

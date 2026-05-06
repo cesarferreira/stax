@@ -40,6 +40,12 @@ Main config path: `~/.config/stax/config.toml`.
 [ui]
 # tips = true
 
+[restack]
+# preflight_warn = true   # warn before rebase if stored parent boundary
+                          # would replay a much larger range than merge-base
+                          # (catches "conflicts on files I didn't touch" caused
+                          # by stale metadata or `git merge main` into a branch)
+
 [ai]
 # agent = "claude" # "codex" | "gemini" | "opencode" — global default
 # model = "claude-sonnet-4-5-20250929"
