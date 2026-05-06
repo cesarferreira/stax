@@ -6,10 +6,10 @@
 //! to surface conflicts on files the user never edited on this branch (because
 //! the stored boundary drifted, or the user merged trunk into the branch).
 //!
-//! This module produces a non-fatal advisory: it never blocks a restack. The
-//! intent is to give engineers in busy monorepos enough evidence to choose
-//! between resolving conflicts or repairing metadata first via
-//! `stax branch reparent --parent <p> --branch <b>`.
+//! This module corrects the rebase boundary automatically when the stored
+//! boundary is clearly worse than the current merge-base. The correction is
+//! intentionally conservative and only affects the current rebase invocation;
+//! normal restack success still refreshes metadata to the parent tip.
 
 use crate::config::Config;
 use crate::git::GitRepo;
@@ -98,9 +98,18 @@ impl RestackPreflight {
         stored > mb.saturating_mul(RANGE_RATIO) + ABSOLUTE_HEADROOM
     }
 
-    /// Print a one-line warning followed by a repair hint. Caller should gate
-    /// this on `is_suspicious()` and on the user's preflight config.
-    pub fn print_warning(&self) {
+    /// Whether this report has a merge-base boundary that can be used instead
+    /// of the stored boundary.
+    pub fn corrected_upstream(&self) -> Option<&str> {
+        if !self.is_suspicious() {
+            return None;
+        }
+        self.merge_base.as_deref()
+    }
+
+    /// Print a one-line notice explaining the automatic correction. Caller
+    /// should gate this on `corrected_upstream()` and on the user's config.
+    pub fn print_correction(&self) {
         let stored = self
             .stored_to_branch
             .map(|n| n.to_string())
@@ -111,7 +120,7 @@ impl RestackPreflight {
             .unwrap_or_else(|| "?".to_string());
 
         println!(
-            "  {} '{}' stored boundary will replay {} commit(s); merge-base would replay {}.",
+            "  {} '{}' stored boundary would replay {} commit(s); using merge-base boundary ({} commit(s)).",
             "preflight:".yellow().bold(),
             self.branch,
             stored.yellow(),
@@ -120,33 +129,44 @@ impl RestackPreflight {
         println!(
             "    {}",
             format!(
-                "Tip: if conflicts hit unrelated files, abort and run `stax branch reparent --parent {} --branch {}` to retarget at the merge-base.",
-                self.parent, self.branch
+                "Stax will rebase '{}' with the merge-base boundary to avoid replaying unrelated history from '{}'.",
+                self.branch,
+                self.parent
             )
             .dimmed()
         );
     }
 }
 
-/// Convenience: analyse and, if both the heuristic and config agree, print the
-/// advisory. Always silent when `quiet` is true. Never fails the caller — any
-/// git error during analysis is swallowed.
-pub fn maybe_warn(
+/// Return the upstream boundary to pass to `git rebase --onto`.
+///
+/// If preflight repair is enabled and the stored boundary would replay a much
+/// larger range than the current merge-base, returns the merge-base instead.
+/// Never fails the caller — any git error during analysis falls back to the
+/// stored revision and the rebase proceeds normally.
+pub fn choose_rebase_upstream(
     repo: &GitRepo,
     config: &Config,
     branch: &str,
     parent: &str,
     stored_revision: &str,
     quiet: bool,
-) {
-    if quiet || !config.restack.preflight_warn {
-        return;
+) -> String {
+    if !config.restack.preflight_auto_repair {
+        return stored_revision.to_string();
     }
+
     if let Ok(report) = RestackPreflight::analyze(repo, branch, parent, stored_revision) {
-        if report.is_suspicious() {
-            report.print_warning();
+        if let Some(upstream) = report.corrected_upstream() {
+            let upstream = upstream.to_string();
+            if !quiet && config.restack.preflight_warn {
+                report.print_correction();
+            }
+            return upstream;
         }
     }
+
+    stored_revision.to_string()
 }
 
 #[cfg(test)]
@@ -187,6 +207,12 @@ mod tests {
     fn drifted_stored_range_is_suspicious() {
         assert!(pf(Some(60), Some(2)).is_suspicious());
         assert!(pf(Some(120), Some(3)).is_suspicious());
+    }
+
+    #[test]
+    fn suspicious_report_uses_merge_base_as_corrected_upstream() {
+        assert_eq!(pf(Some(60), Some(2)).corrected_upstream(), Some("def"));
+        assert_eq!(pf(Some(10), Some(2)).corrected_upstream(), None);
     }
 
     #[test]

@@ -519,28 +519,35 @@ fn build_merge_from_main_fixture(repo: &TestRepo) -> String {
 }
 
 /// When stored boundary drift inflates the replay range, restack should print
-/// a `preflight:` advisory before rebasing.
+/// a `preflight:` notice and automatically rebase from the merge-base instead.
 #[test]
-fn test_restack_preflight_warns_when_stored_range_dominates_merge_base() {
+fn test_restack_preflight_repairs_when_stored_range_dominates_merge_base() {
     let repo = TestRepo::new();
     let config_dir = tempfile::TempDir::new().expect("create config dir");
 
-    let _branch = build_merge_from_main_fixture(&repo);
+    let branch = build_merge_from_main_fixture(&repo);
 
     let output = repo.run_stax_with_env(
         &["restack", "--yes"],
         &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
     );
+    output.assert_success();
 
     let stdout = TestRepo::stdout(&output);
     let stderr = TestRepo::stderr(&output);
     assert!(
         stdout.contains("preflight:") || stderr.contains("preflight:"),
-        "expected a preflight advisory; stdout=\n{stdout}\nstderr=\n{stderr}"
+        "expected a preflight correction notice; stdout=\n{stdout}\nstderr=\n{stderr}"
     );
     assert!(
-        stdout.contains("stax branch reparent") || stderr.contains("stax branch reparent"),
-        "expected a repair hint pointing at `stax branch reparent`"
+        stdout.contains("using merge-base boundary")
+            || stderr.contains("using merge-base boundary"),
+        "expected the notice to say stax used the merge-base boundary"
+    );
+    assert_eq!(
+        rev_list_count(&repo, &format!("main..{branch}")),
+        2,
+        "automatic preflight repair should leave only the feature commits above main"
     );
 }
 
@@ -555,12 +562,13 @@ fn test_restack_preflight_silenced_by_config() {
     )
     .expect("write config");
 
-    let _branch = build_merge_from_main_fixture(&repo);
+    let branch = build_merge_from_main_fixture(&repo);
 
     let output = repo.run_stax_with_env(
         &["restack", "--yes"],
         &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
     );
+    output.assert_success();
 
     let stdout = TestRepo::stdout(&output);
     let stderr = TestRepo::stderr(&output);
@@ -568,6 +576,11 @@ fn test_restack_preflight_silenced_by_config() {
         !stdout.contains("preflight:") && !stderr.contains("preflight:"),
         "preflight advisory should be silenced when restack.preflight_warn=false; \
          stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+    assert_eq!(
+        rev_list_count(&repo, &format!("main..{branch}")),
+        2,
+        "preflight_warn=false should silence output, not disable automatic repair"
     );
 }
 
@@ -577,18 +590,24 @@ fn test_restack_preflight_silenced_by_quiet_flag() {
     let repo = TestRepo::new();
     let config_dir = tempfile::TempDir::new().expect("create config dir");
 
-    let _branch = build_merge_from_main_fixture(&repo);
+    let branch = build_merge_from_main_fixture(&repo);
 
     let output = repo.run_stax_with_env(
         &["restack", "--yes", "--quiet"],
         &[("STAX_CONFIG_DIR", config_dir.path().to_str().unwrap())],
     );
+    output.assert_success();
 
     let stdout = TestRepo::stdout(&output);
     let stderr = TestRepo::stderr(&output);
     assert!(
         !stdout.contains("preflight:") && !stderr.contains("preflight:"),
         "preflight advisory should respect --quiet; stdout=\n{stdout}\nstderr=\n{stderr}"
+    );
+    assert_eq!(
+        rev_list_count(&repo, &format!("main..{branch}")),
+        2,
+        "--quiet should silence output, not disable automatic repair"
     );
 }
 

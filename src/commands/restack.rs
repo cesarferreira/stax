@@ -312,7 +312,7 @@ fn run_impl(
         let restack_timer =
             LiveTimer::maybe_new(!quiet, &format!("{} onto {}", branch, parent_branch_name));
 
-        restack_preflight::maybe_warn(
+        let rebase_upstream = restack_preflight::choose_rebase_upstream(
             repo,
             &preflight_config,
             branch,
@@ -347,14 +347,14 @@ fn run_impl(
             repo.rebase_branch_onto_with_provenance_no_squash_check(
                 branch,
                 &parent_branch_name,
-                &parent_branch_revision,
+                &rebase_upstream,
                 auto_stash_pop,
             )
         } else {
             repo.rebase_branch_onto_with_provenance(
                 branch,
                 &parent_branch_name,
-                &parent_branch_revision,
+                &rebase_upstream,
                 auto_stash_pop,
             )
         };

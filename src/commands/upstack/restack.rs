@@ -102,7 +102,7 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
         println!("  {} onto {}", branch.white(), parent_branch_name.blue());
 
         let preflight_config = Config::load().unwrap_or_default();
-        restack_preflight::maybe_warn(
+        let rebase_upstream = restack_preflight::choose_rebase_upstream(
             &repo,
             &preflight_config,
             branch,
@@ -114,7 +114,7 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
         match repo.rebase_branch_onto_with_provenance(
             branch,
             &parent_branch_name,
-            &parent_branch_revision,
+            &rebase_upstream,
             auto_stash_pop,
         )? {
             RebaseResult::Success => {
