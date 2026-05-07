@@ -289,7 +289,8 @@ stax comments --plain              # Raw markdown output
 stax ci                            # CI for current branch (elapsed/ETA + avg from recent successful runs of the same checks)
 stax ci --stack                    # CI for current stack
 stax ci --all                      # CI for all tracked branches
-stax ci --watch --interval 30      # Watch CI, custom poll interval
+stax ci --watch --interval 30      # Watch until all checks finish, custom poll interval
+stax ci --watch --strict           # Watch but exit as soon as any check fails
 stax ci --watch --alert            # Watch CI, play built-in success/error sounds
 stax ci --watch --alert /path/to/sound.wav  # Use one custom sound for either outcome
 stax ci --watch --no-alert         # Suppress configured completion sounds for one run
