@@ -234,6 +234,7 @@ stax restack --continue            # Continue after conflicts
 stax restack --dry-run             # Predict conflicts only
 stax restack --submit-after yes    # ask|yes|no
 stax restack --auto-stash-pop      # Stash/pop dirty target worktrees
+stax restack --quiet               # Also silences the preflight notice below
 
 stax cascade                       # Restack bottom-up then submit
 stax cascade --no-pr               # Push only, skip PR updates
@@ -423,6 +424,16 @@ stax restack
 git add -A
 stax continue
 ```
+
+If stax detects that the stored `parentBranchRevision` would replay much more
+history than `merge-base(parent, branch)`, it prints a `preflight:` notice and
+automatically uses the merge-base boundary for that rebase. This is the common
+cause of “conflicts on files I never edited” after `git merge main` into a
+branch or late tracking.
+
+Silence the notice with `[restack] preflight_warn = false` or `--quiet`.
+Disable the automatic correction with `[restack] preflight_auto_repair = false`
+only when debugging old boundary behaviour.
 
 ### Repair Broken Metadata
 
