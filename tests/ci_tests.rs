@@ -155,6 +155,7 @@ fn test_ci_alert_flags_are_recognized() {
         vec!["ci", "--watch", "--alert"],
         vec!["ci", "--watch", "--alert", "/tmp/ci-done.wav"],
         vec!["ci", "--watch", "--no-alert"],
+        vec!["ci", "--watch", "--strict"],
     ] {
         let output = repo.run_stax(&args);
         let stderr = TestRepo::stderr(&output);

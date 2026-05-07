@@ -720,6 +720,9 @@ enum Commands {
         /// Disable configured CI completion alerts for this run
         #[arg(long, requires = "watch", conflicts_with = "alert")]
         no_alert: bool,
+        /// Exit watch mode as soon as any check fails
+        #[arg(long, requires = "watch")]
+        strict: bool,
         /// Polling interval in seconds (default: 15)
         #[arg(long, default_value = "15")]
         interval: u64,
@@ -1966,6 +1969,7 @@ pub fn run() -> Result<()> {
             watch,
             alert,
             no_alert,
+            strict,
             interval,
             verbose,
         } => commands::ci::run(
@@ -1979,6 +1983,7 @@ pub fn run() -> Result<()> {
                 None => commands::ci::CiAlertSoundArg::DefaultSound,
             }),
             no_alert,
+            strict,
             interval,
             verbose,
         ),
