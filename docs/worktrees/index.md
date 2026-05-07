@@ -19,6 +19,9 @@ st wt c
 # Create or reuse a named lane
 st wt c payments-api
 
+# Check out a fetched remote branch into a worktree
+st wt c origin/payments-api
+
 # Start a new lane from an explicit base
 st wt c payments-api --from main
 
@@ -46,6 +49,7 @@ st wt rs
 - no `name` → random two-word lane slug
 - `name` matches an existing worktree → reuse it
 - `name` matches an existing branch → create a worktree for that branch
+- `name` matches a fetched branch on the configured remote → create a local tracking branch and worktree
 - otherwise → create a new branch and a new worktree
 
 `st wt go [name]` only opens existing worktrees. With no `name`, it opens a picker.
@@ -55,10 +59,12 @@ Selectors accepted by `go`, `path`, `rm`, and reuse paths in `create`:
 - worktree name
 - full branch name
 - unique branch suffix (e.g. `payments-api` matching `cesar/payments-api`)
+- fetched remote branch name or configured-remote-qualified name (e.g. `payments-api` or `origin/payments-api`)
 - absolute worktree path
 
 ### Base branch rules for new lanes
 
+- fetched remote branches keep their remote tip and upstream tracking branch
 - `--from <branch>` explicitly sets the base
 - otherwise if the current branch is tracked by stax → new lane stacks on current
 - otherwise → new lane starts from trunk
@@ -103,6 +109,7 @@ If you run `create` / `go` without shell integration and without a launcher, sta
 
 - new branches created by `st wt c foo` → **managed**
 - existing tracked branches opened as lanes → stay **managed**
+- fetched remote branches opened as local tracking branches → **unmanaged** until `st branch track`
 - existing plain Git branches opened as worktrees → **unmanaged** until `st branch track`
 
 Managed lanes behave like first-class stax branches: they show in `st ls`, participate in restack/sync/undo, and are targeted by `st wt restack`. Unmanaged lanes still show up in `ls`, `ll`, `go`, `rm`, and `prune`, but stax keeps history-rewriting operations conservative.

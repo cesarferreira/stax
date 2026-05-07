@@ -87,7 +87,7 @@ stax lane [name] [prompt]      # Open interactive lane picker, or start/resume n
 stax absorb                    # Absorb staged changes into correct stack branches
 stax edit|e                    # Interactively edit commits (reword, squash, fixup, drop)
 
-stax worktree create [branch]  # Create a worktree for an existing or new branch
+stax worktree create [branch]  # Create a worktree for an existing local/fetched remote/new branch
 stax worktree list             # List all worktrees (* = current)
 stax worktree ll               # Richer worktree status (managed/prunable/conflict state)
 stax worktree go <name>        # Navigate to a worktree (requires shell integration)
@@ -106,7 +106,7 @@ stax setup --print             # Print shell integration snippet for manual inst
 # Worktree shortcuts
 stax wt                        # Open worktree dashboard (TTY) or print worktree help
 stax w                         # List worktrees
-stax wtc [branch]              # Create worktree
+stax wtc [branch]              # Create worktree (local branch, fetched remote branch, or new branch)
 stax wtls                      # List worktrees
 stax wtll                      # Long worktree list
 stax wtgo <name>               # Navigate to worktree path
@@ -451,8 +451,11 @@ stax setup
 stax setup --yes               # Shell integration + skills + auth import from gh when available
 stax setup --install-skills    # Non-interactive onboarding: shell integration + AI agent skills
 
-# Create a worktree for an existing branch
+# Create a worktree for an existing local branch
 stax worktree create feature/payments-api
+
+# Create a local tracking branch and worktree from a fetched remote branch
+stax worktree create origin/feature/payments-api
 
 # List all worktrees
 stax w
@@ -531,7 +534,7 @@ Symbols:
 6. Check stack shape (`stax ls` / `stax ll`) before submit or merge.
 7. Use `stax lane <name> [prompt]` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
 8. After trunk moves, run `stax wt rs` once instead of rebasing each agent worktree manually.
-9. Use `stax worktree create` when you want a worktree for an existing branch or for human parallel development — `st lane` is the higher-level AI shortcut.
+9. Use `stax worktree create` when you want a worktree for an existing local branch, fetched remote branch, or human parallel development — `st lane` is the higher-level AI shortcut.
 10. Run `stax setup` once per machine to enable `stax worktree go` and the `sw` alias without executing `stax` on every shell startup.
 
 ## Tips

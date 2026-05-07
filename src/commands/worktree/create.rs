@@ -1,12 +1,12 @@
 use super::shared::{
-    build_launch_spec, default_create_base, derive_unique_worktree_name, emit_shell_payload,
-    ensure_gitignore, ensure_managed_worktrees_root, find_worktree, format_create_message,
-    format_go_message, generate_random_lane_slug, managed_worktrees_dir, pick_branch_interactively,
+    build_launch_spec, create_worktree_for_resolved_branch, default_create_base,
+    derive_unique_worktree_name, emit_shell_payload, ensure_gitignore,
+    ensure_managed_worktrees_root, find_worktree, format_create_message, format_go_message,
+    generate_random_lane_slug, managed_worktrees_dir, pick_branch_interactively,
     resolve_branch_name, run_blocking_hook, spawn_background_hook, LaunchOptions,
 };
 use crate::commands::shell_setup;
 use crate::config::Config;
-use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
@@ -86,7 +86,8 @@ pub fn run(
         (false, None) => generate_random_lane_slug(&repo, &config)?,
     };
 
-    let (branch_name, branch_exists) = resolve_branch_name(&repo, &config, &input_name)?;
+    let resolved_branch = resolve_branch_name(&repo, &config, &input_name)?;
+    let branch_name = resolved_branch.name.clone();
     if let Some(worktree) = find_worktree(&repo, &branch_name)? {
         let launch = build_launch_spec(&config, &launch_options, &worktree.name)?;
         format_go_message(&worktree);
@@ -118,13 +119,13 @@ pub fn run(
         return Ok(());
     }
 
-    let base_branch = if branch_exists {
-        None
-    } else {
+    let base_branch = if resolved_branch.needs_base_branch() {
         let base_branch = from.unwrap_or(default_create_base(&repo)?);
         repo.branch_commit(&base_branch)
             .with_context(|| format!("Base branch '{}' does not exist", base_branch))?;
         Some(base_branch)
+    } else {
+        None
     };
 
     let worktree_name = worktree_name.unwrap_or(derive_unique_worktree_name(&repo, &branch_name)?);
@@ -142,40 +143,26 @@ pub fn run(
     ensure_managed_worktrees_root(&repo, &config, &worktrees_dir)?;
     let main_repo_workdir = repo.main_repo_workdir()?;
     ensure_gitignore(&main_repo_workdir, &config.worktree.root_dir)?;
-
-    if branch_exists {
-        repo.worktree_create(&branch_name, &worktree_path)?;
-    } else {
-        let from_branch = base_branch
-            .as_deref()
-            .expect("base branch is always set for a new branch");
-        repo.worktree_create_new_branch(&branch_name, &worktree_path, from_branch)?;
-        let parent_rev = repo.branch_commit(from_branch)?;
-        let meta = BranchMetadata::new(from_branch, &parent_rev);
-        meta.write(repo.inner(), &branch_name)?;
-    }
+    create_worktree_for_resolved_branch(
+        &repo,
+        &resolved_branch,
+        &worktree_path,
+        base_branch.as_deref(),
+    )?;
 
     let copied_files = repo.tracked_file_count_at(&worktree_path).unwrap_or(0);
     let repo_name = main_repo_workdir
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".to_string());
-    let from_label = if let Some(base_branch) = base_branch.as_deref() {
-        if repo.has_remote(base_branch) {
-            format!("origin/{}", base_branch)
-        } else {
-            base_branch.to_string()
-        }
-    } else {
-        branch_name.clone()
-    };
+    let from_label = resolved_branch.source_label(&repo, base_branch.as_deref());
     format_create_message(
         &repo_name,
         &worktree_name,
         &branch_name,
         &from_label,
         copied_files,
-        branch_exists,
+        resolved_branch.is_existing(),
     );
 
     if !no_verify {

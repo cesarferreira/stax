@@ -1,14 +1,13 @@
 use super::shared::{
     build_agent_launch_spec_with_options, build_tmux_launch_spec, compute_worktree_details,
-    default_create_base, default_tmux_session_name, derive_unique_worktree_name,
-    emit_shell_message, emit_shell_payload, ensure_gitignore, ensure_managed_worktrees_root,
-    find_worktree, format_create_message, format_go_message, list_tmux_sessions,
-    managed_worktrees_dir, resolve_branch_name, run_blocking_hook, spawn_background_hook,
-    status_labels, ExistingTmuxSessionBehavior, LaunchSpec, TmuxSession,
+    create_worktree_for_resolved_branch, default_create_base, default_tmux_session_name,
+    derive_unique_worktree_name, emit_shell_message, emit_shell_payload, ensure_gitignore,
+    ensure_managed_worktrees_root, find_worktree, format_create_message, format_go_message,
+    list_tmux_sessions, managed_worktrees_dir, resolve_branch_name, run_blocking_hook,
+    spawn_background_hook, status_labels, ExistingTmuxSessionBehavior, LaunchSpec, TmuxSession,
 };
 use crate::commands::generate;
 use crate::config::Config;
-use crate::engine::BranchMetadata;
 use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
 use anyhow::{bail, Context, Result};
@@ -106,18 +105,19 @@ fn run_named_lane(
         return run_existing_lane(config, &worktree, no_verify, shell_output, request);
     }
 
-    let (branch_name, branch_exists) = resolve_branch_name(repo, config, &input_name)?;
+    let resolved_branch = resolve_branch_name(repo, config, &input_name)?;
+    let branch_name = resolved_branch.name.clone();
     if let Some(worktree) = find_worktree(repo, &branch_name)? {
         return run_existing_lane(config, &worktree, no_verify, shell_output, request);
     }
 
-    let base_branch = if branch_exists {
-        None
-    } else {
+    let base_branch = if resolved_branch.needs_base_branch() {
         let base_branch = default_create_base(repo)?;
         repo.branch_commit(&base_branch)
             .with_context(|| format!("Base branch '{}' does not exist", base_branch))?;
         Some(base_branch)
+    } else {
+        None
     };
 
     let worktree_name = derive_unique_worktree_name(repo, &branch_name)?;
@@ -135,40 +135,26 @@ fn run_named_lane(
     ensure_managed_worktrees_root(repo, config, &worktrees_dir)?;
     let main_repo_workdir = repo.main_repo_workdir()?;
     ensure_gitignore(&main_repo_workdir, &config.worktree.root_dir)?;
-
-    if branch_exists {
-        repo.worktree_create(&branch_name, &worktree_path)?;
-    } else {
-        let from_branch = base_branch
-            .as_deref()
-            .expect("base branch is always set for a new lane");
-        repo.worktree_create_new_branch(&branch_name, &worktree_path, from_branch)?;
-        let parent_rev = repo.branch_commit(from_branch)?;
-        let meta = BranchMetadata::new(from_branch, &parent_rev);
-        meta.write(repo.inner(), &branch_name)?;
-    }
+    create_worktree_for_resolved_branch(
+        repo,
+        &resolved_branch,
+        &worktree_path,
+        base_branch.as_deref(),
+    )?;
 
     let copied_files = repo.tracked_file_count_at(&worktree_path).unwrap_or(0);
     let repo_name = main_repo_workdir
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".to_string());
-    let from_label = if let Some(base_branch) = base_branch.as_deref() {
-        if repo.has_remote(base_branch) {
-            format!("origin/{}", base_branch)
-        } else {
-            base_branch.to_string()
-        }
-    } else {
-        branch_name.clone()
-    };
+    let from_label = resolved_branch.source_label(repo, base_branch.as_deref());
     format_create_message(
         &repo_name,
         &worktree_name,
         &branch_name,
         &from_label,
         copied_files,
-        branch_exists,
+        resolved_branch.is_existing(),
     );
 
     if !no_verify {

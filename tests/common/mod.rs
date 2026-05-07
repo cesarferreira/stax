@@ -61,6 +61,7 @@ fn apply_sanitized_test_env(cmd: &mut Command) {
     cmd.env_remove("GITHUB_TOKEN")
         .env_remove("STAX_GITHUB_TOKEN")
         .env_remove("STAX_SHELL_INTEGRATION")
+        .env_remove("STAX_CONFIG_DIR")
         .env_remove("GH_TOKEN")
         .env("GIT_CONFIG_GLOBAL", null_path)
         .env("GIT_CONFIG_SYSTEM", null_path)
@@ -121,6 +122,7 @@ fn hermetic_git_command() -> Command {
 /// A test repository that creates a temporary git repo with proper initialization
 pub struct TestRepo {
     dir: TempDir,
+    home_dir: TempDir,
     /// Optional bare repository acting as "origin" remote
     #[allow(dead_code)]
     remote_dir: Option<TempDir>,
@@ -171,6 +173,7 @@ impl TestRepo {
 
         Self {
             dir,
+            home_dir: test_tempdir(),
             remote_dir: None,
         }
     }
@@ -357,10 +360,21 @@ impl TestRepo {
         self.dir.path().to_path_buf()
     }
 
+    pub fn clean_home(&self) -> String {
+        let home = self.home_dir.path();
+        fs::create_dir_all(home.join(".config").join("stax")).expect("Failed to create clean home");
+        home.to_string_lossy().into_owned()
+    }
+
+    fn apply_default_stax_env(&self, cmd: &mut Command) {
+        cmd.env("HOME", self.home_dir.path());
+    }
+
     /// Run a stax command in this repository
     pub fn run_stax(&self, args: &[&str]) -> Output {
-        sanitized_stax_command()
-            .args(args)
+        let mut cmd = sanitized_stax_command();
+        self.apply_default_stax_env(&mut cmd);
+        cmd.args(args)
             .current_dir(self.path())
             .output()
             .expect("Failed to execute stax")
@@ -369,6 +383,7 @@ impl TestRepo {
     /// Run a stax command with additional environment variables.
     pub fn run_stax_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut cmd = sanitized_stax_command();
+        self.apply_default_stax_env(&mut cmd);
         cmd.args(args).current_dir(self.path());
         for (key, value) in env {
             cmd.env(key, value);
@@ -378,8 +393,9 @@ impl TestRepo {
 
     /// Run a stax command in a specific directory
     pub fn run_stax_in(&self, cwd: &Path, args: &[&str]) -> Output {
-        sanitized_stax_command()
-            .args(args)
+        let mut cmd = sanitized_stax_command();
+        self.apply_default_stax_env(&mut cmd);
+        cmd.args(args)
             .current_dir(cwd)
             .output()
             .expect("Failed to execute stax")
@@ -388,6 +404,7 @@ impl TestRepo {
     /// Run a stax command in a specific directory with additional environment variables.
     pub fn run_stax_in_with_env(&self, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut cmd = sanitized_stax_command();
+        self.apply_default_stax_env(&mut cmd);
         cmd.args(args).current_dir(cwd);
         for (key, value) in env {
             cmd.env(key, value);
