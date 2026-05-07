@@ -1260,10 +1260,19 @@ pub fn run(
 
                 let restack_timer = LiveTimer::maybe_new(!quiet, &format!("Restack {}", branch));
 
-                let rebase = repo.rebase_branch_onto_with_provenance_timing(
+                let rebase_upstream = crate::engine::restack_preflight::choose_rebase_upstream(
+                    &repo,
+                    &config,
                     branch,
                     &parent_branch_name,
                     &parent_branch_revision,
+                    quiet,
+                );
+
+                let rebase = repo.rebase_branch_onto_with_provenance_timing(
+                    branch,
+                    &parent_branch_name,
+                    &rebase_upstream,
                     auto_stash_pop,
                     true,
                 )?;

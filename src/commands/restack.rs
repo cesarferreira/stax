@@ -1,4 +1,6 @@
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
+use crate::config::Config;
+use crate::engine::restack_preflight;
 use crate::engine::{BranchMetadata, Stack};
 use crate::errors::ConflictStopped;
 use crate::git::{GitRepo, RebaseResult};
@@ -272,6 +274,8 @@ fn run_impl(
 
     let mut summary: Vec<(String, String)> = Vec::new();
 
+    let preflight_config = Config::load().unwrap_or_default();
+
     // Load the stack once and keep it in memory.  After each successful rebase
     // we update the cached `needs_restack` flag for the rebased branch and its
     // direct children so subsequent iterations don't need another disk read.
@@ -308,6 +312,15 @@ fn run_impl(
         let restack_timer =
             LiveTimer::maybe_new(!quiet, &format!("{} onto {}", branch, parent_branch_name));
 
+        let rebase_upstream = restack_preflight::choose_rebase_upstream(
+            repo,
+            &preflight_config,
+            branch,
+            &parent_branch_name,
+            &parent_branch_revision,
+            quiet,
+        );
+
         // Pre-stash dirty target worktrees so the rebase can proceed
         let target_workdir = repo.branch_rebase_target_workdir(branch)?;
         if auto_stash_pop
@@ -334,14 +347,14 @@ fn run_impl(
             repo.rebase_branch_onto_with_provenance_no_squash_check(
                 branch,
                 &parent_branch_name,
-                &parent_branch_revision,
+                &rebase_upstream,
                 auto_stash_pop,
             )
         } else {
             repo.rebase_branch_onto_with_provenance(
                 branch,
                 &parent_branch_name,
-                &parent_branch_revision,
+                &rebase_upstream,
                 auto_stash_pop,
             )
         };
