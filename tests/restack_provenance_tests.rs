@@ -71,6 +71,20 @@ fn write_branch_metadata_raw(
     assert!(status.success(), "git update-ref exited non-zero");
 }
 
+fn rev_list_count(repo: &TestRepo, range: &str) -> usize {
+    let out = repo.git(&["rev-list", "--count", range]);
+    assert!(
+        out.status.success(),
+        "git rev-list --count {} failed: {}",
+        range,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .unwrap_or(0)
+}
+
 // =============================================================================
 // Happy path: stored revision is the correct merge-base
 // =============================================================================
@@ -284,6 +298,180 @@ fn test_restack_with_non_ancestor_revision_preserves_only_feature_commits() {
         behind
     );
 }
+
+// =============================================================================
+// Monorepo-style trunk churn: stale stored parent tip + linear feature branch
+// =============================================================================
+
+/// Regression guard: after many commits land on `main`, stored `parentBranchRevision`
+/// may still point at the **old** trunk tip. Restack must replay only the feature
+/// commits (`stored_tip..feature`), not hundreds of trunk commits.
+///
+/// If this fails, investigate metadata/restack provenance or accidental plain
+/// `git rebase` fallback — not "main moved fast" by itself.
+#[test]
+fn test_many_trunk_commits_linear_restack_only_replays_feature_commits() {
+    // Enough commits to mimic a busy trunk; raise locally if stress-testing.
+    const TRUNK_COMMITS: usize = 60;
+
+    let repo = TestRepo::new();
+
+    // Snapshot trunk tip at fork — this simulates `parentBranchRevision` left at the
+    // last-known parent tip while engineers landed TRUNK_COMMITS on main.
+    let old_main_tip = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "busy-feature"]);
+    repo.create_file("feat1.txt", "feature one");
+    repo.commit("Feature work 1");
+    repo.create_file("feat2.txt", "feature two");
+    repo.commit("Feature work 2");
+
+    repo.git(&["checkout", "main"]);
+    for i in 0..TRUNK_COMMITS {
+        repo.create_file(&format!("trunk_{i}.txt"), &i.to_string());
+        repo.commit(&format!("Trunk churn commit {i}"));
+    }
+
+    let trunk_delta = rev_list_count(&repo, &format!("{old_main_tip}..main"));
+    assert_eq!(
+        trunk_delta, TRUNK_COMMITS,
+        "sanity: main should have diverged from the stored fork SHA by TRUNK_COMMITS"
+    );
+
+    write_branch_metadata_raw(&repo, "busy-feature", "main", &old_main_tip);
+    repo.run_stax(&["set-trunk", "main"]);
+
+    repo.git(&["checkout", "busy-feature"]);
+    let output = repo.run_stax(&["restack", "--yes", "--quiet"]);
+    output.assert_success();
+    assert!(
+        !repo.has_rebase_in_progress(),
+        "rebase should finish cleanly after provenance restack"
+    );
+
+    let ahead = rev_list_count(&repo, "main..busy-feature");
+    assert_eq!(
+        ahead, 2,
+        "linear branch must stay exactly 2 commits ahead of main after restack; \
+         trunk churn must not appear as extra commits on the feature branch"
+    );
+}
+
+/// Same scenario as `test_many_trunk_commits_linear_restack_only_replays_feature_commits`,
+/// but through `stax sync --restack` (`st rs --restack`) after pushing trunk and feature.
+#[test]
+fn test_sync_restack_many_trunk_commits_preserves_linear_feature_depth() {
+    const TRUNK_COMMITS: usize = 32;
+
+    let repo = TestRepo::new_with_remote();
+
+    let old_main_tip = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "sync-busy"]);
+    repo.create_file("sf1.txt", "x");
+    repo.commit("sync feature 1");
+    repo.create_file("sf2.txt", "y");
+    repo.commit("sync feature 2");
+    repo.git(&["push", "-u", "origin", "sync-busy"]);
+
+    repo.git(&["checkout", "main"]);
+    for i in 0..TRUNK_COMMITS {
+        repo.create_file(&format!("remote_trunk_{i}.txt"), "bulk");
+        repo.commit(&format!("main advance {i}"));
+    }
+    repo.git(&["push", "origin", "main"]);
+
+    write_branch_metadata_raw(&repo, "sync-busy", "main", &old_main_tip);
+    repo.run_stax(&["set-trunk", "main"]);
+
+    repo.git(&["checkout", "sync-busy"]);
+    let output = repo.run_stax(&["sync", "--restack", "--force", "--quiet", "--no-delete"]);
+    output.assert_success();
+    assert!(!repo.has_rebase_in_progress());
+
+    let ahead = rev_list_count(&repo, "main..sync-busy");
+    assert_eq!(
+        ahead, 2,
+        "sync --restack must leave exactly two feature commits above updated main"
+    );
+}
+
+// =============================================================================
+// Documentation: merging `main` into a feature branch poisons the replay range
+// =============================================================================
+
+/// Documents the failure mode where `git merge main` was performed on a feature
+/// branch (instead of restack) and `parentBranchRevision` still points at the
+/// pre-merge fork tip. Restack will replay every trunk commit pulled in via the
+/// merge, even on files the developer never touched on this branch — exactly
+/// the “conflicts on files I didn’t touch” experience.
+///
+/// This test does not assert STAX correctness; it pins the **shape** of the
+/// problem so a pre-flight sanity check has a fixture to compare against.
+#[test]
+fn test_merging_main_into_feature_inflates_stored_replay_range() {
+    const PRE_MERGE_TRUNK: usize = 25;
+    const POST_MERGE_TRUNK: usize = 10;
+
+    let repo = TestRepo::new();
+    let fork_point = repo.get_commit_sha("HEAD");
+
+    repo.git(&["checkout", "-b", "merged-feature"]);
+    repo.create_file("ff1.txt", "feat 1");
+    repo.commit("feature commit 1");
+
+    repo.git(&["checkout", "main"]);
+    for i in 0..PRE_MERGE_TRUNK {
+        repo.create_file(&format!("pre_{i}.txt"), "pre");
+        repo.commit(&format!("trunk pre-merge {i}"));
+    }
+
+    // The antipattern: merge `main` into the feature branch instead of rebasing.
+    repo.git(&["checkout", "merged-feature"]);
+    repo.git(&[
+        "merge",
+        "main",
+        "--no-edit",
+        "-m",
+        "Merge branch 'main' into merged-feature",
+    ]);
+
+    repo.create_file("ff2.txt", "feat 2");
+    repo.commit("feature commit 2");
+
+    repo.git(&["checkout", "main"]);
+    for i in 0..POST_MERGE_TRUNK {
+        repo.create_file(&format!("post_{i}.txt"), "post");
+        repo.commit(&format!("trunk post-merge {i}"));
+    }
+
+    // Stored boundary stayed at the original fork tip — the canonical mistake.
+    write_branch_metadata_raw(&repo, "merged-feature", "main", &fork_point);
+    repo.run_stax(&["set-trunk", "main"]);
+
+    let stored_to_feature = rev_list_count(&repo, &format!("{fork_point}..merged-feature"));
+    let merge_base_out = repo.git(&["merge-base", "main", "merged-feature"]);
+    let merge_base = String::from_utf8_lossy(&merge_base_out.stdout)
+        .trim()
+        .to_string();
+    let merge_base_to_feature = rev_list_count(&repo, &format!("{merge_base}..merged-feature"));
+
+    // The stored range balloons because the merge dragged trunk commits into the
+    // branch's reachable history; the merge-base range is what the user expects.
+    assert!(
+        stored_to_feature >= PRE_MERGE_TRUNK + 2,
+        "stored..feature should include the trunk commits brought in via merge: \
+         got {stored_to_feature}, expected at least {}",
+        PRE_MERGE_TRUNK + 2
+    );
+    assert!(
+        merge_base_to_feature < stored_to_feature,
+        "merge-base range ({merge_base_to_feature}) should be strictly smaller than \
+         stored-boundary range ({stored_to_feature}); without that delta there is \
+         nothing for a pre-flight sanity check to detect"
+    );
+}
+
 
 // =============================================================================
 // Genuine conflict is still reported correctly (no regression)
