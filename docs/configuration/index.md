@@ -44,6 +44,11 @@ Config is resolved in this order:
 [ui]
 # tips = true
 
+[restack]
+# preflight_auto_repair = true # automatically use merge-base when stored parent
+                               # boundary would replay a much larger range
+# preflight_warn = true        # print a notice when that automatic repair happens
+
 [ai]
 # agent = "claude" # "codex" | "gemini" | "opencode" — global default
 # model = "claude-sonnet-4-5-20250929"

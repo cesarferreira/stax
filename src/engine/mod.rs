@@ -1,5 +1,6 @@
 pub mod metadata;
 pub mod picker;
+pub mod restack_preflight;
 pub mod stack;
 
 pub use metadata::{BranchMetadata, PrInfo};

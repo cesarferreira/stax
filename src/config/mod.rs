@@ -27,6 +27,32 @@ pub struct Config {
     pub worktree: WorktreeConfig,
     #[serde(default)]
     pub git: GitConfig,
+    #[serde(default)]
+    pub restack: RestackConfig,
+}
+
+/// User-configurable restack behaviour.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RestackConfig {
+    /// Automatically use `merge-base(parent, branch)` as the rebase boundary
+    /// when the stored `parentBranchRevision` would replay a much larger range
+    /// (default: true).
+    #[serde(default = "default_true")]
+    pub preflight_auto_repair: bool,
+    /// Print a non-fatal advisory before rebasing a branch when the stored
+    /// `parentBranchRevision` would have forced git to replay a much larger range
+    /// than `merge-base(parent, branch)` would (default: true).
+    #[serde(default = "default_true")]
+    pub preflight_warn: bool,
+}
+
+impl Default for RestackConfig {
+    fn default() -> Self {
+        Self {
+            preflight_auto_repair: true,
+            preflight_warn: true,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -204,6 +204,14 @@ st resolve
 st resolve --agent codex --model gpt-5.3-codex
 ```
 
+Before each rebase, stax also runs a **preflight repair** that compares the
+stored parent boundary against `merge-base(parent, branch)`. When they diverge
+sharply — the “my restack hit conflicts on files I never touched” case — stax
+automatically uses the merge-base boundary for that rebase and prints a
+one-line notice. Silence the notice with `[restack] preflight_warn = false` or
+`--quiet`; disable the automatic correction with
+`[restack] preflight_auto_repair = false`.
+
 ### Undo / redo
 
 `restack`, `submit`, and `reorder` each snapshot branch state before they touch anything. Recovery is one command away.
@@ -259,7 +267,8 @@ st config --set-ai
 | `st create <name> --below` | Insert a new branch below current |
 | `st ss` | Submit the full stack, open/update linked PRs |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--remote`, `--all`) |
-| `st ci -w --alert` | Watch CI until completion, then play success/error sounds |
+| `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
+| `st ci -w --strict` | Watch CI but exit as soon as any check fails |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
 | `st refresh` | Sync trunk, restack current stack, then push/update PRs |
 | `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |

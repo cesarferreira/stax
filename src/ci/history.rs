@@ -154,22 +154,6 @@ pub fn calculate_average(history: &CiCheckHistory) -> Option<u64> {
     Some(sum / valid_runs.len() as u64)
 }
 
-/// Calculate average run end offset from history
-pub fn calculate_average_end_offset(history: &CiCheckHistory) -> Option<u64> {
-    let valid_offsets: Vec<u64> = history
-        .runs
-        .iter()
-        .filter_map(|run| run.end_offset_secs)
-        .filter(|secs| *secs > 0)
-        .collect();
-
-    if valid_offsets.is_empty() {
-        return None;
-    }
-
-    let sum: u64 = valid_offsets.iter().sum();
-    Some(sum / valid_offsets.len() as u64)
-}
 
 /// Estimate total wall-clock runtime for the current run from reusable per-check history.
 pub fn estimate_run_average(repo: &GitRepo, checks: &[CheckRunInfo]) -> Option<u64> {
@@ -182,19 +166,20 @@ pub fn estimate_run_average(repo: &GitRepo, checks: &[CheckRunInfo]) -> Option<u
         .iter()
         .filter_map(|check| {
             let history = load_check_history(repo, &check.name).ok()?;
-            calculate_average_end_offset(&history).or_else(|| {
-                let avg_duration = calculate_average(&history)?;
-                let start_offset =
-                    match (run_start, parse_ci_timestamp(check.started_at.as_deref())) {
-                        (Some(run_start), Some(check_start)) => check_start
-                            .signed_duration_since(run_start)
-                            .num_seconds()
-                            .max(0)
-                            as u64,
-                        _ => 0,
-                    };
-                Some(start_offset + avg_duration)
-            })
+            let avg_duration = calculate_average(&history)?;
+            // Use the current run's actual start offset (not a stored end_offset_secs).
+            // end_offset_secs is polluted by main-branch builds where checks start much
+            // later due to a longer pipeline, giving wildly inflated ETAs on PR branches.
+            let start_offset =
+                match (run_start, parse_ci_timestamp(check.started_at.as_deref())) {
+                    (Some(run_start), Some(check_start)) => check_start
+                        .signed_duration_since(run_start)
+                        .num_seconds()
+                        .max(0)
+                        as u64,
+                    _ => 0,
+                };
+            Some(start_offset + avg_duration)
         })
         .max()
 }
@@ -324,24 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_average_end_offset() {
-        let mut history = CiCheckHistory::new("test".to_string());
-        history.runs.push(CiRunRecord {
-            duration_secs: 120,
-            completed_at: "2026-01-16T12:00:00Z".to_string(),
-            end_offset_secs: Some(600),
-        });
-        history.runs.push(CiRunRecord {
-            duration_secs: 180,
-            completed_at: "2026-01-16T12:05:00Z".to_string(),
-            end_offset_secs: Some(900),
-        });
-
-        assert_eq!(calculate_average_end_offset(&history), Some(750));
-    }
-
-    #[test]
-    fn test_estimate_run_average_prefers_historical_end_offsets() {
+    fn test_estimate_run_average_uses_avg_duration_for_slowest_check() {
         let (_tempdir, repo) = init_temp_repo();
         add_timing_sample(
             &repo,

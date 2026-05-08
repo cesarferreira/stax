@@ -87,7 +87,7 @@ stax lane [name] [prompt]      # Open interactive lane picker, or start/resume n
 stax absorb                    # Absorb staged changes into correct stack branches
 stax edit|e                    # Interactively edit commits (reword, squash, fixup, drop)
 
-stax worktree create [branch]  # Create a worktree for an existing or new branch
+stax worktree create [branch]  # Create a worktree for an existing local/fetched remote/new branch
 stax worktree list             # List all worktrees (* = current)
 stax worktree ll               # Richer worktree status (managed/prunable/conflict state)
 stax worktree go <name>        # Navigate to a worktree (requires shell integration)
@@ -106,7 +106,7 @@ stax setup --print             # Print shell integration snippet for manual inst
 # Worktree shortcuts
 stax wt                        # Open worktree dashboard (TTY) or print worktree help
 stax w                         # List worktrees
-stax wtc [branch]              # Create worktree
+stax wtc [branch]              # Create worktree (local branch, fetched remote branch, or new branch)
 stax wtls                      # List worktrees
 stax wtll                      # Long worktree list
 stax wtgo <name>               # Navigate to worktree path
@@ -234,6 +234,7 @@ stax restack --continue            # Continue after conflicts
 stax restack --dry-run             # Predict conflicts only
 stax restack --submit-after yes    # ask|yes|no
 stax restack --auto-stash-pop      # Stash/pop dirty target worktrees
+stax restack --quiet               # Also silences the preflight notice below
 
 stax cascade                       # Restack bottom-up then submit
 stax cascade --no-pr               # Push only, skip PR updates
@@ -288,7 +289,8 @@ stax comments --plain              # Raw markdown output
 stax ci                            # CI for current branch (elapsed/ETA + avg from recent successful runs of the same checks)
 stax ci --stack                    # CI for current stack
 stax ci --all                      # CI for all tracked branches
-stax ci --watch --interval 30      # Watch CI, custom poll interval
+stax ci --watch --interval 30      # Watch until all checks finish, custom poll interval
+stax ci --watch --strict           # Watch but exit as soon as any check fails
 stax ci --watch --alert            # Watch CI, play built-in success/error sounds
 stax ci --watch --alert /path/to/sound.wav  # Use one custom sound for either outcome
 stax ci --watch --no-alert         # Suppress configured completion sounds for one run
@@ -424,6 +426,16 @@ git add -A
 stax continue
 ```
 
+If stax detects that the stored `parentBranchRevision` would replay much more
+history than `merge-base(parent, branch)`, it prints a `preflight:` notice and
+automatically uses the merge-base boundary for that rebase. This is the common
+cause of “conflicts on files I never edited” after `git merge main` into a
+branch or late tracking.
+
+Silence the notice with `[restack] preflight_warn = false` or `--quiet`.
+Disable the automatic correction with `[restack] preflight_auto_repair = false`
+only when debugging old boundary behaviour.
+
 ### Repair Broken Metadata
 
 ```bash
@@ -440,8 +452,11 @@ stax setup
 stax setup --yes               # Shell integration + skills + auth import from gh when available
 stax setup --install-skills    # Non-interactive onboarding: shell integration + AI agent skills
 
-# Create a worktree for an existing branch
+# Create a worktree for an existing local branch
 stax worktree create feature/payments-api
+
+# Create a local tracking branch and worktree from a fetched remote branch
+stax worktree create origin/feature/payments-api
 
 # List all worktrees
 stax w
@@ -520,7 +535,7 @@ Symbols:
 6. Check stack shape (`stax ls` / `stax ll`) before submit or merge.
 7. Use `stax lane <name> [prompt]` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
 8. After trunk moves, run `stax wt rs` once instead of rebasing each agent worktree manually.
-9. Use `stax worktree create` when you want a worktree for an existing branch or for human parallel development — `st lane` is the higher-level AI shortcut.
+9. Use `stax worktree create` when you want a worktree for an existing local branch, fetched remote branch, or human parallel development — `st lane` is the higher-level AI shortcut.
 10. Run `stax setup` once per machine to enable `stax worktree go` and the `sw` alias without executing `stax` on every shell startup.
 
 ## Tips

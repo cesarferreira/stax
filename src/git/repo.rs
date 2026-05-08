@@ -640,6 +640,33 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Create a new linked worktree at `path` by creating a local branch that tracks `remote_ref`.
+    pub fn worktree_create_tracking_branch(
+        &self,
+        branch: &str,
+        path: &Path,
+        remote_ref: &str,
+    ) -> Result<()> {
+        let main_dir = self.main_repo_workdir()?;
+        let output = self.run_git(
+            &main_dir,
+            &[
+                "worktree",
+                "add",
+                "--track",
+                "-b",
+                branch,
+                path.to_str().context("Non-UTF-8 worktree path")?,
+                remote_ref,
+            ],
+        )?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git worktree add --track -b failed: {}", stderr);
+        }
+        Ok(())
+    }
+
     /// Create a new linked worktree at `path` with a brand-new `branch` stacked on `base`.
     pub fn worktree_create_new_branch(&self, branch: &str, path: &Path, base: &str) -> Result<()> {
         let main_dir = self.main_repo_workdir()?;

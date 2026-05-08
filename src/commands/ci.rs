@@ -280,6 +280,7 @@ pub fn run(
     watch: bool,
     alert_arg: Option<CiAlertSoundArg>,
     no_alert: bool,
+    strict: bool,
     interval: u64,
     verbose: bool,
 ) -> Result<()> {
@@ -347,6 +348,7 @@ pub fn run(
             json,
             verbose,
             alert,
+            strict,
         );
     }
 
@@ -803,8 +805,28 @@ pub fn record_ci_history(repo: &GitRepo, statuses: &[BranchCiStatus]) {
 fn all_checks_complete(statuses: &[BranchCiStatus]) -> bool {
     statuses.iter().all(|s| {
         // Branches with no CI configured are considered "done" (nothing to wait for)
-        s.check_runs.is_empty() || s.overall_status.as_deref() != Some("pending")
+        s.check_runs.is_empty()
+            || s.check_runs
+                .iter()
+                .all(|check| check_run_is_terminal(check.status.as_str()))
     })
+}
+
+fn check_run_is_terminal(status: &str) -> bool {
+    !matches!(
+        status,
+        "queued" | "in_progress" | "waiting" | "requested" | "pending"
+    )
+}
+
+fn ci_watch_should_exit(statuses: &[BranchCiStatus], strict: bool) -> bool {
+    (strict && has_ci_failure(statuses)) || all_checks_complete(statuses)
+}
+
+fn has_ci_failure(statuses: &[BranchCiStatus]) -> bool {
+    statuses
+        .iter()
+        .any(|s| s.overall_status.as_deref() == Some("failure"))
 }
 
 fn resolve_ci_alert_sounds(
@@ -884,6 +906,7 @@ fn run_watch_mode(
     json: bool,
     verbose: bool,
     alert: Option<CiAlertSounds>,
+    strict: bool,
 ) -> Result<()> {
     let poll_duration = Duration::from_secs(interval);
     let mut iteration = 0;
@@ -920,16 +943,14 @@ fn run_watch_mode(
             }
         }
 
-        let complete = all_checks_complete(&statuses);
+        let failed = has_ci_failure(&statuses);
+        let complete = ci_watch_should_exit(&statuses, strict);
 
         if complete {
-            let has_failure = statuses
-                .iter()
-                .any(|s| s.overall_status.as_deref() == Some("failure"));
             println!();
             let width = 50;
             let line = "═".repeat(width);
-            if has_failure {
+            if failed {
                 let failed_branch = statuses
                     .iter()
                     .find(|s| s.overall_status.as_deref() == Some("failure"))
@@ -964,7 +985,7 @@ fn run_watch_mode(
             }
 
             record_ci_history(repo, &statuses);
-            let alert_outcome = if has_failure {
+            let alert_outcome = if failed {
                 CiAlertOutcome::Error
             } else {
                 CiAlertOutcome::Success
@@ -1472,6 +1493,70 @@ mod tests {
         assert_eq!(render_progress_bar(99, 10), "▰▰▰▰▰▰▰▰▰▱");
         // 100% fills all blocks
         assert_eq!(render_progress_bar(100, 10), "▰▰▰▰▰▰▰▰▰▰");
+    }
+
+    fn test_check(name: &str, status: &str, conclusion: Option<&str>) -> CheckRunInfo {
+        CheckRunInfo {
+            name: name.to_string(),
+            status: status.to_string(),
+            conclusion: conclusion.map(str::to_string),
+            url: None,
+            started_at: None,
+            completed_at: None,
+            elapsed_secs: None,
+            average_secs: None,
+            completion_percent: None,
+        }
+    }
+
+    fn test_branch_status(overall_status: &str, check_runs: Vec<CheckRunInfo>) -> BranchCiStatus {
+        BranchCiStatus {
+            branch: "feature".to_string(),
+            sha: "0123456789abcdef".to_string(),
+            sha_short: "0123456".to_string(),
+            overall_status: Some(overall_status.to_string()),
+            check_runs,
+            pr_number: Some(123),
+        }
+    }
+
+    #[test]
+    fn ci_watch_waits_for_running_checks_after_failure() {
+        let statuses = vec![test_branch_status(
+            "failure",
+            vec![
+                test_check("codeowners", "completed", Some("action_required")),
+                test_check("integration", "in_progress", None),
+            ],
+        )];
+
+        assert!(!all_checks_complete(&statuses));
+    }
+
+    #[test]
+    fn ci_watch_strict_exits_on_failure_before_running_checks_complete() {
+        let statuses = vec![test_branch_status(
+            "failure",
+            vec![
+                test_check("codeowners", "completed", Some("action_required")),
+                test_check("integration", "in_progress", None),
+            ],
+        )];
+
+        assert!(ci_watch_should_exit(&statuses, true));
+    }
+
+    #[test]
+    fn ci_watch_exits_after_all_checks_are_terminal_with_failure() {
+        let statuses = vec![test_branch_status(
+            "failure",
+            vec![
+                test_check("codeowners", "completed", Some("action_required")),
+                test_check("integration", "completed", Some("success")),
+            ],
+        )];
+
+        assert!(ci_watch_should_exit(&statuses, false));
     }
 
     #[test]

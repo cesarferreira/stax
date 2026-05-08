@@ -9,7 +9,7 @@ For the full `st worktree` / `st wt` command surface and cleanup semantics, see 
 `st lane <name> [prompt]`:
 
 1. Finds or creates a named worktree lane
-2. Resolves the branch for that lane (creates one if needed, writes stax metadata for new managed branches)
+2. Resolves the branch for that lane (opens an existing local/fetched remote branch, or creates one if needed and writes stax metadata for new managed branches)
 3. Launches your configured AI agent inside it
 4. Prefers tmux when available so you can resume later
 

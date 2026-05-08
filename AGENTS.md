@@ -2,6 +2,7 @@
 
 ## Test Command Policy
 
+- **AI agents:** for full-suite validation always run `make test` (or `just test`). On macOS this routes through Docker, which is the only sane way to run the entire integration suite — `cargo test` natively will be slow, flaky, and may exhaust file handles. Default to `make test` and only fall back to native runners when explicitly told to.
 - Do not run the full suite via `cargo test` in this repo.
 - For full-suite validation, always use `make test` or `just test`.
 - On macOS, `make test`/`just test` intentionally routes to the Docker fast path.
@@ -9,6 +10,7 @@
   - `make test-native` / `just test-native`
   - `make test-local-ramdisk` / `just test-local-ramdisk`
   - `make test-local-fast` / `just test-local-fast`
+- Targeted single-test or single-crate runs via `cargo test --test <name>` / `cargo nextest run <pattern>` are fine and encouraged for tight feedback loops; switch to `make test` once changes are ready for verification.
 
 ## Why
 
