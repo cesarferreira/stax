@@ -172,7 +172,7 @@ st lane stabilize-ci     "Stabilize the 3 flaky tests in the checkout flow"
 st lane api-docs         "Update API docs for the /users endpoint"
 ```
 
-Each lane is a real Git worktree with normal stax metadata — it appears in `st ls`, participates in restack/sync/undo, and re-attaches via tmux any time. No hidden scratch directories, no lost work.
+Each lane is a real Git worktree with normal stax metadata — it appears in `st ls`, participates in restack/sync/undo, and re-attaches via tmux any time. No hidden scratch directories, no lost work. A future [libghostty terminal-memory layer](docs/integrations/libghostty.md) could also make each lane's terminal output inspectable and replayable.
 
 ```bash
 st wt         # open the worktree dashboard

@@ -202,6 +202,10 @@ st setup --install-skills    # skip auth/skills prompt, accept skills
 
 After shell integration, `st lane ...`, `st wt c ...`, and `st wt go ...` can `cd` the parent shell into the lane.
 
+## Terminal memory roadmap
+
+A future libghostty-backed terminal-memory layer could make lane sessions inspectable and replayable instead of only attachable. See [libghostty terminal memory](../integrations/libghostty.md) for the proposed direction.
+
 ## Related
 
 - [Worktrees (`st wt`)](../worktrees/index.md)
