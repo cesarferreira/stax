@@ -202,9 +202,28 @@ st setup --install-skills    # skip auth/skills prompt, accept skills
 
 After shell integration, `st lane ...`, `st wt c ...`, and `st wt go ...` can `cd` the parent shell into the lane.
 
+## Watch active lanes
+
+```bash
+st lane watch
+```
+
+Prints a live-friendly cockpit of stax-managed lanes with branch, classified state, tmux state, and the last captured tmux terminal line. This is intentionally non-interactive so agents and scripts can call it safely while work is running.
+
+Example:
+
+```text
+  LANE          BRANCH        STATE    TMUX  LAST TERMINAL LINE
+  ──────────────────────────────────────────────────────────────
+  fix-auth      fix-auth      waiting  tmux  Approve command? [y/N]
+  flaky-tests   flaky-tests   running  tmux  running 142 tests...
+```
+
+`st lane watch` uses existing tmux sessions when available and falls back to Git/worktree state when no tmux pane is attached.
+
 ## Terminal memory roadmap
 
-A future libghostty-backed terminal-memory layer could make lane sessions inspectable and replayable instead of only attachable. See [libghostty terminal memory](../integrations/libghostty.md) for the proposed direction.
+The current cockpit captures the latest tmux pane line. A future libghostty-backed terminal-memory layer could make lane sessions fully inspectable and replayable instead of only showing the latest snapshot. See [libghostty terminal memory](../integrations/libghostty.md) for the proposed direction.
 
 ## Related
 

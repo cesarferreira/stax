@@ -189,6 +189,25 @@ case "$cmd" in
       fi
     fi
     ;;
+  capture-pane)
+    target=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -pt)
+          target="$2"
+          shift 2
+          ;;
+        -S)
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    : "${target:?missing capture target}"
+    cat "$state/$target"
+    ;;
   attach-session)
     if [ "${1:-}" = "-t" ]; then
       session="${2:-}"
@@ -682,6 +701,72 @@ fn lane_existing_tmux_session_with_prompt_opens_new_window() {
         agent_log_contents.contains("arg=follow up"),
         "expected second lane prompt to reach the agent, got:\n{}",
         agent_log_contents
+    );
+}
+
+#[test]
+fn lane_watch_shows_tmux_backed_lane_terminal_snapshot() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    let (_bin_dir, path_env, tmux_log, agent_log) = setup_fake_tmux_env(&repo);
+    let tmux_state = repo.path().join("tmux-state");
+    let tmux_state_str = tmux_state.to_string_lossy().into_owned();
+
+    repo.run_stax_with_env(
+        &["lane", "watch-me", "--agent", "codex", "run tests"],
+        &[
+            ("HOME", home.as_str()),
+            ("PATH", path_env.as_str()),
+            ("STAX_TMUX_LOG", tmux_log.as_str()),
+            ("STAX_TMUX_STATE_DIR", tmux_state_str.as_str()),
+            ("STAX_AGENT_LOG", agent_log.as_str()),
+        ],
+    )
+    .assert_success();
+
+    fs::write(
+        tmux_state.join("watch-me"),
+        "running cargo test\ntest auth_refresh ... ok\nApprove command? [y/N]\n",
+    )
+    .expect("write fake tmux pane");
+
+    let out = repo.run_stax_with_env(
+        &["lane", "watch"],
+        &[
+            ("HOME", home.as_str()),
+            ("PATH", path_env.as_str()),
+            ("STAX_TMUX_LOG", tmux_log.as_str()),
+            ("STAX_TMUX_STATE_DIR", tmux_state_str.as_str()),
+            ("STAX_AGENT_LOG", agent_log.as_str()),
+        ],
+    );
+    out.assert_success();
+
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        stdout.contains("LANE"),
+        "expected watch table header, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("watch-me"),
+        "expected lane name, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("tmux"),
+        "expected tmux-backed state, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("waiting"),
+        "expected terminal snapshot to classify approval prompt as waiting, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Approve command? [y/N]"),
+        "expected last rendered terminal line, got:\n{}",
+        stdout
     );
 }
 

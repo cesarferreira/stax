@@ -84,6 +84,7 @@ stax skills update             # Download latest skills from GitHub and update a
 stax skills update --dry-run   # Preview what would be updated without writing
 
 stax lane [name] [prompt]      # Open interactive lane picker, or start/resume named AI lane
+stax lane watch                # Show lane cockpit: branch, state, tmux, last terminal line
 stax absorb                    # Absorb staged changes into correct stack branches
 stax edit|e                    # Interactively edit commits (reword, squash, fixup, drop)
 
@@ -333,6 +334,7 @@ stax lane add-dark-mode "Add dark mode"           # Start a named lane with a pr
 stax lane add-dark-mode --agent codex             # Start a lane with a specific agent
 stax lane add-dark-mode --agent codex --model gpt-5.5-fast  # Override model too
 stax lane add-dark-mode                           # Re-enter the lane (reattaches tmux session)
+stax lane watch                                   # Non-interactive cockpit with state + last tmux line
 stax lane add-dark-mode "new prompt" --no-tmux    # Force direct terminal (no tmux)
 
 stax wt ll                                        # Rich status of all lanes
@@ -485,7 +487,8 @@ stax lane fix-auth-refresh --agent claude "Fix auth refresh edge case"
 stax lane write-integration-tests "Write integration tests for checkout flow"
 
 # 2. Check status while agents run
-stax wt ll           # rich status of all lanes (tmux state, dirty/clean, branch)
+stax lane watch      # live lane cockpit with tmux state + last terminal line
+stax wt ll           # rich Git/worktree status of all lanes
 stax status          # all three branches appear in the normal stack tree
 
 # 3. Reattach to a session later

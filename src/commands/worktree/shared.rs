@@ -962,6 +962,28 @@ pub fn list_tmux_sessions() -> Result<Vec<TmuxSession>> {
     parse_tmux_sessions_output(&String::from_utf8_lossy(&output.stdout))
 }
 
+pub fn capture_tmux_pane(session: &str, lines: usize) -> Result<String> {
+    ensure_tmux_available()?;
+    let start = format!("-{}", lines);
+    let output = Command::new("tmux")
+        .args(["capture-pane", "-pt", session, "-S", &start])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("Failed to capture tmux pane '{}'", session))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "tmux capture-pane failed for '{}': {}",
+            session,
+            stderr.trim()
+        );
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 fn is_tmux_no_server_error(stderr: &str) -> bool {
     stderr.contains("no server running")
         || stderr.contains("failed to connect to server")

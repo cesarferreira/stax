@@ -6,7 +6,7 @@ For stax, the useful framing is not "embed a terminal because it is cool." The u
 
 > Every stacked branch and AI lane can have durable terminal memory.
 
-`st lane` already gives each agent a real branch, worktree, and usually a tmux session. A libghostty-backed layer could make the terminal side just as first-class: inspectable, replayable, status-aware, and tied to the branch/PR lifecycle.
+`st lane` already gives each agent a real branch, worktree, and usually a tmux session. `st lane watch` is the first concrete step: it shows each managed lane's branch, tmux state, classified status, and last captured tmux terminal line. A future libghostty-backed layer could make the terminal side even more first-class: inspectable, replayable, status-aware, and tied to the branch/PR lifecycle.
 
 ## Why this fits stax
 
@@ -26,7 +26,7 @@ Today, terminal output is mostly owned by tmux or the user's terminal emulator. 
 
 ### `st lane watch`
 
-A live cockpit for active lanes:
+Implemented first step: a non-interactive lane cockpit for active lanes:
 
 ```text
 Lane             Branch             State                 Last terminal line
@@ -88,15 +88,15 @@ This would make AI-generated branches easier to audit before review.
 
 ## Architecture sketch
 
-The first version does not need to replace tmux or implement a full terminal emulator.
+The first version keeps the current tmux launch model and adds a lightweight cockpit.
 
 1. Keep launching lanes exactly as today: worktree + branch + configured agent + tmux when available.
-2. Tee PTY/tmux output into a lane-local terminal log.
-3. Feed output through a terminal-state parser such as `libghostty-vt`.
-4. Persist compact snapshots under stax metadata for each lane.
-5. Render those snapshots in the worktree dashboard, TUI, or future `st lane watch` command.
+2. Discover tmux sessions matching managed lane names.
+3. Capture each lane's current tmux pane with `tmux capture-pane`.
+4. Classify obvious states from Git/worktree state plus the last terminal line.
+5. Print the result via `st lane watch`.
 
-A lane record could eventually track:
+A later libghostty-backed layer can replace the raw tmux snapshot with a normalized terminal-state parser:
 
 ```text
 lane name
@@ -127,20 +127,20 @@ updated_at
 - Should replay be raw transcript playback, screen snapshots over time, or both?
 - How should status classifiers be configured for different agents?
 
-## Suggested MVP
+## Suggested next step
 
-Start with an experimental command:
+The command now ships an MVP:
 
 ```bash
 st lane watch
 ```
 
-MVP behavior:
+Current behavior:
 
-1. list active stax-managed lanes
-2. show branch, worktree, tmux/session state, and Git status
-3. show the last captured terminal screen for the selected lane
-4. classify obvious states such as `running`, `waiting`, `conflict`, `tests failed`, and `done`
-5. keep all terminal-memory storage local and easy to delete
+1. lists stax-managed lanes
+2. shows branch, tmux/session state, and Git/worktree status
+3. shows the last captured tmux terminal line
+4. classifies obvious states such as `running`, `waiting`, `conflict`, `failed`, and `done`
+5. keeps terminal capture ephemeral by reading tmux on demand
 
-This keeps the scope small while proving the differentiated value: stax becomes the place where branch state, PR state, and agent terminal state meet.
+Next, wire a real terminal parser such as `libghostty-vt` between captured output and state classification so stax can track rendered terminal screens instead of only the latest raw line.

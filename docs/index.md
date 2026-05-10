@@ -8,7 +8,7 @@
 
 - **Stack, don't wait.** Keep shipping on top of in-review PRs.
 - **Native-fast.** A single Rust binary; `st ls` benches ~70× faster than Graphite and ~215× faster than Freephite on this repo.
-- **Agent-native.** Parallel AI lanes (`st lane`), AI conflict resolution (`st resolve`), AI-drafted PR bodies, and a path toward durable terminal memory for agent sessions.
+- **Agent-native.** Parallel AI lanes (`st lane`), a live lane cockpit (`st lane watch`), AI conflict resolution (`st resolve`), and AI-drafted PR bodies.
 - **Undo-first.** Every destructive op is snapshotted. `st undo` / `st redo` rescue risky rebases.
 - **Drop-in compatible.** Same metadata format as Freephite — existing stacks work immediately.
 

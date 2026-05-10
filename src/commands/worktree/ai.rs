@@ -1,10 +1,11 @@
 use super::shared::{
-    build_agent_launch_spec_with_options, build_tmux_launch_spec, compute_worktree_details,
-    create_worktree_for_resolved_branch, default_create_base, default_tmux_session_name,
-    derive_unique_worktree_name, emit_shell_message, emit_shell_payload, ensure_gitignore,
-    ensure_managed_worktrees_root, find_worktree, format_create_message, format_go_message,
-    list_tmux_sessions, managed_worktrees_dir, resolve_branch_name, run_blocking_hook,
-    spawn_background_hook, status_labels, ExistingTmuxSessionBehavior, LaunchSpec, TmuxSession,
+    build_agent_launch_spec_with_options, build_tmux_launch_spec, capture_tmux_pane,
+    compute_worktree_details, create_worktree_for_resolved_branch, default_create_base,
+    default_tmux_session_name, derive_unique_worktree_name, emit_shell_message, emit_shell_payload,
+    ensure_gitignore, ensure_managed_worktrees_root, find_worktree, format_create_message,
+    format_go_message, list_tmux_sessions, managed_worktrees_dir, resolve_branch_name,
+    run_blocking_hook, spawn_background_hook, status_labels, ExistingTmuxSessionBehavior,
+    LaunchSpec, TmuxSession,
 };
 use crate::commands::generate;
 use crate::config::Config;
@@ -58,6 +59,10 @@ pub fn run(
     yolo: bool,
     agent_args: Vec<String>,
 ) -> Result<()> {
+    if name.as_deref() == Some("watch") && prompt.is_none() {
+        return run_watch();
+    }
+
     if name.is_none() && tmux_session.is_some() {
         bail!("--tmux-session requires an explicit lane name");
     }
@@ -91,6 +96,170 @@ pub fn run(
 
     let request = AiLaneRequest { prompt, ..request };
     run_named_lane(&repo, &config, name, no_verify, shell_output, &request)
+}
+
+fn run_watch() -> Result<()> {
+    let repo = GitRepo::open()?;
+    let details = repo
+        .list_worktrees()?
+        .into_iter()
+        .map(|worktree| compute_worktree_details(&repo, worktree))
+        .collect::<Result<Vec<_>>>()?;
+    let lanes = details
+        .into_iter()
+        .filter(|detail| detail.is_managed && !detail.info.is_main)
+        .collect::<Vec<_>>();
+
+    if lanes.is_empty() {
+        println!("{}", "No managed AI lanes found.".dimmed());
+        return Ok(());
+    }
+
+    let tmux_sessions = list_tmux_sessions().unwrap_or_default();
+    let rows = lanes
+        .iter()
+        .map(|detail| {
+            let session_name = default_tmux_session_name(&detail.info.name).ok();
+            let tmux_session = session_name
+                .as_deref()
+                .and_then(|name| tmux_sessions.iter().find(|session| session.name == name));
+            let terminal = session_name
+                .as_deref()
+                .filter(|_| tmux_session.is_some())
+                .and_then(|name| capture_tmux_pane(name, 20).ok())
+                .and_then(|pane| last_terminal_line(&pane));
+            let state = classify_lane_state(detail, terminal.as_deref());
+            let tmux = tmux_session
+                .map(format_tmux_state)
+                .unwrap_or_else(|| "no-tmux".to_string());
+
+            WatchRow {
+                lane: detail.info.name.clone(),
+                branch: detail.branch_label.clone(),
+                state,
+                tmux,
+                terminal: terminal.unwrap_or_else(|| "—".to_string()),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let lane_width = rows
+        .iter()
+        .map(|row| row.lane.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    let branch_width = rows
+        .iter()
+        .map(|row| row.branch.len())
+        .max()
+        .unwrap_or(6)
+        .max(6);
+    let state_width = rows
+        .iter()
+        .map(|row| row.state.len())
+        .max()
+        .unwrap_or(5)
+        .max(5);
+    let tmux_width = rows
+        .iter()
+        .map(|row| row.tmux.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+
+    println!(
+        "  {:<lane_width$}  {:<branch_width$}  {:<state_width$}  {:<tmux_width$}  {}",
+        "LANE".bold(),
+        "BRANCH".bold(),
+        "STATE".bold(),
+        "TMUX".bold(),
+        "LAST TERMINAL LINE".bold(),
+    );
+    println!(
+        "  {}",
+        "─"
+            .repeat(lane_width + branch_width + state_width + tmux_width + 42)
+            .dimmed()
+    );
+
+    for row in rows {
+        println!(
+            "  {:<lane_width$}  {:<branch_width$}  {:<state_width$}  {:<tmux_width$}  {}",
+            row.lane.cyan(),
+            row.branch.green(),
+            color_watch_state(&row.state),
+            row.tmux.blue(),
+            row.terminal,
+        );
+    }
+
+    Ok(())
+}
+
+struct WatchRow {
+    lane: String,
+    branch: String,
+    state: String,
+    tmux: String,
+    terminal: String,
+}
+
+fn format_tmux_state(session: &TmuxSession) -> String {
+    if session.attached_clients > 0 {
+        "tmux:attached".to_string()
+    } else {
+        "tmux".to_string()
+    }
+}
+
+fn last_terminal_line(pane: &str) -> Option<String> {
+    pane.lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(120).collect())
+}
+
+fn classify_lane_state(detail: &super::shared::WorktreeDetails, terminal: Option<&str>) -> String {
+    if detail.has_conflicts {
+        return "conflict".to_string();
+    }
+    if detail.rebase_in_progress {
+        return "rebase".to_string();
+    }
+    if detail.merge_in_progress {
+        return "merge".to_string();
+    }
+
+    if let Some(line) = terminal {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("approve")
+            || lower.contains("[y/n]")
+            || lower.contains("(y/n)")
+            || lower.ends_with('?')
+        {
+            return "waiting".to_string();
+        }
+        if lower.contains("failed") || lower.contains("error") {
+            return "failed".to_string();
+        }
+        if lower.contains("done") || lower.contains("complete") || lower.contains("passed") {
+            return "done".to_string();
+        }
+        return "running".to_string();
+    }
+
+    status_labels(detail).join(",")
+}
+
+fn color_watch_state(state: &str) -> String {
+    match state {
+        "conflict" | "failed" | "rebase" | "merge" => state.red().bold().to_string(),
+        "waiting" => state.yellow().to_string(),
+        "done" => state.green().to_string(),
+        _ => state.dimmed().to_string(),
+    }
 }
 
 fn run_named_lane(
