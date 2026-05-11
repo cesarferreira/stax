@@ -5520,6 +5520,11 @@ fn test_merge_help() {
     let stdout = TestRepo::stdout(&output);
     assert!(stdout.contains("--all"), "Expected --all flag in help");
     assert!(
+        stdout.contains("--downstack-only"),
+        "Expected --downstack-only flag in help"
+    );
+    assert!(stdout.contains("--ds"), "Expected --ds alias in help");
+    assert!(
         stdout.contains("--dry-run"),
         "Expected --dry-run flag in help"
     );
@@ -5548,6 +5553,78 @@ fn test_merge_help() {
     assert!(
         stdout.contains("--remote"),
         "Expected --remote flag in help"
+    );
+}
+
+#[test]
+fn test_merge_downstack_only_conflicts_with_all() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["merge", "--downstack-only", "--all"]);
+    let stderr = TestRepo::stderr(&output);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-success for conflicting flags"
+    );
+    assert!(
+        stderr.contains("cannot be used with") || stderr.contains("conflicts with"),
+        "Expected clap conflict error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_merge_downstack_only_conflicts_with_remote() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["merge", "--downstack-only", "--remote"]);
+    let stderr = TestRepo::stderr(&output);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-success for conflicting flags"
+    );
+    assert!(
+        stderr.contains("cannot be used with") || stderr.contains("conflicts with"),
+        "Expected clap conflict error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_merge_downstack_only_conflicts_with_queue() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["merge", "--downstack-only", "--queue"]);
+    let stderr = TestRepo::stderr(&output);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-success for conflicting flags"
+    );
+    assert!(
+        stderr.contains("cannot be used with") || stderr.contains("conflicts with"),
+        "Expected clap conflict error, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_merge_ds_alias_conflicts_with_all() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["merge", "--ds", "--all"]);
+    let stderr = TestRepo::stderr(&output);
+
+    assert!(
+        !output.status.success(),
+        "Expected non-success for conflicting flags"
+    );
+    assert!(
+        stderr.contains("cannot be used with") || stderr.contains("conflicts with"),
+        "Expected clap conflict error, got: {}",
+        stderr
     );
 }
 

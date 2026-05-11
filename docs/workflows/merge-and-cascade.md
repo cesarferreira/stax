@@ -21,12 +21,15 @@ During descendant rebases, boundaries are provenance-aware so already-integrated
 ```bash
 st merge --dry-run
 st merge --all
+st merge --downstack-only                 # alias: --ds
 st merge --method squash|merge|rebase
 st merge --when-ready                       # wait for readiness explicitly
 st merge --when-ready --interval 10
 st merge --no-wait --no-delete --no-sync
 st merge --timeout 60 --yes
 ```
+
+`--downstack-only` (`--ds`) merges only ancestors below the current branch, then rebases the current branch onto trunk and keeps descendants stacked above it. It is incompatible with `--all`, `--remote`, and `--queue`.
 
 `--when-ready` is incompatible with `--dry-run`, `--no-wait`, and `--remote`.
 
@@ -41,6 +44,18 @@ st merge
 ```
 
 Merges up to `auth-api`; `auth-ui` and `auth-tests` remain for later.
+
+### Downstack-only merge
+
+Use `--downstack-only` when you want to land prerequisites but keep the checked-out branch open:
+
+```bash
+# stack: main ← auth ← auth-api ← auth-ui ← auth-tests
+st checkout auth-ui
+st merge --ds
+```
+
+Merges `auth` and `auth-api`; `auth-ui` is rebased onto `main`, and `auth-tests` remains stacked on `auth-ui`.
 
 ## `st merge --remote` (GitHub only)
 

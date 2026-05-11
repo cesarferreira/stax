@@ -45,6 +45,10 @@ struct MergeWhenReadyScope {
     remaining: Vec<String>,
     /// Trunk branch name
     trunk: String,
+    /// The branch that was checked out when merge started
+    current: String,
+    /// Whether current branch is excluded from the merge scope
+    downstack_only: bool,
 }
 
 /// Status of a branch during the land process
@@ -89,6 +93,7 @@ enum WaitResult {
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     all: bool,
+    downstack_only: bool,
     method: MergeMethod,
     timeout_mins: u64,
     interval_secs: u64,
@@ -130,7 +135,7 @@ pub fn run(
 
     // Calculate scope: bottom->current are merged; descendants are either merged (--all)
     // or rebased after merges so their PR bases stay valid.
-    let scope = calculate_merge_scope(&stack, &current, all);
+    let scope = calculate_merge_scope(&stack, &current, all, downstack_only);
 
     // Build branch info list
     let mut branches: Vec<LandBranchInfo> = Vec::new();
@@ -202,7 +207,7 @@ pub fn run(
     // Show preview
     if !quiet {
         println!();
-        print_land_preview(&branches, &scope.trunk, &method);
+        print_land_preview(&branches, &scope.trunk, &method, scope.downstack_only);
     }
 
     // Confirm
@@ -458,6 +463,10 @@ pub fn run(
         }
     }
 
+    if scope.downstack_only && failed_pr.is_none() {
+        let _ = repo.checkout(&scope.current);
+    }
+
     // Cleanup merged branches
     if !no_delete && !merged_prs.is_empty() {
         if !quiet {
@@ -491,8 +500,12 @@ pub fn run(
             }
         }
 
-        // Checkout trunk after cleanup
-        let _ = repo.checkout(&scope.trunk);
+        let checkout_after_cleanup = if scope.downstack_only {
+            &scope.current
+        } else {
+            &scope.trunk
+        };
+        let _ = repo.checkout(checkout_after_cleanup);
     }
 
     // Finish transaction
@@ -561,7 +574,12 @@ pub fn run(
                     "branches"
                 }
             );
-            println!("  • Switched to: {}", scope.trunk.cyan());
+            let checkout_after_cleanup = if scope.downstack_only {
+                &scope.current
+            } else {
+                &scope.trunk
+            };
+            println!("  • Switched to: {}", checkout_after_cleanup.cyan());
         }
 
         // Send macOS notification
@@ -618,13 +636,22 @@ pub fn run(
 }
 
 /// Calculate which branches to merge and which descendants remain to be rebased.
-fn calculate_merge_scope(stack: &Stack, current: &str, all: bool) -> MergeWhenReadyScope {
+fn calculate_merge_scope(
+    stack: &Stack,
+    current: &str,
+    all: bool,
+    downstack_only: bool,
+) -> MergeWhenReadyScope {
     let mut to_merge = stack.ancestors(current);
     to_merge.reverse();
     to_merge.retain(|b| b != &stack.trunk);
-    to_merge.push(current.to_string());
 
     let mut remaining = stack.descendants(current);
+    if downstack_only {
+        remaining.insert(0, current.to_string());
+    } else {
+        to_merge.push(current.to_string());
+    }
 
     if all && !remaining.is_empty() {
         to_merge.extend(remaining);
@@ -635,19 +662,32 @@ fn calculate_merge_scope(stack: &Stack, current: &str, all: bool) -> MergeWhenRe
         to_merge,
         remaining,
         trunk: stack.trunk.clone(),
+        current: current.to_string(),
+        downstack_only,
     }
 }
 
 /// Print the merge-when-ready preview
-fn print_land_preview(branches: &[LandBranchInfo], trunk: &str, method: &MergeMethod) {
+fn print_land_preview(
+    branches: &[LandBranchInfo],
+    trunk: &str,
+    method: &MergeMethod,
+    downstack_only: bool,
+) {
     print_header("Merge When Ready");
     println!();
 
     let pr_word = if branches.len() == 1 { "PR" } else { "PRs" };
+    let scope_label = if downstack_only {
+        "below current"
+    } else {
+        "bottom-up"
+    };
     println!(
-        "Will merge {} {} bottom-up into {}:",
+        "Will merge {} {} {} into {}:",
         branches.len().to_string().bold(),
         pr_word,
+        scope_label,
         trunk.cyan()
     );
     println!();
@@ -1001,20 +1041,44 @@ mod tests {
     fn test_calculate_merge_scope_from_middle_without_all_keeps_descendants_remaining() {
         let stack = create_test_stack();
 
-        let scope = calculate_merge_scope(&stack, "feature-b", false);
+        let scope = calculate_merge_scope(&stack, "feature-b", false, false);
 
         assert_eq!(scope.to_merge, vec!["feature-a", "feature-b"]);
         assert_eq!(scope.remaining, vec!["feature-c"]);
         assert_eq!(scope.trunk, "main");
+        assert_eq!(scope.current, "feature-b");
+        assert!(!scope.downstack_only);
     }
 
     #[test]
     fn test_calculate_merge_scope_with_all_includes_descendants() {
         let stack = create_test_stack();
 
-        let scope = calculate_merge_scope(&stack, "feature-b", true);
+        let scope = calculate_merge_scope(&stack, "feature-b", true, false);
 
         assert_eq!(scope.to_merge, vec!["feature-a", "feature-b", "feature-c"]);
         assert!(scope.remaining.is_empty());
+    }
+
+    #[test]
+    fn test_calculate_merge_scope_downstack_only_excludes_current() {
+        let stack = create_test_stack();
+
+        let scope = calculate_merge_scope(&stack, "feature-b", false, true);
+
+        assert_eq!(scope.to_merge, vec!["feature-a"]);
+        assert_eq!(scope.remaining, vec!["feature-b", "feature-c"]);
+        assert_eq!(scope.current, "feature-b");
+        assert!(scope.downstack_only);
+    }
+
+    #[test]
+    fn test_calculate_merge_scope_downstack_only_direct_child_has_no_merge_targets() {
+        let stack = create_test_stack();
+
+        let scope = calculate_merge_scope(&stack, "feature-a", false, true);
+
+        assert!(scope.to_merge.is_empty());
+        assert_eq!(scope.remaining, vec!["feature-a", "feature-b", "feature-c"]);
     }
 }

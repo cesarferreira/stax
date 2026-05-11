@@ -20,6 +20,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | `st ss` | Submit the whole stack — open or update linked PRs |
 | `st merge` | Cascade-merge from stack bottom up to current branch |
 | `st merge --when-ready` | Wait for CI + approvals, then merge (alias: `st mwr`) |
+| `st merge --downstack-only` / `--ds` | Merge ancestors below current, then rebase current branch |
 | `st merge --remote` | Merge remotely via the GitHub API while you keep working |
 | `st merge --all` | Merge the entire stack regardless of where you are |
 | `st cascade` | Restack, push, and create/update PRs in one shot |

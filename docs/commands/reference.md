@@ -27,6 +27,7 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 
 - `st merge` — local cascade merge with provenance-aware descendant rebases, then `st rs --force` unless `--no-sync`
 - `st merge --when-ready` — wait for CI + approvals + mergeability; incompatible with `--dry-run`, `--no-wait`, `--remote`
+- `st merge --downstack-only` / `--ds` — merge ancestors below the current branch, then rebase the current branch onto trunk; incompatible with `--all`, `--remote`, and `--queue`
 - `st merge --remote` — merge entirely via GitHub API, no local git operations (GitHub only)
 - `st merge --queue` — enqueue PRs into GitHub merge queue / GitLab merge trains
 
@@ -218,7 +219,7 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 ### `st merge`
 
 - `--dry-run` / `--yes`
-- `--all` / `--method squash|merge|rebase`
+- `--all` / `--downstack-only` (`--ds`) / `--method squash|merge|rebase`
 - `--when-ready` · `--when-ready --interval 10`
 - `--remote` · `--remote --all` · `--remote --timeout 60 --interval 10`
 - `--queue` · `--queue --all --yes`
