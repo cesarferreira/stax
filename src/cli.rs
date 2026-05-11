@@ -277,6 +277,9 @@ enum Commands {
         /// Merge entire stack (ignore current position)
         #[arg(long)]
         all: bool,
+        /// Merge ancestors below current, then rebase current branch
+        #[arg(long, visible_alias = "ds", conflicts_with_all = ["all", "remote", "queue"])]
+        downstack_only: bool,
         /// Show merge plan without merging
         #[arg(long)]
         dry_run: bool,
@@ -322,6 +325,9 @@ enum Commands {
         /// Merge entire stack (include descendants above current)
         #[arg(long)]
         all: bool,
+        /// Merge ancestors below current, then rebase current branch
+        #[arg(long, visible_alias = "ds", conflicts_with = "all")]
+        downstack_only: bool,
         /// Merge method: squash, merge, rebase
         #[arg(long, default_value = "squash")]
         method: String,
@@ -1753,6 +1759,7 @@ pub fn run() -> Result<()> {
         Commands::Submit { submit } => run_submit(submit, commands::submit::SubmitScope::Stack),
         Commands::Merge {
             all,
+            downstack_only,
             dry_run,
             method,
             no_delete,
@@ -1783,6 +1790,7 @@ pub fn run() -> Result<()> {
             } else if when_ready {
                 commands::merge_when_ready::run(
                     all,
+                    downstack_only,
                     merge_method,
                     timeout,
                     interval,
@@ -1794,6 +1802,7 @@ pub fn run() -> Result<()> {
             } else {
                 commands::merge::run(
                     all,
+                    downstack_only,
                     dry_run,
                     merge_method,
                     no_delete,
@@ -1807,6 +1816,7 @@ pub fn run() -> Result<()> {
         }
         Commands::MergeWhenReady {
             all,
+            downstack_only,
             method,
             timeout,
             interval,
@@ -1818,6 +1828,7 @@ pub fn run() -> Result<()> {
             let merge_method = method.parse().unwrap_or_default();
             commands::merge_when_ready::run(
                 all,
+                downstack_only,
                 merge_method,
                 timeout,
                 interval,

@@ -201,6 +201,8 @@ stax upstack submit                # Submit current + descendants
 stax downstack submit              # Submit ancestors + current
 
 stax merge --all                   # Merge whole stack
+stax merge --downstack-only        # Merge ancestors below current, then rebase current
+stax merge --ds                    # Alias for --downstack-only
 stax merge --dry-run               # Preview merge plan only
 stax merge --method squash         # squash|merge|rebase
 stax merge --when-ready            # Wait for CI + approval before each merge

@@ -187,10 +187,11 @@ st ss         # submit PRs for the ones that are ready
 Merge from the bottom of the stack up to your current branch, with CI and readiness checks:
 
 ```bash
-st merge              # local cascade merge
-st merge --when-ready # wait/poll until PRs are mergeable
-st merge --remote     # merge remotely on GitHub while you keep working
-st merge --all        # merge the whole stack regardless of position
+st merge                  # local cascade merge
+st merge --when-ready     # wait/poll until PRs are mergeable
+st merge --ds             # merge ancestors, rebase current branch
+st merge --remote         # merge remotely on GitHub while you keep working
+st merge --all            # merge the whole stack regardless of position
 ```
 
 → [Merge and cascade](docs/workflows/merge-and-cascade.md)
@@ -266,7 +267,7 @@ st config --set-ai
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current |
 | `st ss` | Submit the full stack, open/update linked PRs |
-| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--remote`, `--all`) |
+| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--remote`, `--all`) |
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |

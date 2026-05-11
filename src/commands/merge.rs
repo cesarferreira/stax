@@ -38,6 +38,10 @@ struct MergeScope {
     remaining: Vec<MergeBranchInfo>,
     /// The trunk branch name
     trunk: String,
+    /// The branch that was checked out when merge started
+    current: String,
+    /// Whether current branch is excluded from the merge scope
+    downstack_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +53,7 @@ pub(crate) enum PrBaseUpdate {
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     all: bool,
+    downstack_only: bool,
     dry_run: bool,
     method: MergeMethod,
     no_delete: bool,
@@ -89,7 +94,7 @@ pub fn run(
     }
 
     // Calculate merge scope based on current position
-    let mut scope = calculate_merge_scope(&repo, &stack, &current, all)?;
+    let mut scope = calculate_merge_scope(&stack, &current, all, downstack_only);
 
     if scope.to_merge.is_empty() {
         if !quiet {
@@ -469,8 +474,12 @@ pub fn run(
             }
         }
 
-        // Checkout trunk after cleanup
-        let _ = repo.checkout(&scope.trunk);
+        let checkout_after_cleanup = if scope.downstack_only {
+            &scope.current
+        } else {
+            &scope.trunk
+        };
+        let _ = repo.checkout(checkout_after_cleanup);
     }
 
     // Print summary
@@ -532,7 +541,12 @@ pub fn run(
                     "branches"
                 }
             );
-            println!("  • Switched to: {}", scope.trunk.cyan());
+            let checkout_after_cleanup = if scope.downstack_only {
+                &scope.current
+            } else {
+                &scope.trunk
+            };
+            println!("  • Switched to: {}", checkout_after_cleanup.cyan());
         }
 
         if !scope.remaining.is_empty() {
@@ -587,11 +601,11 @@ pub fn run(
 
 /// Calculate which branches to merge based on current position
 fn calculate_merge_scope(
-    _repo: &GitRepo,
     stack: &Stack,
     current: &str,
     all: bool,
-) -> Result<MergeScope> {
+    downstack_only: bool,
+) -> MergeScope {
     // Get ancestors of current branch (from current up to trunk)
     let mut ancestors = stack.ancestors(current);
     ancestors.reverse(); // Now bottom-to-top (trunk-adjacent first)
@@ -615,23 +629,29 @@ fn calculate_merge_scope(
         });
     }
 
-    // Add current branch
     let current_info = stack.branches.get(current);
     let current_pr = current_info.and_then(|b| b.pr_number);
     let current_position = to_merge.len() + 1;
 
-    to_merge.push(MergeBranchInfo {
+    let current_branch_info = MergeBranchInfo {
         branch: current.to_string(),
         pr_number: current_pr,
         pr_status: None,
         is_current: true,
         position: current_position,
-    });
+    };
+
+    let mut remaining: Vec<MergeBranchInfo> = Vec::new();
+
+    if downstack_only {
+        remaining.push(current_branch_info);
+    } else {
+        to_merge.push(current_branch_info);
+    }
 
     // Get descendants (branches above current)
     let descendants = stack.descendants(current);
 
-    let mut remaining: Vec<MergeBranchInfo> = Vec::new();
     for (idx, branch) in descendants.iter().enumerate() {
         let branch_info = stack.branches.get(branch);
         let pr_number = branch_info.and_then(|b| b.pr_number);
@@ -651,11 +671,13 @@ fn calculate_merge_scope(
         remaining = Vec::new();
     }
 
-    Ok(MergeScope {
+    MergeScope {
         to_merge,
         remaining,
         trunk: stack.trunk.clone(),
-    })
+        current: current.to_string(),
+        downstack_only,
+    }
 }
 
 /// Print the merge preview box
@@ -667,6 +689,7 @@ fn print_merge_preview(scope: &MergeScope, method: &MergeMethod) {
     let current = scope
         .to_merge
         .iter()
+        .chain(scope.remaining.iter())
         .find(|b| b.is_current)
         .map(|b| b.branch.as_str())
         .unwrap_or("unknown");
@@ -674,6 +697,7 @@ fn print_merge_preview(scope: &MergeScope, method: &MergeMethod) {
     let current_pr = scope
         .to_merge
         .iter()
+        .chain(scope.remaining.iter())
         .find(|b| b.is_current)
         .and_then(|b| b.pr_number)
         .map(|n| format!(" (PR #{})", n))
@@ -691,10 +715,16 @@ fn print_merge_preview(scope: &MergeScope, method: &MergeMethod) {
     } else {
         "PRs"
     };
+    let scope_label = if scope.downstack_only {
+        "below current"
+    } else {
+        "from bottom → current"
+    };
     println!(
-        "This will merge {} {} from bottom → current:",
+        "This will merge {} {} {}:",
         scope.to_merge.len().to_string().bold(),
-        pr_word
+        pr_word,
+        scope_label
     );
     println!();
 
@@ -726,10 +756,17 @@ fn print_branch_box(branches: &[MergeBranchInfo], included: bool, trunk: &str) {
             .unwrap_or_else(|| "no PR".to_string());
 
         // Branch header
+        let current_marker = if branch.is_current {
+            " (current)".cyan().to_string()
+        } else {
+            String::new()
+        };
+
         println!(
-            "  {}. {} {}",
+            "  {}. {}{} {}",
             branch.position.to_string().bold(),
             branch.branch.bold(),
+            current_marker,
             format!("({})", pr_text).dimmed()
         );
 
@@ -1262,6 +1299,73 @@ fn record_ci_history_for_branch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::stack::StackBranch;
+    use std::collections::HashMap;
+
+    fn create_test_stack() -> Stack {
+        let mut branches = HashMap::new();
+
+        branches.insert(
+            "main".to_string(),
+            StackBranch {
+                name: "main".to_string(),
+                parent: None,
+                parent_revision: None,
+                children: vec!["feature-a".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+
+        branches.insert(
+            "feature-a".to_string(),
+            StackBranch {
+                name: "feature-a".to_string(),
+                parent: Some("main".to_string()),
+                parent_revision: None,
+                children: vec!["feature-b".to_string()],
+                needs_restack: false,
+                pr_number: Some(1),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        branches.insert(
+            "feature-b".to_string(),
+            StackBranch {
+                name: "feature-b".to_string(),
+                parent: Some("feature-a".to_string()),
+                parent_revision: None,
+                children: vec!["feature-c".to_string()],
+                needs_restack: false,
+                pr_number: Some(2),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        branches.insert(
+            "feature-c".to_string(),
+            StackBranch {
+                name: "feature-c".to_string(),
+                parent: Some("feature-b".to_string()),
+                parent_revision: None,
+                children: vec![],
+                needs_restack: false,
+                pr_number: Some(3),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
 
     #[test]
     fn test_strip_ansi_empty_string() {
@@ -1369,11 +1473,43 @@ mod tests {
                 position: 3,
             }],
             trunk: "main".to_string(),
+            current: "feature-b".to_string(),
+            downstack_only: false,
         };
 
         assert_eq!(scope.to_merge.len(), 2);
         assert_eq!(scope.remaining.len(), 1);
         assert_eq!(scope.trunk, "main");
+    }
+
+    #[test]
+    fn test_calculate_merge_scope_downstack_only_excludes_current() {
+        let stack = create_test_stack();
+
+        let scope = calculate_merge_scope(&stack, "feature-b", false, true);
+
+        let to_merge: Vec<_> = scope.to_merge.iter().map(|b| b.branch.as_str()).collect();
+        let remaining: Vec<_> = scope.remaining.iter().map(|b| b.branch.as_str()).collect();
+
+        assert_eq!(to_merge, vec!["feature-a"]);
+        assert_eq!(remaining, vec!["feature-b", "feature-c"]);
+        assert!(scope.remaining[0].is_current);
+        assert_eq!(scope.remaining[0].position, 2);
+        assert_eq!(scope.current, "feature-b");
+        assert!(scope.downstack_only);
+    }
+
+    #[test]
+    fn test_calculate_merge_scope_downstack_only_direct_child_has_no_merge_targets() {
+        let stack = create_test_stack();
+
+        let scope = calculate_merge_scope(&stack, "feature-a", false, true);
+
+        let remaining: Vec<_> = scope.remaining.iter().map(|b| b.branch.as_str()).collect();
+
+        assert!(scope.to_merge.is_empty());
+        assert_eq!(remaining, vec!["feature-a", "feature-b", "feature-c"]);
+        assert!(scope.remaining[0].is_current);
     }
 
     #[test]
