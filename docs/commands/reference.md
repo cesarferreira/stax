@@ -196,8 +196,20 @@ st wt go ui-polish --run "cursor ." --tmux
 - `-n`, `--no-verify` skip pre-commit and commit-msg hooks when creating a commit
 - `-m` / `-am` create the commit before creating the destination branch, including with `--from` and `--below`, so hook failures or interrupts do not leave orphan branches
 - `--insert` reparent children of the current branch onto the new branch
-- `--below` create from the current branch's parent and reparent the current branch onto the new branch; combines with `-m`/`-am` to commit on the new lower branch
+- `--below` create from the current branch's parent and reparent the current branch onto the new branch; prepared tracked and untracked changes are auto-stashed and reapplied onto the new lower branch, and `-m`/`-am` commits staged changes there
 - `st branch create --message "msg" --prefix feature/`
+
+Prepared-work `--below` example:
+
+```bash
+# On an upstack branch, after editing a CVE hotfix that belongs lower down:
+st create cve-hotfix --below
+
+# Or commit it immediately on the inserted lower branch:
+st create --below -am "fix: patch CVE-2026-0001"
+```
+
+If the stash cannot apply cleanly while committing below, Stax restores the original branch and prepared changes so the same command can be retried after resolving the conflict. For name-only `--below`, the inserted branch is left in place and the auto-stash remains available for a manual `git stash apply`.
 
 ### `st status` / `st ll` / `st log`
 

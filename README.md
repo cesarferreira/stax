@@ -265,7 +265,7 @@ st config --set-ai
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st create <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
-| `st create <name> --below` | Insert a new branch below current |
+| `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
 | `st ss` | Submit the full stack, open/update linked PRs |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--remote`, `--all`) |
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
