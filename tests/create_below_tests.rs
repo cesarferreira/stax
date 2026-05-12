@@ -39,6 +39,36 @@ fn branch_needs_restack(repo: &TestRepo, branch: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn create_shared_file_stack(
+    repo: &TestRepo,
+    parent_name: &str,
+    current_name: &str,
+) -> (String, String) {
+    repo.run_stax(&["bc", parent_name]).assert_success();
+    repo.create_file("shared.txt", "safe line\nmiddle\nfeature no\n");
+    repo.commit(&format!("Add {}", parent_name));
+    let parent = repo.current_branch();
+
+    repo.run_stax(&["bc", current_name]).assert_success();
+    repo.create_file("shared.txt", "safe line\nmiddle\nfeature yes\n");
+    repo.commit(&format!("Add {}", current_name));
+    let current = repo.current_branch();
+
+    (parent, current)
+}
+
+fn parent_for_branch(repo: &TestRepo, branch: &str) -> Option<String> {
+    repo.get_status_json()["branches"]
+        .as_array()
+        .and_then(|branches| {
+            branches
+                .iter()
+                .find(|entry| entry["name"].as_str() == Some(branch))
+        })
+        .and_then(|entry| entry["parent"].as_str())
+        .map(ToString::to_string)
+}
+
 #[test]
 fn test_create_below_reparents_current_branch_and_preserves_descendants() {
     let repo = TestRepo::new();
@@ -181,6 +211,181 @@ fn test_create_below_with_message_commits_on_new_branch() {
     assert!(
         branch_needs_restack(&repo, current),
         "original branch should need restack after the below branch gets a commit"
+    );
+}
+
+#[test]
+fn test_create_below_auto_stashes_dirty_worktree_onto_new_branch() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    let (_parent, current) =
+        create_shared_file_stack(&repo, "below-stash-parent", "below-stash-current");
+
+    repo.create_file("shared.txt", "hotfix line\nmiddle\nfeature yes\n");
+    repo.create_file("cve-notes.txt", "untracked hotfix notes\n");
+
+    let output = repo.run_stax(&["create", "below-hotfix", "--below"]);
+    output.assert_success();
+    output.assert_stdout_contains("Stashed working tree changes");
+    output.assert_stdout_contains("Restored stashed changes on new branch");
+
+    let new_branch = repo.current_branch();
+    assert!(
+        new_branch.contains("below-hotfix"),
+        "Expected to switch to below-hotfix branch, got: {}",
+        new_branch
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("shared.txt")).expect("read shared.txt"),
+        "hotfix line\nmiddle\nfeature no\n",
+        "prepared changes should be reapplied to the lower branch base"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("cve-notes.txt")).expect("read cve-notes.txt"),
+        "untracked hotfix notes\n",
+        "untracked prepared files should be carried to the new lower branch"
+    );
+    let status = TestRepo::stdout(&repo.git(&["status", "--porcelain"]));
+    assert!(
+        status.contains(" M shared.txt"),
+        "prepared change should remain uncommitted on the new lower branch"
+    );
+    assert!(
+        status.contains("?? cve-notes.txt"),
+        "untracked prepared file should remain uncommitted on the new lower branch"
+    );
+    assert_eq!(
+        parent_for_branch(&repo, &current).as_deref(),
+        Some(new_branch.as_str()),
+        "original current branch should be reparented onto the new below branch"
+    );
+    assert!(
+        TestRepo::stdout(&repo.git(&["stash", "list"]))
+            .trim()
+            .is_empty(),
+        "auto-stash should be dropped after a clean restore"
+    );
+}
+
+#[test]
+fn test_create_below_with_message_auto_stashes_staged_worktree_before_detach() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    let (parent, current) = create_shared_file_stack(
+        &repo,
+        "below-message-stash-parent",
+        "below-message-stash-current",
+    );
+    let parent_before = repo.get_commit_sha(&parent);
+    let current_before = repo.get_commit_sha(&current);
+
+    repo.create_file("shared.txt", "hotfix line\nmiddle\nfeature yes\n");
+    assert!(repo.git(&["add", "shared.txt"]).status.success());
+
+    let output = repo.run_stax(&["create", "--below", "-m", "Fix staged CVE"]);
+    output.assert_success();
+    output.assert_stdout_contains("Stashed working tree changes");
+    output.assert_stdout_contains("Committed: Fix staged CVE");
+
+    let new_branch = repo.current_branch();
+    assert!(
+        new_branch.to_lowercase().contains("fix-staged-cve"),
+        "Expected generated fix-staged-cve branch, got: {}",
+        new_branch
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("shared.txt")).expect("read shared.txt"),
+        "hotfix line\nmiddle\nfeature no\n",
+        "commit should be made from the lower branch base"
+    );
+    assert!(
+        TestRepo::stdout(&repo.git(&["status", "--porcelain"]))
+            .trim()
+            .is_empty(),
+        "staged prepared change should be committed"
+    );
+
+    let subject = repo.git(&["log", "-1", "--pretty=%s"]);
+    assert!(subject.status.success(), "{}", TestRepo::stderr(&subject));
+    assert_eq!(TestRepo::stdout(&subject).trim(), "Fix staged CVE");
+    let commit_parent = repo.git(&["rev-parse", "HEAD^"]);
+    assert!(
+        commit_parent.status.success(),
+        "{}",
+        TestRepo::stderr(&commit_parent)
+    );
+    assert_eq!(
+        TestRepo::stdout(&commit_parent).trim(),
+        parent_before,
+        "below commit should be based on the original parent"
+    );
+    assert_eq!(
+        repo.get_commit_sha(&current),
+        current_before,
+        "original branch should not advance when committing below it"
+    );
+    assert_eq!(
+        parent_for_branch(&repo, &current).as_deref(),
+        Some(new_branch.as_str()),
+        "original current branch should be reparented onto the generated below branch"
+    );
+    assert!(
+        TestRepo::stdout(&repo.git(&["stash", "list"]))
+            .trim()
+            .is_empty(),
+        "auto-stash should be dropped after a successful commit"
+    );
+}
+
+#[test]
+fn test_create_below_with_message_restores_original_branch_when_auto_stash_conflicts() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    let (_parent, current) =
+        create_shared_file_stack(&repo, "below-conflict-parent", "below-conflict-current");
+    let current_before = repo.get_commit_sha(&current);
+
+    repo.create_file("shared.txt", "safe line\nmiddle\nfeature hotfix\n");
+    assert!(repo.git(&["add", "shared.txt"]).status.success());
+
+    let output = repo.run_stax(&["create", "--below", "-m", "Conflicting hotfix"]);
+    output.assert_failure();
+    output.assert_stderr_contains("Could not apply stashed changes");
+
+    assert_eq!(
+        repo.current_branch(),
+        current,
+        "auto-stash conflict should restore the original branch"
+    );
+    assert_eq!(
+        repo.get_commit_sha(&current),
+        current_before,
+        "failed below create should not advance the original branch"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("shared.txt")).expect("read shared.txt"),
+        "safe line\nmiddle\nfeature hotfix\n",
+        "prepared changes should be restored on the original branch"
+    );
+    assert!(
+        TestRepo::stdout(&repo.git(&["status", "--porcelain"])).contains("M  shared.txt"),
+        "original staged state should be restored"
+    );
+    assert!(
+        !repo
+            .list_branches()
+            .iter()
+            .any(|branch| branch.to_lowercase().contains("conflicting-hotfix")),
+        "failed below create must not leave the destination branch"
+    );
+    assert!(
+        TestRepo::stdout(&repo.git(&["stash", "list"]))
+            .trim()
+            .is_empty(),
+        "restored auto-stash should be dropped"
     );
 }
 

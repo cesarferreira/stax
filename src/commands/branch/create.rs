@@ -32,8 +32,9 @@ use console::Term;
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use serde::Deserialize;
 use std::io::IsTerminal;
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Output, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -562,6 +563,7 @@ pub fn run(
         &branch_name,
         insert,
         below_current_meta.as_ref(),
+        !staging::is_staging_area_empty(workdir)?,
     )?;
 
     // Stage/commit behavior:
@@ -631,6 +633,172 @@ fn rollback_create_and_restore(
     rollback_create(repo, original_branch, new_branch);
 }
 
+const CREATE_BELOW_AUTO_STASH_MESSAGE: &str = "stax create --below auto-stash";
+
+/// Holds the temporary stash used when `--below` needs to move dirty work from
+/// the current branch onto the new lower branch.
+struct CreateBelowAutoStash {
+    active: bool,
+    restore_index: bool,
+}
+
+impl CreateBelowAutoStash {
+    fn inactive() -> Self {
+        Self {
+            active: false,
+            restore_index: false,
+        }
+    }
+
+    fn push_if_dirty(workdir: &Path, restore_index: bool) -> Result<Self> {
+        if !staging::has_uncommitted_changes(workdir) {
+            return Ok(Self::inactive());
+        }
+
+        let output = run_git_output(
+            workdir,
+            &["stash", "push", "-u", "-m", CREATE_BELOW_AUTO_STASH_MESSAGE],
+            "git stash push",
+        )?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stdout.contains("No local changes") || stderr.contains("No local changes") {
+            return Ok(Self::inactive());
+        }
+
+        println!("{}", "✓ Stashed working tree changes for --below.".green());
+        Ok(Self {
+            active: true,
+            restore_index,
+        })
+    }
+
+    fn is_active(&self) -> bool {
+        self.active
+    }
+
+    fn apply_to_worktree(&self, workdir: &Path) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+
+        run_git_output(workdir, &["stash", "apply"], "git stash apply")?;
+
+        if self.restore_index {
+            restore_auto_stash_index(workdir)?;
+        }
+
+        Ok(())
+    }
+
+    fn restore_on_original_branch(
+        &mut self,
+        repo: &GitRepo,
+        workdir: &Path,
+        original_branch: &str,
+    ) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+
+        reset_hard_and_clean(workdir)?;
+        repo.checkout(original_branch)
+            .with_context(|| format!("Failed to checkout original branch '{}'", original_branch))?;
+        self.apply_to_worktree(workdir)
+            .with_context(|| format!("Failed to restore auto-stash on '{}'", original_branch))?;
+        self.drop_stash(workdir)?;
+        println!(
+            "{}",
+            "✓ Restored stashed changes on original branch.".green()
+        );
+        Ok(())
+    }
+
+    fn drop_stash(&mut self, workdir: &Path) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+
+        run_git_output(workdir, &["stash", "drop"], "git stash drop")?;
+
+        self.active = false;
+        Ok(())
+    }
+}
+
+fn restore_auto_stash_index(workdir: &Path) -> Result<()> {
+    let diff = run_git_output(
+        workdir,
+        &["diff", "--binary", "stash@{0}^1", "stash@{0}^2"],
+        "git diff for auto-stash index",
+    )?;
+    if diff.stdout.is_empty() {
+        return Ok(());
+    }
+
+    let mut apply = Command::new("git")
+        .args(["apply", "--cached", "--3way"])
+        .current_dir(workdir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to run git apply for auto-stash index")?;
+
+    let Some(mut stdin) = apply.stdin.take() else {
+        bail!("Failed to open git apply stdin for auto-stash index");
+    };
+    stdin
+        .write_all(&diff.stdout)
+        .context("Failed to write auto-stash index diff to git apply")?;
+    drop(stdin);
+
+    let output = apply
+        .wait_with_output()
+        .context("Failed to wait for git apply for auto-stash index")?;
+    if !output.status.success() {
+        bail!(
+            "git apply for auto-stash index failed: {}",
+            format_git_output(&output)
+        );
+    }
+
+    Ok(())
+}
+
+fn reset_hard_and_clean(workdir: &Path) -> Result<()> {
+    run_git_output(workdir, &["reset", "--hard"], "git reset --hard")?;
+    run_git_output(workdir, &["clean", "-fd"], "git clean -fd")?;
+
+    Ok(())
+}
+
+fn run_git_output(workdir: &Path, args: &[&str], action: &str) -> Result<Output> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(workdir)
+        .output()
+        .with_context(|| format!("Failed to run {}", action))?;
+
+    if !output.status.success() {
+        bail!("{} failed: {}", action, format_git_output(&output));
+    }
+
+    Ok(output)
+}
+
+fn format_git_output(output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    match (stderr.is_empty(), stdout.is_empty()) {
+        (false, false) => format!("{}\n{}", stderr, stdout),
+        (false, true) => stderr,
+        (true, false) => stdout,
+        (true, true) => output.status.to_string(),
+    }
+}
+
 /// Graphite-style commit-first flow: commit before creating the destination
 /// branch, then split the new commit off to a new branch.
 ///
@@ -643,6 +811,10 @@ fn rollback_create_and_restore(
 /// When `parent_branch != current` (`--from` or `--below`), we check out the
 /// parent detached before committing. That makes the resulting commit's parent
 /// correct without advancing the requested parent branch.
+///
+/// For `--below` with prepared local changes, the dirty worktree is
+/// auto-stashed before the detached checkout and the stash is kept until the
+/// command succeeds, so any failure can restore the original branch and index.
 #[allow(clippy::too_many_arguments)]
 fn run_commit_first(
     repo: &GitRepo,
@@ -660,15 +832,57 @@ fn run_commit_first(
     let workdir = repo.workdir()?;
     let committing_on_current = parent_branch == current;
     let parent_sha = repo.branch_commit(parent_branch)?;
+    let mut auto_stash = if !committing_on_current && below_current_meta.is_some() {
+        CreateBelowAutoStash::push_if_dirty(workdir, !staging::is_staging_area_empty(workdir)?)?
+    } else {
+        CreateBelowAutoStash::inactive()
+    };
 
     if !committing_on_current {
-        checkout_detached_for_commit(workdir, parent_branch)?;
+        if let Err(e) = checkout_detached_for_commit(workdir, parent_branch) {
+            auto_stash.restore_on_original_branch(repo, workdir, current)?;
+            return Err(e);
+        }
+        if let Err(e) = auto_stash.apply_to_worktree(workdir) {
+            let apply_error = e.to_string();
+            if let Err(restore_error) =
+                auto_stash.restore_on_original_branch(repo, workdir, current)
+            {
+                bail!(
+                    "Could not apply stashed changes to '{}' for `st create --below`: {}. \
+                     Auto-stash was kept; run `git stash list` before retrying. \
+                     Restore attempt failed: {}",
+                    parent_branch,
+                    apply_error,
+                    restore_error
+                );
+            }
+            bail!(
+                "Could not apply stashed changes to '{}' for `st create --below`: {}. \
+                 Restored changes on '{}'.",
+                parent_branch,
+                apply_error,
+                current
+            );
+        }
+        if auto_stash.is_active() {
+            println!(
+                "{}",
+                "✓ Applied stashed changes on lower branch base.".green()
+            );
+        }
     }
 
     // Stage (if requested) BEFORE the commit so hooks see the final tree.
     if stage_mode == StageMode::All || needs_stage_all {
         if let Err(e) = staging::stage_all(workdir) {
-            restore_after_failed_pre_branch_commit(repo, workdir, current, committing_on_current);
+            restore_after_failed_pre_branch_commit(
+                repo,
+                workdir,
+                current,
+                committing_on_current,
+                &mut auto_stash,
+            );
             return Err(e);
         }
     }
@@ -679,7 +893,13 @@ fn run_commit_first(
     let staging_area_empty = match staging::is_staging_area_empty(workdir) {
         Ok(empty) => empty,
         Err(e) => {
-            restore_after_failed_pre_branch_commit(repo, workdir, current, committing_on_current);
+            restore_after_failed_pre_branch_commit(
+                repo,
+                workdir,
+                current,
+                committing_on_current,
+                &mut auto_stash,
+            );
             return Err(e);
         }
     };
@@ -693,9 +913,11 @@ fn run_commit_first(
             branch_name,
             insert,
             below_current_meta,
+            false,
         )?;
         println!("{}", "No changes to commit".dimmed());
         print_tips(config);
+        auto_stash.drop_stash(workdir)?;
         return Ok(());
     }
 
@@ -706,13 +928,25 @@ fn run_commit_first(
     let commit = match run_git_commit(workdir, message, true, no_verify) {
         Ok(commit) => commit,
         Err(e) => {
-            restore_after_failed_pre_branch_commit(repo, workdir, current, committing_on_current);
+            restore_after_failed_pre_branch_commit(
+                repo,
+                workdir,
+                current,
+                committing_on_current,
+                &mut auto_stash,
+            );
             return Err(e);
         }
     };
 
     if !commit.status.success() {
-        restore_after_failed_pre_branch_commit(repo, workdir, current, committing_on_current);
+        restore_after_failed_pre_branch_commit(
+            repo,
+            workdir,
+            current,
+            committing_on_current,
+            &mut auto_stash,
+        );
         if commit.interrupted {
             bail!(
                 "Commit interrupted. \
@@ -735,6 +969,7 @@ fn run_commit_first(
             repo,
             committing_on_current,
             below_current_meta,
+            &mut auto_stash,
         );
         bail!(
             "Commit interrupted. \
@@ -756,6 +991,7 @@ fn run_commit_first(
                 repo,
                 committing_on_current,
                 below_current_meta,
+                &mut auto_stash,
             );
             return Err(e);
         }
@@ -770,6 +1006,7 @@ fn run_commit_first(
             repo,
             committing_on_current,
             below_current_meta,
+            &mut auto_stash,
         );
         return Err(e);
     }
@@ -784,6 +1021,7 @@ fn run_commit_first(
             repo,
             committing_on_current,
             below_current_meta,
+            &mut auto_stash,
         );
         return Err(e);
     }
@@ -798,6 +1036,7 @@ fn run_commit_first(
                 repo,
                 committing_on_current,
                 below_current_meta,
+                &mut auto_stash,
             );
             return Err(e);
         }
@@ -813,6 +1052,7 @@ fn run_commit_first(
                 repo,
                 committing_on_current,
                 below_current_meta,
+                &mut auto_stash,
             );
             return Err(e);
         }
@@ -831,6 +1071,7 @@ fn run_commit_first(
                 repo,
                 committing_on_current,
                 below_current_meta,
+                &mut auto_stash,
             );
             return Err(e);
         }
@@ -840,7 +1081,20 @@ fn run_commit_first(
     // `current` (now at the old SHA) while the working tree matches the new
     // commit; in the detached-parent case HEAD already points at the new commit.
     // `git checkout` only moves HEAD in both cases.
-    repo.checkout(branch_name)?;
+    if let Err(e) = repo.checkout(branch_name) {
+        rollback_after_commit(
+            workdir,
+            current,
+            &parent_sha,
+            Some(branch_name),
+            repo,
+            committing_on_current,
+            below_current_meta,
+            &mut auto_stash,
+        );
+        return Err(e);
+    }
+    auto_stash.drop_stash(workdir)?;
 
     print_remote_parent_warning(repo, config, parent_branch);
     println!(
@@ -955,7 +1209,13 @@ fn restore_after_failed_pre_branch_commit(
     workdir: &Path,
     original_branch: &str,
     committing_on_current: bool,
+    auto_stash: &mut CreateBelowAutoStash,
 ) {
+    if auto_stash.is_active() {
+        let _ = auto_stash.restore_on_original_branch(repo, workdir, original_branch);
+        return;
+    }
+
     if committing_on_current {
         return;
     }
@@ -970,8 +1230,10 @@ fn restore_after_failed_pre_branch_commit(
 /// Undo the partial state left by `run_commit_first` when a step after
 /// `git commit` (branch creation, metadata write, ref update) fails.
 ///
-/// `--soft` keeps the working tree and index exactly as git left them after
-/// the successful commit, so the user can retry without re-staging.
+/// Without an active auto-stash, `--soft` keeps the working tree and index
+/// exactly as git left them after the successful commit, so the user can retry
+/// without re-staging. With an active `--below` auto-stash, restore the original
+/// stash instead because the post-commit tree may be based on a different parent.
 fn rollback_after_commit(
     workdir: &Path,
     original_branch: &str,
@@ -980,6 +1242,7 @@ fn rollback_after_commit(
     repo: &GitRepo,
     committing_on_current: bool,
     restore_original_meta: Option<&BranchMetadata>,
+    auto_stash: &mut CreateBelowAutoStash,
 ) {
     if let Some(meta) = restore_original_meta {
         let _ = meta.write(repo.inner(), original_branch);
@@ -988,6 +1251,12 @@ fn rollback_after_commit(
         let _ = BranchMetadata::delete(repo.inner(), name);
         let _ = repo.delete_branch(name, true);
     }
+
+    if auto_stash.is_active() {
+        let _ = auto_stash.restore_on_original_branch(repo, workdir, original_branch);
+        return;
+    }
+
     let _ = Command::new("git")
         .args(["reset", "--soft", old_sha])
         .current_dir(workdir)
@@ -1019,23 +1288,36 @@ fn create_branch_with_banner(
     branch_name: &str,
     insert: bool,
     below_current_meta: Option<&BranchMetadata>,
+    restore_stash_index: bool,
 ) -> Result<()> {
-    if parent_branch == original {
-        repo.create_branch(branch_name)?;
+    let workdir = repo.workdir()?;
+    let mut auto_stash = if below_current_meta.is_some() {
+        CreateBelowAutoStash::push_if_dirty(workdir, restore_stash_index)?
     } else {
-        repo.create_branch_at(branch_name, parent_branch)?;
-    }
+        CreateBelowAutoStash::inactive()
+    };
+
+    if let Err(e) = if parent_branch == original {
+        repo.create_branch(branch_name)
+    } else {
+        repo.create_branch_at(branch_name, parent_branch)
+    } {
+        auto_stash.restore_on_original_branch(repo, workdir, original)?;
+        return Err(e);
+    };
 
     let parent_rev = repo.branch_commit(parent_branch)?;
     let meta = BranchMetadata::new(parent_branch, &parent_rev);
     if let Err(e) = meta.write(repo.inner(), branch_name) {
         rollback_create(repo, original, branch_name);
+        auto_stash.restore_on_original_branch(repo, workdir, original)?;
         return Err(e);
     }
 
     if insert {
         if let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name) {
             rollback_create(repo, original, branch_name);
+            auto_stash.restore_on_original_branch(repo, workdir, original)?;
             return Err(e);
         }
     }
@@ -1043,13 +1325,27 @@ fn create_branch_with_banner(
     if let Some(current_meta) = below_current_meta {
         if let Err(e) = apply_below_reparenting(repo, original, branch_name, current_meta) {
             rollback_create_and_restore(repo, original, branch_name, below_current_meta);
+            auto_stash.restore_on_original_branch(repo, workdir, original)?;
             return Err(e);
         }
     }
 
     if let Err(e) = repo.checkout(branch_name) {
         rollback_create_and_restore(repo, original, branch_name, below_current_meta);
+        auto_stash.restore_on_original_branch(repo, workdir, original)?;
         return Err(e);
+    }
+    if let Err(e) = auto_stash.apply_to_worktree(workdir) {
+        bail!(
+            "Created and switched to '{}', but could not apply stashed changes: {}. \
+             Auto-stash was kept; resolve the working tree or run `git stash apply` manually.",
+            branch_name,
+            e
+        );
+    }
+    if auto_stash.is_active() {
+        auto_stash.drop_stash(workdir)?;
+        println!("{}", "✓ Restored stashed changes on new branch.".green());
     }
 
     print_remote_parent_warning(repo, config, parent_branch);

@@ -11,7 +11,16 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | `st ll` | Like `st ls` plus PR URLs and detail |
 | `st create <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
-| `st create <name> --below` | Insert a new branch below current |
+| `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
+
+If you discover a hotfix while working upstack, keep the edits in place:
+
+```bash
+st create cve-hotfix --below
+st create --below -am "fix: patch CVE-2026-0001"
+```
+
+`--below` auto-stashes prepared tracked and untracked changes before moving to the lower base, then reapplies them on the inserted branch. With `-am`, those changes are staged and committed on the new lower branch.
 
 ## Submit and merge
 
