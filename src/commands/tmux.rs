@@ -28,8 +28,8 @@ pub fn format_status_line(
     pr_state: Option<&str>,
     ci_state: Option<&str>,
 ) -> String {
-    let branch_display = if branch.len() > 20 {
-        format!("{}…", &branch[..19])
+    let branch_display = if branch.len() > 35 {
+        format!("{}…", &branch[..34])
     } else {
         branch.to_string()
     };
@@ -165,11 +165,11 @@ mod tests {
     }
 
     #[test]
-    fn test_branch_name_truncated_at_20_chars() {
-        let long = "feat/this-is-a-very-long-branch-name";
+    fn test_branch_name_truncated_at_35_chars() {
+        let long = "feat/this-is-a-very-long-branch-name-that-keeps-going";
         let result = format_status_line(long, 1, 1, None, false, None, None);
-        // &long[..19] = "feat/this-is-a-very" → appended with "…"
-        assert!(result.contains("feat/this-is-a-very…"), "truncation wrong: {result}");
-        assert!(!result.contains("feat/this-is-a-very-long"), "should be truncated: {result}");
+        // &long[..34] = "feat/this-is-a-very-long-branch-na" → appended with "…"
+        assert!(result.contains("feat/this-is-a-very-long-branch-na…"), "truncation wrong: {result}");
+        assert!(!result.contains("feat/this-is-a-very-long-branch-name-that"), "should be truncated: {result}");
     }
 }
