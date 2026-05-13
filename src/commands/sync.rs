@@ -1,3 +1,4 @@
+use crate::cache::CiCache;
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
 use crate::commands::worktree::{
@@ -1441,7 +1442,77 @@ pub fn run(
         }
     }
 
+    refresh_pr_draft_states(&repo, &config);
+
     Ok(())
+}
+
+/// Fetch live PR draft state from the forge for all tracked branches and update
+/// both branch metadata and CiCache. Called at end of sync so that operations
+/// like `gh pr ready` are reflected without needing a separate `stax ci` run.
+fn refresh_pr_draft_states(repo: &GitRepo, config: &Config) {
+    let remote_info = match RemoteInfo::from_repo(repo, config) {
+        Ok(info) => info,
+        Err(_) => return,
+    };
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(_) => return,
+    };
+    let _enter = rt.enter();
+    let client = match ForgeClient::new(&remote_info) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let stack = match Stack::load(repo) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let git_dir = match repo.git_dir() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let mut cache = CiCache::load(&git_dir);
+    let mut cache_dirty = false;
+
+    for (branch_name, branch_info) in &stack.branches {
+        if branch_name == &stack.trunk {
+            continue;
+        }
+        let pr_number = match branch_info.pr_number {
+            Some(n) => n,
+            None => continue,
+        };
+        let live_pr = match rt.block_on(client.get_pr(pr_number)) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        // Update branch metadata with fresh is_draft
+        if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch_name) {
+            if let Some(ref mut pr_info) = meta.pr_info {
+                pr_info.is_draft = Some(live_pr.is_draft);
+                let _ = meta.write(repo.inner(), branch_name);
+            }
+        }
+
+        // Update CiCache — preserve existing CI state, refresh pr_state
+        let pr_state = if live_pr.is_draft {
+            "DRAFT".to_string()
+        } else {
+            "OPEN".to_string()
+        };
+        let existing_ci = cache
+            .branches
+            .get(branch_name.as_str())
+            .and_then(|e| e.ci_state.clone());
+        cache.update(branch_name, existing_ci, Some(pr_state));
+        cache_dirty = true;
+    }
+
+    if cache_dirty {
+        let _ = cache.save(&git_dir);
+    }
 }
 
 /// Drop stale `refs/remotes/<remote>/<branch>` for stax-tracked branches that no longer exist on the remote.
