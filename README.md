@@ -333,9 +333,9 @@ stack_links = "body"   # "comment" | "body" | "both" | "off"
 
 [**stax.tmux**](https://github.com/cesarferreira/stax.tmux) is a TPM-compatible plugin that puts your stack in the tmux status bar and adds keybindings for common actions:
 
-```
- feat/login-flow [3/5] #42  ● passing  14:22
-```
+<p align="center">
+  <img src="assets/tmux.png" width="880" alt="stax.tmux status bar">
+</p>
 
 - Live status bar — branch, stack position, PR state, CI state; auto-refreshes in the background
 - Keybindings — `prefix + S` popup, `prefix + ]`/`[` up/down, `prefix + M-s` sync
