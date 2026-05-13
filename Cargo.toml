@@ -34,6 +34,7 @@ git2 = { version = "0.20", default-features = false, features = ["https"] }
 # GitHub API
 octocrab = "0.49"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

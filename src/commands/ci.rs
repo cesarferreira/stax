@@ -8,6 +8,7 @@ use crate::github::GitHubClient;
 use crate::notifications::{self, BuiltInSound, Sound};
 use crate::remote::RemoteInfo;
 use anyhow::Result;
+use futures_util::future::join_all;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
@@ -383,39 +384,46 @@ pub fn fetch_ci_statuses(
     stack: &Stack,
     branches_to_check: &[String],
 ) -> Result<Vec<BranchCiStatus>> {
-    let mut statuses: Vec<BranchCiStatus> = Vec::new();
+    let prepared: Vec<(String, String, String, Option<u64>)> = branches_to_check
+        .iter()
+        .filter_map(|branch| {
+            let sha = repo.branch_commit(branch).ok()?;
+            let sha_short = sha.chars().take(7).collect::<String>();
+            let pr_number = stack.branches.get(branch).and_then(|b| b.pr_number);
+            Some((branch.clone(), sha, sha_short, pr_number))
+        })
+        .collect();
 
-    for branch in branches_to_check {
-        let sha = match repo.branch_commit(branch) {
-            Ok(sha) => sha,
-            Err(_) => continue,
-        };
+    let mut statuses = rt.block_on(async {
+        join_all(
+            prepared
+                .iter()
+                .map(|(branch, sha, sha_short, pr_number)| async {
+                    let check_runs_result = client.fetch_checks(repo, sha).await;
+                    let (overall_status, check_runs) = match check_runs_result {
+                        Ok((status, runs)) => (status, runs),
+                        Err(_) => (None, Vec::new()),
+                    };
 
-        let sha_short = sha.chars().take(7).collect::<String>();
-        let pr_number = stack.branches.get(branch).and_then(|b| b.pr_number);
+                    let pr_live = match pr_number {
+                        Some(n) => client.get_pr(*n).await.ok(),
+                        None => None,
+                    };
+                    let pr_is_draft = pr_live.as_ref().map(|p| p.is_draft);
 
-        let check_runs_result = rt.block_on(async { client.fetch_checks(repo, &sha).await });
-
-        let (overall_status, check_runs) = match check_runs_result {
-            Ok((status, runs)) => (status, runs),
-            Err(_) => (None, Vec::new()),
-        };
-
-        let pr_live = pr_number.and_then(|n| {
-            rt.block_on(async { client.get_pr(n).await }).ok()
-        });
-        let pr_is_draft = pr_live.as_ref().map(|p| p.is_draft);
-
-        statuses.push(BranchCiStatus {
-            branch: branch.clone(),
-            sha,
-            sha_short,
-            overall_status,
-            check_runs,
-            pr_number,
-            pr_is_draft,
-        });
-    }
+                    BranchCiStatus {
+                        branch: branch.clone(),
+                        sha: sha.clone(),
+                        sha_short: sha_short.clone(),
+                        overall_status,
+                        check_runs,
+                        pr_number: *pr_number,
+                        pr_is_draft,
+                    }
+                }),
+        )
+        .await
+    });
 
     // Sort by branch name for consistent output
     statuses.sort_by(|a, b| a.branch.cmp(&b.branch));

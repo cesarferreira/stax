@@ -3366,6 +3366,7 @@ dependencies = [
  "crossterm",
  "dialoguer",
  "dirs",
+ "futures-util",
  "fuzzy-matcher",
  "git2",
  "indicatif",
