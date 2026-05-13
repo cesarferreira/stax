@@ -7,7 +7,11 @@ st config --reset-ai          # clear saved AI defaults and re-prompt
 st config --reset-ai --no-prompt
 ```
 
-Main config path: `~/.config/stax/config.toml`.
+Config is resolved in this order:
+
+1. `STAX_CONFIG_DIR/config.toml` when `STAX_CONFIG_DIR` is set.
+2. `.config/stax/config.toml` at the current git repository root when it exists.
+3. `~/.config/stax/config.toml`.
 
 ## Example config
 

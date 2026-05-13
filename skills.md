@@ -193,7 +193,7 @@ stax submit --ai --body            # Generate/update PR body only
 stax submit --ai --yes             # Accept generated new-PR details
 stax submit --rerequest-review     # Re-request existing reviewers on update
 
-# ~/.config/stax/config.toml
+# ~/.config/stax/config.toml or repo-local .config/stax/config.toml
 [submit]
 stack_links = "body"               # "comment" | "body" | "both" | "off"
 

@@ -311,7 +311,8 @@ st config --set-ai         # pick AI agent + model
 st config --reset-ai       # clear saved AI pairing and re-prompt
 ```
 
-Config lives at `~/.config/stax/config.toml`:
+Config lives at `~/.config/stax/config.toml`. A repo-local `.config/stax/config.toml`
+is used when present, and `STAX_CONFIG_DIR` overrides both:
 
 ```toml
 [submit]
