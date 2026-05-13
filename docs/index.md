@@ -25,6 +25,7 @@
 | Understand stacked-branch workflow | [Stacked branches](concepts/stacked-branches.md) |
 | Keep multiple independent stacks | [Multiple stacks](concepts/multiple-stacks.md) |
 | Drive stax from the terminal UI | [Interactive TUI](interface/tui.md) |
+| Watch the stack live with CI and PR status | `st watch` |
 | Merge an entire stack safely | [Merge and cascade](workflows/merge-and-cascade.md) |
 | Run parallel AI coding sessions | [AI worktree lanes](workflows/agent-worktrees.md) |
 | Manage Git worktrees as lanes | [Worktrees](worktrees/index.md) |

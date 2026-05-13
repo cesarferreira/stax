@@ -263,6 +263,8 @@ st config --set-ai
 |---|---|
 | `st` | Launch interactive TUI |
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
+| `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
+| `st watch --current` | Watch only the current stack |
 | `st create <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |

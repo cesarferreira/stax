@@ -737,6 +737,16 @@ enum Commands {
         verbose: bool,
     },
 
+    /// Live auto-refreshing stack status with CI and PR state
+    Watch {
+        /// Watch only the current stack (not all tracked branches)
+        #[arg(long, short)]
+        current: bool,
+        /// Polling interval in seconds (overrides adaptive default)
+        #[arg(long, short)]
+        interval: Option<u64>,
+    },
+
     /// Split the current branch into multiple stacked branches (interactive)
     Split {
         /// Split by selecting individual hunks instead of by commit
@@ -1998,6 +2008,7 @@ pub fn run() -> Result<()> {
             interval,
             verbose,
         ),
+        Commands::Watch { current, interval } => commands::watch::run(current, interval),
         Commands::Split {
             hunk,
             file,
