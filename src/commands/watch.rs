@@ -21,6 +21,7 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
     let config = Config::load()?;
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
     let rt = tokio::runtime::Runtime::new()?;
+    let _enter = rt.enter();
     let client = ForgeClient::new(&remote_info)?;
 
     println!(
