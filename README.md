@@ -288,6 +288,7 @@ st config --set-ai
 | `st standup` | Summarize recent engineering activity |
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |
+| `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |
 | `st pr` / `st pr list` / `st issue list` | Open current PR · list PRs · list issues |
 
 Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands/reference.md](docs/commands/reference.md)

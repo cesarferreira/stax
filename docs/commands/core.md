@@ -27,6 +27,8 @@ st create --below -am "fix: patch CVE-2026-0001"
 | Command | What it does |
 |---|---|
 | `st ss` | Submit the whole stack — open or update linked PRs |
+| `st draft [branch]` | Convert the current (or named) branch's PR to draft |
+| `st undraft [branch]` | Mark the current (or named) branch's PR as ready for review |
 | `st merge` | Cascade-merge from stack bottom up to current branch |
 | `st merge --when-ready` | Wait for CI + approvals, then merge (alias: `st mwr`) |
 | `st merge --downstack-only` / `--ds` | Merge ancestors below current, then rebase current branch |
