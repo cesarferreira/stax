@@ -943,11 +943,8 @@ impl GitHubClient {
                     .iter()
                     .filter(|r| r.state == "APPROVED")
                     .count();
-                let changes_requested = pr
-                    .reviews
-                    .nodes
-                    .iter()
-                    .any(|r| r.state == "CHANGES_REQUESTED");
+                let changes_requested =
+                    pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
                 (pr.review_decision, approvals, changes_requested)
             })
             .unwrap_or((None, 0, false));
