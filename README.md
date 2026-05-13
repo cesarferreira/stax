@@ -92,6 +92,8 @@ Then:
 cargo install --path . --locked
 # or
 make install
+# or
+task install
 ```
 
 No system OpenSSL? Use the vendored feature:
@@ -286,6 +288,8 @@ st config --set-ai
 | `st gen` / `st generate` | AI: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
 | `st ss --ai` | Submit with AI-generated PR title/body suggestions |
 | `st standup` | Summarize recent engineering activity |
+| `st tmux status` | Print a tmux-formatted status string (branch, stack position, PR, CI) for `status-right` |
+| `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |
 | `st pr` / `st pr list` / `st issue list` | Open current PR · list PRs · list issues |
@@ -356,15 +360,20 @@ Everything else — stacked branches, PRs, restack, sync, undo/redo, TUI, AI gen
 Before opening a PR, run:
 
 ```bash
-make test   # or: just test
+make test   # or: just test / task test
 ```
+
+If bare `task` prints `No matches.`, your shell is running Taskwarrior instead of Go Task. Use the Go Task binary directly, for example `/opt/homebrew/opt/go-task/bin/task test`, or adjust your shell aliases/PATH.
 
 To cut a release, run:
 
 ```bash
 make release          # default minor bump
 make release LEVEL=patch
+task release          # default minor bump
+task release LEVEL=patch
 just release-patch    # or: just release-minor / just release-major
+task release-patch    # or: task release-minor / task release-major
 ```
 
 Release automation now finalizes the next versioned entry in `CHANGELOG.md` from commits since the latest `v*` tag inside `cargo release`'s pre-release hook, refreshes the compare links, and leaves a fresh `Unreleased` header for follow-up work. If there are no commits since the last tag, the release exits early instead of creating an empty changelog entry.
