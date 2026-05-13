@@ -53,11 +53,70 @@ pub fn format_status_line(
 }
 
 fn run_status() -> Result<()> {
-    todo!()
+    use crate::cache::CiCache;
+    use crate::engine::Stack;
+    use crate::git::GitRepo;
+
+    let repo = match GitRepo::open() {
+        Ok(r) => r,
+        Err(_) => return Ok(()),
+    };
+    let stack = match Stack::load(&repo) {
+        Ok(s) => s,
+        Err(_) => return Ok(()),
+    };
+    let current = match repo.current_branch() {
+        Ok(b) => b,
+        Err(_) => return Ok(()),
+    };
+
+    if current == stack.trunk {
+        return Ok(());
+    }
+
+    let stack_branches = stack.current_stack(&current);
+    let non_trunk: Vec<&String> = stack_branches
+        .iter()
+        .filter(|b| *b != &stack.trunk)
+        .collect();
+    let pos = non_trunk
+        .iter()
+        .position(|b| *b == &current)
+        .map(|i| i + 1)
+        .unwrap_or(1);
+    let total = non_trunk.len().max(1);
+
+    let info = stack.branches.get(&current);
+    let pr_number = info.and_then(|b| b.pr_number);
+    let pr_is_draft = info.and_then(|b| b.pr_is_draft).unwrap_or(false);
+    let pr_state = info.and_then(|b| b.pr_state.as_deref());
+
+    let git_dir = repo.git_dir()?;
+    let cache = CiCache::load(git_dir);
+    let ci_state_owned = cache.get_ci_state(&current);
+    let ci_state = ci_state_owned.as_deref();
+
+    let output = format_status_line(&current, pos, total, pr_number, pr_is_draft, pr_state, ci_state);
+    print!("{}", output);
+    Ok(())
 }
 
 fn run_popup() -> Result<()> {
-    todo!()
+    if std::env::var("TMUX").is_err() {
+        anyhow::bail!("Not inside a tmux session. Run this command from within tmux.");
+    }
+    std::process::Command::new("tmux")
+        .args([
+            "display-popup",
+            "-E",
+            "-w",
+            "80%",
+            "-h",
+            "80%",
+            "stax watch --current",
+        ])
+        .status()?;
+    Ok(())
 }
 
 #[cfg(test)]
