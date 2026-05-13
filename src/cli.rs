@@ -688,6 +688,18 @@ enum Commands {
     /// Open the repository in browser
     Open,
 
+    /// Mark the current (or named) branch's PR as a draft
+    Draft {
+        /// Branch to operate on (defaults to current)
+        branch: Option<String>,
+    },
+
+    /// Mark the current (or named) branch's PR as ready for review
+    Undraft {
+        /// Branch to operate on (defaults to current)
+        branch: Option<String>,
+    },
+
     /// Show comments on the current branch's PR
     Comments {
         /// Output raw markdown without rendering
@@ -1971,6 +1983,8 @@ pub fn run() -> Result<()> {
             None => print_subcommand_help("issue"),
         },
         Commands::Open => commands::open::run(),
+        Commands::Draft { branch } => commands::draft::run(branch, true),
+        Commands::Undraft { branch } => commands::draft::run(branch, false),
         Commands::Comments { plain } => commands::comments::run(plain),
         Commands::Ci {
             all,
