@@ -1030,7 +1030,7 @@ fn format_duration(secs: u64) -> String {
     }
 }
 
-fn update_ci_cache(repo: &GitRepo, stack: &Stack, statuses: &[BranchCiStatus]) {
+pub(crate) fn update_ci_cache(repo: &GitRepo, stack: &Stack, statuses: &[BranchCiStatus]) {
     let git_dir = match repo.git_dir() {
         Ok(path) => path,
         Err(_) => return,

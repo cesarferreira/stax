@@ -51,4 +51,5 @@ pub mod submit;
 pub mod sync;
 pub mod undo;
 pub mod upstack;
+pub mod watch;
 pub mod worktree;
