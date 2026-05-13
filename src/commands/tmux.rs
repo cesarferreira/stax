@@ -28,8 +28,8 @@ pub fn format_status_line(
     pr_state: Option<&str>,
     ci_state: Option<&str>,
 ) -> String {
-    let branch_display = if branch.len() > 35 {
-        format!("{}…", &branch[..34])
+    let branch_display = if branch.len() > 50 {
+        format!("{}…", &branch[..49])
     } else {
         branch.to_string()
     };
@@ -86,13 +86,21 @@ fn run_status() -> Result<()> {
 
     let info = stack.branches.get(&current);
     let pr_number = info.and_then(|b| b.pr_number);
-    let pr_is_draft = info.and_then(|b| b.pr_is_draft).unwrap_or(false);
     let pr_state = info.and_then(|b| b.pr_state.as_deref());
 
     let git_dir = repo.git_dir()?;
     let cache = CiCache::load(git_dir);
     let ci_state_owned = cache.get_ci_state(&current);
     let ci_state = ci_state_owned.as_deref();
+
+    // Prefer cache pr_state over metadata: cache is refreshed on every CI fetch,
+    // metadata only updates on `stax submit`. If cache says OPEN the PR is no longer draft.
+    let cached_pr_state = cache.branches.get(&current).and_then(|e| e.pr_state.as_deref());
+    let pr_is_draft = match cached_pr_state {
+        Some(s) if s.eq_ignore_ascii_case("draft") => true,
+        Some(s) if s.eq_ignore_ascii_case("open") => false,
+        _ => info.and_then(|b| b.pr_is_draft).unwrap_or(false),
+    };
 
     let output = format_status_line(&current, pos, total, pr_number, pr_is_draft, pr_state, ci_state);
     print!("{}", output);
@@ -165,11 +173,11 @@ mod tests {
     }
 
     #[test]
-    fn test_branch_name_truncated_at_35_chars() {
-        let long = "feat/this-is-a-very-long-branch-name-that-keeps-going";
+    fn test_branch_name_truncated_at_50_chars() {
+        let long = "cesar/codex/OBX-2734-remove-worm-feature-and-related-cleanup";
         let result = format_status_line(long, 1, 1, None, false, None, None);
-        // &long[..34] = "feat/this-is-a-very-long-branch-na" → appended with "…"
-        assert!(result.contains("feat/this-is-a-very-long-branch-na…"), "truncation wrong: {result}");
-        assert!(!result.contains("feat/this-is-a-very-long-branch-name-that"), "should be truncated: {result}");
+        // &long[..49] → appended with "…", total visible length 50
+        assert!(result.contains("cesar/codex/OBX-2734-remove-worm-feature-and-rela…"), "truncation wrong: {result}");
+        assert!(!result.contains("cesar/codex/OBX-2734-remove-worm-feature-and-related-cleanup"), "should be truncated: {result}");
     }
 }
