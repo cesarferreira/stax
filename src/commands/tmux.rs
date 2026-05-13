@@ -1,5 +1,8 @@
 use anyhow::Result;
 use clap::Subcommand;
+use crate::cache::CiCache;
+use crate::engine::Stack;
+use crate::git::GitRepo;
 
 #[derive(Debug, Subcommand)]
 pub enum TmuxCommand {
@@ -53,10 +56,6 @@ pub fn format_status_line(
 }
 
 fn run_status() -> Result<()> {
-    use crate::cache::CiCache;
-    use crate::engine::Stack;
-    use crate::git::GitRepo;
-
     let repo = match GitRepo::open() {
         Ok(r) => r,
         Err(_) => return Ok(()),
