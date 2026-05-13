@@ -328,6 +328,28 @@ stack_links = "body"   # "comment" | "body" | "both" | "off"
 
 ## Integrations
 
+### tmux
+
+[**stax.tmux**](https://github.com/cesarferreira/stax.tmux) is a TPM-compatible plugin that puts your stack in the tmux status bar and adds keybindings for common actions:
+
+```
+ feat/login-flow [3/5] #42  ● passing  14:22
+```
+
+- Live status bar — branch, stack position, PR state, CI state; auto-refreshes in the background
+- Keybindings — `prefix + S` popup, `prefix + ]`/`[` up/down, `prefix + M-s` sync
+- Window auto-rename — tmux window title follows the current branch
+
+Install via TPM:
+
+```tmux
+set -g @plugin 'cesarferreira/stax.tmux'
+```
+
+See the [stax.tmux README](https://github.com/cesarferreira/stax.tmux) for full setup and configuration options.
+
+---
+
 AI and editor integration guides:
 
 - [Claude Code](docs/integrations/claude-code.md)
@@ -349,7 +371,7 @@ stax runs on Windows (x86_64) with prebuilt binaries on [Releases](https://githu
   - The `sw` quick alias is not available.
   - `st wt rm` (bare) cannot relocate the shell. Specify: `st wt rm <name>`.
 - **Worktree commands still work.** `st wt c/go/ls/ll/cleanup/rm/prune/restack` all function — only the shell-level `cd` is missing.
-- **tmux integration requires WSL** or a Unix-like environment.
+- **tmux integration requires WSL** or a Unix-like environment. The [stax.tmux](https://github.com/cesarferreira/stax.tmux) plugin is Unix-only.
 
 Everything else — stacked branches, PRs, restack, sync, undo/redo, TUI, AI generation — works on Windows without limitation.
 
