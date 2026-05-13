@@ -104,6 +104,23 @@ fn run_status() -> Result<()> {
 
     let output = format_status_line(&current, pos, total, pr_number, pr_is_draft, pr_state, ci_state);
     print!("{}", output);
+
+    // Spawn a background `stax ci` refresh when the cache is older than 90 seconds so the
+    // status bar stays current without the user having to run stax ci manually.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(cache.last_refresh) > 90 {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = std::process::Command::new(exe)
+                .arg("ci")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    }
+
     Ok(())
 }
 
