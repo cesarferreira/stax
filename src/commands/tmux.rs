@@ -12,7 +12,6 @@ pub enum TmuxCommand {
     Popup,
 }
 
-#[allow(dead_code)]
 pub fn run(cmd: TmuxCommand) -> Result<()> {
     match cmd {
         TmuxCommand::Status => run_status(),
@@ -20,7 +19,6 @@ pub fn run(cmd: TmuxCommand) -> Result<()> {
     }
 }
 
-#[allow(dead_code)]
 pub fn format_status_line(
     branch: &str,
     pos: usize,
@@ -56,6 +54,7 @@ pub fn format_status_line(
 }
 
 fn run_status() -> Result<()> {
+    // Status bar context: fail silently so tmux shows an empty segment rather than an error string
     let repo = match GitRepo::open() {
         Ok(r) => r,
         Err(_) => return Ok(()),
@@ -112,6 +111,8 @@ fn run_popup() -> Result<()> {
             "80%",
             "-h",
             "80%",
+            "sh",
+            "-c",
             "stax watch --current",
         ])
         .status()?;
