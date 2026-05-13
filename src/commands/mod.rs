@@ -49,6 +49,7 @@ pub mod standup;
 pub mod status;
 pub mod submit;
 pub mod sync;
+pub mod tmux;
 pub mod undo;
 pub mod upstack;
 pub mod watch;
