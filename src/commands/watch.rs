@@ -189,7 +189,11 @@ fn render_watch_table(
                 let state = info
                     .and_then(|b| b.pr_state.as_deref())
                     .unwrap_or("open");
-                let draft = info.and_then(|b| b.pr_is_draft).unwrap_or(false);
+                let draft = ci_by_branch
+                    .get(branch.as_str())
+                    .and_then(|s| s.pr_is_draft)
+                    .or_else(|| info.and_then(|b| b.pr_is_draft))
+                    .unwrap_or(false);
                 if draft {
                     format!("  PR #{} draft", n).dimmed().to_string()
                 } else if state.to_lowercase() == "merged" {
@@ -233,13 +237,21 @@ fn load_ci_from_cache(git_dir: &std::path::Path, branches: &[String]) -> Vec<Bra
     branches
         .iter()
         .filter_map(|b| {
-            cache.get_ci_state(b).map(|_| BranchCiStatus {
-                branch: b.clone(),
-                sha: String::new(),
-                sha_short: String::new(),
-                overall_status: cache.get_ci_state(b),
-                check_runs: vec![],
-                pr_number: None,
+            cache.get_ci_state(b).map(|_| {
+                let pr_is_draft = cache
+                    .branches
+                    .get(b.as_str())
+                    .and_then(|e| e.pr_state.as_deref())
+                    .map(|s| s.eq_ignore_ascii_case("draft"));
+                BranchCiStatus {
+                    branch: b.clone(),
+                    sha: String::new(),
+                    sha_short: String::new(),
+                    overall_status: cache.get_ci_state(b),
+                    check_runs: vec![],
+                    pr_number: None,
+                    pr_is_draft,
+                }
             })
         })
         .collect()

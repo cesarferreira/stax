@@ -759,6 +759,12 @@ enum Commands {
         interval: Option<u64>,
     },
 
+    /// tmux integration: status bar string and popup viewer
+    Tmux {
+        #[command(subcommand)]
+        command: commands::tmux::TmuxCommand,
+    },
+
     /// Split the current branch into multiple stacked branches (interactive)
     Split {
         /// Split by selecting individual hunks instead of by commit
@@ -2023,6 +2029,7 @@ pub fn run() -> Result<()> {
             verbose,
         ),
         Commands::Watch { current, interval } => commands::watch::run(current, interval),
+        Commands::Tmux { command } => commands::tmux::run(command),
         Commands::Split {
             hunk,
             file,

@@ -92,6 +92,8 @@ Then:
 cargo install --path . --locked
 # or
 make install
+# or
+task install
 ```
 
 No system OpenSSL? Use the vendored feature:
@@ -286,6 +288,8 @@ st config --set-ai
 | `st gen` / `st generate` | AI: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
 | `st ss --ai` | Submit with AI-generated PR title/body suggestions |
 | `st standup` | Summarize recent engineering activity |
+| `st tmux status` | Print a tmux-formatted status string (branch, stack position, PR, CI) for `status-right` |
+| `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |
 | `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |
@@ -325,6 +329,28 @@ stack_links = "body"   # "comment" | "body" | "both" | "off"
 
 ## Integrations
 
+### tmux
+
+[**stax.tmux**](https://github.com/cesarferreira/stax.tmux) is a TPM-compatible plugin that puts your stack in the tmux status bar and adds keybindings for common actions:
+
+```
+ feat/login-flow [3/5] #42  ● passing  14:22
+```
+
+- Live status bar — branch, stack position, PR state, CI state; auto-refreshes in the background
+- Keybindings — `prefix + S` popup, `prefix + ]`/`[` up/down, `prefix + M-s` sync
+- Window auto-rename — tmux window title follows the current branch
+
+Install via TPM:
+
+```tmux
+set -g @plugin 'cesarferreira/stax.tmux'
+```
+
+See the [stax.tmux README](https://github.com/cesarferreira/stax.tmux) for full setup and configuration options.
+
+---
+
 AI and editor integration guides:
 
 - [Claude Code](docs/integrations/claude-code.md)
@@ -346,7 +372,7 @@ stax runs on Windows (x86_64) with prebuilt binaries on [Releases](https://githu
   - The `sw` quick alias is not available.
   - `st wt rm` (bare) cannot relocate the shell. Specify: `st wt rm <name>`.
 - **Worktree commands still work.** `st wt c/go/ls/ll/cleanup/rm/prune/restack` all function — only the shell-level `cd` is missing.
-- **tmux integration requires WSL** or a Unix-like environment.
+- **tmux integration requires WSL** or a Unix-like environment. The [stax.tmux](https://github.com/cesarferreira/stax.tmux) plugin is Unix-only.
 
 Everything else — stacked branches, PRs, restack, sync, undo/redo, TUI, AI generation — works on Windows without limitation.
 
@@ -357,15 +383,20 @@ Everything else — stacked branches, PRs, restack, sync, undo/redo, TUI, AI gen
 Before opening a PR, run:
 
 ```bash
-make test   # or: just test
+make test   # or: just test / task test
 ```
+
+If bare `task` prints `No matches.`, your shell is running Taskwarrior instead of Go Task. Use the Go Task binary directly, for example `/opt/homebrew/opt/go-task/bin/task test`, or adjust your shell aliases/PATH.
 
 To cut a release, run:
 
 ```bash
 make release          # default minor bump
 make release LEVEL=patch
+task release          # default minor bump
+task release LEVEL=patch
 just release-patch    # or: just release-minor / just release-major
+task release-patch    # or: task release-minor / task release-major
 ```
 
 Release automation now finalizes the next versioned entry in `CHANGELOG.md` from commits since the latest `v*` tag inside `cargo release`'s pre-release hook, refreshes the compare links, and leaves a fresh `Unreleased` header for follow-up work. If there are no commits since the last tag, the release exits early instead of creating an empty changelog entry.

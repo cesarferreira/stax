@@ -25,6 +25,8 @@ pub struct BranchCiStatus {
     pub overall_status: Option<String>,
     pub check_runs: Vec<CheckRunInfo>,
     pub pr_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_is_draft: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -399,6 +401,11 @@ pub fn fetch_ci_statuses(
             Err(_) => (None, Vec::new()),
         };
 
+        let pr_live = pr_number.and_then(|n| {
+            rt.block_on(async { client.get_pr(n).await }).ok()
+        });
+        let pr_is_draft = pr_live.as_ref().map(|p| p.is_draft);
+
         statuses.push(BranchCiStatus {
             branch: branch.clone(),
             sha,
@@ -406,6 +413,7 @@ pub fn fetch_ci_statuses(
             overall_status,
             check_runs,
             pr_number,
+            pr_is_draft,
         });
     }
 
@@ -1038,7 +1046,10 @@ pub(crate) fn update_ci_cache(repo: &GitRepo, stack: &Stack, statuses: &[BranchC
 
     let mut cache = CiCache::load(git_dir);
     for status in statuses {
-        cache.update(&status.branch, status.overall_status.clone(), None);
+        let pr_state = status.pr_is_draft.map(|is_draft| {
+            if is_draft { "DRAFT".to_string() } else { "OPEN".to_string() }
+        });
+        cache.update(&status.branch, status.overall_status.clone(), pr_state);
     }
 
     let valid_branches: Vec<String> = stack.branches.keys().cloned().collect();
@@ -1517,6 +1528,7 @@ mod tests {
             overall_status: Some(overall_status.to_string()),
             check_runs,
             pr_number: Some(123),
+            pr_is_draft: None,
         }
     }
 
@@ -1770,6 +1782,7 @@ mod tests {
                 completion_percent: None,
             }],
             pr_number: Some(42),
+            pr_is_draft: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();
@@ -1790,6 +1803,7 @@ mod tests {
             overall_status: None,
             check_runs: vec![],
             pr_number: None,
+            pr_is_draft: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();
