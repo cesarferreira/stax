@@ -1801,10 +1801,9 @@ fn rejected_push_branches(porcelain: &str, branches: &[&str]) -> Vec<String> {
         .lines()
         .filter(|line| line.starts_with("!\t"))
         .filter_map(|line| {
-            branches
-                .iter()
-                .find(|branch| line.contains(&format!("refs/heads/{}", branch)))
-                .map(|branch| (*branch).to_string())
+            let local_ref = line.split('\t').nth(1)?.split(':').next()?;
+            let branch = local_ref.strip_prefix("refs/heads/")?;
+            branches.contains(&branch).then(|| branch.to_string())
         })
         .collect()
 }
@@ -2519,6 +2518,16 @@ mod tests {
         assert_eq!(
             rejected_push_branches(porcelain, &["feature-a", "feature-b", "feature-c"]),
             vec!["feature-b".to_string(), "feature-c".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejected_push_branches_matches_exact_branch_names() {
+        let porcelain = "!\trefs/heads/feature-a:refs/heads/feature-a\t[rejected]\n";
+
+        assert_eq!(
+            rejected_push_branches(porcelain, &["feature", "feature-a"]),
+            vec!["feature-a".to_string()]
         );
     }
 
