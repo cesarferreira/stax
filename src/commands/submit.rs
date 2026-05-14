@@ -15,6 +15,7 @@ use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Editor, Input, Select};
+use futures_util::future::join_all;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -90,6 +91,12 @@ struct PrPlan {
     needs_pr_update: bool,
     // Empty branches get pushed but no PR created
     is_empty: bool,
+}
+
+struct ExistingPrLookup {
+    branch: String,
+    existing_pr: Option<PrInfoWithHead>,
+    needs_full_scan_fallback: bool,
 }
 
 #[derive(Default, Clone)]
@@ -642,95 +649,92 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         let runtime = tokio::runtime::Runtime::new()?;
         let _enter = runtime.enter();
         let forge_client = ForgeClient::new(&remote_info)?;
-        let mut open_prs_by_head: Option<HashMap<String, PrInfoWithHead>> = None;
+        let mut lookup_inputs = Vec::new();
+        for branch in &branches_to_submit {
+            if empty_set.contains(branch) {
+                continue;
+            }
+
+            let meta = BranchMetadata::read(repo.inner(), branch)?
+                .context(format!("No metadata for branch {}", branch))?;
+            let metadata_pr_number = meta
+                .pr_info
+                .as_ref()
+                .filter(|p| p.number > 0)
+                .map(|p| p.number);
+            lookup_inputs.push((
+                branch.clone(),
+                metadata_pr_number,
+                remote_branches.contains(branch),
+            ));
+        }
+
+        let lookup_started_at = Instant::now();
+        let lookup_results = runtime.block_on(async {
+            join_all(lookup_inputs.into_iter().map(
+                |(branch, metadata_pr_number, has_remote_branch)| {
+                    discover_existing_pr(
+                        forge_client.clone(),
+                        branch,
+                        metadata_pr_number,
+                        has_remote_branch,
+                    )
+                },
+            ))
+            .await
+        });
+        timings.open_pr_discovery += lookup_started_at.elapsed();
+
+        let mut lookups_by_branch = HashMap::new();
+        for lookup in lookup_results {
+            let lookup = lookup?;
+            lookups_by_branch.insert(lookup.branch.clone(), lookup);
+        }
+
+        if lookups_by_branch
+            .values()
+            .any(|lookup| lookup.needs_full_scan_fallback)
+        {
+            full_scan_fallbacks += lookups_by_branch
+                .values()
+                .filter(|lookup| lookup.needs_full_scan_fallback)
+                .count();
+            if verbose && !quiet {
+                println!("    Falling back to full open PR scan for metadata mismatches");
+            }
+
+            let lookup_started_at = Instant::now();
+            let open_prs_by_head =
+                runtime.block_on(async { forge_client.list_open_prs_by_head().await })?;
+            timings.open_pr_discovery += lookup_started_at.elapsed();
+            if verbose && !quiet {
+                println!("      Cached {} open PRs", open_prs_by_head.len());
+            }
+
+            for lookup in lookups_by_branch.values_mut() {
+                if lookup.needs_full_scan_fallback {
+                    lookup.existing_pr = open_prs_by_head.get(&lookup.branch).cloned();
+                }
+            }
+        }
 
         for branch in &branches_to_submit {
             let meta = BranchMetadata::read(repo.inner(), branch)?
                 .context(format!("No metadata for branch {}", branch))?;
 
             let is_empty = empty_set.contains(branch);
-            let had_metadata_pr = meta.pr_info.as_ref().filter(|p| p.number > 0).is_some();
 
             // Check if PR exists (skip for empty branches)
-            let mut existing_pr: Option<PrInfoWithHead> = None;
+            let existing_pr = lookups_by_branch
+                .get(branch)
+                .and_then(|lookup| lookup.existing_pr.clone());
             if !is_empty {
                 if verbose && !quiet {
                     println!("    Checking PR for {}", branch.cyan());
-                }
-
-                if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
-                    if verbose && !quiet {
-                        println!("      Using metadata PR #{}", pr_info.number);
-                    }
-
-                    let lookup_started_at = Instant::now();
-                    match runtime
-                        .block_on(async { forge_client.get_pr_with_head(pr_info.number).await })
-                    {
-                        Ok(pr) => {
-                            let state = pr.info.state.to_ascii_lowercase();
-                            if pr.head == *branch && matches!(state.as_str(), "open" | "opened") {
-                                existing_pr = Some(pr);
-                            } else if verbose && !quiet {
-                                println!(
-                                    "      PR #{} head '{}' does not match '{}', trying head lookup",
-                                    pr_info.number, pr.head, branch
-                                );
-                            }
-                        }
-                        Err(_) => {
-                            if verbose && !quiet {
-                                println!(
-                                    "      Failed to fetch PR #{} from metadata, trying head lookup",
-                                    pr_info.number
-                                );
-                            }
-                        }
-                    }
-                    timings.open_pr_discovery += lookup_started_at.elapsed();
-                }
-
-                if existing_pr.is_none() {
-                    let lookup_started_at = Instant::now();
-                    existing_pr = runtime
-                        .block_on(async { forge_client.find_open_pr_by_head(branch).await })?;
-                    timings.open_pr_discovery += lookup_started_at.elapsed();
-                    if verbose && !quiet {
-                        if let Some(found) = &existing_pr {
-                            println!("      Found open PR #{} via head lookup", found.info.number);
-                        } else {
-                            println!("      No open PR found via head lookup");
-                        }
-                    }
-                }
-
-                if existing_pr.is_none() && (had_metadata_pr || remote_branches.contains(branch)) {
-                    full_scan_fallbacks += 1;
-                    if verbose && !quiet {
-                        println!("      Falling back to full open PR scan (metadata mismatch)");
-                    }
-                    if open_prs_by_head.is_none() {
-                        let lookup_started_at = Instant::now();
-                        let prs = runtime
-                            .block_on(async { forge_client.list_open_prs_by_head().await })?;
-                        timings.open_pr_discovery += lookup_started_at.elapsed();
-                        if verbose && !quiet {
-                            println!("      Cached {} open PRs", prs.len());
-                        }
-                        open_prs_by_head = Some(prs);
-                    }
-                    if let Some(map) = &open_prs_by_head {
-                        existing_pr = map.get(branch).cloned();
-                        if verbose && !quiet {
-                            if let Some(found) = &existing_pr {
-                                println!(
-                                    "      Found open PR #{} in fallback list",
-                                    found.info.number
-                                );
-                            } else {
-                                println!("      No open PR found in fallback list");
-                            }
-                        }
+                    if let Some(found) = &existing_pr {
+                        println!("      Found open PR #{}", found.info.number);
+                    } else {
+                        println!("      No open PR found");
                     }
                 }
             } else if verbose && !quiet {
@@ -1892,6 +1896,35 @@ fn validate_narrow_scope_submit(
     }
 
     Ok(())
+}
+
+async fn discover_existing_pr(
+    forge_client: ForgeClient,
+    branch: String,
+    metadata_pr_number: Option<u64>,
+    has_remote_branch: bool,
+) -> Result<ExistingPrLookup> {
+    let mut existing_pr = None;
+    let had_metadata_pr = metadata_pr_number.is_some();
+
+    if let Some(pr_number) = metadata_pr_number {
+        if let Ok(pr) = forge_client.get_pr_with_head(pr_number).await {
+            let state = pr.info.state.to_ascii_lowercase();
+            if pr.head == branch && matches!(state.as_str(), "open" | "opened") {
+                existing_pr = Some(pr);
+            }
+        }
+    }
+
+    if existing_pr.is_none() {
+        existing_pr = forge_client.find_open_pr_by_head(&branch).await?;
+    }
+
+    Ok(ExistingPrLookup {
+        branch,
+        needs_full_scan_fallback: existing_pr.is_none() && (had_metadata_pr || has_remote_branch),
+        existing_pr,
+    })
 }
 
 /// Check if a branch needs to be pushed (local differs from remote)
