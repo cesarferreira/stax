@@ -8,7 +8,9 @@ use anyhow::Result;
 use colored::Colorize;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
 
 const LINKED_WORKTREE_GLYPH: &str = "↳";
 
@@ -189,6 +191,21 @@ pub fn run(
         })
         .collect::<Vec<_>>();
     let ahead_behind = repo.commits_ahead_behind_many(&ahead_behind_pairs);
+    let line_diff_pairs = ordered_branches
+        .iter()
+        .map(|name| {
+            stack
+                .branches
+                .get(name)
+                .and_then(|b| b.parent.clone())
+                .map(|parent| (parent, name.clone()))
+        })
+        .collect::<Vec<_>>();
+    let line_diff_stats = if json {
+        get_line_diff_stats_many(workdir.to_path_buf(), line_diff_pairs)
+    } else {
+        vec![(0, 0); ordered_branches.len()]
+    };
 
     for (idx, name) in ordered_branches.iter().enumerate() {
         let info = stack.branches.get(name);
@@ -197,15 +214,7 @@ pub fn run(
             .get(idx)
             .and_then(|result| result.as_ref().ok().copied())
             .unwrap_or((0, 0));
-        // Only compute line stats for JSON output (expensive subprocess per branch)
-        let (lines_added, lines_deleted) = if json {
-            parent
-                .as_deref()
-                .and_then(|p| get_line_diff_stats(workdir, p, name))
-                .unwrap_or((0, 0))
-        } else {
-            (0, 0)
-        };
+        let (lines_added, lines_deleted) = line_diff_stats.get(idx).copied().unwrap_or((0, 0));
 
         let pr_state = info.and_then(|b| b.pr_state.clone()).and_then(|s| {
             if s.trim().is_empty() {
@@ -794,11 +803,32 @@ mod tests {
 }
 
 /// Get line additions and deletions between parent and branch
-fn get_line_diff_stats(
-    workdir: &std::path::Path,
-    parent: &str,
-    branch: &str,
-) -> Option<(usize, usize)> {
+fn get_line_diff_stats_many(
+    workdir: PathBuf,
+    branch_pairs: Vec<Option<(String, String)>>,
+) -> Vec<(usize, usize)> {
+    let handles = branch_pairs
+        .into_iter()
+        .map(|pair| {
+            pair.map(|(parent, branch)| {
+                let workdir = workdir.clone();
+                thread::spawn(move || {
+                    get_line_diff_stats(&workdir, &parent, &branch).unwrap_or((0, 0))
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    handles
+        .into_iter()
+        .map(|handle| match handle {
+            Some(handle) => handle.join().unwrap_or((0, 0)),
+            None => (0, 0),
+        })
+        .collect()
+}
+
+fn get_line_diff_stats(workdir: &Path, parent: &str, branch: &str) -> Option<(usize, usize)> {
     let output = Command::new("git")
         .args(["diff", "--numstat", &format!("{}...{}", parent, branch)])
         .current_dir(workdir)
