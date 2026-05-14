@@ -8,7 +8,7 @@ use anyhow::Result;
 use colored::Colorize;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::thread;
 
@@ -202,7 +202,7 @@ pub fn run(
         })
         .collect::<Vec<_>>();
     let line_diff_stats = if json {
-        get_line_diff_stats_many(workdir.to_path_buf(), line_diff_pairs)
+        get_line_diff_stats_many(workdir, &line_diff_pairs)
     } else {
         vec![(0, 0); ordered_branches.len()]
     };
@@ -804,28 +804,29 @@ mod tests {
 
 /// Get line additions and deletions between parent and branch
 fn get_line_diff_stats_many(
-    workdir: PathBuf,
-    branch_pairs: Vec<Option<(String, String)>>,
+    workdir: &Path,
+    branch_pairs: &[Option<(String, String)>],
 ) -> Vec<(usize, usize)> {
-    let handles = branch_pairs
-        .into_iter()
-        .map(|pair| {
-            pair.map(|(parent, branch)| {
-                let workdir = workdir.clone();
-                thread::spawn(move || {
-                    get_line_diff_stats(&workdir, &parent, &branch).unwrap_or((0, 0))
+    thread::scope(|scope| {
+        let handles = branch_pairs
+            .iter()
+            .map(|pair| {
+                pair.as_ref().map(|(parent, branch)| {
+                    scope.spawn(move || {
+                        get_line_diff_stats(workdir, parent, branch).unwrap_or((0, 0))
+                    })
                 })
             })
-        })
-        .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
 
-    handles
-        .into_iter()
-        .map(|handle| match handle {
-            Some(handle) => handle.join().unwrap_or((0, 0)),
-            None => (0, 0),
-        })
-        .collect()
+        handles
+            .into_iter()
+            .map(|handle| match handle {
+                Some(handle) => handle.join().unwrap_or((0, 0)),
+                None => (0, 0),
+            })
+            .collect()
+    })
 }
 
 fn get_line_diff_stats(workdir: &Path, parent: &str, branch: &str) -> Option<(usize, usize)> {
