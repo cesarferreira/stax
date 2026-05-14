@@ -157,20 +157,28 @@ pub fn bottom() -> Result<()> {
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
 
+    drop(repo);
+    bottom_with_loaded_stack(&stack, &workdir, &current)
+}
+
+pub(crate) fn bottom_with_loaded_stack(
+    stack: &Stack,
+    workdir: &std::path::Path,
+    current: &str,
+) -> Result<()> {
     // Get the current stack and find the bottom (first branch above trunk)
-    let current_stack = stack.current_stack(&current);
+    let current_stack = stack.current_stack(current);
 
     // Find the first branch that's not trunk
     let bottom_branch = current_stack.iter().find(|b| *b != &stack.trunk);
 
     match bottom_branch {
         Some(target) => {
-            if target == &current {
+            if target == current {
                 println!("{}", "Already at the bottom of the stack.".dimmed());
                 return Ok(());
             }
-            drop(repo);
-            switch_branch(&workdir, &current, target)?;
+            switch_branch(workdir, current, target)?;
             println!("Switched to branch '{}'", target.bright_cyan());
         }
         None => {

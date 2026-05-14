@@ -9,15 +9,17 @@ use std::process::Command;
 pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let original = repo.current_branch()?;
+    let workdir = repo.workdir()?.to_path_buf();
+    let stack = Stack::load(&repo)?;
 
     println!("{}", "Cascading stack...".bold());
 
     // Warn if local trunk is behind its remote-tracking ref. This uses the
     // cached remote refs (no network call) so it's instant. The user can run
     // `stax rs` to fetch and sync trunk before cascading.
-    warn_if_trunk_stale(&repo);
+    warn_if_trunk_stale(&repo, &stack);
 
-    commands::navigate::bottom()?;
+    commands::navigate::bottom_with_loaded_stack(&stack, &workdir, &original)?;
     // A bottom-anchored restack already walks ancestors/current/descendants for
     // this stack, so we do not need a follow-up upstack restack.
     commands::restack::run(
@@ -59,9 +61,8 @@ pub fn run(no_pr: bool, no_submit: bool, auto_stash_pop: bool) -> Result<()> {
 /// Check whether local trunk is behind its remote-tracking ref and print a
 /// warning if so. Uses the cached remote refs — no network call. Non-fatal:
 /// the user may intentionally be working offline or not ready to sync yet.
-fn warn_if_trunk_stale(repo: &GitRepo) {
+fn warn_if_trunk_stale(repo: &GitRepo, stack: &Stack) {
     let Ok(config) = Config::load() else { return };
-    let Ok(stack) = Stack::load(repo) else { return };
     let Ok(workdir) = repo.workdir() else { return };
 
     let remote_ref = format!("{}/{}", config.remote_name(), stack.trunk);
