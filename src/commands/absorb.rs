@@ -411,7 +411,6 @@ fn collect_file_attribution(
             "log",
             "--format=commit:%H",
             "--name-only",
-            "--diff-filter=AM",
             "--reverse",
             "--ancestry-path",
             &format!("{}..{}", base, top_branch),
