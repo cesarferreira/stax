@@ -6160,7 +6160,7 @@ mod forge_mock_tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
-    use wiremock::matchers::{method, path, path_regex, query_param};
+    use wiremock::matchers::{body_string_contains, method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn ensure_crypto_provider() {
@@ -6489,6 +6489,30 @@ mod forge_mock_tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 github_pull_fixture_with_details(number, branch, "main", title, body)
             ])))
+            .mount(mock_server)
+            .await;
+    }
+
+    async fn mount_github_review_status(mock_server: &MockServer, decision: &str) {
+        let nodes = if decision == "APPROVED" {
+            serde_json::json!([{ "state": "APPROVED" }])
+        } else {
+            serde_json::json!([])
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("reviewDecision"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewDecision": decision,
+                            "reviews": { "nodes": nodes }
+                        }
+                    }
+                }
+            })))
             .mount(mock_server)
             .await;
     }
@@ -7955,6 +7979,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
+        mount_github_review_status(&mock_server, "APPROVED").await;
+
         // During the "already merged" path, merge must still retarget the next PR to trunk.
         Mock::given(method("PATCH"))
             .and(path("/repos/test/repo/pulls/102"))
@@ -8203,6 +8229,8 @@ mod forge_mock_tests {
         let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
         assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
 
+        mount_github_review_status(&mock_server, "APPROVED").await;
+
         let merge_output = run_stax_with_env(
             &repo,
             home.path(),
@@ -8303,6 +8331,8 @@ mod forge_mock_tests {
             })))
             .mount(&mock_server)
             .await;
+
+        mount_github_review_status(&mock_server, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -8436,6 +8466,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
+        mount_github_review_status(&mock_server, "APPROVED").await;
+
         let merge_output = run_stax_with_env(
             &repo,
             home.path(),
@@ -8551,6 +8583,8 @@ mod forge_mock_tests {
             })))
             .mount(&mock_server)
             .await;
+
+        mount_github_review_status(&mock_server, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -8703,6 +8737,8 @@ mod forge_mock_tests {
             })))
             .mount(&mock_server)
             .await;
+
+        mount_github_review_status(&mock_server, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -8891,6 +8927,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
+        mount_github_review_status(&mock_server, "APPROVED").await;
+
         let merge_output = run_stax_with_env(
             &repo,
             home.path(),
@@ -9059,6 +9097,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
+        mount_github_review_status(&mock_server, "APPROVED").await;
+
         let merge_output = run_stax_with_env(
             &repo,
             home.path(),
@@ -9217,6 +9257,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
+        mount_github_review_status(&mock_server, "APPROVED").await;
+
         let merge_output = run_stax_with_env(
             &repo,
             home.path(),
@@ -9358,6 +9400,8 @@ mod forge_mock_tests {
             .with_priority(2)
             .mount(&mock_server)
             .await;
+
+        mount_github_review_status(&mock_server, "APPROVED").await;
 
         let queue_output = run_stax_with_env(
             &repo,
@@ -11182,6 +11226,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
+        mount_github_review_status(&mock_server, "APPROVED").await;
+
         install_reject_all_pre_receive(&remote_root);
 
         let merge_output = run_stax_with_env(
@@ -11340,6 +11386,8 @@ mod forge_mock_tests {
             })))
             .mount(&mock_server)
             .await;
+
+        mount_github_review_status(&mock_server, "APPROVED").await;
 
         install_reject_all_pre_receive(&remote_root);
 
@@ -11527,6 +11575,8 @@ mod forge_mock_tests {
                 .mount(&mock_server)
                 .await;
         }
+
+        mount_github_review_status(&mock_server, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
