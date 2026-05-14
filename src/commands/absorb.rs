@@ -331,36 +331,15 @@ fn attribute_files(
 ) -> Result<AbsorbPlan> {
     let mut branch_files: HashMap<String, Vec<String>> = HashMap::new();
     let mut unattributed: Vec<String> = Vec::new();
+    let branch_by_file = collect_file_attribution(workdir, branch_boundaries)?;
 
     for file in files {
-        let mut attributed = false;
-
-        // Walk branches from top to bottom (most recent first)
-        for (branch, parent) in branch_boundaries.iter().rev() {
-            let output = Command::new("git")
-                .args([
-                    "log",
-                    "--oneline",
-                    "-1",
-                    &format!("{}..{}", parent, branch),
-                    "--",
-                    file,
-                ])
-                .current_dir(workdir)
-                .output()?;
-
-            if output.status.success() && !output.stdout.is_empty() {
-                branch_files
-                    .entry(branch.clone())
-                    .or_default()
-                    .push(file.clone());
-                attributed = true;
-                break;
-            }
-        }
-
-        if !attributed {
-            unattributed.push(file.clone());
+        match branch_by_file.get(file) {
+            Some(branch) => branch_files
+                .entry(branch.clone())
+                .or_default()
+                .push(file.clone()),
+            None => unattributed.push(file.clone()),
         }
     }
 
@@ -377,6 +356,92 @@ fn attribute_files(
         groups,
         unattributed,
     })
+}
+
+fn collect_branch_tips(
+    workdir: &Path,
+    branch_boundaries: &[(String, String)],
+) -> Result<HashMap<String, String>> {
+    let mut branch_tips = HashMap::new();
+
+    for (branch, _) in branch_boundaries {
+        let output = Command::new("git")
+            .args(["rev-parse", branch])
+            .current_dir(workdir)
+            .output()?;
+
+        if !output.status.success() {
+            bail!("Failed to resolve branch tip for '{}'", branch);
+        }
+
+        let tip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        branch_tips.insert(tip, branch.clone());
+    }
+
+    Ok(branch_tips)
+}
+
+fn next_branch_after(branch: &str, branch_boundaries: &[(String, String)]) -> Option<String> {
+    let idx = branch_boundaries
+        .iter()
+        .position(|(candidate, _)| candidate == branch)?;
+    branch_boundaries
+        .get(idx + 1)
+        .map(|(next_branch, _)| next_branch.clone())
+}
+
+fn collect_file_attribution(
+    workdir: &Path,
+    branch_boundaries: &[(String, String)],
+) -> Result<HashMap<String, String>> {
+    let mut branch_by_file = HashMap::new();
+    let Some((first_branch, base)) = branch_boundaries.first() else {
+        return Ok(branch_by_file);
+    };
+    let top_branch = branch_boundaries
+        .last()
+        .map(|(branch, _)| branch.as_str())
+        .unwrap_or(base);
+    let branch_tips = collect_branch_tips(workdir, branch_boundaries)?;
+    let mut current_branch = first_branch.clone();
+    let mut branch_after_current_commit: Option<String> = None;
+
+    let output = Command::new("git")
+        .args([
+            "log",
+            "--format=commit:%H",
+            "--name-only",
+            "--diff-filter=AM",
+            "--reverse",
+            "--ancestry-path",
+            &format!("{}..{}", base, top_branch),
+        ])
+        .current_dir(workdir)
+        .output()?;
+
+    if !output.status.success() {
+        bail!("Failed to collect file attribution for absorb");
+    }
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(commit) = line.strip_prefix("commit:") {
+            if let Some(next_branch) = branch_after_current_commit.take() {
+                current_branch = next_branch;
+            }
+            if let Some(tip_branch) = branch_tips.get(commit) {
+                branch_after_current_commit = next_branch_after(tip_branch, branch_boundaries);
+            }
+            continue;
+        }
+
+        branch_by_file.insert(line.to_string(), current_branch.clone());
+    }
+
+    Ok(branch_by_file)
 }
 
 /// Get the first-line commit message of a branch's tip.
