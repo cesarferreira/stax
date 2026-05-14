@@ -932,21 +932,24 @@ impl GitHubClient {
             }
         }
 
-        let (review_decision, approvals, changes_requested) = response
+        let data = response
             .data
-            .and_then(|d| d.repository)
-            .and_then(|r| r.pull_request)
-            .map(|pr| {
-                let approvals = pr
-                    .reviews
-                    .nodes
-                    .iter()
-                    .filter(|r| r.state == "APPROVED")
-                    .count();
-                let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
-                (pr.review_decision, approvals, changes_requested)
-            })
-            .unwrap_or((None, 0, false));
+            .context("GraphQL response did not include review data")?;
+        let repository = data
+            .repository
+            .context("GraphQL response did not include repository data")?;
+        let pr = repository
+            .pull_request
+            .context("GraphQL response did not include pull request review data")?;
+
+        let approvals = pr
+            .reviews
+            .nodes
+            .iter()
+            .filter(|r| r.state == "APPROVED")
+            .count();
+        let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
+        let review_decision = pr.review_decision;
 
         Ok((review_decision, approvals, changes_requested))
     }
@@ -1984,6 +1987,43 @@ mod tests {
 
         assert!(error.contains("Failed to get review status for PR #11"));
         assert!(error.contains("GraphQL error: rate limit exceeded"));
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_fails_closed_on_missing_review_data() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/11"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
+                "id": 11,
+                "number": 11,
+                "state": "open",
+                "draft": false,
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "title": "Ready-looking PR",
+                "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "repository": { "pullRequest": null } }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let error = client.get_pr_merge_status(11).await.unwrap_err();
+        let error = format!("{error:#}");
+
+        assert!(error.contains("Failed to get review status for PR #11"));
+        assert!(error.contains("pull request review data"));
     }
 
     #[tokio::test]
