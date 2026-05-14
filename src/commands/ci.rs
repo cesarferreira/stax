@@ -396,7 +396,7 @@ pub(crate) async fn fetch_ci_statuses_async(
     let mut statuses = join_all(
         prepared
             .iter()
-            .map(|(branch, sha, sha_short, pr_number)| async {
+            .map(|(branch, sha, sha_short, pr_number)| async move {
                 let check_runs_result = client.fetch_checks(repo, sha).await;
                 let (overall_status, check_runs) = match check_runs_result {
                     Ok((status, runs)) => (status, runs),
