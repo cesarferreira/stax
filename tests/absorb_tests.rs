@@ -216,3 +216,32 @@ fn absorb_moves_changes_to_their_owning_branch() {
         "hello from feature-a"
     );
 }
+
+#[test]
+fn absorb_keeps_branch_boundary_when_parent_tip_deletes_file() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "feature-a"]).assert_success();
+    repo.create_file("scratch.txt", "temporary");
+    repo.commit("add scratch file");
+    fs::remove_file(repo.path().join("scratch.txt")).unwrap();
+    repo.git(&["add", "scratch.txt"]);
+    repo.commit("remove scratch file");
+
+    repo.run_stax(&["create", "feature-b"]).assert_success();
+    repo.create_file("b.txt", "owned by feature-b");
+    repo.commit("add b.txt in feature-b");
+
+    repo.create_file("b.txt", "updated on top");
+    repo.git(&["add", "b.txt"]);
+
+    let output = repo.run_stax(&["absorb", "--dry-run"]);
+    output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+
+    assert!(
+        stdout.contains("feature-b"),
+        "b.txt should stay attributed to feature-b after a parent deletion-only tip: {stdout}"
+    );
+}
