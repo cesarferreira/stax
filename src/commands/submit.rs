@@ -1202,6 +1202,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             println!("{}", "Pushing branches...".bold());
         }
 
+        let mut pushed_branches = Vec::new();
         for plan in &branches_needing_push {
             // Squash all commits on the branch down to one before pushing
             if squash {
@@ -1211,34 +1212,44 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     }
                 }
             }
+            pushed_branches.push((plan.branch.clone(), repo.branch_commit(&plan.branch).ok()));
+        }
 
-            let push_timer = LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", plan.branch));
+        let push_timer = LiveTimer::maybe_new(
+            !quiet,
+            &format!(
+                "Pushing {} {}...",
+                pushed_branches.len(),
+                if pushed_branches.len() == 1 {
+                    "branch"
+                } else {
+                    "branches"
+                }
+            ),
+        );
+        let branch_names = pushed_branches
+            .iter()
+            .map(|(branch, _)| branch.as_str())
+            .collect::<Vec<_>>();
 
-            // Get local OID before push (this is what we're pushing)
-            let local_oid = repo.branch_commit(&plan.branch).ok();
-
-            match push_branch(repo.workdir()?, &remote_info.name, &plan.branch, no_verify) {
-                Ok(()) => {
-                    // Record after-OIDs
+        match push_branches(repo.workdir()?, &remote_info.name, &branch_names, no_verify) {
+            Ok(()) => {
+                for (branch, local_oid) in &pushed_branches {
                     if let Some(ref mut tx) = tx {
-                        let _ = tx.record_after(&repo, &plan.branch);
-                        if let Some(oid) = &local_oid {
-                            tx.record_remote_after(&remote_info.name, &plan.branch, oid);
+                        let _ = tx.record_after(&repo, branch);
+                        if let Some(oid) = local_oid {
+                            tx.record_remote_after(&remote_info.name, branch, oid);
                         }
                     }
-                    LiveTimer::maybe_finish_ok(push_timer, "done");
                 }
-                Err(e) => {
-                    LiveTimer::maybe_finish_err(push_timer, "failed");
-                    if let Some(tx) = tx {
-                        tx.finish_err(
-                            &format!("Push failed: {}", e),
-                            Some("push"),
-                            Some(&plan.branch),
-                        )?;
-                    }
-                    return Err(e);
+                LiveTimer::maybe_finish_ok(push_timer, "done");
+            }
+            Err(e) => {
+                LiveTimer::maybe_finish_err(push_timer, "failed");
+                if let Some(tx) = tx {
+                    tx.finish_err(&format!("Push failed: {}", e), Some("push"), None)?;
                 }
+                return Err(e);
             }
         }
     }
@@ -1737,30 +1748,64 @@ fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()>
     Ok(())
 }
 
-fn push_branch(
+fn push_branches(
     workdir: &std::path::Path,
     remote: &str,
-    branch: &str,
+    branches: &[&str],
     no_verify: bool,
 ) -> Result<()> {
-    let mut args = vec!["push", "--force-with-lease"];
+    let mut args = vec!["push", "--porcelain", "--force-with-lease"];
     if no_verify {
         args.push("--no-verify");
     }
-    args.extend(["-u", remote, branch]);
+    args.extend(["-u", remote]);
+    args.extend(branches.iter().copied());
 
-    let status = Command::new("git")
+    let output = Command::new("git")
         .args(args)
         .current_dir(workdir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("Failed to push branch")?;
+        .output()
+        .context("Failed to push branches")?;
 
-    if !status.success() {
-        anyhow::bail!("Failed to push branch {}", branch);
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let rejected = rejected_push_branches(&stdout, branches);
+        let details = stderr.trim();
+        if !rejected.is_empty() {
+            anyhow::bail!(
+                "Failed to push branches {}: rejected {}{}",
+                branches.join(", "),
+                rejected.join(", "),
+                if details.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", details)
+                }
+            );
+        }
+        if details.is_empty() {
+            anyhow::bail!("Failed to push branches: {}", branches.join(", "));
+        }
+        anyhow::bail!(
+            "Failed to push branches {}: {}",
+            branches.join(", "),
+            details
+        );
     }
     Ok(())
+}
+
+fn rejected_push_branches(porcelain: &str, branches: &[&str]) -> Vec<String> {
+    porcelain
+        .lines()
+        .filter(|line| line.starts_with("!\t"))
+        .filter_map(|line| {
+            let local_ref = line.split('\t').nth(1)?.split(':').next()?;
+            let branch = local_ref.strip_prefix("refs/heads/")?;
+            branches.contains(&branch).then(|| branch.to_string())
+        })
+        .collect()
 }
 
 fn resolve_branches_for_scope(stack: &Stack, current: &str, scope: SubmitScope) -> Vec<String> {
@@ -2450,8 +2495,9 @@ fn format_duration(duration: Duration) -> String {
 mod tests {
     use super::{
         build_ai_pr_details_prompt, existing_ai_prompt_items, existing_ai_targets_for_auto_accept,
-        parse_ai_pr_details, resolve_ai_targets, resolve_is_draft_without_prompt, truncate_ai_diff,
-        AiPrTargets, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS,
+        parse_ai_pr_details, rejected_push_branches, resolve_ai_targets,
+        resolve_is_draft_without_prompt, truncate_ai_diff, AiPrTargets, MAX_AI_DIFF_BYTES,
+        PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS,
     };
 
     #[test]
@@ -2459,6 +2505,29 @@ mod tests {
         assert_eq!(
             resolve_is_draft_without_prompt(false, false, false, true),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn rejected_push_branches_extracts_porcelain_failures() {
+        let porcelain = "\
+=\trefs/heads/feature-a:refs/heads/feature-a\t[up to date]\n\
+!\trefs/heads/feature-b:refs/heads/feature-b\t[rejected] (stale info)\n\
+!\trefs/heads/feature-c:refs/heads/feature-c\t[remote rejected] (hook declined)\n";
+
+        assert_eq!(
+            rejected_push_branches(porcelain, &["feature-a", "feature-b", "feature-c"]),
+            vec!["feature-b".to_string(), "feature-c".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejected_push_branches_matches_exact_branch_names() {
+        let porcelain = "!\trefs/heads/feature-a:refs/heads/feature-a\t[rejected]\n";
+
+        assert_eq!(
+            rejected_push_branches(porcelain, &["feature", "feature-a"]),
+            vec!["feature-a".to_string()]
         );
     }
 
