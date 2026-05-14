@@ -876,7 +876,7 @@ impl GitHubClient {
         let (review_decision, approvals, changes_requested) = self
             .get_pr_reviews(pr_number)
             .await
-            .unwrap_or((None, 0, false));
+            .with_context(|| format!("Failed to get review status for PR #{}", pr_number))?;
 
         Ok(PrMergeStatus {
             number: pr.number,
@@ -943,8 +943,7 @@ impl GitHubClient {
                     .iter()
                     .filter(|r| r.state == "APPROVED")
                     .count();
-                let changes_requested =
-                    pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
+                let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
                 (pr.review_decision, approvals, changes_requested)
             })
             .unwrap_or((None, 0, false));
@@ -1948,6 +1947,43 @@ mod tests {
         let client = create_test_client(&mock_server).await;
         let body = client.get_pr_body(11).await.unwrap();
         assert_eq!(body, "## Summary\n\nhello");
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_fails_closed_on_review_graphql_error() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/11"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
+                "id": 11,
+                "number": 11,
+                "state": "open",
+                "draft": false,
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "title": "Ready-looking PR",
+                "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "errors": [{ "message": "rate limit exceeded" }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let error = client.get_pr_merge_status(11).await.unwrap_err();
+        let error = format!("{error:#}");
+
+        assert!(error.contains("Failed to get review status for PR #11"));
+        assert!(error.contains("GraphQL error: rate limit exceeded"));
     }
 
     #[tokio::test]
