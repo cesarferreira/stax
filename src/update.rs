@@ -173,6 +173,18 @@ fn is_cargo_bin_path(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    fn cargo_home_with_binstall_metadata() -> tempfile::TempDir {
+        let temp = tempfile::tempdir().expect("temp cargo home");
+        let metadata_dir = temp.path().join("binstall");
+        fs::create_dir_all(&metadata_dir).expect("metadata dir");
+        fs::write(
+            metadata_dir.join("crates-v1.json"),
+            r#"{"name":"other"}{"name":"stax"}"#,
+        )
+        .expect("metadata");
+        temp
+    }
+
     #[test]
     fn test_detect_homebrew_arm() {
         let path = "/opt/homebrew/bin/stax";
@@ -255,14 +267,7 @@ mod tests {
 
     #[test]
     fn test_detect_cargo_binstall() {
-        let temp = tempfile::tempdir().expect("temp cargo home");
-        let metadata_dir = temp.path().join("binstall");
-        fs::create_dir_all(&metadata_dir).expect("metadata dir");
-        fs::write(
-            metadata_dir.join("crates-v1.json"),
-            r#"{"name":"other"}{"name":"stax"}"#,
-        )
-        .expect("metadata");
+        let temp = cargo_home_with_binstall_metadata();
 
         let path = "/home/user/.cargo/bin/stax";
         assert!(matches!(
@@ -273,14 +278,7 @@ mod tests {
 
     #[test]
     fn test_detect_cargo_binstall_windows() {
-        let temp = tempfile::tempdir().expect("temp cargo home");
-        let metadata_dir = temp.path().join("binstall");
-        fs::create_dir_all(&metadata_dir).expect("metadata dir");
-        fs::write(
-            metadata_dir.join("crates-v1.json"),
-            r#"{"name":"other"}{"name":"stax"}"#,
-        )
-        .expect("metadata");
+        let temp = cargo_home_with_binstall_metadata();
 
         let path = r"C:\Users\user\.cargo\bin\stax.exe";
         assert!(matches!(

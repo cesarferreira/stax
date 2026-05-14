@@ -6,6 +6,8 @@ stax ships prebuilt Windows binaries (`x86_64-pc-windows-msvc`). Unit tests run 
 
 Download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/cesarferreira/stax/releases/latest), extract `stax.exe` and `st.exe`, and place them on your `PATH`.
 
+If you install with `cargo install` or `cargo binstall`, update notifications and `st cli upgrade` detect the Windows `.cargo\bin` path and show the matching cargo upgrade command.
+
 ## What works
 
 All core stax features work on Windows without modification:
