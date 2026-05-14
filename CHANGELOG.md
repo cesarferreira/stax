@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.73.0] - 2026-05-14
+
+### Changed
+- Reuse loaded stack for cascade navigation (#398)
+- Parallelize status JSON line stats (#399)
+- Attribute absorb files with one log walk (#400)
+- Batch submit branch pushes (#402)
+- Parallelize submit PR discovery (#403)
+- Test fix
+
+### Fixed
+- Fail closed on review lookup errors (#401)
+- Detect Windows cargo installs (#397)
+
 ## [0.72.0] - 2026-05-14
 
 ### Changed
@@ -315,7 +329,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.72.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.73.0...HEAD
+[0.73.0]: https://github.com/cesarferreira/stax/compare/v0.72.0...v0.73.0
 [0.72.0]: https://github.com/cesarferreira/stax/compare/v0.71.1...v0.72.0
 [0.71.1]: https://github.com/cesarferreira/stax/compare/v0.71.0...v0.71.1
 [0.71.0]: https://github.com/cesarferreira/stax/compare/v0.70.0...v0.71.0
