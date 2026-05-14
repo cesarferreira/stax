@@ -8,6 +8,7 @@ use crate::github::GitHubClient;
 use crate::notifications::{self, BuiltInSound, Sound};
 use crate::remote::RemoteInfo;
 use anyhow::Result;
+use futures_util::future::join_all;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
@@ -375,6 +376,57 @@ pub fn run(
     Ok(())
 }
 
+/// Fetch CI statuses for all branches (async; use from an existing runtime or tests).
+pub(crate) async fn fetch_ci_statuses_async(
+    repo: &GitRepo,
+    client: &ForgeClient,
+    stack: &Stack,
+    branches_to_check: &[String],
+) -> Result<Vec<BranchCiStatus>> {
+    let prepared: Vec<(String, String, String, Option<u64>)> = branches_to_check
+        .iter()
+        .filter_map(|branch| {
+            let sha = repo.branch_commit(branch).ok()?;
+            let sha_short = sha.chars().take(7).collect::<String>();
+            let pr_number = stack.branches.get(branch).and_then(|b| b.pr_number);
+            Some((branch.clone(), sha, sha_short, pr_number))
+        })
+        .collect();
+
+    let mut statuses = join_all(
+        prepared
+            .iter()
+            .map(|(branch, sha, sha_short, pr_number)| async {
+                let check_runs_result = client.fetch_checks(repo, sha).await;
+                let (overall_status, check_runs) = match check_runs_result {
+                    Ok((status, runs)) => (status, runs),
+                    Err(_) => (None, Vec::new()),
+                };
+
+                let pr_live = match pr_number {
+                    Some(n) => client.get_pr(*n).await.ok(),
+                    None => None,
+                };
+                let pr_is_draft = pr_live.as_ref().map(|p| p.is_draft);
+
+                BranchCiStatus {
+                    branch: branch.clone(),
+                    sha: sha.clone(),
+                    sha_short: sha_short.clone(),
+                    overall_status,
+                    check_runs,
+                    pr_number: *pr_number,
+                    pr_is_draft,
+                }
+            }),
+    )
+    .await;
+
+    statuses.sort_by(|a, b| a.branch.cmp(&b.branch));
+
+    Ok(statuses)
+}
+
 /// Fetch CI statuses for all branches
 pub fn fetch_ci_statuses(
     repo: &GitRepo,
@@ -383,44 +435,12 @@ pub fn fetch_ci_statuses(
     stack: &Stack,
     branches_to_check: &[String],
 ) -> Result<Vec<BranchCiStatus>> {
-    let mut statuses: Vec<BranchCiStatus> = Vec::new();
-
-    for branch in branches_to_check {
-        let sha = match repo.branch_commit(branch) {
-            Ok(sha) => sha,
-            Err(_) => continue,
-        };
-
-        let sha_short = sha.chars().take(7).collect::<String>();
-        let pr_number = stack.branches.get(branch).and_then(|b| b.pr_number);
-
-        let check_runs_result = rt.block_on(async { client.fetch_checks(repo, &sha).await });
-
-        let (overall_status, check_runs) = match check_runs_result {
-            Ok((status, runs)) => (status, runs),
-            Err(_) => (None, Vec::new()),
-        };
-
-        let pr_live = pr_number.and_then(|n| {
-            rt.block_on(async { client.get_pr(n).await }).ok()
-        });
-        let pr_is_draft = pr_live.as_ref().map(|p| p.is_draft);
-
-        statuses.push(BranchCiStatus {
-            branch: branch.clone(),
-            sha,
-            sha_short,
-            overall_status,
-            check_runs,
-            pr_number,
-            pr_is_draft,
-        });
-    }
-
-    // Sort by branch name for consistent output
-    statuses.sort_by(|a, b| a.branch.cmp(&b.branch));
-
-    Ok(statuses)
+    rt.block_on(fetch_ci_statuses_async(
+        repo,
+        client,
+        stack,
+        branches_to_check,
+    ))
 }
 
 /// Compact single-branch display block
@@ -1470,10 +1490,18 @@ fn check_icon_label(check: &CheckRunInfo) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::stack::StackBranch;
+    use crate::engine::Stack;
+    use crate::forge::ForgeClient;
     use crate::git::GitRepo;
+    use crate::github::GitHubClient;
     use chrono::TimeZone;
+    use octocrab::Octocrab;
+    use std::collections::HashMap;
     use std::process::Command;
     use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn init_temp_repo() -> (TempDir, GitRepo) {
         let tempdir = TempDir::new().unwrap();
@@ -1486,6 +1514,135 @@ mod tests {
 
         let repo = GitRepo::open_from_path(tempdir.path()).unwrap();
         (tempdir, repo)
+    }
+
+    fn ensure_crypto_provider() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    /// Two local branches `b1` and `b2` (each one commit ahead of `main`) with distinct SHAs.
+    fn git_repo_with_two_branches() -> (TempDir, GitRepo, String, String) {
+        let tempdir = TempDir::new().unwrap();
+        let dir = tempdir.path();
+        let run = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(dir)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "ci-test@stax.local"]);
+        run(&["config", "user.name", "ci-test"]);
+        std::fs::write(dir.join("marker"), "0").unwrap();
+        run(&["add", "marker"]);
+        run(&["commit", "-m", "init"]);
+        run(&["checkout", "-b", "b1"]);
+        std::fs::write(dir.join("marker"), "1").unwrap();
+        run(&["add", "marker"]);
+        run(&["commit", "-m", "on-b1"]);
+        run(&["checkout", "main"]);
+        run(&["checkout", "-b", "b2"]);
+        std::fs::write(dir.join("marker"), "2").unwrap();
+        run(&["add", "marker"]);
+        run(&["commit", "-m", "on-b2"]);
+        let repo = GitRepo::open_from_path(dir).unwrap();
+        let sha_b1 = repo.branch_commit("b1").unwrap();
+        let sha_b2 = repo.branch_commit("b2").unwrap();
+        (tempdir, repo, sha_b1, sha_b2)
+    }
+
+    fn test_stack_for_ci_fetch(pr_a: u64, pr_b: u64) -> Stack {
+        let mut branches = HashMap::new();
+        branches.insert(
+            "b1".to_string(),
+            StackBranch {
+                name: "b1".to_string(),
+                parent: Some("main".to_string()),
+                parent_revision: None,
+                children: Vec::new(),
+                needs_restack: false,
+                pr_number: Some(pr_a),
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert(
+            "b2".to_string(),
+            StackBranch {
+                name: "b2".to_string(),
+                parent: Some("main".to_string()),
+                parent_revision: None,
+                children: Vec::new(),
+                needs_restack: false,
+                pr_number: Some(pr_b),
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    fn pr_json(number: u64, is_draft: bool) -> serde_json::Value {
+        serde_json::json!({
+            "url": format!("https://api.github.com/repos/test-owner/test-repo/pulls/{number}"),
+            "id": number,
+            "number": number,
+            "state": "open",
+            "draft": is_draft,
+            "head": { "ref": "head", "sha": "aaa", "label": "test-owner:head" },
+            "base": { "ref": "main", "sha": "bbb" }
+        })
+    }
+
+    fn check_runs_body(check_name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "total_count": 1,
+            "check_runs": [
+                {
+                    "id": 1,
+                    "name": check_name,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "html_url": null,
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:01:00Z"
+                }
+            ]
+        })
+    }
+
+    async fn mount_github_ci_mocks(server: &MockServer, sha_b1: &str, sha_b2: &str) {
+        let path_b1 = format!("/repos/test-owner/test-repo/commits/{sha_b1}/check-runs");
+        let path_b2 = format!("/repos/test-owner/test-repo/commits/{sha_b2}/check-runs");
+
+        Mock::given(method("GET"))
+            .and(path(path_b1.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(check_runs_body("ci-b1")))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(path_b2.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(check_runs_body("ci-b2")))
+            .mount(server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/201"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pr_json(201, false)))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/202"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(pr_json(202, true)))
+            .mount(server)
+            .await;
     }
 
     #[test]
@@ -2046,5 +2203,104 @@ mod tests {
 
         assert!(check_sort_key(&failed) < check_sort_key(&running));
         assert!(check_sort_key(&running) < check_sort_key(&passed));
+    }
+
+    #[test]
+    fn fetch_ci_statuses_merges_github_data_per_branch_sorted() {
+        ensure_crypto_provider();
+        let (_td, repo, sha_b1, sha_b2) = git_repo_with_two_branches();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mock_server = MockServer::start().await;
+            mount_github_ci_mocks(&mock_server, &sha_b1, &sha_b2).await;
+
+            let octocrab = Octocrab::builder()
+                .base_uri(mock_server.uri())
+                .unwrap()
+                .personal_token("test-token".to_string())
+                .build()
+                .unwrap();
+            let gh = GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo");
+            let client = ForgeClient::GitHub(gh);
+            let stack = test_stack_for_ci_fetch(201, 202);
+
+            // Input order is intentionally not alphabetical; output is sorted by branch name.
+            // `missing-branch` is skipped (no local ref).
+            let branches = vec![
+                "b2".to_string(),
+                "b1".to_string(),
+                "missing-branch".to_string(),
+            ];
+            let statuses = fetch_ci_statuses_async(&repo, &client, &stack, &branches)
+                .await
+                .unwrap();
+
+            assert_eq!(statuses.len(), 2);
+            assert_eq!(statuses[0].branch, "b1");
+            assert_eq!(statuses[1].branch, "b2");
+            assert_eq!(statuses[0].sha, sha_b1);
+            assert_eq!(statuses[1].sha, sha_b2);
+            assert_eq!(statuses[0].check_runs[0].name, "ci-b1");
+            assert_eq!(statuses[1].check_runs[0].name, "ci-b2");
+            assert_eq!(statuses[0].pr_number, Some(201));
+            assert_eq!(statuses[1].pr_number, Some(202));
+            assert_eq!(statuses[0].pr_is_draft, Some(false));
+            assert_eq!(statuses[1].pr_is_draft, Some(true));
+            assert_eq!(statuses[0].overall_status.as_deref(), Some("success"));
+            assert_eq!(statuses[1].overall_status.as_deref(), Some("success"));
+        });
+    }
+
+    #[test]
+    fn fetch_ci_statuses_branch_without_pr_skips_pull_request_fetch() {
+        ensure_crypto_provider();
+        let (_td, repo, sha_b1, _sha_b2) = git_repo_with_two_branches();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mock_server = MockServer::start().await;
+            let path_b1 = format!("/repos/test-owner/test-repo/commits/{sha_b1}/check-runs");
+            Mock::given(method("GET"))
+                .and(path(path_b1.as_str()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(check_runs_body("solo")))
+                .mount(&mock_server)
+                .await;
+
+            let octocrab = Octocrab::builder()
+                .base_uri(mock_server.uri())
+                .unwrap()
+                .personal_token("test-token".to_string())
+                .build()
+                .unwrap();
+            let gh = GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo");
+            let client = ForgeClient::GitHub(gh);
+
+            let mut branches = HashMap::new();
+            branches.insert(
+                "b1".to_string(),
+                StackBranch {
+                    name: "b1".to_string(),
+                    parent: Some("main".to_string()),
+                    parent_revision: None,
+                    children: Vec::new(),
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: None,
+                    pr_is_draft: None,
+                },
+            );
+            let stack = Stack {
+                branches,
+                trunk: "main".to_string(),
+            };
+
+            let statuses = fetch_ci_statuses_async(&repo, &client, &stack, &["b1".to_string()])
+                .await
+                .unwrap();
+            assert_eq!(statuses.len(), 1);
+            assert_eq!(statuses[0].branch, "b1");
+            assert_eq!(statuses[0].check_runs[0].name, "solo");
+            assert_eq!(statuses[0].pr_number, None);
+            assert_eq!(statuses[0].pr_is_draft, None);
+        });
     }
 }
