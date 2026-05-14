@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.72.0] - 2026-05-14
+
+### Changed
+- Add live stack watch view (#391)
+- Add draft and undraft commands for tracked PRs (#390)
+- Add tmux status bar and popup support (#393)
+- Refresh PR draft state from GitHub during rs (#394)
+- New screenshot
+- Parallelize fetch_ci_statuses with join_all (#395)
+
 ## [0.71.1] - 2026-05-13
 
 ### Changed
@@ -305,7 +315,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.71.1...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.72.0...HEAD
+[0.72.0]: https://github.com/cesarferreira/stax/compare/v0.71.1...v0.72.0
 [0.71.1]: https://github.com/cesarferreira/stax/compare/v0.71.0...v0.71.1
 [0.71.0]: https://github.com/cesarferreira/stax/compare/v0.70.0...v0.71.0
 [0.70.0]: https://github.com/cesarferreira/stax/compare/v0.69.2...v0.70.0
