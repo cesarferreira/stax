@@ -6493,6 +6493,29 @@ mod forge_mock_tests {
             .await;
     }
 
+    async fn mount_github_review_status(mock_server: &MockServer, decision: &str) {
+        let nodes = if decision == "APPROVED" {
+            serde_json::json!([{ "state": "APPROVED" }])
+        } else {
+            serde_json::json!([])
+        };
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewDecision": decision,
+                            "reviews": { "nodes": nodes }
+                        }
+                    }
+                }
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
     async fn mount_github_stack_links_off_sync(
         mock_server: &MockServer,
         number: u64,
@@ -7954,6 +7977,8 @@ mod forge_mock_tests {
             })))
             .mount(&mock_server)
             .await;
+
+        mount_github_review_status(&mock_server, "APPROVED").await;
 
         // During the "already merged" path, merge must still retarget the next PR to trunk.
         Mock::given(method("PATCH"))
