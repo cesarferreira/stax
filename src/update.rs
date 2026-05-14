@@ -136,10 +136,9 @@ pub fn show_update_notification() {
 
 /// Parse install method from a given path (for testing)
 fn install_method_from_path(path: &Path, cargo_home: Option<&Path>) -> InstallMethod {
-    let path = path.to_string_lossy();
-    if path.contains("/homebrew/") || path.contains("/Cellar/") {
+    if is_homebrew_path(path) {
         InstallMethod::Homebrew
-    } else if path.contains(".cargo/bin") {
+    } else if is_cargo_bin_path(path) {
         if binstall_metadata_contains_stax(cargo_home) {
             InstallMethod::CargoBinstall
         } else {
@@ -148,6 +147,26 @@ fn install_method_from_path(path: &Path, cargo_home: Option<&Path>) -> InstallMe
     } else {
         InstallMethod::Unknown
     }
+}
+
+fn is_homebrew_path(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        name == "homebrew" || name == "Cellar"
+    })
+}
+
+fn is_cargo_bin_path(path: &Path) -> bool {
+    let path = path.to_string_lossy();
+    let parts: Vec<&str> = path
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+
+    matches!(
+        parts.as_slice(),
+        [.., ".cargo", "bin", binary] if !binary.is_empty()
+    )
 }
 
 #[cfg(test)]
@@ -200,6 +219,15 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_cargo_windows() {
+        let path = r"C:\Users\user\.cargo\bin\stax.exe";
+        assert!(matches!(
+            install_method_from_path(Path::new(path), None),
+            InstallMethod::Cargo
+        ));
+    }
+
+    #[test]
     fn test_detect_unknown_usr_local_bin() {
         let path = "/usr/local/bin/stax";
         assert!(matches!(
@@ -237,6 +265,24 @@ mod tests {
         .expect("metadata");
 
         let path = "/home/user/.cargo/bin/stax";
+        assert!(matches!(
+            install_method_from_path(Path::new(path), Some(temp.path())),
+            InstallMethod::CargoBinstall
+        ));
+    }
+
+    #[test]
+    fn test_detect_cargo_binstall_windows() {
+        let temp = tempfile::tempdir().expect("temp cargo home");
+        let metadata_dir = temp.path().join("binstall");
+        fs::create_dir_all(&metadata_dir).expect("metadata dir");
+        fs::write(
+            metadata_dir.join("crates-v1.json"),
+            r#"{"name":"other"}{"name":"stax"}"#,
+        )
+        .expect("metadata");
+
+        let path = r"C:\Users\user\.cargo\bin\stax.exe";
         assert!(matches!(
             install_method_from_path(Path::new(path), Some(temp.path())),
             InstallMethod::CargoBinstall
