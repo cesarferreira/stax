@@ -1566,6 +1566,13 @@ enum PrCommands {
     /// Open the current branch PR in the browser
     Open,
 
+    /// Print or edit the current branch PR description
+    Body {
+        /// Open the PR description in $EDITOR and update it on save
+        #[arg(long)]
+        edit: bool,
+    },
+
     /// List open pull requests in the current repository
     List {
         /// Maximum number of pull requests to return (max: 100)
@@ -1992,6 +1999,7 @@ pub fn run() -> Result<()> {
         ),
         Commands::Pr { command } => match command.unwrap_or(PrCommands::Open) {
             PrCommands::Open => commands::pr::run_open(),
+            PrCommands::Body { edit } => commands::pr::run_body(edit),
             PrCommands::List { limit, json } => commands::pr::run_list(limit, json),
         },
         Commands::Issue { command } => match command {

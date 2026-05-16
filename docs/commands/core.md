@@ -63,7 +63,7 @@ st create --below -am "fix: patch CVE-2026-0001"
 | Command | What it does |
 |---|---|
 | `st standup` | Summarize recent activity (`--ai` for AI version, `--ai --style slack` for Slack-ready bullets) |
-| `st pr` / `st pr list` | Open current PR in browser · list open PRs |
+| `st pr` / `st pr body` / `st pr list` | Open current PR in browser · view/edit PR body · list open PRs |
 | `st issue list` | List open issues |
 | `st changelog` | Generate changelog between refs (auto-resolves last tag) |
 | `st open` | Open the repository in the browser |

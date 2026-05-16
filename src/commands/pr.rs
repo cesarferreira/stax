@@ -8,8 +8,11 @@ use crate::engine::Stack;
 use crate::forge::{ForgeClient, RepoPrListItem};
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use colored::Colorize;
+use std::io::Write;
+use std::process::Command;
+use termimad::MadSkin;
 
 const TITLE_MIN_WIDTH: usize = 24;
 const BRANCH_MIN_WIDTH: usize = 18;
@@ -74,6 +77,104 @@ pub fn run_list(limit: u8, json: bool) -> Result<()> {
 
     print_pr_table(&repo_label, &prs);
     Ok(())
+}
+
+/// Print or edit the PR body for the current branch.
+pub fn run_body(edit: bool) -> Result<()> {
+    let repo = GitRepo::open()?;
+    let current = repo.current_branch()?;
+    let stack = Stack::load(&repo)?;
+    let config = Config::load()?;
+
+    let branch_info = stack.branches.get(&current);
+    if branch_info.is_none() {
+        anyhow::bail!(
+            "Branch '{}' is not tracked. Use {} to track it first.",
+            current,
+            "stax branch track".cyan()
+        );
+    }
+
+    let pr_number = super::resolve_pr::resolve_pr_number(&repo, &stack, &current, &config)?;
+    if pr_number.is_none() {
+        anyhow::bail!(
+            "No PR found for branch '{}'. Use {} to create one.",
+            current,
+            "stax submit".cyan()
+        );
+    }
+    let pr_number = pr_number.unwrap();
+
+    let remote_info = RemoteInfo::from_repo(&repo, &config)?;
+    let rt = tokio::runtime::Runtime::new()?;
+    let _enter = rt.enter();
+    let client = ForgeClient::new(&remote_info)?;
+    let body = rt.block_on(async { client.get_pr_body(pr_number).await })?;
+
+    if edit {
+        let updated = edit_body(&body)?;
+        if updated == body {
+            println!("PR #{} body unchanged", pr_number.to_string().cyan());
+            return Ok(());
+        }
+
+        rt.block_on(async { client.update_pr_body(pr_number, &updated).await })?;
+        println!("Updated PR #{} body", pr_number.to_string().cyan());
+        return Ok(());
+    }
+
+    print_rendered_body(&body);
+    Ok(())
+}
+
+fn print_rendered_body(body: &str) {
+    let body = body.trim();
+    if body.is_empty() {
+        return;
+    }
+
+    let skin = MadSkin::default();
+    let rendered = skin.term_text(body);
+    println!("{}", rendered);
+}
+
+fn edit_body(body: &str) -> Result<String> {
+    let editor =
+        std::env::var("EDITOR").context("$EDITOR is not set; set EDITOR to edit PR body")?;
+    if editor.trim().is_empty() {
+        bail!("$EDITOR is empty; set EDITOR to edit PR body");
+    }
+
+    let mut file = tempfile::Builder::new()
+        .prefix("stax-pr-body-")
+        .suffix(".md")
+        .tempfile()
+        .context("Failed to create temporary PR body file")?;
+    file.write_all(body.as_bytes())
+        .context("Failed to write PR body to temporary file")?;
+    file.flush()
+        .context("Failed to flush temporary PR body file")?;
+
+    let path = file.path().to_path_buf();
+    let status = if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/C", &format!("{} \"{}\"", editor, path.display())])
+            .status()
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(format!("{} \"$1\"", editor))
+            .arg("stax-editor")
+            .arg(&path)
+            .status()
+    }
+    .context("Failed to launch $EDITOR")?;
+
+    if !status.success() {
+        bail!("$EDITOR exited with status {}", status);
+    }
+
+    std::fs::read_to_string(&path).context("Failed to read edited PR body")
 }
 
 fn print_pr_table(repo_label: &str, prs: &[RepoPrListItem]) {

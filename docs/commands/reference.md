@@ -113,6 +113,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st ci -w --alert` / `--alert <file>` / `--no-alert` | Success/error completion sounds for watch mode |
 | `st ci --verbose` / `--json` | Summary cards · JSON output |
 | `st pr` · `st pr open` | Open current branch PR |
+| `st pr body` · `st pr body --edit` | Print or edit the current branch PR description |
 | `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
 | `st issue list` | List open issues |
 | `st comments` | Show PR comments |
