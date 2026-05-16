@@ -55,6 +55,8 @@ stax undo [op-id]              # Undo last/specific operation
 stax redo [op-id]              # Redo last/specific undone operation
 
 stax pr                        # Open current branch PR
+stax pr body                   # Print current PR description
+stax pr body --edit            # Edit current PR description in $EDITOR
 stax open                      # Open repo in browser
 stax comments                  # Show current PR comments
 stax copy [--pr]               # Copy branch name or PR URL
@@ -287,6 +289,8 @@ stax log                           # Stack + commit details
 stax diff                          # Diff each branch vs parent + aggregate stack diff
 stax range-diff                    # Range-diff branches needing restack
 
+stax pr body                       # Print current PR description
+stax pr body --edit                # Edit current PR description in $EDITOR
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output
 

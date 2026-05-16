@@ -293,7 +293,7 @@ st config --set-ai
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |
 | `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |
-| `st pr` / `st pr list` / `st issue list` | Open current PR · list PRs · list issues |
+| `st pr` / `st pr body` / `st pr list` / `st issue list` | Open current PR · view/edit PR body · list PRs · list issues |
 
 Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands/reference.md](docs/commands/reference.md)
 
