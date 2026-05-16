@@ -6358,6 +6358,129 @@ mod forge_mock_tests {
         find_body_update(requests, "PATCH", path_name, "body")
     }
 
+    fn write_branch_pr_metadata(
+        repo: &TestRepo,
+        branch: &str,
+        parent_branch: &str,
+        pr_number: u64,
+        is_draft: Option<bool>,
+    ) {
+        let mut pr_info = serde_json::json!({
+            "number": pr_number,
+            "state": "OPEN"
+        });
+        if let Some(is_draft) = is_draft {
+            pr_info["isDraft"] = serde_json::json!(is_draft);
+        }
+        let metadata = serde_json::json!({
+            "parentBranchName": parent_branch,
+            "parentBranchRevision": repo.get_commit_sha(parent_branch),
+            "prInfo": pr_info
+        });
+
+        let mut child = Command::new("git")
+            .args(["hash-object", "-w", "--stdin"])
+            .current_dir(repo.path())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("Failed to hash metadata blob");
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .expect("metadata hash stdin")
+            .write_all(metadata.to_string().as_bytes())
+            .expect("Failed to write metadata JSON");
+        let output = child.wait_with_output().expect("Failed to hash metadata");
+        assert!(
+            output.status.success(),
+            "git hash-object failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let blob_hash = String::from_utf8(output.stdout)
+            .expect("metadata hash UTF-8")
+            .trim()
+            .to_string();
+        let update_ref = repo.git(&[
+            "update-ref",
+            &format!("refs/branch-metadata/{}", branch),
+            &blob_hash,
+        ]);
+        assert!(
+            update_ref.status.success(),
+            "git update-ref failed: {}",
+            TestRepo::stderr(&update_ref)
+        );
+    }
+
+    fn github_pull_fixture_with_draft(
+        number: u64,
+        head_branch: &str,
+        base_branch: &str,
+        is_draft: bool,
+    ) -> serde_json::Value {
+        let mut pr = github_pull_fixture(number, head_branch, base_branch, "aaaa");
+        pr["draft"] = serde_json::json!(is_draft);
+        pr
+    }
+
+    async fn mount_github_pr_draft_transition(
+        mock_server: &MockServer,
+        number: u64,
+        branch: &str,
+        remote_is_draft: bool,
+        desired_is_draft: bool,
+    ) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/test/repo/pulls/{}", number)))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(github_pull_fixture_with_draft(
+                    number,
+                    branch,
+                    "main",
+                    remote_is_draft,
+                )),
+            )
+            .mount(mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains(format!(
+                "pullRequest(number: {})",
+                number
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "repository": {
+                        "pullRequest": { "id": format!("PR_node_{}", number) }
+                    }
+                }
+            })))
+            .mount(mock_server)
+            .await;
+
+        let mutation = if desired_is_draft {
+            "convertPullRequestToDraft"
+        } else {
+            "markPullRequestReadyForReview"
+        };
+        let is_draft_after = desired_is_draft;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains(mutation))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    mutation: {
+                        "pullRequest": { "isDraft": is_draft_after }
+                    }
+                }
+            })))
+            .mount(mock_server)
+            .await;
+    }
+
     fn issue_comment_fixture(id: u64, body: &str) -> serde_json::Value {
         serde_json::json!({
             "id": id,
@@ -6813,6 +6936,107 @@ mod forge_mock_tests {
 
         // Verify mock server is running
         assert!(!mock_server.uri().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_undraft_fetches_remote_when_local_metadata_is_stale_false() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-undraft-stale");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 405, Some(false));
+        mount_github_pr_draft_transition(&mock_server, 405, &branch, true, false).await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["undraft"]);
+        assert!(
+            output.status.success(),
+            "undraft failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        assert!(
+            TestRepo::stdout(&output).contains("ready for review"),
+            "expected ready-for-review output, got: {}",
+            TestRepo::stdout(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().any(|request| {
+                request.method.as_str() == "GET"
+                    && request.url.path() == "/repos/test/repo/pulls/405"
+            }),
+            "undraft should confirm remote PR state before trusting local metadata"
+        );
+        assert!(
+            requests.iter().any(|request| {
+                request.method.as_str() == "POST"
+                    && request.url.path() == "/graphql"
+                    && String::from_utf8_lossy(&request.body)
+                        .contains("markPullRequestReadyForReview")
+            }),
+            "undraft should mark a remotely-draft PR ready even when local metadata says published"
+        );
+
+        let metadata_ref = format!("refs/branch-metadata/{}", branch);
+        let metadata_output = repo.git(&["show", &metadata_ref]);
+        assert!(metadata_output.status.success());
+        let metadata: serde_json::Value =
+            serde_json::from_str(&TestRepo::stdout(&metadata_output)).unwrap();
+        assert_eq!(metadata["prInfo"]["isDraft"], false);
+    }
+
+    #[tokio::test]
+    async fn test_undraft_noops_only_after_remote_confirms_published() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-undraft-already-published");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 406, None);
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/406"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture_with_draft(406, &branch, "main", false)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["undraft"]);
+        assert!(
+            output.status.success(),
+            "undraft failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        assert!(
+            TestRepo::stdout(&output).contains("already published"),
+            "expected no-op output after remote confirmation, got: {}",
+            TestRepo::stdout(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().any(|request| {
+                request.method.as_str() == "GET"
+                    && request.url.path() == "/repos/test/repo/pulls/406"
+            }),
+            "already-published no-op should be based on remote state"
+        );
+        assert!(
+            !requests.iter().any(|request| {
+                request.method.as_str() == "POST"
+                    && request.url.path() == "/graphql"
+                    && String::from_utf8_lossy(&request.body)
+                        .contains("markPullRequestReadyForReview")
+            }),
+            "already-published remote PR should not be mutated"
+        );
     }
 
     #[tokio::test]
