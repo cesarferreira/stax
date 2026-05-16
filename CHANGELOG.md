@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.74.0] - 2026-05-16
+
+### Changed
+- Add PR body view and editing (#407)
+
+### Fixed
+- Verify remote draft state before undraft no-op (#406)
+
 ## [0.73.0] - 2026-05-14
 
 ### Changed
@@ -329,7 +337,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.73.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.74.0...HEAD
+[0.74.0]: https://github.com/cesarferreira/stax/compare/v0.73.0...v0.74.0
 [0.73.0]: https://github.com/cesarferreira/stax/compare/v0.72.0...v0.73.0
 [0.72.0]: https://github.com/cesarferreira/stax/compare/v0.71.1...v0.72.0
 [0.71.1]: https://github.com/cesarferreira/stax/compare/v0.71.0...v0.71.1
