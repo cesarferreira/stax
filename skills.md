@@ -66,6 +66,8 @@ stax standup --ai              # AI-generated spoken standup update (colored car
 stax standup --ai --style slack  # AI-generated Slack-ready Yesterday/Today bullets
 stax standup --ai --jit   # AI standup plus Jira next-up context via jit (github.com/cesarferreira/jit)
 stax changelog <from> [to]     # Changelog between refs
+stax changelog find [query]    # Fuzzy-find CHANGELOG.md entries; rows show release + section
+stax changelog --find [query]  # Flag form of changelog fuzzy-find
 stax generate                  # Interactive picker: PR body, PR title, or commit message (AI)
 stax gen --pr-body             # Non-interactive: refresh open PR body from diff
 stax gen --pr-title            # Non-interactive: refresh open PR title from diff
@@ -323,6 +325,9 @@ stax standup --ai --jit           # Add Jira context via jit (github.com/cesarfe
 
 stax changelog v1.2.0 HEAD         # Changelog from ref to ref
 stax changelog v1.2.0 --path src/  # Filter by path
+stax changelog find                # Interactive fuzzy picker over CHANGELOG.md entries
+stax changelog find "auth fix"     # Search entries and show containing release
+stax changelog --find "auth fix"   # Flag form for scripts
 stax changelog v1.2.0 --json       # JSON output
 
 stax gen                           # Interactive AI picker (PR body / title / commit msg)

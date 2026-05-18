@@ -967,12 +967,15 @@ enum Commands {
         no_template: bool,
     },
 
-    /// Generate changelog between two refs
+    /// Generate changelog between refs or fuzzy-find CHANGELOG.md entries with `find [query]`
     Changelog {
-        /// Starting ref (tag, branch, or commit). Defaults to last tag if omitted.
+        /// Starting ref (tag, branch, or commit). Defaults to last tag if omitted. Use `find [query]` to fuzzy-find CHANGELOG.md.
         from: Option<String>,
         /// Ending ref (defaults to HEAD)
         to: Option<String>,
+        /// Fuzzy-find entries in CHANGELOG.md. Omit QUERY to open an interactive picker.
+        #[arg(long, alias = "search", value_name = "QUERY", num_args = 0..=1)]
+        find: Option<Option<String>>,
         /// Only consider tags matching this prefix when auto-resolving (e.g. release/ios)
         #[arg(long)]
         tag_prefix: Option<String>,
@@ -2117,16 +2120,11 @@ pub fn run() -> Result<()> {
         Commands::Changelog {
             from,
             to,
+            find,
             tag_prefix,
             path,
             json,
-        } => commands::changelog::run(
-            from,
-            to.unwrap_or_else(|| "HEAD".to_string()),
-            tag_prefix,
-            path,
-            json,
-        ),
+        } => commands::changelog::run(from, to, find, tag_prefix, path, json),
         Commands::Rename {
             name,
             edit,

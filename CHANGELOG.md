@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+### Added
+- Add release-aware fuzzy search for `stax changelog --find`.
+- Add `stax changelog find [query]` as a discoverable fuzzy-find command form with colorful release-aware rows.
+
+### Fixed
+- Keep interactive `stax changelog find` rows plain so fuzzy-select highlighting renders cleanly.
+
 ## [0.75.0] - 2026-05-19
 
 ### Changed

@@ -2,7 +2,7 @@
 
 - When changing the `stax co` UI, match the `stax ls` visual language (colors, tree/indentation) and confirm it visually. Do not ship a redesign without verifying the output looks like the `ls` tree and that selection emphasis is obvious.
 - Ahead/behind label changes must cover both `stax co` and `stax ls` renderers; checkout and status format divergence labels separately, so verify both command outputs.
-- When using `dialoguer::FuzzySelect` with pre-colored ANSI rows, do not rely on `ColorfulTheme::active_item_style` while `highlight_matches(false)` is set. Use a custom `Theme` with explicit active/inactive row renderings so selected-row styling still applies without corrupting ANSI color output.
+- When using `dialoguer::FuzzySelect`, keep item strings plain by default and let the picker own highlight styling; if rows must contain ANSI color, use a custom `Theme` with explicit active/inactive rendering and verify the selected row visually.
 - Stack tree lane colors must come from `src/commands/stack_palette.rs`; do not duplicate per-command color arrays or `st ls`/`st co` will drift.
 - Interactive prompts rendered on `stderr` must style item text against `stderr` and gate interactivity on `stdin` + `stderr`; shell integration can capture stdout for `--shell-output` while dialoguer prompts still run on stderr.
 - TUI changes must be checked at standard terminal widths (around 80 columns); keep one-line summaries and footers compact, and prefer a single contextual action over listing every shortcut.
@@ -30,6 +30,7 @@
 - Tests that must run outside any Git repository must not use temp dirs rooted under `STAX_TEST_TMPDIR`/`TMPDIR` inside the workspace; `git discover` walks parent directories, so those fixtures can accidentally execute inside the repo during `make test-native`.
 - For full-suite test runs, use `make test` or `just test` (never `cargo test`); on macOS the default should use Docker for performance and consistency.
 - Integration-test shims for external CLIs must track the option shapes used in production code; when tmux launch commands add flags such as `-c` or `new-window` flows, update the fake `tmux` script in the same change.
+- When running native full-suite validation from inside tmux, unset `TMUX` and `TMUX_PANE`; worktree lane tests simulate both inside- and outside-tmux launches and inherit those variables through the test helper.
 - Release automation that rewrites `CHANGELOG.md` must derive `Unreleased` notes from commits since the latest version tag and fail before publishing when that range is empty; never let `cargo release` cut an empty version section.
 - Files generated for a release commit (for example `CHANGELOG.md`) must be produced inside `cargo release`'s `pre-release-hook`; wrapper scripts must not dirty the worktree before `cargo release` performs its clean-tree check.
 - Amend-style commands must detect zero-ahead tracked branches and avoid rewriting inherited parent commits; when the user supplies a message, prefer creating the first branch-local commit instead of amending shared history.

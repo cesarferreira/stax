@@ -361,6 +361,10 @@ AI and editor integration guides:
 
 Shared skill/instruction file used across agents: [skills.md](skills.md)
 
+`st changelog` can generate notes between refs, and `st changelog find [query]`
+or `st changelog --find [query]` fuzzy-finds entries in `CHANGELOG.md` while
+showing the release and section that contain each match.
+
 <a id="windows-notes"></a>
 <details>
 <summary><strong>Windows notes</strong> — shell integration, worktrees, tmux</summary>

@@ -65,7 +65,7 @@ st create --below -am "fix: patch CVE-2026-0001"
 | `st standup` | Summarize recent activity (`--ai` for AI version, `--ai --style slack` for Slack-ready bullets) |
 | `st pr` / `st pr body` / `st pr list` | Open current PR in browser · view/edit PR body · list open PRs |
 | `st issue list` | List open issues |
-| `st changelog` | Generate changelog between refs (auto-resolves last tag) |
+| `st changelog` | Generate changelog between refs or fuzzy-find `CHANGELOG.md` entries with `find` / `--find` |
 | `st open` | Open the repository in the browser |
 | `st run <cmd>` | Run a command on each branch in the stack (alias: `st test <cmd>`) |
 | `st demo` | Interactive tutorial — no auth or repo required |
