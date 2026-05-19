@@ -199,6 +199,7 @@ st wt go ui-polish --run "cursor ." --tmux
 - `st create --ai -m "msg"` keeps the commit message and generates the branch name
 - `-n`, `--no-verify` skip pre-commit and commit-msg hooks when creating a commit
 - `-m` / `-am` create the commit before creating the destination branch, including with `--from` and `--below`, so hook failures or interrupts do not leave orphan branches
+- `-m` / `--ai` derived branch names refuse collisions instead of creating `-2` duplicates; pass an explicit different name or checkout/reparent the existing branch
 - `--insert` reparent children of the current branch onto the new branch
 - `--below` create from the current branch's parent and reparent the current branch onto the new branch; prepared tracked and untracked changes are auto-stashed and reapplied onto the new lower branch, and `-m`/`-am` commits staged changes there
 - `st branch create --message "msg" --prefix feature/`

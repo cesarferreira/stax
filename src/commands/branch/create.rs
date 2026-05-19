@@ -432,7 +432,7 @@ pub fn run(
     // it offers an interactive menu (or bails in non-TTY). Use -a/--all to
     // skip the menu and force-stage.
     // When neither name nor message is provided, launch interactive wizard.
-    let (input, commit_message, stage_mode, generated_from_message) = if let Some(n) = &name {
+    let (input, commit_message, stage_mode, generated_branch_name) = if let Some(n) = &name {
         let commit_message = ai_message;
         let stage_mode = if commit_message.is_some() {
             if all {
@@ -487,7 +487,7 @@ pub fn run(
     };
     let existing_branches = repo.list_branches()?;
     let branch_name =
-        resolve_branch_name_conflicts(&branch_name, &existing_branches, generated_from_message)?;
+        resolve_branch_name_conflicts(&branch_name, &existing_branches, generated_branch_name)?;
 
     // Before creating the branch, resolve the staging question. Doing this
     // early means declining ("Abort" / empty `--patch` exit) is a clean no-op
@@ -1539,25 +1539,16 @@ enum BranchNameConflict<'a> {
 fn resolve_branch_name_conflicts(
     branch_name: &str,
     existing_branches: &[String],
-    generated_from_message: bool,
+    generated_branch_name: bool,
 ) -> Result<String> {
     match detect_branch_name_conflict(branch_name, existing_branches) {
         None => Ok(branch_name.to_string()),
-        Some(BranchNameConflict::Exact(_) | BranchNameConflict::ExistingIsDescendant(_))
-            if generated_from_message =>
-        {
-            for suffix in 2..1000 {
-                let candidate = append_branch_suffix(branch_name, suffix);
-                if detect_branch_name_conflict(&candidate, existing_branches).is_none() {
-                    return Ok(candidate);
-                }
-            }
-
-            bail!(
-                "Cannot create a unique branch name from '{}'. Too many similarly named branches already exist.",
-                branch_name
-            );
-        }
+        Some(conflict) if generated_branch_name => bail!(
+            "{}\n\
+             Generated branch names are not auto-suffixed.\n\
+             Checkout/reparent the existing branch or pass an explicit different branch name.",
+            branch_name_conflict_message(branch_name, conflict)
+        ),
         Some(conflict) => bail!("{}", branch_name_conflict_message(branch_name, conflict)),
     }
 }
@@ -1602,13 +1593,6 @@ fn branch_name_conflict_message(branch_name: &str, conflict: BranchNameConflict<
              Either delete '{}' first, or use a different name.",
             branch_name, existing, existing
         ),
-    }
-}
-
-fn append_branch_suffix(branch_name: &str, suffix: usize) -> String {
-    match branch_name.rsplit_once('/') {
-        Some((prefix, leaf)) => format!("{}/{}-{}", prefix, leaf, suffix),
-        None => format!("{}-{}", branch_name, suffix),
     }
 }
 

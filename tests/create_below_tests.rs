@@ -215,6 +215,70 @@ fn test_create_below_with_message_commits_on_new_branch() {
 }
 
 #[test]
+fn test_create_below_with_message_rejects_generated_name_collision_in_stack() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    let branches = repo.create_stack(&[
+        "below-collision-parent",
+        "below-collision-current",
+        "below-collision-hotfix",
+    ]);
+    let current = &branches[1];
+
+    repo.run_stax(&["checkout", current]).assert_success();
+    let output = repo.run_stax(&["create", "--below", "-m", "below collision hotfix"]);
+    output.assert_failure();
+
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("already exists")
+            && stderr.contains("Generated branch names are not auto-suffixed")
+            && stderr.contains("explicit different branch name"),
+        "Expected actionable generated-name collision error, got: {}",
+        stderr
+    );
+    assert_eq!(
+        repo.current_branch(),
+        *current,
+        "failed below create should leave the current branch checked out"
+    );
+    assert!(
+        !repo
+            .list_branches()
+            .iter()
+            .any(|branch| branch.contains("below-collision-hotfix-2")),
+        "below create must not silently create a suffixed duplicate branch"
+    );
+    assert_current_parent_contains(&repo, "below-collision-parent");
+}
+
+#[test]
+fn test_create_below_with_explicit_name_collision_uses_normal_conflict_error() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["status"]).assert_success();
+
+    let branches = repo.create_stack(&["below-explicit-current", "below-explicit-existing"]);
+    let current = &branches[0];
+
+    repo.run_stax(&["checkout", current]).assert_success();
+    let output = repo.run_stax(&["create", "below-explicit-existing", "--below"]);
+    output.assert_failure();
+
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("already exists"),
+        "Expected normal branch conflict error, got: {}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("Generated branch names"),
+        "Explicit branch-name collisions should not mention generated names: {}",
+        stderr
+    );
+}
+
+#[test]
 fn test_create_below_auto_stashes_dirty_worktree_onto_new_branch() {
     let repo = TestRepo::new();
     repo.run_stax(&["status"]).assert_success();

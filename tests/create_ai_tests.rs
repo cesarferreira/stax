@@ -200,3 +200,43 @@ fn create_ai_yes_without_staging_generates_branch_only() {
     assert!(prompt.contains("\"branch\""));
     assert!(!prompt.contains("\"message\""));
 }
+
+#[test]
+fn create_ai_generated_branch_rejects_collision() {
+    let repo = TestRepo::new();
+    let output = repo.run_stax(&["create", "ai-collision"]);
+    assert!(
+        output.status.success(),
+        "create failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    repo.create_file("src/lib.rs", "pub fn collision() {}\n");
+
+    let home = TempDir::new().expect("create home");
+    write_test_config_with_ai(home.path());
+    let prompt_log = home.path().join("prompt.txt");
+    let bin_dir = write_fake_claude(home.path(), r#"{"branch":"ai-collision"}"#, &prompt_log);
+    let env = ai_env(home.path(), &bin_dir);
+    let env = env_refs(&env);
+
+    let output = repo.run_stax_with_env(&["create", "--ai", "--yes"], &env);
+    assert!(!output.status.success());
+
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("already exists")
+            && stderr.contains("Generated branch names are not auto-suffixed")
+            && stderr.contains("explicit different branch name"),
+        "Expected generated-name collision error, got: {}",
+        stderr
+    );
+    assert_eq!(repo.current_branch(), "ai-collision");
+    assert!(
+        !repo
+            .list_branches()
+            .iter()
+            .any(|branch| branch == "ai-collision-2"),
+        "AI-generated collision must not create a suffixed duplicate branch"
+    );
+}

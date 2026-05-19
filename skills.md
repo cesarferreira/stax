@@ -154,6 +154,7 @@ stax create --below -am "message"  # Auto-stash/apply, stage all, commit on new 
 stax bc <name>                     # Hidden shortcut alias
 # create -m/-am commits before branch creation, including --from/--below,
 # so hook failures or interrupts do not leave orphan branches or -2 retries.
+# -m/--ai derived branch names refuse collisions instead of creating -2 duplicates.
 # --below keeps prepared work in place by stashing before moving downstack,
 # then applying it on the inserted lower branch.
 

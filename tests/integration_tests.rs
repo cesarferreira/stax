@@ -530,7 +530,7 @@ fn test_branch_create_with_message() {
 }
 
 #[test]
-fn test_branch_create_with_message_uses_unique_suffix_on_collision() {
+fn test_branch_create_with_message_rejects_generated_name_collision() {
     let repo = TestRepo::new();
 
     let output = repo.run_stax(&["bc", "-m", "Add new feature"]);
@@ -542,23 +542,30 @@ fn test_branch_create_with_message_uses_unique_suffix_on_collision() {
     let first_branch = repo.current_branch();
 
     let output = repo.run_stax(&["bc", "-m", "Add new feature"]);
-    assert!(
-        output.status.success(),
-        "Failed second create: {}",
-        TestRepo::stderr(&output)
-    );
-    let second_branch = repo.current_branch();
+    assert!(!output.status.success());
 
-    assert_ne!(first_branch, second_branch);
+    let stderr = TestRepo::stderr(&output);
     assert!(
-        second_branch.ends_with("-2") && second_branch.to_lowercase().contains("new-feature"),
-        "Expected suffixed branch name, got: {}",
-        second_branch
+        stderr.contains("already exists")
+            && stderr.contains("Generated branch names are not auto-suffixed")
+            && stderr.contains("explicit different branch name"),
+        "Expected generated-name collision error, got: {}",
+        stderr
+    );
+    assert_eq!(
+        repo.current_branch(),
+        first_branch,
+        "failed create should leave the existing branch checked out"
     );
 
     let branches = repo.list_branches();
     assert!(branches.iter().any(|b| b == &first_branch));
-    assert!(branches.iter().any(|b| b == &second_branch));
+    assert!(
+        !branches
+            .iter()
+            .any(|branch| branch.to_lowercase().contains("new-feature-2")),
+        "generated-name collision must not create a suffixed duplicate branch"
+    );
 }
 
 #[test]
@@ -7883,6 +7890,135 @@ mod forge_mock_tests {
         let body_patch = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
         assert_eq!(payload["body"], "## Summary\n\nhello");
+    }
+
+    #[tokio::test]
+    async fn test_branch_submit_stack_links_include_full_stack_context() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_github_remote(&repo, home.path());
+        let _remote_root = remote_root.keep();
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-link-parent"]);
+        assert!(
+            output.status.success(),
+            "Failed to create parent: {}",
+            TestRepo::stderr(&output)
+        );
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Add parent");
+        let parent = repo.current_branch();
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &parent]);
+        assert!(
+            push.status.success(),
+            "Failed to push parent: {}",
+            TestRepo::stderr(&push)
+        );
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-link-child"]);
+        assert!(
+            output.status.success(),
+            "Failed to create child: {}",
+            TestRepo::stderr(&output)
+        );
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Add child");
+        let child = repo.current_branch();
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &child]);
+        assert!(
+            push.status.success(),
+            "Failed to push child: {}",
+            TestRepo::stderr(&push)
+        );
+
+        write_branch_pr_metadata(&repo, &parent, "main", 101, Some(false));
+        write_branch_pr_metadata(&repo, &child, &parent, 102, Some(false));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                github_pull_fixture_with_details(102, &child, &parent, "Child PR", "child body"),
+            ))
+            .mount(&mock_server)
+            .await;
+
+        for (number, branch, base, comment_id, body) in [
+            (101_u64, parent.as_str(), "main", 901_u64, "parent body"),
+            (
+                102_u64,
+                child.as_str(),
+                parent.as_str(),
+                902_u64,
+                "child body",
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/repos/test/repo/issues/{}/comments", number)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    issue_comment_fixture(comment_id, "<!-- stax-stack-comment -->\nold")
+                ])))
+                .mount(&mock_server)
+                .await;
+
+            Mock::given(method("PATCH"))
+                .and(path(format!(
+                    "/repos/test/repo/issues/comments/{}",
+                    comment_id
+                )))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(issue_comment_fixture(
+                        comment_id,
+                        "<!-- stax-stack-comment -->\nupdated",
+                    )),
+                )
+                .mount(&mock_server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path(format!("/repos/test/repo/pulls/{}", number)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    github_pull_fixture_with_details(number, branch, base, "PR", body),
+                ))
+                .mount(&mock_server)
+                .await;
+        }
+
+        let output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["branch", "submit", "--yes", "--no-prompt"],
+        );
+        assert!(
+            output.status.success(),
+            "branch submit failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let child_comment_patch = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/issues/comments/902"
+            })
+            .expect("expected child stack-comment update");
+        let payload: serde_json::Value = serde_json::from_slice(&child_comment_patch.body).unwrap();
+        let body = payload["body"].as_str().expect("comment body");
+        assert!(
+            body.contains("PR #101") && body.contains("PR #102"),
+            "scoped submit stack links should include parent and child PRs, got: {}",
+            body
+        );
+        assert!(
+            body.contains("PR #102** 👈"),
+            "current PR should keep the pointer, got: {}",
+            body
+        );
     }
 
     #[tokio::test]
