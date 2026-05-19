@@ -102,13 +102,13 @@ Restack + push + create/update PRs in a single flow.
 
 ## `st update`
 
-The "bottom PR merged, catch me up" command. Prints the plan up front, then runs sync → restack → submit.
+The "bottom PR merged, catch me up" command. Prints the plan up front, then syncs trunk without merged-branch cleanup, restacks, and submits.
 
 | Command | Behavior |
 |---|---|
-| `st update` | sync → restack → push → create/update PRs |
-| `st update --no-pr` | sync → restack → push |
-| `st update --no-submit` | sync → restack |
+| `st update` | sync trunk → restack → push → create/update PRs |
+| `st update --no-pr` | sync trunk → restack → push |
+| `st update --no-submit` | sync trunk → restack |
 | `st update --force` | force the sync step instead of prompting |
-| `st update --force --yes --no-prompt` | run the full sync/restack/submit flow without prompts |
+| `st update --force --yes --no-prompt` | run the full trunk-sync/restack/submit flow without prompts |
 | `st update --verbose` | show detailed sync/restack/submit timing |

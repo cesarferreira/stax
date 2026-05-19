@@ -15,7 +15,7 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 | `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
-| `st update` | | `sync --restack`, then push and create/update PRs for the current stack |
+| `st update` | | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack |
 | `st update --force --yes --no-prompt` | | Run the full update flow without sync or submit prompts |
 | `st update --verbose` | | Same as `st update`, with detailed sync/restack/submit timing |
 | `st restack` | | Rebase current stack locally — auto-normalizes missing/merged parents; `--stop-here` limits scope |
