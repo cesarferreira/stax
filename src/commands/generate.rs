@@ -1208,12 +1208,12 @@ pub fn build_ai_prompt(
 
     if !diff.is_empty() {
         let truncated = if diff.len() > MAX_DIFF_BYTES {
-            let safe = &diff[..MAX_DIFF_BYTES];
-            // Cut at last newline to avoid splitting a line
-            let cut = safe.rfind('\n').unwrap_or(MAX_DIFF_BYTES);
+            // Cut on a UTF-8 boundary so non-ASCII diffs do not panic.
+            let safe = &diff[..safe_utf8_cut(diff, MAX_DIFF_BYTES)];
+            let cut = safe.rfind('\n').unwrap_or(safe.len());
             format!(
                 "{}\n\n... (diff truncated, showing first ~80KB of {} total) ...",
-                &diff[..cut],
+                &safe[..cut],
                 format_bytes(diff.len())
             )
         } else {
@@ -1324,6 +1324,16 @@ pub fn invoke_ai_agent(agent: &str, model: Option<&str>, prompt: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_ai_prompt_handles_multibyte_diff_at_truncation_boundary() {
+        // Place a multibyte character so its bytes straddle MAX_DIFF_BYTES.
+        let mut diff = "a".repeat(MAX_DIFF_BYTES - 1);
+        diff.push('é');
+        diff.push_str(&"b".repeat(1024));
+        let prompt = build_ai_prompt("stat", &diff, &[], None);
+        assert!(prompt.contains("diff truncated"));
+    }
 
     #[test]
     fn validate_agent_name_accepts_gemini() {
