@@ -155,7 +155,6 @@ st ss
 
 # 4. After the bottom PR merges on GitHub…
 st update          # sync trunk, restack this stack, update PRs
-st update --force --yes --no-prompt   # sync/restack/submit without prompts
 ```
 
 Picked the wrong trunk? Run `st trunk main` or `st init --trunk <branch>` to reconfigure.
