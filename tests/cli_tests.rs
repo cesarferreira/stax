@@ -1558,6 +1558,16 @@ fn gt_parity_c_alias() {
 }
 
 #[test]
+fn create_add_alias_help_matches_create_command() {
+    let output = stax(&["add", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Create a new branch"));
+    assert!(stdout.contains("--below"));
+    assert!(stdout.contains("--ai"));
+}
+
+#[test]
 fn gt_parity_create_am_flags() {
     // gt create -am "message" -> stax create -am "message"
     let output = stax(&["create", "--help"]);
