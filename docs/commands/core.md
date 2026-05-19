@@ -9,7 +9,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | `st` | Launch the interactive TUI |
 | `st ls` | Show stack with PR, rebase, and metadata-repair status |
 | `st ll` | Like `st ls` plus PR URLs and detail |
-| `st create <name>` | Create a branch stacked on current |
+| `st create <name>` / `st add <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
 

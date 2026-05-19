@@ -641,7 +641,7 @@ enum Commands {
     Stack(StackCommands),
 
     /// Create a new branch stacked on current
-    #[command(visible_alias = "c")]
+    #[command(visible_aliases = ["c", "add"])]
     Create {
         /// Name for the new branch
         name: Option<String>,
@@ -2818,6 +2818,19 @@ mod tests {
                 yes: true,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn create_add_alias_parses_as_create_command() {
+        let cli = parse_cli(&["stax", "add", "feature-alias", "--below"]);
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Create {
+                name: Some(ref name),
+                below: true,
+                ..
+            }) if name == "feature-alias"
         ));
     }
 

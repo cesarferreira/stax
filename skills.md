@@ -42,7 +42,7 @@ stax branch ...|b              # Branch subcommands
 stax upstack ...|us            # Descendant-scope commands
 stax downstack ...|ds          # Ancestor-scope commands
 
-stax create|c                  # Create stacked branch (--ai can name it from changes)
+stax create|c|add              # Create stacked branch (--ai can name it from changes)
 stax modify|m                  # Amend current commit (menu when nothing staged)
 stax rename                    # Rename current branch
 stax detach                    # Remove branch from stack, reparent children
@@ -138,6 +138,7 @@ Release prep rewrites the next released changelog entry from non-merge commits s
 
 ```bash
 stax create <name>                 # Create branch stacked on current
+stax add <name>                    # Alias for create
 stax create -m "message"           # Use commit message (TTY menu if nothing staged)
 stax create -a                     # Stage all before creating
 stax create -am "message"          # Stage all + commit (bypasses menu)

@@ -49,7 +49,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 
 | Command | Alias | Description |
 |---|---|---|
-| `st create <name>` | `c`, `bc` | Create stacked branch (TTY menu when nothing staged and `-m`) |
+| `st create <name>` | `c`, `add`, `bc` | Create stacked branch (TTY menu when nothing staged and `-m`) |
 | `st create --ai` | | Generate a branch name from local changes (`-a` also generates a first commit message) |
 | `st create <name> --below` | | Insert a new branch below current |
 | `st modify` | `m` | Amend staged changes into current commit (`-a` stages all, `-r` restacks after) |
@@ -190,6 +190,7 @@ st wt go ui-polish --run "cursor ." --tmux
 
 ### `st create`
 
+- `st add <name>` is an alias for `st create <name>`
 - `-m "msg"` set commit message (with nothing staged in a TTY: menu for stage all, `--patch`, empty branch, or abort)
 - `-am "msg"` stage all and commit
 - `--ai` generate missing branch name and/or first commit message from local changes
