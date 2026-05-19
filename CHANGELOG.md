@@ -8,12 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
-### Added
-- Add release-aware fuzzy search for `stax changelog --find`.
-- Add `stax changelog find [query]` as a discoverable fuzzy-find command form with colorful release-aware rows.
+## [0.76.0] - 2026-05-19
 
-### Fixed
-- Keep interactive `stax changelog find` rows plain so fuzzy-select highlighting renders cleanly.
+### Added
+- Add release-aware changelog search (#410)
+- Add create alias (#414)
 
 ## [0.75.0] - 2026-05-19
 
@@ -360,7 +359,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.75.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.76.0...HEAD
+[0.76.0]: https://github.com/cesarferreira/stax/compare/v0.75.0...v0.76.0
 [0.75.0]: https://github.com/cesarferreira/stax/compare/v0.74.2...v0.75.0
 [0.74.2]: https://github.com/cesarferreira/stax/compare/v0.74.1...v0.74.2
 [0.74.1]: https://github.com/cesarferreira/stax/compare/v0.74.0...v0.74.1
