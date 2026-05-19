@@ -45,7 +45,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
 | `st restack` | Rebase current stack onto parents locally (no fetch) |
-| `st update` | `sync --restack` **plus** push and update PRs |
+| `st update` | Sync trunk without merged-branch cleanup, restack, then push and update PRs |
 | `st update --force --yes --no-prompt` | Full update flow without sync or submit prompts |
 | `st update --verbose` | Same as `st update`, with detailed sync/restack/submit timing |
 

@@ -155,7 +155,6 @@ st ss
 
 # 4. After the bottom PR merges on GitHub…
 st update          # sync trunk, restack this stack, update PRs
-st update --force --yes --no-prompt   # same flow without prompts
 ```
 
 Picked the wrong trunk? Run `st trunk main` or `st init --trunk <branch>` to reconfigure.
@@ -275,7 +274,7 @@ st config --set-ai
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
-| `st update` | Sync trunk, restack current stack, then push/update PRs |
+| `st update` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs |
 | `st update --force --yes --no-prompt` | Run update without sync or submit prompts |
 | `st update --verbose` | Include detailed sync/restack/submit timing |
 | `st restack` | Rebase current stack onto parents locally |

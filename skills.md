@@ -231,9 +231,9 @@ stax sync --force                  # Force sync without prompts
 stax sync --prune                  # Prune stale remotes
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
-stax update                        # Sync, restack, then submit
-stax update --no-pr                # Push only after sync/restack
-stax update --no-submit            # Sync/restack only
+stax update                        # Sync trunk, restack, then submit (no merged cleanup)
+stax update --no-pr                # Push only after trunk sync/restack
+stax update --no-submit            # Trunk sync/restack only
 stax update --force                # Force sync without prompts first
 stax update --force --yes --no-prompt # Full update without sync/submit prompts
 stax update --verbose              # Show detailed sync/restack/submit timings

@@ -2173,8 +2173,13 @@ fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
         stdout
     );
     assert!(
-        stdout.contains("1. Sync trunk and clean merged branches"),
+        stdout.contains("1. Sync trunk"),
         "Expected sync step, got: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("clean merged branches"),
+        "Update should not advertise merged branch cleanup, got: {}",
         stdout
     );
     assert!(
@@ -2218,7 +2223,78 @@ fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
 }
 
 #[test]
-fn test_refresh_no_submit_handles_squash_merged_middle_branch() {
+fn test_update_no_submit_skips_merged_branch_cleanup() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "update-merged-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent change\n");
+    repo.commit("Parent commit");
+    repo.git(&["push", "-u", "origin", &parent]);
+
+    repo.run_stax(&["bc", "update-merged-child"]);
+    let child = repo.current_branch();
+    repo.create_file("child.txt", "child change\n");
+    repo.commit("Child commit");
+
+    repo.run_stax(&["checkout", "main"]);
+    let merge = repo.git(&["merge", "--no-ff", &parent, "-m", "Merge parent"]);
+    assert!(
+        merge.status.success(),
+        "failed to merge parent into main\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&merge),
+        TestRepo::stderr(&merge)
+    );
+
+    repo.run_stax(&["checkout", &child]);
+    let output = repo.run_stax(&["update", "--no-submit", "--force"]);
+    assert!(
+        output.status.success(),
+        "update --no-submit failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        !stdout.contains("Detect merged branches"),
+        "update should skip merged-branch detection, got: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Found 1 merged branch"),
+        "update should not report merged branches, got: {}",
+        stdout
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == &parent),
+        "merged parent branch should remain after update"
+    );
+
+    let status = repo.run_stax(&["status", "--json"]);
+    assert!(
+        status.status.success(),
+        "status failed after update\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&status),
+        TestRepo::stderr(&status)
+    );
+    let status_json: Value =
+        serde_json::from_str(&TestRepo::stdout(&status)).expect("Invalid JSON");
+    let branches_json = status_json["branches"]
+        .as_array()
+        .expect("Expected branches array");
+    assert!(
+        branches_json
+            .iter()
+            .any(|b| b["name"].as_str() == Some(parent.as_str())),
+        "merged parent branch should remain tracked after update"
+    );
+}
+
+#[test]
+fn test_refresh_no_submit_preserves_squash_merged_middle_branch() {
     let repo = TestRepo::new_with_remote();
 
     repo.run_stax(&["bc", "refresh-squash-parent"]);
@@ -2278,8 +2354,8 @@ fn test_refresh_no_submit_handles_squash_merged_middle_branch() {
 
     let branches = repo.list_branches();
     assert!(
-        !branches.iter().any(|b| b == &parent),
-        "Expected merged parent branch to be deleted"
+        branches.iter().any(|b| b == &parent),
+        "Expected refresh alias to preserve merged parent branch"
     );
 
     let count_output = repo.git(&["rev-list", "--count", &format!("main..{}", child)]);

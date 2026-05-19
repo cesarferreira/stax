@@ -19,7 +19,7 @@ pub fn run(
     let workdir = repo.workdir()?.to_path_buf();
 
     println!("{}", "Updating stack...".bold());
-    println!("  1. Sync trunk and clean merged branches");
+    println!("  1. Sync trunk");
     println!("  2. Restack current stack onto updated parents");
     if no_submit {
         println!("  3. Skip push and PR updates (--no-submit)");
@@ -33,7 +33,7 @@ pub fn run(
         true,  // restack
         false, // prune
         false, // full
-        true,  // delete_merged
+        false, // delete_merged
         false, // delete_upstream_gone
         force,
         safe,
