@@ -1550,8 +1550,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         }
         async_timings.pr_create_update = create_update_started_at.elapsed();
 
-        // Sync stack links on ALL PRs in the stack, even on otherwise no-op submit runs.
-        let prs_with_numbers: Vec<_> = pr_infos
+        // Sync stack links with full current-stack context, even for scoped
+        // submit commands where only one branch needed push/PR work.
+        let stack_link_pr_infos = stack_pr_infos_for_links(&stack, &current, &pr_infos);
+        let prs_with_numbers: Vec<_> = stack_link_pr_infos
             .iter()
             .filter_map(|p| p.pr_number.map(|num| (num, p.branch.clone())))
             .collect();
@@ -1560,8 +1562,12 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         for (pr_number, _branch) in &prs_with_numbers {
             let sync_timer =
                 LiveTimer::maybe_new(!quiet, &format!("Syncing stack links on #{}...", pr_number));
-            let stack_links =
-                generate_stack_links_markdown(&pr_infos, *pr_number, &remote_info, &stack.trunk);
+            let stack_links = generate_stack_links_markdown(
+                &stack_link_pr_infos,
+                *pr_number,
+                &remote_info,
+                &stack.trunk,
+            );
 
             match stack_links_mode {
                 StackLinksMode::Comment | StackLinksMode::Both => {
@@ -1798,6 +1804,32 @@ fn push_branches(
         );
     }
     Ok(())
+}
+
+fn stack_pr_infos_for_links(
+    stack: &Stack,
+    current: &str,
+    processed_pr_infos: &[StackPrInfo],
+) -> Vec<StackPrInfo> {
+    let processed_pr_numbers: HashMap<&str, Option<u64>> = processed_pr_infos
+        .iter()
+        .map(|info| (info.branch.as_str(), info.pr_number))
+        .collect();
+
+    stack
+        .current_stack(current)
+        .into_iter()
+        .filter(|branch| branch != &stack.trunk)
+        .map(|branch| {
+            let pr_number = processed_pr_numbers
+                .get(branch.as_str())
+                .copied()
+                .flatten()
+                .or_else(|| stack.branches.get(&branch).and_then(|info| info.pr_number));
+
+            StackPrInfo { branch, pr_number }
+        })
+        .collect()
 }
 
 fn rejected_push_branches(porcelain: &str, branches: &[&str]) -> Vec<String> {
@@ -2529,9 +2561,12 @@ mod tests {
     use super::{
         build_ai_pr_details_prompt, existing_ai_prompt_items, existing_ai_targets_for_auto_accept,
         parse_ai_pr_details, rejected_push_branches, resolve_ai_targets,
-        resolve_is_draft_without_prompt, truncate_ai_diff, AiPrTargets, MAX_AI_DIFF_BYTES,
-        PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS,
+        resolve_is_draft_without_prompt, stack_pr_infos_for_links, truncate_ai_diff, AiPrTargets,
+        StackPrInfo, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS,
     };
+    use crate::engine::stack::StackBranch;
+    use crate::engine::Stack;
+    use std::collections::HashMap;
 
     #[test]
     fn no_prompt_defaults_to_draft() {
@@ -2561,6 +2596,84 @@ mod tests {
         assert_eq!(
             rejected_push_branches(porcelain, &["feature", "feature-a"]),
             vec!["feature-a".to_string()]
+        );
+    }
+
+    #[test]
+    fn stack_links_for_scoped_submit_use_full_current_stack_context() {
+        let stack = Stack {
+            trunk: "main".to_string(),
+            branches: HashMap::from([
+                (
+                    "main".to_string(),
+                    StackBranch {
+                        name: "main".to_string(),
+                        parent: None,
+                        parent_revision: None,
+                        children: vec!["base".to_string()],
+                        needs_restack: false,
+                        pr_number: None,
+                        pr_state: None,
+                        pr_is_draft: None,
+                    },
+                ),
+                (
+                    "base".to_string(),
+                    StackBranch {
+                        name: "base".to_string(),
+                        parent: Some("main".to_string()),
+                        parent_revision: Some("main-sha".to_string()),
+                        children: vec!["middle".to_string()],
+                        needs_restack: false,
+                        pr_number: Some(10),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "middle".to_string(),
+                    StackBranch {
+                        name: "middle".to_string(),
+                        parent: Some("base".to_string()),
+                        parent_revision: Some("base-sha".to_string()),
+                        children: vec!["leaf".to_string()],
+                        needs_restack: false,
+                        pr_number: Some(20),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "leaf".to_string(),
+                    StackBranch {
+                        name: "leaf".to_string(),
+                        parent: Some("middle".to_string()),
+                        parent_revision: Some("middle-sha".to_string()),
+                        children: vec![],
+                        needs_restack: false,
+                        pr_number: Some(30),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+            ]),
+        };
+
+        let infos = stack_pr_infos_for_links(
+            &stack,
+            "middle",
+            &[StackPrInfo {
+                branch: "middle".to_string(),
+                pr_number: Some(22),
+            }],
+        );
+
+        assert_eq!(
+            infos
+                .iter()
+                .map(|info| (info.branch.as_str(), info.pr_number))
+                .collect::<Vec<_>>(),
+            vec![("base", Some(10)), ("middle", Some(22)), ("leaf", Some(30))]
         );
     }
 
