@@ -33,7 +33,9 @@ pub fn run(reset_ai: bool, no_prompt: bool, yes: bool, set_ai: bool) -> Result<(
     println!("  [submit]");
     println!(r#"  stack_links = "comment"  # "comment" | "body" | "both" | "off""#);
     println!(r#"  # Example: stack_links = "body""#);
-    println!(r#"  single_stack = "on"      # "on" | "off" — when "off", suppress stack-link sync while only one PR exists"#);
+    println!(
+        r#"  single_stack = "on"      # "on" | "off" — when "off", suppress stack-link sync while only one PR exists"#
+    );
 
     println!();
     println!("{}", "CI watch alerts:".blue().bold());
