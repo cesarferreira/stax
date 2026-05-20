@@ -26,6 +26,7 @@ Main config path: `~/.config/stax/config.toml`.
 
 [submit]
 # stack_links = "comment" # "comment" | "body" | "both" | "off"
+# single_stack = "on"     # "on" | "off" — when "off", skip stack-link sync while the stack has only one PR
 
 [ci]
 # alert = false
@@ -155,9 +156,12 @@ Where `st submit` writes the stack graph for a PR:
 ```toml
 [submit]
 stack_links = "body"   # "comment" | "body" | "both" | "off"
+single_stack = "on"    # "on" | "off"
 ```
 
 When body output is enabled, stax appends a managed block to the bottom of the PR body and only rewrites that managed block on future submits.
+
+`single_stack` controls whether stack links are written when the stack contains only one PR. With the default `"on"`, links are always synced per `stack_links`. With `"off"`, stax skips link sync — and removes any stale links left over from a previous `"on"` setting — while the stack has a single PR. As soon as a second PR is submitted on the same stack, links populate on every PR (including the original) automatically.
 
 ## Forge type override
 

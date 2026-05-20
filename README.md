@@ -322,6 +322,7 @@ Config lives at `~/.config/stax/config.toml`:
 ```toml
 [submit]
 stack_links = "body"   # "comment" | "body" | "both" | "off"
+single_stack = "on"    # "on" | "off" — when "off", skip stack-link sync while only one PR exists
 ```
 
 → [Full config reference](docs/configuration/index.md)

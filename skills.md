@@ -200,6 +200,7 @@ stax submit --rerequest-review     # Re-request existing reviewers on update
 # ~/.config/stax/config.toml
 [submit]
 stack_links = "body"               # "comment" | "body" | "both" | "off"
+single_stack = "on"                # "on" | "off" — when "off", skip stack-link sync while only one PR exists; populates on all PRs as soon as the stack reaches 2
 
 stax branch submit                 # Submit current branch only
 stax bs                            # Hidden shortcut alias for branch submit
