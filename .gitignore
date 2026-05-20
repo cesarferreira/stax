@@ -12,3 +12,13 @@ Cargo.lock
 docs/plans/
 __pycache__/
 *.pyc
+
+# secrets / credentials
+.env
+.env.*
+*.key
+*.pem
+secrets/
+credentials/
+.aws/
+.ssh/
