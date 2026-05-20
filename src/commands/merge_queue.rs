@@ -473,8 +473,10 @@ pub fn run(
             true,  // force
             false, // safe
             false, // continue
-            quiet, false, // verbose
+            quiet,
+            false, // verbose
             false, // auto_stash_pop
+            &[],
         ) {
             if !quiet {
                 println!();

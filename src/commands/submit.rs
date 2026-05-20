@@ -48,6 +48,7 @@ pub struct SubmitOptions {
     pub publish: bool,
     pub no_pr: bool,
     pub no_fetch: bool,
+    pub prefetched: bool,
     pub no_verify: bool,
     /// Deprecated; kept for CLI compatibility (currently a no-op).
     pub force: bool,
@@ -247,6 +248,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         publish,
         no_pr,
         no_fetch,
+        prefetched,
         no_verify,
         force,
         yes,
@@ -356,8 +358,8 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
 
     // Fetch trunk + branches being submitted + (for narrow scope) parents used in validation.
     // Run `git ls-remote --heads` in parallel for an up-to-date remote branch name set.
-    let (fetch_summary, remote_branches) = if no_fetch {
-        if !quiet {
+    let (fetch_summary, remote_branches) = if no_fetch || prefetched {
+        if no_fetch && !quiet {
             println!(
                 "  {} {}",
                 "Skipping fetch".yellow(),
@@ -367,7 +369,12 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         let rb = remote::get_remote_branches(repo.workdir()?, &remote_info.name)?
             .into_iter()
             .collect::<HashSet<_>>();
-        ("skipped (--no-fetch)".to_string(), rb)
+        let summary = if no_fetch {
+            "skipped (--no-fetch)"
+        } else {
+            "already fetched by update"
+        };
+        (summary.to_string(), rb)
     } else {
         let refs = branches_to_fetch_for_submit(&repo, &stack, scope, &branches_to_submit)?;
         let fetch_timer =

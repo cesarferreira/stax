@@ -94,6 +94,7 @@ impl From<SubmitOptions> for commands::submit::SubmitOptions {
             publish: submit.publish,
             no_pr: submit.no_pr,
             no_fetch: submit.no_fetch,
+            prefetched: false,
             no_verify: submit.no_verify,
             force: submit.force,
             yes: submit.yes,
@@ -1901,6 +1902,7 @@ pub fn run() -> Result<()> {
             quiet,
             verbose,
             auto_stash_pop,
+            &[],
         ),
         Commands::Restack {
             all,

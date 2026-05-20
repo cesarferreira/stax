@@ -123,6 +123,7 @@ pub fn run(
     quiet: bool,
     verbose: bool,
     mut auto_stash_pop: bool,
+    extra_fetch_refs: &[String],
 ) -> Result<()> {
     let sync_started_at = Instant::now();
     let mut step_timings: Vec<(String, Duration)> = Vec::new();
@@ -188,6 +189,19 @@ pub fn run(
     let output;
     // Remote branch names for merged detection (`None` when `--no-delete`: trunk-only fetch).
     let remote_branches_for_merged: Option<HashSet<String>>;
+    let remote_heads_for_extra_fetch = if !full && !extra_fetch_refs.is_empty() {
+        Some(
+            remote::ls_remote_heads(&workdir, &remote_name)
+                .context("Failed to list remote heads before fetch")?,
+        )
+    } else {
+        None
+    };
+    let fetch_refs = sync_fetch_refs(
+        &stack.trunk,
+        extra_fetch_refs,
+        remote_heads_for_extra_fetch.as_ref(),
+    );
 
     if full {
         let fetch_args: Vec<&str> = vec!["fetch", "--prune", "--no-tags", remote_name.as_str()];
@@ -204,16 +218,19 @@ pub fn run(
         } else {
             None
         };
-    } else if delete_merged {
+    } else if delete_merged && remote_heads_for_extra_fetch.is_none() {
         let workdir_fetch = workdir.clone();
         let remote_fetch = remote_name.clone();
-        let trunk = stack.trunk.clone();
+        let fetch_refs = fetch_refs.clone();
         let workdir_ls = workdir.clone();
         let remote_ls = remote_name.clone();
 
         let fetch_handle = std::thread::spawn(move || {
             Command::new("git")
-                .args(["fetch", "--no-tags", remote_fetch.as_str(), trunk.as_str()])
+                .arg("fetch")
+                .arg("--no-tags")
+                .arg(remote_fetch)
+                .args(fetch_refs)
                 .current_dir(&workdir_fetch)
                 .output()
         });
@@ -233,14 +250,26 @@ pub fn run(
             prune_stale_remote_tracking_refs(&workdir, remote_name.as_str(), &stack, &heads);
         }
         remote_branches_for_merged = Some(heads);
+    } else if delete_merged {
+        output = Command::new("git")
+            .arg("fetch")
+            .arg("--no-tags")
+            .arg(remote_name.as_str())
+            .args(&fetch_refs)
+            .current_dir(&workdir)
+            .output()
+            .context("Failed to fetch")?;
+        let heads = remote_heads_for_extra_fetch.expect("remote heads checked for extra refs");
+        if output.status.success() {
+            prune_stale_remote_tracking_refs(&workdir, remote_name.as_str(), &stack, &heads);
+        }
+        remote_branches_for_merged = Some(heads);
     } else {
         output = Command::new("git")
-            .args([
-                "fetch",
-                "--no-tags",
-                remote_name.as_str(),
-                stack.trunk.as_str(),
-            ])
+            .arg("fetch")
+            .arg("--no-tags")
+            .arg(remote_name.as_str())
+            .args(&fetch_refs)
             .current_dir(&workdir)
             .output()
             .context("Failed to fetch")?;
@@ -1513,6 +1542,25 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config) {
     if cache_dirty {
         let _ = cache.save(&git_dir);
     }
+}
+
+fn sync_fetch_refs(
+    trunk: &str,
+    extra_fetch_refs: &[String],
+    remote_heads: Option<&HashSet<String>>,
+) -> Vec<String> {
+    let mut refs = vec![trunk.to_string()];
+    for ref_name in extra_fetch_refs {
+        if ref_name != trunk
+            && remote_heads
+                .map(|heads| heads.contains(ref_name))
+                .unwrap_or(true)
+            && !refs.iter().any(|existing| existing == ref_name)
+        {
+            refs.push(ref_name.clone());
+        }
+    }
+    refs
 }
 
 /// Drop stale `refs/remotes/<remote>/<branch>` for stax-tracked branches that no longer exist on the remote.

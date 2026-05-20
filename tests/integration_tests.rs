@@ -296,6 +296,15 @@ impl TestRepo {
             .expect("Failed to execute stax")
     }
 
+    fn run_stax_with_env(&self, args: &[&str], envs: &[(&str, &Path)]) -> Output {
+        let mut command = sanitized_stax_command();
+        command.args(args).current_dir(self.path());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        command.output().expect("Failed to execute stax")
+    }
+
     /// Get stdout as string from output
     fn stdout(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout).to_string()
@@ -2290,6 +2299,94 @@ fn test_update_no_submit_skips_merged_branch_cleanup() {
             .iter()
             .any(|b| b["name"].as_str() == Some(parent.as_str())),
         "merged parent branch should remain tracked after update"
+    );
+}
+
+#[test]
+fn test_update_submit_does_not_refetch_trunk_after_sync() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+
+    repo.run_stax(&["bc", "update-fetch-dedupe"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch]);
+
+    let trace_dir = test_tempdir();
+    let trace_file = trace_dir.path().join("git-trace.log");
+    let output = repo.run_stax_with_env(
+        &["update", "--no-pr", "--force", "--yes", "--no-prompt"],
+        &[("GIT_TRACE", trace_file.as_path())],
+    );
+
+    assert!(
+        output.status.success(),
+        "update --no-pr failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let trace = fs::read_to_string(&trace_file).expect("failed to read git trace");
+    let fetch_lines = trace
+        .lines()
+        .filter(|line| line.contains("git fetch") && line.contains(" --no-tags "))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        fetch_lines.len(),
+        1,
+        "update should fetch once. Trace:\n{}",
+        trace
+    );
+    assert!(fetch_lines[0].contains(" origin "));
+    assert!(fetch_lines[0].contains(" main"));
+    assert!(fetch_lines[0].contains(&branch));
+}
+
+#[test]
+fn test_update_submit_fetches_once_with_unpublished_branch() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+
+    repo.run_stax(&["bc", "update-fetch-new-branch"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.commit("Feature commit");
+
+    let trace_dir = test_tempdir();
+    let trace_file = trace_dir.path().join("git-trace.log");
+    let output = repo.run_stax_with_env(
+        &["update", "--no-pr", "--force", "--yes", "--no-prompt"],
+        &[("GIT_TRACE", trace_file.as_path())],
+    );
+
+    assert!(
+        output.status.success(),
+        "update --no-pr failed\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let trace = fs::read_to_string(&trace_file).expect("failed to read git trace");
+    let fetch_lines = trace
+        .lines()
+        .filter(|line| line.contains("git fetch") && line.contains(" --no-tags "))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        fetch_lines.len(),
+        1,
+        "update should fetch once. Trace:\n{}",
+        trace
+    );
+    assert!(fetch_lines[0].contains(" origin "));
+    assert!(fetch_lines[0].contains(" main"));
+    assert!(!fetch_lines[0].contains(&branch));
+
+    assert!(
+        repo.list_remote_branches().contains(&branch),
+        "update should still push unpublished branch"
     );
 }
 

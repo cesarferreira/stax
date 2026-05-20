@@ -1,4 +1,5 @@
 use crate::commands;
+use crate::engine::Stack;
 use crate::git::{local_branch_exists_in, GitRepo};
 use anyhow::Result;
 use colored::Colorize;
@@ -17,6 +18,16 @@ pub fn run(
     let repo = GitRepo::open()?;
     let original = repo.current_branch()?;
     let workdir = repo.workdir()?.to_path_buf();
+    let stack = Stack::load(&repo)?;
+    let submit_fetch_refs = if no_submit {
+        Vec::new()
+    } else {
+        stack
+            .current_stack(&original)
+            .into_iter()
+            .filter(|branch| branch != &stack.trunk)
+            .collect::<Vec<_>>()
+    };
 
     println!("{}", "Updating stack...".bold());
     println!("  1. Sync trunk");
@@ -41,6 +52,7 @@ pub fn run(
         false, // quiet
         verbose,
         auto_stash_pop,
+        &submit_fetch_refs,
     )?;
 
     if repo.rebase_in_progress()? {
@@ -55,6 +67,7 @@ pub fn run(
         commands::submit::SubmitScope::Stack,
         commands::submit::SubmitOptions {
             no_pr,
+            prefetched: true,
             yes,
             no_prompt,
             verbose,
