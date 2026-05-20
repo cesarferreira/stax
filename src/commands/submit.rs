@@ -1557,20 +1557,18 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         }
         async_timings.pr_create_update = create_update_started_at.elapsed();
 
-        // Sync stack links with full current-stack context, even for scoped
-        // submit commands where only one branch needed push/PR work.
-        let stack_link_pr_infos = stack_pr_infos_for_links(&stack, &current, &pr_infos);
-        let prs_with_numbers: Vec<_> = stack_link_pr_infos
-            .iter()
-            .filter_map(|p| p.pr_number.map(|num| (num, p.branch.clone())))
-            .collect();
+        // Sync every PR in the submitted scope, but build the displayed links
+        // from each PR branch's own stack context. When submitting from trunk,
+        // a single trunk-wide context would flatten sibling stacks into a fake
+        // linear chain.
+        let stack_link_contexts = stack_link_contexts_for_sync(&stack, &current, &pr_infos);
 
         let stack_links_started_at = Instant::now();
-        for (pr_number, _branch) in &prs_with_numbers {
+        for (pr_number, _branch, stack_link_pr_infos) in &stack_link_contexts {
             let sync_timer =
                 LiveTimer::maybe_new(!quiet, &format!("Syncing stack links on #{}...", pr_number));
             let stack_links = generate_stack_links_markdown(
-                &stack_link_pr_infos,
+                stack_link_pr_infos,
                 *pr_number,
                 &remote_info,
                 &stack.trunk,
@@ -1835,6 +1833,21 @@ fn stack_pr_infos_for_links(
                 .or_else(|| stack.branches.get(&branch).and_then(|info| info.pr_number));
 
             StackPrInfo { branch, pr_number }
+        })
+        .collect()
+}
+
+fn stack_link_contexts_for_sync(
+    stack: &Stack,
+    current: &str,
+    processed_pr_infos: &[StackPrInfo],
+) -> Vec<(u64, String, Vec<StackPrInfo>)> {
+    stack_pr_infos_for_links(stack, current, processed_pr_infos)
+        .into_iter()
+        .filter_map(|info| {
+            let pr_number = info.pr_number?;
+            let context = stack_pr_infos_for_links(stack, &info.branch, processed_pr_infos);
+            Some((pr_number, info.branch, context))
         })
         .collect()
 }
@@ -2568,8 +2581,9 @@ mod tests {
     use super::{
         build_ai_pr_details_prompt, existing_ai_prompt_items, existing_ai_targets_for_auto_accept,
         parse_ai_pr_details, rejected_push_branches, resolve_ai_targets,
-        resolve_is_draft_without_prompt, stack_pr_infos_for_links, truncate_ai_diff, AiPrTargets,
-        StackPrInfo, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS,
+        resolve_is_draft_without_prompt, stack_link_contexts_for_sync, stack_pr_infos_for_links,
+        truncate_ai_diff, AiPrTargets, StackPrInfo, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX,
+        PR_TYPE_OPTIONS,
     };
     use crate::engine::stack::StackBranch;
     use crate::engine::Stack;
@@ -2681,6 +2695,88 @@ mod tests {
                 .map(|info| (info.branch.as_str(), info.pr_number))
                 .collect::<Vec<_>>(),
             vec![("base", Some(10)), ("middle", Some(22)), ("leaf", Some(30))]
+        );
+    }
+
+    #[test]
+    fn stack_link_sync_from_trunk_uses_each_pr_branch_context() {
+        let stack = Stack {
+            trunk: "main".to_string(),
+            branches: HashMap::from([
+                (
+                    "main".to_string(),
+                    StackBranch {
+                        name: "main".to_string(),
+                        parent: None,
+                        parent_revision: None,
+                        children: vec!["feature-a".to_string(), "feature-b".to_string()],
+                        needs_restack: false,
+                        pr_number: None,
+                        pr_state: None,
+                        pr_is_draft: None,
+                    },
+                ),
+                (
+                    "feature-a".to_string(),
+                    StackBranch {
+                        name: "feature-a".to_string(),
+                        parent: Some("main".to_string()),
+                        parent_revision: Some("main-sha".to_string()),
+                        children: vec![],
+                        needs_restack: false,
+                        pr_number: Some(10),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "feature-b".to_string(),
+                    StackBranch {
+                        name: "feature-b".to_string(),
+                        parent: Some("main".to_string()),
+                        parent_revision: Some("main-sha".to_string()),
+                        children: vec!["feature-b-child".to_string()],
+                        needs_restack: false,
+                        pr_number: Some(20),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "feature-b-child".to_string(),
+                    StackBranch {
+                        name: "feature-b-child".to_string(),
+                        parent: Some("feature-b".to_string()),
+                        parent_revision: Some("feature-b-sha".to_string()),
+                        children: vec![],
+                        needs_restack: false,
+                        pr_number: Some(30),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+            ]),
+        };
+
+        let contexts = stack_link_contexts_for_sync(&stack, "main", &[]);
+
+        let context_for = |branch: &str| {
+            contexts
+                .iter()
+                .find(|(_, context_branch, _)| context_branch == branch)
+                .map(|(_, _, infos)| {
+                    infos
+                        .iter()
+                        .map(|info| (info.branch.as_str(), info.pr_number))
+                        .collect::<Vec<_>>()
+                })
+                .expect("expected branch context")
+        };
+
+        assert_eq!(context_for("feature-a"), vec![("feature-a", Some(10))]);
+        assert_eq!(
+            context_for("feature-b-child"),
+            vec![("feature-b", Some(20)), ("feature-b-child", Some(30))]
         );
     }
 
