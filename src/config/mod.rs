@@ -408,23 +408,17 @@ impl Config {
 
     /// Get the config file path
     pub fn path() -> Result<PathBuf> {
-        if std::env::var("STAX_CONFIG_DIR").is_err() {
-            if let Some(path) = Self::repo_local_path()? {
-                return Ok(path);
-            }
-        }
-
         Ok(Self::dir()?.join("config.toml"))
     }
 
     /// Get the repo-local config file path when the current directory is inside
-    /// a git repository and `.config/stax/config.toml` exists at its root.
+    /// a git repository and `stax.toml` exists at its root.
     fn repo_local_path() -> Result<Option<PathBuf>> {
         let Some(root) = git_root()? else {
             return Ok(None);
         };
 
-        let path = root.join(".config").join("stax").join("config.toml");
+        let path = root.join("stax.toml");
         Ok(path.exists().then_some(path))
     }
 
@@ -447,13 +441,36 @@ impl Config {
     /// Load config from file
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
+        if std::env::var("STAX_CONFIG_DIR").is_ok() {
+            return Self::load_path_or_default(&path);
+        }
+
+        let config = Self::load_path_or_default(&path)?;
+        if let Some(repo_path) = Self::repo_local_path()? {
+            Self::load_with_overlay(config, &repo_path)
+        } else {
+            Ok(config)
+        }
+    }
+
+    fn load_path_or_default(path: &Path) -> Result<Self> {
         if path.exists() {
-            let content = fs::read_to_string(&path)?;
+            let content = fs::read_to_string(path)?;
             let config: Config = toml::from_str(&content)?;
             Ok(config)
         } else {
             Ok(Config::default())
         }
+    }
+
+    fn load_with_overlay(config: Config, repo_path: &Path) -> Result<Self> {
+        let mut base = toml::Value::try_from(config)?;
+        let repo_content = fs::read_to_string(repo_path)
+            .with_context(|| format!("Failed to read repo config {}", repo_path.display()))?;
+        let repo_overlay: toml::Value = toml::from_str(&repo_content)
+            .with_context(|| format!("Failed to parse repo config {}", repo_path.display()))?;
+        merge_toml_values(&mut base, repo_overlay);
+        Ok(base.try_into()?)
     }
 
     /// Save config to file
@@ -845,6 +862,24 @@ fn git_root() -> Result<Option<PathBuf>> {
     }
 
     Ok(Some(Path::new(&root).to_path_buf()))
+}
+
+fn merge_toml_values(base: &mut toml::Value, overlay: toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base_table), toml::Value::Table(overlay_table)) => {
+            for (key, value) in overlay_table {
+                match base_table.get_mut(&key) {
+                    Some(base_value) => merge_toml_values(base_value, value),
+                    None => {
+                        base_table.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base_value, overlay_value) => {
+            *base_value = overlay_value;
+        }
+    }
 }
 
 #[cfg(test)]

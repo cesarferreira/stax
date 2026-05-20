@@ -10,8 +10,8 @@ st config --reset-ai --no-prompt
 Config is resolved in this order:
 
 1. `STAX_CONFIG_DIR/config.toml` when `STAX_CONFIG_DIR` is set.
-2. `.config/stax/config.toml` at the current git repository root when it exists.
-3. `~/.config/stax/config.toml`.
+2. `~/.config/stax/config.toml`.
+3. `stax.toml` at the current git repository root overlays only the values it sets.
 
 ## Example config
 
