@@ -6352,12 +6352,27 @@ mod forge_mock_tests {
     }
 
     fn write_test_config_with_submit(home: &Path, api_base_url: &str, stack_links: Option<&str>) {
+        write_test_config_with_submit_full(home, api_base_url, stack_links, None);
+    }
+
+    fn write_test_config_with_submit_full(
+        home: &Path,
+        api_base_url: &str,
+        stack_links: Option<&str>,
+        single_stack: Option<&str>,
+    ) {
         let config_dir = home.join(".config").join("stax");
         std::fs::create_dir_all(&config_dir).expect("Failed to create config dir");
         let config_path = config_dir.join("config.toml");
         let mut config = format!("[remote]\napi_base_url = \"{}\"\n", api_base_url);
-        if let Some(mode) = stack_links {
-            config.push_str(&format!("\n[submit]\nstack_links = \"{}\"\n", mode));
+        if stack_links.is_some() || single_stack.is_some() {
+            config.push_str("\n[submit]\n");
+            if let Some(mode) = stack_links {
+                config.push_str(&format!("stack_links = \"{}\"\n", mode));
+            }
+            if let Some(mode) = single_stack {
+                config.push_str(&format!("single_stack = \"{}\"\n", mode));
+            }
         }
         fs::write(&config_path, config).expect("Failed to write config");
     }
@@ -8443,6 +8458,328 @@ mod forge_mock_tests {
         let body_patch = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
         assert_eq!(payload["body"], "## Summary\n\nhello");
+    }
+
+    #[tokio::test]
+    async fn test_submit_single_stack_off_solo_pr_cleans_up_stale_links() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit_full(
+            home.path(),
+            &mock_server.uri(),
+            Some("comment"),
+            Some("off"),
+        );
+        let repo = setup_branch_with_remote(home.path(), "feature-single-off");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/42",
+                    "id": 42,
+                    "number": 42,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-single-off", "sha": "aaaa", "label": "test:feature-single-off" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        // Pre-existing stale stack comment from a prior single_stack="on" submit.
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                issue_comment_fixture(901, "<!-- stax-stack-comment -->\nold")
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("DELETE"))
+            .and(path("/repos/test/repo/issues/comments/901"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "body": "## Summary\n\nhello\n\n<!-- stax-stack-links:start -->\nold\n<!-- stax-stack-links:end -->",
+                "head": { "ref": "feature-single-off", "sha": "aaaa", "label": "test:feature-single-off" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "head": { "ref": "feature-single-off", "sha": "aaaa", "label": "test:feature-single-off" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--yes", "--no-prompt"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+
+        // single_stack=off + solo PR should suppress the configured `comment` mode
+        // and behave like `off`: delete the stale comment and strip body links.
+        assert!(
+            requests.iter().any(|r| r.method.as_str() == "DELETE"
+                && r.url.path() == "/repos/test/repo/issues/comments/901"),
+            "expected stale stack comment to be deleted"
+        );
+        assert!(
+            !requests.iter().any(|r| r.method.as_str() == "POST"
+                && r.url.path() == "/repos/test/repo/issues/42/comments"),
+            "should not create a stack comment for a solo PR when single_stack=off"
+        );
+        let body_patch = find_body_patch(&requests, "/repos/test/repo/pulls/42");
+        let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
+        assert_eq!(
+            payload["body"], "## Summary\n\nhello",
+            "body stack-links block should be stripped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submit_single_stack_off_two_pr_stack_still_syncs_links() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit_full(
+            home.path(),
+            &mock_server.uri(),
+            Some("comment"),
+            Some("off"),
+        );
+
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_github_remote(&repo, home.path());
+        let _remote_root = remote_root.keep();
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "single-off-parent"]);
+        assert!(
+            output.status.success(),
+            "Failed to create parent: {}",
+            TestRepo::stderr(&output)
+        );
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Add parent");
+        let parent = repo.current_branch();
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &parent]);
+        assert!(
+            push.status.success(),
+            "Failed to push parent: {}",
+            TestRepo::stderr(&push)
+        );
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "single-off-child"]);
+        assert!(
+            output.status.success(),
+            "Failed to create child: {}",
+            TestRepo::stderr(&output)
+        );
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Add child");
+        let child = repo.current_branch();
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &child]);
+        assert!(
+            push.status.success(),
+            "Failed to push child: {}",
+            TestRepo::stderr(&push)
+        );
+
+        write_branch_pr_metadata(&repo, &parent, "main", 101, Some(false));
+        write_branch_pr_metadata(&repo, &child, &parent, 102, Some(false));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                github_pull_fixture_with_details(102, &child, &parent, "Child PR", "child body"),
+            ))
+            .mount(&mock_server)
+            .await;
+
+        for (number, branch, base, comment_id, body) in [
+            (101_u64, parent.as_str(), "main", 901_u64, "parent body"),
+            (
+                102_u64,
+                child.as_str(),
+                parent.as_str(),
+                902_u64,
+                "child body",
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/repos/test/repo/issues/{}/comments", number)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    issue_comment_fixture(comment_id, "<!-- stax-stack-comment -->\nold")
+                ])))
+                .mount(&mock_server)
+                .await;
+
+            Mock::given(method("PATCH"))
+                .and(path(format!(
+                    "/repos/test/repo/issues/comments/{}",
+                    comment_id
+                )))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(issue_comment_fixture(
+                        comment_id,
+                        "<!-- stax-stack-comment -->\nupdated",
+                    )),
+                )
+                .mount(&mock_server)
+                .await;
+
+            Mock::given(method("GET"))
+                .and(path(format!("/repos/test/repo/pulls/{}", number)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    github_pull_fixture_with_details(number, branch, base, "PR", body),
+                ))
+                .mount(&mock_server)
+                .await;
+        }
+
+        let output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["branch", "submit", "--yes", "--no-prompt"],
+        );
+        assert!(
+            output.status.success(),
+            "branch submit failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        // With 2 PRs in the stack the override does NOT apply — both PRs get
+        // their stack-link comments patched.
+        let requests = mock_server.received_requests().await.unwrap();
+        for comment_id in [901_u64, 902_u64] {
+            let patch = requests
+                .iter()
+                .find(|r| {
+                    r.method.as_str() == "PATCH"
+                        && r.url.path()
+                            == format!("/repos/test/repo/issues/comments/{}", comment_id)
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "expected PATCH on stack comment {} when stack has 2 PRs",
+                        comment_id
+                    )
+                });
+            let payload: serde_json::Value = serde_json::from_slice(&patch.body).unwrap();
+            let body = payload["body"].as_str().expect("comment body");
+            assert!(
+                body.contains("PR #101") && body.contains("PR #102"),
+                "stack links should reference both PRs, got: {}",
+                body
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_submit_single_stack_on_default_syncs_solo_pr_comment() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        // Explicitly set stack_links=comment but leave single_stack unset
+        // (default = "on") — regression guard that default behavior is intact.
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("comment"));
+        let repo = setup_branch_with_remote(home.path(), "feature-single-on");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/42",
+                    "id": 42,
+                    "number": 42,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "feature-single-on", "sha": "aaaa", "label": "test:feature-single-on" },
+                    "base": { "ref": "main", "sha": "bbbb" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/42/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                issue_comment_fixture(901, "<!-- stax-stack-comment -->\nold")
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/issues/comments/901"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_comment_fixture(
+                    901,
+                    "<!-- stax-stack-comment -->\nupdated",
+                )),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "body": "## Summary\n\nhello",
+                "head": { "ref": "feature-single-on", "sha": "aaaa", "label": "test:feature-single-on" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/42",
+                "id": 42,
+                "number": 42,
+                "state": "open",
+                "draft": false,
+                "head": { "ref": "feature-single-on", "sha": "aaaa", "label": "test:feature-single-on" },
+                "base": { "ref": "main", "sha": "bbbb" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--yes", "--no-prompt"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(
+            requests.iter().any(|r| r.method.as_str() == "PATCH"
+                && r.url.path() == "/repos/test/repo/issues/comments/901"),
+            "default (single_stack=on) should still sync the stack comment on a solo PR"
+        );
     }
 
     #[tokio::test]
