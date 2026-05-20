@@ -930,7 +930,7 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Run full test suite**
 
-Run: `just test` (or `make test` or `cargo nextest run`)
+Run: `make test` (or `cargo nextest run` for targeted native validation)
 Expected: All tests PASS
 
 - [ ] **Step 2: Check for clippy warnings**
@@ -1204,7 +1204,7 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Run full test suite one final time**
 
-Run: `just test`
+Run: `make test`
 Expected: All tests PASS
 
 - [ ] **Step 2: Check git status**

@@ -386,20 +386,15 @@ Everything else — stacked branches, PRs, restack, sync, undo/redo, TUI, AI gen
 Before opening a PR, run:
 
 ```bash
-make test   # or: just test / task test
+make test
 ```
-
-If bare `task` prints `No matches.`, your shell is running Taskwarrior instead of Go Task. Use the Go Task binary directly, for example `/opt/homebrew/opt/go-task/bin/task test`, or adjust your shell aliases/PATH.
 
 To cut a release, run:
 
 ```bash
-make release          # default minor bump
-make release LEVEL=patch
-task release          # default minor bump
-task release LEVEL=patch
-just release-patch    # or: just release-minor / just release-major
-task release-patch    # or: task release-minor / task release-major
+make release                  # default minor bump
+make release LEVEL=patch      # patch bump
+make release LEVEL=major      # major bump
 ```
 
 Release automation now finalizes the next versioned entry in `CHANGELOG.md` from commits since the latest `v*` tag inside `cargo release`'s pre-release hook, refreshes the compare links, and leaves a fresh `Unreleased` header for follow-up work. If there are no commits since the last tag, the release exits early instead of creating an empty changelog entry.
