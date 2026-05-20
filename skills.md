@@ -191,7 +191,7 @@ stax submit --ai --body            # Generate/update PR body only
 stax submit --ai --yes             # Accept generated new-PR details
 stax submit --rerequest-review     # Re-request existing reviewers on update
 
-# ~/.config/stax/config.toml, with repo-root stax.toml for shared overrides
+# ~/.config/stax/config.toml; repo-root stax.toml overlays shared values
 [submit]
 stack_links = "body"               # "comment" | "body" | "both" | "off"
 
