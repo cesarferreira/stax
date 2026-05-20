@@ -4,11 +4,8 @@ Cut a new `stax` release with an auto-generated changelog entry.
 
 ```bash
 make release                  # defaults to a minor bump
-make release LEVEL=patch
-
-just release-patch
-just release-minor
-just release-major
+make release LEVEL=patch      # patch bump
+make release LEVEL=major      # major bump
 ```
 
 During `cargo release`'s pre-release hook, the workflow rebuilds the upcoming release entry in `CHANGELOG.md` from commits since the latest `v<major>.<minor>.<patch>` tag, refreshes the compare links, and leaves a fresh empty `Unreleased` header at the top.
@@ -30,5 +27,5 @@ If no non-merge commits exist since the last version tag, release prep fails wit
 
 ## Notes
 
-- `make release` defaults to a minor bump. Use `LEVEL=patch` or the `just release-*` targets to control the semver bump.
-- `release-dry` is a plain `cargo release` dry run. The hook sees `DRY_RUN=true` and leaves `CHANGELOG.md` untouched.
+- `make release` defaults to a minor bump. Use `LEVEL=patch`, `LEVEL=minor`, or `LEVEL=major` to control the semver bump.
+- For a dry run, invoke `cargo release <level> --no-confirm` directly without `--execute`; the hook sees `DRY_RUN=true` and leaves `CHANGELOG.md` untouched.

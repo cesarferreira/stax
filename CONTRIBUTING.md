@@ -31,12 +31,10 @@ The test suite is process/filesystem heavy (spawns `git` and `stax` subprocesses
 
 ```bash
 # Full test suite (preferred — uses Docker on macOS when available)
-just test
-# or
 make test
 
 # Full suite natively (slower on macOS)
-just test-native
+make test-native
 
 # Run a single test by name
 cargo nextest run test_name
@@ -48,7 +46,7 @@ cargo nextest run --lib --bins
 cargo nextest run --tests
 ```
 
-**Important:** Do not use `cargo test` directly — always use `just test` or `make test` for the full suite.
+**Important:** Do not use `cargo test` directly — always use `make test` for the full suite.
 
 ## Code Quality
 
