@@ -1,5 +1,5 @@
 use crate::commands::open::open_url_in_browser;
-use crate::config::{Config, StackLinksMode};
+use crate::config::{Config, SingleStackMode, StackLinksMode};
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
@@ -284,6 +284,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let stack = Stack::load(&repo)?;
     let config = Config::load()?;
     let stack_links_mode = config.submit.stack_links;
+    let single_stack_mode = config.submit.single_stack;
 
     // Track if --draft was explicitly passed (we'll ask interactively if not)
     let draft_flag_set = draft;
@@ -1564,6 +1565,12 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         let stack_link_contexts = stack_link_contexts_for_sync(&stack, &current, &pr_infos);
 
         let stack_links_started_at = Instant::now();
+        let effective_stack_links_mode =
+            if single_stack_mode == SingleStackMode::Off && stack_link_contexts.len() <= 1 {
+                StackLinksMode::Off
+            } else {
+                stack_links_mode
+            };
         for (pr_number, _branch, stack_link_pr_infos) in &stack_link_contexts {
             let sync_timer =
                 LiveTimer::maybe_new(!quiet, &format!("Syncing stack links on #{}...", pr_number));
@@ -1574,7 +1581,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 &stack.trunk,
             );
 
-            match stack_links_mode {
+            match effective_stack_links_mode {
                 StackLinksMode::Comment | StackLinksMode::Both => {
                     if created_pr_numbers.contains(pr_number) {
                         client
@@ -1592,7 +1599,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             }
 
             let current_body = client.get_pr_body(*pr_number).await?;
-            let desired_body = match stack_links_mode {
+            let desired_body = match effective_stack_links_mode {
                 StackLinksMode::Body | StackLinksMode::Both => {
                     upsert_stack_links_in_body(&current_body, &stack_links)
                 }
