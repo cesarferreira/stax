@@ -107,6 +107,12 @@ pub struct SubmitConfig {
     /// Where stax-managed stack links should be synced on submit.
     #[serde(default)]
     pub stack_links: StackLinksMode,
+    /// Whether to sync stack links when the stack has only one PR.
+    /// `On` (default) always syncs per `stack_links`. `Off` skips link sync
+    /// (and cleans up stale links) while the stack has <= 1 PRs; once a 2nd
+    /// PR exists, all PRs in the stack get links synced normally.
+    #[serde(default)]
+    pub single_stack: SingleStackMode,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -129,6 +135,14 @@ pub enum StackLinksMode {
     Comment,
     Body,
     Both,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SingleStackMode {
+    #[default]
+    On,
     Off,
 }
 

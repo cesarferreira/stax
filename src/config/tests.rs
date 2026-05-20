@@ -56,6 +56,7 @@ fn test_default_config() {
     assert_eq!(config.remote.name, "origin");
     assert_eq!(config.remote.base_url, "https://github.com");
     assert_eq!(config.submit.stack_links, StackLinksMode::Comment);
+    assert_eq!(config.submit.single_stack, SingleStackMode::On);
     assert!(!config.ci.alert);
     assert!(config.ci.success_alert_sound.is_none());
     assert!(config.ci.error_alert_sound.is_none());
@@ -129,6 +130,61 @@ fn test_submit_stack_links_rejects_unknown_value() {
         r#"
 [submit]
 stack_links = "weird"
+"#,
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("unknown variant"));
+}
+
+#[test]
+fn test_submit_single_stack_defaults_to_on() {
+    let config: Config = toml::from_str(
+        r#"
+[remote]
+name = "origin"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.submit.single_stack, SingleStackMode::On);
+}
+
+#[test]
+fn test_submit_single_stack_round_trip_off() {
+    let config: Config = toml::from_str(
+        r#"
+[submit]
+single_stack = "off"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.submit.single_stack, SingleStackMode::Off);
+
+    let encoded = toml::to_string(&config).unwrap();
+    assert!(encoded.contains("single_stack = \"off\""));
+}
+
+#[test]
+fn test_submit_single_stack_round_trip_on() {
+    let config: Config = toml::from_str(
+        r#"
+[submit]
+single_stack = "on"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.submit.single_stack, SingleStackMode::On);
+}
+
+#[test]
+fn test_submit_single_stack_rejects_unknown_value() {
+    let err = toml::from_str::<Config>(
+        r#"
+[submit]
+single_stack = "maybe"
 "#,
     )
     .unwrap_err();
