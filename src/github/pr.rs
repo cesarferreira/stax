@@ -501,13 +501,19 @@ impl GitHubClient {
             .await
             .context("Failed to get PR")?;
 
-        Ok(PrInfo {
-            number: pr.number,
-            state: pr
-                .state
+        let state = if pr.merged_at.is_some() {
+            "MERGED".to_string()
+        } else {
+            pr.state
                 .as_ref()
                 .map(|s| format!("{:?}", s))
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .to_uppercase()
+        };
+
+        Ok(PrInfo {
+            number: pr.number,
+            state,
             is_draft: pr.draft.unwrap_or(false),
             base: pr.base.ref_field.clone(),
         })

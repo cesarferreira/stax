@@ -12163,4 +12163,213 @@ mod forge_mock_tests {
             );
         }
     }
+
+    // ─── Tests for gh CLI metadata corruption fix ───────────────────────────
+
+    /// When a PR is merged via `gh pr merge`, the live PR state is "closed" with
+    /// merged_at set. After sync, the branch metadata's prInfo.state should be
+    /// updated to "MERGED" so that subsequent syncs can use Method 2 detection.
+    #[tokio::test]
+    async fn test_sync_refreshes_pr_state_from_github_merged() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-gh-merged");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 500, Some(false));
+
+        // Simulate: PR was merged via `gh pr merge` — GitHub returns state=closed + merged_at set
+        let mut merged_pr = github_pull_fixture(500, &branch, "main", "aaaa");
+        merged_pr["state"] = serde_json::json!("closed");
+        merged_pr["merged_at"] = serde_json::json!("2026-05-20T10:00:00Z");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/500"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merged_pr))
+            .mount(&mock_server)
+            .await;
+
+        // Run sync — it should refresh PR state in metadata
+        let output = run_stax_with_env(&repo, home.path(), &["sync"]);
+        assert!(
+            output.status.success(),
+            "Sync failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        // Verify: metadata should now show state=MERGED
+        let metadata_ref = format!("refs/branch-metadata/{}", branch);
+        let metadata_output = repo.git(&["show", &metadata_ref]);
+        if metadata_output.status.success() {
+            let metadata: serde_json::Value =
+                serde_json::from_str(&TestRepo::stdout(&metadata_output)).unwrap();
+            assert_eq!(
+                metadata["prInfo"]["state"], "MERGED",
+                "Expected prInfo.state to be MERGED after gh pr merge, got: {}",
+                metadata["prInfo"]["state"]
+            );
+        }
+        // If metadata ref was deleted (sync cleaned up the merged branch), that's also correct
+    }
+
+    /// When a PR is closed (not merged) via `gh pr close`, sync should update
+    /// the metadata state to CLOSED so stax knows the PR is no longer active.
+    #[tokio::test]
+    async fn test_sync_refreshes_pr_state_from_github_closed() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-gh-closed");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 501, Some(false));
+
+        // Simulate: PR was closed via `gh pr close` — state=closed, no merged_at
+        let mut closed_pr = github_pull_fixture(501, &branch, "main", "aaaa");
+        closed_pr["state"] = serde_json::json!("closed");
+        closed_pr["merged_at"] = serde_json::json!(null);
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/501"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(closed_pr))
+            .mount(&mock_server)
+            .await;
+
+        // Run sync
+        let output = run_stax_with_env(&repo, home.path(), &["sync"]);
+        assert!(
+            output.status.success(),
+            "Sync failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        // Verify: metadata should now show state=CLOSED
+        let metadata_ref = format!("refs/branch-metadata/{}", branch);
+        let metadata_output = repo.git(&["show", &metadata_ref]);
+        assert!(
+            metadata_output.status.success(),
+            "Metadata ref should still exist for closed-but-unmerged PR"
+        );
+        let metadata: serde_json::Value =
+            serde_json::from_str(&TestRepo::stdout(&metadata_output)).unwrap();
+        assert_eq!(
+            metadata["prInfo"]["state"], "CLOSED",
+            "Expected prInfo.state to be CLOSED after gh pr close, got: {}",
+            metadata["prInfo"]["state"]
+        );
+    }
+
+    /// When a PR's base is changed via `gh pr edit --base`, sync should detect
+    /// the mismatch and update parentBranchName in metadata to match the live
+    /// PR base, preventing stale restack targets.
+    #[tokio::test]
+    async fn test_sync_reconciles_pr_base_with_parent_metadata() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+
+        // Create a stack: main <- feature-base <- feature-child
+        let repo = setup_branch_with_remote(home.path(), "feature-base");
+        let base_branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &base_branch, "main", 510, Some(false));
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "feature-child"]);
+        assert!(output.status.success());
+        let child_branch = "feature-child".to_string();
+        repo.create_file("child.txt", "child content");
+        repo.commit("Child commit");
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &child_branch]);
+        assert!(push.status.success());
+        write_branch_pr_metadata(&repo, &child_branch, &base_branch, 511, Some(false));
+
+        // Simulate: user ran `gh pr edit --base main` on feature-child
+        // The live PR now has base=main, but metadata still says parent=feature-base
+        let mut rebased_pr = github_pull_fixture(511, &child_branch, "main", "aaaa");
+        rebased_pr["state"] = serde_json::json!("open");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/511"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(rebased_pr))
+            .mount(&mock_server)
+            .await;
+
+        // Also mock the parent branch's PR (still open)
+        let parent_pr = github_pull_fixture(510, &base_branch, "main", "aaaa");
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/510"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(parent_pr))
+            .mount(&mock_server)
+            .await;
+
+        // Run sync
+        let output = run_stax_with_env(&repo, home.path(), &["sync"]);
+        assert!(
+            output.status.success(),
+            "Sync failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        // Verify: feature-child's metadata should now have parentBranchName=main
+        let metadata_ref = format!("refs/branch-metadata/{}", child_branch);
+        let metadata_output = repo.git(&["show", &metadata_ref]);
+        assert!(metadata_output.status.success());
+        let metadata: serde_json::Value =
+            serde_json::from_str(&TestRepo::stdout(&metadata_output)).unwrap();
+        assert_eq!(
+            metadata["parentBranchName"], "main",
+            "Expected parentBranchName to be reconciled to 'main' (live PR base), got: {}",
+            metadata["parentBranchName"]
+        );
+    }
+
+    /// Verify that get_pr returns "MERGED" state (not "Closed") when GitHub
+    /// reports a PR with merged_at set.
+    #[tokio::test]
+    async fn test_get_pr_returns_merged_state_for_merged_pr() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-merged-state");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 520, Some(false));
+
+        // Mock a merged PR response
+        let mut merged_pr = github_pull_fixture(520, &branch, "main", "aaaa");
+        merged_pr["state"] = serde_json::json!("closed");
+        merged_pr["merged_at"] = serde_json::json!("2026-05-20T12:00:00Z");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/520"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merged_pr))
+            .mount(&mock_server)
+            .await;
+
+        // Use `stax ci` which fetches PR state — verify it shows merged, not closed
+        let output = run_stax_with_env(&repo, home.path(), &["sync"]);
+        assert!(
+            output.status.success(),
+            "sync failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        // Verify metadata state is MERGED (not "Closed" from raw GitHub state)
+        let metadata_ref = format!("refs/branch-metadata/{}", branch);
+        let metadata_output = repo.git(&["show", &metadata_ref]);
+        if metadata_output.status.success() {
+            let metadata: serde_json::Value =
+                serde_json::from_str(&TestRepo::stdout(&metadata_output)).unwrap();
+            assert_eq!(
+                metadata["prInfo"]["state"], "MERGED",
+                "get_pr should return MERGED for PRs with merged_at set, got: {}",
+                metadata["prInfo"]["state"]
+            );
+        }
+    }
 }

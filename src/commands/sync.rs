@@ -1476,9 +1476,9 @@ pub fn run(
     Ok(())
 }
 
-/// Fetch live PR draft state from the forge for all tracked branches and update
+/// Fetch live PR state from the forge for all tracked branches and update
 /// both branch metadata and CiCache. Called at end of sync so that operations
-/// like `gh pr ready` are reflected without needing a separate `stax ci` run.
+/// like `gh pr ready`, `gh pr merge`, or `gh pr edit --base` are reflected.
 fn refresh_pr_draft_states(repo: &GitRepo, config: &Config) {
     let remote_info = match RemoteInfo::from_repo(repo, config) {
         Ok(info) => info,
@@ -1517,20 +1517,36 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config) {
             Err(_) => continue,
         };
 
-        // Update branch metadata with fresh is_draft
+        // Update branch metadata with fresh state, is_draft, and base
         if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch_name) {
             if let Some(ref mut pr_info) = meta.pr_info {
                 pr_info.is_draft = Some(live_pr.is_draft);
-                let _ = meta.write(repo.inner(), branch_name);
+                pr_info.state = live_pr.state.clone();
             }
+
+            // Reconcile PR base with parent: if the live PR base differs from
+            // our tracked parent and the live base is a known branch, update.
+            if !live_pr.base.is_empty() && live_pr.base != meta.parent_branch_name {
+                let base_is_known = live_pr.base == stack.trunk
+                    || stack.branches.contains_key(&live_pr.base);
+                if base_is_known {
+                    // Update parent revision to the current tip of the new parent
+                    if let Ok(parent_ref) =
+                        repo.inner().find_branch(&live_pr.base, git2::BranchType::Local)
+                    {
+                        if let Ok(commit) = parent_ref.get().peel_to_commit() {
+                            meta.parent_branch_revision = commit.id().to_string();
+                        }
+                    }
+                    meta.parent_branch_name = live_pr.base.clone();
+                }
+            }
+
+            let _ = meta.write(repo.inner(), branch_name);
         }
 
-        // Update CiCache — preserve existing CI state, refresh pr_state
-        let pr_state = if live_pr.is_draft {
-            "DRAFT".to_string()
-        } else {
-            "OPEN".to_string()
-        };
+        // Update CiCache with the live PR state
+        let pr_state = live_pr.state.clone();
         let existing_ci = cache
             .branches
             .get(branch_name.as_str())
