@@ -85,6 +85,22 @@ fn rev_list_count(repo: &TestRepo, range: &str) -> usize {
         .unwrap_or(0)
 }
 
+fn assert_git_success(repo: &TestRepo, args: &[&str], context: &str) {
+    let out = repo.git(args);
+    assert!(
+        out.status.success(),
+        "{} failed: git {}\nstdout:\n{}\nstderr:\n{}",
+        context,
+        args.join(" "),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn create_empty_commit(repo: &TestRepo, message: &str) {
+    assert_git_success(repo, &["commit", "--allow-empty", "-m", message], message);
+}
+
 // =============================================================================
 // Happy path: stored revision is the correct merge-base
 // =============================================================================
@@ -320,16 +336,19 @@ fn test_many_trunk_commits_linear_restack_only_replays_feature_commits() {
     // last-known parent tip while engineers landed TRUNK_COMMITS on main.
     let old_main_tip = repo.get_commit_sha("HEAD");
 
-    repo.git(&["checkout", "-b", "busy-feature"]);
+    assert_git_success(
+        &repo,
+        &["checkout", "-b", "busy-feature"],
+        "create busy-feature",
+    );
     repo.create_file("feat1.txt", "feature one");
     repo.commit("Feature work 1");
     repo.create_file("feat2.txt", "feature two");
     repo.commit("Feature work 2");
 
-    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["checkout", "main"], "checkout main");
     for i in 0..TRUNK_COMMITS {
-        repo.create_file(&format!("trunk_{i}.txt"), &i.to_string());
-        repo.commit(&format!("Trunk churn commit {i}"));
+        create_empty_commit(&repo, &format!("Trunk churn commit {i}"));
     }
 
     let trunk_delta = rev_list_count(&repo, &format!("{old_main_tip}..main"));
@@ -341,7 +360,11 @@ fn test_many_trunk_commits_linear_restack_only_replays_feature_commits() {
     write_branch_metadata_raw(&repo, "busy-feature", "main", &old_main_tip);
     repo.run_stax(&["set-trunk", "main"]);
 
-    repo.git(&["checkout", "busy-feature"]);
+    assert_git_success(
+        &repo,
+        &["checkout", "busy-feature"],
+        "checkout busy-feature",
+    );
     let output = repo.run_stax(&["restack", "--yes", "--quiet"]);
     output.assert_success();
     assert!(
@@ -367,24 +390,27 @@ fn test_sync_restack_many_trunk_commits_preserves_linear_feature_depth() {
 
     let old_main_tip = repo.get_commit_sha("HEAD");
 
-    repo.git(&["checkout", "-b", "sync-busy"]);
+    assert_git_success(&repo, &["checkout", "-b", "sync-busy"], "create sync-busy");
     repo.create_file("sf1.txt", "x");
     repo.commit("sync feature 1");
     repo.create_file("sf2.txt", "y");
     repo.commit("sync feature 2");
-    repo.git(&["push", "-u", "origin", "sync-busy"]);
+    assert_git_success(
+        &repo,
+        &["push", "-u", "origin", "sync-busy"],
+        "push sync-busy",
+    );
 
-    repo.git(&["checkout", "main"]);
+    assert_git_success(&repo, &["checkout", "main"], "checkout main");
     for i in 0..TRUNK_COMMITS {
-        repo.create_file(&format!("remote_trunk_{i}.txt"), "bulk");
-        repo.commit(&format!("main advance {i}"));
+        create_empty_commit(&repo, &format!("main advance {i}"));
     }
-    repo.git(&["push", "origin", "main"]);
+    assert_git_success(&repo, &["push", "origin", "main"], "push main");
 
     write_branch_metadata_raw(&repo, "sync-busy", "main", &old_main_tip);
     repo.run_stax(&["set-trunk", "main"]);
 
-    repo.git(&["checkout", "sync-busy"]);
+    assert_git_success(&repo, &["checkout", "sync-busy"], "checkout sync-busy");
     let output = repo.run_stax(&["sync", "--restack", "--force", "--quiet", "--no-delete"]);
     output.assert_success();
     assert!(!repo.has_rebase_in_progress());
