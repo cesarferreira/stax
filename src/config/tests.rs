@@ -111,6 +111,44 @@ fn config_load_overlays_repo_stax_toml_when_present() {
 }
 
 #[test]
+fn config_load_discovers_repo_stax_toml_from_nested_directory() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let original_dir = env::current_dir().unwrap();
+    let temp_dir = std::env::temp_dir().join(format!(
+        "stax-test-nested-local-config-{}",
+        std::process::id()
+    ));
+    let repo_dir = temp_dir.join("repo");
+    let nested_dir = repo_dir.join("src").join("nested");
+    let home_dir = temp_dir.join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&nested_dir).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(global_config_dir.join("config.toml"), "[ui]\ntips = true\n").unwrap();
+    fs::write(repo_dir.join("stax.toml"), "[ui]\ntips = false\n").unwrap();
+
+    env::set_var("HOME", &home_dir);
+    env::remove_var("STAX_CONFIG_DIR");
+    Command::new("git")
+        .arg("init")
+        .current_dir(&repo_dir)
+        .output()
+        .unwrap();
+    env::set_current_dir(&nested_dir).unwrap();
+
+    assert!(!Config::load().unwrap().ui.tips);
+
+    env::set_current_dir(original_dir).unwrap();
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn config_path_uses_global_config_when_repo_local_config_is_absent() {
     let _guard = env_lock();
 
@@ -255,7 +293,10 @@ fn config_save_writes_global_config_when_repo_stax_toml_exists() {
     config.ui.tips = false;
     config.save().unwrap();
 
-    assert!(global_config_path.exists());
+    let saved_global_config = fs::read_to_string(&global_config_path).unwrap();
+    let saved_config: Config = toml::from_str(&saved_global_config).unwrap();
+    assert!(!saved_config.ui.tips);
+    assert!(saved_global_config.contains("tips = false"));
     assert_eq!(
         fs::read_to_string(repo_dir.join("stax.toml")).unwrap(),
         "[ui]\ntips = false\n"

@@ -845,23 +845,9 @@ impl Config {
 }
 
 fn git_root() -> Result<Option<PathBuf>> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output();
-
-    let Ok(output) = output else {
-        return Ok(None);
-    };
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let root = String::from_utf8(output.stdout)?.trim().to_string();
-    if root.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(Path::new(&root).to_path_buf()))
+    Ok(git2::Repository::discover(".")
+        .ok()
+        .and_then(|repo| repo.workdir().map(PathBuf::from)))
 }
 
 fn merge_toml_values(base: &mut toml::Value, overlay: toml::Value) {
