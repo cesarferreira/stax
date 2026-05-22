@@ -603,6 +603,11 @@ pub fn run(
                     plan_blocking_worktree_cleanup(&repo, branch, force)?
                 };
 
+                // For the prompt we use merged_branch_names (all detected merges) as
+                // the doomed set — an approximation, since the user hasn't confirmed
+                // deletions yet. The actual checkout in the second pass uses the
+                // confirmed set, so if the user declines some branches the effective
+                // parent may be closer in the chain than what the prompt suggests.
                 let prompt_parent = if is_current_branch {
                     Some(
                         resolve_fallback_parent_skipping_doomed(

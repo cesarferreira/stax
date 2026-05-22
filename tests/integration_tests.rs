@@ -4926,6 +4926,11 @@ fn test_sync_deleting_fully_merged_stack_does_not_reparent_doomed_children() {
         "Fully deleted merged stacks should not reparent branches that are also being deleted, got: {}",
         stdout
     );
+    assert!(
+        stdout.contains("deleted"),
+        "Expected sync output to report deletions, got: {}",
+        stdout
+    );
 
     let branches = repo.list_branches();
     assert!(
