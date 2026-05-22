@@ -590,14 +590,126 @@ pub fn run(
                 record_ci_history_for_merged(&repo, rt, client, &branch_names, &stack, quiet);
             }
 
+            let merged_branch_names: Vec<String> =
+                merged.iter().map(|m| m.branch.clone()).collect();
+            let mut deletion_decisions = Vec::new();
             for merged_info in &merged {
+                let branch = &merged_info.branch;
+                let is_current_branch = branch == &current;
+
+                let blocking_worktree_cleanup = if is_current_branch {
+                    None
+                } else {
+                    plan_blocking_worktree_cleanup(&repo, branch, force)?
+                };
+
+                let prompt_parent = if is_current_branch {
+                    Some(
+                        resolve_fallback_parent_skipping_doomed(
+                            &workdir,
+                            &stack,
+                            branch,
+                            &merged_branch_names,
+                        )
+                        .0,
+                    )
+                } else {
+                    None
+                };
+                let prompt = sync_delete_prompt(
+                    branch,
+                    if is_current_branch {
+                        prompt_parent.as_deref()
+                    } else {
+                        None
+                    },
+                    None,
+                    blocking_worktree_cleanup.as_ref(),
+                );
+
+                let confirm = if auto_confirm {
+                    true
+                } else if quiet {
+                    false
+                } else {
+                    Confirm::with_theme(&ColorfulTheme::default())
+                        .with_prompt(prompt)
+                        .default(true)
+                        .interact()?
+                };
+                let confirmed_dirty_worktree_removal = confirm
+                    && blocking_worktree_cleanup.as_ref().is_some_and(
+                        BlockingWorktreeCleanup::can_force_remove_dirty_worktree_during_sync,
+                    );
+
+                if confirm {
+                    deletion_decisions.push((
+                        merged_info.clone(),
+                        blocking_worktree_cleanup,
+                        confirmed_dirty_worktree_removal,
+                    ));
+                } else if !quiet {
+                    println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+                }
+            }
+
+            let confirmed_branch_names: Vec<String> = deletion_decisions
+                .iter()
+                .map(|(info, _, _)| info.branch.clone())
+                .collect();
+            let confirmed_deletions: HashSet<String> =
+                confirmed_branch_names.iter().cloned().collect();
+
+            for (merged_info, blocking_worktree_cleanup, confirmed_dirty_worktree_removal) in
+                deletion_decisions
+            {
                 let branch = &merged_info.branch;
                 let merge_type = &merged_info.merge_type;
                 let is_current_branch = branch == &current;
 
-                // Handle squash-merged branches with children
+                // Resolve parent branch for checkout/reparent, skipping any
+                // branch that was also confirmed for deletion in this pass.
+                let (parent_branch, parent_fallback_from) = resolve_fallback_parent_skipping_doomed(
+                    &workdir,
+                    &stack,
+                    branch,
+                    &confirmed_branch_names,
+                );
+                let parent_exists_locally = local_branch_exists(&workdir, &parent_branch);
+
+                if !quiet {
+                    if let Some(missing_parent) = &parent_fallback_from {
+                        println!(
+                            "    {} parent {} not available; using {}",
+                            "↪".yellow(),
+                            missing_parent.yellow(),
+                            parent_branch.cyan()
+                        );
+                    }
+                }
+
+                if !parent_exists_locally {
+                    if !quiet {
+                        println!(
+                            "    {} {}",
+                            branch.bright_black(),
+                            format!(
+                                "couldn't resolve a local parent branch (wanted '{}'), skipping",
+                                parent_branch
+                            )
+                            .red()
+                        );
+                    }
+                    continue;
+                }
+
+                // Handle squash-merged branches with surviving children.
                 if matches!(merge_type, MergeType::SquashMerge) {
-                    let children = stack.children(branch);
+                    let children: Vec<String> = stack
+                        .children(branch)
+                        .into_iter()
+                        .filter(|child| !confirmed_deletions.contains(child))
+                        .collect();
                     if !children.is_empty() {
                         if !quiet {
                             println!(
@@ -645,7 +757,9 @@ pub fn run(
                                         child.yellow(),
                                         e
                                     );
-                                    eprintln!("      Stopping sync. Resolve conflicts and run `stax continue`.");
+                                    eprintln!(
+                                        "      Stopping sync. Resolve conflicts and run `stax continue`."
+                                    );
                                     return Err(e);
                                 }
                             }
@@ -653,229 +767,153 @@ pub fn run(
                     }
                 }
 
-                let blocking_worktree_cleanup = if is_current_branch {
-                    None
-                } else {
-                    plan_blocking_worktree_cleanup(&repo, branch, force)?
-                };
+                // If we're on this branch, checkout parent first
+                if is_current_branch {
+                    match checkout_branch_for_cleanup(&repo, &workdir, &parent_branch) {
+                        Ok(()) => {
+                            if !quiet {
+                                println!("    {} checked out {}", "→".cyan(), parent_branch.cyan());
+                            }
 
-                // Resolve parent branch for checkout/reparent.
-                // Metadata can reference a deleted branch; in that case fall back to trunk.
-                let recorded_parent_branch = stack
-                    .branches
-                    .get(branch)
-                    .and_then(|b| b.parent.clone())
-                    .unwrap_or_else(|| stack.trunk.clone());
-                let (parent_branch, parent_fallback_from) =
-                    resolve_effective_parent(&workdir, &recorded_parent_branch, &stack.trunk);
-                let parent_exists_locally = local_branch_exists(&workdir, &parent_branch);
+                            // Pull latest changes for the parent branch
+                            let pull_status = Command::new("git")
+                                .args(["pull", "--ff-only", &remote_name, &parent_branch])
+                                .current_dir(&workdir)
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .status();
 
-                if !quiet {
-                    if let Some(missing_parent) = &parent_fallback_from {
-                        println!(
-                            "    {} parent {} not found locally; using {}",
-                            "↪".yellow(),
-                            missing_parent.yellow(),
-                            parent_branch.cyan()
-                        );
-                    }
-                }
-
-                if !parent_exists_locally {
-                    if !quiet {
-                        println!(
-                            "    {} {}",
-                            branch.bright_black(),
-                            format!(
-                                "couldn't resolve a local parent branch (wanted '{}'), skipping",
-                                parent_branch
-                            )
-                            .red()
-                        );
-                    }
-                    continue;
-                }
-
-                let prompt = sync_delete_prompt(
-                    branch,
-                    if is_current_branch {
-                        Some(parent_branch.as_str())
-                    } else {
-                        None
-                    },
-                    None,
-                    blocking_worktree_cleanup.as_ref(),
-                );
-
-                let confirm = if auto_confirm {
-                    true
-                } else if quiet {
-                    false
-                } else {
-                    Confirm::with_theme(&ColorfulTheme::default())
-                        .with_prompt(prompt)
-                        .default(true)
-                        .interact()?
-                };
-                let confirmed_dirty_worktree_removal = confirm
-                    && blocking_worktree_cleanup.as_ref().is_some_and(
-                        BlockingWorktreeCleanup::can_force_remove_dirty_worktree_during_sync,
-                    );
-
-                if confirm {
-                    // If we're on this branch, checkout parent first
-                    if is_current_branch {
-                        match checkout_branch_for_cleanup(&repo, &workdir, &parent_branch) {
-                            Ok(()) => {
-                                if !quiet {
+                            if let Ok(status) = pull_status {
+                                if status.success() && !quiet {
                                     println!(
-                                        "    {} checked out {}",
-                                        "→".cyan(),
+                                        "    {} pulled latest {}",
+                                        "↓".cyan(),
                                         parent_branch.cyan()
                                     );
                                 }
-
-                                // Pull latest changes for the parent branch
-                                let pull_status = Command::new("git")
-                                    .args(["pull", "--ff-only", &remote_name, &parent_branch])
-                                    .current_dir(&workdir)
-                                    .stdout(std::process::Stdio::null())
-                                    .stderr(std::process::Stdio::null())
-                                    .status();
-
-                                if let Ok(status) = pull_status {
-                                    if status.success() && !quiet {
-                                        println!(
-                                            "    {} pulled latest {}",
-                                            "↓".cyan(),
-                                            parent_branch.cyan()
-                                        );
-                                    }
-                                }
-                            }
-                            Err(checkout_error) => {
-                                if !quiet {
-                                    println!(
-                                        "    {} {}",
-                                        branch.bright_black(),
-                                        format!(
-                                            "failed to checkout '{}': {}, skipping",
-                                            parent_branch, checkout_error
-                                        )
-                                        .red()
-                                    );
-                                }
-                                continue;
                             }
                         }
-                    }
-
-                    // Reparent tracked children onto the surviving parent before
-                    // deleting, preserving the old-parent boundary for later restack.
-                    reparent_children_for_deletion(
-                        &repo,
-                        &stack,
-                        branch,
-                        &parent_branch,
-                        forge_client.as_ref(),
-                        quiet,
-                    )?;
-
-                    let local_delete = delete_local_branch_for_sync(
-                        &repo,
-                        &config,
-                        &workdir,
-                        branch,
-                        blocking_worktree_cleanup.as_ref(),
-                        force,
-                        confirmed_dirty_worktree_removal,
-                        quiet,
-                    )?;
-                    let local_deleted = local_delete.deleted;
-                    let local_worktree_blocked = local_delete.worktree_blocked;
-
-                    // Delete remote branch
-                    let remote_status = Command::new("git")
-                        .args(["push", &remote_name, "--delete", branch])
-                        .current_dir(&workdir)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status();
-
-                    let remote_deleted = remote_status.map(|s| s.success()).unwrap_or(false);
-
-                    // Only delete metadata if branch no longer exists locally.
-                    let local_still_exists = local_branch_exists(&workdir, branch);
-
-                    let metadata_deleted = if !local_still_exists {
-                        match crate::git::refs::delete_metadata(repo.inner(), branch) {
-                            Ok(()) => true,
-                            Err(e) => {
+                        Err(checkout_error) => {
+                            if !quiet {
                                 println!(
-                                    "{}",
+                                    "    {} {}",
+                                    branch.bright_black(),
                                     format!(
-                                        "Warning: failed to delete metadata for '{}': {}",
-                                        branch, e
+                                        "failed to checkout '{}': {}, skipping",
+                                        parent_branch, checkout_error
                                     )
-                                    .yellow()
+                                    .red()
                                 );
-                                false
                             }
+                            continue;
+                        }
+                    }
+                }
+
+                // Reparent tracked children onto the surviving parent before
+                // deleting, preserving the old-parent boundary for later restack.
+                reparent_children_for_deletion(
+                    &repo,
+                    &stack,
+                    branch,
+                    &parent_branch,
+                    &confirmed_deletions,
+                    forge_client.as_ref(),
+                    quiet,
+                )?;
+
+                let local_delete = delete_local_branch_for_sync(
+                    &repo,
+                    &config,
+                    &workdir,
+                    branch,
+                    blocking_worktree_cleanup.as_ref(),
+                    force,
+                    confirmed_dirty_worktree_removal,
+                    quiet,
+                )?;
+                let local_deleted = local_delete.deleted;
+                let local_worktree_blocked = local_delete.worktree_blocked;
+
+                // Delete remote branch
+                let remote_status = Command::new("git")
+                    .args(["push", &remote_name, "--delete", branch])
+                    .current_dir(&workdir)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+
+                let remote_deleted = remote_status.map(|s| s.success()).unwrap_or(false);
+
+                // Only delete metadata if branch no longer exists locally.
+                let local_still_exists = local_branch_exists(&workdir, branch);
+
+                let metadata_deleted = if !local_still_exists {
+                    match crate::git::refs::delete_metadata(repo.inner(), branch) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            println!(
+                                "{}",
+                                format!(
+                                    "Warning: failed to delete metadata for '{}': {}",
+                                    branch, e
+                                )
+                                .yellow()
+                            );
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+
+                if metadata_deleted {
+                    stats.merged_branches_cleaned += 1;
+                }
+
+                if !quiet {
+                    if local_deleted && remote_deleted {
+                        println!(
+                            "    {} {}",
+                            branch.bright_black(),
+                            "deleted (local + remote)".green()
+                        );
+                    } else if local_deleted {
+                        println!(
+                            "    {} {}",
+                            branch.bright_black(),
+                            "deleted (local only)".green()
+                        );
+                    } else if remote_deleted {
+                        println!(
+                            "    {} {}",
+                            branch.bright_black(),
+                            "deleted (remote only)".green()
+                        );
+                        if !metadata_deleted {
+                            println!(
+                                "    {} {}",
+                                "↷".yellow(),
+                                "local branch still exists, metadata kept".dimmed()
+                            );
                         }
                     } else {
-                        false
-                    };
-
-                    if metadata_deleted {
-                        stats.merged_branches_cleaned += 1;
-                    }
-
-                    if !quiet {
-                        if local_deleted && remote_deleted {
-                            println!(
-                                "    {} {}",
-                                branch.bright_black(),
-                                "deleted (local + remote)".green()
+                        if local_worktree_blocked {
+                            print_blocked_branch_delete_recovery(
+                                branch,
+                                blocking_worktree_cleanup.as_ref(),
                             );
-                        } else if local_deleted {
-                            println!(
-                                "    {} {}",
-                                branch.bright_black(),
-                                "deleted (local only)".green()
-                            );
-                        } else if remote_deleted {
-                            println!(
-                                "    {} {}",
-                                branch.bright_black(),
-                                "deleted (remote only)".green()
-                            );
-                            if !metadata_deleted {
-                                println!(
-                                    "    {} {}",
-                                    "↷".yellow(),
-                                    "local branch still exists, metadata kept".dimmed()
-                                );
-                            }
                         } else {
-                            if local_worktree_blocked {
-                                print_blocked_branch_delete_recovery(
-                                    branch,
-                                    blocking_worktree_cleanup.as_ref(),
-                                );
-                            } else {
-                                println!("    {} {}", branch.bright_black(), "skipped".dimmed());
-                            }
-                            if !metadata_deleted {
-                                println!(
-                                    "    {} {}",
-                                    "↷".yellow(),
-                                    "metadata kept because local branch still exists".dimmed()
-                                );
-                            }
+                            println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+                        }
+                        if !metadata_deleted {
+                            println!(
+                                "    {} {}",
+                                "↷".yellow(),
+                                "metadata kept because local branch still exists".dimmed()
+                            );
                         }
                     }
-                } else if !quiet {
-                    println!("    {} {}", branch.bright_black(), "skipped".dimmed());
                 }
             }
         } else if !quiet {
@@ -949,6 +987,7 @@ pub fn run(
                 }
             };
 
+            let gone_deletions: HashSet<String> = gone.iter().cloned().collect();
             for branch in &gone {
                 if !local_branch_exists(&workdir, branch) {
                     continue;
@@ -1052,6 +1091,7 @@ pub fn run(
                     &live_stack,
                     branch,
                     &fallback_parent,
+                    &gone_deletions,
                     forge_client.as_ref(),
                     quiet,
                 )?;
@@ -2169,22 +2209,6 @@ fn checkout_branch_for_cleanup(
     }
 }
 
-fn resolve_effective_parent(
-    workdir: &std::path::Path,
-    recorded_parent: &str,
-    trunk: &str,
-) -> (String, Option<String>) {
-    if local_branch_exists(workdir, recorded_parent) {
-        return (recorded_parent.to_string(), None);
-    }
-
-    if recorded_parent != trunk && local_branch_exists(workdir, trunk) {
-        return (trunk.to_string(), Some(recorded_parent.to_string()));
-    }
-
-    (recorded_parent.to_string(), None)
-}
-
 /// Walk the parent chain from `branch` skipping any branch in `doomed` (e.g.
 /// branches scheduled for deletion in the same sync pass). Returns the first
 /// ancestor that is not doomed and still exists locally, falling back to trunk.
@@ -2244,6 +2268,7 @@ fn reparent_children_for_deletion(
     stack_snapshot: &Stack,
     branch: &str,
     new_parent: &str,
+    skipped_children: &HashSet<String>,
     forge_client: Option<&(tokio::runtime::Runtime, ForgeClient)>,
     quiet: bool,
 ) -> Result<()> {
@@ -2252,6 +2277,7 @@ fn reparent_children_for_deletion(
         .iter()
         .filter(|(_, info)| info.parent.as_deref() == Some(branch))
         .map(|(name, _)| name.clone())
+        .filter(|name| !skipped_children.contains(name))
         .collect();
     let doomed_tip = repo.branch_commit(branch).ok();
 

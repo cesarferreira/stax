@@ -4887,6 +4887,65 @@ fn test_sync_detects_branch_with_empty_diff_against_trunk() {
 }
 
 #[test]
+fn test_sync_deleting_fully_merged_stack_does_not_reparent_doomed_children() {
+    let repo = TestRepo::new_with_remote();
+
+    // Build main -> parent -> child -> leaf.
+    repo.run_stax(&["bc", "merged-stack-parent"]);
+    let parent_branch = repo.current_branch();
+    repo.create_file("parent.txt", "parent content");
+    repo.commit("Parent commit");
+    repo.git(&["push", "-u", "origin", &parent_branch]);
+
+    repo.run_stax(&["bc", "merged-stack-child"]);
+    let child_branch = repo.current_branch();
+    repo.create_file("child.txt", "child content");
+    repo.commit("Child commit");
+    repo.git(&["push", "-u", "origin", &child_branch]);
+
+    repo.run_stax(&["bc", "merged-stack-leaf"]);
+    let leaf_branch = repo.current_branch();
+    repo.create_file("leaf.txt", "leaf content");
+    repo.commit("Leaf commit");
+    repo.git(&["push", "-u", "origin", &leaf_branch]);
+
+    // Merging the leaf into trunk makes every branch in the stack merged.
+    repo.merge_branch_on_remote(&leaf_branch);
+    repo.run_stax(&["t"]);
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        !stdout.contains("reparented"),
+        "Fully deleted merged stacks should not reparent branches that are also being deleted, got: {}",
+        stdout
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.contains(&parent_branch),
+        "Expected parent branch to be deleted, got: {:?}",
+        branches
+    );
+    assert!(
+        !branches.contains(&child_branch),
+        "Expected child branch to be deleted, got: {:?}",
+        branches
+    );
+    assert!(
+        !branches.contains(&leaf_branch),
+        "Expected leaf branch to be deleted, got: {:?}",
+        branches
+    );
+}
+
+#[test]
 fn test_sync_on_merged_branch_checkouts_parent() {
     let repo = TestRepo::new_with_remote();
 
