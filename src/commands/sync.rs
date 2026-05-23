@@ -1572,12 +1572,13 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config) {
             // Reconcile PR base with parent: if the live PR base differs from
             // our tracked parent and the live base is a known branch, update.
             if !live_pr.base.is_empty() && live_pr.base != meta.parent_branch_name {
-                let base_is_known = live_pr.base == stack.trunk
-                    || stack.branches.contains_key(&live_pr.base);
+                let base_is_known =
+                    live_pr.base == stack.trunk || stack.branches.contains_key(&live_pr.base);
                 if base_is_known {
                     // Update parent revision to the current tip of the new parent
-                    if let Ok(parent_ref) =
-                        repo.inner().find_branch(&live_pr.base, git2::BranchType::Local)
+                    if let Ok(parent_ref) = repo
+                        .inner()
+                        .find_branch(&live_pr.base, git2::BranchType::Local)
                     {
                         if let Ok(commit) = parent_ref.get().peel_to_commit() {
                             meta.parent_branch_revision = commit.id().to_string();

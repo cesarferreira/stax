@@ -154,7 +154,6 @@ pub fn calculate_average(history: &CiCheckHistory) -> Option<u64> {
     Some(sum / valid_runs.len() as u64)
 }
 
-
 /// Estimate total wall-clock runtime for the current run from reusable per-check history.
 pub fn estimate_run_average(repo: &GitRepo, checks: &[CheckRunInfo]) -> Option<u64> {
     let run_start = checks
@@ -170,15 +169,13 @@ pub fn estimate_run_average(repo: &GitRepo, checks: &[CheckRunInfo]) -> Option<u
             // Use the current run's actual start offset (not a stored end_offset_secs).
             // end_offset_secs is polluted by main-branch builds where checks start much
             // later due to a longer pipeline, giving wildly inflated ETAs on PR branches.
-            let start_offset =
-                match (run_start, parse_ci_timestamp(check.started_at.as_deref())) {
-                    (Some(run_start), Some(check_start)) => check_start
-                        .signed_duration_since(run_start)
-                        .num_seconds()
-                        .max(0)
-                        as u64,
-                    _ => 0,
-                };
+            let start_offset = match (run_start, parse_ci_timestamp(check.started_at.as_deref())) {
+                (Some(run_start), Some(check_start)) => check_start
+                    .signed_duration_since(run_start)
+                    .num_seconds()
+                    .max(0) as u64,
+                _ => 0,
+            };
             Some(start_offset + avg_duration)
         })
         .max()

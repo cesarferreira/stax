@@ -834,9 +834,7 @@ mod tests {
             line: 42,
         };
 
-        let row = with_colored_override(true, || {
-            format_changelog_find_picker_item(&entry, 5, 5)
-        });
+        let row = with_colored_override(true, || format_changelog_find_picker_item(&entry, 5, 5));
 
         assert!(
             !row.contains("\u{1b}["),
