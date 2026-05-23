@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::remote::ForgeType;
@@ -425,6 +425,17 @@ impl Config {
         Ok(Self::dir()?.join("config.toml"))
     }
 
+    /// Get the repo-local config file path when the current directory is inside
+    /// a git repository and `stax.toml` exists at its root.
+    fn repo_local_path() -> Result<Option<PathBuf>> {
+        let Some(root) = git_root()? else {
+            return Ok(None);
+        };
+
+        let path = root.join("stax.toml");
+        Ok(path.exists().then_some(path))
+    }
+
     /// Get the credentials file path (separate from config, not for dotfiles)
     fn credentials_path() -> Result<PathBuf> {
         Ok(Self::dir()?.join(".credentials"))
@@ -444,13 +455,36 @@ impl Config {
     /// Load config from file
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
+        if std::env::var("STAX_CONFIG_DIR").is_ok() {
+            return Self::load_path_or_default(&path);
+        }
+
+        let config = Self::load_path_or_default(&path)?;
+        if let Some(repo_path) = Self::repo_local_path()? {
+            Self::load_with_overlay(config, &repo_path)
+        } else {
+            Ok(config)
+        }
+    }
+
+    fn load_path_or_default(path: &Path) -> Result<Self> {
         if path.exists() {
-            let content = fs::read_to_string(&path)?;
+            let content = fs::read_to_string(path)?;
             let config: Config = toml::from_str(&content)?;
             Ok(config)
         } else {
             Ok(Config::default())
         }
+    }
+
+    fn load_with_overlay(config: Config, repo_path: &Path) -> Result<Self> {
+        let mut base = toml::Value::try_from(config)?;
+        let repo_content = fs::read_to_string(repo_path)
+            .with_context(|| format!("Failed to read repo config {}", repo_path.display()))?;
+        let repo_overlay: toml::Value = toml::from_str(&repo_content)
+            .with_context(|| format!("Failed to parse repo config {}", repo_path.display()))?;
+        merge_toml_values(&mut base, repo_overlay);
+        Ok(base.try_into()?)
     }
 
     /// Save config to file
@@ -821,6 +855,30 @@ impl Config {
 
     pub fn remote_forge_override(&self) -> Option<ForgeType> {
         self.remote.forge
+    }
+}
+
+fn git_root() -> Result<Option<PathBuf>> {
+    Ok(git2::Repository::discover(".")
+        .ok()
+        .and_then(|repo| repo.workdir().map(PathBuf::from)))
+}
+
+fn merge_toml_values(base: &mut toml::Value, overlay: toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base_table), toml::Value::Table(overlay_table)) => {
+            for (key, value) in overlay_table {
+                match base_table.get_mut(&key) {
+                    Some(base_value) => merge_toml_values(base_value, value),
+                    None => {
+                        base_table.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base_value, overlay_value) => {
+            *base_value = overlay_value;
+        }
     }
 }
 

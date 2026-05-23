@@ -197,7 +197,7 @@ stax submit --ai --body            # Generate/update PR body only
 stax submit --ai --yes             # Accept generated new-PR details
 stax submit --rerequest-review     # Re-request existing reviewers on update
 
-# ~/.config/stax/config.toml
+# ~/.config/stax/config.toml; repo-root stax.toml overlays shared values
 [submit]
 stack_links = "body"               # "comment" | "body" | "both" | "off"
 single_stack = "on"                # "on" | "off" — when "off", skip stack-link sync while only one PR exists; populates on all PRs as soon as the stack reaches 2
