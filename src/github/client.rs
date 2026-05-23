@@ -547,40 +547,57 @@ impl GitHubClient {
     }
 
     /// List open issues for the current repository.
+    ///
+    /// GitHub's issues endpoint includes pull requests, so we filter them client-side and
+    /// paginate until we have `limit` real issues or the API has no more pages.
     pub async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
         self.record_api_call("issues.list");
-        let per_page = limit.clamp(1, 100);
-        // GitHub returns PRs in this listing; we filter client-side. Request up to 2× so a
-        // PR-heavy first page does not underfill after filtering (capped at API max).
-        let fetch_per_page = (usize::from(per_page) * 2).min(100) as u8;
-        let url = format!(
-            "/repos/{}/{}/issues?state=open&sort=updated&direction=desc&per_page={}",
-            self.owner, self.repo, fetch_per_page
-        );
+        let want = limit.clamp(1, 100) as usize;
+        let mut collected: Vec<RepoIssueListItem> = Vec::with_capacity(want);
+        let mut page = 1u32;
 
-        let response: Vec<RepoListIssue> = self
-            .octocrab
-            .get(&url, None::<&()>)
-            .await
-            .context("Failed to list issues")?;
+        loop {
+            let url = format!(
+                "/repos/{}/{}/issues?state=open&sort=updated&direction=desc&per_page=100&page={}",
+                self.owner, self.repo, page
+            );
 
-        Ok(response
-            .into_iter()
-            .filter(|issue| issue.pull_request.is_none())
-            .take(usize::from(per_page))
-            .map(|issue| RepoIssueListItem {
-                number: issue.number,
-                title: issue.title,
-                url: issue.html_url,
-                author: issue.user.login,
-                labels: issue
-                    .labels
-                    .into_iter()
-                    .filter_map(|label| label.name)
-                    .collect(),
-                updated_at: issue.updated_at,
-            })
-            .collect())
+            let response: Vec<RepoListIssue> = self
+                .octocrab
+                .get(&url, None::<&()>)
+                .await
+                .context("Failed to list issues")?;
+
+            let fetched = response.len();
+
+            for issue in response {
+                if issue.pull_request.is_some() {
+                    continue;
+                }
+                collected.push(RepoIssueListItem {
+                    number: issue.number,
+                    title: issue.title,
+                    url: issue.html_url,
+                    author: issue.user.login,
+                    labels: issue
+                        .labels
+                        .into_iter()
+                        .filter_map(|label| label.name)
+                        .collect(),
+                    updated_at: issue.updated_at,
+                });
+                if collected.len() >= want {
+                    return Ok(collected);
+                }
+            }
+
+            if fetched < 100 {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(collected)
     }
 }
 
@@ -1069,7 +1086,8 @@ mod tests {
             .and(query_param("state", "open"))
             .and(query_param("sort", "updated"))
             .and(query_param("direction", "desc"))
-            .and(query_param("per_page", "60"))
+            .and(query_param("per_page", "100"))
+            .and(query_param("page", "1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {
                     "number": 113,
@@ -1116,38 +1134,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_open_issues_overfetches_to_fill_after_pr_pollution() {
+    async fn test_list_open_issues_paginates_through_pr_heavy_first_page() {
         let mock_server = MockServer::start().await;
 
-        Mock::given(method("GET"))
-            .and(path("/repos/test-owner/test-repo/issues"))
-            .and(query_param("state", "open"))
-            .and(query_param("sort", "updated"))
-            .and(query_param("direction", "desc"))
-            .and(query_param("per_page", "4"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {
-                    "number": 201,
-                    "title": "PR one",
-                    "html_url": "https://github.com/test-owner/test-repo/pull/201",
+        // Page 1: 100 items, all PRs — real issues are on page 2
+        let pr_items: Vec<serde_json::Value> = (1u32..=100)
+            .map(|n| {
+                serde_json::json!({
+                    "number": n,
+                    "title": format!("PR {n}"),
+                    "html_url": format!("https://github.com/test-owner/test-repo/pull/{n}"),
                     "user": { "login": "u" },
                     "labels": [],
                     "updated_at": "2026-03-15T12:00:00Z",
                     "pull_request": {
-                        "url": "https://api.github.com/repos/test-owner/test-repo/pulls/201"
+                        "url": format!("https://api.github.com/repos/test-owner/test-repo/pulls/{n}")
                     }
-                },
-                {
-                    "number": 202,
-                    "title": "PR two",
-                    "html_url": "https://github.com/test-owner/test-repo/pull/202",
-                    "user": { "login": "u" },
-                    "labels": [],
-                    "updated_at": "2026-03-15T11:00:00Z",
-                    "pull_request": {
-                        "url": "https://api.github.com/repos/test-owner/test-repo/pulls/202"
-                    }
-                },
+                })
+            })
+            .collect();
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(pr_items)))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {
                     "number": 10,
                     "title": "Real issue A",
