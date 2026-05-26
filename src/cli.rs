@@ -833,8 +833,8 @@ enum Commands {
     Move {
         /// Target parent branch (interactive picker if omitted)
         target: Option<String>,
-        /// Restack the moved branches after reparenting
-        #[arg(long)]
+        /// Accepted for backward compatibility; restack now always runs
+        #[arg(long, hide = true)]
         restack: bool,
     },
 
@@ -1439,8 +1439,8 @@ enum UpstackCommands {
     Onto {
         /// Target parent branch (interactive picker if omitted)
         target: Option<String>,
-        /// Restack the moved branches after reparenting
-        #[arg(long)]
+        /// Accepted for backward compatibility; restack now always runs
+        #[arg(long, hide = true)]
         restack: bool,
     },
 
@@ -2200,14 +2200,12 @@ pub fn run() -> Result<()> {
             UpstackCommands::Restack { auto_stash_pop } => {
                 commands::upstack::restack::run(auto_stash_pop)
             }
-            UpstackCommands::Onto { target, restack } => {
-                commands::upstack::onto::run(target, restack)
-            }
+            UpstackCommands::Onto { target, restack: _ } => commands::upstack::onto::run(target),
             UpstackCommands::Submit { submit } => {
                 run_submit(submit, commands::submit::SubmitScope::Upstack)
             }
         },
-        Commands::Move { target, restack } => commands::upstack::onto::run(target, restack),
+        Commands::Move { target, restack: _ } => commands::upstack::onto::run(target),
         Commands::Downstack(cmd) => match cmd {
             DownstackCommands::Get => {
                 commands::status::run(false, None, false, false, false, false)

@@ -263,3 +263,281 @@ fn move_alias_rejects_trunk_and_circular() {
     output.assert_failure();
     output.assert_stderr_contains("circular");
 }
+
+// =============================================================================
+// Git history correctness after reparent (the core bug: #433)
+//
+// Before the fix, `stax mv` only updated metadata — the git ref was never
+// moved. After `stax create b` while on `a`, `b` points to the same commit
+// as `a`. Running `stax mv b main` would update b's parent pointer to `main`
+// in the metadata, but `b` in git still sits on top of `a`'s history.
+// =============================================================================
+
+/// Core regression test for issue #433.
+///
+/// Scenario that reproduces the exact bug:
+///   main → a (commit A) → b (no unique commits, same SHA as a)
+///   `stax mv b main`
+///
+/// After the fix: `b` must point to main's tip, NOT to commit A.
+/// Before the fix: `b` still points to A1 (a's commit), so `git log main..b`
+/// would show a's commit — phantom commit from the wrong parent.
+#[test]
+fn mv_with_no_unique_commits_moves_to_new_parent_tip() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    // main → a (has commit A)
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "content a");
+    repo.commit("commit A");
+
+    // a → b (no unique commits — b is created at same SHA as a)
+    repo.run_stax(&["create", "b"]).assert_success();
+
+    // Verify precondition: b and a point to the same commit
+    let a_sha = repo.get_commit_sha("a");
+    let b_sha_before = repo.get_commit_sha("b");
+    assert_eq!(
+        a_sha, b_sha_before,
+        "Precondition: b and a should share the same commit before mv"
+    );
+
+    let output = repo.run_stax(&["mv", "main"]);
+    output.assert_success();
+
+    // After mv: b should be at main's tip (fast-forward, no commits ahead)
+    let main_sha = repo.get_commit_sha("main");
+    let b_sha_after = repo.get_commit_sha("b");
+    assert_eq!(
+        main_sha, b_sha_after,
+        "After mv to main with no unique commits, b should point to main's tip"
+    );
+
+    // git log main..b should be empty (no commits unique to b)
+    let log = repo.git(&["rev-list", "--count", "main..b"]);
+    let count = String::from_utf8_lossy(&log.stdout)
+        .trim()
+        .parse::<usize>()
+        .unwrap_or(99);
+    assert_eq!(
+        count, 0,
+        "b should have 0 commits ahead of main after mv (no unique commits to replay)"
+    );
+}
+
+/// When the branch has unique commits, they must be rebased onto the new parent.
+///
+/// Scenario: main → a (commit A) → b (commit B, unique to b)
+/// `stax mv b main`
+/// After: b should have exactly 1 commit ahead of main (commit B only, not A).
+#[test]
+fn mv_with_unique_commits_rebases_onto_new_parent() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    // main → a
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "content a");
+    repo.commit("commit A");
+
+    // a → b with its own commit
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "content b");
+    repo.commit("commit B");
+
+    let output = repo.run_stax(&["mv", "main"]);
+    output.assert_success();
+
+    // b should have exactly 1 commit ahead of main (commit B, not commit A)
+    let log = repo.git(&["log", "--oneline", "main..b"]);
+    let log_str = String::from_utf8_lossy(&log.stdout).to_string();
+    let unique: Vec<&str> = log_str.lines().filter(|l| !l.trim().is_empty()).collect();
+
+    assert_eq!(
+        unique.len(),
+        1,
+        "b should have exactly 1 unique commit (B) above main, got {}:\n{}",
+        unique.len(),
+        unique.join("\n")
+    );
+    assert!(
+        unique[0].contains("commit B"),
+        "The unique commit should be 'commit B', got: {}",
+        unique[0]
+    );
+
+    // Confirm a's commit is NOT in b's unique history
+    let a_in_b = repo.git(&["log", "--oneline", "main..b"]);
+    let a_in_b_str = String::from_utf8_lossy(&a_in_b.stdout).to_string();
+    assert!(
+        !a_in_b_str.contains("commit A"),
+        "commit A (from branch a) must NOT appear in b's unique history after mv to main"
+    );
+}
+
+/// `stax upstack onto` must also always restack (same behaviour as `mv`).
+///
+/// Reproduces the same scenario via the long form command.
+#[test]
+fn upstack_onto_always_restacks_git_history() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    // main → a (commit A) → b (commit B)
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "content a");
+    repo.commit("commit A");
+
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "content b");
+    repo.commit("commit B");
+
+    repo.run_stax(&["checkout", "b"]);
+    let output = repo.run_stax(&["upstack", "onto", "main"]);
+    output.assert_success();
+
+    // b should have exactly 1 commit above main (commit B only)
+    let log = repo.git(&["log", "--oneline", "main..b"]);
+    let log_str = String::from_utf8_lossy(&log.stdout).to_string();
+    let unique: Vec<&str> = log_str.lines().filter(|l| !l.trim().is_empty()).collect();
+
+    assert_eq!(
+        unique.len(),
+        1,
+        "upstack onto: b should have exactly 1 unique commit above main, got {}:\n{}",
+        unique.len(),
+        unique.join("\n")
+    );
+    assert!(
+        !log_str.contains("commit A"),
+        "upstack onto: commit A must NOT appear in b's unique history after reparent to main"
+    );
+}
+
+/// After moving a branch with descendants, the entire subtree must be rebased.
+///
+/// Scenario: main → a (commit A) → b (commit B) → c (commit C)
+/// `stax mv b main`
+/// After: b has 1 commit above main (B), c has 1 commit above b (C).
+/// Neither b nor c should contain commit A.
+#[test]
+fn mv_subtree_git_history_correct_after_reparent() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "content a");
+    repo.commit("commit A");
+
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "content b");
+    repo.commit("commit B");
+
+    repo.run_stax(&["create", "c"]).assert_success();
+    repo.create_file("c.txt", "content c");
+    repo.commit("commit C");
+
+    repo.run_stax(&["checkout", "b"]);
+    let output = repo.run_stax(&["mv", "main"]);
+    output.assert_success();
+
+    // b: exactly 1 commit above main (B, not A)
+    let b_log = repo.git(&["log", "--oneline", "main..b"]);
+    let b_log_str = String::from_utf8_lossy(&b_log.stdout).to_string();
+    let b_unique: Vec<&str> = b_log_str.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        b_unique.len(),
+        1,
+        "b should have exactly 1 unique commit above main after mv, got {}:\n{}",
+        b_unique.len(),
+        b_unique.join("\n")
+    );
+    assert!(
+        !b_log_str.contains("commit A"),
+        "commit A must NOT appear in b's history after mv to main"
+    );
+
+    // c: exactly 1 commit above b (C only)
+    let c_log = repo.git(&["log", "--oneline", "b..c"]);
+    let c_log_str = String::from_utf8_lossy(&c_log.stdout).to_string();
+    let c_unique: Vec<&str> = c_log_str.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        c_unique.len(),
+        1,
+        "c should have exactly 1 unique commit above b after subtree mv, got {}:\n{}",
+        c_unique.len(),
+        c_unique.join("\n")
+    );
+    assert!(
+        c_log_str.contains("commit C"),
+        "c's unique commit should be 'commit C'"
+    );
+}
+
+/// Metadata parent pointer must also be updated to the new parent after mv.
+/// (Regression guard: git history correct but metadata still wrong = still broken.)
+#[test]
+fn mv_metadata_parent_updated_after_restack() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "content a");
+    repo.commit("commit A");
+
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "content b");
+    repo.commit("commit B");
+
+    repo.run_stax(&["mv", "main"]);
+
+    let status = repo.run_stax(&["status", "--json"]);
+    let json: serde_json::Value =
+        serde_json::from_str(&TestRepo::stdout(&status)).expect("valid json");
+    let branches = json["branches"].as_array().expect("branches array");
+    let b_entry = find_branch(branches, "b").expect("should find branch b");
+
+    assert_eq!(
+        b_entry["parent"].as_str().unwrap(),
+        "main",
+        "metadata parent must be 'main' after mv"
+    );
+
+    // b should not need a restack (git and metadata are in sync)
+    assert_ne!(
+        b_entry["needs_restack"].as_bool().unwrap_or(false),
+        true,
+        "b should not need restack after mv — git and metadata must already agree"
+    );
+}
+
+/// `--restack` flag is accepted for backward compatibility but now a no-op
+/// (restack always happens). Must not error out.
+#[test]
+fn mv_restack_flag_accepted_for_backward_compat() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "content a");
+    repo.commit("commit A");
+
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "content b");
+    repo.commit("commit B");
+
+    // --restack flag should still be accepted (backward compat) and produce correct output
+    let output = repo.run_stax(&["mv", "--restack", "main"]);
+    output.assert_success();
+
+    // Git history must still be correct
+    let log = repo.git(&["log", "--oneline", "main..b"]);
+    let log_str = String::from_utf8_lossy(&log.stdout).to_string();
+    let unique: Vec<&str> = log_str.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        unique.len(),
+        1,
+        "--restack flag: b should still have exactly 1 commit above main"
+    );
+}
