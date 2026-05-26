@@ -8,9 +8,9 @@ use crate::github::GitHubClient;
 use crate::notifications::{self, BuiltInSound, Sound};
 use crate::remote::RemoteInfo;
 use anyhow::Result;
-use futures_util::future::join_all;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -393,33 +393,31 @@ pub(crate) async fn fetch_ci_statuses_async(
         })
         .collect();
 
-    let mut statuses = join_all(
-        prepared
-            .iter()
-            .map(|(branch, sha, sha_short, pr_number)| async move {
-                let check_runs_result = client.fetch_checks(repo, sha).await;
-                let (overall_status, check_runs) = match check_runs_result {
-                    Ok((status, runs)) => (status, runs),
-                    Err(_) => (None, Vec::new()),
-                };
+    let mut statuses = join_all(prepared.iter().map(
+        |(branch, sha, sha_short, pr_number)| async move {
+            let check_runs_result = client.fetch_checks(repo, sha).await;
+            let (overall_status, check_runs) = match check_runs_result {
+                Ok((status, runs)) => (status, runs),
+                Err(_) => (None, Vec::new()),
+            };
 
-                let pr_live = match pr_number {
-                    Some(n) => client.get_pr(*n).await.ok(),
-                    None => None,
-                };
-                let pr_is_draft = pr_live.as_ref().map(|p| p.is_draft);
+            let pr_live = match pr_number {
+                Some(n) => client.get_pr(*n).await.ok(),
+                None => None,
+            };
+            let pr_is_draft = pr_live.as_ref().map(|p| p.is_draft);
 
-                BranchCiStatus {
-                    branch: branch.clone(),
-                    sha: sha.clone(),
-                    sha_short: sha_short.clone(),
-                    overall_status,
-                    check_runs,
-                    pr_number: *pr_number,
-                    pr_is_draft,
-                }
-            }),
-    )
+            BranchCiStatus {
+                branch: branch.clone(),
+                sha: sha.clone(),
+                sha_short: sha_short.clone(),
+                overall_status,
+                check_runs,
+                pr_number: *pr_number,
+                pr_is_draft,
+            }
+        },
+    ))
     .await;
 
     statuses.sort_by(|a, b| a.branch.cmp(&b.branch));
@@ -1067,7 +1065,11 @@ pub(crate) fn update_ci_cache(repo: &GitRepo, stack: &Stack, statuses: &[BranchC
     let mut cache = CiCache::load(git_dir);
     for status in statuses {
         let pr_state = status.pr_is_draft.map(|is_draft| {
-            if is_draft { "DRAFT".to_string() } else { "OPEN".to_string() }
+            if is_draft {
+                "DRAFT".to_string()
+            } else {
+                "OPEN".to_string()
+            }
         });
         cache.update(&status.branch, status.overall_status.clone(), pr_state);
     }
@@ -1525,14 +1527,12 @@ mod tests {
         let tempdir = TempDir::new().unwrap();
         let dir = tempdir.path();
         let run = |args: &[&str]| {
-            assert!(
-                Command::new("git")
-                    .args(args)
-                    .current_dir(dir)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .status()
+                .unwrap()
+                .success());
         };
         run(&["init", "-b", "main"]);
         run(&["config", "user.email", "ci-test@stax.local"]);

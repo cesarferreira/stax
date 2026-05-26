@@ -747,10 +747,7 @@ fn checkout_by_pr(repo: &GitRepo, pr_num: u64, shell_output: bool) -> Result<()>
 
     // Checkout the branch
     let workdir = repo.workdir()?;
-    let timer = LiveTimer::maybe_new(
-        true,
-        &format!("Checking out {}...", target_branch),
-    );
+    let timer = LiveTimer::maybe_new(true, &format!("Checking out {}...", target_branch));
     checkout_branch_in(workdir, &target_branch)?;
     LiveTimer::maybe_finish_ok(timer, "done");
 

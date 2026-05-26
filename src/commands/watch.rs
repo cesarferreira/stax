@@ -24,10 +24,7 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
     let _enter = rt.enter();
     let client = ForgeClient::new(&remote_info)?;
 
-    println!(
-        "{}",
-        "Watching stack... (Ctrl+C to stop)".cyan().bold()
-    );
+    println!("{}", "Watching stack... (Ctrl+C to stop)".cyan().bold());
 
     let mut iteration = 0usize;
 
@@ -97,13 +94,18 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
         if branches_to_watch.is_empty() {
             println!("{}", "No tracked branches.".dimmed());
         } else {
-            render_watch_table(&stack, &current, &branches_to_watch, &ci_statuses, &remote_branches);
+            render_watch_table(
+                &stack,
+                &current,
+                &branches_to_watch,
+                &ci_statuses,
+                &remote_branches,
+            );
         }
 
         // Decide next interval
-        let next_interval = interval.unwrap_or_else(|| {
-            adaptive_interval(&ci_statuses, &stack, &branches_to_watch)
-        });
+        let next_interval =
+            interval.unwrap_or_else(|| adaptive_interval(&ci_statuses, &stack, &branches_to_watch));
 
         println!();
         println!(
@@ -126,17 +128,10 @@ fn render_watch_table(
     ci_statuses: &[BranchCiStatus],
     remote_branches: &HashSet<String>,
 ) {
-    let ci_by_branch: std::collections::HashMap<&str, &BranchCiStatus> = ci_statuses
-        .iter()
-        .map(|s| (s.branch.as_str(), s))
-        .collect();
+    let ci_by_branch: std::collections::HashMap<&str, &BranchCiStatus> =
+        ci_statuses.iter().map(|s| (s.branch.as_str(), s)).collect();
 
-    let name_width = branches
-        .iter()
-        .map(|b| b.len())
-        .max()
-        .unwrap_or(10)
-        .max(10);
+    let name_width = branches.iter().map(|b| b.len()).max().unwrap_or(10).max(10);
 
     for branch in branches {
         let info = stack.branches.get(branch);
@@ -148,8 +143,7 @@ fn render_watch_table(
             "○".dimmed().to_string()
         };
 
-        let cloud = if remote_branches.contains(branch)
-            || info.and_then(|b| b.pr_number).is_some()
+        let cloud = if remote_branches.contains(branch) || info.and_then(|b| b.pr_number).is_some()
         {
             "☁".bright_blue().to_string()
         } else {
@@ -186,9 +180,7 @@ fn render_watch_table(
         // PR info
         let pr_tag = match info.and_then(|b| b.pr_number) {
             Some(n) => {
-                let state = info
-                    .and_then(|b| b.pr_state.as_deref())
-                    .unwrap_or("open");
+                let state = info.and_then(|b| b.pr_state.as_deref()).unwrap_or("open");
                 let draft = ci_by_branch
                     .get(branch.as_str())
                     .and_then(|s| s.pr_is_draft)
@@ -224,12 +216,7 @@ fn render_watch_table(
     } else {
         " ".to_string()
     };
-    println!(
-        "  {}  {} {}",
-        trunk_marker,
-        trunk_cloud,
-        trunk.dimmed()
-    );
+    println!("  {}  {} {}", trunk_marker, trunk_cloud, trunk.dimmed());
 }
 
 fn load_ci_from_cache(git_dir: &std::path::Path, branches: &[String]) -> Vec<BranchCiStatus> {
@@ -257,11 +244,7 @@ fn load_ci_from_cache(git_dir: &std::path::Path, branches: &[String]) -> Vec<Bra
         .collect()
 }
 
-fn adaptive_interval(
-    ci_statuses: &[BranchCiStatus],
-    stack: &Stack,
-    branches: &[String],
-) -> u64 {
+fn adaptive_interval(ci_statuses: &[BranchCiStatus], stack: &Stack, branches: &[String]) -> u64 {
     // Any CI actively running → poll fast
     let any_running = ci_statuses.iter().any(|s| {
         s.check_runs.iter().any(|c| {
