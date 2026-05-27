@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.81.1] - 2026-05-27
+
+### Changed
+- Recover existing PR on duplicate submit create (#435)
+
+### Fixed
+- Skip full PR scan in read-only lookups, cloud icon means has PR
+- Bound sync PR metadata refresh
+
 ## [0.81.0] - 2026-05-27
 
 ### Changed
@@ -407,7 +416,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.81.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.81.1...HEAD
+[0.81.1]: https://github.com/cesarferreira/stax/compare/v0.81.0...v0.81.1
 [0.81.0]: https://github.com/cesarferreira/stax/compare/v0.80.0...v0.81.0
 [0.80.0]: https://github.com/cesarferreira/stax/compare/v0.79.0...v0.80.0
 [0.79.0]: https://github.com/cesarferreira/stax/compare/v0.78.2...v0.79.0
