@@ -836,6 +836,9 @@ enum Commands {
         /// Accepted for backward compatibility; restack now always runs
         #[arg(long, hide = true)]
         restack: bool,
+        /// Stash uncommitted changes before rebasing and restore them after
+        #[arg(long)]
+        auto_stash_pop: bool,
     },
 
     /// Interactively reorder branches within a stack
@@ -1442,6 +1445,9 @@ enum UpstackCommands {
         /// Accepted for backward compatibility; restack now always runs
         #[arg(long, hide = true)]
         restack: bool,
+        /// Stash uncommitted changes before rebasing and restore them after
+        #[arg(long)]
+        auto_stash_pop: bool,
     },
 
     /// Submit current branch and descendants
@@ -2200,12 +2206,20 @@ pub fn run() -> Result<()> {
             UpstackCommands::Restack { auto_stash_pop } => {
                 commands::upstack::restack::run(auto_stash_pop)
             }
-            UpstackCommands::Onto { target, restack: _ } => commands::upstack::onto::run(target),
+            UpstackCommands::Onto {
+                target,
+                restack: _,
+                auto_stash_pop,
+            } => commands::upstack::onto::run(target, auto_stash_pop),
             UpstackCommands::Submit { submit } => {
                 run_submit(submit, commands::submit::SubmitScope::Upstack)
             }
         },
-        Commands::Move { target, restack: _ } => commands::upstack::onto::run(target),
+        Commands::Move {
+            target,
+            restack: _,
+            auto_stash_pop,
+        } => commands::upstack::onto::run(target, auto_stash_pop),
         Commands::Downstack(cmd) => match cmd {
             DownstackCommands::Get => {
                 commands::status::run(false, None, false, false, false, false)

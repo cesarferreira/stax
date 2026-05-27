@@ -541,3 +541,110 @@ fn mv_restack_flag_accepted_for_backward_compat() {
         "--restack flag: b should still have exactly 1 commit above main"
     );
 }
+
+// =============================================================================
+// Dirty working tree behaviour
+//
+// Now that mv always rebases, a dirty working tree blocks the operation.
+// --auto-stash-pop stashes before rebasing and pops afterward, matching
+// the behaviour of `stax restack --auto-stash-pop`.
+// =============================================================================
+
+/// Without --auto-stash-pop, mv with uncommitted changes must fail with a
+/// clear message pointing to --auto-stash-pop.
+#[test]
+fn mv_fails_with_dirty_working_tree() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "content a");
+    repo.commit("commit A");
+
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "content b");
+    repo.commit("commit B");
+
+    // Leave uncommitted changes in the working tree
+    repo.create_file("dirty.txt", "uncommitted");
+
+    let output = repo.run_stax(&["mv", "main"]);
+    output.assert_failure();
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("uncommitted") || stderr.contains("auto-stash-pop"),
+        "Should mention uncommitted changes or --auto-stash-pop, got: {}",
+        stderr
+    );
+}
+
+/// With --auto-stash-pop, mv stashes dirty changes, rebases, then restores them.
+#[test]
+fn mv_auto_stash_pop_succeeds_with_dirty_working_tree() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "content a");
+    repo.commit("commit A");
+
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "content b");
+    repo.commit("commit B");
+
+    // Leave uncommitted changes
+    repo.create_file("dirty.txt", "uncommitted content");
+
+    let output = repo.run_stax(&["mv", "--auto-stash-pop", "main"]);
+    output.assert_success();
+
+    // Git history must be correct: b has 1 commit above main (B only)
+    let log = repo.git(&["log", "--oneline", "main..b"]);
+    let log_str = String::from_utf8_lossy(&log.stdout).to_string();
+    let unique: Vec<&str> = log_str.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(
+        unique.len(),
+        1,
+        "--auto-stash-pop: b should have exactly 1 commit above main, got {}:\n{}",
+        unique.len(),
+        log_str
+    );
+
+    // Dirty changes must be restored after the rebase
+    let status = repo.git(&["status", "--porcelain"]);
+    let status_str = String::from_utf8_lossy(&status.stdout).to_string();
+    assert!(
+        status_str.contains("dirty.txt"),
+        "--auto-stash-pop: dirty changes should be restored after mv, got:\n{}",
+        status_str
+    );
+}
+
+/// upstack onto also accepts --auto-stash-pop.
+#[test]
+fn upstack_onto_auto_stash_pop_succeeds_with_dirty_working_tree() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["create", "a"]).assert_success();
+    repo.create_file("a.txt", "content a");
+    repo.commit("commit A");
+
+    repo.run_stax(&["create", "b"]).assert_success();
+    repo.create_file("b.txt", "content b");
+    repo.commit("commit B");
+
+    repo.create_file("dirty.txt", "uncommitted content");
+
+    repo.run_stax(&["checkout", "b"]);
+    let output = repo.run_stax(&["upstack", "onto", "--auto-stash-pop", "main"]);
+    output.assert_success();
+
+    let status = repo.git(&["status", "--porcelain"]);
+    let status_str = String::from_utf8_lossy(&status.stdout).to_string();
+    assert!(
+        status_str.contains("dirty.txt"),
+        "upstack onto --auto-stash-pop: dirty changes should be restored, got:\n{}",
+        status_str
+    );
+}

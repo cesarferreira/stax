@@ -9,7 +9,7 @@ use std::collections::HashSet;
 /// Reparent the current branch AND all its descendants onto a new parent.
 /// The subtree structure is preserved -- only the root's parent changes.
 /// Rebase is always performed so git history matches the new parent immediately.
-pub fn run(target: Option<String>) -> Result<()> {
+pub fn run(target: Option<String>, auto_stash_pop: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let stack = Stack::load(&repo)?;
     let current = repo.current_branch()?;
@@ -118,7 +118,12 @@ pub fn run(target: Option<String>) -> Result<()> {
         &merge_base,
     )?;
 
-    match repo.rebase_branch_onto_with_provenance(&current, &new_parent, &rebase_upstream, false)? {
+    match repo.rebase_branch_onto_with_provenance(
+        &current,
+        &new_parent,
+        &rebase_upstream,
+        auto_stash_pop,
+    )? {
         RebaseResult::Success => {
             // Persist metadata only after the rebase succeeds so we never
             // leave metadata pointing at a new parent with old git history.
