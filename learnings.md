@@ -16,6 +16,8 @@
 - When adding or changing CLI commands/flags, update both `README.md` and `docs/` command references in the same change and verify parity against `stax --help` before marking docs complete.
 - AI standup prompts that ask for `Today` must include concrete in-flight signals (recent branch work, opened PRs, or Jira tickets with PRs) and tell the model to carry unfinished work forward; otherwise the model fills missing context with generic review/cleanup/backlog bullets.
 - Long-running reporting or AI commands must show progress for human-facing output while keeping `--json` and plain-text modes free of progress noise; use stderr for progress when stdout may be copied, piped, or parsed.
+- Command completion footers must be printed after all foreground work has finished; if a best-effort metadata refresh or cache update can block, show it as a timed progress step and include it in the total.
+- Sync metadata refreshes must scale with local tracked branches, not repo-wide forge state; avoid listing every open PR when the command only needs metadata for known PR numbers.
 - When a feature has both command docs and workflow guides, keep one canonical docs page for the command surface and have workflow pages link back to it instead of duplicating subcommand semantics.
 - Shell integration snippets that define common command names (`stax`, `st`, `sw`) must clear conflicting aliases first; zsh expands aliases while parsing function definitions and can abort shell startup otherwise.
 - Shared bash/zsh shell snippets must use shell-specific command lookup (`whence -p` in zsh, `type -P` in bash) when they need the real binary path; bash-only flags in shared wrappers can break every `st`/`stax` invocation on zsh.

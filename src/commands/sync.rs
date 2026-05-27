@@ -11,6 +11,7 @@ use crate::errors::ConflictStopped;
 use crate::forge::ForgeClient;
 use crate::git::repo::BranchDeleteResolution;
 use crate::git::{GitRepo, RebaseResult, RebaseTimings};
+use crate::github::pr::PrInfo as ForgePrInfo;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
@@ -18,10 +19,13 @@ use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
+use futures_util::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
+
+const PR_METADATA_REFRESH_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Default)]
 struct SyncStats {
@@ -1486,6 +1490,10 @@ pub fn run(
         .ok()
         .flatten();
 
+    if let Some(pr_refresh_elapsed) = refresh_pr_draft_states(&repo, &config, quiet) {
+        step_timings.push(("refresh PR metadata".to_string(), pr_refresh_elapsed));
+    }
+
     if verbose && !quiet {
         println!();
         println!("{}", "Sync timing summary:".bold());
@@ -1516,94 +1524,142 @@ pub fn run(
         }
     }
 
-    refresh_pr_draft_states(&repo, &config);
-
     Ok(())
 }
 
 /// Fetch live PR state from the forge for all tracked branches and update
 /// both branch metadata and CiCache. Called at end of sync so that operations
 /// like `gh pr ready`, `gh pr merge`, or `gh pr edit --base` are reflected.
-fn refresh_pr_draft_states(repo: &GitRepo, config: &Config) {
+fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Option<Duration> {
+    let started_at = Instant::now();
+    let stack = match Stack::load(repo) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    let tracked_pr_branches: Vec<(String, u64)> = stack
+        .branches
+        .iter()
+        .filter_map(|(branch_name, branch_info)| {
+            if branch_name == &stack.trunk {
+                return None;
+            }
+            branch_info
+                .pr_number
+                .map(|pr_number| (branch_name.clone(), pr_number))
+        })
+        .collect();
+    if tracked_pr_branches.is_empty() {
+        return None;
+    }
+
+    let timer = LiveTimer::maybe_new(!quiet, "Refresh PR metadata");
+
     let remote_info = match RemoteInfo::from_repo(repo, config) {
         Ok(info) => info,
-        Err(_) => return,
+        Err(_) => {
+            LiveTimer::maybe_finish_skipped(timer, "skipped");
+            return Some(started_at.elapsed());
+        }
     };
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
-        Err(_) => return,
+        Err(_) => {
+            LiveTimer::maybe_finish_skipped(timer, "skipped");
+            return Some(started_at.elapsed());
+        }
     };
     let _enter = rt.enter();
     let client = match ForgeClient::new(&remote_info) {
         Ok(c) => c,
-        Err(_) => return,
-    };
-    let stack = match Stack::load(repo) {
-        Ok(s) => s,
-        Err(_) => return,
+        Err(_) => {
+            LiveTimer::maybe_finish_skipped(timer, "skipped");
+            return Some(started_at.elapsed());
+        }
     };
     let git_dir = match repo.git_dir() {
         Ok(p) => p,
-        Err(_) => return,
+        Err(_) => {
+            LiveTimer::maybe_finish_skipped(timer, "skipped");
+            return Some(started_at.elapsed());
+        }
     };
     let mut cache = CiCache::load(&git_dir);
     let mut cache_dirty = false;
 
-    for (branch_name, branch_info) in &stack.branches {
-        if branch_name == &stack.trunk {
+    let live_prs = rt.block_on(async {
+        stream::iter(
+            tracked_pr_branches
+                .into_iter()
+                .map(|(branch_name, pr_number)| {
+                    let client = client.clone();
+                    async move { (branch_name, client.get_pr(pr_number).await.ok()) }
+                }),
+        )
+        .buffer_unordered(PR_METADATA_REFRESH_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await
+    });
+
+    for (branch_name, live_pr) in live_prs {
+        let Some(live_pr) = live_pr else {
             continue;
-        }
-        let pr_number = match branch_info.pr_number {
-            Some(n) => n,
-            None => continue,
-        };
-        let live_pr = match rt.block_on(client.get_pr(pr_number)) {
-            Ok(p) => p,
-            Err(_) => continue,
         };
 
-        // Update branch metadata with fresh state, is_draft, and base
-        if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch_name) {
-            if let Some(ref mut pr_info) = meta.pr_info {
-                pr_info.is_draft = Some(live_pr.is_draft);
-                pr_info.state = live_pr.state.clone();
-            }
-
-            // Reconcile PR base with parent: if the live PR base differs from
-            // our tracked parent and the live base is a known branch, update.
-            if !live_pr.base.is_empty() && live_pr.base != meta.parent_branch_name {
-                let base_is_known =
-                    live_pr.base == stack.trunk || stack.branches.contains_key(&live_pr.base);
-                if base_is_known {
-                    // Update parent revision to the current tip of the new parent
-                    if let Ok(parent_ref) = repo
-                        .inner()
-                        .find_branch(&live_pr.base, git2::BranchType::Local)
-                    {
-                        if let Ok(commit) = parent_ref.get().peel_to_commit() {
-                            meta.parent_branch_revision = commit.id().to_string();
-                        }
-                    }
-                    meta.parent_branch_name = live_pr.base.clone();
-                }
-            }
-
-            let _ = meta.write(repo.inner(), branch_name);
-        }
-
-        // Update CiCache with the live PR state
-        let pr_state = live_pr.state.clone();
-        let existing_ci = cache
-            .branches
-            .get(branch_name.as_str())
-            .and_then(|e| e.ci_state.clone());
-        cache.update(branch_name, existing_ci, Some(pr_state));
+        apply_live_pr_state(repo, &stack, &mut cache, &branch_name, &live_pr);
         cache_dirty = true;
     }
 
     if cache_dirty {
         let _ = cache.save(&git_dir);
     }
+
+    LiveTimer::maybe_finish_timed(timer);
+    Some(started_at.elapsed())
+}
+
+fn apply_live_pr_state(
+    repo: &GitRepo,
+    stack: &Stack,
+    cache: &mut CiCache,
+    branch_name: &str,
+    live_pr: &ForgePrInfo,
+) {
+    let pr_state = live_pr.state.to_uppercase();
+
+    // Update branch metadata with fresh state, is_draft, and base
+    if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch_name) {
+        if let Some(ref mut pr_info) = meta.pr_info {
+            pr_info.is_draft = Some(live_pr.is_draft);
+            pr_info.state = pr_state.clone();
+        }
+
+        // Reconcile PR base with parent: if the live PR base differs from
+        // our tracked parent and the live base is a known branch, update.
+        if !live_pr.base.is_empty() && live_pr.base != meta.parent_branch_name {
+            let base_is_known =
+                live_pr.base == stack.trunk || stack.branches.contains_key(&live_pr.base);
+            if base_is_known {
+                // Update parent revision to the current tip of the new parent
+                if let Ok(parent_ref) = repo
+                    .inner()
+                    .find_branch(&live_pr.base, git2::BranchType::Local)
+                {
+                    if let Ok(commit) = parent_ref.get().peel_to_commit() {
+                        meta.parent_branch_revision = commit.id().to_string();
+                    }
+                }
+                meta.parent_branch_name = live_pr.base.clone();
+            }
+        }
+
+        let _ = meta.write(repo.inner(), branch_name);
+    }
+
+    let existing_ci = cache
+        .branches
+        .get(branch_name)
+        .and_then(|e| e.ci_state.clone());
+    cache.update(branch_name, existing_ci, Some(pr_state));
 }
 
 fn sync_fetch_refs(

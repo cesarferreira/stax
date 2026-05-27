@@ -12716,6 +12716,61 @@ mod forge_mock_tests {
         // If metadata ref was deleted (sync cleaned up the merged branch), that's also correct
     }
 
+    #[tokio::test]
+    async fn test_sync_shows_and_targets_pr_metadata_refresh() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = setup_branch_with_remote(home.path(), "feature-pr-refresh");
+        let branch = repo.current_branch();
+        write_branch_pr_metadata(&repo, &branch, "main", 530, Some(false));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/530"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(530, &branch, "main", "aaaa")),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["sync"]);
+        assert!(
+            output.status.success(),
+            "Sync failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        let stdout = TestRepo::stdout(&output);
+        let refresh_index = stdout
+            .find("Refresh PR metadata")
+            .unwrap_or_else(|| panic!("Expected visible PR refresh timing, got:\n{}", stdout));
+        let complete_index = stdout
+            .find("Sync complete!")
+            .unwrap_or_else(|| panic!("Expected sync completion footer, got:\n{}", stdout));
+        assert!(
+            refresh_index < complete_index,
+            "PR refresh must finish before Sync complete is printed, got:\n{}",
+            stdout
+        );
+
+        let requests = mock_server.received_requests().await.unwrap_or_default();
+        assert!(
+            requests
+                .iter()
+                .any(|r| r.method.as_str() == "GET" && r.url.path() == "/repos/test/repo/pulls/530"),
+            "Expected sync to refresh the tracked PR directly"
+        );
+        assert!(
+            requests.iter().all(|r| {
+                !(r.method.as_str() == "GET" && r.url.path() == "/repos/test/repo/pulls")
+            }),
+            "Sync PR metadata refresh must not scan the repo-wide open PR list"
+        );
+    }
+
     /// When a PR is closed (not merged) via `gh pr close`, sync should update
     /// the metadata state to CLOSED so stax knows the PR is no longer active.
     #[tokio::test]
