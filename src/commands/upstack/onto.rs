@@ -8,7 +8,8 @@ use std::collections::HashSet;
 
 /// Reparent the current branch AND all its descendants onto a new parent.
 /// The subtree structure is preserved -- only the root's parent changes.
-pub fn run(target: Option<String>, restack: bool) -> Result<()> {
+/// Rebase is always performed so git history matches the new parent immediately.
+pub fn run(target: Option<String>, auto_stash_pop: bool) -> Result<()> {
     let repo = GitRepo::open()?;
     let stack = Stack::load(&repo)?;
     let current = repo.current_branch()?;
@@ -88,10 +89,6 @@ pub fn run(target: Option<String>, restack: bool) -> Result<()> {
         ..old_meta
     };
 
-    if !restack {
-        updated.write(repo.inner(), &current)?;
-    }
-
     println!(
         "✓ Reparented '{}' onto '{}'",
         current.green(),
@@ -107,64 +104,58 @@ pub fn run(target: Option<String>, restack: bool) -> Result<()> {
         }
     }
 
-    if restack {
-        println!();
-        println!("{}", "Restacking moved branches...".bold());
+    println!();
+    println!("{}", "Restacking moved branches...".bold());
 
-        // Rebase the root branch directly using old parent info as upstream
-        // (same approach as reparent.rs -- we need the old parent boundary
-        // because the metadata was already overwritten)
-        let rebase_upstream = resolve_rebase_upstream(
-            &repo,
-            &old_parent_name,
-            &old_parent_rev,
-            &current,
-            &merge_base,
-        )?;
+    // Rebase the root branch directly using old parent info as upstream.
+    // We need the old parent boundary because the metadata hasn't been
+    // written yet — the rebase must know where the branch's own commits begin.
+    let rebase_upstream = resolve_rebase_upstream(
+        &repo,
+        &old_parent_name,
+        &old_parent_rev,
+        &current,
+        &merge_base,
+    )?;
 
-        match repo.rebase_branch_onto_with_provenance(
-            &current,
-            &new_parent,
-            &rebase_upstream,
-            false,
-        )? {
-            RebaseResult::Success => {
-                // Persist metadata only after the root rebase succeeds
-                let new_parent_rev = repo.branch_commit(&new_parent)?;
-                let mut persisted = updated.clone();
-                persisted.parent_branch_revision = new_parent_rev;
-                persisted.write(repo.inner(), &current)?;
-                println!(
-                    "  {} rebased '{}' onto '{}'",
-                    "✓".green(),
-                    current,
-                    new_parent
-                );
+    match repo.rebase_branch_onto_with_provenance(
+        &current,
+        &new_parent,
+        &rebase_upstream,
+        auto_stash_pop,
+    )? {
+        RebaseResult::Success => {
+            // Persist metadata only after the rebase succeeds so we never
+            // leave metadata pointing at a new parent with old git history.
+            let new_parent_rev = repo.branch_commit(&new_parent)?;
+            let mut persisted = updated.clone();
+            persisted.parent_branch_revision = new_parent_rev;
+            persisted.write(repo.inner(), &current)?;
+            println!(
+                "  {} rebased '{}' onto '{}'",
+                "✓".green(),
+                current,
+                new_parent
+            );
 
-                // Now restack descendants via upstack restack
-                if subtree.len() > 1 {
-                    super::restack::run(false)?;
-                }
-            }
-            RebaseResult::Conflict => {
-                bail!(
-                    "Rebase conflict while rebasing '{}' onto '{}'. \
-                     Resolve conflicts, then run `st continue` or `st abort`.",
-                    current,
-                    new_parent
-                );
+            // Restack descendants
+            if subtree.len() > 1 {
+                super::restack::run(false)?;
             }
         }
-
-        // Return to original branch
-        if repo.current_branch()? != current {
-            let _ = repo.checkout(&current);
+        RebaseResult::Conflict => {
+            bail!(
+                "Rebase conflict while rebasing '{}' onto '{}'. \
+                 Resolve conflicts, then run `st continue` or `st abort`.",
+                current,
+                new_parent
+            );
         }
-    } else {
-        println!(
-            "{}",
-            "Run `st restack` to rebase the moved branches onto their new parent.".yellow()
-        );
+    }
+
+    // Return to original branch
+    if repo.current_branch()? != current {
+        let _ = repo.checkout(&current);
     }
 
     Ok(())
