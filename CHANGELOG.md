@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.81.2] - 2026-05-27
+
+### Fixed
+- Ensure update check cache is written before process exits
+
 ## [0.81.1] - 2026-05-27
 
 ### Changed
@@ -416,7 +421,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.81.1...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.81.2...HEAD
+[0.81.2]: https://github.com/cesarferreira/stax/compare/v0.81.1...v0.81.2
 [0.81.1]: https://github.com/cesarferreira/stax/compare/v0.81.0...v0.81.1
 [0.81.0]: https://github.com/cesarferreira/stax/compare/v0.80.0...v0.81.0
 [0.80.0]: https://github.com/cesarferreira/stax/compare/v0.79.0...v0.80.0
