@@ -7615,6 +7615,107 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
+    async fn test_submit_adopts_existing_pr_when_create_reports_duplicate_head() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config_with_submit(home.path(), &mock_server.uri(), Some("off"));
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "feature-duplicate-pr"]);
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+        let branch = repo.current_branch();
+        repo.create_file("duplicate-pr.txt", "duplicate pr\n");
+        repo.commit("Add duplicate PR recovery fixture");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .and(query_param("head", format!("test:{}", branch)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .and(query_param("head", format!("test:{}", branch)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                github_pull_fixture_with_details(
+                    88,
+                    &branch,
+                    "main",
+                    "Duplicate PR recovery",
+                    "Recovered existing PR."
+                )
+            ])))
+            .with_priority(2)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "message": "Validation Failed",
+                "documentation_url": "https://docs.github.com/rest/pulls/pulls#create-a-pull-request",
+                "errors": [{
+                    "resource": "PullRequest",
+                    "code": "custom",
+                    "message": format!("A pull request already exists for test:{}.", branch)
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/88/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/88"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                github_pull_fixture_with_details(
+                    88,
+                    &branch,
+                    "main",
+                    "Duplicate PR recovery",
+                    "Recovered existing PR.",
+                ),
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["submit", "--yes", "--no-prompt"]);
+        assert!(
+            output.status.success(),
+            "submit should recover duplicate PR create\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let metadata_ref = format!("refs/branch-metadata/{}", branch);
+        let metadata_output = repo.git(&["show", &metadata_ref]);
+        assert!(
+            metadata_output.status.success(),
+            "Failed to read metadata: {}",
+            TestRepo::stderr(&metadata_output)
+        );
+        let metadata = TestRepo::stdout(&metadata_output);
+        assert!(
+            metadata.contains("\"number\":88"),
+            "Expected recovered PR number in metadata, got: {}",
+            metadata
+        );
+    }
+
+    #[tokio::test]
     async fn test_submit_body_scope_yes_uses_default_title_for_new_pr() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;

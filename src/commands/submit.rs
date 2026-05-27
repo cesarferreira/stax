@@ -1518,24 +1518,37 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 let create_timer =
                     LiveTimer::maybe_new(!quiet, &format!("Creating {}...", plan.branch));
 
-                let pr = client
+                let pr = match client
                     .create_pr(&plan.branch, &plan.parent, title, body, is_draft)
                     .await
-                    .context(format!(
-                        "Failed to create PR for '{}' with base '{}'\n\
-                         This may happen if:\n  \
-                         - The base branch '{}' doesn't exist on the remote\n  \
-                         - The branch has no commits different from base\n  \
-                         - API request timed out (check network/VPN and retry)\n  \
-                         Try: git log {}..{} to see the commits",
-                        plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
-                    ))?;
-                created_pr_numbers.insert(pr.number);
+                {
+                    Ok(pr) => {
+                        created_pr_numbers.insert(pr.number);
+                        LiveTimer::maybe_finish_ok(
+                            create_timer,
+                            &format!("created {}", format!("#{}", pr.number).dimmed()),
+                        );
+                        pr
+                    }
+                    Err(err) if is_duplicate_pr_create_error(&err) => {
+                        let Some(existing_pr) =
+                            recover_existing_pr_after_duplicate_create(&client, &plan.branch)
+                                .await?
+                        else {
+                            return Err(err).context(create_pr_failure_context(plan));
+                        };
 
-                LiveTimer::maybe_finish_ok(
-                    create_timer,
-                    &format!("created {}", format!("#{}", pr.number).dimmed()),
-                );
+                        LiveTimer::maybe_finish_ok(
+                            create_timer,
+                            &format!(
+                                "using existing {}",
+                                format!("#{}", existing_pr.info.number).dimmed()
+                            ),
+                        );
+                        existing_pr.info
+                    }
+                    Err(err) => return Err(err).context(create_pr_failure_context(plan)),
+                };
 
                 // Update metadata with PR info
                 let updated_meta = BranchMetadata {
@@ -2029,6 +2042,35 @@ async fn discover_existing_pr(
         needs_full_scan_fallback: existing_pr.is_none() && (had_metadata_pr || has_remote_branch),
         existing_pr,
     })
+}
+
+async fn recover_existing_pr_after_duplicate_create(
+    client: &ForgeClient,
+    branch: &str,
+) -> Result<Option<PrInfoWithHead>> {
+    if let Some(pr) = client.find_open_pr_by_head(branch).await? {
+        return Ok(Some(pr));
+    }
+
+    let open_prs_by_head = client.list_open_prs_by_head().await?;
+    Ok(open_prs_by_head.get(branch).cloned())
+}
+
+fn is_duplicate_pr_create_error(err: &anyhow::Error) -> bool {
+    let message = format!("{:#}", err);
+    message.contains("A pull request already exists") && message.contains("PullRequest")
+}
+
+fn create_pr_failure_context(plan: &PrPlan) -> String {
+    format!(
+        "Failed to create PR for '{}' with base '{}'\n\
+         This may happen if:\n  \
+         - The base branch '{}' doesn't exist on the remote\n  \
+         - The branch has no commits different from base\n  \
+         - API request timed out (check network/VPN and retry)\n  \
+         Try: git log {}..{} to see the commits",
+        plan.branch, plan.parent, plan.parent, plan.parent, plan.branch
+    )
 }
 
 /// Check if a branch needs to be pushed (local differs from remote)
