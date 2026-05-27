@@ -65,7 +65,10 @@ pub fn format_status_line(
 }
 
 pub fn format_branch_status_line(branch: &str) -> String {
-    format!(" #[fg=colour250]\u{f418}#[fg=default] {}", truncate_branch_name(branch))
+    format!(
+        " #[fg=colour250]\u{f418}#[fg=default] {}",
+        truncate_branch_name(branch)
+    )
 }
 
 fn run_status() -> Result<()> {
@@ -281,7 +284,10 @@ mod tests {
     fn test_trunk_long_name_truncated() {
         let long = "release/".to_string() + &"a".repeat(50);
         let result = format_branch_status_line(&long);
-        assert!(result.contains('…'), "trunk long name should be truncated: {result}");
+        assert!(
+            result.contains('…'),
+            "trunk long name should be truncated: {result}"
+        );
         assert!(
             !result.contains(&long),
             "full branch name should not appear: {result}"
