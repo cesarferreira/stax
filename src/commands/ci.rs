@@ -802,12 +802,18 @@ fn print_multi_branch_header(statuses: &[BranchCiStatus]) {
     println!("CI  {}", parts.join("  "));
 }
 
-/// One-line counts summary for the `--oneline` view.
-///
-/// Returns `"no CI"`, `"<n> failing"`, `"<done>/<total> running"`, or `"<n> checks"`.
-fn oneline_check_summary(status: &BranchCiStatus) -> String {
+/// Roll-up state of a branch's CI for the `--oneline` view.
+enum CiRollup {
+    NoCi,
+    Failing(usize),
+    Running { done: usize, total: usize },
+    Passing(usize),
+}
+
+/// Collapse a branch's check runs into a single roll-up state.
+fn ci_rollup(status: &BranchCiStatus) -> CiRollup {
     if status.check_runs.is_empty() {
-        return "no CI".to_string();
+        return CiRollup::NoCi;
     }
     let total = status.check_runs.len();
     let failed = status
@@ -822,17 +828,29 @@ fn oneline_check_summary(status: &BranchCiStatus) -> String {
         })
         .count();
     if failed > 0 {
-        return format!("{} failing", failed);
+        return CiRollup::Failing(failed);
     }
-    let completed = status
+    let done = status
         .check_runs
         .iter()
         .filter(|c| c.status == "completed")
         .count();
-    if completed < total {
-        return format!("{}/{} running", completed, total);
+    if done < total {
+        return CiRollup::Running { done, total };
     }
-    format!("{} checks", total)
+    CiRollup::Passing(total)
+}
+
+/// One-line counts summary for the `--oneline` view.
+///
+/// Returns `"no CI"`, `"<n> failing"`, `"<done>/<total> running"`, or `"<n> checks"`.
+fn oneline_check_summary(status: &BranchCiStatus) -> String {
+    match ci_rollup(status) {
+        CiRollup::NoCi => "no CI".to_string(),
+        CiRollup::Failing(n) => format!("{} failing", n),
+        CiRollup::Running { done, total } => format!("{}/{} running", done, total),
+        CiRollup::Passing(n) => format!("{} checks", n),
+    }
 }
 
 /// Colored overall-status icon for the `--oneline` view.
@@ -859,11 +877,13 @@ fn oneline_row(
 ) -> String {
     let icon = oneline_overall_icon(status);
 
+    // Branch column: cyan, bold for the current branch. Pad on plain text so
+    // ANSI codes don't skew alignment.
     let branch_padded = format!("{:<width$}", status.branch, width = branch_w);
     let branch_cell = if is_current {
-        branch_padded.bold()
+        branch_padded.cyan().bold()
     } else {
-        branch_padded.normal()
+        branch_padded.cyan()
     };
 
     let pr_str = status
@@ -872,24 +892,34 @@ fn oneline_row(
         .unwrap_or_default();
     let pr_cell = format!("{:<width$}", pr_str, width = pr_w).bright_magenta();
 
+    // Title column: the current branch's title stands out in bold white.
     let title = status.pr_title.as_deref().unwrap_or("");
     let title_trunc = truncate_title(title, title_w);
     let title_pad = title_w.saturating_sub(title_trunc.chars().count());
-    let title_cell = format!("{}{}", title_trunc, " ".repeat(title_pad));
+    let title_cell = if is_current {
+        format!("{}{}", title_trunc.bold().white(), " ".repeat(title_pad))
+    } else {
+        format!("{}{}", title_trunc.white(), " ".repeat(title_pad))
+    };
 
+    // Trailing summary: colored by roll-up state, with dimmed timing.
     let summary = oneline_check_summary(status);
+    let summary_cell = match ci_rollup(status) {
+        CiRollup::NoCi => summary.dimmed(),
+        CiRollup::Failing(_) => summary.red().bold(),
+        CiRollup::Running { .. } => summary.yellow(),
+        CiRollup::Passing(_) => summary.green(),
+    };
     let trailing = match timing {
-        Some(t) if !t.is_empty() => format!("{} · {}", summary, t),
-        _ => summary,
+        Some(t) if !t.is_empty() => {
+            format!("{} {} {}", summary_cell, "·".dimmed(), t.dimmed())
+        }
+        _ => summary_cell.to_string(),
     };
 
     format!(
         "{}  {}  {}  {}  {}",
-        icon,
-        branch_cell,
-        pr_cell,
-        title_cell,
-        trailing.dimmed()
+        icon, branch_cell, pr_cell, title_cell, trailing
     )
 }
 
