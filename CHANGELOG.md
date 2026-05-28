@@ -8,9 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.82.0] - 2026-05-28
+
 ### Added
-- Add `st ci --oneline` (`-1`): a one-line-per-branch CI roll-up (status icon · branch · `#PR` · draft/ready · title · check count + timing). Multi-branch `st ci` views (`--stack`/`--all`) now default to this roll-up; `--verbose` still shows the grouped summary cards
-- Add `st doctor --fix` to apply safe local health-check repairs after one confirmation
+- Add doctor fix mode
+- Add --oneline compact whole-stack view (#440)
+
+### Changed
+- Add codegraph
+- Added cursor codegraph mdc
+- Split 2987-line cli.rs into focused submodules
+
+### Fixed
+- Search commits in changelog find (#438)
 
 ## [0.81.2] - 2026-05-27
 
@@ -425,7 +435,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.81.2...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.82.0...HEAD
+[0.82.0]: https://github.com/cesarferreira/stax/compare/v0.81.2...v0.82.0
 [0.81.2]: https://github.com/cesarferreira/stax/compare/v0.81.1...v0.81.2
 [0.81.1]: https://github.com/cesarferreira/stax/compare/v0.81.0...v0.81.1
 [0.81.0]: https://github.com/cesarferreira/stax/compare/v0.80.0...v0.81.0
