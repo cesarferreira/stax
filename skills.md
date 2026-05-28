@@ -77,6 +77,7 @@ stax auth [status]             # GitHub auth setup/status
 stax config                    # Print config path + contents
 stax cli upgrade               # Detect the install method and run the matching upgrade flow
 stax doctor                    # Health checks (also reports stale skill files)
+stax doctor --fix              # Show one repair plan, then apply safe local fixes after confirmation
 stax validate                  # Validate stack metadata
 stax fix                       # Auto-repair metadata
 stax test <cmd...>             # Run command on each branch
@@ -386,6 +387,7 @@ stax auth status                   # Show active auth source
 stax config                        # Print config location + values
 stax cli upgrade                   # Upgrade using the detected install method, then refresh shell setup
 stax doctor                        # Repo/config health checks (also reports stale skill files)
+stax doctor --fix                  # Confirm once to set recommended git config and update stale installed skills
 stax demo                          # Interactive tutorial
 
 stax skills                        # List installed AI agent skill files + version status

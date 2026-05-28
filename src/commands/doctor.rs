@@ -4,11 +4,50 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::forge;
 use crate::git::{refs, GitRepo};
 use crate::remote::{self, RemoteInfo};
-use anyhow::Result;
+use anyhow::{bail, Result};
 use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Confirm};
+use std::io::IsTerminal;
 use std::process::Command;
 
-pub fn run() -> Result<()> {
+#[derive(Default)]
+struct RepairPlan {
+    actions: Vec<RepairAction>,
+}
+
+impl RepairPlan {
+    fn push(&mut self, action: RepairAction) {
+        if !self.actions.contains(&action) {
+            self.actions.push(action);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.actions.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RepairAction {
+    SetGitConfig {
+        key: &'static str,
+        value: &'static str,
+    },
+    UpdateSkills,
+}
+
+impl RepairAction {
+    fn description(&self) -> String {
+        match self {
+            RepairAction::SetGitConfig { key, value } => {
+                format!("Set git config {key}={value}")
+            }
+            RepairAction::UpdateSkills => "Update stale AI agent skill files".to_string(),
+        }
+    }
+}
+
+pub fn run(fix: bool) -> Result<()> {
     println!("{}", "stax doctor".bold());
     println!();
 
@@ -22,6 +61,7 @@ pub fn run() -> Result<()> {
 
     let config = Config::load()?;
     let mut issues = 0;
+    let mut repair_plan = RepairPlan::default();
 
     if repo.is_initialized() {
         println!("{} {}", "✓".green(), "Repo initialized".dimmed());
@@ -184,9 +224,17 @@ pub fn run() -> Result<()> {
             let mut missing = Vec::new();
             if !rerere_ok {
                 missing.push("rerere.enabled");
+                repair_plan.push(RepairAction::SetGitConfig {
+                    key: "rerere.enabled",
+                    value: "true",
+                });
             }
             if !autostash_ok {
                 missing.push("rebase.autoStash");
+                repair_plan.push(RepairAction::SetGitConfig {
+                    key: "rebase.autoStash",
+                    value: "true",
+                });
             }
             println!(
                 "{} {}",
@@ -257,6 +305,7 @@ pub fn run() -> Result<()> {
                 "AI agent skill files are up to date".dimmed()
             );
         } else {
+            repair_plan.push(RepairAction::UpdateSkills);
             println!(
                 "{} {}",
                 "⚠".yellow(),
@@ -281,6 +330,66 @@ pub fn run() -> Result<()> {
         println!("{}", "✓ Doctor check complete (no critical issues)".green());
     } else {
         println!("{}", format!("✗ Doctor found {} issue(s)", issues).yellow());
+    }
+
+    if fix {
+        apply_fix_flow(&repair_plan)?;
+    }
+
+    Ok(())
+}
+
+fn apply_fix_flow(repair_plan: &RepairPlan) -> Result<()> {
+    println!();
+
+    if repair_plan.is_empty() {
+        println!("{}", "No safe automatic fixes available.".dimmed());
+        return Ok(());
+    }
+
+    println!("{}", "Repair plan:".bold());
+    for (index, action) in repair_plan.actions.iter().enumerate() {
+        println!("  {}. {}", index + 1, action.description());
+    }
+    println!();
+
+    if !std::io::stdin().is_terminal() {
+        bail!("`stax doctor --fix` requires an interactive terminal");
+    }
+
+    let apply = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Apply these fixes?")
+        .default(true)
+        .interact()?;
+
+    if !apply {
+        println!("{}", "No fixes applied.".yellow());
+        return Ok(());
+    }
+
+    for action in &repair_plan.actions {
+        apply_repair_action(action)?;
+    }
+
+    println!();
+    println!("{}", "✓ Doctor repair complete".green());
+    Ok(())
+}
+
+fn apply_repair_action(action: &RepairAction) -> Result<()> {
+    match action {
+        RepairAction::SetGitConfig { key, value } => {
+            let status = Command::new("git")
+                .args(["config", "--global", key, value])
+                .status()?;
+            if !status.success() {
+                bail!("failed to set git config {key}={value}");
+            }
+            println!("{} {}", "✓".green(), action.description().dimmed());
+        }
+        RepairAction::UpdateSkills => {
+            skills::run_update(false)?;
+        }
     }
 
     Ok(())

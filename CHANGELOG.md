@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+### Added
+- Add `st doctor --fix` to apply safe local health-check repairs after one confirmation
+
 ## [0.81.2] - 2026-05-27
 
 ### Fixed

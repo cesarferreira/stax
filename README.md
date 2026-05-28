@@ -291,6 +291,7 @@ st config --set-ai
 | `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |
+| `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
 | `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |
 | `st pr` / `st pr body` / `st pr list` / `st issue list` | Open current PR · view/edit PR body · list PRs · list issues |
 

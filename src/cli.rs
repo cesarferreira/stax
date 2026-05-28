@@ -586,7 +586,11 @@ enum Commands {
     },
 
     /// Check stax configuration and repo health
-    Doctor,
+    Doctor {
+        /// Apply safe local repairs after showing a repair plan
+        #[arg(long)]
+        fix: bool,
+    },
 
     /// Manage AI agent skill files (`stax skills update` to refresh)
     Skills {
@@ -1740,8 +1744,8 @@ pub fn run() -> Result<()> {
             update::show_update_notification();
             return result;
         }
-        Commands::Doctor => {
-            let result = commands::doctor::run();
+        Commands::Doctor { fix } => {
+            let result = commands::doctor::run(*fix);
             update::show_update_notification();
             return result;
         }
@@ -1977,7 +1981,7 @@ pub fn run() -> Result<()> {
         Commands::Init { .. } => unreachable!(), // Handled above
         Commands::Diff { stack, all } => commands::diff::run(stack, all),
         Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
-        Commands::Doctor => unreachable!(), // Handled above
+        Commands::Doctor { .. } => unreachable!(), // Handled above
         Commands::Skills { .. } => unreachable!(), // Handled above
         Commands::Trunk { branch } => {
             if let Some(name) = branch {

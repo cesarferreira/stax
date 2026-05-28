@@ -20,6 +20,21 @@ Runs:
 
 Exit code `0` if healthy, `1` if issues found.
 
+## `st doctor --fix`
+
+Check repo/config health, print a repair plan, and apply safe local repairs after one confirmation.
+
+```bash
+st doctor --fix
+```
+
+Repairs in this mode are intentionally conservative:
+
+- Sets recommended global Git config (`rerere.enabled=true`, `rebase.autoStash=true`) when missing.
+- Updates already-installed stale AI agent skill files.
+
+It does not mutate branch refs, PR metadata, remotes, or worktree contents.
+
 ## `st fix`
 
 Auto-repair broken metadata. Wrapped in a transaction so `st undo` works.

@@ -136,6 +136,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st init` | Initialize stax or reconfigure trunk (`--trunk <branch>`) |
 | `st cli upgrade` | Detect install method and run the matching upgrade |
 | `st doctor` | Check repo health |
+| `st doctor --fix` | Apply safe local repairs after one confirmation (recommended Git config and stale AI skills) |
 | `st continue` | Continue after conflicts |
 | `st open` | Open repository in browser |
 | `st demo` | Interactive tutorial — no auth or repo required |

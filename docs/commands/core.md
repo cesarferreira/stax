@@ -69,6 +69,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st changelog` | Generate changelog between refs or fuzzy-find `CHANGELOG.md` entries with `find` / `--find` |
 | `st open` | Open the repository in the browser |
 | `st run <cmd>` | Run a command on each branch in the stack (alias: `st test <cmd>`) |
+| `st doctor` / `st doctor --fix` | Check repo/config health; `--fix` applies safe local repairs after one confirmation |
 | `st demo` | Interactive tutorial — no auth or repo required |
 
 See also: [Navigation](navigation.md) · [Stack health](stack-health.md) · [Full reference](reference.md)
