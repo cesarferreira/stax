@@ -238,6 +238,7 @@ fn load_ci_from_cache(git_dir: &std::path::Path, branches: &[String]) -> Vec<Bra
                     check_runs: vec![],
                     pr_number: None,
                     pr_is_draft,
+                    pr_title: None,
                 }
             })
         })

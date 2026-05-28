@@ -431,6 +431,7 @@ pub fn run() -> Result<()> {
             strict,
             interval,
             verbose,
+            oneline,
         } => commands::ci::run(
             all,
             stack,
@@ -445,6 +446,7 @@ pub fn run() -> Result<()> {
             strict,
             interval,
             verbose,
+            oneline,
         ),
         Commands::Watch { current, interval } => commands::watch::run(current, interval),
         Commands::Tmux { command } => commands::tmux::run(command),

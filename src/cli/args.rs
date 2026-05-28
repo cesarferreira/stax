@@ -752,6 +752,9 @@ pub(crate) enum Commands {
         /// Show compact summary cards instead of the full per-check table
         #[arg(long, short)]
         verbose: bool,
+        /// One compact line per branch across the whole stack
+        #[arg(long, short = '1', conflicts_with = "verbose")]
+        oneline: bool,
     },
 
     /// Live auto-refreshing stack status with CI and PR state
