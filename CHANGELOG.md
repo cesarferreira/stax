@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - ReleaseDate
 
 ### Added
+- Add `st ci --oneline` (`-1`): a one-line-per-branch CI roll-up (status icon · branch · `#PR` · draft/ready · title · check count + timing). Multi-branch `st ci` views (`--stack`/`--all`) now default to this roll-up; `--verbose` still shows the grouped summary cards
 - Add `st doctor --fix` to apply safe local health-check repairs after one confirmation
 
 ## [0.81.2] - 2026-05-27

@@ -108,10 +108,12 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 
 | Command | Description |
 |---|---|
-| `st ci` | CI status for current branch (with elapsed/ETA learned from recent runs) |
-| `st ci --stack` / `--all` / `--watch` | Scope and watch modes (`--watch --strict` fail-fasts on failure) |
+| `st ci` | CI status for current branch — full per-check table (with elapsed/ETA learned from recent runs) |
+| `st ci --stack` / `--all` | Scope to stack / all tracked branches; multi-branch views default to the one-line roll-up |
+| `st ci --oneline` / `-1` | One compact line per branch (icon · branch · #PR · draft/ready · title · checks + timing) |
+| `st ci --watch` | Watch modes (`--watch --strict` fail-fasts on failure) |
 | `st ci -w --alert` / `--alert <file>` / `--no-alert` | Success/error completion sounds for watch mode |
-| `st ci --verbose` / `--json` | Summary cards · JSON output |
+| `st ci --verbose` / `--json` | Grouped summary cards · JSON output |
 | `st pr` · `st pr open` | Open current branch PR |
 | `st pr body` · `st pr body --edit` | Print or edit the current branch PR description |
 | `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
@@ -269,7 +271,9 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 
 ### `st ci`
 
-- `--stack` / `--all` / `--watch` / `--watch --strict` / `--interval 30` / `--json`
+- `--stack` / `--all` / `--oneline` (`-1`) / `--verbose` / `--watch` / `--watch --strict` / `--interval 30` / `--json`
+- Three render modes: the **full per-check table** (single branch, default), grouped **summary cards** (`--verbose`/`-v`), and the **one-line roll-up** (`--oneline`/`-1`). Any multi-branch view (`--stack`/`--all`) defaults to the roll-up; `--verbose` overrides it back to cards. `--oneline` and `--verbose` cannot be combined.
+- The roll-up renders one line per branch, base→tip: CI status icon · branch · `#PR` · `draft`/`ready` · PR title · trailing check-count and timing. A bare `--oneline` defaults its scope to the current stack.
 - By default, `--watch` waits until every check is terminal, even if one check has already failed. Add `--strict` to exit as soon as any check fails.
 - `--watch --alert` plays built-in success/error sounds; `--watch --alert <file>` uses one custom sound for either outcome; `--watch --no-alert` suppresses `[ci] alert = true` for one run.
 - Config can enable alerts by default with `[ci] alert = true`; set `success_alert_sound` and/or `error_alert_sound` to override the per-outcome built-in sounds.

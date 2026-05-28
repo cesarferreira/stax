@@ -1,4 +1,4 @@
-<!-- stax-skills-version: 0.50.2 -->
+<!-- stax-skills-version: 0.51.0 -->
 # Stax Skills for AI Coding Agents
 
 This document teaches AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode) how to use `stax` to manage stacked Git branches and PRs.
@@ -60,7 +60,7 @@ stax pr body --edit            # Edit current PR description in $EDITOR
 stax open                      # Open repo in browser
 stax comments                  # Show current PR comments
 stax copy [--pr]               # Copy branch name or PR URL
-stax ci                        # CI status
+stax ci [--oneline|-1]         # CI status (per-check table; --oneline / multi-branch = one line per branch)
 stax standup                   # Recent activity summary
 stax standup --ai              # AI-generated spoken standup update (colored card)
 stax standup --ai --style slack  # AI-generated Slack-ready Yesterday/Today bullets
@@ -298,9 +298,10 @@ stax pr body --edit                # Edit current PR description in $EDITOR
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output
 
-stax ci                            # CI for current branch (elapsed/ETA + avg from recent successful runs of the same checks)
-stax ci --stack                    # CI for current stack
-stax ci --all                      # CI for all tracked branches
+stax ci                            # CI for current branch, full per-check table (elapsed/ETA + avg from recent successful runs of the same checks)
+stax ci --stack                    # CI for current stack (defaults to the one-line-per-branch roll-up)
+stax ci --all                      # CI for all tracked branches (one-line-per-branch roll-up)
+stax ci --oneline                  # One compact line per branch across the stack (alias: -1)
 stax ci --watch --interval 30      # Watch until all checks finish, custom poll interval
 stax ci --watch --strict           # Watch but exit as soon as any check fails
 stax ci --watch --alert            # Watch CI, play built-in success/error sounds
@@ -308,7 +309,11 @@ stax ci --watch --alert /path/to/sound.wav  # Use one custom sound for either ou
 stax ci --watch --no-alert         # Suppress configured completion sounds for one run
 stax ci --refresh                  # Force refresh (bypass cache)
 stax ci --json                     # Machine-readable output
-stax ci --verbose                  # Compact summary cards
+stax ci --verbose                  # Compact summary cards (grouped failed/running/passed per branch)
+
+# Oneline roll-up: status icon · branch · #PR · draft/ready · title · check-count + timing.
+# Single branch shows the full per-check table; any multi-branch view defaults to oneline;
+# --verbose forces the grouped cards. --oneline conflicts with --verbose.
 
 # ~/.config/stax/config.toml
 [ci]
