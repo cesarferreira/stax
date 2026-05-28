@@ -7,7 +7,6 @@ use fuzzy_matcher::FuzzyMatcher;
 use regex::Regex;
 use serde::Serialize;
 use std::env;
-use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -36,28 +35,23 @@ struct ChangelogJson {
     commits: Vec<CommitEntry>,
 }
 
-/// A single bullet entry parsed from CHANGELOG.md.
-#[derive(Debug, Clone, Serialize)]
-struct ChangelogFindEntry {
-    release: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    section: Option<String>,
-    text: String,
-    line: usize,
-}
-
 #[derive(Debug, Clone)]
-struct ScoredChangelogFindEntry {
-    entry: ChangelogFindEntry,
+struct ScoredCommitEntry {
+    entry: CommitEntry,
     score: i64,
 }
 
-/// JSON output structure for changelog find mode.
+/// JSON output structure for changelog commit find mode.
 #[derive(Serialize)]
 struct ChangelogFindJson {
     query: String,
+    from: String,
+    to: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolved_from: Option<String>,
+    path: Option<String>,
     match_count: usize,
-    matches: Vec<ChangelogFindEntry>,
+    matches: Vec<CommitEntry>,
 }
 
 /// Pick the first tag from `git tag --sort=-creatordate` output that matches
@@ -112,27 +106,57 @@ pub fn run(
     let (from, to, find) = normalize_find_args(from, to, find)?;
 
     if let Some(query) = find {
-        if from.is_some() || to.is_some() || tag_prefix.is_some() || path.is_some() {
-            anyhow::bail!(
-                "`stax changelog --find` searches CHANGELOG.md and cannot be combined with refs, --path, or --tag-prefix"
-            );
-        }
-
-        return run_find(workdir, query, json);
+        return run_find(workdir, from, to, tag_prefix, path, query, json);
     }
 
-    let to = to.unwrap_or_else(|| "HEAD".to_string());
+    let (from, to, auto_resolved) =
+        resolve_changelog_range(workdir, from, to, tag_prefix.as_deref())?;
+    let resolved_path = resolve_path_filter(workdir, path.as_ref())?;
+    let commits = load_commits(workdir, &from, &to, &resolved_path)?;
 
+    if json {
+        let output = ChangelogJson {
+            from: from.clone(),
+            to: to.clone(),
+            resolved_from: if auto_resolved {
+                Some(from.clone())
+            } else {
+                None
+            },
+            path: resolved_path.clone(),
+            commit_count: commits.len(),
+            commits,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
+
+    print_changelog(&from, &to, &resolved_path, &commits);
+
+    Ok(())
+}
+
+fn resolve_changelog_range(
+    workdir: &Path,
+    from: Option<String>,
+    to: Option<String>,
+    tag_prefix: Option<&str>,
+) -> Result<(String, String, bool)> {
+    let to = to.unwrap_or_else(|| "HEAD".to_string());
     let (from, auto_resolved) = match from {
         Some(f) => (f, false),
         None => {
-            let tag = resolve_latest_tag(workdir, tag_prefix.as_deref())?;
+            let tag = resolve_latest_tag(workdir, tag_prefix)?;
             (tag, true)
         }
     };
 
+    Ok((from, to, auto_resolved))
+}
+
+fn resolve_path_filter(workdir: &Path, path: Option<&String>) -> Result<Option<String>> {
     // Resolve path filter relative to current directory and make it relative to repo root
-    let resolved_path = if let Some(p) = path.as_ref() {
+    let resolved_path = if let Some(p) = path {
         let current_dir = env::current_dir().context("Failed to get current directory")?;
         let path_buf = PathBuf::from(p);
 
@@ -153,6 +177,15 @@ pub fn run(
         None
     };
 
+    Ok(resolved_path)
+}
+
+fn load_commits(
+    workdir: &Path,
+    from: &str,
+    to: &str,
+    resolved_path: &Option<String>,
+) -> Result<Vec<CommitEntry>> {
     // Build git log command
     // Use %x00 (NULL byte) as delimiter to handle messages with special characters
     // %aN gives us the author name from git config (user.name)
@@ -181,29 +214,7 @@ pub fn run(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let commits = parse_commits(&stdout)?;
-
-    if json {
-        let output = ChangelogJson {
-            from: from.clone(),
-            to: to.clone(),
-            resolved_from: if auto_resolved {
-                Some(from.clone())
-            } else {
-                None
-            },
-            path: resolved_path.clone(),
-            commit_count: commits.len(),
-            commits,
-        };
-        println!("{}", serde_json::to_string_pretty(&output)?);
-        return Ok(());
-    }
-
-    // Pretty output
-    print_changelog(&from, &to, &resolved_path, &commits);
-
-    Ok(())
+    parse_commits(&stdout)
 }
 
 fn normalize_find_args(
@@ -240,37 +251,57 @@ fn normalize_find_args(
     }
 }
 
-fn run_find(workdir: &Path, query: Option<String>, json: bool) -> Result<()> {
-    let changelog_path = workdir.join("CHANGELOG.md");
-    let changelog = fs::read_to_string(&changelog_path)
-        .with_context(|| format!("Failed to read {}", changelog_path.display()))?;
-    let entries = parse_changelog_entries(&changelog);
-
-    if entries.is_empty() {
-        anyhow::bail!("No changelog entries found in {}", changelog_path.display());
-    }
+fn run_find(
+    workdir: &Path,
+    from: Option<String>,
+    to: Option<String>,
+    tag_prefix: Option<String>,
+    path: Option<String>,
+    query: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let (from, to, auto_resolved) =
+        resolve_changelog_range(workdir, from, to, tag_prefix.as_deref())?;
+    let resolved_path = resolve_path_filter(workdir, path.as_ref())?;
+    let commits = load_commits(workdir, &from, &to, &resolved_path)?;
 
     match query {
-        Some(query) => run_find_query(&entries, &query, json),
+        Some(query) => run_find_query(
+            &commits,
+            &query,
+            &from,
+            &to,
+            auto_resolved,
+            &resolved_path,
+            json,
+        ),
         None => {
             if json {
                 anyhow::bail!(
                     "Use `stax changelog find <query> --json` or `stax changelog --find <query> --json` for JSON output"
                 );
             }
-            run_find_picker(&entries)
+            run_find_picker(&commits, &from, &to, &resolved_path)
         }
     }
 }
 
-fn run_find_query(entries: &[ChangelogFindEntry], query: &str, json: bool) -> Result<()> {
+fn run_find_query(
+    commits: &[CommitEntry],
+    query: &str,
+    from: &str,
+    to: &str,
+    auto_resolved: bool,
+    path: &Option<String>,
+    json: bool,
+) -> Result<()> {
     let query = query.trim();
     if query.is_empty() {
         anyhow::bail!("`stax changelog --find <query>` requires a non-empty query");
     }
 
-    let matches = find_changelog_entries(entries, query);
-    let displayed_matches: Vec<ChangelogFindEntry> = matches
+    let matches = find_commit_entries(commits, query);
+    let displayed_matches: Vec<CommitEntry> = matches
         .iter()
         .take(CHANGELOG_FIND_LIMIT)
         .map(|m| m.entry.clone())
@@ -279,6 +310,14 @@ fn run_find_query(entries: &[ChangelogFindEntry], query: &str, json: bool) -> Re
     if json {
         let output = ChangelogFindJson {
             query: query.to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+            resolved_from: if auto_resolved {
+                Some(from.to_string())
+            } else {
+                None
+            },
+            path: path.clone(),
             match_count: displayed_matches.len(),
             matches: displayed_matches,
         };
@@ -286,160 +325,91 @@ fn run_find_query(entries: &[ChangelogFindEntry], query: &str, json: bool) -> Re
         return Ok(());
     }
 
-    print_changelog_find_matches(query, &matches);
+    print_changelog_find_matches(query, from, to, path, &matches);
     Ok(())
 }
 
-fn run_find_picker(entries: &[ChangelogFindEntry]) -> Result<()> {
+fn run_find_picker(
+    commits: &[CommitEntry],
+    from: &str,
+    to: &str,
+    path: &Option<String>,
+) -> Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         anyhow::bail!(
             "`stax changelog find` requires an interactive terminal. Use `stax changelog find <query>` in scripts."
         );
     }
 
-    let release_width = entries
-        .iter()
-        .map(|entry| entry.release.len())
-        .max()
-        .unwrap_or(7)
-        .min(24);
-    let section_width = entries
-        .iter()
-        .filter_map(|entry| entry.section.as_ref())
-        .map(|section| section.len())
-        .max()
-        .unwrap_or(7)
-        .min(18);
+    if commits.is_empty() {
+        anyhow::bail!("No commits found in this range.");
+    }
 
-    let items: Vec<String> = entries
+    let pr_width = commits
         .iter()
-        .map(|entry| format_changelog_find_picker_item(entry, release_width, section_width))
+        .filter_map(|entry| entry.pr_number)
+        .map(|n| format!("#{}", n).len())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
+    let items: Vec<String> = commits
+        .iter()
+        .map(|entry| format_commit_find_picker_item(entry, pr_width))
         .collect();
 
     let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Search changelog entries (release shown first)")
+        .with_prompt(format!(
+            "Search changelog commits ({} → {}){}",
+            from,
+            to,
+            path.as_ref()
+                .map(|p| format!(", filtered to {p}"))
+                .unwrap_or_default()
+        ))
         .items(&items)
         .interact()?;
 
-    print_changelog_find_selection(&entries[selection]);
+    print_changelog_find_selection(&commits[selection]);
     Ok(())
 }
 
-fn parse_changelog_entries(changelog: &str) -> Vec<ChangelogFindEntry> {
-    let mut entries = Vec::new();
-    let mut release: Option<String> = None;
-    let mut section: Option<String> = None;
-    let mut current_entry: Option<usize> = None;
-
-    for (idx, line) in changelog.lines().enumerate() {
-        if let Some(next_release) = parse_release_heading(line) {
-            release = Some(next_release);
-            section = None;
-            current_entry = None;
-            continue;
-        }
-
-        if let Some(next_section) = parse_section_heading(line) {
-            section = Some(next_section);
-            current_entry = None;
-            continue;
-        }
-
-        let trimmed = line.trim();
-        if let Some(text) = trimmed.strip_prefix("- ") {
-            if let Some(release) = release.as_ref() {
-                entries.push(ChangelogFindEntry {
-                    release: release.clone(),
-                    section: section.clone(),
-                    text: text.trim().to_string(),
-                    line: idx + 1,
-                });
-                current_entry = Some(entries.len() - 1);
-            }
-            continue;
-        }
-
-        if !trimmed.is_empty()
-            && (line.starts_with("  ") || line.starts_with('\t'))
-            && current_entry.is_some()
-        {
-            if let Some(entry_idx) = current_entry {
-                entries[entry_idx].text.push(' ');
-                entries[entry_idx].text.push_str(trimmed);
-            }
-        } else if !trimmed.is_empty() {
-            current_entry = None;
-        }
-    }
-
-    entries
-}
-
-fn parse_release_heading(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    if !trimmed.starts_with("## ") || trimmed.starts_with("### ") {
-        return None;
-    }
-
-    let title = trimmed.trim_start_matches('#').trim();
-    if let Some(rest) = title.strip_prefix('[') {
-        if let Some((release, _)) = rest.split_once(']') {
-            return Some(release.trim().to_string());
-        }
-    }
-
-    let release = title
-        .split_once(" - ")
-        .map_or(title, |(version, _)| version);
-    let release = release.trim();
-    if release.is_empty() {
-        None
-    } else {
-        Some(release.to_string())
-    }
-}
-
-fn parse_section_heading(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    trimmed
-        .strip_prefix("### ")
-        .map(str::trim)
-        .filter(|section| !section.is_empty())
-        .map(ToString::to_string)
-}
-
-fn find_changelog_entries(
-    entries: &[ChangelogFindEntry],
-    query: &str,
-) -> Vec<ScoredChangelogFindEntry> {
+fn find_commit_entries(commits: &[CommitEntry], query: &str) -> Vec<ScoredCommitEntry> {
     let matcher = SkimMatcherV2::default();
-    let mut matches: Vec<ScoredChangelogFindEntry> = entries
+    let mut matches: Vec<ScoredCommitEntry> = commits
         .iter()
         .filter_map(|entry| {
-            let haystack = changelog_find_haystack(entry);
+            let haystack = commit_find_haystack(entry);
             matcher
                 .fuzzy_match(&haystack, query)
-                .map(|score| ScoredChangelogFindEntry {
+                .map(|score| ScoredCommitEntry {
                     entry: entry.clone(),
                     score,
                 })
         })
         .collect();
 
-    matches.sort_by(|a, b| b.score.cmp(&a.score).then(a.entry.line.cmp(&b.entry.line)));
+    matches.sort_by(|a, b| b.score.cmp(&a.score));
     matches
 }
 
-fn changelog_find_haystack(entry: &ChangelogFindEntry) -> String {
+fn commit_find_haystack(entry: &CommitEntry) -> String {
     format!(
-        "{} {} {}",
-        entry.release,
-        entry.section.as_deref().unwrap_or_default(),
-        entry.text
+        "{} {} {} {}",
+        entry.short_hash,
+        entry.pr_number.map(|n| format!("#{n}")).unwrap_or_default(),
+        entry.message,
+        entry.author
     )
 }
 
-fn print_changelog_find_matches(query: &str, matches: &[ScoredChangelogFindEntry]) {
+fn print_changelog_find_matches(
+    query: &str,
+    from: &str,
+    to: &str,
+    path: &Option<String>,
+    matches: &[ScoredCommitEntry],
+) {
     let match_word = if matches.len() == 1 {
         "match"
     } else {
@@ -448,7 +418,7 @@ fn print_changelog_find_matches(query: &str, matches: &[ScoredChangelogFindEntry
     println!(
         "{}",
         format!(
-            "Changelog search: \"{}\" ({} {})",
+            "Changelog commit search: \"{}\" ({} {})",
             query.cyan(),
             matches.len().min(CHANGELOG_FIND_LIMIT),
             match_word
@@ -457,8 +427,15 @@ fn print_changelog_find_matches(query: &str, matches: &[ScoredChangelogFindEntry
         .bold()
     );
 
+    println!("{}", format!("Range: {} → {}", from, to).dimmed());
+    if let Some(p) = path {
+        println!("{}", format!("Filtered to: {}", p).dimmed());
+    }
+    println!("{}", "─".repeat(50).dimmed());
+    println!();
+
     if matches.is_empty() {
-        println!("{}", "No changelog entries matched.".dimmed());
+        println!("{}", "No commits matched.".dimmed());
         return;
     }
 
@@ -474,92 +451,66 @@ fn print_changelog_find_matches(query: &str, matches: &[ScoredChangelogFindEntry
         );
     }
 
-    let displayed: Vec<&ChangelogFindEntry> = matches
+    let displayed: Vec<&CommitEntry> = matches
         .iter()
         .take(CHANGELOG_FIND_LIMIT)
         .map(|m| &m.entry)
         .collect();
-    let release_width = displayed
+    let pr_width = displayed
         .iter()
-        .map(|entry| entry.release.len())
+        .filter_map(|entry| entry.pr_number)
+        .map(|n| format!("#{}", n).len())
         .max()
-        .unwrap_or(7)
-        .min(24);
-    let section_width = displayed
-        .iter()
-        .filter_map(|entry| entry.section.as_ref())
-        .map(|section| section.len())
-        .max()
-        .unwrap_or(7)
-        .min(18);
+        .unwrap_or(1)
+        .max(1);
 
     for entry in displayed {
         println!(
             "{} {}",
             "  •".bright_black(),
-            format_changelog_find_item(entry, release_width, section_width)
+            format_commit_find_item(entry, pr_width)
         );
     }
 }
 
-fn print_changelog_find_selection(entry: &ChangelogFindEntry) {
-    println!(
-        "{}",
-        format!(
-            "Release {}{}",
-            entry.release,
-            entry
-                .section
-                .as_ref()
-                .map(|section| format!(" · {}", colorize_changelog_section(section)))
-                .unwrap_or_default()
-        )
-        .bright_white()
-        .bold()
-    );
-    println!("{}", entry.text.bright_white());
+fn print_changelog_find_selection(entry: &CommitEntry) {
+    println!("{}", entry.short_hash.bright_yellow().bold());
+    println!("{}", entry.message.bright_white());
+    println!("{}", format!("Author: {}", entry.author).cyan().dimmed());
+    if let Some(pr_number) = entry.pr_number {
+        println!("{}", format!("PR: #{}", pr_number).bright_magenta());
+    }
 }
 
-fn format_changelog_find_item(
-    entry: &ChangelogFindEntry,
-    release_width: usize,
-    section_width: usize,
-) -> String {
-    let section = entry.section.as_deref().unwrap_or("");
-    let release = format!("{:<release_width$}", entry.release)
-        .bright_green()
-        .bold();
-    let section = format!("{:<section_width$}", section);
-    let section = if section.trim().is_empty() {
-        section.bright_black()
+fn format_commit_find_item(entry: &CommitEntry, pr_width: usize) -> String {
+    let pr_col = if let Some(n) = entry.pr_number {
+        let raw = format!("{:<width$}", format!("#{}", n), width = pr_width);
+        raw.bright_magenta().to_string()
     } else {
-        colorize_changelog_section(&section)
+        " ".repeat(pr_width).dimmed().to_string()
     };
-    format!("{}  {}  {}", release, section, entry.text.bright_white())
-}
+    let clean_message = remove_pr_suffix(&entry.message);
 
-fn format_changelog_find_picker_item(
-    entry: &ChangelogFindEntry,
-    release_width: usize,
-    section_width: usize,
-) -> String {
     format!(
-        "{:<release_width$}  {:<section_width$}  {}",
-        entry.release,
-        entry.section.as_deref().unwrap_or(""),
-        entry.text
+        "{} {} {} {}",
+        entry.short_hash.bright_yellow(),
+        pr_col,
+        clean_message.bright_white(),
+        format!("(@{})", entry.author).cyan().dimmed()
     )
 }
 
-fn colorize_changelog_section(section: &str) -> colored::ColoredString {
-    match section.trim() {
-        "Added" => section.bright_green().bold(),
-        "Fixed" => section.bright_yellow().bold(),
-        "Changed" => section.bright_cyan().bold(),
-        "Removed" => section.bright_red().bold(),
-        "Documentation" => section.bright_blue().bold(),
-        _ => section.bright_magenta().bold(),
-    }
+fn format_commit_find_picker_item(entry: &CommitEntry, pr_width: usize) -> String {
+    let pr_col = entry
+        .pr_number
+        .map(|n| format!("#{}", n))
+        .unwrap_or_default();
+    let clean_message = remove_pr_suffix(&entry.message);
+
+    format!(
+        "{} {:<pr_width$} {} (@{})",
+        entry.short_hash, pr_col, clean_message, entry.author
+    )
 }
 
 /// Parse git log output into CommitEntry structs
@@ -679,19 +630,6 @@ fn remove_pr_suffix(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static COLORED_OVERRIDE_LOCK: Mutex<()> = Mutex::new(());
-
-    fn with_colored_override<T>(enabled: bool, f: impl FnOnce() -> T) -> T {
-        let _guard = COLORED_OVERRIDE_LOCK
-            .lock()
-            .expect("colored override lock poisoned");
-        colored::control::set_override(enabled);
-        let result = f();
-        colored::control::unset_override();
-        result
-    }
 
     #[test]
     fn test_parse_commits_basic() {
@@ -800,50 +738,6 @@ mod tests {
 
         let json = serde_json::to_string_pretty(&output).unwrap();
         assert!(json.contains("\"resolved_from\": \"v2.0.0\""));
-    }
-
-    #[test]
-    fn test_format_changelog_find_item_is_colored_when_colors_are_enabled() {
-        let entry = ChangelogFindEntry {
-            release: "1.2.3".to_string(),
-            section: Some("Fixed".to_string()),
-            text: "Fix colorful changelog search rows".to_string(),
-            line: 42,
-        };
-
-        let row = with_colored_override(true, || format_changelog_find_item(&entry, 5, 5));
-
-        assert!(
-            row.contains("\u{1b}["),
-            "row should include ANSI color: {row:?}"
-        );
-        assert!(row.contains("1.2.3"), "row: {row}");
-        assert!(row.contains("Fixed"), "row: {row}");
-        assert!(
-            row.contains("Fix colorful changelog search rows"),
-            "row: {row}"
-        );
-    }
-
-    #[test]
-    fn test_format_changelog_find_picker_item_stays_plain_when_colors_are_enabled() {
-        let entry = ChangelogFindEntry {
-            release: "1.2.3".to_string(),
-            section: Some("Fixed".to_string()),
-            text: "Fix interactive changelog picker rendering".to_string(),
-            line: 42,
-        };
-
-        let row = with_colored_override(true, || format_changelog_find_picker_item(&entry, 5, 5));
-
-        assert!(
-            !row.contains("\u{1b}["),
-            "picker row should not include ANSI color: {row:?}"
-        );
-        assert_eq!(
-            row,
-            "1.2.3  Fixed  Fix interactive changelog picker rendering"
-        );
     }
 
     #[test]

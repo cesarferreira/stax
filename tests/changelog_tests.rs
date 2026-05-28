@@ -138,62 +138,104 @@ fn test_changelog_json_explicit_from_no_resolved() {
 }
 
 #[test]
-fn test_changelog_find_query_shows_release_context() {
+fn test_changelog_find_query_searches_commits_without_changelog() {
     let repo = TestRepo::new();
 
-    repo.create_file(
-        "CHANGELOG.md",
-        r#"# Changelog
-
-## [0.3.0] - 2026-05-18
-
-### Added
-- Add release picker rows for changelog entries
-
-## [0.2.0] - 2026-05-17
-
-### Fixed
-- Keep auth tokens fresh during submit
-"#,
-    );
+    repo.git(&["tag", "v1.0.0"]);
+    repo.create_file("auth.txt", "tokens");
+    repo.commit("fix: keep auth tokens fresh during submit");
+    repo.create_file("picker.txt", "release picker");
+    repo.commit("feat: add release picker rows");
 
     let output = repo.run_stax(&["changelog", "--find", "auth fresh"]);
     output.assert_success();
 
     let stdout = TestRepo::stdout(&output);
-    assert!(stdout.contains("0.2.0"), "stdout:\n{}", stdout);
-    assert!(stdout.contains("Fixed"), "stdout:\n{}", stdout);
     assert!(
-        stdout.contains("Keep auth tokens fresh during submit"),
+        stdout.contains("fix: keep auth tokens fresh during submit"),
         "stdout:\n{}",
         stdout
     );
-    assert!(!stdout.contains("0.3.0"), "stdout:\n{}", stdout);
+    assert!(
+        !stdout.contains("feat: add release picker rows"),
+        "stdout:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_changelog_find_query_respects_path_filter() {
+    let repo = TestRepo::new();
+
+    repo.git(&["tag", "v1.0.0"]);
+    repo.create_file("apps/android/auth.txt", "tokens");
+    repo.commit("fix: keep android auth fresh");
+    repo.create_file("apps/ios/auth.txt", "tokens");
+    repo.commit("fix: keep ios auth fresh");
+
+    let output = repo.run_stax(&["changelog", "find", "auth fresh", "--path", "apps/android"]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("fix: keep android auth fresh"),
+        "stdout:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("fix: keep ios auth fresh"),
+        "stdout:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Filtered to: apps/android"),
+        "stdout:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_changelog_find_flag_form_accepts_explicit_refs() {
+    let repo = TestRepo::new();
+
+    repo.git(&["tag", "v1.0.0"]);
+    repo.create_file("old.txt", "old");
+    repo.commit("fix: old auth behavior");
+    repo.git(&["tag", "v1.1.0"]);
+    repo.create_file("new.txt", "new");
+    repo.commit("fix: new auth behavior");
+
+    let output = repo.run_stax(&["changelog", "v1.1.0", "HEAD", "--find", "auth"]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("fix: new auth behavior"),
+        "stdout:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("fix: old auth behavior"),
+        "stdout:\n{}",
+        stdout
+    );
+    assert!(stdout.contains("Range: v1.1.0"), "stdout:\n{}", stdout);
 }
 
 #[test]
 fn test_changelog_find_query_accepts_separator_form() {
     let repo = TestRepo::new();
 
-    repo.create_file(
-        "CHANGELOG.md",
-        r#"# Changelog
-
-## [0.4.0] - 2026-05-18
-
-### Fixed
-- Fix release search when cargo run passes a command separator
-"#,
-    );
+    repo.git(&["tag", "v1.0.0"]);
+    repo.create_file("separator.txt", "separator");
+    repo.commit("fix: support separator form in changelog find");
 
     let output = repo.run_stax(&["changelog", "--", "--find", "separator"]);
     output.assert_success();
 
     let stdout = TestRepo::stdout(&output);
-    assert!(stdout.contains("0.4.0"), "stdout:\n{}", stdout);
-    assert!(stdout.contains("Fixed"), "stdout:\n{}", stdout);
     assert!(
-        stdout.contains("Fix release search when cargo run passes a command separator"),
+        stdout.contains("fix: support separator form in changelog find"),
         "stdout:\n{}",
         stdout
     );
@@ -203,25 +245,16 @@ fn test_changelog_find_query_accepts_separator_form() {
 fn test_changelog_find_query_accepts_find_alias() {
     let repo = TestRepo::new();
 
-    repo.create_file(
-        "CHANGELOG.md",
-        r#"# Changelog
-
-## [0.5.0] - 2026-05-18
-
-### Fixed
-- Find changelog entries with a discoverable command form
-"#,
-    );
+    repo.git(&["tag", "v1.0.0"]);
+    repo.create_file("discoverable.txt", "discoverable");
+    repo.commit("fix: find changelog commits with a discoverable command form");
 
     let output = repo.run_stax(&["changelog", "find", "discoverable"]);
     output.assert_success();
 
     let stdout = TestRepo::stdout(&output);
-    assert!(stdout.contains("0.5.0"), "stdout:\n{}", stdout);
-    assert!(stdout.contains("Fixed"), "stdout:\n{}", stdout);
     assert!(
-        stdout.contains("Find changelog entries with a discoverable command form"),
+        stdout.contains("fix: find changelog commits with a discoverable command form"),
         "stdout:\n{}",
         stdout
     );
@@ -231,16 +264,9 @@ fn test_changelog_find_query_accepts_find_alias() {
 fn test_changelog_find_query_supports_json() {
     let repo = TestRepo::new();
 
-    repo.create_file(
-        "CHANGELOG.md",
-        r#"# Changelog
-
-## [1.0.0] - 2026-05-18
-
-### Added
-- Search release notes from the changelog command
-"#,
-    );
+    repo.git(&["tag", "v1.0.0"]);
+    repo.create_file("release-notes.txt", "release notes");
+    repo.commit("feat: search release notes from the changelog command");
 
     let output = repo.run_stax(&["changelog", "--find", "release notes", "--json"]);
     output.assert_success();
@@ -249,11 +275,12 @@ fn test_changelog_find_query_supports_json() {
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
 
     assert_eq!(json["query"], "release notes");
-    assert_eq!(json["matches"][0]["release"], "1.0.0");
-    assert_eq!(json["matches"][0]["section"], "Added");
+    assert_eq!(json["from"], "v1.0.0");
+    assert_eq!(json["to"], "HEAD");
+    assert_eq!(json["match_count"], 1);
     assert_eq!(
-        json["matches"][0]["text"],
-        "Search release notes from the changelog command"
+        json["matches"][0]["message"],
+        "feat: search release notes from the changelog command"
     );
 }
 
@@ -261,16 +288,9 @@ fn test_changelog_find_query_supports_json() {
 fn test_changelog_find_without_query_requires_terminal() {
     let repo = TestRepo::new();
 
-    repo.create_file(
-        "CHANGELOG.md",
-        r#"# Changelog
-
-## [1.0.0] - 2026-05-18
-
-### Added
-- Search release notes from the changelog command
-"#,
-    );
+    repo.git(&["tag", "v1.0.0"]);
+    repo.create_file("release-notes.txt", "release notes");
+    repo.commit("feat: search release notes from the changelog command");
 
     let output = repo.run_stax(&["changelog", "--find"]);
     output.assert_failure();

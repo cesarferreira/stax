@@ -66,7 +66,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st standup` | Summarize recent activity (`--ai` for AI version, `--ai --style slack` for Slack-ready bullets) |
 | `st pr` / `st pr body` / `st pr list` | Open current PR in browser · view/edit PR body · list open PRs |
 | `st issue list` | List open issues |
-| `st changelog` | Generate changelog between refs or fuzzy-find `CHANGELOG.md` entries with `find` / `--find` |
+| `st changelog` | Generate changelog between refs or fuzzy-find commits with `find` / `--find` |
 | `st open` | Open the repository in the browser |
 | `st run <cmd>` | Run a command on each branch in the stack (alias: `st test <cmd>`) |
 | `st doctor` / `st doctor --fix` | Check repo/config health; `--fix` applies safe local repairs after one confirmation |

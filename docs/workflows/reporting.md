@@ -104,17 +104,16 @@ st changelog                   # auto-detect last tag → HEAD
 st changelog v1.0.0            # explicit from ref → HEAD
 st changelog v1.0.0 v2.0.0     # between two refs
 st changelog abc123 def456     # between two commits
-st changelog find              # fuzzy-find CHANGELOG.md entries interactively
-st changelog find "auth fix"   # fuzzy-find entries and show their release
+st changelog find              # fuzzy-find commits interactively
+st changelog find "auth fix"   # fuzzy-find commits in the default range
 st changelog --find "auth fix" # flag form for scripts
 ```
 
 PR numbers are extracted from squash-merge commit messages like `(#123)`.
 
-`find` / `--find` searches `CHANGELOG.md` instead of git history. Each result starts
-with the release and section that contain the matching entry, so you can tell
-which released version included the change. Add `--json` with a query for
-scriptable output.
+`find` / `--find` searches commit messages in the same range used by `st changelog`.
+Use positional refs with the flag form, for example `st changelog v1.0.0 HEAD --find "auth fix"`.
+Add `--json` with a query for scriptable output.
 
 ### Monorepo tag prefix
 
@@ -130,6 +129,7 @@ st changelog --tag-prefix release/android --json
 ```bash
 st changelog v1.0.0 --path apps/frontend
 st changelog v1.0.0 --path packages/shared-utils
+st changelog find "auth fix" --path apps/frontend
 ```
 
 ### JSON output

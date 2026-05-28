@@ -975,13 +975,13 @@ enum Commands {
         no_template: bool,
     },
 
-    /// Generate changelog between refs or fuzzy-find CHANGELOG.md entries with `find [query]`
+    /// Generate changelog between refs or fuzzy-find commits with `find [query]`
     Changelog {
-        /// Starting ref (tag, branch, or commit). Defaults to last tag if omitted. Use `find [query]` to fuzzy-find CHANGELOG.md.
+        /// Starting ref (tag, branch, or commit). Defaults to last tag if omitted. Use `find [query]` to fuzzy-find commits.
         from: Option<String>,
         /// Ending ref (defaults to HEAD)
         to: Option<String>,
-        /// Fuzzy-find entries in CHANGELOG.md. Omit QUERY to open an interactive picker.
+        /// Fuzzy-find commits in the selected range. Omit QUERY to open an interactive picker.
         #[arg(long, alias = "search", value_name = "QUERY", num_args = 0..=1)]
         find: Option<Option<String>>,
         /// Only consider tags matching this prefix when auto-resolving (e.g. release/ios)

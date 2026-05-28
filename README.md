@@ -364,8 +364,8 @@ AI and editor integration guides:
 Shared skill/instruction file used across agents: [skills.md](skills.md)
 
 `st changelog` can generate notes between refs, and `st changelog find [query]`
-or `st changelog --find [query]` fuzzy-finds entries in `CHANGELOG.md` while
-showing the release and section that contain each match.
+or `st changelog --find [query]` fuzzy-finds commits in the selected range.
+Use `--path` to scope either mode to a subdirectory.
 
 <a id="windows-notes"></a>
 <details>
