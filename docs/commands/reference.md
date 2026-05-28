@@ -120,8 +120,8 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st copy` · `st copy --pr` | Copy branch name · PR URL |
 | `st standup` | Recent activity (`--ai` for AI spoken version; `--jit` for Jira context) |
 | `st changelog [from] [to]` | Generate changelog (auto-resolves last tag when `from` omitted) |
-| `st changelog find [query]` | Fuzzy-find CHANGELOG.md entries with release context |
-| `st changelog --find [query]` | Flag form of changelog fuzzy-find |
+| `st changelog find [query]` | Fuzzy-find commits in the selected changelog range |
+| `st changelog --find [query]` | Flag form of commit fuzzy-find |
 | `st generate` · `st gen` | AI generation: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
 | `st ss --ai` | Submit with AI-generated PR title/body suggestions |
 
@@ -298,7 +298,7 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 
 - `--tag-prefix release/ios`
 - `--path src/`
-- `find [query]` / `search [query]` — fuzzy-find entries in `CHANGELOG.md`; omit `query` for an interactive picker.
+- `find [query]` / `search [query]` — fuzzy-find commits in the selected range; omit `query` for an interactive picker.
 - `--find [query]` / `--search [query]` — flag form of the same fuzzy finder.
 - `--json`
 
