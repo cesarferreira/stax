@@ -1,90 +1,89 @@
-use crate::{commands, config::Config, errors::ConflictStopped, git::GitRepo, tui, update};
-use anyhow::Result;
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use std::{io::IsTerminal, path::PathBuf, time::Duration};
+use crate::commands;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
-const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
+pub(crate) const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
 
 #[derive(Parser)]
 #[command(name = "stax")]
 #[command(version)]
 #[command(about = "Fast stacked Git branches and PRs", long_about = None)]
-struct Cli {
+pub(crate) struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
+    pub(crate) command: Option<Commands>,
 }
 
 #[derive(Args, Clone)]
-struct SubmitOptions {
+pub(crate) struct SubmitOptions {
     /// Create new PRs as drafts; convert existing PRs to draft
     #[arg(short, long, conflicts_with = "publish")]
-    draft: bool,
+    pub(crate) draft: bool,
     /// Create new PRs as published; convert existing draft PRs to published
     #[arg(long, conflicts_with = "draft")]
-    publish: bool,
+    pub(crate) publish: bool,
     /// Only push, don't create/update PRs
     #[arg(long)]
-    no_pr: bool,
+    pub(crate) no_pr: bool,
     /// Skip git fetch and use cached remote-tracking refs
     #[arg(long = "no-fetch", action = clap::ArgAction::SetTrue)]
-    no_fetch: bool,
+    pub(crate) no_fetch: bool,
     /// Skip pre-push hooks when pushing branches
     #[arg(long = "no-verify", short = 'n')]
-    no_verify: bool,
+    pub(crate) no_verify: bool,
     /// Deprecated: kept for CLI compatibility (currently a no-op)
     #[arg(long, hide = true)]
-    force: bool,
+    pub(crate) force: bool,
     /// Auto-approve prompts
     #[arg(long)]
-    yes: bool,
+    pub(crate) yes: bool,
     /// Disable interactive prompts (use defaults)
     #[arg(long)]
-    no_prompt: bool,
+    pub(crate) no_prompt: bool,
     /// Assign reviewers (comma-separated or repeat)
     #[arg(long, value_delimiter = ',')]
-    reviewers: Vec<String>,
+    pub(crate) reviewers: Vec<String>,
     /// Add labels (comma-separated or repeat)
     #[arg(long, value_delimiter = ',')]
-    labels: Vec<String>,
+    pub(crate) labels: Vec<String>,
     /// Assign users (comma-separated or repeat)
     #[arg(long, value_delimiter = ',')]
-    assignees: Vec<String>,
+    pub(crate) assignees: Vec<String>,
     /// Suppress extra output
     #[arg(long)]
-    quiet: bool,
+    pub(crate) quiet: bool,
     /// Open the current branch PR in browser after submit
     #[arg(long, conflicts_with = "no_pr")]
-    open: bool,
+    pub(crate) open: bool,
     /// Show detailed output
     #[arg(short, long)]
-    verbose: bool,
+    pub(crate) verbose: bool,
     /// Specify template by name (skip picker)
     #[arg(long)]
-    template: Option<String>,
+    pub(crate) template: Option<String>,
     /// Skip template selection (no template)
     #[arg(long)]
-    no_template: bool,
+    pub(crate) no_template: bool,
     /// Always open editor for PR body
     #[arg(long)]
-    edit: bool,
+    pub(crate) edit: bool,
     /// Generate PR title and body using AI
     #[arg(long)]
-    ai: bool,
+    pub(crate) ai: bool,
     /// With --ai, generate/update PR title only
     #[arg(long, requires = "ai")]
-    title: bool,
+    pub(crate) title: bool,
     /// With --ai, generate/update PR body only
     #[arg(long, requires = "ai")]
-    body: bool,
+    pub(crate) body: bool,
     /// Re-request review from existing reviewers when updating PRs
     #[arg(long)]
-    rerequest_review: bool,
+    pub(crate) rerequest_review: bool,
     /// Squash all commits on each branch into one before pushing
     #[arg(long)]
-    squash: bool,
+    pub(crate) squash: bool,
     /// Update existing PR titles when the tip commit subject has changed
     #[arg(long)]
-    update_title: bool,
+    pub(crate) update_title: bool,
 }
 
 impl From<SubmitOptions> for commands::submit::SubmitOptions {
@@ -119,7 +118,7 @@ impl From<SubmitOptions> for commands::submit::SubmitOptions {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-enum RestackSubmitAfter {
+pub(crate) enum RestackSubmitAfter {
     Ask,
     Yes,
     No,
@@ -136,7 +135,7 @@ impl From<RestackSubmitAfter> for commands::restack::SubmitAfterRestack {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-enum StandupSummaryStyle {
+pub(crate) enum StandupSummaryStyle {
     Spoken,
     Slack,
 }
@@ -151,61 +150,61 @@ impl From<StandupSummaryStyle> for commands::standup::SummaryStyle {
 }
 
 #[derive(Args, Clone, Default)]
-struct WorktreeLaunchArgs {
+pub(crate) struct WorktreeLaunchArgs {
     /// Launch an AI agent after entering the worktree
     #[arg(long)]
-    agent: Option<String>,
+    pub(crate) agent: Option<String>,
     /// Model override for the selected AI agent
     #[arg(long, requires = "agent")]
-    model: Option<String>,
+    pub(crate) model: Option<String>,
     /// Run an arbitrary shell command after entering the worktree
     #[arg(long, conflicts_with = "agent")]
-    run: Option<String>,
+    pub(crate) run: Option<String>,
     /// Create or attach to a tmux session for this worktree
     #[arg(long)]
-    tmux: bool,
+    pub(crate) tmux: bool,
     /// Override the tmux session name (defaults to the worktree name)
     #[arg(long, requires = "tmux")]
-    tmux_session: Option<String>,
+    pub(crate) tmux_session: Option<String>,
     /// Auto-accept agent permission prompts (claude: --dangerously-skip-permissions,
     /// codex: --dangerously-bypass-approvals-and-sandbox, opencode: --dangerously-skip-permissions,
     /// gemini: --yolo). Use with care.
     #[arg(long, requires = "agent")]
-    yolo: bool,
+    pub(crate) yolo: bool,
     /// Pass an extra argument to the launched agent (repeatable)
     #[arg(long = "agent-arg", requires = "agent")]
-    agent_arg: Vec<String>,
+    pub(crate) agent_arg: Vec<String>,
     /// Arguments passed through to the launched agent or command (after `--`)
     #[arg(last = true)]
-    args: Vec<String>,
+    pub(crate) args: Vec<String>,
 }
 
 #[derive(Args, Clone, Default)]
-struct AiLaneArgs {
+pub(crate) struct AiLaneArgs {
     /// AI agent override (claude, codex, gemini, opencode)
     #[arg(long)]
-    agent: Option<String>,
+    pub(crate) agent: Option<String>,
     /// Model override for the selected AI agent
     #[arg(long, requires = "agent")]
-    model: Option<String>,
+    pub(crate) model: Option<String>,
     /// Launch directly in the terminal instead of tmux
     #[arg(long)]
-    no_tmux: bool,
+    pub(crate) no_tmux: bool,
     /// Override the tmux session name (defaults to the lane name)
     #[arg(long, conflicts_with = "no_tmux")]
-    tmux_session: Option<String>,
+    pub(crate) tmux_session: Option<String>,
     /// Auto-accept agent permission prompts (claude: --dangerously-skip-permissions,
     /// codex: --dangerously-bypass-approvals-and-sandbox, opencode: --dangerously-skip-permissions,
     /// gemini: --yolo). Use with care.
     #[arg(long)]
-    yolo: bool,
+    pub(crate) yolo: bool,
     /// Pass an extra argument to the launched agent (repeatable)
     #[arg(long = "agent-arg")]
-    agent_arg: Vec<String>,
+    pub(crate) agent_arg: Vec<String>,
 }
 
 #[derive(Subcommand)]
-enum Commands {
+pub(crate) enum Commands {
     /// Show all stacks (simple tree view)
     #[command(visible_alias = "ls")]
     Status {
@@ -1221,19 +1220,19 @@ enum Commands {
 }
 
 #[derive(Subcommand, Clone)]
-enum AuthSubcommand {
+pub(crate) enum AuthSubcommand {
     /// Show which auth source is currently active
     Status,
 }
 
 #[derive(Subcommand, Clone)]
-enum CliSubcommand {
+pub(crate) enum CliSubcommand {
     /// Upgrade stax using the current installation method
     Upgrade,
 }
 
 #[derive(Subcommand)]
-enum StackCommands {
+pub(crate) enum StackCommands {
     /// Submit stack - push branches and create/update PRs
     #[command(visible_alias = "s")]
     Submit {
@@ -1272,7 +1271,7 @@ enum StackCommands {
 }
 
 #[derive(Subcommand)]
-enum BranchCommands {
+pub(crate) enum BranchCommands {
     /// Create a new branch stacked on current
     #[command(visible_alias = "c")]
     Create {
@@ -1434,7 +1433,7 @@ enum BranchCommands {
 }
 
 #[derive(Subcommand)]
-enum UpstackCommands {
+pub(crate) enum UpstackCommands {
     /// Restack all branches above current
     Restack {
         /// Auto-stash and auto-pop dirty target worktrees during restack operations
@@ -1462,7 +1461,7 @@ enum UpstackCommands {
 }
 
 #[derive(Subcommand)]
-enum DownstackCommands {
+pub(crate) enum DownstackCommands {
     /// Show branches below current
     Get,
 
@@ -1474,7 +1473,7 @@ enum DownstackCommands {
 }
 
 #[derive(Subcommand)]
-enum SkillsCommands {
+pub(crate) enum SkillsCommands {
     /// List installed AI agent skill files and their version status
     List,
 
@@ -1487,7 +1486,7 @@ enum SkillsCommands {
 }
 
 #[derive(Subcommand)]
-enum WorktreeCommands {
+pub(crate) enum WorktreeCommands {
     /// Create or enter a worktree lane
     #[command(visible_alias = "c")]
     Create {
@@ -1577,7 +1576,7 @@ enum WorktreeCommands {
 }
 
 #[derive(Subcommand, Clone)]
-enum PrCommands {
+pub(crate) enum PrCommands {
     /// Open the current branch PR in the browser
     Open,
 
@@ -1600,7 +1599,7 @@ enum PrCommands {
 }
 
 #[derive(Subcommand, Clone)]
-enum IssueCommands {
+pub(crate) enum IssueCommands {
     /// List open issues in the current repository
     List {
         /// Maximum number of issues to return (max: 100)
@@ -1612,850 +1611,8 @@ enum IssueCommands {
     },
 }
 
-fn run_submit(submit: SubmitOptions, scope: commands::submit::SubmitScope) -> Result<()> {
-    commands::submit::run(scope, submit.into())
-}
-
-fn print_subcommand_help(name: &str) -> Result<()> {
-    let mut cmd = Cli::command();
-    let subcommand = cmd
-        .find_subcommand_mut(name)
-        .ok_or_else(|| anyhow::anyhow!("Unknown subcommand '{}'", name))?;
-    subcommand.print_help()?;
-    println!();
-    Ok(())
-}
-
-pub fn run() -> Result<()> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    // Spawn update check immediately so it runs in parallel with command work.
-    // The handle joins the thread on drop, ensuring the cache write completes before exit.
-    let _update_handle = update::check_in_background();
-
-    let cli = Cli::parse();
-
-    if let Some(Commands::Setup {
-        print,
-        refresh,
-        skip_skills,
-        install_skills,
-        skip_auth,
-        auth_from_gh,
-        yes,
-    }) = &cli.command
-    {
-        let skill_install_mode = if *install_skills {
-            commands::shell_setup::SkillInstallMode::Install
-        } else if *skip_skills {
-            commands::shell_setup::SkillInstallMode::Skip
-        } else {
-            commands::shell_setup::SkillInstallMode::Ask
-        };
-        let auth_setup_mode = if *auth_from_gh {
-            commands::shell_setup::AuthSetupMode::ImportFromGh
-        } else if *skip_auth {
-            commands::shell_setup::AuthSetupMode::Skip
-        } else {
-            commands::shell_setup::AuthSetupMode::Ask
-        };
-        let setup_options = commands::shell_setup::SetupOptions {
-            auto_accept: *yes,
-            skill_install_mode,
-            auth_setup_mode,
-        };
-        let result = commands::shell_setup::run(*print, *refresh, setup_options);
-        update::show_update_notification();
-        return result;
-    }
-
-    // Ensure config exists (creates default on first run)
-    let _ = Config::ensure_exists();
-    let _ = commands::shell_setup::refresh_installed_snippets();
-
-    let (stdin_is_terminal, stdout_is_terminal) = detect_interactive_stdio();
-
-    // Bare `st`/`stax` should only enter the TUI when both sides are interactive.
-    // In shells or wrappers without a usable TTY, fall back to the regular status view.
-    let command = match cli.command {
-        Some(cmd) => cmd,
-        None => {
-            let interactive_terminal =
-                check_interactive_terminal(stdin_is_terminal, stdout_is_terminal);
-            if interactive_terminal.available {
-                // TUI requires initialized repo
-                commands::init::ensure_initialized()?;
-                let result = tui::run();
-                update::show_update_notification();
-                return result;
-            }
-
-            print_interactive_fallback(
-                interactive_terminal.reason.as_deref(),
-                "dashboard",
-                "falling back to status view",
-            );
-
-            Commands::Status {
-                json: false,
-                stack: None,
-                current: false,
-                compact: false,
-                quiet: false,
-            }
-        }
-    };
-
-    // Commands that don't need repo initialization
-    match &command {
-        Commands::Auth {
-            token,
-            from_gh,
-            command,
-        } => {
-            if command.is_some() && (token.is_some() || *from_gh) {
-                anyhow::bail!("`stax auth status` cannot be combined with --token or --from-gh.");
-            }
-            let result = match command {
-                Some(AuthSubcommand::Status) => commands::auth::status(),
-                None => commands::auth::run(token.clone(), *from_gh),
-            };
-            update::show_update_notification();
-            return result;
-        }
-        Commands::Cli { command } => {
-            let result = match command {
-                CliSubcommand::Upgrade => commands::cli::run_upgrade(),
-            };
-            return result;
-        }
-        Commands::Config {
-            reset_ai,
-            no_prompt,
-            yes,
-            set_ai,
-        } => {
-            let result = commands::config::run(*reset_ai, *no_prompt, *yes, *set_ai);
-            update::show_update_notification();
-            return result;
-        }
-        Commands::Init { trunk } => {
-            let result = commands::init::run(trunk.clone());
-            update::show_update_notification();
-            return result;
-        }
-        Commands::Doctor { fix } => {
-            let result = commands::doctor::run(*fix);
-            update::show_update_notification();
-            return result;
-        }
-        Commands::Skills { command } => {
-            let result = match command {
-                None | Some(SkillsCommands::List) => commands::skills::run_list(),
-                Some(SkillsCommands::Update { dry_run }) => commands::skills::run_update(*dry_run),
-            };
-            update::show_update_notification();
-            return result;
-        }
-        Commands::Demo => {
-            let result = commands::demo::run();
-            update::show_update_notification();
-            return result;
-        }
-        _ => {}
-    }
-
-    // Ensure repo is initialized for all other commands
-    commands::init::ensure_initialized()?;
-
-    // Block commands that do not explicitly support running during an active rebase.
-    if !command.allows_during_rebase() {
-        if let Ok(repo) = GitRepo::open() {
-            if repo.rebase_in_progress().unwrap_or(false) {
-                anyhow::bail!(
-                    "A rebase is in progress. Resolve conflicts and run one of:\n  \
-                     stax resolve\n  stax continue\n  stax abort"
-                );
-            }
-        }
-    }
-
-    let result = match command {
-        Commands::Status {
-            json,
-            stack,
-            current,
-            compact,
-            quiet,
-        } => commands::status::run(json, stack, current, compact, quiet, false),
-        Commands::Ll {
-            json,
-            stack,
-            current,
-            compact,
-            quiet,
-        } => commands::status::run(json, stack, current, compact, quiet, true),
-        Commands::Log {
-            json,
-            stack,
-            current,
-            compact,
-            quiet,
-        } => commands::log::run(json, stack, current, compact, quiet),
-        Commands::Submit { submit } => run_submit(submit, commands::submit::SubmitScope::Stack),
-        Commands::Merge {
-            all,
-            downstack_only,
-            dry_run,
-            method,
-            no_delete,
-            no_wait,
-            timeout,
-            when_ready,
-            remote,
-            queue,
-            interval,
-            no_sync,
-            yes,
-            quiet,
-        } => {
-            let merge_method = method.parse().unwrap_or_default();
-            if queue {
-                commands::merge_queue::run(all, timeout, interval, no_sync, yes, quiet)
-            } else if remote {
-                commands::merge_remote::run(
-                    all,
-                    merge_method,
-                    timeout,
-                    interval,
-                    no_delete,
-                    no_sync,
-                    yes,
-                    quiet,
-                )
-            } else if when_ready {
-                commands::merge_when_ready::run(
-                    all,
-                    downstack_only,
-                    merge_method,
-                    timeout,
-                    interval,
-                    no_delete,
-                    no_sync,
-                    yes,
-                    quiet,
-                )
-            } else {
-                commands::merge::run(
-                    all,
-                    downstack_only,
-                    dry_run,
-                    merge_method,
-                    no_delete,
-                    no_wait,
-                    timeout,
-                    no_sync,
-                    yes,
-                    quiet,
-                )
-            }
-        }
-        Commands::MergeWhenReady {
-            all,
-            downstack_only,
-            method,
-            timeout,
-            interval,
-            no_delete,
-            no_sync,
-            yes,
-            quiet,
-        } => {
-            let merge_method = method.parse().unwrap_or_default();
-            commands::merge_when_ready::run(
-                all,
-                downstack_only,
-                merge_method,
-                timeout,
-                interval,
-                no_delete,
-                no_sync,
-                yes,
-                quiet,
-            )
-        }
-        Commands::Sync {
-            restack,
-            prune,
-            full,
-            no_delete,
-            delete_upstream_gone,
-            force,
-            safe,
-            r#continue,
-            quiet,
-            verbose,
-            auto_stash_pop,
-        } => commands::sync::run(
-            restack,
-            prune,
-            full,
-            !no_delete,
-            delete_upstream_gone,
-            force,
-            safe,
-            r#continue,
-            quiet,
-            verbose,
-            auto_stash_pop,
-            &[],
-        ),
-        Commands::Restack {
-            all,
-            stop_here,
-            r#continue,
-            dry_run,
-            yes,
-            quiet,
-            auto_stash_pop,
-            submit_after,
-        } => commands::restack::run(
-            all,
-            stop_here,
-            r#continue,
-            dry_run,
-            yes,
-            quiet,
-            auto_stash_pop,
-            submit_after.into(),
-        ),
-        Commands::Cascade {
-            no_pr,
-            no_submit,
-            auto_stash_pop,
-        } => commands::cascade::run(no_pr, no_submit, auto_stash_pop),
-        Commands::Update {
-            no_pr,
-            no_submit,
-            force,
-            safe,
-            verbose,
-            yes,
-            no_prompt,
-            auto_stash_pop,
-        } => commands::refresh::run(
-            no_pr,
-            no_submit,
-            force,
-            safe,
-            verbose,
-            yes,
-            no_prompt,
-            auto_stash_pop,
-        ),
-        Commands::Checkout {
-            branch,
-            pr,
-            trunk,
-            parent,
-            child,
-            shell_output,
-        } => commands::checkout::run(branch, pr, trunk, parent, child, shell_output),
-        Commands::Continue => commands::continue_cmd::run_and_resume_restack(),
-        Commands::Resolve {
-            agent,
-            model,
-            max_rounds,
-        } => commands::resolve::run(agent, model, max_rounds),
-        Commands::Abort => commands::abort::run(),
-        Commands::Modify {
-            message,
-            all,
-            quiet,
-            no_verify,
-            restack,
-        } => commands::modify::run(message, all, quiet, no_verify, restack),
-        Commands::Auth { .. } => unreachable!(), // Handled above
-        Commands::Cli { .. } => unreachable!(),  // Handled above
-        Commands::Config { .. } => unreachable!(), // Handled above
-        Commands::Init { .. } => unreachable!(), // Handled above
-        Commands::Diff { stack, all } => commands::diff::run(stack, all),
-        Commands::RangeDiff { stack, all } => commands::range_diff::run(stack, all),
-        Commands::Doctor { .. } => unreachable!(), // Handled above
-        Commands::Skills { .. } => unreachable!(), // Handled above
-        Commands::Trunk { branch } => {
-            if let Some(name) = branch {
-                commands::set_trunk::run(&name)
-            } else {
-                commands::checkout::run(None, None, true, false, None, false)
-            }
-        }
-        Commands::Up { count } => commands::navigate::up(count),
-        Commands::Down { count } => commands::navigate::down(count),
-        Commands::Top => commands::navigate::top(),
-        Commands::Bottom => commands::navigate::bottom(),
-        Commands::Prev => commands::navigate::prev(),
-        Commands::Create {
-            name,
-            all,
-            message,
-            ai,
-            yes,
-            from,
-            prefix,
-            insert,
-            below,
-            no_verify,
-        } => commands::branch::create::run(
-            name, message, from, prefix, all, insert, below, no_verify, ai, yes,
-        ),
-        Commands::Pr { command } => match command.unwrap_or(PrCommands::Open) {
-            PrCommands::Open => commands::pr::run_open(),
-            PrCommands::Body { edit } => commands::pr::run_body(edit),
-            PrCommands::List { limit, json } => commands::pr::run_list(limit, json),
-        },
-        Commands::Issue { command } => match command {
-            Some(IssueCommands::List { limit, json }) => commands::issue::run_list(limit, json),
-            None => print_subcommand_help("issue"),
-        },
-        Commands::Open => commands::open::run(),
-        Commands::Draft { branch } => commands::draft::run(branch, true),
-        Commands::Undraft { branch } => commands::draft::run(branch, false),
-        Commands::Comments { plain } => commands::comments::run(plain),
-        Commands::Ci {
-            all,
-            stack,
-            json,
-            refresh,
-            watch,
-            alert,
-            no_alert,
-            strict,
-            interval,
-            verbose,
-        } => commands::ci::run(
-            all,
-            stack,
-            json,
-            refresh,
-            watch,
-            alert.map(|value| match value {
-                Some(path) => commands::ci::CiAlertSoundArg::Path(path),
-                None => commands::ci::CiAlertSoundArg::DefaultSound,
-            }),
-            no_alert,
-            strict,
-            interval,
-            verbose,
-        ),
-        Commands::Watch { current, interval } => commands::watch::run(current, interval),
-        Commands::Tmux { command } => commands::tmux::run(command),
-        Commands::Split {
-            hunk,
-            file,
-            no_verify,
-        } => commands::split::run(hunk, file, no_verify),
-        Commands::Absorb { dry_run, all } => commands::absorb::run(dry_run, all),
-        Commands::Copy { pr } => {
-            let target = if pr {
-                commands::copy::CopyTarget::Pr
-            } else {
-                commands::copy::CopyTarget::Branch
-            };
-            commands::copy::run(target)
-        }
-        Commands::Detach { branch, yes } => commands::detach::run(branch, yes),
-        Commands::Fold { keep, yes } => commands::branch::fold::run(keep, yes),
-        Commands::Reorder { yes } => commands::reorder::run(yes),
-        Commands::Edit { yes, no_verify } => commands::edit::run(yes, no_verify),
-        Commands::Validate => commands::stack_cmd::run_validate(),
-        Commands::Fix { dry_run, yes } => commands::stack_cmd::run_fix(dry_run, yes),
-        Commands::Run {
-            cmd,
-            all,
-            stack,
-            fail_fast,
-        }
-        | Commands::Test {
-            cmd,
-            all,
-            stack,
-            fail_fast,
-        } => commands::stack_cmd::run_test(cmd, all, stack, fail_fast),
-        Commands::Demo => unreachable!(), // Handled above
-        Commands::Standup {
-            json,
-            all,
-            hours,
-            ai,
-            style,
-            jit,
-            agent,
-            model,
-            plain_text,
-        } => commands::standup::run(
-            json,
-            all,
-            hours,
-            ai,
-            jit,
-            agent,
-            model,
-            plain_text,
-            style.map(Into::into).unwrap_or_default(),
-        ),
-        Commands::Generate {
-            pr_body,
-            pr_title,
-            commit_msg,
-            edit,
-            no_prompt,
-            agent,
-            model,
-            template,
-            no_template,
-        } => commands::generate::run(
-            pr_body,
-            pr_title,
-            commit_msg,
-            edit,
-            no_prompt,
-            agent,
-            model,
-            template,
-            no_template,
-        ),
-        Commands::Changelog {
-            from,
-            to,
-            find,
-            tag_prefix,
-            path,
-            json,
-        } => commands::changelog::run(from, to, find, tag_prefix, path, json),
-        Commands::Rename {
-            name,
-            edit,
-            push,
-            literal,
-        } => commands::branch::rename::run(name, edit, push, literal),
-        Commands::Undo {
-            op_id,
-            yes,
-            no_push,
-            quiet,
-        } => commands::undo::run(op_id, yes, no_push, quiet),
-        Commands::Redo {
-            op_id,
-            yes,
-            no_push,
-            quiet,
-        } => commands::redo::run(op_id, yes, no_push, quiet),
-        Commands::Branch(cmd) => match cmd {
-            BranchCommands::Create {
-                name,
-                all,
-                message,
-                ai,
-                yes,
-                from,
-                prefix,
-                insert,
-                below,
-                no_verify,
-            } => commands::branch::create::run(
-                name, message, from, prefix, all, insert, below, no_verify, ai, yes,
-            ),
-            BranchCommands::Checkout {
-                branch,
-                pr,
-                trunk,
-                parent,
-                child,
-                shell_output,
-            } => commands::checkout::run(branch, pr, trunk, parent, child, shell_output),
-            BranchCommands::Track { parent, all_prs } => {
-                commands::branch::track::run(parent, all_prs)
-            }
-            BranchCommands::Untrack { branch } => commands::branch::untrack::run(branch),
-            BranchCommands::Reparent {
-                branch,
-                parent,
-                restack,
-            } => commands::branch::reparent::run(branch, parent, restack),
-            BranchCommands::Rename {
-                name,
-                edit,
-                push,
-                literal,
-            } => commands::branch::rename::run(name, edit, push, literal),
-            BranchCommands::Delete { branch, force } => {
-                commands::branch::delete::run(branch, force)
-            }
-            BranchCommands::Squash { message, yes } => commands::branch::squash::run(message, yes),
-            BranchCommands::Fold { keep, yes } => commands::branch::fold::run(keep, yes),
-            BranchCommands::Up { count } => commands::navigate::up(count),
-            BranchCommands::Down { count } => commands::navigate::down(count),
-            BranchCommands::Top => commands::navigate::top(),
-            BranchCommands::Bottom => commands::navigate::bottom(),
-            BranchCommands::Submit { submit } => {
-                run_submit(submit, commands::submit::SubmitScope::Branch)
-            }
-        },
-        Commands::Upstack(cmd) => match cmd {
-            UpstackCommands::Restack { auto_stash_pop } => {
-                commands::upstack::restack::run(auto_stash_pop)
-            }
-            UpstackCommands::Onto {
-                target,
-                restack: _,
-                auto_stash_pop,
-            } => commands::upstack::onto::run(target, auto_stash_pop),
-            UpstackCommands::Submit { submit } => {
-                run_submit(submit, commands::submit::SubmitScope::Upstack)
-            }
-        },
-        Commands::Move {
-            target,
-            restack: _,
-            auto_stash_pop,
-        } => commands::upstack::onto::run(target, auto_stash_pop),
-        Commands::Downstack(cmd) => match cmd {
-            DownstackCommands::Get => {
-                commands::status::run(false, None, false, false, false, false)
-            }
-            DownstackCommands::Submit { submit } => {
-                run_submit(submit, commands::submit::SubmitScope::Downstack)
-            }
-        },
-        Commands::Stack(cmd) => match cmd {
-            StackCommands::Submit { submit } => {
-                run_submit(submit, commands::submit::SubmitScope::Stack)
-            }
-            StackCommands::Restack {
-                all,
-                stop_here,
-                r#continue,
-                dry_run,
-                yes,
-                quiet,
-                auto_stash_pop,
-                submit_after,
-            } => commands::restack::run(
-                all,
-                stop_here,
-                r#continue,
-                dry_run,
-                yes,
-                quiet,
-                auto_stash_pop,
-                submit_after.into(),
-            ),
-        },
-        // Hidden shortcuts
-        Commands::Bc {
-            name,
-            all,
-            message,
-            ai,
-            yes,
-            from,
-            prefix,
-            insert,
-            below,
-            no_verify,
-        } => commands::branch::create::run(
-            name, message, from, prefix, all, insert, below, no_verify, ai, yes,
-        ),
-        Commands::Bu { count } => commands::navigate::up(count),
-        Commands::Bd { count } => commands::navigate::down(count),
-        Commands::Bs { submit } => run_submit(submit, commands::submit::SubmitScope::Branch),
-        Commands::Sr {
-            all,
-            stop_here,
-            r#continue,
-            dry_run,
-            yes,
-            quiet,
-            auto_stash_pop,
-            submit_after,
-        } => commands::restack::run(
-            all,
-            stop_here,
-            r#continue,
-            dry_run,
-            yes,
-            quiet,
-            auto_stash_pop,
-            submit_after.into(),
-        ),
-        Commands::Worktree { command } => match command {
-            None => {
-                let interactive_terminal =
-                    check_interactive_terminal(stdin_is_terminal, stdout_is_terminal);
-                if interactive_terminal.available {
-                    commands::init::ensure_initialized()?;
-                    tui::worktree::run()
-                } else {
-                    print_interactive_fallback(
-                        interactive_terminal.reason.as_deref(),
-                        "worktree dashboard",
-                        "showing worktree help",
-                    );
-                    print_worktree_help()
-                }
-            }
-            Some(WorktreeCommands::Create {
-                name,
-                from,
-                pick,
-                worktree_name,
-                no_verify,
-                shell_output,
-                launch,
-            }) => commands::worktree::create::run(
-                name,
-                from,
-                pick,
-                worktree_name,
-                no_verify,
-                shell_output,
-                launch.agent,
-                launch.model,
-                launch.run,
-                launch.tmux,
-                launch.tmux_session,
-                launch.args,
-                launch.yolo,
-                launch.agent_arg,
-            ),
-            Some(WorktreeCommands::List { json }) => commands::worktree::list::run(json),
-            Some(WorktreeCommands::LongList { json }) => commands::worktree::ll::run(json),
-            Some(WorktreeCommands::Go {
-                name,
-                no_verify,
-                shell_output,
-                launch,
-            }) => commands::worktree::go::run_go(
-                name,
-                no_verify,
-                shell_output,
-                launch.agent,
-                launch.model,
-                launch.run,
-                launch.tmux,
-                launch.tmux_session,
-                launch.args,
-                launch.yolo,
-                launch.agent_arg,
-            ),
-            Some(WorktreeCommands::Path { name }) => commands::worktree::go::run_path(&name),
-            Some(WorktreeCommands::Remove {
-                name,
-                force,
-                delete_branch,
-            }) => commands::worktree::remove::run(name, force, delete_branch),
-            Some(WorktreeCommands::Prune) => commands::worktree::prune::run(),
-            Some(WorktreeCommands::Cleanup {
-                force,
-                dry_run,
-                yes,
-            }) => commands::worktree::cleanup::run(force, yes, dry_run),
-            Some(WorktreeCommands::Restack) => commands::worktree::restack::run(),
-        },
-        Commands::Setup { .. } => {
-            unreachable!("setup returns before repo initialization")
-        }
-        Commands::Lane {
-            name,
-            prompt,
-            no_verify,
-            shell_output,
-            ai,
-        } => commands::worktree::ai::run(
-            name,
-            prompt,
-            no_verify,
-            shell_output,
-            ai.agent,
-            ai.model,
-            ai.no_tmux,
-            ai.tmux_session,
-            ai.yolo,
-            ai.agent_arg,
-        ),
-        // Hidden worktree shortcuts
-        Commands::W => commands::worktree::list::run(false),
-        Commands::Wtc {
-            name,
-            from,
-            pick,
-            worktree_name,
-            no_verify,
-            shell_output,
-            launch,
-        } => commands::worktree::create::run(
-            name,
-            from,
-            pick,
-            worktree_name,
-            no_verify,
-            shell_output,
-            launch.agent,
-            launch.model,
-            launch.run,
-            launch.tmux,
-            launch.tmux_session,
-            launch.args,
-            launch.yolo,
-            launch.agent_arg,
-        ),
-        Commands::Wtls => commands::worktree::list::run(false),
-        Commands::Wtll { json } => commands::worktree::ll::run(json),
-        Commands::Wtgo {
-            name,
-            no_verify,
-            shell_output,
-            launch,
-        } => commands::worktree::go::run_go(
-            name,
-            no_verify,
-            shell_output,
-            launch.agent,
-            launch.model,
-            launch.run,
-            launch.tmux,
-            launch.tmux_session,
-            launch.args,
-            launch.yolo,
-            launch.agent_arg,
-        ),
-        Commands::Wtrm {
-            name,
-            force,
-            delete_branch,
-        } => commands::worktree::remove::run(name, force, delete_branch),
-        Commands::Wtprune => commands::worktree::prune::run(),
-        Commands::Wtcleanup {
-            force,
-            dry_run,
-            yes,
-        } => commands::worktree::cleanup::run(force, yes, dry_run),
-        Commands::Wtrs => commands::worktree::restack::run(),
-    };
-
-    // Show update notification from cache (instant — no network request here)
-    update::show_update_notification();
-
-    match result {
-        Ok(()) => Ok(()),
-        Err(e) if e.is::<ConflictStopped>() => std::process::exit(1),
-        Err(e) => Err(e),
-    }
-}
-
 impl Commands {
-    fn policy(&self) -> CommandPolicy {
+    pub(crate) fn policy(&self) -> CommandPolicy {
         match self {
             Commands::Continue | Commands::Resolve { .. } | Commands::Abort => {
                 CommandPolicy::RebaseControl
@@ -2471,517 +1628,14 @@ impl Commands {
         }
     }
 
-    fn allows_during_rebase(&self) -> bool {
+    pub(crate) fn allows_during_rebase(&self) -> bool {
         !matches!(self.policy(), CommandPolicy::RequiresCleanRepoState)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CommandPolicy {
+pub(crate) enum CommandPolicy {
     RebaseControl,
     RebaseSafe,
     RequiresCleanRepoState,
-}
-
-fn detect_interactive_stdio() -> (bool, bool) {
-    #[cfg(debug_assertions)]
-    if std::env::var_os("STAX_TEST_FORCE_INTERACTIVE_TERMINAL").is_some() {
-        // Integration tests use this to drive the interactive fallback path without a real PTY.
-        return (true, true);
-    }
-
-    (
-        std::io::stdin().is_terminal(),
-        std::io::stdout().is_terminal(),
-    )
-}
-
-fn has_interactive_terminal(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
-    stdin_is_terminal && stdout_is_terminal
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct InteractiveTerminalCheck {
-    available: bool,
-    reason: Option<String>,
-}
-
-fn check_interactive_terminal(
-    stdin_is_terminal: bool,
-    stdout_is_terminal: bool,
-) -> InteractiveTerminalCheck {
-    check_interactive_terminal_with_probe(stdin_is_terminal, stdout_is_terminal, || {
-        #[cfg(debug_assertions)]
-        if let Ok(reason) = std::env::var("STAX_TEST_FORCE_INPUT_READER_FAILURE") {
-            // Integration tests use this to exercise the interactive fallback path deterministically.
-            return Err(reason);
-        }
-
-        crossterm::event::poll(Duration::from_millis(0))
-            .map(|_| ())
-            .map_err(|err| err.to_string())
-    })
-}
-
-fn check_interactive_terminal_with_probe<F>(
-    stdin_is_terminal: bool,
-    stdout_is_terminal: bool,
-    probe_input_reader: F,
-) -> InteractiveTerminalCheck
-where
-    F: FnOnce() -> std::result::Result<(), String>,
-{
-    if !has_interactive_terminal(stdin_is_terminal, stdout_is_terminal) {
-        return InteractiveTerminalCheck {
-            available: false,
-            reason: None,
-        };
-    }
-
-    match probe_input_reader() {
-        Ok(()) => InteractiveTerminalCheck {
-            available: true,
-            reason: None,
-        },
-        Err(reason) => InteractiveTerminalCheck {
-            available: false,
-            reason: Some(reason),
-        },
-    }
-}
-
-fn print_interactive_fallback(reason: Option<&str>, dashboard: &str, fallback: &str) {
-    if let Some(reason) = reason {
-        eprintln!(
-            "stax: interactive {} unavailable ({}); {}.",
-            dashboard, reason, fallback
-        );
-    }
-}
-
-fn print_worktree_help() -> Result<()> {
-    let mut command = Cli::command();
-    if let Some(worktree) = command.find_subcommand_mut("worktree") {
-        worktree.print_help()?;
-        println!();
-        return Ok(());
-    }
-
-    anyhow::bail!("Failed to load worktree help");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        check_interactive_terminal_with_probe, detect_interactive_stdio, has_interactive_terminal,
-        Cli, CliSubcommand, CommandPolicy, Commands, InteractiveTerminalCheck, RestackSubmitAfter,
-        StackCommands, WorktreeCommands,
-    };
-    use clap::Parser;
-    use std::cell::Cell;
-
-    fn try_parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
-        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        std::thread::Builder::new()
-            .name("cli-parse".into())
-            .stack_size(8 * 1024 * 1024)
-            .spawn(move || Cli::try_parse_from(args))
-            .expect("spawn parse thread")
-            .join()
-            .expect("join parse thread")
-    }
-
-    fn parse_cli(args: &[&str]) -> Cli {
-        try_parse_cli(args).expect("parse CLI")
-    }
-
-    #[test]
-    fn interactive_terminal_requires_both_stdio_streams() {
-        assert!(has_interactive_terminal(true, true));
-        assert!(!has_interactive_terminal(true, false));
-        assert!(!has_interactive_terminal(false, true));
-        assert!(!has_interactive_terminal(false, false));
-    }
-
-    #[test]
-    fn interactive_stdio_can_be_forced_for_tests() {
-        #[cfg(debug_assertions)]
-        {
-            std::env::set_var("STAX_TEST_FORCE_INTERACTIVE_TERMINAL", "1");
-            assert_eq!(detect_interactive_stdio(), (true, true));
-            std::env::remove_var("STAX_TEST_FORCE_INTERACTIVE_TERMINAL");
-        }
-    }
-
-    #[test]
-    fn interactive_dashboard_skips_probe_without_a_tty() {
-        let probe_called = Cell::new(false);
-        let check = check_interactive_terminal_with_probe(true, false, || {
-            probe_called.set(true);
-            Ok(())
-        });
-
-        assert_eq!(
-            check,
-            InteractiveTerminalCheck {
-                available: false,
-                reason: None,
-            }
-        );
-        assert!(!probe_called.get());
-    }
-
-    #[test]
-    fn interactive_dashboard_requires_input_reader() {
-        let check =
-            check_interactive_terminal_with_probe(true, true, || Err("reader init failed".into()));
-
-        assert_eq!(
-            check,
-            InteractiveTerminalCheck {
-                available: false,
-                reason: Some("reader init failed".into()),
-            }
-        );
-    }
-
-    #[test]
-    fn interactive_dashboard_launches_when_probe_succeeds() {
-        let check = check_interactive_terminal_with_probe(true, true, || Ok(()));
-
-        assert_eq!(
-            check,
-            InteractiveTerminalCheck {
-                available: true,
-                reason: None,
-            }
-        );
-    }
-
-    #[test]
-    fn bare_worktree_command_parses_without_subcommand() {
-        let cli = parse_cli(&["stax", "wt"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Worktree { command: None })
-        ));
-    }
-
-    #[test]
-    fn explicit_worktree_subcommand_still_parses() {
-        let cli = parse_cli(&["stax", "wt", "ls"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Worktree { command: Some(_) })
-        ));
-    }
-
-    #[test]
-    fn worktree_cleanup_subcommand_parses() {
-        let cli = parse_cli(&["stax", "wt", "cleanup", "--force", "--dry-run", "--yes"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Worktree {
-                command: Some(WorktreeCommands::Cleanup {
-                    force: true,
-                    dry_run: true,
-                    yes: true
-                })
-            })
-        ));
-    }
-
-    #[test]
-    fn lane_command_parses_without_name_for_picker() {
-        let cli = parse_cli(&["stax", "lane"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Lane {
-                name: None,
-                prompt: None,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn lane_command_parses_explicit_name_and_prompt() {
-        let cli = parse_cli(&["stax", "lane", "review-pass", "fix macOS build"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Lane {
-                name: Some(name),
-                prompt: Some(prompt),
-                ..
-            }) if name == "review-pass" && prompt == "fix macOS build"
-        ));
-    }
-
-    #[test]
-    fn lane_command_accepts_hidden_shell_output_after_prompt() {
-        let cli = parse_cli(&[
-            "stax",
-            "lane",
-            "review-pass",
-            "fix macOS build",
-            "--shell-output",
-        ]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Lane {
-                name: Some(name),
-                prompt: Some(prompt),
-                shell_output: true,
-                ..
-            }) if name == "review-pass" && prompt == "fix macOS build"
-        ));
-    }
-
-    #[test]
-    fn lane_requires_agent_when_model_is_set() {
-        match try_parse_cli(&["stax", "lane", "review-pass", "--model", "gpt-5.4"]) {
-            Ok(_) => panic!("expected clap error"),
-            Err(err) => assert!(err.to_string().contains("--agent")),
-        }
-    }
-
-    #[test]
-    fn restack_defaults_to_not_submitting_after_success() {
-        let cli = parse_cli(&["stax", "restack"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Restack {
-                stop_here: false,
-                submit_after: RestackSubmitAfter::No,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn restack_parses_stop_here_flag() {
-        let cli = parse_cli(&["stax", "restack", "--stop-here"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Restack {
-                stop_here: true,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn stack_restack_via_two_tokens() {
-        let cli = parse_cli(&["stax", "s", "r"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack(StackCommands::Restack {
-                submit_after: RestackSubmitAfter::No,
-                ..
-            }))
-        ));
-    }
-
-    #[test]
-    fn stack_restack_via_single_token_sr() {
-        let cli = parse_cli(&["stax", "sr"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Sr {
-                submit_after: RestackSubmitAfter::No,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn stack_submit_via_two_tokens() {
-        let cli = parse_cli(&["stax", "s", "s"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Stack(StackCommands::Submit { .. }))
-        ));
-    }
-
-    #[test]
-    fn ss_still_parses_as_top_level_submit() {
-        let cli = parse_cli(&["stax", "ss"]);
-        assert!(matches!(cli.command, Some(Commands::Submit { .. })));
-    }
-
-    #[test]
-    fn submit_ai_flags_parse_for_full_title_and_body_generation() {
-        let cli = parse_cli(&["stax", "ss", "--ai", "--title", "--body", "--yes"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Submit { submit }) if submit.ai
-                && submit.title
-                && submit.body
-                && submit.yes
-        ));
-    }
-
-    #[test]
-    fn create_ai_flags_parse_for_generated_branch_details() {
-        let cli = parse_cli(&["stax", "create", "--ai", "--yes"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Create {
-                ai: true,
-                yes: true,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn create_add_alias_parses_as_create_command() {
-        let cli = parse_cli(&["stax", "add", "feature-alias", "--below"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Create {
-                name: Some(ref name),
-                below: true,
-                ..
-            }) if name == "feature-alias"
-        ));
-    }
-
-    #[test]
-    fn branch_create_ai_flags_parse() {
-        let cli = parse_cli(&["stax", "branch", "create", "--ai", "-a"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Branch(super::BranchCommands::Create {
-                ai: true,
-                all: true,
-                ..
-            }))
-        ));
-    }
-
-    #[test]
-    fn hidden_bc_ai_flags_parse() {
-        let cli = parse_cli(&["stax", "bc", "--ai", "--yes"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Bc {
-                ai: true,
-                yes: true,
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn branch_submit_body_scope_modifier_parses() {
-        let cli = parse_cli(&["stax", "bs", "--ai", "--body"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Bs { submit }) if submit.ai && !submit.title && submit.body
-        ));
-    }
-
-    #[test]
-    fn title_and_body_modifiers_require_ai() {
-        assert!(try_parse_cli(&["stax", "submit", "--title"]).is_err());
-        assert!(try_parse_cli(&["stax", "submit", "--body"]).is_err());
-    }
-
-    #[test]
-    fn removed_legacy_body_flag_is_rejected() {
-        let removed_flag = ["--ai", "-body"].concat();
-        assert!(try_parse_cli(&["stax", "submit", &removed_flag]).is_err());
-    }
-
-    #[test]
-    fn ls_parses_as_status() {
-        let cli = parse_cli(&["stax", "ls"]);
-        assert!(matches!(cli.command, Some(Commands::Status { .. })));
-    }
-
-    #[test]
-    fn submit_backward_compat() {
-        let cli = parse_cli(&["stax", "submit"]);
-        assert!(matches!(cli.command, Some(Commands::Submit { .. })));
-    }
-
-    #[test]
-    fn restack_backward_compat() {
-        let cli = parse_cli(&["stax", "restack"]);
-        assert!(matches!(cli.command, Some(Commands::Restack { .. })));
-    }
-
-    #[test]
-    fn cli_upgrade_parses() {
-        let cli = parse_cli(&["stax", "cli", "upgrade"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Cli {
-                command: CliSubcommand::Upgrade
-            })
-        ));
-    }
-
-    #[test]
-    fn s_alone_shows_stack_group() {
-        let result = try_parse_cli(&["stax", "s"]);
-        assert!(result.is_err(), "bare `s` should require a subcommand");
-    }
-
-    #[test]
-    fn split_parses_file_flag() {
-        let cli = parse_cli(&["stax", "split", "--file", "src/main.rs"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Split {
-                hunk: false,
-                ref file,
-                no_verify: false,
-            }) if file == &["src/main.rs"]
-        ));
-    }
-
-    #[test]
-    fn split_parses_short_file_flag() {
-        let cli = parse_cli(&["stax", "split", "-f", "src/main.rs", "src/lib.rs"]);
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Split {
-                hunk: false,
-                ref file,
-                no_verify: false,
-            }) if file == &["src/main.rs", "src/lib.rs"]
-        ));
-    }
-
-    #[test]
-    fn split_file_and_hunk_conflict() {
-        let result = try_parse_cli(&["stax", "split", "--hunk", "--file", "foo.rs"]);
-        assert!(result.is_err(), "--hunk and --file should conflict");
-    }
-
-    #[test]
-    fn continue_is_marked_as_rebase_control() {
-        let cli = parse_cli(&["stax", "continue"]);
-        let cmd = cli.command.expect("command");
-        assert_eq!(cmd.policy(), CommandPolicy::RebaseControl);
-        assert!(cmd.allows_during_rebase());
-    }
-
-    #[test]
-    fn sync_continue_is_marked_as_rebase_safe() {
-        let cli = parse_cli(&["stax", "sync", "--continue"]);
-        let cmd = cli.command.expect("command");
-        assert_eq!(cmd.policy(), CommandPolicy::RebaseSafe);
-        assert!(cmd.allows_during_rebase());
-    }
-
-    #[test]
-    fn status_requires_clean_repo_state() {
-        let cli = parse_cli(&["stax", "status"]);
-        let cmd = cli.command.expect("command");
-        assert_eq!(cmd.policy(), CommandPolicy::RequiresCleanRepoState);
-        assert!(!cmd.allows_during_rebase());
-    }
 }
