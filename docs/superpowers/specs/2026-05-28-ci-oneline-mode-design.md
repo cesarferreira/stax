@@ -117,9 +117,12 @@ Unit tests (no network/git) for `oneline_row` and the trailing-summary helper:
 - long title truncated to width with `…`
 - column alignment: branches of differing lengths pad to a common width
 
+## Follow-ups (implemented in this branch)
+
+- **Multi-branch defaults to oneline.** A single branch still shows the full per-check table; any multi-branch view (`--stack`/`--all`) now defaults to the oneline roll-up. `-v/--verbose` still gives the grouped cards. The full per-check table across a whole stack is intentionally dropped (scope to one branch for it). The decision is centralized in a pure `ci_view_mode(oneline, verbose, multi) -> CiView` helper used by both the one-shot and `--watch` dispatch.
+- **Review-state column.** A `draft` (dim) / `ready` (green) label sits between the PR number and the title, sourced from `oneline_review_label` (`pr_is_draft` + `pr_number`). Branches without a PR — or with unknown draft state — show nothing, and the column collapses entirely when no row has a PR.
+
 ## Out of scope (YAGNI)
 
-- PR review-state label ("Ready for review" / "Draft") as a column — the CI status icon is the leading signal; draft state already lives in `pr_is_draft` and can be added later if wanted.
 - PR age / "15m"-style timestamps — trailing column is CI timing, not PR age.
 - Cross-repo "repo" column from the screenshot — stax operates on a single repo's stack.
-- Making `--oneline` the default for multi-branch views — explicit opt-in only.
