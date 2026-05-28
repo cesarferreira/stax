@@ -12,3 +12,4 @@ Cargo.lock
 docs/plans/
 __pycache__/
 *.pyc
+.codegraph/
