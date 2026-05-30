@@ -265,6 +265,13 @@ pub(crate) enum Commands {
         quiet: bool,
     },
 
+    /// Attention-prioritized PR cockpit: which PR should you touch next?
+    Inbox {
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Submit stack - push branches and create/update PRs
     #[command(visible_alias = "ss", hide = true)]
     Submit {

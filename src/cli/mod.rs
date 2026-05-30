@@ -200,6 +200,7 @@ pub fn run() -> Result<()> {
             compact,
             quiet,
         } => commands::log::run(json, stack, current, compact, quiet),
+        Commands::Inbox { json } => commands::inbox::run(json),
         Commands::Submit { submit } => run_submit(submit, commands::submit::SubmitScope::Stack),
         Commands::Merge {
             all,

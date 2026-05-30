@@ -19,6 +19,7 @@ pub mod draft;
 pub mod edit;
 pub mod generate;
 pub(crate) mod github_list;
+pub mod inbox;
 pub mod init;
 pub mod issue;
 pub mod log;
