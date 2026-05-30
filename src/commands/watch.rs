@@ -24,8 +24,6 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
     let _enter = rt.enter();
     let client = ForgeClient::new(&remote_info)?;
 
-    println!("{}", "Watching stack... (Ctrl+C to stop)".cyan().bold());
-
     let mut iteration = 0usize;
 
     loop {
@@ -158,13 +156,6 @@ fn render_watch_table(
             format!("{:<width$}", branch, width = name_width)
         };
 
-        // Stack status
-        let stack_tag = if info.map(|b| b.needs_restack).unwrap_or(false) {
-            "⟳ restack".bright_yellow().to_string()
-        } else {
-            "         ".to_string()
-        };
-
         // CI status
         let ci_tag = match ci_by_branch.get(branch.as_str()) {
             None => "  –          ".dimmed().to_string(),
@@ -177,29 +168,42 @@ fn render_watch_table(
             },
         };
 
-        // PR info
+        // PR info with review/approval state
         let pr_tag = match info.and_then(|b| b.pr_number) {
             Some(n) => {
                 let state = info.and_then(|b| b.pr_state.as_deref()).unwrap_or("open");
-                let draft = ci_by_branch
-                    .get(branch.as_str())
+                let ci_status = ci_by_branch.get(branch.as_str());
+                let draft = ci_status
                     .and_then(|s| s.pr_is_draft)
                     .or_else(|| info.and_then(|b| b.pr_is_draft))
                     .unwrap_or(false);
-                if draft {
-                    format!("  PR #{} draft", n).dimmed().to_string()
-                } else if state.to_lowercase() == "merged" {
+                let review_decision = ci_status.and_then(|s| s.pr_review_decision.as_deref());
+
+                if state.to_lowercase() == "merged" {
                     format!("  PR #{} merged", n).bright_magenta().to_string()
+                } else if draft {
+                    format!("  PR #{} draft", n).dimmed().to_string()
                 } else {
-                    format!("  PR #{}", n).bright_magenta().to_string()
+                    match review_decision {
+                        Some("APPROVED") => {
+                            format!("  PR #{} approved", n).green().bold().to_string()
+                        }
+                        Some("CHANGES_REQUESTED") => {
+                            format!("  PR #{} changes", n).red().bold().to_string()
+                        }
+                        Some("REVIEW_REQUIRED") => {
+                            format!("  PR #{} review", n).yellow().to_string()
+                        }
+                        _ => format!("  PR #{}", n).bright_magenta().to_string(),
+                    }
                 }
             }
             None => String::new(),
         };
 
         println!(
-            "  {}  {} {}  {}  {}{}",
-            marker, cloud, branch_display, stack_tag, ci_tag, pr_tag
+            "  {}  {} {}  {}{}",
+            marker, cloud, branch_display, ci_tag, pr_tag
         );
     }
 
@@ -239,6 +243,7 @@ fn load_ci_from_cache(git_dir: &std::path::Path, branches: &[String]) -> Vec<Bra
                     pr_number: None,
                     pr_is_draft,
                     pr_title: None,
+                    pr_review_decision: None,
                 }
             })
         })

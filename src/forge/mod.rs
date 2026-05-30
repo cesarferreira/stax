@@ -253,6 +253,10 @@ impl ForgeClient {
         dispatch!(self, get_pr_merge_status(number))
     }
 
+    pub async fn get_pr_review_decision(&self, number: u64) -> Result<Option<String>> {
+        dispatch!(self, get_pr_review_decision(number))
+    }
+
     pub async fn is_pr_merged(&self, number: u64) -> Result<bool> {
         dispatch!(self, is_pr_merged(number))
     }
