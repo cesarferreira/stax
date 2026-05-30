@@ -910,6 +910,13 @@ impl GitHubClient {
         })
     }
 
+    /// Return the overall review decision for a PR (`"APPROVED"`, `"CHANGES_REQUESTED"`,
+    /// `"REVIEW_REQUIRED"`, or `None` when there is no review requirement).
+    pub async fn get_pr_review_decision(&self, pr_number: u64) -> Result<Option<String>> {
+        let (decision, _, _) = self.get_pr_reviews(pr_number).await?;
+        Ok(decision)
+    }
+
     /// Get PR review information using GraphQL API
     async fn get_pr_reviews(&self, pr_number: u64) -> Result<(Option<String>, usize, bool)> {
         let query = format!(

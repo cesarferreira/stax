@@ -453,6 +453,11 @@ impl GitLabClient {
         })
     }
 
+    pub async fn get_pr_review_decision(&self, _number: u64) -> Result<Option<String>> {
+        // GitLab approval data is not surfaced here; return None to avoid extra API calls.
+        Ok(None)
+    }
+
     pub async fn is_pr_merged(&self, number: u64) -> Result<bool> {
         let mr: GitLabMr = get_json(
             &self.client,

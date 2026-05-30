@@ -30,6 +30,8 @@ pub struct BranchCiStatus {
     pub pr_is_draft: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_review_decision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,6 +414,12 @@ pub(crate) async fn fetch_ci_statuses_async(
             let pr_is_draft = pr_live.as_ref().map(|p| p.info.is_draft);
             let pr_title = pr_live.as_ref().map(|p| p.title.clone());
 
+            // Fetch review decision only for open (non-draft) PRs; failures become None.
+            let pr_review_decision = match (pr_number, pr_is_draft) {
+                (Some(n), Some(false)) => client.get_pr_review_decision(*n).await.unwrap_or(None),
+                _ => None,
+            };
+
             BranchCiStatus {
                 branch: branch.clone(),
                 sha: sha.clone(),
@@ -421,6 +429,7 @@ pub(crate) async fn fetch_ci_statuses_async(
                 pr_number: *pr_number,
                 pr_is_draft,
                 pr_title,
+                pr_review_decision,
             }
         },
     ))
@@ -871,13 +880,20 @@ fn ci_view_mode(oneline: bool, verbose: bool, multi: bool) -> CiView {
     }
 }
 
-/// Review-state label for the `--oneline` view: `"draft"`, `"ready"`, or `""`.
+/// Review-state label for the `--oneline` view.
 ///
-/// Empty when the branch has no PR, or when the draft state is unknown.
+/// Shows draft state for draft PRs, approval state for open PRs, or empty when unknown.
 fn oneline_review_label(status: &BranchCiStatus) -> &'static str {
-    match (status.pr_number, status.pr_is_draft) {
-        (Some(_), Some(true)) => "draft",
-        (Some(_), Some(false)) => "ready",
+    if status.pr_number.is_none() {
+        return "";
+    }
+    if status.pr_is_draft == Some(true) {
+        return "draft";
+    }
+    match status.pr_review_decision.as_deref() {
+        Some("APPROVED") => "approved",
+        Some("CHANGES_REQUESTED") => "changes",
+        Some("REVIEW_REQUIRED") => "review",
         _ => "",
     }
 }
@@ -929,7 +945,9 @@ fn oneline_row(
         let padded = format!("{:<width$}", label, width = state_w);
         let colored = match label {
             "draft" => padded.dimmed(),
-            "ready" => padded.green(),
+            "approved" => padded.green().bold(),
+            "changes" => padded.red().bold(),
+            "review" => padded.yellow(),
             _ => padded.normal(),
         };
         Some(colored.to_string())
@@ -1951,6 +1969,7 @@ mod tests {
             pr_number: Some(123),
             pr_is_draft: None,
             pr_title: None,
+            pr_review_decision: None,
         }
     }
 
@@ -2206,6 +2225,7 @@ mod tests {
             pr_number: Some(42),
             pr_is_draft: None,
             pr_title: None,
+            pr_review_decision: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();
@@ -2228,6 +2248,7 @@ mod tests {
             pr_number: None,
             pr_is_draft: None,
             pr_title: None,
+            pr_review_decision: None,
         };
 
         let json = serde_json::to_string(&status).unwrap();
@@ -2724,11 +2745,39 @@ mod tests {
     }
 
     #[test]
-    fn review_label_ready_pr() {
+    fn review_label_approved_pr() {
         let mut s = test_branch_status("success", vec![]);
         s.pr_number = Some(7);
         s.pr_is_draft = Some(false);
-        assert_eq!(oneline_review_label(&s), "ready");
+        s.pr_review_decision = Some("APPROVED".to_string());
+        assert_eq!(oneline_review_label(&s), "approved");
+    }
+
+    #[test]
+    fn review_label_changes_requested() {
+        let mut s = test_branch_status("success", vec![]);
+        s.pr_number = Some(7);
+        s.pr_is_draft = Some(false);
+        s.pr_review_decision = Some("CHANGES_REQUESTED".to_string());
+        assert_eq!(oneline_review_label(&s), "changes");
+    }
+
+    #[test]
+    fn review_label_review_required() {
+        let mut s = test_branch_status("success", vec![]);
+        s.pr_number = Some(7);
+        s.pr_is_draft = Some(false);
+        s.pr_review_decision = Some("REVIEW_REQUIRED".to_string());
+        assert_eq!(oneline_review_label(&s), "review");
+    }
+
+    #[test]
+    fn review_label_open_no_decision() {
+        let mut s = test_branch_status("success", vec![]);
+        s.pr_number = Some(7);
+        s.pr_is_draft = Some(false);
+        s.pr_review_decision = None;
+        assert_eq!(oneline_review_label(&s), "");
     }
 
     #[test]
@@ -2760,14 +2809,15 @@ mod tests {
     }
 
     #[test]
-    fn oneline_row_shows_ready_label() {
+    fn oneline_row_shows_approved_label() {
         let mut status = test_branch_status(
             "success",
             vec![test_check("build", "completed", Some("success"))],
         );
         status.pr_is_draft = Some(false);
+        status.pr_review_decision = Some("APPROVED".to_string());
         status.pr_title = Some("Done".to_string());
-        let row = oneline_row(&status, false, 10, 6, 5, 20, None);
-        assert!(row.contains("ready"));
+        let row = oneline_row(&status, false, 10, 6, 8, 20, None);
+        assert!(row.contains("approved"));
     }
 }

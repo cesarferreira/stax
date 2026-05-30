@@ -410,6 +410,10 @@ impl GiteaClient {
         })
     }
 
+    pub async fn get_pr_review_decision(&self, _number: u64) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     pub async fn is_pr_merged(&self, number: u64) -> Result<bool> {
         let pr: GiteaPull =
             get_json(&self.client, &self.repo_url(&format!("/pulls/{}", number))).await?;
