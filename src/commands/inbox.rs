@@ -381,12 +381,85 @@ pub fn run(json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Minimal grouped text output. Richer rendering arrives in a later phase.
+/// Maximum width the branch column is allowed to occupy before truncation.
+const MAX_BRANCH_WIDTH: usize = 48;
+
+/// Truncate a branch name to `max` display columns, adding an ellipsis.
+///
+/// Operates on `char` counts (branch names are effectively ASCII), keeping the
+/// trailing ellipsis so column alignment stays exact.
+fn truncate_branch(name: &str, max: usize) -> String {
+    if name.chars().count() <= max {
+        return name.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let truncated: String = name.chars().take(keep).collect();
+    format!("{}…", truncated)
+}
+
+/// A single-width colored glyph that flags the action at a glance.
+fn action_marker(action: NextAction) -> colored::ColoredString {
+    match action {
+        NextAction::FixCi => "✗".red(),
+        NextAction::AddressComments => "●".yellow(),
+        NextAction::Restack => "⟳".yellow(),
+        NextAction::ContinueAgent => "●".magenta(),
+        NextAction::Merge => "✓".green(),
+        NextAction::WaitForReview => "·".dimmed(),
+        NextAction::None => " ".normal(),
+    }
+}
+
+/// Optional dim trailing context, shown only when it adds something the action
+/// label does not already convey. Keeps the common case (e.g. "restack") clean.
+fn detail(item: &InboxItem) -> Option<String> {
+    match item.bucket {
+        Bucket::ReadyToMerge => {
+            if item.approvals.unwrap_or(0) > 0 {
+                Some(format!("{} approved", item.approvals.unwrap_or(0)))
+            } else {
+                None
+            }
+        }
+        Bucket::WaitingOnOthers => match item.ci.as_deref() {
+            Some("pending") => Some("CI running".to_string()),
+            _ => match item.review.as_deref() {
+                Some("review_required") | None => Some("needs review".to_string()),
+                Some(other) => Some(other.replace('_', " ")),
+            },
+        },
+        Bucket::AgentRunning => Some("agent working".to_string()),
+        // For NeedsYou the action label (fix CI / address comments / restack)
+        // already says everything; surface CI only if it failed unexpectedly.
+        Bucket::NeedsYou => None,
+        Bucket::Other => {
+            if item.is_draft {
+                Some("draft".to_string())
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Grouped, aligned, de-noised text output.
 fn render(items: &[InboxItem]) {
     if items.is_empty() {
         println!("{}", "Inbox zero — nothing needs your attention.".dimmed());
         return;
     }
+
+    // Dynamic column widths so PR numbers and actions line up across buckets.
+    let pr_width = items
+        .iter()
+        .filter_map(|i| i.pr_number.map(|n| format!("#{}", n).len()))
+        .max()
+        .unwrap_or(0);
+    let branch_width = items
+        .iter()
+        .map(|i| truncate_branch(&i.branch, MAX_BRANCH_WIDTH).chars().count())
+        .max()
+        .unwrap_or(0);
 
     let mut buckets: Vec<Bucket> = items.iter().map(|i| i.bucket).collect();
     buckets.sort_by_key(|b| b.order());
@@ -398,45 +471,46 @@ fn render(items: &[InboxItem]) {
             continue;
         }
 
+        let title = format!("{} ({})", bucket.title(), group.len());
         let header = match bucket {
-            Bucket::NeedsYou => bucket.title().red().bold(),
-            Bucket::AgentRunning => bucket.title().magenta().bold(),
-            Bucket::ReadyToMerge => bucket.title().green().bold(),
-            Bucket::WaitingOnOthers => bucket.title().yellow().bold(),
-            Bucket::Other => bucket.title().dimmed(),
+            Bucket::NeedsYou => title.red().bold(),
+            Bucket::AgentRunning => title.magenta().bold(),
+            Bucket::ReadyToMerge => title.green().bold(),
+            Bucket::WaitingOnOthers => title.yellow().bold(),
+            Bucket::Other => title.dimmed().bold(),
         };
         println!("{}", header);
 
         for item in group {
-            let pr = item
+            let pr_raw = item
                 .pr_number
                 .map(|n| format!("#{}", n))
-                .unwrap_or_else(|| "  -".to_string());
-            let name = if item.is_current {
-                item.branch.bold().to_string()
+                .unwrap_or_default();
+            let pr_cell = format!("{:>width$}", pr_raw, width = pr_width);
+
+            let branch_raw = truncate_branch(&item.branch, MAX_BRANCH_WIDTH);
+            let pad = branch_width.saturating_sub(branch_raw.chars().count());
+            let branch_colored = if item.is_current {
+                branch_raw.bold().to_string()
             } else {
-                item.branch.normal().to_string()
+                branch_raw.normal().to_string()
             };
+            let branch_cell = format!("{}{}", branch_colored, " ".repeat(pad));
+
+            let marker = action_marker(item.next_action);
             let action = item.next_action.label().cyan();
-            let mut tags: Vec<String> = Vec::new();
-            if let Some(ci) = &item.ci {
-                tags.push(format!("CI:{}", ci));
-            }
-            if let Some(review) = &item.review {
-                tags.push(review.clone());
-            }
-            if item.needs_restack {
-                tags.push("restack".to_string());
-            }
-            if item.agent_active {
-                tags.push("agent".to_string());
-            }
-            let tag_str = if tags.is_empty() {
-                String::new()
-            } else {
-                format!("  ({})", tags.join(", ")).dimmed().to_string()
-            };
-            println!("  {:>6}  {:<32}  {}{}", pr.bright_magenta(), name, action, tag_str);
+            let detail = detail(item)
+                .map(|d| format!("  {}", d).dimmed().to_string())
+                .unwrap_or_default();
+
+            println!(
+                "  {}  {}  {} {}{}",
+                pr_cell.bright_magenta(),
+                branch_cell,
+                marker,
+                action,
+                detail
+            );
         }
         println!();
     }
@@ -567,6 +641,21 @@ mod tests {
     #[test]
     fn classify_no_status_nothing_to_do() {
         assert_eq!(classify(None, false, false), (Bucket::Other, NextAction::None));
+    }
+
+    #[test]
+    fn truncate_branch_leaves_short_names_untouched() {
+        assert_eq!(truncate_branch("short", 48), "short");
+        assert_eq!(truncate_branch("exactly-ten", 11), "exactly-ten");
+    }
+
+    #[test]
+    fn truncate_branch_adds_ellipsis_when_too_long() {
+        let long = "cesar/OBX-2839-fix-route-redraw-after-passing-pickup-dropoff";
+        let out = truncate_branch(long, 20);
+        assert_eq!(out.chars().count(), 20);
+        assert!(out.ends_with('…'));
+        assert!(out.starts_with("cesar/OBX-2839"));
     }
 
     #[test]
