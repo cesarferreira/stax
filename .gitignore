@@ -13,3 +13,7 @@ docs/plans/
 __pycache__/
 *.pyc
 .codegraph/
+
+.playwright-mcp/
+.superpowers/
+
