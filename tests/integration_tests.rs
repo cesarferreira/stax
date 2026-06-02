@@ -6875,7 +6875,16 @@ mod forge_mock_tests {
             .await;
     }
 
-    async fn mount_github_review_status(mock_server: &MockServer, decision: &str) {
+    async fn mount_github_review_status(mock_server: &MockServer, number: u64, decision: &str) {
+        mount_github_merge_status(mock_server, number, "OPEN", decision).await;
+    }
+
+    async fn mount_github_merge_status(
+        mock_server: &MockServer,
+        number: u64,
+        state: &str,
+        decision: &str,
+    ) {
         let nodes = if decision == "APPROVED" {
             serde_json::json!([{ "state": "APPROVED" }])
         } else {
@@ -6884,12 +6893,24 @@ mod forge_mock_tests {
 
         Mock::given(method("POST"))
             .and(path("/graphql"))
+            .and(body_string_contains(format!(
+                "pullRequest(number: {})",
+                number
+            )))
             .and(body_string_contains("reviewDecision"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": {
                     "repository": {
                         "pullRequest": {
+                            "number": number,
+                            "title": format!("PR #{}", number),
+                            "state": state,
+                            "updatedAt": "2026-06-02T10:00:00Z",
+                            "isDraft": false,
+                            "mergeable": "MERGEABLE",
                             "reviewDecision": decision,
+                            "headRefOid": format!("sha-{}", number),
+                            "statusCheckRollup": { "state": "SUCCESS" },
                             "reviews": { "nodes": nodes }
                         }
                     }
@@ -9014,7 +9035,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_merge_status(&mock_server, 101, "CLOSED", "APPROVED").await;
+        mount_github_review_status(&mock_server, 102, "APPROVED").await;
 
         // During the "already merged" path, merge must still retarget the next PR to trunk.
         Mock::given(method("PATCH"))
@@ -9264,7 +9286,8 @@ mod forge_mock_tests {
         let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
         assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 101, "APPROVED").await;
+        mount_github_review_status(&mock_server, 102, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -9367,7 +9390,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 101, "APPROVED").await;
+        mount_github_review_status(&mock_server, 102, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -9501,7 +9525,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 101, "APPROVED").await;
+        mount_github_review_status(&mock_server, 102, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -9619,7 +9644,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 101, "APPROVED").await;
+        mount_github_review_status(&mock_server, 102, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -9773,7 +9799,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_merge_status(&mock_server, 201, "CLOSED", "APPROVED").await;
+        mount_github_review_status(&mock_server, 202, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -9962,7 +9989,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 201, "APPROVED").await;
+        mount_github_review_status(&mock_server, 202, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -10132,7 +10160,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 301, "APPROVED").await;
+        mount_github_review_status(&mock_server, 302, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -10292,7 +10321,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 301, "APPROVED").await;
+        mount_github_review_status(&mock_server, 302, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,
@@ -10436,7 +10466,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_merge_status(&mock_server, 401, "CLOSED", "APPROVED").await;
+        mount_github_review_status(&mock_server, 402, "APPROVED").await;
 
         let queue_output = run_stax_with_env(
             &repo,
@@ -12261,7 +12292,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 401, "APPROVED").await;
+        mount_github_review_status(&mock_server, 402, "APPROVED").await;
 
         install_reject_all_pre_receive(&remote_root);
 
@@ -12422,7 +12454,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 501, "APPROVED").await;
+        mount_github_review_status(&mock_server, 502, "APPROVED").await;
 
         install_reject_all_pre_receive(&remote_root);
 
@@ -12611,7 +12644,10 @@ mod forge_mock_tests {
                 .await;
         }
 
-        mount_github_review_status(&mock_server, "APPROVED").await;
+        mount_github_review_status(&mock_server, 601, "APPROVED").await;
+        mount_github_review_status(&mock_server, 602, "APPROVED").await;
+        mount_github_review_status(&mock_server, 603, "APPROVED").await;
+        mount_github_review_status(&mock_server, 604, "APPROVED").await;
 
         let merge_output = run_stax_with_env(
             &repo,

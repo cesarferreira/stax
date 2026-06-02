@@ -684,6 +684,25 @@ pub(crate) enum Commands {
         command: Option<PrCommands>,
     },
 
+    /// Open live PR readiness for tracked pull requests
+    Ready {
+        /// Show all tracked branch PRs (default)
+        #[arg(long, conflicts_with_all = ["current", "stack"])]
+        all: bool,
+        /// Show only the current stack
+        #[arg(long, conflicts_with = "all")]
+        current: bool,
+        /// Show only the current stack
+        #[arg(long, conflicts_with = "all")]
+        stack: bool,
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+        /// Render a static table instead of the interactive TUI
+        #[arg(long, conflicts_with = "json")]
+        plain: bool,
+    },
+
     /// Browse open issues in the current repository
     Issue {
         #[command(subcommand)]
@@ -1598,6 +1617,21 @@ pub(crate) enum PrCommands {
         /// Output JSON for scripting
         #[arg(long)]
         json: bool,
+        /// Open live PR readiness for tracked pull requests
+        #[arg(long)]
+        ready: bool,
+        /// With --ready, show all tracked branch PRs (default)
+        #[arg(long, requires = "ready", conflicts_with_all = ["current", "stack"])]
+        all: bool,
+        /// With --ready, show only the current stack
+        #[arg(long, requires = "ready", conflicts_with = "all")]
+        current: bool,
+        /// With --ready, show only the current stack
+        #[arg(long, requires = "ready", conflicts_with = "all")]
+        stack: bool,
+        /// With --ready, render a static table instead of the interactive TUI
+        #[arg(long, requires = "ready", conflicts_with = "json")]
+        plain: bool,
     },
 }
 

@@ -186,6 +186,7 @@ pub struct PrMergeStatus {
     pub number: u64,
     pub title: String,
     pub state: String,
+    pub updated_at: Option<String>,
     pub is_draft: bool,
     pub mergeable: Option<bool>,
     pub mergeable_state: String,
@@ -312,6 +313,41 @@ struct PullRequestData {
 }
 
 #[derive(Debug, Deserialize)]
+struct PrMergeStatusData {
+    repository: Option<PrMergeStatusRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrMergeStatusRepository {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<PullRequestMergeStatusData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullRequestMergeStatusData {
+    number: u64,
+    title: String,
+    state: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+    #[serde(rename = "isDraft")]
+    is_draft: bool,
+    mergeable: String,
+    #[serde(rename = "reviewDecision")]
+    review_decision: Option<String>,
+    #[serde(rename = "headRefOid")]
+    head_ref_oid: String,
+    #[serde(rename = "statusCheckRollup")]
+    status_check_rollup: Option<StatusCheckRollupData>,
+    reviews: ReviewConnection,
+}
+
+#[derive(Debug, Deserialize)]
+struct StatusCheckRollupData {
+    state: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct ReviewConnection {
     nodes: Vec<ReviewNode>,
 }
@@ -319,6 +355,34 @@ struct ReviewConnection {
 #[derive(Debug, Deserialize)]
 struct ReviewNode {
     state: String,
+}
+
+fn graphql_mergeable_bool(mergeable: &str) -> Option<bool> {
+    match mergeable {
+        "MERGEABLE" => Some(true),
+        "CONFLICTING" => Some(false),
+        "UNKNOWN" => None,
+        _ => None,
+    }
+}
+
+fn graphql_mergeable_state(mergeable: &str) -> String {
+    match mergeable {
+        "MERGEABLE" => "clean",
+        "CONFLICTING" => "dirty",
+        "UNKNOWN" => "unknown",
+        other => other,
+    }
+    .to_string()
+}
+
+fn graphql_check_rollup_status(state: &str) -> CiStatus {
+    match state {
+        "SUCCESS" => CiStatus::Success,
+        "PENDING" | "EXPECTED" => CiStatus::Pending,
+        "FAILURE" | "ERROR" => CiStatus::Failure,
+        _ => CiStatus::NoCi,
+    }
 }
 
 impl GitHubClient {
@@ -859,54 +923,90 @@ impl GitHubClient {
 
     /// Get detailed merge status for a PR
     pub async fn get_pr_merge_status(&self, pr_number: u64) -> Result<PrMergeStatus> {
-        // Get basic PR info
-        let pr = self
+        self.record_api_call("graphql.pr_merge_status");
+        let query = format!(
+            r#"
+            query {{
+                repository(owner: "{}", name: "{}") {{
+                    pullRequest(number: {}) {{
+                        number
+                        title
+                        state
+                        updatedAt
+                        isDraft
+                        mergeable
+                        reviewDecision
+                        headRefOid
+                        statusCheckRollup {{
+                            state
+                        }}
+                        reviews(last: 100) {{
+                            nodes {{
+                                state
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+            "#,
+            self.owner, self.repo, pr_number
+        );
+
+        let response: GraphQLResponse<PrMergeStatusData> = self
             .octocrab
-            .pulls(&self.owner, &self.repo)
-            .get(pr_number)
+            .graphql(&serde_json::json!({ "query": query }))
             .await
-            .context("Failed to get PR")?;
+            .context("Failed to query PR merge status")?;
 
-        let head_sha = pr.head.sha.clone();
-        let state = pr
-            .state
+        if let Some(errors) = response.errors {
+            if !errors.is_empty() {
+                anyhow::bail!("GraphQL error: {}", errors[0].message);
+            }
+        }
+
+        let data = response
+            .data
+            .context("GraphQL response did not include merge status data")?;
+        let repository = data
+            .repository
+            .context("GraphQL response did not include repository data")?;
+        let pr = repository
+            .pull_request
+            .context("GraphQL response did not include pull request merge status data")?;
+
+        let approvals = pr
+            .reviews
+            .nodes
+            .iter()
+            .filter(|r| r.state == "APPROVED")
+            .count();
+        let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED")
+            || pr
+                .reviews
+                .nodes
+                .iter()
+                .any(|r| r.state == "CHANGES_REQUESTED");
+        let mergeable = graphql_mergeable_bool(&pr.mergeable);
+        let mergeable_state = graphql_mergeable_state(&pr.mergeable);
+        let ci_status = pr
+            .status_check_rollup
             .as_ref()
-            .map(|s| format!("{:?}", s))
-            .unwrap_or_default();
-
-        // Get CI status (default to NoCi if we can't fetch - don't block on missing info)
-        let ci_status = self
-            .combined_status_state(&head_sha)
-            .await
-            .ok()
-            .flatten()
-            .map(|s| CiStatus::from_str(&s))
+            .map(|rollup| graphql_check_rollup_status(&rollup.state))
             .unwrap_or(CiStatus::NoCi);
-
-        let (review_decision, approvals, changes_requested) = if state.eq_ignore_ascii_case("open")
-        {
-            self.get_pr_reviews(pr_number)
-                .await
-                .with_context(|| format!("Failed to get review status for PR #{}", pr_number))?
-        } else {
-            (None, 0, false)
-        };
 
         Ok(PrMergeStatus {
             number: pr.number,
-            title: pr.title.clone().unwrap_or_default(),
-            state,
-            is_draft: pr.draft.unwrap_or(false),
-            mergeable: pr.mergeable,
-            mergeable_state: pr
-                .mergeable_state
-                .map(|s| format!("{:?}", s).to_lowercase())
-                .unwrap_or_default(),
+            title: pr.title,
+            state: pr.state.to_ascii_lowercase(),
+            updated_at: Some(pr.updated_at),
+            is_draft: pr.is_draft,
+            mergeable,
+            mergeable_state,
             ci_status,
-            review_decision,
+            review_decision: pr.review_decision,
             approvals,
             changes_requested,
-            head_sha,
+            head_sha: pr.head_ref_oid,
         })
     }
 
@@ -1428,6 +1528,7 @@ mod tests {
             number: 1,
             title: "Test".to_string(),
             state: "Open".to_string(),
+            updated_at: None,
             is_draft: false,
             mergeable: Some(true),
             mergeable_state: "clean".to_string(),
@@ -1449,6 +1550,7 @@ mod tests {
             number: 1,
             title: "Test".to_string(),
             state: "Open".to_string(),
+            updated_at: None,
             is_draft: false,
             mergeable: Some(true),
             mergeable_state: "clean".to_string(),
@@ -1470,6 +1572,7 @@ mod tests {
             number: 1,
             title: "Test".to_string(),
             state: "Open".to_string(),
+            updated_at: None,
             is_draft: false,
             mergeable: None, // Still computing
             mergeable_state: "unknown".to_string(),
@@ -1490,6 +1593,7 @@ mod tests {
             number: 1,
             title: "Test".to_string(),
             state: "Open".to_string(),
+            updated_at: None,
             is_draft: false,
             mergeable: Some(true),
             mergeable_state: "clean".to_string(),
@@ -1510,6 +1614,7 @@ mod tests {
             number: 1,
             title: "Test".to_string(),
             state: "Open".to_string(),
+            updated_at: None,
             is_draft: false,
             mergeable: Some(true),
             mergeable_state: "clean".to_string(),
@@ -1530,6 +1635,7 @@ mod tests {
             number: 1,
             title: "Test".to_string(),
             state: "Open".to_string(),
+            updated_at: None,
             is_draft: true,
             mergeable: Some(true),
             mergeable_state: "clean".to_string(),
@@ -1550,6 +1656,7 @@ mod tests {
             number: 1,
             title: "Test".to_string(),
             state: "Open".to_string(),
+            updated_at: None,
             is_draft: false,
             mergeable: Some(false), // Has conflicts
             mergeable_state: "dirty".to_string(),
@@ -1571,6 +1678,7 @@ mod tests {
             number: 1,
             title: "Test".to_string(),
             state: "Open".to_string(),
+            updated_at: None,
             is_draft: false,
             mergeable: Some(true),
             mergeable_state: "clean".to_string(),
@@ -1882,6 +1990,7 @@ mod tests {
             number: 1,
             title: "Test".to_string(),
             state: "Open".to_string(),
+            updated_at: None,
             is_draft: false,
             mergeable: Some(true),
             mergeable_state: "clean".to_string(),
@@ -1970,25 +2079,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_pr_merge_status_fails_closed_on_review_graphql_error() {
+    async fn test_get_pr_merge_status_maps_graphql_fields() {
         let mock_server = MockServer::start().await;
 
-        Mock::given(method("GET"))
-            .and(path("/repos/test-owner/test-repo/pulls/11"))
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
-                "id": 11,
-                "number": 11,
-                "state": "open",
-                "draft": false,
-                "mergeable": true,
-                "mergeable_state": "clean",
-                "title": "Ready-looking PR",
-                "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
-                "base": { "ref": "main", "sha": "bbbb" }
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "number": 11,
+                            "title": "Ready-looking PR",
+                            "state": "OPEN",
+                            "updatedAt": "2026-06-02T10:00:00Z",
+                            "isDraft": false,
+                            "mergeable": "MERGEABLE",
+                            "reviewDecision": "APPROVED",
+                            "headRefOid": "aaaa",
+                            "statusCheckRollup": { "state": "SUCCESS" },
+                            "reviews": {
+                                "nodes": [
+                                    { "state": "APPROVED" },
+                                    { "state": "COMMENTED" }
+                                ]
+                            }
+                        }
+                    }
+                }
             })))
             .mount(&mock_server)
             .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(11).await.unwrap();
+
+        assert_eq!(status.number, 11);
+        assert_eq!(status.title, "Ready-looking PR");
+        assert_eq!(status.state, "open");
+        assert_eq!(status.updated_at.as_deref(), Some("2026-06-02T10:00:00Z"));
+        assert_eq!(status.mergeable, Some(true));
+        assert_eq!(status.mergeable_state, "clean");
+        assert_eq!(status.review_decision.as_deref(), Some("APPROVED"));
+        assert_eq!(status.approvals, 1);
+        assert!(!status.changes_requested);
+        assert_eq!(status.ci_status, CiStatus::Success);
+        assert_eq!(status.head_sha, "aaaa");
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_merge_status_fails_on_graphql_error() {
+        let mock_server = MockServer::start().await;
 
         Mock::given(method("POST"))
             .and(path("/graphql"))
@@ -2002,7 +2142,6 @@ mod tests {
         let error = client.get_pr_merge_status(11).await.unwrap_err();
         let error = format!("{error:#}");
 
-        assert!(error.contains("Failed to get review status for PR #11"));
         assert!(error.contains("GraphQL error: rate limit exceeded"));
     }
 
@@ -2010,19 +2149,25 @@ mod tests {
     async fn test_get_pr_merge_status_skips_reviews_for_closed_pr() {
         let mock_server = MockServer::start().await;
 
-        Mock::given(method("GET"))
-            .and(path("/repos/test-owner/test-repo/pulls/11"))
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
-                "id": 11,
-                "number": 11,
-                "state": "closed",
-                "draft": false,
-                "mergeable": true,
-                "mergeable_state": "clean",
-                "title": "Already merged PR",
-                "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
-                "base": { "ref": "main", "sha": "bbbb" }
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "number": 11,
+                            "title": "Already merged PR",
+                            "state": "CLOSED",
+                            "updatedAt": "2026-06-01T10:00:00Z",
+                            "isDraft": false,
+                            "mergeable": "MERGEABLE",
+                            "reviewDecision": null,
+                            "headRefOid": "aaaa",
+                            "statusCheckRollup": { "state": "SUCCESS" },
+                            "reviews": { "nodes": [] }
+                        }
+                    }
+                }
             })))
             .mount(&mock_server)
             .await;
@@ -2034,28 +2179,13 @@ mod tests {
         assert!(!status.is_ready());
         assert_eq!(status.review_decision, None);
         assert_eq!(status.approvals, 0);
+        assert_eq!(status.ci_status, CiStatus::Success);
+        assert_eq!(status.mergeable, Some(true));
     }
 
     #[tokio::test]
-    async fn test_get_pr_merge_status_fails_closed_on_missing_review_data() {
+    async fn test_get_pr_merge_status_fails_on_missing_pr_data() {
         let mock_server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/repos/test-owner/test-repo/pulls/11"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
-                "id": 11,
-                "number": 11,
-                "state": "open",
-                "draft": false,
-                "mergeable": true,
-                "mergeable_state": "clean",
-                "title": "Ready-looking PR",
-                "head": { "ref": "feature-a", "sha": "aaaa", "label": "test-owner:feature-a" },
-                "base": { "ref": "main", "sha": "bbbb" }
-            })))
-            .mount(&mock_server)
-            .await;
 
         Mock::given(method("POST"))
             .and(path("/graphql"))
@@ -2069,8 +2199,7 @@ mod tests {
         let error = client.get_pr_merge_status(11).await.unwrap_err();
         let error = format!("{error:#}");
 
-        assert!(error.contains("Failed to get review status for PR #11"));
-        assert!(error.contains("pull request review data"));
+        assert!(error.contains("pull request merge status data"));
     }
 
     #[tokio::test]

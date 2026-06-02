@@ -30,6 +30,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st ss` | Submit the whole stack — open or update linked PRs |
 | `st draft [branch]` | Convert the current (or named) branch's PR to draft |
 | `st undraft [branch]` | Mark the current (or named) branch's PR as ready for review |
+| `st ready` | Open the interactive PR readiness dashboard for all tracked PRs: merge, ping, fix, wait, or draft |
 | `st merge` | Cascade-merge from stack bottom up to current branch |
 | `st merge --when-ready` | Wait for CI + approvals, then merge (alias: `st mwr`) |
 | `st merge --downstack-only` / `--ds` | Merge ancestors below current, then rebase current branch |
@@ -64,7 +65,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | Command | What it does |
 |---|---|
 | `st standup` | Summarize recent activity (`--ai` for AI version, `--ai --style slack` for Slack-ready bullets) |
-| `st pr` / `st pr body` / `st pr list` | Open current PR in browser · view/edit PR body · list open PRs |
+| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` | Open current PR in browser · view/edit PR body · list open PRs · show stack PR readiness |
 | `st issue list` | List open issues |
 | `st changelog` | Generate changelog between refs or fuzzy-find commits with `find` / `--find` |
 | `st open` | Open the repository in the browser |
@@ -73,3 +74,5 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st demo` | Interactive tutorial — no auth or repo required |
 
 See also: [Navigation](navigation.md) · [Stack health](stack-health.md) · [Full reference](reference.md)
+
+`st ready` and `st pr list --ready` launch a TUI in an interactive terminal and default to all tracked PRs, ordered newest changed PR first. Use `--current` or `--stack` for only the current stack. Use Up/Down or `j`/`k` to move, Enter or `o` to open the selected PR, `r` to refresh, `?` for help, and `q`/Esc to quit. Use `--plain` for the static table and `--json` for machine-readable output.

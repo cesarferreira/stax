@@ -399,6 +399,7 @@ impl GiteaClient {
             number: pr.number,
             title: pr.title,
             state,
+            updated_at: pr.updated_at.map(|updated| updated.to_rfc3339()),
             is_draft: pr.draft.unwrap_or(false),
             mergeable: pr.mergeable.or_else(|| mergeable_bool(&mergeable_state)),
             mergeable_state,

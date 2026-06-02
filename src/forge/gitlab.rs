@@ -442,6 +442,7 @@ impl GitLabClient {
             number: mr.iid,
             title: mr.title,
             state: normalize_gitlab_state(&mr.state),
+            updated_at: mr.updated_at.map(|updated| updated.to_rfc3339()),
             is_draft: mr.draft,
             mergeable,
             mergeable_state,

@@ -58,7 +58,23 @@ pub fn run_open() -> Result<()> {
 }
 
 /// List open pull requests for the current repository.
-pub fn run_list(limit: u8, json: bool) -> Result<()> {
+pub fn run_list(
+    limit: u8,
+    json: bool,
+    ready: bool,
+    all: bool,
+    current: bool,
+    stack: bool,
+    plain: bool,
+) -> Result<()> {
+    if ready {
+        return crate::commands::ready::run(
+            crate::commands::ready::ReadyScopeMode::from_flags(all, current, stack),
+            json,
+            plain,
+        );
+    }
+
     let repo = GitRepo::open()?;
     let config = Config::load()?;
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;

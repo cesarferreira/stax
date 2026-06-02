@@ -410,8 +410,27 @@ pub fn run() -> Result<()> {
         Commands::Pr { command } => match command.unwrap_or(PrCommands::Open) {
             PrCommands::Open => commands::pr::run_open(),
             PrCommands::Body { edit } => commands::pr::run_body(edit),
-            PrCommands::List { limit, json } => commands::pr::run_list(limit, json),
+            PrCommands::List {
+                limit,
+                json,
+                ready,
+                all,
+                current,
+                stack,
+                plain,
+            } => commands::pr::run_list(limit, json, ready, all, current, stack, plain),
         },
+        Commands::Ready {
+            all,
+            current,
+            stack,
+            json,
+            plain,
+        } => commands::ready::run(
+            commands::ready::ReadyScopeMode::from_flags(all, current, stack),
+            json,
+            plain,
+        ),
         Commands::Issue { command } => match command {
             Some(IssueCommands::List { limit, json }) => commands::issue::run_list(limit, json),
             None => print_subcommand_help("issue"),
