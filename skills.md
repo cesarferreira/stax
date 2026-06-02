@@ -57,9 +57,12 @@ stax redo [op-id]              # Redo last/specific undone operation
 stax pr                        # Open current branch PR
 stax pr body                   # Print current PR description
 stax pr body --edit            # Edit current PR description in $EDITOR
-stax ready                     # Live PR readiness table for current stack (merge/ping/fix/wait/draft)
-stax pr list --ready           # Same readiness table under PR list
-stax ready --all               # Include all tracked branch PRs
+stax ready                     # Interactive PR readiness dashboard for all tracked PRs, newest changed first (merge/ping/fix/wait/draft)
+stax ready --current           # Readiness dashboard for current stack only
+stax ready --stack             # Same as --current
+stax ready --plain             # Static readiness table for captured/non-interactive output
+stax pr list --ready           # Same readiness view under PR list
+stax ready --all               # Explicit all tracked branch PRs (default)
 stax open                      # Open repo in browser
 stax comments                  # Show current PR comments
 stax copy [--pr]               # Copy branch name or PR URL
@@ -298,8 +301,10 @@ stax range-diff                    # Range-diff branches needing restack
 
 stax pr body                       # Print current PR description
 stax pr body --edit                # Edit current PR description in $EDITOR
-stax ready                         # Fresh PR readiness for current stack: ACTION, PR, BRANCH, REVIEWS, CI, TITLE
-stax ready --all                   # Readiness for all tracked branch PRs
+stax ready                         # Interactive PR readiness dashboard for all tracked PRs, newest changed first; arrows move, Enter opens PR
+stax ready --current               # Current-stack readiness dashboard
+stax ready --plain                 # Fresh static readiness table: ACTION, PR, BRANCH, REVIEWS, CI, TITLE
+stax ready --all                   # Readiness for all tracked branch PRs (default)
 stax ready --json                  # Machine-readable readiness rows
 stax pr list --ready               # Same readiness view under PR list
 stax comments                      # Show current PR comments

@@ -20,13 +20,15 @@ Turn `st ready` into an interactive Ratatui dashboard by default in an interacti
 
 | Command | Behavior |
 |---|---|
-| `st ready` | Launch interactive readiness TUI when stdin/stdout are terminals. |
-| `st ready --all` | Same TUI, scoped to all tracked branch PRs. |
+| `st ready` | Launch interactive readiness TUI for all tracked branch PRs when stdin/stdout are terminals. |
+| `st ready --all` | Explicit all tracked branch PRs; same as the default. |
+| `st ready --current` | Same TUI, scoped to the current stack. |
+| `st ready --stack` | Same as `--current`. |
 | `st ready --json` | Keep existing JSON output; never launch TUI. |
 | `st ready --plain` | Render the current static readiness table. |
 | `st pr list --ready` | Match `st ready` behavior. |
 | `st pr list --ready --plain` | Static table under the PR-list entrypoint. |
-| non-interactive `st ready` | Fall back to plain table so pipes and captured output do not receive TUI escape sequences. |
+| non-interactive `st ready` | Fall back to plain table for all tracked PRs so pipes and captured output do not receive TUI escape sequences. |
 
 ## TUI Layout
 

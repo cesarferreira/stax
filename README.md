@@ -271,7 +271,7 @@ st config --set-ai
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
 | `st ss` | Submit the full stack, open/update linked PRs |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--remote`, `--all`) |
-| `st ready` | Live PR readiness table for the current stack: merge, ping, fix, wait, or draft |
+| `st ready` | Interactive PR readiness dashboard for all tracked PRs, newest changed PR first: merge, ping, fix, wait, or draft (`--current`/`--stack` for current stack, `--plain` for table output) |
 | `st ci` / `st ci --oneline` | CI status — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
