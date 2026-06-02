@@ -82,6 +82,19 @@ fn test_checkout_trunk_full_command() {
     assert_eq!(repo.current_branch(), "main");
 }
 
+#[test]
+fn test_get_help() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["get", "--help"]);
+    output
+        .assert_success()
+        .assert_stdout_contains("remote branch")
+        .assert_stdout_contains("--parent")
+        .assert_stdout_contains("--no-checkout")
+        .assert_stdout_contains("--force");
+}
+
 // =============================================================================
 // Sync Command Tests
 // =============================================================================

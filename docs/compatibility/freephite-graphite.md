@@ -24,6 +24,7 @@ st status   # your existing stack appears immediately
 | `fp bc` | `gt create` | `st create` · `st bc` |
 | — | `gt create --insert` | `st create --insert` |
 | — | — | `st create --below` |
+| — | `gt get` | `st get` |
 | `fp bco` | `gt checkout` | `st checkout` · `st co` |
 | `fp bu` | `gt up` | `st up` · `st bu` |
 | `fp bd` | `gt down` | `st down` · `st bd` |

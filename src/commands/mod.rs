@@ -18,6 +18,7 @@ pub mod doctor;
 pub mod draft;
 pub mod edit;
 pub mod generate;
+pub mod get;
 pub(crate) mod github_list;
 pub mod init;
 pub mod issue;

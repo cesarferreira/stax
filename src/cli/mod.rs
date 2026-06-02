@@ -359,6 +359,12 @@ pub fn run() -> Result<()> {
             child,
             shell_output,
         } => commands::checkout::run(branch, pr, trunk, parent, child, shell_output),
+        Commands::Get {
+            branch,
+            parent,
+            no_checkout,
+            force,
+        } => commands::get::run(branch, parent, no_checkout, force),
         Commands::Continue => commands::continue_cmd::run_and_resume_restack(),
         Commands::Resolve {
             agent,

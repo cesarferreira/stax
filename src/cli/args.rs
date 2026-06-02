@@ -482,6 +482,21 @@ pub(crate) enum Commands {
         shell_output: bool,
     },
 
+    /// Fetch, checkout, and track a remote branch
+    Get {
+        /// Remote branch name to fetch
+        branch: String,
+        /// Parent branch to record in stax metadata (defaults to trunk)
+        #[arg(short, long)]
+        parent: Option<String>,
+        /// Fetch and track without checking out the branch
+        #[arg(long)]
+        no_checkout: bool,
+        /// Reset an existing local branch to the remote tip
+        #[arg(short, long)]
+        force: bool,
+    },
+
     /// Continue after resolving conflicts
     #[command(visible_alias = "cont")]
     Continue,
