@@ -269,6 +269,7 @@ st config --set-ai
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
+| `st get <branch>` | Fetch a remote branch, create a local upstream-tracking branch, track it in stax, and check it out |
 | `st ss` | Submit the full stack, open/update linked PRs |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--remote`, `--all`) |
 | `st ci` / `st ci --oneline` | CI status — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |

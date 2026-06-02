@@ -52,6 +52,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st create <name>` | `c`, `add`, `bc` | Create stacked branch (TTY menu when nothing staged and `-m`) |
 | `st create --ai` | | Generate a branch name from local changes (`-a` also generates a first commit message) |
 | `st create <name> --below` | | Insert a new branch below current |
+| `st get <branch>` | | Fetch, checkout, and track a remote branch |
 | `st modify` | `m` | Amend staged changes into current commit (`-a` stages all, `-r` restacks after) |
 | `st rename` | | Rename current branch |
 | `st branch track` | | Track an existing branch |
@@ -268,6 +269,12 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 ### `st checkout`
 
 - `--trunk` / `--parent` / `--child 1`
+
+### `st get`
+
+- `--parent <branch>` records a non-trunk parent in stax metadata
+- `--no-checkout` fetches and tracks without switching branches
+- `--force` resets an existing divergent local branch to the remote tip
 
 ### `st ci`
 

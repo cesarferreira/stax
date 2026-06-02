@@ -29,6 +29,7 @@ stax sync|rs                   # Sync trunk + clean merged branches
 stax restack                   # Rebase branch/stack onto parents
 stax cascade                   # Restack bottom-up and submit updates
 
+stax get <branch>              # Fetch, checkout, and track remote branch
 stax checkout|co|bco           # Checkout branch (interactive by default)
 stax trunk|t                   # Checkout trunk
 stax trunk <branch>            # Set trunk branch
@@ -268,6 +269,9 @@ stax top                           # Tip of current stack
 stax bottom                        # Base branch above trunk
 stax p                             # Previous branch
 
+stax get teammate-branch           # Fetch remote branch, track under trunk, checkout
+stax get teammate-branch --parent base-branch  # Track fetched branch under explicit parent
+stax get teammate-branch --no-checkout  # Fetch and track without switching branches
 stax branch track --parent main    # Track existing branch under parent
 stax branch track --all-prs        # Import your open PRs
 stax branch untrack <branch>       # Remove stax metadata only
