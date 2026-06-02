@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.83.0] - 2026-06-02
+
+### Added
+- Add PR readiness view (#447)
+
+### Changed
+- Show PR approval status in watch oneline view (#443)
+
 ## [0.82.0] - 2026-05-28
 
 ### Added
@@ -435,7 +443,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.82.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.83.0...HEAD
+[0.83.0]: https://github.com/cesarferreira/stax/compare/v0.82.0...v0.83.0
 [0.82.0]: https://github.com/cesarferreira/stax/compare/v0.81.2...v0.82.0
 [0.81.2]: https://github.com/cesarferreira/stax/compare/v0.81.1...v0.81.2
 [0.81.1]: https://github.com/cesarferreira/stax/compare/v0.81.0...v0.81.1
