@@ -117,6 +117,8 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st pr` · `st pr open` | Open current branch PR |
 | `st pr body` · `st pr body --edit` | Print or edit the current branch PR description |
 | `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
+| `st pr list --ready` | Show live PR readiness for the current stack (`--all` includes all tracked branch PRs) |
+| `st ready` | Short alias for `st pr list --ready` (`--all`, `--json`) |
 | `st issue list` | List open issues |
 | `st comments` | Show PR comments |
 | `st copy` · `st copy --pr` | Copy branch name · PR URL |

@@ -292,6 +292,25 @@ fn test_merge_when_ready_hidden_alias_still_works() {
 }
 
 #[test]
+fn test_ready_help_available() {
+    let output = stax(&["ready", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("PR readiness"));
+    assert!(stdout.contains("--all"));
+    assert!(stdout.contains("--json"));
+}
+
+#[test]
+fn test_pr_list_ready_help_exposes_all() {
+    let output = stax(&["pr", "list", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--ready"));
+    assert!(stdout.contains("--all"));
+}
+
+#[test]
 fn test_checkout_aliases() {
     // co and bco should both work
     let output1 = stax(&["co", "--help"]);

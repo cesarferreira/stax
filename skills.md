@@ -57,6 +57,9 @@ stax redo [op-id]              # Redo last/specific undone operation
 stax pr                        # Open current branch PR
 stax pr body                   # Print current PR description
 stax pr body --edit            # Edit current PR description in $EDITOR
+stax ready                     # Live PR readiness table for current stack (merge/ping/fix/wait/draft)
+stax pr list --ready           # Same readiness table under PR list
+stax ready --all               # Include all tracked branch PRs
 stax open                      # Open repo in browser
 stax comments                  # Show current PR comments
 stax copy [--pr]               # Copy branch name or PR URL
@@ -295,6 +298,10 @@ stax range-diff                    # Range-diff branches needing restack
 
 stax pr body                       # Print current PR description
 stax pr body --edit                # Edit current PR description in $EDITOR
+stax ready                         # Fresh PR readiness for current stack: ACTION, PR, BRANCH, REVIEWS, CI, TITLE
+stax ready --all                   # Readiness for all tracked branch PRs
+stax ready --json                  # Machine-readable readiness rows
+stax pr list --ready               # Same readiness view under PR list
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output
 
@@ -429,6 +436,7 @@ stax ss --rerequest-review
 ### Merge with Safety Gates (CI + approvals)
 
 ```bash
+stax ready
 stax merge --when-ready --interval 15
 ```
 

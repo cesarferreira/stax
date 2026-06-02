@@ -684,6 +684,16 @@ pub(crate) enum Commands {
         command: Option<PrCommands>,
     },
 
+    /// Show live PR readiness for the current stack
+    Ready {
+        /// Show all tracked branch PRs
+        #[arg(long)]
+        all: bool,
+        /// Output JSON for scripting
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Browse open issues in the current repository
     Issue {
         #[command(subcommand)]
@@ -1598,6 +1608,12 @@ pub(crate) enum PrCommands {
         /// Output JSON for scripting
         #[arg(long)]
         json: bool,
+        /// Show live PR readiness for the current stack
+        #[arg(long)]
+        ready: bool,
+        /// With --ready, show all tracked branch PRs
+        #[arg(long, requires = "ready")]
+        all: bool,
     },
 }
 
