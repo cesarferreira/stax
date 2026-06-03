@@ -29,7 +29,7 @@ vendored-openssl = ["git2/vendored-openssl"]
 clap = { version = "4", features = ["derive"] }
 
 # Git (no ssh — we use HTTPS + token auth exclusively)
-git2 = { version = "0.20", default-features = false, features = ["https"] }
+git2 = { version = "0.21", default-features = false, features = ["https"] }
 
 # GitHub API
 octocrab = "0.49"
