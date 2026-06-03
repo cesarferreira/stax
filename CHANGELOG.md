@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.84.1] - 2026-06-03
+
+### Changed
+- Configure Dependabot for Cargo and GitHub Actions
+- Bump clap from 4.6.0 to 4.6.1 (#459)
+- Bump reqwest from 0.13.2 to 0.13.4 (#458)
+- Bump signal-hook from 0.3.18 to 0.4.4 (#457)
+- Bump rustls from 0.23.37 to 0.23.40 (#455)
+- Bump actions/upload-pages-artifact from 4 to 5 (#454)
+- Bump actions/upload-artifact from 6 to 7 (#453)
+- Bump actions/download-artifact from 6 to 8 (#452)
+- Bump softprops/action-gh-release from 2 to 3 (#451)
+- Bump actions/deploy-pages from 4 to 5 (#450)
+- Bump rand from 0.8.5 to 0.8.6 (#461)
+- Bump rustls-webpki from 0.103.10 to 0.103.13 (#460)
+- Bump git2 from 0.20 to 0.21 (#462)
+
 ## [0.84.0] - 2026-06-02
 
 ### Changed
@@ -448,7 +465,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.84.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.84.1...HEAD
+[0.84.1]: https://github.com/cesarferreira/stax/compare/v0.84.0...v0.84.1
 [0.84.0]: https://github.com/cesarferreira/stax/compare/v0.83.0...v0.84.0
 [0.83.0]: https://github.com/cesarferreira/stax/compare/v0.82.0...v0.83.0
 [0.82.0]: https://github.com/cesarferreira/stax/compare/v0.81.2...v0.82.0
