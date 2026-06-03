@@ -78,7 +78,7 @@ jobs:
           Compress-Archive -Path "target/${{ matrix.target }}/release/stax.exe","target/${{ matrix.target }}/release/st.exe" -DestinationPath "stax-${{ matrix.target }}.zip"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: stax-${{ matrix.target }}
           path: stax-${{ matrix.target }}.*
