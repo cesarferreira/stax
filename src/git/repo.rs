@@ -420,7 +420,7 @@ impl GitRepo {
         let mut entries: Vec<(PathBuf, Option<String>, bool)> = vec![(main_path, None, false)];
 
         let worktree_names = self.repo.worktrees()?;
-        for name in worktree_names.iter().flatten() {
+        for name in worktree_names.iter().filter_map(|r| r.ok().flatten()) {
             let worktree = self.repo.find_worktree(name)?;
             let is_prunable = worktree.is_prunable(None).unwrap_or(false);
             let path = Self::normalize_path(worktree.path());
@@ -428,7 +428,7 @@ impl GitRepo {
                 repo.head()
                     .ok()
                     .filter(|head| head.is_branch())
-                    .and_then(|head| head.shorthand().map(str::to_string))
+                    .and_then(|head| head.shorthand().ok().map(str::to_string))
             });
             entries.push((path, branch, is_prunable));
         }
@@ -979,7 +979,7 @@ impl GitRepo {
         for oid in revwalk {
             let oid = oid?;
             if let Ok(commit) = self.repo.find_commit(oid) {
-                if let Some(msg) = commit.summary() {
+                if let Ok(Some(msg)) = commit.summary() {
                     commits.push(msg.to_string());
                 }
             }
@@ -1689,7 +1689,7 @@ Use --auto-stash-pop or stash/commit changes first.",
             // Max 5 commits
             let oid = oid?;
             let commit = self.repo.find_commit(oid)?;
-            let message = commit.summary().unwrap_or("").to_string();
+            let message = commit.summary().ok().flatten().unwrap_or("").to_string();
             let short_id = &oid.to_string()[..10];
             commits.push(CommitInfo {
                 short_hash: short_id.to_string(),
@@ -1865,7 +1865,7 @@ Use --auto-stash-pop or stash/commit changes first.",
             .context("Failed to glob remote refs")?;
         let mut names = HashSet::new();
         for r in refs.flatten() {
-            if let Some(name) = r.name() {
+            if let Ok(name) = r.name() {
                 if let Some(branch) = name.strip_prefix(&prefix) {
                     names.insert(branch.to_string());
                 }

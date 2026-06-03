@@ -101,7 +101,7 @@ pub fn list_metadata_branches(repo: &Repository) -> Result<Vec<String>> {
 
     for reference in repo.references_glob(&format!("{}*", METADATA_REF_PREFIX))? {
         let reference = reference?;
-        if let Some(name) = reference.name() {
+        if let Ok(name) = reference.name() {
             let branch = name.strip_prefix(METADATA_REF_PREFIX).unwrap_or(name);
             branches.push(branch.to_string());
         }
