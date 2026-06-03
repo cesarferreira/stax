@@ -126,7 +126,7 @@ impl SplitApp {
             let oid = oid?;
             let commit = repo.inner().find_commit(oid)?;
             let short_sha = &oid.to_string()[..7];
-            let message = commit.summary().unwrap_or("").to_string();
+            let message = commit.summary().ok().flatten().unwrap_or("").to_string();
 
             commits.push(CommitDisplay {
                 sha: oid.to_string(),
