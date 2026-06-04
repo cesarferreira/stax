@@ -308,6 +308,13 @@ pub fn run() -> Result<()> {
             auto_stash_pop,
             &[],
         ),
+        Commands::Sweep {
+            delete,
+            include_stale,
+            force,
+            stale_days,
+            json,
+        } => commands::sweep::run(delete, include_stale, force, stale_days, json),
         Commands::Restack {
             all,
             stop_here,

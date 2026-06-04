@@ -26,6 +26,7 @@ stax log|l                     # Stack status with commits + PR info
 stax submit|ss                 # Submit full stack
 stax merge                     # Merge PRs from stack bottom upward
 stax sync|rs                   # Sync trunk + clean merged branches
+stax sweep                     # Classify + optionally delete merged/gone/stale branches
 stax restack                   # Rebase branch/stack onto parents
 stax cascade                   # Restack bottom-up and submit updates
 
@@ -238,6 +239,14 @@ stax sync --force                  # Force sync without prompts
 stax sync --prune                  # Prune stale remotes
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
+
+stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
+stax sweep --delete                # Delete merged + upstream-gone branches after confirmation
+stax sweep --delete --include-stale  # Also delete stale branches
+stax sweep --delete --force        # Skip confirmation prompt
+stax sweep --stale-days 60         # Override stale threshold in days (default 30, or branch.stale_days config)
+stax sweep --json                  # Machine-readable branch classification (conflicts with --delete)
+
 stax update                        # Sync trunk, restack, then submit (no merged cleanup)
 stax update --no-pr                # Push only after trunk sync/restack
 stax update --no-submit            # Trunk sync/restack only

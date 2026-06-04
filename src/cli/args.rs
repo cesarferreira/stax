@@ -389,6 +389,25 @@ pub(crate) enum Commands {
         auto_stash_pop: bool,
     },
 
+    /// List and optionally clean up local branches (merged, upstream-gone, stale)
+    Sweep {
+        /// Delete merged and upstream-gone branches (safe to remove)
+        #[arg(short, long)]
+        delete: bool,
+        /// When deleting, also include stale branches (use with --delete)
+        #[arg(long, requires = "delete")]
+        include_stale: bool,
+        /// Skip confirmation prompts (use with --delete)
+        #[arg(short, long, requires = "delete")]
+        force: bool,
+        /// Override the stale threshold in days (default: 30, or branch.stale_days from config)
+        #[arg(long, value_name = "DAYS")]
+        stale_days: Option<u64>,
+        /// Output classification results as JSON (implies read-only, no deletion)
+        #[arg(long, conflicts_with = "delete")]
+        json: bool,
+    },
+
     /// Restack (rebase) the current branch onto its parent
     #[command(hide = true)]
     Restack {

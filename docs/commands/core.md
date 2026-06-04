@@ -51,6 +51,17 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st update --force --yes --no-prompt` | Full update flow without sync or submit prompts |
 | `st update --verbose` | Same as `st update`, with detailed sync/restack/submit timing |
 
+## Branch housekeeping
+
+| Command | What it does |
+|---|---|
+| `st sweep` | Classify all local branches: merged, upstream-gone, stale, active (read-only) |
+| `st sweep --delete` | Delete all merged and upstream-gone branches after confirmation |
+| `st sweep --delete --include-stale` | Also delete stale branches (older than threshold) |
+| `st sweep --delete --force` | Skip confirmation prompt |
+| `st sweep --stale-days 60` | Override stale threshold (default 30, or `branch.stale_days` in config) |
+| `st sweep --json` | Machine-readable output of all classified branches |
+
 ## Navigation and recovery
 
 | Command | What it does |

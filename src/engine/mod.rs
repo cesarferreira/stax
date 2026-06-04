@@ -1,3 +1,4 @@
+pub mod branch_detect;
 pub mod metadata;
 pub mod picker;
 pub mod restack_preflight;
