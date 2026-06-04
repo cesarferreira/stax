@@ -980,12 +980,11 @@ impl GitHubClient {
             .iter()
             .filter(|r| r.state == "APPROVED")
             .count();
-        let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED")
-            || pr
-                .reviews
-                .nodes
-                .iter()
-                .any(|r| r.state == "CHANGES_REQUESTED");
+        // #376 / #447: derive blocking state from reviewDecision only. The
+        // reviews list retains historical events, so scanning it with any()
+        // lets a superseded CHANGES_REQUESTED review keep blocking the PR.
+        // reviewDecision already applies per-reviewer latest-wins logic.
+        let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
         let mergeable = graphql_mergeable_bool(&pr.mergeable);
         let mergeable_state = graphql_mergeable_state(&pr.mergeable);
         let ci_status = pr
