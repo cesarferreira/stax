@@ -109,7 +109,7 @@ test-docker:
 		-w /work \
 		-e CARGO_HOME=/work/.docker-cache/cargo \
 		-v "$$(pwd)/.docker-cache/target:/work/target" \
-		rust:1.93 \
+		rust:1.95 \
 		bash -lc 'export PATH="$$CARGO_HOME/bin:/usr/local/cargo/bin:$$PATH"; if ! command -v cargo-nextest >/dev/null 2>&1; then cargo install cargo-nextest --locked; fi && cargo nextest run'
 
 # Run fast unit tests only

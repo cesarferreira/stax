@@ -116,7 +116,7 @@ pub(crate) fn run_go_on_worktree(
                 "{}",
                 "Tip: add shell integration for automatic cd:".dimmed()
             );
-            println!("  {}", "stax shell-setup --install".cyan());
+            println!("  {}", "stax setup".cyan());
         }
     }
 

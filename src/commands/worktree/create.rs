@@ -72,7 +72,7 @@ pub fn run(
                         "{}",
                         "Tip: add shell integration for automatic cd:".dimmed()
                     );
-                    println!("  {}", "stax shell-setup --install".cyan());
+                    println!("  {}", "stax setup".cyan());
                 }
             }
 
@@ -113,7 +113,7 @@ pub fn run(
                     "{}",
                     "Tip: add shell integration for automatic cd:".dimmed()
                 );
-                println!("  {}", "stax shell-setup --install".cyan());
+                println!("  {}", "stax setup".cyan());
             }
         }
         return Ok(());
@@ -192,7 +192,7 @@ pub fn run(
                 "{}",
                 "Tip: add shell integration for automatic cd:".dimmed()
             );
-            println!("  {}", "stax shell-setup --install".cyan());
+            println!("  {}", "stax setup".cyan());
         }
     }
 

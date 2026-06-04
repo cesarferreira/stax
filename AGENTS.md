@@ -3,6 +3,7 @@
 ## Test Command Policy
 
 - **AI agents:** for full-suite validation always run `make test`. On macOS this routes through Docker, which is the only sane way to run the entire integration suite — `cargo test` natively will be slow, flaky, and may exhaust file handles. Default to `make test` and only fall back to native runners when explicitly told to.
+- **Start Docker before running `make test`.** On macOS the Docker daemon is not always running; if `make test` fails with `failed to connect to the docker API at unix:///.../docker.sock`, ask the user to launch Docker Desktop (or run `open -a Docker`) and retry — do not silently fall back to `make test-native`.
 - Do not run the full suite via `cargo test` in this repo.
 - For full-suite validation, always use `make test`.
 - On macOS, `make test` intentionally routes to the Docker fast path.
