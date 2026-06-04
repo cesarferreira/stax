@@ -9,13 +9,7 @@ use serde_json::Value;
 
 /// Merge a branch into the current branch using git (fast-forward).
 fn merge_branch(repo: &TestRepo, branch: &str) {
-    let out = repo.git(&[
-        "merge",
-        "--no-ff",
-        branch,
-        "-m",
-        &format!("Merge {}", branch),
-    ]);
+    let out = repo.git(&["merge", "--no-ff", branch, "-m", &format!("Merge {}", branch)]);
     assert!(
         out.status.success(),
         "Failed to merge branch {}: {}",
