@@ -2098,8 +2098,8 @@ mod tests {
                             "statusCheckRollup": { "state": "SUCCESS" },
                             "reviews": {
                                 "nodes": [
-                                    { "state": "APPROVED" },
-                                    { "state": "COMMENTED" }
+                                    { "state": "APPROVED", "author": { "login": "alice" } },
+                                    { "state": "COMMENTED", "author": { "login": "bob" } }
                                 ]
                             }
                         }
@@ -2150,8 +2150,8 @@ mod tests {
                             "statusCheckRollup": { "state": "SUCCESS" },
                             "reviews": {
                                 "nodes": [
-                                    { "state": "CHANGES_REQUESTED" },
-                                    { "state": "APPROVED" }
+                                    { "state": "CHANGES_REQUESTED", "author": { "login": "alice" } },
+                                    { "state": "APPROVED", "author": { "login": "alice" } }
                                 ]
                             }
                         }
@@ -2166,6 +2166,115 @@ mod tests {
 
         assert_eq!(status.review_decision.as_deref(), Some("APPROVED"));
         assert!(!status.changes_requested);
+        // Same reviewer requested changes then approved: latest-wins → 1 approval.
+        assert_eq!(status.approvals, 1);
+    }
+
+    // Helper for the approval-counting tests below: builds a merge-status mock
+    // response whose reviews list is the provided nodes.
+    fn merge_status_body(reviews: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "number": 20,
+                        "title": "Approval counting PR",
+                        "state": "OPEN",
+                        "updatedAt": "2026-06-04T10:00:00Z",
+                        "isDraft": false,
+                        "mergeable": "MERGEABLE",
+                        "reviewDecision": "APPROVED",
+                        "headRefOid": "cccc",
+                        "statusCheckRollup": { "state": "SUCCESS" },
+                        "reviews": { "nodes": reviews }
+                    }
+                }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn test_merge_status_counts_repeat_approvals_once() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merge_status_body(
+                serde_json::json!([
+                    { "state": "APPROVED", "author": { "login": "alice" } },
+                    { "state": "APPROVED", "author": { "login": "alice" } }
+                ]),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(20).await.unwrap();
+
+        assert_eq!(status.approvals, 1);
+    }
+
+    #[tokio::test]
+    async fn test_merge_status_approval_superseded_by_changes_requested() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merge_status_body(
+                serde_json::json!([
+                    { "state": "APPROVED", "author": { "login": "alice" } },
+                    { "state": "CHANGES_REQUESTED", "author": { "login": "alice" } }
+                ]),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(20).await.unwrap();
+
+        assert_eq!(status.approvals, 0);
+    }
+
+    #[tokio::test]
+    async fn test_merge_status_comment_does_not_clear_approval() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merge_status_body(
+                serde_json::json!([
+                    { "state": "APPROVED", "author": { "login": "alice" } },
+                    { "state": "COMMENTED", "author": { "login": "alice" } }
+                ]),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(20).await.unwrap();
+
+        assert_eq!(status.approvals, 1);
+    }
+
+    #[tokio::test]
+    async fn test_merge_status_counts_distinct_reviewers() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merge_status_body(
+                serde_json::json!([
+                    { "state": "APPROVED", "author": { "login": "alice" } },
+                    { "state": "APPROVED", "author": { "login": "bob" } }
+                ]),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(20).await.unwrap();
+
+        assert_eq!(status.approvals, 2);
     }
 
     #[tokio::test]
