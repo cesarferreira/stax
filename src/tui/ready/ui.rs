@@ -259,7 +259,7 @@ fn render_details(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
             Line::from(vec![
                 Span::styled("Mergeable: ", detail_label_style()),
                 Span::styled(
-                    format!("{:?}", row.mergeable),
+                    mergeable_detail_label(row.mergeable).to_string(),
                     mergeable_detail_style(row.mergeable),
                 ),
             ]),
@@ -445,6 +445,14 @@ fn mergeable_detail_style(mergeable: Option<bool>) -> Style {
     }
 }
 
+fn mergeable_detail_label(mergeable: Option<bool>) -> &'static str {
+    match mergeable {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "checking…",
+    }
+}
+
 fn merge_state_detail_style(state: &str) -> Style {
     let normalized = state.to_ascii_lowercase();
     if normalized == "clean" || normalized == "has_hooks" {
@@ -618,6 +626,9 @@ mod tests {
         assert_eq!(mergeable_detail_style(Some(true)).fg, Some(Color::Green));
         assert_eq!(mergeable_detail_style(Some(false)).fg, Some(Color::Red));
         assert_eq!(mergeable_detail_style(None).fg, Some(Color::Yellow));
+        assert_eq!(mergeable_detail_label(Some(true)), "yes");
+        assert_eq!(mergeable_detail_label(Some(false)), "no");
+        assert_eq!(mergeable_detail_label(None), "checking…");
         assert_eq!(metadata_detail_style().fg, Some(Color::Magenta));
         assert_eq!(url_detail_style().fg, Some(Color::Blue));
         assert_eq!(title_detail_style().fg, Some(Color::White));
