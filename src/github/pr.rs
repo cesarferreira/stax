@@ -2126,6 +2126,49 @@ mod tests {
         assert_eq!(status.head_sha, "aaaa");
     }
 
+    // Regression test for #376 / #447: the reviews list retains historical
+    // review events, so a superseded CHANGES_REQUESTED review must not block a
+    // PR whose reviewDecision is APPROVED (reviewDecision already applies
+    // per-reviewer latest-wins logic).
+    #[tokio::test]
+    async fn test_get_pr_merge_status_ignores_stale_changes_requested_review() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "number": 12,
+                            "title": "Re-approved PR",
+                            "state": "OPEN",
+                            "updatedAt": "2026-06-03T10:00:00Z",
+                            "isDraft": false,
+                            "mergeable": "MERGEABLE",
+                            "reviewDecision": "APPROVED",
+                            "headRefOid": "bbbb",
+                            "statusCheckRollup": { "state": "SUCCESS" },
+                            "reviews": {
+                                "nodes": [
+                                    { "state": "CHANGES_REQUESTED" },
+                                    { "state": "APPROVED" }
+                                ]
+                            }
+                        }
+                    }
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(12).await.unwrap();
+
+        assert_eq!(status.review_decision.as_deref(), Some("APPROVED"));
+        assert!(!status.changes_requested);
+    }
+
     #[tokio::test]
     async fn test_get_pr_merge_status_fails_on_graphql_error() {
         let mock_server = MockServer::start().await;

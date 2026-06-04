@@ -35,11 +35,7 @@ pub fn run(
     // --- Classify all local branches ---
 
     // 1. Merged (ancestor or squash-merged)
-    let merged_infos = find_merged_branches_all(
-        &workdir,
-        &trunk,
-        Some(remote_trunk_ref.as_str()),
-    )?;
+    let merged_infos = find_merged_branches_all(&workdir, &trunk, Some(remote_trunk_ref.as_str()))?;
     let merged_set: HashSet<String> = merged_infos.iter().map(|m| m.branch.clone()).collect();
 
     // 2. Upstream-gone
@@ -95,7 +91,10 @@ pub fn run(
     // --- Human-readable output ---
 
     if total_classified == 0 {
-        println!("{}", "No local branches found (other than trunk and current).".dimmed());
+        println!(
+            "{}",
+            "No local branches found (other than trunk and current).".dimmed()
+        );
         return Ok(());
     }
 
@@ -147,7 +146,9 @@ pub fn run(
         sorted.sort();
         println!(
             "{} {}",
-            format!("  upstream-gone  ({})", sorted.len()).yellow().bold(),
+            format!("  upstream-gone  ({})", sorted.len())
+                .yellow()
+                .bold(),
             "— remote deleted, safe to delete".dimmed()
         );
         for b in &sorted {
@@ -192,10 +193,7 @@ pub fn run(
     if !active_branches.is_empty() {
         let mut sorted = active_branches.clone();
         sorted.sort();
-        println!(
-            "{}",
-            format!("  active  ({})", sorted.len()).cyan().bold()
-        );
+        println!("{}", format!("  active  ({})", sorted.len()).cyan().bold());
         for b in &sorted {
             let tracked_marker = if stack.branches.contains_key(b) {
                 " tracked".dimmed()
@@ -208,7 +206,13 @@ pub fn run(
     }
 
     // Summary / hints
-    print_summary(&merged_set, &gone_set, &stale_set, effective_stale_days, delete);
+    print_summary(
+        &merged_set,
+        &gone_set,
+        &stale_set,
+        effective_stale_days,
+        delete,
+    );
 
     // --- Deletion ---
     if delete {
