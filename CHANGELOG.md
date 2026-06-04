@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.85.0] - 2026-06-04
+
+### Added
+- Add stax sweep command for branch housekeeping (#468)
+
+### Changed
+- Potential fix for code scanning alert no. 2: Workflow does not contain permissions (#463)
+
+### Fixed
+- Replace stale `stax shell-setup --install` hints with `stax setup` (#465)
+- Treat no-review-required PRs as ready to merge (#466)
+- Render Mergeable detail with human label (#467)
+
 ## [0.84.1] - 2026-06-03
 
 ### Changed
@@ -465,7 +478,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.84.1...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.85.0...HEAD
+[0.85.0]: https://github.com/cesarferreira/stax/compare/v0.84.1...v0.85.0
 [0.84.1]: https://github.com/cesarferreira/stax/compare/v0.84.0...v0.84.1
 [0.84.0]: https://github.com/cesarferreira/stax/compare/v0.83.0...v0.84.0
 [0.83.0]: https://github.com/cesarferreira/stax/compare/v0.82.0...v0.83.0
