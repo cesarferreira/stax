@@ -355,6 +355,43 @@ struct ReviewConnection {
 #[derive(Debug, Deserialize)]
 struct ReviewNode {
     state: String,
+    // Author may be null for reviews left by deleted/ghost users.
+    author: Option<ReviewAuthor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewAuthor {
+    login: String,
+}
+
+/// Count effective approvals applying GitHub's per-reviewer latest-wins rules.
+///
+/// `reviews(last: 100)` returns nodes in chronological order. For each
+/// reviewer only `APPROVED`/`CHANGES_REQUESTED`/`DISMISSED` change their review
+/// standing — `COMMENTED` and `PENDING` do not clear a prior approval, so they
+/// are skipped when determining a reviewer's effective state. The reviewer's
+/// last standing-changing review wins; we count reviewers whose effective state
+/// is `APPROVED`. Author-less reviews (deleted/ghost users) are grouped under a
+/// single key.
+fn count_effective_approvals(nodes: &[ReviewNode]) -> usize {
+    use std::collections::HashMap;
+
+    let mut effective: HashMap<&str, &str> = HashMap::new();
+    for node in nodes {
+        match node.state.as_str() {
+            "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED" => {
+                let key = node.author.as_ref().map(|a| a.login.as_str()).unwrap_or("");
+                effective.insert(key, node.state.as_str());
+            }
+            // COMMENTED / PENDING / unknown states do not change standing.
+            _ => {}
+        }
+    }
+
+    effective
+        .values()
+        .filter(|state| **state == "APPROVED")
+        .count()
 }
 
 fn graphql_mergeable_bool(mergeable: &str) -> Option<bool> {
@@ -943,6 +980,9 @@ impl GitHubClient {
                         reviews(last: 100) {{
                             nodes {{
                                 state
+                                author {{
+                                    login
+                                }}
                             }}
                         }}
                     }}
@@ -974,12 +1014,7 @@ impl GitHubClient {
             .pull_request
             .context("GraphQL response did not include pull request merge status data")?;
 
-        let approvals = pr
-            .reviews
-            .nodes
-            .iter()
-            .filter(|r| r.state == "APPROVED")
-            .count();
+        let approvals = count_effective_approvals(&pr.reviews.nodes);
         // #376 / #447: derive blocking state from reviewDecision only. The
         // reviews list retains historical events, so scanning it with any()
         // lets a superseded CHANGES_REQUESTED review keep blocking the PR.
@@ -1027,6 +1062,9 @@ impl GitHubClient {
                         reviews(last: 100) {{
                             nodes {{
                                 state
+                                author {{
+                                    login
+                                }}
                             }}
                         }}
                     }}
@@ -1058,12 +1096,7 @@ impl GitHubClient {
             .pull_request
             .context("GraphQL response did not include pull request review data")?;
 
-        let approvals = pr
-            .reviews
-            .nodes
-            .iter()
-            .filter(|r| r.state == "APPROVED")
-            .count();
+        let approvals = count_effective_approvals(&pr.reviews.nodes);
         let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
         let review_decision = pr.review_decision;
 
