@@ -355,6 +355,43 @@ struct ReviewConnection {
 #[derive(Debug, Deserialize)]
 struct ReviewNode {
     state: String,
+    // Author may be null for reviews left by deleted/ghost users.
+    author: Option<ReviewAuthor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewAuthor {
+    login: String,
+}
+
+/// Count effective approvals applying GitHub's per-reviewer latest-wins rules.
+///
+/// `reviews(last: 100)` returns nodes in chronological order. For each
+/// reviewer only `APPROVED`/`CHANGES_REQUESTED`/`DISMISSED` change their review
+/// standing — `COMMENTED` and `PENDING` do not clear a prior approval, so they
+/// are skipped when determining a reviewer's effective state. The reviewer's
+/// last standing-changing review wins; we count reviewers whose effective state
+/// is `APPROVED`. Author-less reviews (deleted/ghost users) are grouped under a
+/// single key.
+fn count_effective_approvals(nodes: &[ReviewNode]) -> usize {
+    use std::collections::HashMap;
+
+    let mut effective: HashMap<&str, &str> = HashMap::new();
+    for node in nodes {
+        match node.state.as_str() {
+            "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED" => {
+                let key = node.author.as_ref().map(|a| a.login.as_str()).unwrap_or("");
+                effective.insert(key, node.state.as_str());
+            }
+            // COMMENTED / PENDING / unknown states do not change standing.
+            _ => {}
+        }
+    }
+
+    effective
+        .values()
+        .filter(|state| **state == "APPROVED")
+        .count()
 }
 
 fn graphql_mergeable_bool(mergeable: &str) -> Option<bool> {
@@ -943,6 +980,9 @@ impl GitHubClient {
                         reviews(last: 100) {{
                             nodes {{
                                 state
+                                author {{
+                                    login
+                                }}
                             }}
                         }}
                     }}
@@ -974,18 +1014,11 @@ impl GitHubClient {
             .pull_request
             .context("GraphQL response did not include pull request merge status data")?;
 
-        let approvals = pr
-            .reviews
-            .nodes
-            .iter()
-            .filter(|r| r.state == "APPROVED")
-            .count();
-        let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED")
-            || pr
-                .reviews
-                .nodes
-                .iter()
-                .any(|r| r.state == "CHANGES_REQUESTED");
+        let approvals = count_effective_approvals(&pr.reviews.nodes);
+        // The reviews list retains historical events, so scanning it would let
+        // a superseded CHANGES_REQUESTED review keep blocking the PR. Rely on
+        // reviewDecision, which already applies per-reviewer latest-wins logic.
+        let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
         let mergeable = graphql_mergeable_bool(&pr.mergeable);
         let mergeable_state = graphql_mergeable_state(&pr.mergeable);
         let ci_status = pr
@@ -1028,6 +1061,9 @@ impl GitHubClient {
                         reviews(last: 100) {{
                             nodes {{
                                 state
+                                author {{
+                                    login
+                                }}
                             }}
                         }}
                     }}
@@ -1059,12 +1095,7 @@ impl GitHubClient {
             .pull_request
             .context("GraphQL response did not include pull request review data")?;
 
-        let approvals = pr
-            .reviews
-            .nodes
-            .iter()
-            .filter(|r| r.state == "APPROVED")
-            .count();
+        let approvals = count_effective_approvals(&pr.reviews.nodes);
         let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
         let review_decision = pr.review_decision;
 
@@ -2099,8 +2130,8 @@ mod tests {
                             "statusCheckRollup": { "state": "SUCCESS" },
                             "reviews": {
                                 "nodes": [
-                                    { "state": "APPROVED" },
-                                    { "state": "COMMENTED" }
+                                    { "state": "APPROVED", "author": { "login": "alice" } },
+                                    { "state": "COMMENTED", "author": { "login": "bob" } }
                                 ]
                             }
                         }
@@ -2124,6 +2155,155 @@ mod tests {
         assert!(!status.changes_requested);
         assert_eq!(status.ci_status, CiStatus::Success);
         assert_eq!(status.head_sha, "aaaa");
+    }
+
+    // A superseded CHANGES_REQUESTED review must not block a PR whose
+    // reviewDecision is APPROVED — the reviews list retains historical events.
+    #[tokio::test]
+    async fn test_get_pr_merge_status_ignores_stale_changes_requested_review() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "number": 12,
+                            "title": "Re-approved PR",
+                            "state": "OPEN",
+                            "updatedAt": "2026-06-03T10:00:00Z",
+                            "isDraft": false,
+                            "mergeable": "MERGEABLE",
+                            "reviewDecision": "APPROVED",
+                            "headRefOid": "bbbb",
+                            "statusCheckRollup": { "state": "SUCCESS" },
+                            "reviews": {
+                                "nodes": [
+                                    { "state": "CHANGES_REQUESTED", "author": { "login": "alice" } },
+                                    { "state": "APPROVED", "author": { "login": "alice" } }
+                                ]
+                            }
+                        }
+                    }
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(12).await.unwrap();
+
+        assert_eq!(status.review_decision.as_deref(), Some("APPROVED"));
+        assert!(!status.changes_requested);
+        // Same reviewer requested changes then approved: latest-wins → 1 approval.
+        assert_eq!(status.approvals, 1);
+    }
+
+    // Builds a merge-status mock response with the given review nodes.
+    fn merge_status_body(reviews: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "number": 20,
+                        "title": "Approval counting PR",
+                        "state": "OPEN",
+                        "updatedAt": "2026-06-04T10:00:00Z",
+                        "isDraft": false,
+                        "mergeable": "MERGEABLE",
+                        "reviewDecision": "APPROVED",
+                        "headRefOid": "cccc",
+                        "statusCheckRollup": { "state": "SUCCESS" },
+                        "reviews": { "nodes": reviews }
+                    }
+                }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn test_merge_status_counts_repeat_approvals_once() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merge_status_body(
+                serde_json::json!([
+                    { "state": "APPROVED", "author": { "login": "alice" } },
+                    { "state": "APPROVED", "author": { "login": "alice" } }
+                ]),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(20).await.unwrap();
+
+        assert_eq!(status.approvals, 1);
+    }
+
+    #[tokio::test]
+    async fn test_merge_status_approval_superseded_by_changes_requested() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merge_status_body(
+                serde_json::json!([
+                    { "state": "APPROVED", "author": { "login": "alice" } },
+                    { "state": "CHANGES_REQUESTED", "author": { "login": "alice" } }
+                ]),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(20).await.unwrap();
+
+        assert_eq!(status.approvals, 0);
+    }
+
+    #[tokio::test]
+    async fn test_merge_status_comment_does_not_clear_approval() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merge_status_body(
+                serde_json::json!([
+                    { "state": "APPROVED", "author": { "login": "alice" } },
+                    { "state": "COMMENTED", "author": { "login": "alice" } }
+                ]),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(20).await.unwrap();
+
+        assert_eq!(status.approvals, 1);
+    }
+
+    #[tokio::test]
+    async fn test_merge_status_counts_distinct_reviewers() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merge_status_body(
+                serde_json::json!([
+                    { "state": "APPROVED", "author": { "login": "alice" } },
+                    { "state": "APPROVED", "author": { "login": "bob" } }
+                ]),
+            )))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(20).await.unwrap();
+
+        assert_eq!(status.approvals, 2);
     }
 
     #[tokio::test]
