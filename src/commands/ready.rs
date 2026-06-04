@@ -508,13 +508,10 @@ fn classify_status(status: &PrMergeStatus, ci_summary: &CiSummary) -> (ReadyActi
     if status.mergeable == Some(true)
         && status.ci_status.is_success()
         && matches!(status.review_decision.as_deref(), Some("APPROVED") | None)
-        && (status.approvals > 0 || status.review_decision.is_some())
     {
         return (ReadyAction::Merge, ReadyReason::Ready);
     }
-    if status.review_decision.as_deref() == Some("REVIEW_REQUIRED")
-        || status.review_decision.is_none() && status.approvals == 0
-    {
+    if status.review_decision.as_deref() == Some("REVIEW_REQUIRED") {
         return (ReadyAction::Ping, ReadyReason::ReviewRequired);
     }
 
@@ -532,9 +529,7 @@ fn review_summary(status: &PrMergeStatus) -> String {
     if status.changes_requested || status.review_decision.as_deref() == Some("CHANGES_REQUESTED") {
         return "changes requested".to_string();
     }
-    if status.review_decision.as_deref() == Some("REVIEW_REQUIRED")
-        || status.review_decision.is_none() && status.approvals == 0
-    {
+    if status.review_decision.as_deref() == Some("REVIEW_REQUIRED") {
         return "missing review".to_string();
     }
     if status.approvals == 1 {
@@ -542,6 +537,9 @@ fn review_summary(status: &PrMergeStatus) -> String {
     }
     if status.approvals > 1 {
         return format!("{} approvals", status.approvals);
+    }
+    if status.review_decision.is_none() {
+        return "not required".to_string();
     }
     "unknown".to_string()
 }
@@ -746,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_unknown_review_without_approvals_as_ping() {
+    fn classifies_no_review_requirement_as_ready() {
         let row = PrReadinessRow::from_status(
             "feature",
             status(|s| {
@@ -756,8 +754,9 @@ mod tests {
             CiSummary::passed(),
         );
 
-        assert_eq!(row.action, ReadyAction::Ping);
-        assert_eq!(row.reason, ReadyReason::ReviewRequired);
+        assert_eq!(row.action, ReadyAction::Merge);
+        assert_eq!(row.reason, ReadyReason::Ready);
+        assert_eq!(row.review_summary, "not required");
     }
 
     #[test]
