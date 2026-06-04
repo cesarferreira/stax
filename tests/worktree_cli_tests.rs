@@ -763,7 +763,7 @@ fn wt_create_without_shell_integration_suggests_install() {
         stdout
     );
     assert!(
-        stdout.contains("stax shell-setup --install"),
+        stdout.contains("stax setup"),
         "expected shell integration install hint, got:\n{}",
         stdout
     );
@@ -790,7 +790,7 @@ fn wt_go_without_shell_integration_suggests_install() {
         stdout
     );
     assert!(
-        stdout.contains("stax shell-setup --install"),
+        stdout.contains("stax setup"),
         "expected shell integration install hint, got:\n{}",
         stdout
     );

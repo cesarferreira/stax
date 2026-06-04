@@ -472,7 +472,7 @@ pub fn prompt_if_missing() -> Result<()> {
     eprintln!("{} Shell integration not detected.", "stax:".cyan().bold());
     eprintln!(
         "  Run {} for transparent worktree navigation (cd).",
-        "stax shell-setup --install".cyan()
+        "stax setup".cyan()
     );
     eprintln!();
 
