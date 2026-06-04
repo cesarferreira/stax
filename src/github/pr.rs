@@ -1015,10 +1015,9 @@ impl GitHubClient {
             .context("GraphQL response did not include pull request merge status data")?;
 
         let approvals = count_effective_approvals(&pr.reviews.nodes);
-        // #376 / #447: derive blocking state from reviewDecision only. The
-        // reviews list retains historical events, so scanning it with any()
-        // lets a superseded CHANGES_REQUESTED review keep blocking the PR.
-        // reviewDecision already applies per-reviewer latest-wins logic.
+        // The reviews list retains historical events, so scanning it would let
+        // a superseded CHANGES_REQUESTED review keep blocking the PR. Rely on
+        // reviewDecision, which already applies per-reviewer latest-wins logic.
         let changes_requested = pr.review_decision.as_deref() == Some("CHANGES_REQUESTED");
         let mergeable = graphql_mergeable_bool(&pr.mergeable);
         let mergeable_state = graphql_mergeable_state(&pr.mergeable);
@@ -2158,10 +2157,8 @@ mod tests {
         assert_eq!(status.head_sha, "aaaa");
     }
 
-    // Regression test for #376 / #447: the reviews list retains historical
-    // review events, so a superseded CHANGES_REQUESTED review must not block a
-    // PR whose reviewDecision is APPROVED (reviewDecision already applies
-    // per-reviewer latest-wins logic).
+    // A superseded CHANGES_REQUESTED review must not block a PR whose
+    // reviewDecision is APPROVED — the reviews list retains historical events.
     #[tokio::test]
     async fn test_get_pr_merge_status_ignores_stale_changes_requested_review() {
         let mock_server = MockServer::start().await;
@@ -2203,8 +2200,7 @@ mod tests {
         assert_eq!(status.approvals, 1);
     }
 
-    // Helper for the approval-counting tests below: builds a merge-status mock
-    // response whose reviews list is the provided nodes.
+    // Builds a merge-status mock response with the given review nodes.
     fn merge_status_body(reviews: serde_json::Value) -> serde_json::Value {
         serde_json::json!({
             "data": {
