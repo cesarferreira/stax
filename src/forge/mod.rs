@@ -542,8 +542,8 @@ mod tests {
 
     fn restore_env(var: &str, value: Option<String>) {
         match value {
-            Some(value) => env::set_var(var, value),
-            None => env::remove_var(var),
+            Some(value) => unsafe { env::set_var(var, value) },
+            None => unsafe { env::remove_var(var) },
         }
     }
 
@@ -603,11 +603,11 @@ mod tests {
             env::temp_dir().join(format!("stax-forge-token-gitlab-{}", std::process::id()));
         fs::create_dir_all(&temp_dir).unwrap();
 
-        env::set_var("HOME", &temp_dir);
-        env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-        env::remove_var("STAX_GITLAB_TOKEN");
-        env::remove_var("GITLAB_TOKEN");
-        env::remove_var("STAX_FORGE_TOKEN");
+        unsafe { env::set_var("HOME", &temp_dir) };
+        unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+        unsafe { env::remove_var("STAX_GITLAB_TOKEN") };
+        unsafe { env::remove_var("GITLAB_TOKEN") };
+        unsafe { env::remove_var("STAX_FORGE_TOKEN") };
 
         Config::set_github_token("saved-token").unwrap();
 
@@ -638,11 +638,11 @@ mod tests {
             env::temp_dir().join(format!("stax-forge-token-gitea-{}", std::process::id()));
         fs::create_dir_all(&temp_dir).unwrap();
 
-        env::set_var("HOME", &temp_dir);
-        env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-        env::remove_var("STAX_GITEA_TOKEN");
-        env::remove_var("GITEA_TOKEN");
-        env::remove_var("STAX_FORGE_TOKEN");
+        unsafe { env::set_var("HOME", &temp_dir) };
+        unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+        unsafe { env::remove_var("STAX_GITEA_TOKEN") };
+        unsafe { env::remove_var("GITEA_TOKEN") };
+        unsafe { env::remove_var("STAX_FORGE_TOKEN") };
 
         Config::set_github_token("saved-token").unwrap();
 

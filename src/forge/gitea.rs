@@ -720,7 +720,7 @@ mod tests {
     async fn test_list_open_prs_by_head() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITEA_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("Authorization", "token test-token"))
@@ -754,7 +754,7 @@ mod tests {
     async fn test_fetch_checks_maps_gitea_statuses() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITEA_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("Authorization", "token test-token"))
@@ -789,7 +789,7 @@ mod tests {
     async fn test_list_open_pull_requests() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITEA_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("Authorization", "token test-token"))
@@ -829,7 +829,7 @@ mod tests {
     async fn test_list_open_issues() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITEA_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("Authorization", "token test-token"))
@@ -862,7 +862,7 @@ mod tests {
     async fn test_get_current_user() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITEA_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("Authorization", "token test-token"))
@@ -882,7 +882,7 @@ mod tests {
     async fn test_get_user_open_prs_filters_by_author() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITEA_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("Authorization", "token test-token"))
@@ -924,7 +924,7 @@ mod tests {
     async fn test_get_recent_merged_prs() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITEA_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("Authorization", "token test-token"))
@@ -967,7 +967,7 @@ mod tests {
     async fn test_get_recent_opened_prs() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITEA_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("Authorization", "token test-token"))
@@ -1010,7 +1010,7 @@ mod tests {
     async fn test_get_reviews_received() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITEA_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITEA_TOKEN", "test-token") };
 
         // Mock: user's open PRs
         Mock::given(method("GET"))

@@ -197,7 +197,7 @@ fn load_commits(
     ];
 
     // Add path filter if specified
-    if let Some(ref p) = resolved_path {
+    if let Some(p) = &resolved_path {
         args.push("--".to_string());
         args.push(p.clone());
     }

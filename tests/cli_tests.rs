@@ -1211,12 +1211,12 @@ fn test_generate_help_includes_no_prompt_flag() {
 
 #[test]
 fn test_gen_alias_matches_generate_help() {
-    let gen = stax(&["gen", "--help"]);
+    let gen_out = stax(&["gen", "--help"]);
     let generate = stax(&["generate", "--help"]);
-    assert!(gen.status.success(), "gen --help should succeed");
+    assert!(gen_out.status.success(), "gen --help should succeed");
     assert!(generate.status.success(), "generate --help should succeed");
     assert_eq!(
-        String::from_utf8_lossy(&gen.stdout),
+        String::from_utf8_lossy(&gen_out.stdout),
         String::from_utf8_lossy(&generate.stdout),
         "gen and generate help should match"
     );

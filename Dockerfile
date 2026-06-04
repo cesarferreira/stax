@@ -1,4 +1,4 @@
-FROM rust:1.95
+FROM rust:latest
 
 RUN cargo install cargo-nextest --locked
 

@@ -394,7 +394,7 @@ impl HunkSplitApp {
             let hunks: Vec<usize> = file_sel
                 .iter()
                 .enumerate()
-                .filter(|(_, &s)| s)
+                .filter(|&(_, &s)| s)
                 .map(|(hi, _)| hi)
                 .collect();
             if !hunks.is_empty() {
