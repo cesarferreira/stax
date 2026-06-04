@@ -51,6 +51,7 @@ pub mod staging;
 pub mod standup;
 pub mod status;
 pub mod submit;
+pub mod sweep;
 pub mod sync;
 pub mod tmux;
 pub mod undo;

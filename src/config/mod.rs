@@ -83,6 +83,9 @@ pub struct BranchConfig {
     /// Username for branch naming. If not set, uses git config user.name
     #[serde(default)]
     pub user: Option<String>,
+    /// Number of days without commits before a branch is considered stale by `stax sweep` (default: 30)
+    #[serde(default = "default_stale_days")]
+    pub stale_days: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -343,12 +346,17 @@ impl Default for BranchConfig {
             replacement: default_replacement(),
             format: None,
             user: None,
+            stale_days: default_stale_days(),
         }
     }
 }
 
 fn default_date_format() -> String {
     "%m-%d".to_string()
+}
+
+fn default_stale_days() -> u64 {
+    30
 }
 
 impl Default for RemoteConfig {

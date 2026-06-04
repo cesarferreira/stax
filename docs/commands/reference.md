@@ -15,6 +15,12 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 | `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
+| `st sweep` | | Classify all local branches as merged / upstream-gone / stale / active (read-only by default) |
+| `st sweep --delete` | | Delete merged and upstream-gone branches after confirmation |
+| `st sweep --delete --include-stale` | | Also delete stale branches (older than `--stale-days` / `branch.stale_days` config key) |
+| `st sweep --delete --force` | | Skip confirmation prompt |
+| `st sweep --stale-days <N>` | | Override stale threshold in days (default: 30) |
+| `st sweep --json` | | Machine-readable branch classification (conflicts with `--delete`) |
 | `st update` | | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack |
 | `st update --force --yes --no-prompt` | | Run the full update flow without sync or submit prompts |
 | `st update --verbose` | | Same as `st update`, with detailed sync/restack/submit timing |
