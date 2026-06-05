@@ -7204,7 +7204,7 @@ mod forge_mock_tests {
         let repo = TestRepo::new_with_remote();
 
         // Set environment variables for the mock
-        std::env::set_var("STAX_GITHUB_TOKEN", "mock-token");
+        unsafe { std::env::set_var("STAX_GITHUB_TOKEN", "mock-token") };
 
         (repo, mock_server)
     }

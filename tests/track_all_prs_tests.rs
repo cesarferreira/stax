@@ -44,8 +44,8 @@ fn test_track_all_prs_no_token() {
     let repo = TestRepo::new_with_remote();
 
     // Ensure no token is set
-    std::env::remove_var("GITHUB_TOKEN");
-    std::env::remove_var("STAX_GITHUB_TOKEN");
+    unsafe { std::env::remove_var("GITHUB_TOKEN") };
+    unsafe { std::env::remove_var("STAX_GITHUB_TOKEN") };
 
     let output = repo.run_stax(&["branch", "track", "--all-prs"]);
 

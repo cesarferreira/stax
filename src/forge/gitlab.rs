@@ -793,7 +793,7 @@ mod tests {
     async fn test_list_open_prs_by_head() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("PRIVATE-TOKEN", "test-token"))
@@ -829,7 +829,7 @@ mod tests {
     async fn test_fetch_checks_maps_gitlab_statuses() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("PRIVATE-TOKEN", "test-token"))
@@ -866,7 +866,7 @@ mod tests {
     async fn test_list_open_pull_requests() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("PRIVATE-TOKEN", "test-token"))
@@ -907,7 +907,7 @@ mod tests {
     async fn test_list_open_issues() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("PRIVATE-TOKEN", "test-token"))
@@ -941,7 +941,7 @@ mod tests {
     async fn test_get_current_user() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("PRIVATE-TOKEN", "test-token"))
@@ -962,7 +962,7 @@ mod tests {
     async fn test_get_user_open_prs() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("PRIVATE-TOKEN", "test-token"))
@@ -996,7 +996,7 @@ mod tests {
     async fn test_get_recent_merged_prs() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("PRIVATE-TOKEN", "test-token"))
@@ -1030,7 +1030,7 @@ mod tests {
     async fn test_get_recent_opened_prs() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
 
         Mock::given(method("GET"))
             .and(header("PRIVATE-TOKEN", "test-token"))
@@ -1062,7 +1062,7 @@ mod tests {
     async fn test_get_reviews_received() {
         ensure_crypto_provider();
         let server = MockServer::start().await;
-        std::env::set_var("STAX_GITLAB_TOKEN", "test-token");
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
 
         // Mock: user's open MRs
         Mock::given(method("GET"))

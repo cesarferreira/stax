@@ -36,9 +36,9 @@ fn interactive_terminal_requires_both_stdio_streams() {
 fn interactive_stdio_can_be_forced_for_tests() {
     #[cfg(debug_assertions)]
     {
-        std::env::set_var("STAX_TEST_FORCE_INTERACTIVE_TERMINAL", "1");
+        unsafe { std::env::set_var("STAX_TEST_FORCE_INTERACTIVE_TERMINAL", "1") };
         assert_eq!(detect_interactive_stdio(), (true, true));
-        std::env::remove_var("STAX_TEST_FORCE_INTERACTIVE_TERMINAL");
+        unsafe { std::env::remove_var("STAX_TEST_FORCE_INTERACTIVE_TERMINAL") };
     }
 }
 

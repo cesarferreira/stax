@@ -257,7 +257,7 @@ mod tests {
     fn ready_tui_constructs_forge_client_with_entered_runtime() {
         let _guard = ENV_LOCK.lock().unwrap();
         let original_token = env::var("STAX_GITHUB_TOKEN").ok();
-        env::set_var("STAX_GITHUB_TOKEN", "test-token");
+        unsafe { env::set_var("STAX_GITHUB_TOKEN", "test-token") };
 
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
         let remote = RemoteInfo {
@@ -273,8 +273,8 @@ mod tests {
         let result = create_loader_forge_client(&runtime, &remote);
 
         match original_token {
-            Some(token) => env::set_var("STAX_GITHUB_TOKEN", token),
-            None => env::remove_var("STAX_GITHUB_TOKEN"),
+            Some(token) => unsafe { env::set_var("STAX_GITHUB_TOKEN", token) },
+            None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
         }
         assert!(result.is_ok());
     }

@@ -31,8 +31,8 @@ fn write_auth_config(
 
 fn restore_env_var(name: &str, value: Option<String>) {
     match value {
-        Some(value) => env::set_var(name, value),
-        None => env::remove_var(name),
+        Some(value) => unsafe { env::set_var(name, value) },
+        None => unsafe { env::remove_var(name) },
     }
 }
 
@@ -80,8 +80,8 @@ fn config_load_overlays_repo_stax_toml_when_present() {
     )
     .unwrap();
 
-    env::set_var("HOME", &home_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     Command::new("git")
         .arg("init")
         .current_dir(&repo_dir)
@@ -131,8 +131,8 @@ fn config_load_discovers_repo_stax_toml_from_nested_directory() {
     fs::write(global_config_dir.join("config.toml"), "[ui]\ntips = true\n").unwrap();
     fs::write(repo_dir.join("stax.toml"), "[ui]\ntips = false\n").unwrap();
 
-    env::set_var("HOME", &home_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     Command::new("git")
         .arg("init")
         .current_dir(&repo_dir)
@@ -163,8 +163,8 @@ fn config_path_uses_global_config_when_repo_local_config_is_absent() {
     fs::create_dir_all(&repo_dir).unwrap();
     fs::create_dir_all(&home_dir).unwrap();
 
-    env::set_var("HOME", &home_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     Command::new("git")
         .arg("init")
         .current_dir(&repo_dir)
@@ -206,8 +206,8 @@ fn config_path_env_override_wins_over_repo_local_config() {
     )
     .unwrap();
 
-    env::set_var("HOME", temp_dir.join("home"));
-    env::set_var("STAX_CONFIG_DIR", &override_config_dir);
+    unsafe { env::set_var("HOME", temp_dir.join("home")) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", &override_config_dir) };
     Command::new("git")
         .arg("init")
         .current_dir(&repo_dir)
@@ -244,8 +244,8 @@ fn config_load_ignores_old_repo_dot_config_path() {
     fs::create_dir_all(&home_dir).unwrap();
     fs::write(old_config_dir.join("config.toml"), "[ui]\ntips = false\n").unwrap();
 
-    env::set_var("HOME", &home_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     Command::new("git")
         .arg("init")
         .current_dir(&repo_dir)
@@ -280,8 +280,8 @@ fn config_save_writes_global_config_when_repo_stax_toml_exists() {
     fs::create_dir_all(&home_dir).unwrap();
     fs::write(repo_dir.join("stax.toml"), "[ui]\ntips = false\n").unwrap();
 
-    env::set_var("HOME", &home_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     Command::new("git")
         .arg("init")
         .current_dir(&repo_dir)
@@ -649,13 +649,13 @@ fn test_token_priority_stax_env_first() {
     let temp_dir =
         std::env::temp_dir().join(format!("stax-test-stax-first-{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
     write_auth_config(&temp_dir, false, true, None);
 
     // Set both env vars
-    env::set_var("STAX_GITHUB_TOKEN", "stax-token");
-    env::set_var("GITHUB_TOKEN", "github-token");
+    unsafe { env::set_var("STAX_GITHUB_TOKEN", "stax-token") };
+    unsafe { env::set_var("GITHUB_TOKEN", "github-token") };
 
     // STAX_GITHUB_TOKEN should take priority
     let token = Config::github_token();
@@ -663,18 +663,18 @@ fn test_token_priority_stax_env_first() {
 
     // Restore original values
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -691,31 +691,31 @@ fn test_github_token_env_ignored_by_default() {
     let temp_dir =
         std::env::temp_dir().join(format!("stax-test-env-ignored-{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
     write_auth_config(&temp_dir, false, false, None);
 
     // Only set GITHUB_TOKEN
-    env::remove_var("STAX_GITHUB_TOKEN");
-    env::set_var("GITHUB_TOKEN", "github-token");
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::set_var("GITHUB_TOKEN", "github-token") };
 
     let token = Config::github_token();
     assert_eq!(token, None);
 
     // Restore original values
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -732,29 +732,29 @@ fn test_github_token_env_opt_in_fallback() {
     let temp_dir =
         std::env::temp_dir().join(format!("stax-test-env-opt-in-{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
     write_auth_config(&temp_dir, false, true, None);
 
-    env::remove_var("STAX_GITHUB_TOKEN");
-    env::set_var("GITHUB_TOKEN", "github-token");
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::set_var("GITHUB_TOKEN", "github-token") };
 
     let token = Config::github_token();
     assert_eq!(token, Some("github-token".to_string()));
 
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -774,28 +774,28 @@ fn test_empty_stax_token_falls_back_to_credentials() {
     write_auth_config(&temp_dir, false, true, None);
     fs::write(config_dir.join(".credentials"), "file-token").unwrap();
 
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-    env::set_var("STAX_GITHUB_TOKEN", "");
-    env::set_var("GITHUB_TOKEN", "github-token");
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::set_var("STAX_GITHUB_TOKEN", "") };
+    unsafe { env::set_var("GITHUB_TOKEN", "github-token") };
 
     let token = Config::github_token();
     assert_eq!(token, Some("file-token".to_string()));
 
     // Restore original values
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -842,8 +842,8 @@ fn test_set_github_token_writes_to_file() {
     fs::create_dir_all(&temp_dir).unwrap();
 
     // Override HOME to use temp directory
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
 
     // Write token
     let test_token = "ghp_test_token_12345";
@@ -871,10 +871,10 @@ fn test_set_github_token_writes_to_file() {
 
     // Cleanup
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
 }
 
@@ -896,10 +896,10 @@ fn test_github_token_reads_from_credentials_file() {
     fs::write(config_dir.join(".credentials"), test_token).unwrap();
 
     // Override HOME and clear env vars
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-    env::remove_var("STAX_GITHUB_TOKEN");
-    env::remove_var("GITHUB_TOKEN");
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::remove_var("GITHUB_TOKEN") };
 
     // Read token - should come from file
     let token = Config::github_token();
@@ -907,18 +907,18 @@ fn test_github_token_reads_from_credentials_file() {
 
     // Cleanup
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -939,8 +939,8 @@ fn test_github_token_roundtrip() {
     fs::create_dir_all(&temp_dir).unwrap();
 
     // Override HOME
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
 
     // Write token
     let test_token = "ghp_roundtrip_token_abcdef";
@@ -953,10 +953,10 @@ fn test_github_token_roundtrip() {
 
     // Cleanup
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
 }
 
@@ -980,10 +980,10 @@ fn test_github_token_credentials_take_priority_over_env_when_enabled() {
     write_auth_config(&temp_dir, false, true, None);
 
     // Set HOME and env var
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-    env::remove_var("STAX_GITHUB_TOKEN");
-    env::set_var("GITHUB_TOKEN", env_token);
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::set_var("GITHUB_TOKEN", env_token) };
 
     // Credentials file should take priority over ambient GITHUB_TOKEN
     let token = Config::github_token();
@@ -991,18 +991,18 @@ fn test_github_token_credentials_take_priority_over_env_when_enabled() {
 
     // Cleanup
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -1024,10 +1024,10 @@ fn test_github_token_trims_whitespace_from_file() {
     fs::write(config_dir.join(".credentials"), token_with_whitespace).unwrap();
 
     // Override HOME and clear env vars
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-    env::remove_var("STAX_GITHUB_TOKEN");
-    env::remove_var("GITHUB_TOKEN");
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::remove_var("GITHUB_TOKEN") };
 
     // Token should be trimmed
     let token = Config::github_token();
@@ -1035,18 +1035,18 @@ fn test_github_token_trims_whitespace_from_file() {
 
     // Cleanup
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -1064,37 +1064,37 @@ fn test_github_token_falls_back_to_gh_cli() {
         std::env::temp_dir().join(format!("stax-test-gh-fallback-{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
     write_auth_config(&temp_dir, true, false, None);
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-    env::remove_var("STAX_GITHUB_TOKEN");
-    env::remove_var("GITHUB_TOKEN");
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::remove_var("GITHUB_TOKEN") };
 
     let mock_path = write_mock_gh(
         &temp_dir,
         "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ]; then\n  echo \"gh-cli-token\"\n  exit 0\nfi\nexit 1\n",
     );
-    env::set_var("PATH", mock_path);
+    unsafe { env::set_var("PATH", mock_path) };
 
     let token = Config::github_token();
     assert_eq!(token, Some("gh-cli-token".to_string()));
 
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_path {
-        Some(v) => env::set_var("PATH", v),
-        None => env::remove_var("PATH"),
+        Some(v) => unsafe { env::set_var("PATH", v) },
+        None => unsafe { env::remove_var("PATH") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -1112,34 +1112,34 @@ fn test_github_token_skips_gh_cli_when_disabled() {
         std::env::temp_dir().join(format!("stax-test-gh-disabled-{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
     write_auth_config(&temp_dir, false, false, None);
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-    env::remove_var("STAX_GITHUB_TOKEN");
-    env::remove_var("GITHUB_TOKEN");
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::remove_var("GITHUB_TOKEN") };
 
     let mock_path = write_mock_gh(&temp_dir, "#!/bin/sh\necho \"gh-cli-token\"\n");
-    env::set_var("PATH", mock_path);
+    unsafe { env::set_var("PATH", mock_path) };
 
     let token = Config::github_token();
     assert_eq!(token, None);
 
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_path {
-        Some(v) => env::set_var("PATH", v),
-        None => env::remove_var("PATH"),
+        Some(v) => unsafe { env::set_var("PATH", v) },
+        None => unsafe { env::remove_var("PATH") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -1157,37 +1157,37 @@ fn test_github_token_passes_gh_hostname() {
         std::env::temp_dir().join(format!("stax-test-gh-hostname-{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
     write_auth_config(&temp_dir, true, false, Some("github.example.com"));
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-    env::remove_var("STAX_GITHUB_TOKEN");
-    env::remove_var("GITHUB_TOKEN");
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::remove_var("GITHUB_TOKEN") };
 
     let mock_path = write_mock_gh(
         &temp_dir,
         "#!/bin/sh\nif [ \"$1\" = \"auth\" ] && [ \"$2\" = \"token\" ] && [ \"$3\" = \"--hostname\" ] && [ \"$4\" = \"github.example.com\" ]; then\n  echo \"gh-host-token\"\n  exit 0\nfi\nexit 1\n",
     );
-    env::set_var("PATH", mock_path);
+    unsafe { env::set_var("PATH", mock_path) };
 
     let token = Config::github_token();
     assert_eq!(token, Some("gh-host-token".to_string()));
 
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_path {
-        Some(v) => env::set_var("PATH", v),
-        None => env::remove_var("PATH"),
+        Some(v) => unsafe { env::set_var("PATH", v) },
+        None => unsafe { env::remove_var("PATH") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
@@ -1205,34 +1205,34 @@ fn test_github_token_gh_failure_falls_back_to_opt_in_env() {
         std::env::temp_dir().join(format!("stax-test-gh-fallback-env-{}", std::process::id()));
     fs::create_dir_all(&temp_dir).unwrap();
     write_auth_config(&temp_dir, true, true, None);
-    env::set_var("HOME", &temp_dir);
-    env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax"));
-    env::remove_var("STAX_GITHUB_TOKEN");
-    env::set_var("GITHUB_TOKEN", "env-token");
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::set_var("GITHUB_TOKEN", "env-token") };
 
     let mock_path = write_mock_gh(&temp_dir, "#!/bin/sh\nexit 1\n");
-    env::set_var("PATH", mock_path);
+    unsafe { env::set_var("PATH", mock_path) };
 
     let token = Config::github_token();
     assert_eq!(token, Some("env-token".to_string()));
 
     let _ = fs::remove_dir_all(&temp_dir);
-    env::remove_var("STAX_CONFIG_DIR");
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
     match orig_home {
-        Some(v) => env::set_var("HOME", v),
-        None => env::remove_var("HOME"),
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
     }
     match orig_path {
-        Some(v) => env::set_var("PATH", v),
-        None => env::remove_var("PATH"),
+        Some(v) => unsafe { env::set_var("PATH", v) },
+        None => unsafe { env::remove_var("PATH") },
     }
     match orig_stax {
-        Some(v) => env::set_var("STAX_GITHUB_TOKEN", v),
-        None => env::remove_var("STAX_GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
     }
     match orig_github {
-        Some(v) => env::set_var("GITHUB_TOKEN", v),
-        None => env::remove_var("GITHUB_TOKEN"),
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
     }
 }
 
