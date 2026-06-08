@@ -1,13 +1,13 @@
 use crate::config::Config;
 use crate::engine::branch_detect::{
-    find_merged_branches_all, find_stale_branches, find_upstream_gone_branches, MergeType,
-    StaleBranchInfo,
+    MergeType, StaleBranchInfo, find_merged_branches_all, find_stale_branches,
+    find_upstream_gone_branches,
 };
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::process::Command;
@@ -35,19 +35,19 @@ pub fn run(
     // --- Classify all local branches ---
 
     // 1. Merged (ancestor or squash-merged)
-    let merged_infos = find_merged_branches_all(
-        &workdir,
-        &trunk,
-        Some(remote_trunk_ref.as_str()),
-    )?;
+    let merged_infos: Vec<_> =
+        find_merged_branches_all(&workdir, &trunk, Some(remote_trunk_ref.as_str()))?
+            .into_iter()
+            .filter(|m| m.branch != trunk && m.branch != current)
+            .collect();
     let merged_set: HashSet<String> = merged_infos.iter().map(|m| m.branch.clone()).collect();
 
     // 2. Upstream-gone
     let gone_branches = find_upstream_gone_branches(&workdir, &trunk)?;
-    // Merged takes precedence over upstream-gone
+    // Merged takes precedence over upstream-gone; trunk/current are never candidates.
     let gone_set: HashSet<String> = gone_branches
         .into_iter()
-        .filter(|b| !merged_set.contains(b))
+        .filter(|b| b != &trunk && b != &current && !merged_set.contains(b))
         .collect();
 
     // 3. Stale (old commits, not merged or gone)
@@ -95,7 +95,10 @@ pub fn run(
     // --- Human-readable output ---
 
     if total_classified == 0 {
-        println!("{}", "No local branches found (other than trunk and current).".dimmed());
+        println!(
+            "{}",
+            "No local branches found (other than trunk and current).".dimmed()
+        );
         return Ok(());
     }
 
@@ -147,7 +150,9 @@ pub fn run(
         sorted.sort();
         println!(
             "{} {}",
-            format!("  upstream-gone  ({})", sorted.len()).yellow().bold(),
+            format!("  upstream-gone  ({})", sorted.len())
+                .yellow()
+                .bold(),
             "— remote deleted, safe to delete".dimmed()
         );
         for b in &sorted {
@@ -192,10 +197,7 @@ pub fn run(
     if !active_branches.is_empty() {
         let mut sorted = active_branches.clone();
         sorted.sort();
-        println!(
-            "{}",
-            format!("  active  ({})", sorted.len()).cyan().bold()
-        );
+        println!("{}", format!("  active  ({})", sorted.len()).cyan().bold());
         for b in &sorted {
             let tracked_marker = if stack.branches.contains_key(b) {
                 " tracked".dimmed()
@@ -208,7 +210,13 @@ pub fn run(
     }
 
     // Summary / hints
-    print_summary(&merged_set, &gone_set, &stale_set, effective_stale_days, delete);
+    print_summary(
+        &merged_set,
+        &gone_set,
+        &stale_set,
+        effective_stale_days,
+        delete,
+    );
 
     // --- Deletion ---
     if delete {

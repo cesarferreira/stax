@@ -9,7 +9,13 @@ use serde_json::Value;
 
 /// Merge a branch into the current branch using git (fast-forward).
 fn merge_branch(repo: &TestRepo, branch: &str) {
-    let out = repo.git(&["merge", "--no-ff", branch, "-m", &format!("Merge {}", branch)]);
+    let out = repo.git(&[
+        "merge",
+        "--no-ff",
+        branch,
+        "-m",
+        &format!("Merge {}", branch),
+    ]);
     assert!(
         out.status.success(),
         "Failed to merge branch {}: {}",
@@ -80,6 +86,73 @@ fn sweep_does_not_list_trunk_or_current() {
     assert!(
         lines_with_main.is_empty(),
         "trunk 'main' should not appear as a deletable branch:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn sweep_does_not_list_current_merged_branch_as_deletable() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["bc", "current-merged"]).assert_success();
+    repo.create_file("current.txt", "current");
+    repo.commit("current branch commit");
+
+    repo.run_stax(&["t"]).assert_success();
+    merge_branch(&repo, "current-merged");
+    repo.git(&["checkout", "current-merged"]);
+
+    let out = repo.run_stax(&["sweep"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+
+    let candidate_lines: Vec<&str> = stdout
+        .lines()
+        .filter(|l| {
+            l.contains("current-merged") && (l.contains("✓") || l.contains("⚑") || l.contains("○"))
+        })
+        .collect();
+    assert!(
+        candidate_lines.is_empty(),
+        "current branch must not appear as a sweep candidate:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("delete 1 merged/gone branch"),
+        "summary tip must not count the current branch as deletable:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn sweep_json_does_not_list_current_merged_branch() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["bc", "current-json-merged"])
+        .assert_success();
+    repo.create_file("current-json.txt", "current");
+    repo.commit("current json branch commit");
+
+    repo.run_stax(&["t"]).assert_success();
+    merge_branch(&repo, "current-json-merged");
+    repo.git(&["checkout", "current-json-merged"]);
+
+    let out = repo.run_stax(&["sweep", "--json"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("sweep --json should output valid JSON: {}\n{}", e, stdout));
+    let branches = parsed["branches"]
+        .as_array()
+        .expect("JSON should have branches array");
+
+    assert!(
+        branches
+            .iter()
+            .all(|b| b["name"].as_str() != Some("current-json-merged")),
+        "current branch must not appear in sweep JSON:\n{}",
         stdout
     );
 }
