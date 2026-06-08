@@ -3677,6 +3677,35 @@ fn test_status_shows_remote_indicator() {
 }
 
 #[test]
+fn test_status_text_shows_remote_indicator_without_pr_metadata() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "feature/remote-without-pr"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("f.txt", "content");
+    repo.commit("Feature");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    let output = repo.run_stax(&["ls"]);
+    assert!(
+        output.status.success(),
+        "Failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let line = stdout
+        .lines()
+        .find(|line| line.contains(&branch_name))
+        .expect("Expected branch in status output");
+    assert!(
+        line.contains("☁"),
+        "Expected remote indicator in status output line: {}",
+        line
+    );
+}
+
+#[test]
 fn test_force_push_after_amend() {
     let repo = TestRepo::new_with_remote();
 

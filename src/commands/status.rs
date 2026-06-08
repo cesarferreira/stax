@@ -296,7 +296,9 @@ pub fn run(
         let branch = &db.name;
         let is_current = branch == &current;
         let entry = branch_status_map.get(branch);
-        let has_remote = entry.and_then(|e| e.pr_number).is_some();
+        let has_remote = entry
+            .map(|e| e.has_remote || e.pr_number.is_some())
+            .unwrap_or(false);
 
         // Check if we need a corner connector - this happens when the PREVIOUS branch was at a higher column
         // The corner shows that a side branch joins back to this level
