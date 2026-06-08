@@ -16,7 +16,7 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
 | `st sweep` | | Classify all local branches as merged / upstream-gone / stale / active (read-only by default) |
-| `st sweep --delete` | | Delete merged and upstream-gone branches after confirmation |
+| `st sweep --delete` | | Delete merged branches and upstream-gone branches with no unique work after confirmation |
 | `st sweep --delete --include-stale` | | Also delete stale branches (older than `--stale-days` / `branch.stale_days` config key) |
 | `st sweep --delete --force` | | Skip confirmation prompt |
 | `st sweep --stale-days <N>` | | Override stale threshold in days (default: 30) |
