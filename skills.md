@@ -241,7 +241,7 @@ stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
 
 stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
-stax sweep --delete                # Delete merged + upstream-gone branches after confirmation
+stax sweep --delete                # Delete merged + upstream-gone branches with no unique work after confirmation
 stax sweep --delete --include-stale  # Also delete stale branches
 stax sweep --delete --force        # Skip confirmation prompt
 stax sweep --stale-days 60         # Override stale threshold in days (default 30, or branch.stale_days config)

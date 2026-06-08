@@ -245,6 +245,109 @@ fn sweep_shows_active_unmerged_branch() {
     );
 }
 
+#[test]
+fn sweep_does_not_treat_upstream_gone_with_local_work_as_deletable() {
+    let repo = TestRepo::new_with_remote();
+    repo.run_stax(&["init"]).assert_success();
+
+    assert!(repo
+        .git(&["checkout", "-b", "gone-with-local-work"])
+        .status
+        .success());
+    repo.create_file("pushed.txt", "pushed");
+    repo.commit("pushed work");
+    assert!(repo
+        .git(&["push", "-u", "origin", "gone-with-local-work"])
+        .status
+        .success());
+
+    repo.create_file("local-only.txt", "local only");
+    repo.commit("local-only work");
+
+    assert!(repo.git(&["checkout", "main"]).status.success());
+    assert!(repo
+        .git(&["push", "origin", "--delete", "gone-with-local-work"])
+        .status
+        .success());
+    assert!(repo.git(&["fetch", "--prune", "origin"]).status.success());
+
+    let out = repo.run_stax(&["sweep", "--json"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("sweep --json should output valid JSON: {}\n{}", e, stdout));
+    let branch = parsed["branches"]
+        .as_array()
+        .expect("JSON should have branches array")
+        .iter()
+        .find(|b| b["name"].as_str() == Some("gone-with-local-work"))
+        .expect("gone-with-local-work should appear in sweep JSON");
+    assert!(
+        branch["status"].as_str() == Some("active"),
+        "branch with local-only commits should be classified as active:\n{}",
+        stdout
+    );
+
+    let delete_out = repo.run_stax(&["sweep", "--delete", "--force"]);
+    delete_out.assert_success();
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&"gone-with-local-work".to_string()),
+        "gone-with-local-work should survive sweep --delete --force:\n{:?}",
+        branches
+    );
+}
+
+#[test]
+fn sweep_delete_removes_gone_branch_without_unique_work() {
+    let repo = TestRepo::new_with_remote();
+    repo.run_stax(&["init"]).assert_success();
+
+    assert!(repo
+        .git(&["checkout", "-b", "gone-without-local-work"])
+        .status
+        .success());
+    assert!(repo
+        .git(&["push", "-u", "origin", "gone-without-local-work"])
+        .status
+        .success());
+
+    assert!(repo.git(&["checkout", "main"]).status.success());
+    assert!(repo
+        .git(&["push", "origin", "--delete", "gone-without-local-work"])
+        .status
+        .success());
+    assert!(repo.git(&["fetch", "--prune", "origin"]).status.success());
+
+    let out = repo.run_stax(&["sweep", "--json"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("sweep --json should output valid JSON: {}\n{}", e, stdout));
+    let branch = parsed["branches"]
+        .as_array()
+        .expect("JSON should have branches array")
+        .iter()
+        .find(|b| b["name"].as_str() == Some("gone-without-local-work"))
+        .expect("gone-without-local-work should appear in sweep JSON");
+    assert_eq!(
+        branch["status"].as_str(),
+        Some("merged"),
+        "branch without unique commits should remain a safe deletion candidate"
+    );
+
+    let delete_out = repo.run_stax(&["sweep", "--delete", "--force"]);
+    delete_out.assert_success();
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.contains(&"gone-without-local-work".to_string()),
+        "gone-without-local-work should be deleted:\n{:?}",
+        branches
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Phase 2 — opt-in deletion
 // ---------------------------------------------------------------------------

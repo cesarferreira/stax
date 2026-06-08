@@ -1,13 +1,13 @@
 use crate::config::Config;
 use crate::engine::branch_detect::{
-    MergeType, StaleBranchInfo, find_merged_branches_all, find_stale_branches,
-    find_upstream_gone_branches,
+    find_merged_branches_all, find_stale_branches, find_upstream_gone_branches, MergeType,
+    StaleBranchInfo,
 };
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{Confirm, theme::ColorfulTheme};
+use dialoguer::{theme::ColorfulTheme, Confirm};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::process::Command;
@@ -45,14 +45,27 @@ pub fn run(
     // 2. Upstream-gone
     let gone_branches = find_upstream_gone_branches(&workdir, &trunk)?;
     // Merged takes precedence over upstream-gone; trunk/current are never candidates.
-    let gone_set: HashSet<String> = gone_branches
-        .into_iter()
-        .filter(|b| b != &trunk && b != &current && !merged_set.contains(b))
-        .collect();
+    let mut gone_set: HashSet<String> = HashSet::new();
+    let mut protected_gone_set: HashSet<String> = HashSet::new();
+    for branch in gone_branches {
+        if branch == trunk || branch == current || merged_set.contains(&branch) {
+            continue;
+        }
+
+        if has_unique_commits_since_any_base(&workdir, &branch, &[&trunk, &remote_trunk_ref])? {
+            protected_gone_set.insert(branch);
+        } else {
+            gone_set.insert(branch);
+        }
+    }
 
     // 3. Stale (old commits, not merged or gone)
-    let already_classified: HashSet<String> =
-        merged_set.iter().chain(gone_set.iter()).cloned().collect();
+    let already_classified: HashSet<String> = merged_set
+        .iter()
+        .chain(gone_set.iter())
+        .chain(protected_gone_set.iter())
+        .cloned()
+        .collect();
     let stale_infos = find_stale_branches(
         &workdir,
         &trunk,
@@ -438,6 +451,33 @@ fn format_age(days: u64) -> String {
         let years = days / 365;
         format!("({} year{})", years, if years == 1 { "" } else { "s" })
     }
+}
+
+fn has_unique_commits_since_any_base(
+    workdir: &std::path::Path,
+    branch: &str,
+    bases: &[&str],
+) -> Result<bool> {
+    for base in bases {
+        let range = format!("{}..{}", base, branch);
+        let output = Command::new("git")
+            .args(["rev-list", "--count", &range])
+            .current_dir(workdir)
+            .output()
+            .with_context(|| format!("Failed to count unique commits for '{}'", branch))?;
+
+        if !output.status.success() {
+            continue;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let unique_count = stdout.trim().parse::<u64>().unwrap_or(u64::MAX);
+        if unique_count == 0 {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
 }
 
 /// Reparent stax-tracked children of `branch` to trunk before deleting it.

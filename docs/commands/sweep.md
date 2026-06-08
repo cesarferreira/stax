@@ -17,11 +17,11 @@ Over time a repo accumulates branches that were merged, whose PR was closed, or 
 | Status | Meaning |
 |---|---|
 | `merged` | Ancestor of trunk, or confirmed merged via remote state |
-| `upstream-gone` | Remote tracking ref is `[gone]` (upstream branch deleted) |
+| `upstream-gone` | Remote tracking ref is `[gone]` and the branch has no commits unique to local or remote trunk |
 | `stale` | Last commit older than the configured threshold (default 30 days) |
 | `active` | Everything else |
 
-Precedence when a branch matches multiple: **merged > upstream-gone > stale > active**.
+Precedence when a branch matches multiple: **merged > safe upstream-gone > stale > active**. Upstream-gone branches with unique commits are treated as active so cleanup cannot delete local-only work.
 
 ## Usage
 
@@ -29,7 +29,7 @@ Precedence when a branch matches multiple: **merged > upstream-gone > stale > ac
 # Read-only: classify all local branches and print a grouped summary
 stax sweep
 
-# Delete merged and upstream-gone branches (safe to remove), with confirmation
+# Delete merged branches and upstream-gone branches with no unique work, with confirmation
 stax sweep --delete
 
 # Also include stale branches in the deletion set
@@ -49,7 +49,7 @@ stax sweep --json
 
 | Flag | Description |
 |---|---|
-| `--delete` | Delete merged and upstream-gone branches after confirmation |
+| `--delete` | Delete merged branches and upstream-gone branches with no unique work after confirmation |
 | `--include-stale` | Extend deletion to stale branches (requires `--delete`) |
 | `--force` | Skip confirmation prompt (requires `--delete`) |
 | `--stale-days <N>` | Override stale threshold in days (default: 30) |
@@ -70,6 +70,7 @@ stale_days = 60
 
 - Trunk and the current branch are always excluded.
 - `--delete` without `--include-stale` never touches stale branches; unmerged work is safe.
+- Upstream-gone branches with commits not reachable from local or remote trunk are classified as active and are not deleted by `--delete`.
 - Stax-tracked children of deleted branches are reparented to trunk before deletion so `stax status` stays clean.
 - `--json` is always read-only (conflicts with `--delete`).
 
