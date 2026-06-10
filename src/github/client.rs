@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use octocrab::Octocrab;
 use octocrab::params::repos::Reference;
 use octocrab::service::middleware::retry::RetryConfig;
-use octocrab::Octocrab;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -501,10 +501,20 @@ impl GitHubClient {
                 .await;
 
             if let Ok(pr) = pr {
+                let Some(number) = pr.number else {
+                    continue;
+                };
+                let Some(head) = pr.head.as_deref() else {
+                    continue;
+                };
+                let Some(base) = pr.base.as_deref() else {
+                    continue;
+                };
+
                 results.push(OpenPrInfo {
-                    number: pr.number,
-                    head_branch: pr.head.ref_field.clone(),
-                    base_branch: pr.base.ref_field.clone(),
+                    number,
+                    head_branch: head.ref_field.clone(),
+                    base_branch: base.ref_field.clone(),
                     state: "OPEN".to_string(),
                     is_draft: pr.draft.unwrap_or(false),
                 });

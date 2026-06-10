@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use octocrab::params::pulls::Sort;
+use octocrab::models::pulls::{Base, Head, PullRequest};
 use octocrab::params::State;
-use serde::Deserialize;
+use octocrab::params::pulls::Sort;
+use serde::{Deserialize, de::DeserializeOwned};
 use std::collections::HashMap;
 
 use super::GitHubClient;
@@ -95,6 +96,53 @@ pub struct PrInfoWithHead {
     pub head: String,
     pub head_label: Option<String>,
     pub title: String,
+}
+
+fn octocrab_pr_number(pr: &PullRequest) -> Result<u64> {
+    pr.number.context("GitHub PR response missing number")
+}
+
+fn octocrab_pr_head(pr: &PullRequest) -> Result<&Head> {
+    pr.head
+        .as_deref()
+        .context("GitHub PR response missing head")
+}
+
+fn octocrab_pr_base(pr: &PullRequest) -> Result<&Base> {
+    pr.base
+        .as_deref()
+        .context("GitHub PR response missing base")
+}
+
+fn octocrab_pr_state(pr: &PullRequest) -> String {
+    pr.state
+        .as_ref()
+        .map(|s| format!("{:?}", s))
+        .unwrap_or_default()
+}
+
+fn octocrab_pr_info_with_state(pr: &PullRequest, state: String) -> Result<PrInfo> {
+    Ok(PrInfo {
+        number: octocrab_pr_number(pr)?,
+        state,
+        is_draft: pr.draft.unwrap_or(false),
+        base: octocrab_pr_base(pr)?.ref_field.clone(),
+    })
+}
+
+fn octocrab_pr_info(pr: &PullRequest) -> Result<PrInfo> {
+    octocrab_pr_info_with_state(pr, octocrab_pr_state(pr))
+}
+
+fn octocrab_pr_info_with_head(pr: &PullRequest) -> Result<PrInfoWithHead> {
+    let head = octocrab_pr_head(pr)?;
+
+    Ok(PrInfoWithHead {
+        head_label: head.label.clone(),
+        title: pr.title.clone().unwrap_or_default(),
+        info: octocrab_pr_info(pr)?,
+        head: head.ref_field.clone(),
+    })
 }
 
 /// Merge method for PRs
@@ -245,18 +293,6 @@ impl PrMergeStatus {
         }
         "Ready" // Default to ready if nothing is blocking
     }
-}
-
-/// Response from GitHub GraphQL API for PR reviews
-#[derive(Debug, Deserialize)]
-struct GraphQLResponse<T> {
-    data: Option<T>,
-    errors: Option<Vec<GraphQLError>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GraphQLError {
-    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -423,6 +459,21 @@ fn graphql_check_rollup_status(state: &str) -> CiStatus {
 }
 
 impl GitHubClient {
+    async fn graphql_data<T: DeserializeOwned>(&self, payload: serde_json::Value) -> Result<T> {
+        match self.octocrab.graphql(&payload).await {
+            Ok(data) => Ok(data),
+            Err(octocrab::Error::Graphql { source, .. }) => {
+                let message = source
+                    .0
+                    .first()
+                    .map(|error| error.message.as_str())
+                    .unwrap_or("unknown GraphQL error");
+                anyhow::bail!("GraphQL error: {}", message)
+            }
+            Err(err) => Err(anyhow::Error::new(err)),
+        }
+    }
+
     /// Find existing open PR for a branch owned by `head_owner`.
     ///
     /// Uses GitHub's `head` filter first (single request) and validates the
@@ -450,11 +501,11 @@ impl GitHubClient {
         };
 
         for pr in &prs.items {
-            if pr.head.ref_field != branch {
+            let head = octocrab_pr_head(pr)?;
+            if head.ref_field != branch {
                 continue;
             }
-            let owner_matches = pr
-                .head
+            let owner_matches = head
                 .label
                 .as_ref()
                 .and_then(|label| label.split_once(':').map(|(owner, _)| owner == head_owner))
@@ -463,21 +514,7 @@ impl GitHubClient {
                 continue;
             }
 
-            return Ok(Some(PrInfoWithHead {
-                head_label: pr.head.label.clone(),
-                title: pr.title.clone().unwrap_or_default(),
-                info: PrInfo {
-                    number: pr.number,
-                    state: pr
-                        .state
-                        .as_ref()
-                        .map(|s| format!("{:?}", s))
-                        .unwrap_or_default(),
-                    is_draft: pr.draft.unwrap_or(false),
-                    base: pr.base.ref_field.clone(),
-                },
-                head: pr.head.ref_field.clone(),
-            }));
+            return Ok(Some(octocrab_pr_info_with_head(pr)?));
         }
 
         Ok(None)
@@ -525,29 +562,12 @@ impl GitHubClient {
             };
 
             for pr in &prs.items {
-                let head = pr.head.ref_field.clone();
+                let head = octocrab_pr_head(pr)?.ref_field.clone();
                 if prs_by_head.contains_key(&head) {
                     continue;
                 }
 
-                prs_by_head.insert(
-                    head,
-                    PrInfoWithHead {
-                        head_label: pr.head.label.clone(),
-                        title: pr.title.clone().unwrap_or_default(),
-                        info: PrInfo {
-                            number: pr.number,
-                            state: pr
-                                .state
-                                .as_ref()
-                                .map(|s| format!("{:?}", s))
-                                .unwrap_or_default(),
-                            is_draft: pr.draft.unwrap_or(false),
-                            base: pr.base.ref_field.clone(),
-                        },
-                        head: pr.head.ref_field.clone(),
-                    },
-                );
+                prs_by_head.insert(head, octocrab_pr_info_with_head(pr)?);
             }
 
             if (prs.items.len() as u8) < PER_PAGE {
@@ -580,16 +600,7 @@ impl GitHubClient {
             .await
             .context("Failed to create PR")?;
 
-        Ok(PrInfo {
-            number: pr.number,
-            state: pr
-                .state
-                .as_ref()
-                .map(|s| format!("{:?}", s))
-                .unwrap_or_default(),
-            is_draft: pr.draft.unwrap_or(false),
-            base: pr.base.ref_field.clone(),
-        })
+        octocrab_pr_info(&pr)
     }
 
     /// Get a PR by number
@@ -612,12 +623,7 @@ impl GitHubClient {
                 .to_uppercase()
         };
 
-        Ok(PrInfo {
-            number: pr.number,
-            state,
-            is_draft: pr.draft.unwrap_or(false),
-            base: pr.base.ref_field.clone(),
-        })
+        octocrab_pr_info_with_state(&pr, state)
     }
 
     /// Get a PR by number, including head branch name
@@ -630,21 +636,7 @@ impl GitHubClient {
             .await
             .context("Failed to get PR")?;
 
-        Ok(PrInfoWithHead {
-            head: pr.head.ref_field.clone(),
-            head_label: pr.head.label.clone(),
-            title: pr.title.clone().unwrap_or_default(),
-            info: PrInfo {
-                number: pr.number,
-                state: pr
-                    .state
-                    .as_ref()
-                    .map(|s| format!("{:?}", s))
-                    .unwrap_or_default(),
-                is_draft: pr.draft.unwrap_or(false),
-                base: pr.base.ref_field.clone(),
-            },
-        })
+        octocrab_pr_info_with_head(&pr)
     }
 
     /// Update PR base branch
@@ -694,26 +686,10 @@ impl GitHubClient {
             )
         };
 
-        let response: GraphQLResponse<serde_json::Value> = self
-            .octocrab
-            .graphql(&serde_json::json!({ "query": mutation }))
+        let _: serde_json::Value = self
+            .graphql_data(serde_json::json!({ "query": mutation }))
             .await
             .context("Failed to update PR draft status")?;
-
-        if let Some(errors) = response.errors {
-            if !errors.is_empty() {
-                anyhow::bail!(
-                    "Failed to {} PR #{}: {}",
-                    if is_draft {
-                        "convert to draft"
-                    } else {
-                        "mark ready for review"
-                    },
-                    pr_number,
-                    errors[0].message
-                );
-            }
-        }
 
         Ok(())
     }
@@ -992,21 +968,11 @@ impl GitHubClient {
             self.owner, self.repo, pr_number
         );
 
-        let response: GraphQLResponse<PrMergeStatusData> = self
-            .octocrab
-            .graphql(&serde_json::json!({ "query": query }))
+        let data: PrMergeStatusData = self
+            .graphql_data(serde_json::json!({ "query": query }))
             .await
             .context("Failed to query PR merge status")?;
 
-        if let Some(errors) = response.errors {
-            if !errors.is_empty() {
-                anyhow::bail!("GraphQL error: {}", errors[0].message);
-            }
-        }
-
-        let data = response
-            .data
-            .context("GraphQL response did not include merge status data")?;
         let repository = data
             .repository
             .context("GraphQL response did not include repository data")?;
@@ -1073,21 +1039,11 @@ impl GitHubClient {
             self.owner, self.repo, pr_number
         );
 
-        let response: GraphQLResponse<PrReviewData> = self
-            .octocrab
-            .graphql(&serde_json::json!({ "query": query }))
+        let data: PrReviewData = self
+            .graphql_data(serde_json::json!({ "query": query }))
             .await
             .context("Failed to query PR reviews")?;
 
-        if let Some(errors) = response.errors {
-            if !errors.is_empty() {
-                anyhow::bail!("GraphQL error: {}", errors[0].message);
-            }
-        }
-
-        let data = response
-            .data
-            .context("GraphQL response did not include review data")?;
         let repository = data
             .repository
             .context("GraphQL response did not include repository data")?;
@@ -1117,21 +1073,12 @@ impl GitHubClient {
             self.owner, self.repo, pr_number
         );
 
-        let response: GraphQLResponse<PrNodeIdData> = self
-            .octocrab
-            .graphql(&serde_json::json!({ "query": query }))
+        let data: PrNodeIdData = self
+            .graphql_data(serde_json::json!({ "query": query }))
             .await
             .context("Failed to query PR node ID")?;
 
-        if let Some(errors) = response.errors {
-            if !errors.is_empty() {
-                anyhow::bail!("GraphQL error: {}", errors[0].message);
-            }
-        }
-
-        response
-            .data
-            .and_then(|d| d.repository)
+        data.repository
             .and_then(|r| r.pull_request)
             .map(|pr| pr.id)
             .context("PR not found")
@@ -1157,25 +1104,12 @@ impl GitHubClient {
             node_id
         );
 
-        let response: GraphQLResponse<EnqueueData> = self
-            .octocrab
-            .graphql(&serde_json::json!({ "query": mutation }))
+        let data: EnqueueData = self
+            .graphql_data(serde_json::json!({ "query": mutation }))
             .await
             .context("Failed to enqueue PR into merge queue")?;
 
-        if let Some(errors) = response.errors {
-            if !errors.is_empty() {
-                anyhow::bail!(
-                    "Failed to enqueue PR #{} into merge queue: {}",
-                    pr_number,
-                    errors[0].message
-                );
-            }
-        }
-
-        response
-            .data
-            .and_then(|d| d.enqueue_pull_request)
+        data.enqueue_pull_request
             .context("No enqueue result returned — is merge queue enabled on this repository?")
     }
 
@@ -1202,7 +1136,7 @@ impl GitHubClient {
             .get(pr_number)
             .await
             .context("Failed to get PR")?;
-        Ok(pr.head.sha)
+        Ok(octocrab_pr_head(&pr)?.sha.clone())
     }
 
     /// List all issue comments (conversation comments) on a PR
@@ -2492,10 +2426,12 @@ mod tests {
 
         let stats = client.api_call_stats();
         assert_eq!(stats.total_requests, 1);
-        assert!(stats
-            .by_operation
-            .iter()
-            .any(|(op, count)| op == "pulls.list.open.page" && *count == 1));
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "pulls.list.open.page" && *count == 1)
+        );
     }
 
     #[tokio::test]
@@ -2531,10 +2467,12 @@ mod tests {
 
         let stats = client.api_call_stats();
         assert_eq!(stats.total_requests, 1);
-        assert!(stats
-            .by_operation
-            .iter()
-            .any(|(op, count)| op == "pulls.list.head" && *count == 1));
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "pulls.list.head" && *count == 1)
+        );
     }
 
     #[tokio::test]
@@ -2576,14 +2514,18 @@ mod tests {
 
         let stats = client.api_call_stats();
         assert_eq!(stats.total_requests, 2);
-        assert!(stats
-            .by_operation
-            .iter()
-            .any(|(op, count)| op == "pulls.list.head" && *count == 1));
-        assert!(stats
-            .by_operation
-            .iter()
-            .any(|(op, count)| op == "pulls.list.open.page" && *count == 1));
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "pulls.list.head" && *count == 1)
+        );
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "pulls.list.open.page" && *count == 1)
+        );
     }
 
     #[tokio::test]
@@ -2614,10 +2556,41 @@ mod tests {
 
         let stats = client.api_call_stats();
         assert_eq!(stats.total_requests, 1);
-        assert!(stats
-            .by_operation
-            .iter()
-            .any(|(op, count)| op == "pulls.get" && *count == 1));
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "pulls.get" && *count == 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_pr_with_head_errors_when_response_missing_head() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls/11"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/11",
+                "id": 11,
+                "number": 11,
+                "base": { "ref": "main", "sha": "bbbb" },
+                "draft": false
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let err = client
+            .get_pr_with_head(11)
+            .await
+            .expect_err("missing head should fail");
+
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("GitHub PR response missing head"),
+            "expected missing head context, got: {msg}"
+        );
     }
 
     // Note: The find_pr function now validates that the returned PR's head branch
