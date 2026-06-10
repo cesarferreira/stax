@@ -1,12 +1,26 @@
 # Windows
 
-stax ships prebuilt Windows binaries (`x86_64-pc-windows-msvc`). Unit tests run on Windows in CI alongside Linux.
+stax supports Windows (`x86_64-pc-windows-msvc`), but prebuilt Windows binaries are not published. Windows users should build and install from source with Rust.
 
 ## Install
 
-Download `stax-x86_64-pc-windows-msvc.zip` from [GitHub Releases](https://github.com/cesarferreira/stax/releases/latest), extract `stax.exe` and `st.exe`, and place them on your `PATH`.
+Install Rust with the MSVC toolchain, then install from crates.io:
 
-If you install with `cargo install` or `cargo binstall`, update notifications and `st cli upgrade` detect the Windows `.cargo\bin` path and show the matching cargo upgrade command.
+```powershell
+cargo install stax --locked --features vendored-openssl
+```
+
+Or build from a local checkout:
+
+```powershell
+git clone https://github.com/cesarferreira/stax.git
+cd stax
+cargo install --path . --locked --features vendored-openssl
+```
+
+Cargo installs `stax.exe` and `st.exe` into `%USERPROFILE%\.cargo\bin`; make sure that directory is on your `PATH`.
+
+If you install with `cargo install`, update notifications and `st cli upgrade` detect the Windows `.cargo\bin` path and show the matching cargo upgrade command.
 
 ## What works
 

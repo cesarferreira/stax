@@ -48,7 +48,7 @@ brew install cesarferreira/tap/stax
 ```
 
 <details>
-<summary><strong>Other installation methods</strong> — cargo-binstall, prebuilt binaries, Windows, from source</summary>
+<summary><strong>Other installation methods</strong> — cargo-binstall, prebuilt binaries, Windows from source</summary>
 
 ### cargo-binstall
 
@@ -76,7 +76,21 @@ mv stax st ~/.local/bin/
 # echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 ```
 
-**Windows (x86_64):** download `stax-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/cesarferreira/stax/releases), extract `stax.exe` and `st.exe`, and place them on your `PATH`. See [Windows notes](#windows-notes).
+**Windows (x86_64):** prebuilt Windows binaries are not published. Install Rust with the MSVC toolchain, then build and install from crates.io:
+
+```powershell
+cargo install stax --locked --features vendored-openssl
+```
+
+Or build from a local checkout:
+
+```powershell
+git clone https://github.com/cesarferreira/stax.git
+cd stax
+cargo install --path . --locked --features vendored-openssl
+```
+
+Cargo installs `stax.exe` and `st.exe` into `%USERPROFILE%\.cargo\bin`; make sure that directory is on your `PATH`. See [Windows notes](#windows-notes).
 
 ### Build from source
 
@@ -375,7 +389,9 @@ Use `--path` to scope either mode to a subdirectory.
 <details>
 <summary><strong>Windows notes</strong> — shell integration, worktrees, tmux</summary>
 
-stax runs on Windows (x86_64) with prebuilt binaries on [Releases](https://github.com/cesarferreira/stax/releases). Most commands work identically, with these limitations:
+stax runs on Windows (x86_64), but prebuilt Windows binaries are not published. Build it with Rust via `cargo install stax --locked --features vendored-openssl`; most commands work identically once `%USERPROFILE%\.cargo\bin` is on your `PATH`.
+
+Known limitations:
 
 - **Shell integration is not available.** `st setup` supports bash/zsh/fish only. On Windows:
   - `st wt c` / `st wt go` create and navigate worktrees but cannot auto-`cd` the parent shell. Manually `cd` to the printed path.
