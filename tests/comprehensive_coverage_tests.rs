@@ -1,7 +1,7 @@
 //! Comprehensive integration tests targeting additional code paths
 //! These tests focus on edge cases and less common execution paths
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

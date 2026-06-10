@@ -2,7 +2,7 @@
 //!
 //! Tests for the `downstack get` command that shows branches below current.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

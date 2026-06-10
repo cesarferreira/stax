@@ -4,7 +4,7 @@
 //! Note: Full functionality requires GitHub API access, so we test
 //! pre-condition validation that exits before API calls.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

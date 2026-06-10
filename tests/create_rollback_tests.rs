@@ -13,7 +13,7 @@
 //!
 //! Most tests require Unix (pre-commit hooks use `#!/bin/sh` and chmod).
 
-mod common;
+use crate::common;
 
 #[cfg(unix)]
 use common::stax_bin;

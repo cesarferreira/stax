@@ -3,7 +3,7 @@
 //! The TUI runs stax commands via subprocess. These tests verify that
 //! the commands work correctly when called with the arguments the TUI uses.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

@@ -1,6 +1,6 @@
 //! PR body command integration tests.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 use std::fs;

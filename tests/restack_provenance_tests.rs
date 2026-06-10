@@ -11,7 +11,7 @@
 //!   `git rebase --onto <parentBranchName> <parentBranchRevision> <branch>`
 //! without any ancestor check.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 use std::io::Write;

@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 #[cfg(unix)]
 mod unix {

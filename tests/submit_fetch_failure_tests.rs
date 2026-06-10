@@ -5,7 +5,7 @@
 //! must NOT silently fall through to a `--force-with-lease` push against
 //! stale remote-tracking refs (which the remote rejects as `(stale info)`).
 
-mod common;
+use crate::common;
 
 use common::TestRepo;
 

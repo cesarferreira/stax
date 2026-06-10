@@ -2,7 +2,7 @@
 //!
 //! These tests verify that various edge cases are handled correctly.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

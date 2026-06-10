@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{run_stax_in_script_with_env, TestRepo};
 use std::fs;

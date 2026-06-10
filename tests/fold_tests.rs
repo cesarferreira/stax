@@ -5,7 +5,7 @@
 //! surviving branch, siblings are rebased, and `--keep` lets the current
 //! branch's name survive while the parent ref is deleted.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

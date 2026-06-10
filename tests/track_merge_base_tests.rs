@@ -5,7 +5,7 @@
 //! `git rebase --onto` to scope the replay incorrectly when the branch was created
 //! from an older parent commit.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

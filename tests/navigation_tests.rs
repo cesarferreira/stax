@@ -2,7 +2,7 @@
 //!
 //! Tests for top, bottom, up, down commands that navigate the branch stack.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

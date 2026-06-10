@@ -3,7 +3,7 @@
 //! Verifies that staged changes are attributed to the correct stack branches
 //! based on which branch last modified each file.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 use std::fs;

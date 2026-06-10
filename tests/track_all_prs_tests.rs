@@ -1,6 +1,6 @@
 //! Integration tests for `stax branch track --all-prs` command
 
-mod common;
+use crate::common;
 use common::{OutputAssertions, TestRepo};
 
 /// Test that --all-prs flag is recognized by the CLI

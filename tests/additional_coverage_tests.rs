@@ -1,7 +1,7 @@
 //! Additional integration tests for code coverage
 //! Targeting edge cases and less-tested code paths
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 use serde_json::Value;

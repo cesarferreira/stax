@@ -1,7 +1,7 @@
 //! Additional integration tests to increase code coverage
 //! Tests for: checkout, sync, restack, undo, redo, doctor, log, diff
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 
