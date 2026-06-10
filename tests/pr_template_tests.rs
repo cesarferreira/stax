@@ -4,7 +4,7 @@
 //! Note: Full submit tests require GitHub API access, so we test
 //! template discovery in real repo contexts without API calls.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 use std::fs;

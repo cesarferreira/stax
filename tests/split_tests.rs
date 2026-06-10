@@ -4,7 +4,7 @@
 //! Note: The split command launches an interactive TUI, so we test
 //! pre-condition validation that exits before the TUI launches.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

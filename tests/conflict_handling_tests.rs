@@ -4,7 +4,7 @@
 //! Bug 2: Non-rebase-aware commands during active rebase should give clear error
 //! Bug 3: restack --continue should resume from checkpoint, not restart
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

@@ -3,7 +3,7 @@
 //! Verifies interactive commit editing (reword, drop, squash, fixup)
 //! within a branch's own commits.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

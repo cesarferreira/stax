@@ -2,7 +2,7 @@
 //!
 //! Tests for the `continue` command that resumes after conflict resolution.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 use serde_json::Value;

@@ -2,7 +2,7 @@
 //!
 //! These tests verify the CI status display functionality.
 
-mod common;
+use crate::common;
 use common::TestRepo;
 
 /// Test that ci command shows "no tracked branches" when there are none

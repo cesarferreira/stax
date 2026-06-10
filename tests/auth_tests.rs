@@ -1,6 +1,6 @@
 //! Tests for `stax auth` command flags and behavior.
 
-mod common;
+use crate::common;
 use common::{OutputAssertions, TestRepo};
 
 #[test]

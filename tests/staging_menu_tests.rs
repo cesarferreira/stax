@@ -9,7 +9,7 @@
 //! - `-a/--all`: bypass the menu entirely and force-stage.
 //! - Pre-staged index: skip the menu and commit what's staged.
 //!
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

@@ -1,6 +1,6 @@
 //! Integration tests for `stax get`.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 

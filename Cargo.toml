@@ -7,6 +7,12 @@ description = "Fast stacked Git branches and PRs"
 license = "MIT"
 authors = ["Cesar Ferreira"]
 repository = "https://github.com/cesarferreira/stax"
+# Integration tests are consolidated into a single binary (tests/all_tests.rs)
+# instead of one binary per file. Linking ~50 separate test binaries (each
+# statically linking the whole stax lib + octocrab/git2/ratatui) dominated build
+# time; one binary links once. Disable auto-discovery so the per-file targets
+# are not also built.
+autotests = false
 
 [lib]
 name = "stax"
@@ -19,6 +25,11 @@ path = "src/main.rs"
 [[bin]]
 name = "st"
 path = "src/bin/st.rs"
+
+# Single consolidated integration-test binary. See `autotests = false` above.
+[[test]]
+name = "all_tests"
+path = "tests/all_tests.rs"
 
 [features]
 default = []

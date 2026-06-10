@@ -1,6 +1,6 @@
 //! Tests for `st upstack onto` -- mass reparent current + descendants onto new parent.
 
-mod common;
+use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 
