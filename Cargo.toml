@@ -1,6 +1,6 @@
 [package]
 name = "stax"
-version = "0.86.1"
+version = "0.86.2"
 edition = "2024"
 default-run = "stax"
 description = "Fast stacked Git branches and PRs"

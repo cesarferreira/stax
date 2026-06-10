@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.86.2] - 2026-06-10
+
+### Changed
+- Bump regex from 1.12.3 to 1.12.4 (#485)
+- Bump tokio from 1.50.0 to 1.52.3 (#484)
+- Bump astral-sh/setup-uv from 6 to 7 (#480)
+- Bump chrono from 0.4.44 to 0.4.45 (#482)
+- Bump toml from 1.0.7+spec-1.1.0 to 1.1.2+spec-1.1.0 (#483)
+- Update cargo lock (#486)
+- Bump versions
+- [codex] Disable Windows release builds (#488)
+- Cut test link time with line-tables-only debuginfo (#489)
+- Consolidate integration tests into a single binary (#490)
+- Track latest stable Rust in the Docker test fast-path (#491)
+
 ## [0.86.1] - 2026-06-08
 
 ### Changed
@@ -497,7 +512,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.86.1...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.86.2...HEAD
+[0.86.2]: https://github.com/cesarferreira/stax/compare/v0.86.1...v0.86.2
 [0.86.1]: https://github.com/cesarferreira/stax/compare/v0.86.0...v0.86.1
 [0.86.0]: https://github.com/cesarferreira/stax/compare/v0.85.1...v0.86.0
 [0.85.1]: https://github.com/cesarferreira/stax/compare/v0.85.0...v0.85.1
