@@ -1,10 +1,13 @@
-.PHONY: build build-release release install clean test test-native test-local-fast test-local-ramdisk test-docker ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
+.PHONY: build build-release release install clean test test-native test-local-fast test-local-ramdisk test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
 RAMDISK_MOUNT ?= /Volumes/$(RAMDISK_NAME)
 MAC_LOCAL_TEST_THREADS ?= 8
 LEVEL ?= minor
+CONTAINER ?= $(shell if [ -x /opt/homebrew/opt/container/bin/container ]; then printf '%s\n' /opt/homebrew/opt/container/bin/container; else printf '%s\n' container; fi)
+CONTAINER_MEMORY ?= 8G
+CONTAINER_CARGO_BUILD_JOBS ?= 4
 
 # Default target
 all: check build test
@@ -111,6 +114,20 @@ test-docker:
 		-v "$$(pwd)/.docker-cache/target:/work/target" \
 		rust:1 \
 		bash -lc 'export PATH="$$CARGO_HOME/bin:/usr/local/cargo/bin:$$PATH"; if ! command -v cargo-nextest >/dev/null 2>&1; then cargo install cargo-nextest --locked; fi && cargo nextest run'
+
+# Run tests with Apple container (experimental macOS fast path)
+test-container:
+	mkdir -p .container-cache/cargo .container-cache/target
+	$(CONTAINER) run --rm -t \
+		-u "$$(id -u):$$(id -g)" \
+		-m "$(CONTAINER_MEMORY)" \
+		-v "$$(pwd):/work" \
+		-w /work \
+		-e CARGO_HOME=/work/.container-cache/cargo \
+		-e CARGO_BUILD_JOBS="$(CONTAINER_CARGO_BUILD_JOBS)" \
+		-v "$$(pwd)/.container-cache/target:/work/target" \
+		rust:1 \
+		bash -lc 'export PATH="$$CARGO_HOME/bin:/usr/local/cargo/bin:$$PATH"; if ! command -v cargo-nextest >/dev/null 2>&1; then mkdir -p "$$CARGO_HOME/bin"; case "$$(uname -m)" in aarch64|arm64) nextest_platform=linux-arm ;; x86_64|amd64) nextest_platform=linux ;; *) echo "unsupported container architecture: $$(uname -m)" >&2; exit 1 ;; esac; curl -LsSf "https://get.nexte.st/latest/$$nextest_platform" | tar zxf - -C "$$CARGO_HOME/bin"; fi && cargo nextest run'
 
 # Run fast unit tests only
 test-unit:
