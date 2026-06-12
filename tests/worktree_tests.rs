@@ -378,7 +378,7 @@ fn restack_interactive_stash_propagates_to_target_worktree() {
     // but didn't enable auto_stash_pop for the rebase layer, so wt_a's dirty state
     // caused: "Cannot restack: worktree has uncommitted changes".
     let output =
-        common::run_stax_in_script(&wt_b, &["restack", "--all"], "printf 'y\\n'; sleep 10");
+        common::run_stax_in_script(&wt_b, &["restack", "--all"], "printf 'y\\n'; sleep 2");
     assert!(
         output.status.success(),
         "Interactive restack should succeed when target worktree is also dirty.\n\
@@ -552,7 +552,7 @@ fn interactive_checkout_selector_routes_to_worktree() {
     let output = common::run_stax_in_script(
         &repo.path(),
         &["checkout"],
-        "printf '\\033[A'; sleep 1; printf '\\r'",
+        "printf '\\033[A'; sleep 0.2; printf '\\r'",
     );
 
     assert!(

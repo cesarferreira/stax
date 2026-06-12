@@ -93,10 +93,10 @@ fn test_split_hunk_requires_terminal() {
 
 /// Each round: j(down to hunk), Space(select), Enter(finish round), Enter(accept name).
 fn split_hunk_script(rounds: usize) -> String {
-    let mut parts = vec!["sleep 1".to_string()];
+    let mut parts = vec![common::TUI_SCRIPT_LEAD_DELAY.to_string()];
     for _ in 0..rounds {
         parts.push("printf 'j \\r\\r'".to_string());
-        parts.push("sleep 2".to_string());
+        parts.push(common::TUI_SCRIPT_STEP_DELAY.to_string());
     }
     parts.join("; ")
 }
@@ -281,8 +281,12 @@ fn test_split_hunk_abort_with_dirty_workdir_preserves_changes() {
     repo.create_file("dirty.txt", "dirty content\n");
 
     // Abort immediately: q(quit) y(confirm)
-    let script = "sleep 1; printf 'qy'; sleep 2";
-    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], script);
+    let script = format!(
+        "{}; printf 'qy'; {}",
+        common::TUI_SCRIPT_LEAD_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY
+    );
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
 
     assert!(
         output.status.success(),
@@ -504,13 +508,13 @@ fn test_split_hunk_line_additions_partial_select() {
     // Round 3: select hunks 2 and 3 (j, space, j, space, Enter, Enter)
 
     let script = [
-        "sleep 1",
+        common::TUI_SCRIPT_LEAD_DELAY,
         "printf 'j \\r\\r'",
-        "sleep 3",
+        common::TUI_SCRIPT_STEP_DELAY,
         "printf 'j \\r\\r'",
-        "sleep 3",
+        common::TUI_SCRIPT_STEP_DELAY,
         "printf 'j j \\r\\r'",
-        "sleep 2",
+        common::TUI_SCRIPT_STEP_DELAY,
     ]
     .join("; ");
     let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
@@ -618,7 +622,12 @@ fn test_split_hunk_partial_file_selection_gets_second_round() {
     //   j=A:2(now idx 0), space=select, j=A:3(now idx 1), space=select
     //   Enter=commit, Enter=accept name
 
-    let script = "sleep 1; printf 'j j jjja\\r\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
+    let script = format!(
+        "{}; printf 'j j jjja\\r\\r'; {}; printf 'j j \\r\\r'; {}",
+        common::TUI_SCRIPT_LEAD_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY
+    );
     let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
     assert!(
         output.status.success(),
@@ -785,8 +794,13 @@ fn test_split_hunk_toggle_file_then_deselect() {
     // Round 2 (list mode): file_a with 2 remaining hunks
     //   j → first hunk, space, j → second hunk, space, Enter, Enter
 
-    let script = "sleep 1; printf 'ajjj j ja\\r\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
-    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], script);
+    let script = format!(
+        "{}; printf 'ajjj j ja\\r\\r'; {}; printf 'j j \\r\\r'; {}",
+        common::TUI_SCRIPT_LEAD_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY
+    );
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
     assert!(
         output.status.success(),
         "Split failed: {}",
@@ -828,8 +842,13 @@ fn test_split_hunk_select_later_hunks_first() {
     // Round 2: file_a with A:0 and A:1 remaining
     //   j → first hunk, space, j → second hunk, space, Enter, Enter
 
-    let script = "sleep 1; printf 'jjj j ja\\r\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
-    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], script);
+    let script = format!(
+        "{}; printf 'jjj j ja\\r\\r'; {}; printf 'j j \\r\\r'; {}",
+        common::TUI_SCRIPT_LEAD_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY
+    );
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
     assert!(
         output.status.success(),
         "Split failed: {}",
@@ -891,8 +910,13 @@ fn test_split_hunk_sequential_mode_partial() {
     // Round 2 (list mode): remaining A:2, A:3
     //   j, space, j, space, Enter, Enter
 
-    let script = "sleep 1; printf '\\tyyynnna\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
-    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], script);
+    let script = format!(
+        "{}; printf '\\tyyynnna\\r'; {}; printf 'j j \\r\\r'; {}",
+        common::TUI_SCRIPT_LEAD_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY
+    );
+    let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
     assert!(
         output.status.success(),
         "Split failed: {}",
@@ -918,11 +942,16 @@ fn test_split_hunk_debug_log_captures_selections() {
     let (repo, original) = setup_two_file_four_two_hunks();
 
     // Same as partial-select: select A:0, A:1 + all B, expect round 2 with A:2, A:3
-    let script = "sleep 1; printf 'j j jjja\\r\\r'; sleep 3; printf 'j j \\r\\r'; sleep 2";
+    let script = format!(
+        "{}; printf 'j j jjja\\r\\r'; {}; printf 'j j \\r\\r'; {}",
+        common::TUI_SCRIPT_LEAD_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY,
+        common::TUI_SCRIPT_STEP_DELAY
+    );
     let output = common::run_stax_in_script_with_env(
         &repo.path(),
         &["split", "--hunk"],
-        script,
+        &script,
         &[("STAX_SPLIT_DEBUG", "1")],
     );
     assert!(

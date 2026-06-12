@@ -1272,6 +1272,9 @@ pub(crate) fn sync_head_after_push(
     repo: &GitRepo,
     branch: &str,
 ) {
+    if std::env::var_os("STAX_TEST_DISABLE_HEAD_SYNC").is_some() {
+        return;
+    }
     if let Ok(pushed_sha) = repo.rev_parse(branch) {
         wait_for_github_head_sync(rt, client, pr_number, &pushed_sha, Duration::from_secs(15));
     }

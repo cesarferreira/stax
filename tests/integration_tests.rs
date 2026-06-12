@@ -37,7 +37,8 @@ fn sanitized_stax_command() -> Command {
         .env_remove("GH_TOKEN")
         .env("GIT_CONFIG_GLOBAL", null_path)
         .env("GIT_CONFIG_SYSTEM", null_path)
-        .env("STAX_DISABLE_UPDATE_CHECK", "1");
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .env("STAX_TEST_DISABLE_HEAD_SYNC", "1");
     cmd
 }
 
@@ -7105,7 +7106,8 @@ mod forge_mock_tests {
             .env("GIT_CONFIG_GLOBAL", &gitconfig)
             .env("GIT_CONFIG_SYSTEM", &gitconfig)
             .env(token_env, "mock-token")
-            .env("STAX_DISABLE_UPDATE_CHECK", "1");
+            .env("STAX_DISABLE_UPDATE_CHECK", "1")
+            .env("STAX_TEST_DISABLE_HEAD_SYNC", "1");
         command.output().expect("Failed to execute stax")
     }
 
@@ -7132,7 +7134,8 @@ mod forge_mock_tests {
             .env("GIT_CONFIG_SYSTEM", &gitconfig)
             .env(token_env, "mock-token")
             .env("PATH", path)
-            .env("STAX_DISABLE_UPDATE_CHECK", "1");
+            .env("STAX_DISABLE_UPDATE_CHECK", "1")
+            .env("STAX_TEST_DISABLE_HEAD_SYNC", "1");
         command.output().expect("Failed to execute stax")
     }
 
@@ -7151,7 +7154,8 @@ mod forge_mock_tests {
             .env("GIT_CONFIG_GLOBAL", &gitconfig)
             .env("GIT_CONFIG_SYSTEM", &gitconfig)
             .env(token_env, "mock-token")
-            .env("STAX_DISABLE_UPDATE_CHECK", "1");
+            .env("STAX_DISABLE_UPDATE_CHECK", "1")
+            .env("STAX_TEST_DISABLE_HEAD_SYNC", "1");
         command
             .output()
             .expect("Failed to execute stax in custom cwd")
