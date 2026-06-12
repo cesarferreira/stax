@@ -36,6 +36,12 @@ make test
 # Full suite natively (slower on macOS)
 make test-native
 
+# Rebuild the pre-baked Linux test image (after Dockerfile changes)
+make test-image
+
+# Experimental Apple Container path (builds into container's local image store)
+make test-container
+
 # Run a single test by name
 cargo nextest run test_name
 

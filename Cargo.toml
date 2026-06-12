@@ -105,3 +105,9 @@ split-debuginfo = "unpacked"
 [profile.test]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
+
+# Linux container test runs (Docker / Apple Container): skip debuginfo for faster
+# linking when target/ is bind-mounted from the macOS host.
+[profile.test-container]
+inherits = "test"
+debug = 0
