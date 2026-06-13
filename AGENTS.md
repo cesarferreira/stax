@@ -12,7 +12,7 @@
   - `make test-local-ramdisk`
   - `make test-local-fast`
 - Targeted single-test runs via `cargo nextest run <pattern>` are fine and encouraged for tight feedback loops; switch to `make test` once changes are ready for verification.
-- Container test runs (`make test` / `make test-docker` / `make test-container`) use the pre-baked `stax-test` image (`make test-image`), the `test-container` Cargo profile (no debuginfo, mold linker), and shared env (`STAX_DISABLE_UPDATE_CHECK`, `RUST_MIN_STACK`, capped `NEXTEST_TEST_THREADS`). For tight iteration, prefer `cargo nextest run --lib --bins` or a module filter before a full container run.
+- Container test runs (`make test` / `make test-docker` / `make test-container`) use the pre-baked `stax-test` image (`make test-image`), the `test-container` Cargo profile (no debuginfo, mold linker), and shared env (`STAX_DISABLE_UPDATE_CHECK`, `RUST_MIN_STACK`, capped `NEXTEST_TEST_THREADS`). CI uses the same `test-container` profile and mold on `ubuntu-latest`. For tight iteration, prefer `cargo nextest run --lib --bins` or a module filter before a full container run.
 - All integration tests compile into a **single** binary (`tests/all_tests.rs`, with `autotests = false` in `Cargo.toml`) so cargo links one test binary instead of ~50 — this is what keeps test builds fast. Because of this, there is only one `[[test]]` target named `all_tests`: `cargo test --test status_tests` no longer works. To scope a run, filter by module path instead, e.g. `cargo nextest run status_tests::` (one former file) or `cargo nextest run status_tests::status_json_output` (one test). When adding a new `tests/*_tests.rs` file, register it with a `#[path = "..."] mod ...;` entry in `tests/all_tests.rs`.
 
 ## Why
