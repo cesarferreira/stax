@@ -348,3 +348,65 @@ fn sync_restack_skips_dirty_imported_parent_worktree_without_force() {
     assert_eq!(repo.get_commit_sha("dirty-base"), original_parent_sha);
     assert!(!repo.path().join("base-2.txt").exists());
 }
+
+#[test]
+fn sync_deletes_merged_imported_branch_locally_without_deleting_remote() {
+    let repo = TestRepo::new_with_remote();
+    let imported_sha =
+        push_remote_only_branch(&repo, "borrowed-base", "base.txt", "borrowed base\n");
+
+    repo.run_stax(&["get", "borrowed-base"]).assert_success();
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.merge_branch_on_remote("borrowed-base");
+
+    let out = repo.run_stax(&["sync", "--force"]);
+    out.assert_success();
+
+    let remote_branches = repo.list_remote_branches();
+    assert!(
+        remote_branches
+            .iter()
+            .any(|branch| branch == "borrowed-base"),
+        "sync must not delete imported remote branches, got: {:?}",
+        remote_branches
+    );
+    repo.git(&["fetch", "origin", "borrowed-base"])
+        .assert_success();
+    assert_eq!(repo.get_commit_sha("origin/borrowed-base"), imported_sha);
+
+    let local_branches = repo.list_branches();
+    assert!(
+        !local_branches
+            .iter()
+            .any(|branch| branch == "borrowed-base"),
+        "sync must clean up merged imported support branches locally, got: {:?}",
+        local_branches
+    );
+    repo.git(&["show-ref", "--verify", "refs/branch-metadata/borrowed-base"])
+        .assert_failure();
+}
+
+#[test]
+fn sync_delete_upstream_gone_deletes_imported_branch_locally() {
+    let repo = TestRepo::new_with_remote();
+    push_remote_only_branch(&repo, "borrowed-gone", "base.txt", "borrowed base\n");
+
+    repo.run_stax(&["get", "borrowed-gone"]).assert_success();
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.git(&["push", "origin", "--delete", "borrowed-gone"])
+        .assert_success();
+
+    let out = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
+    out.assert_success();
+
+    let local_branches = repo.list_branches();
+    assert!(
+        !local_branches
+            .iter()
+            .any(|branch| branch == "borrowed-gone"),
+        "upstream-gone cleanup must delete imported support branches locally, got: {:?}",
+        local_branches
+    );
+    repo.git(&["show-ref", "--verify", "refs/branch-metadata/borrowed-gone"])
+        .assert_failure();
+}

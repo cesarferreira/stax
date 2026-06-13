@@ -239,6 +239,7 @@ stax sync --force                  # Force sync without prompts
 stax sync --prune                  # Prune stale remotes
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
+# sync cleanup may delete merged/gone imported support branches locally, but never push-deletes their remotes.
 
 stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
 stax sweep --delete                # Delete merged + upstream-gone branches with no unique work after confirmation
@@ -288,7 +289,7 @@ stax get teammate-branch           # Fetch remote branch, track under trunk, che
 stax get teammate-branch --parent base-branch  # Track fetched branch under explicit parent
 stax get teammate-branch --no-checkout  # Fetch and track without switching branches
 # Imported branches are read-only during submit; existing imported PRs still get stack-link comments with relative intro text. GitHub comments keep compact native PR references and mark the rendered PR with 👈.
-# sync --restack refreshes clean imported bases before rebasing descendants.
+# sync --restack refreshes clean imported bases before rebasing descendants; cleanup can remove them locally after merge/gone.
 stax branch track --parent main    # Track existing branch under parent
 stax branch track --all-prs        # Import your open PRs
 stax branch untrack <branch>       # Remove stax metadata only

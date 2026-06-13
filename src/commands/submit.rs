@@ -550,7 +550,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             let mut meta = BranchMetadata::read(repo.inner(), branch)?
                 .context(format!("No metadata for branch {}", branch))?;
             let is_empty = empty_set.contains(branch);
-            let is_imported = is_imported_from_remote(&meta, &remote_info.name);
+            let is_imported = is_imported_branch(&meta);
             let needs_push =
                 !is_imported && branch_needs_push(repo.workdir()?, &remote_info.name, branch);
             let mut existing_pr = None;
@@ -736,7 +736,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 .context(format!("No metadata for branch {}", branch))?;
 
             let is_empty = empty_set.contains(branch);
-            let is_imported = is_imported_from_remote(&meta, &remote_info.name);
+            let is_imported = is_imported_branch(&meta);
 
             // Check if PR exists (skip for empty branches)
             let existing_pr = lookups_by_branch
@@ -1345,8 +1345,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let rt = rt.context("Internal error: missing runtime for PR submission")?;
     let client = client.context("Internal error: missing forge client for PR submission")?;
 
-    let imported_stack_branches =
-        imported_branches_for_stack(&repo, &stack, &current, &remote_info.name)?;
+    let imported_stack_branches = imported_branches_for_stack(&repo, &stack, &current)?;
 
     let (open_pr_url, async_timings, async_full_scan_fallbacks) = rt.block_on(async {
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();
@@ -1944,7 +1943,6 @@ fn imported_branches_for_stack(
     repo: &GitRepo,
     stack: &Stack,
     current: &str,
-    remote: &str,
 ) -> Result<HashSet<String>> {
     let mut imported = HashSet::new();
     for branch in stack
@@ -1955,7 +1953,7 @@ fn imported_branches_for_stack(
         let Some(meta) = BranchMetadata::read(repo.inner(), &branch)? else {
             continue;
         };
-        if is_imported_from_remote(&meta, remote) {
+        if is_imported_branch(&meta) {
             imported.insert(branch);
         }
     }
@@ -2212,8 +2210,8 @@ fn branch_needs_push(workdir: &Path, remote: &str, branch: &str) -> bool {
     }
 }
 
-fn is_imported_from_remote(meta: &BranchMetadata, remote: &str) -> bool {
-    meta.source_remote.as_deref() == Some(remote)
+fn is_imported_branch(meta: &BranchMetadata) -> bool {
+    meta.source_remote.is_some()
 }
 
 fn branch_matches_remote(workdir: &Path, remote: &str, branch: &str) -> bool {

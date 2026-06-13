@@ -143,6 +143,7 @@ pub fn run(
     let remote_name = config.remote_name().to_string();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
     let imported_branches = imported_branches_for_remote(&repo, &stack, &remote_name)?;
+    let remote_delete_exempt_imported_branches = imported_branches_for_cleanup(&repo, &stack)?;
     let mut sync_extra_fetch_refs = extra_fetch_refs.to_vec();
     for branch in &imported_branches {
         if !sync_extra_fetch_refs.contains(branch) {
@@ -868,15 +869,21 @@ pub fn run(
                 let local_deleted = local_delete.deleted;
                 let local_worktree_blocked = local_delete.worktree_blocked;
 
-                // Delete remote branch
-                let remote_status = Command::new("git")
-                    .args(["push", &remote_name, "--delete", branch])
-                    .current_dir(&workdir)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status();
+                // Imported branches are read-only remote references. Clean them
+                // up locally after merge, but never push-delete someone else's
+                // remote branch.
+                let remote_deleted = if remote_delete_exempt_imported_branches.contains(branch) {
+                    false
+                } else {
+                    let remote_status = Command::new("git")
+                        .args(["push", &remote_name, "--delete", branch])
+                        .current_dir(&workdir)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
 
-                let remote_deleted = remote_status.map(|s| s.success()).unwrap_or(false);
+                    remote_status.map(|s| s.success()).unwrap_or(false)
+                };
 
                 // Only delete metadata if branch no longer exists locally.
                 let local_still_exists = local_branch_exists(&workdir, branch);
@@ -1745,6 +1752,23 @@ fn imported_branches_for_remote(
         }
     }
     imported.sort();
+    Ok(imported)
+}
+
+fn imported_branches_for_cleanup(repo: &GitRepo, stack: &Stack) -> Result<HashSet<String>> {
+    let mut imported = HashSet::new();
+    for branch in stack.branches.keys() {
+        if branch == &stack.trunk {
+            continue;
+        }
+
+        let Some(meta) = BranchMetadata::read(repo.inner(), branch)? else {
+            continue;
+        };
+        if meta.source_remote.is_some() {
+            imported.insert(branch.clone());
+        }
+    }
     Ok(imported)
 }
 

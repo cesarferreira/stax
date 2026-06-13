@@ -259,6 +259,7 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 - `--restack` · `--restack --auto-stash-pop`
 - `--delete-upstream-gone`
 - `--force` / `--safe` / `--continue` / `--quiet` / `--verbose`
+- Imported branches from `st get` are remote-delete exempt: once they are detected as merged or upstream-gone, sync may delete the local support branch and metadata, but it will not push-delete the imported remote branch.
 
 ### `st restack`
 
