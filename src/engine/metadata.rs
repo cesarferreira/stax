@@ -13,6 +13,12 @@ pub struct BranchMetadata {
     /// Commit SHA of parent when this branch was last rebased
     #[serde(default)]
     pub parent_branch_revision: String,
+    /// Remote this branch was imported from with `stax get`.
+    ///
+    /// Imported branches are tracked so local branches can stack on top of
+    /// them, but submit should not push or update their PRs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_remote: Option<String>,
     /// PR information (if submitted)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_info: Option<PrInfo>,
@@ -35,6 +41,7 @@ impl BranchMetadata {
         Self {
             parent_branch_name: parent_name.to_string(),
             parent_branch_revision: parent_revision.to_string(),
+            source_remote: None,
             pr_info: None,
         }
     }
@@ -81,6 +88,10 @@ impl BranchMetadata {
 
     /// Check if the branch needs restacking (parent has moved)
     pub fn needs_restack(&self, repo: &Repository) -> Result<bool> {
+        if self.source_remote.is_some() {
+            return Ok(false);
+        }
+
         let parent_ref = repo.find_branch(&self.parent_branch_name, git2::BranchType::Local)?;
         let current_parent_rev = parent_ref.get().peel_to_commit()?.id().to_string();
         Ok(current_parent_rev != self.parent_branch_revision)
@@ -96,6 +107,7 @@ mod tests {
         let meta = BranchMetadata::new("main", "abc123");
         assert_eq!(meta.parent_branch_name, "main");
         assert_eq!(meta.parent_branch_revision, "abc123");
+        assert!(meta.source_remote.is_none());
         assert!(meta.pr_info.is_none());
     }
 

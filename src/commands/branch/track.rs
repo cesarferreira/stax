@@ -233,6 +233,7 @@ fn run_track_all_prs() -> Result<()> {
         let meta = BranchMetadata {
             parent_branch_name: parent_branch.clone(),
             parent_branch_revision: parent_rev,
+            source_remote: None,
             pr_info: Some(PrInfo {
                 number: pr.number,
                 state: pr.state.to_uppercase(),

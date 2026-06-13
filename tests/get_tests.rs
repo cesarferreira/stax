@@ -3,6 +3,10 @@
 use crate::common;
 
 use common::{OutputAssertions, TestRepo};
+use serde_json::Value;
+use std::path::Path;
+use std::process::Command;
+use tempfile::TempDir;
 
 fn push_remote_only_branch_from(
     repo: &TestRepo,
@@ -38,6 +42,79 @@ fn parent_for(repo: &TestRepo, branch: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn metadata_for(repo: &TestRepo, branch: &str) -> Value {
+    let output = repo.git(&["show", &format!("refs/branch-metadata/{}", branch)]);
+    output.assert_success();
+    serde_json::from_str(&TestRepo::stdout(&output)).expect("valid metadata JSON")
+}
+
+fn run_git_in(cwd: &Path, args: &[&str]) -> std::process::Output {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("run git");
+    output.assert_success();
+    output
+}
+
+fn configure_submit_remote(repo: &TestRepo) {
+    let remote_path = repo
+        .remote_path()
+        .expect("Expected remote path for repository with origin");
+    let remote_path_str = remote_path.to_string_lossy().to_string();
+
+    repo.git(&[
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/test-owner/test-repo.git",
+    ]);
+    repo.git(&["remote", "set-url", "--push", "origin", &remote_path_str]);
+
+    let file_url = format!("file://{}", remote_path_str);
+    repo.git(&[
+        "config",
+        "--local",
+        &format!("url.{}.insteadOf", file_url.trim_end_matches('/')),
+        "https://github.com/test-owner/test-repo.git",
+    ]);
+}
+
+fn update_remote_branch_in_clone(
+    repo: &TestRepo,
+    branch: &str,
+    file: &str,
+    content: &str,
+) -> String {
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let clone_dir = TempDir::new().expect("temp clone");
+
+    run_git_in(
+        clone_dir.path(),
+        &["clone", remote_path.to_str().unwrap(), "."],
+    );
+    run_git_in(
+        clone_dir.path(),
+        &["checkout", "-B", branch, &format!("origin/{}", branch)],
+    );
+    run_git_in(
+        clone_dir.path(),
+        &["config", "user.email", "other@test.com"],
+    );
+    run_git_in(clone_dir.path(), &["config", "user.name", "Other User"]);
+    std::fs::write(clone_dir.path().join(file), content).expect("write remote update");
+    run_git_in(clone_dir.path(), &["add", "-A"]);
+    run_git_in(
+        clone_dir.path(),
+        &["commit", "-m", "Update imported branch"],
+    );
+    let sha = run_git_in(clone_dir.path(), &["rev-parse", "HEAD"]);
+    run_git_in(clone_dir.path(), &["push", "origin", branch]);
+
+    String::from_utf8_lossy(&sha.stdout).trim().to_string()
+}
+
 #[test]
 fn get_fetches_remote_only_branch_and_tracks_it() {
     let repo = TestRepo::new_with_remote();
@@ -57,6 +134,10 @@ fn get_fetches_remote_only_branch_and_tracks_it() {
     assert_eq!(repo.get_commit_sha("remote-feature"), remote_sha);
     assert_eq!(repo.get_commit_sha("origin/remote-feature"), remote_sha);
     assert_eq!(parent_for(&repo, "remote-feature").as_deref(), Some("main"));
+    assert_eq!(
+        metadata_for(&repo, "remote-feature")["sourceRemote"],
+        "origin"
+    );
 
     repo.git(&["config", "branch.remote-feature.remote"])
         .assert_success()
@@ -174,4 +255,96 @@ fn get_force_resets_divergent_local_branch() {
     assert_eq!(repo.current_branch(), "main");
     assert_eq!(repo.get_commit_sha("force-feature"), remote_sha);
     assert_eq!(parent_for(&repo, "force-feature").as_deref(), Some("main"));
+}
+
+#[test]
+fn submit_does_not_push_imported_support_branch() {
+    let repo = TestRepo::new_with_remote();
+    configure_submit_remote(&repo);
+    let original_remote_sha =
+        push_remote_only_branch(&repo, "imported-parent", "parent.txt", "remote parent\n");
+
+    repo.run_stax(&["get", "imported-parent"]).assert_success();
+    repo.create_file("local-parent.txt", "local parent change\n");
+    repo.commit("Local parent change");
+    let local_parent_sha = repo.head_sha();
+
+    repo.run_stax(&["create", "my-child"]).assert_success();
+    repo.create_file("child.txt", "child\n");
+    repo.commit("Child change");
+    let child = repo.current_branch();
+
+    let out = repo.run_stax(&["downstack", "submit", "--no-pr", "--yes"]);
+    out.assert_success();
+
+    repo.git(&["fetch", "origin", "imported-parent"])
+        .assert_success();
+    assert_eq!(
+        repo.get_commit_sha("origin/imported-parent"),
+        original_remote_sha
+    );
+    assert_eq!(repo.get_commit_sha("imported-parent"), local_parent_sha);
+    assert_eq!(
+        repo.get_commit_sha(&format!("origin/{}", child)),
+        repo.get_commit_sha(&child)
+    );
+}
+
+#[test]
+fn sync_restack_updates_imported_parent_then_rebases_child() {
+    let repo = TestRepo::new_with_remote();
+    push_remote_only_branch(&repo, "review-base", "base.txt", "review base\n");
+
+    repo.run_stax(&["get", "review-base"]).assert_success();
+    repo.run_stax(&["create", "my-child"]).assert_success();
+    repo.create_file("child.txt", "child\n");
+    repo.commit("Child change");
+    let child = repo.current_branch();
+
+    let updated_parent_sha =
+        update_remote_branch_in_clone(&repo, "review-base", "base-2.txt", "review base 2\n");
+
+    let out = repo.run_stax(&["sync", "--restack", "--force"]);
+    out.assert_success()
+        .assert_stdout_contains("updated imported branch")
+        .assert_stdout_contains("restacked 1");
+
+    assert_eq!(repo.get_commit_sha("review-base"), updated_parent_sha);
+    assert_eq!(repo.current_branch(), child);
+    assert!(repo.path().join("base-2.txt").exists());
+}
+
+#[test]
+fn sync_restack_skips_dirty_imported_parent_worktree_without_force() {
+    let repo = TestRepo::new_with_remote();
+    let original_parent_sha =
+        push_remote_only_branch(&repo, "dirty-base", "base.txt", "review base\n");
+
+    repo.run_stax(&["get", "dirty-base"]).assert_success();
+    repo.run_stax(&["create", "my-child"]).assert_success();
+    repo.create_file("child.txt", "child\n");
+    repo.commit("Child change");
+
+    let imported_worktree = TempDir::new().expect("imported worktree");
+    run_git_in(
+        &repo.path(),
+        &[
+            "worktree",
+            "add",
+            imported_worktree.path().to_str().unwrap(),
+            "dirty-base",
+        ],
+    );
+    std::fs::write(imported_worktree.path().join("local.txt"), "local edit\n")
+        .expect("dirty imported worktree");
+
+    update_remote_branch_in_clone(&repo, "dirty-base", "base-2.txt", "review base 2\n");
+
+    let out = repo.run_stax(&["sync", "--restack"]);
+    out.assert_success()
+        .assert_stdout_contains("skipped imported branch")
+        .assert_stdout_contains("All branches up to date");
+
+    assert_eq!(repo.get_commit_sha("dirty-base"), original_parent_sha);
+    assert!(!repo.path().join("base-2.txt").exists());
 }

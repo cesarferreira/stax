@@ -72,7 +72,7 @@ pub fn run(branch: String, parent: Option<String>, no_checkout: bool, force: boo
     }
 
     let repo = GitRepo::open()?;
-    write_tracking_metadata(&repo, &branch, &parent_branch)?;
+    write_tracking_metadata(&repo, &branch, &parent_branch, &remote)?;
 
     if no_checkout {
         println!(
@@ -108,7 +108,12 @@ fn normalize_remote_branch(branch: &str, remote: &str) -> Result<String> {
     Ok(trimmed.to_string())
 }
 
-fn write_tracking_metadata(repo: &GitRepo, branch: &str, parent_branch: &str) -> Result<()> {
+fn write_tracking_metadata(
+    repo: &GitRepo,
+    branch: &str,
+    parent_branch: &str,
+    remote: &str,
+) -> Result<()> {
     if let Some(existing) = BranchMetadata::read(repo.inner(), branch)? {
         if existing.parent_branch_name != parent_branch {
             anyhow::bail!(
@@ -119,13 +124,23 @@ fn write_tracking_metadata(repo: &GitRepo, branch: &str, parent_branch: &str) ->
                 "stax branch reparent".cyan()
             );
         }
+        if existing.source_remote.as_deref() != Some(remote) {
+            let updated = BranchMetadata {
+                source_remote: Some(remote.to_string()),
+                ..existing
+            };
+            updated.write(repo.inner(), branch)?;
+        }
         return Ok(());
     }
 
     let parent_rev = repo
         .merge_base(parent_branch, branch)
         .or_else(|_| repo.branch_commit(parent_branch))?;
-    let meta = BranchMetadata::new(parent_branch, &parent_rev);
+    let meta = BranchMetadata {
+        source_remote: Some(remote.to_string()),
+        ..BranchMetadata::new(parent_branch, &parent_rev)
+    };
     meta.write(repo.inner(), branch)?;
     Ok(())
 }

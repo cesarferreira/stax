@@ -92,6 +92,8 @@ struct PrPlan {
     needs_pr_update: bool,
     // Empty branches get pushed but no PR created
     is_empty: bool,
+    // Branches imported with `stax get` are read-only support branches.
+    is_imported: bool,
 }
 
 struct ExistingPrLookup {
@@ -548,7 +550,9 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             let mut meta = BranchMetadata::read(repo.inner(), branch)?
                 .context(format!("No metadata for branch {}", branch))?;
             let is_empty = empty_set.contains(branch);
-            let needs_push = branch_needs_push(repo.workdir()?, &remote_info.name, branch);
+            let is_imported = is_imported_from_remote(&meta, &remote_info.name);
+            let needs_push =
+                !is_imported && branch_needs_push(repo.workdir()?, &remote_info.name, branch);
             let mut existing_pr = None;
             let had_metadata_pr = meta.pr_info.as_ref().filter(|p| p.number > 0).is_some();
 
@@ -651,6 +655,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 needs_push,
                 needs_pr_update: false,
                 is_empty,
+                is_imported,
             });
         }
     } else {
@@ -731,6 +736,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 .context(format!("No metadata for branch {}", branch))?;
 
             let is_empty = empty_set.contains(branch);
+            let is_imported = is_imported_from_remote(&meta, &remote_info.name);
 
             // Check if PR exists (skip for empty branches)
             let existing_pr = lookups_by_branch
@@ -793,10 +799,13 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             let base = meta.parent_branch_name.clone();
 
             // Check if we actually need to push
-            let needs_push = branch_needs_push(repo.workdir()?, &remote_info.name, branch);
+            let needs_push =
+                !is_imported && branch_needs_push(repo.workdir()?, &remote_info.name, branch);
 
             // Check if PR base needs updating (not for empty branches)
             let needs_pr_update = if is_empty {
+                false
+            } else if is_imported {
                 false
             } else if let Some(pr) = &existing_pr {
                 pr.info.base != base || needs_push
@@ -835,6 +844,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 needs_push,
                 needs_pr_update,
                 is_empty,
+                is_imported,
             });
         }
 
@@ -847,15 +857,21 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     // Show plan summary (exclude empty branches from PR counts)
     let creates: Vec<_> = plans
         .iter()
-        .filter(|p| p.existing_pr.is_none() && !p.is_empty)
+        .filter(|p| p.existing_pr.is_none() && !p.is_empty && !p.is_imported)
         .collect();
     let updates: Vec<_> = plans
         .iter()
-        .filter(|p| p.existing_pr.is_some() && p.needs_pr_update && !p.is_empty)
+        .filter(|p| p.existing_pr.is_some() && p.needs_pr_update && !p.is_empty && !p.is_imported)
         .collect();
     let noops: Vec<_> = plans
         .iter()
-        .filter(|p| p.existing_pr.is_some() && !p.needs_pr_update && !p.needs_push && !p.is_empty)
+        .filter(|p| {
+            p.existing_pr.is_some()
+                && !p.needs_pr_update
+                && !p.needs_push
+                && !p.is_empty
+                && !p.is_imported
+        })
         .collect();
 
     if !quiet {
@@ -896,7 +912,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         let mut ai_agent_selection: Option<AiAgentSelection> = None;
         let new_prs: Vec<_> = plans
             .iter()
-            .filter(|p| p.existing_pr.is_none() && !p.is_empty)
+            .filter(|p| p.existing_pr.is_none() && !p.is_empty && !p.is_imported)
             .collect();
         if !new_prs.is_empty() && !quiet {
             println!();
@@ -904,7 +920,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         }
 
         for plan in &mut plans {
-            if plan.existing_pr.is_some() || plan.is_empty {
+            if plan.existing_pr.is_some() || plan.is_empty || plan.is_imported {
                 continue;
             }
 
@@ -1066,7 +1082,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             if should_consider_existing_ai {
                 let existing_prs: Vec<_> = plans
                     .iter()
-                    .filter(|p| p.existing_pr.is_some() && !p.is_empty)
+                    .filter(|p| p.existing_pr.is_some() && !p.is_empty && !p.is_imported)
                     .collect();
                 if !existing_prs.is_empty() && !quiet {
                     println!();
@@ -1078,6 +1094,9 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         continue;
                     };
                     if plan.is_empty {
+                        continue;
+                    }
+                    if plan.is_imported {
                         continue;
                     }
 
@@ -1296,7 +1315,9 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 || p.generated_body_update.is_some())
     });
 
-    let any_existing_prs = plans.iter().any(|p| !p.is_empty && p.existing_pr.is_some());
+    let any_existing_prs = plans
+        .iter()
+        .any(|p| !p.is_empty && !p.is_imported && p.existing_pr.is_some());
 
     if !any_pr_work && branches_needing_push.is_empty() && !any_existing_prs {
         if !quiet {
@@ -1333,7 +1354,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         let create_update_started_at = Instant::now();
         for plan in &plans {
             // Skip empty branches for PR operations
-            if plan.is_empty {
+            if plan.is_empty || plan.is_imported {
                 continue;
             }
 
@@ -2099,6 +2120,10 @@ fn branch_needs_push(workdir: &Path, remote: &str, branch: &str) -> bool {
         (Some(_), None) => true,      // Branch not on remote yet
         _ => true,                    // Default to push if unsure
     }
+}
+
+fn is_imported_from_remote(meta: &BranchMetadata, remote: &str) -> bool {
+    meta.source_remote.as_deref() == Some(remote)
 }
 
 fn branch_matches_remote(workdir: &Path, remote: &str, branch: &str) -> bool {

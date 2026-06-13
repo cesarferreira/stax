@@ -30,7 +30,7 @@ stax sweep                     # Classify + optionally delete merged/gone/stale 
 stax restack                   # Rebase branch/stack onto parents
 stax cascade                   # Restack bottom-up and submit updates
 
-stax get <branch>              # Fetch, checkout, and track remote branch
+stax get <branch>              # Fetch, checkout, and track imported remote branch
 stax checkout|co|bco           # Checkout branch (interactive by default)
 stax trunk|t                   # Checkout trunk
 stax trunk <branch>            # Set trunk branch
@@ -287,6 +287,7 @@ stax p                             # Previous branch
 stax get teammate-branch           # Fetch remote branch, track under trunk, checkout
 stax get teammate-branch --parent base-branch  # Track fetched branch under explicit parent
 stax get teammate-branch --no-checkout  # Fetch and track without switching branches
+# Imported branches are read-only during submit; sync --restack refreshes clean imported bases before rebasing descendants.
 stax branch track --parent main    # Track existing branch under parent
 stax branch track --all-prs        # Import your open PRs
 stax branch untrack <branch>       # Remove stax metadata only
