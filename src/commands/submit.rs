@@ -1345,6 +1345,9 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let rt = rt.context("Internal error: missing runtime for PR submission")?;
     let client = client.context("Internal error: missing forge client for PR submission")?;
 
+    let imported_stack_branches =
+        imported_branches_for_stack(&repo, &stack, &current, &remote_info.name)?;
+
     let (open_pr_url, async_timings, async_full_scan_fallbacks) = rt.block_on(async {
         let mut pr_infos: Vec<StackPrInfo> = Vec::new();
         let mut created_pr_numbers: HashSet<u64> = HashSet::new();
@@ -1453,6 +1456,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     pr_infos.push(StackPrInfo {
                         branch: plan.branch.clone(),
                         pr_number: Some(pr.number),
+                        is_imported: plan.is_imported,
                     });
                 } else {
                     // Toggle draft status even when no other update is needed
@@ -1528,6 +1532,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     pr_infos.push(StackPrInfo {
                         branch: plan.branch.clone(),
                         pr_number: Some(existing_pr_number),
+                        is_imported: plan.is_imported,
                     });
                 }
             } else {
@@ -1587,6 +1592,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 pr_infos.push(StackPrInfo {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
+                    is_imported: plan.is_imported,
                 });
             }
         }
@@ -1596,7 +1602,23 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         // from each PR branch's own stack context. When submitting from trunk,
         // a single trunk-wide context would flatten sibling stacks into a fake
         // linear chain.
-        let stack_link_contexts = stack_link_contexts_for_sync(&stack, &current, &pr_infos);
+        let mut stack_link_pr_infos = pr_infos.clone();
+        if stack_links_mode != StackLinksMode::Off {
+            discover_stack_link_pr_infos(
+                &client,
+                &stack,
+                &current,
+                &imported_stack_branches,
+                &mut stack_link_pr_infos,
+            )
+            .await?;
+        }
+        let stack_link_contexts = stack_link_contexts_for_sync(
+            &stack,
+            &current,
+            &stack_link_pr_infos,
+            &imported_stack_branches,
+        );
 
         let stack_links_started_at = Instant::now();
         let effective_stack_links_mode =
@@ -1856,10 +1878,11 @@ fn stack_pr_infos_for_links(
     stack: &Stack,
     current: &str,
     processed_pr_infos: &[StackPrInfo],
+    imported_branches: &HashSet<String>,
 ) -> Vec<StackPrInfo> {
-    let processed_pr_numbers: HashMap<&str, Option<u64>> = processed_pr_infos
+    let processed_pr_infos_by_branch: HashMap<&str, &StackPrInfo> = processed_pr_infos
         .iter()
-        .map(|info| (info.branch.as_str(), info.pr_number))
+        .map(|info| (info.branch.as_str(), info))
         .collect();
 
     stack
@@ -1867,27 +1890,94 @@ fn stack_pr_infos_for_links(
         .into_iter()
         .filter(|branch| branch != &stack.trunk)
         .map(|branch| {
-            let pr_number = processed_pr_numbers
-                .get(branch.as_str())
-                .copied()
-                .flatten()
+            let processed_info = processed_pr_infos_by_branch.get(branch.as_str()).copied();
+            let pr_number = processed_info
+                .and_then(|info| info.pr_number)
                 .or_else(|| stack.branches.get(&branch).and_then(|info| info.pr_number));
+            let is_imported = processed_info
+                .map(|info| info.is_imported)
+                .unwrap_or_else(|| imported_branches.contains(&branch));
 
-            StackPrInfo { branch, pr_number }
+            StackPrInfo {
+                branch,
+                pr_number,
+                is_imported,
+            }
         })
         .collect()
+}
+
+async fn discover_stack_link_pr_infos(
+    client: &ForgeClient,
+    stack: &Stack,
+    current: &str,
+    imported_branches: &HashSet<String>,
+    processed_pr_infos: &mut Vec<StackPrInfo>,
+) -> Result<()> {
+    let mut known_branches: HashSet<String> = processed_pr_infos
+        .iter()
+        .filter(|info| info.pr_number.is_some())
+        .map(|info| info.branch.clone())
+        .collect();
+
+    let missing_pr_infos =
+        stack_pr_infos_for_links(stack, current, processed_pr_infos, imported_branches);
+    for info in missing_pr_infos {
+        if info.pr_number.is_some() || known_branches.contains(&info.branch) {
+            continue;
+        }
+
+        if let Some(pr) = client.find_open_pr_by_head(&info.branch).await? {
+            known_branches.insert(info.branch.clone());
+            processed_pr_infos.push(StackPrInfo {
+                branch: info.branch,
+                pr_number: Some(pr.info.number),
+                is_imported: info.is_imported,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn imported_branches_for_stack(
+    repo: &GitRepo,
+    stack: &Stack,
+    current: &str,
+    remote: &str,
+) -> Result<HashSet<String>> {
+    let mut imported = HashSet::new();
+    for branch in stack
+        .current_stack(current)
+        .into_iter()
+        .filter(|branch| branch != &stack.trunk)
+    {
+        let Some(meta) = BranchMetadata::read(repo.inner(), &branch)? else {
+            continue;
+        };
+        if is_imported_from_remote(&meta, remote) {
+            imported.insert(branch);
+        }
+    }
+    Ok(imported)
 }
 
 fn stack_link_contexts_for_sync(
     stack: &Stack,
     current: &str,
     processed_pr_infos: &[StackPrInfo],
+    imported_branches: &HashSet<String>,
 ) -> Vec<(u64, String, Vec<StackPrInfo>)> {
-    stack_pr_infos_for_links(stack, current, processed_pr_infos)
+    stack_pr_infos_for_links(stack, current, processed_pr_infos, imported_branches)
         .into_iter()
         .filter_map(|info| {
             let pr_number = info.pr_number?;
-            let context = stack_pr_infos_for_links(stack, &info.branch, processed_pr_infos);
+            let context = stack_pr_infos_for_links(
+                stack,
+                &info.branch,
+                processed_pr_infos,
+                imported_branches,
+            );
             Some((pr_number, info.branch, context))
         })
         .collect()
@@ -2661,7 +2751,7 @@ mod tests {
     };
     use crate::engine::stack::StackBranch;
     use crate::engine::Stack;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn no_prompt_defaults_to_draft() {
@@ -2754,21 +2844,28 @@ mod tests {
             ]),
         };
 
+        let imported_branches = HashSet::from(["base".to_string()]);
         let infos = stack_pr_infos_for_links(
             &stack,
             "middle",
             &[StackPrInfo {
                 branch: "middle".to_string(),
                 pr_number: Some(22),
+                is_imported: false,
             }],
+            &imported_branches,
         );
 
         assert_eq!(
             infos
                 .iter()
-                .map(|info| (info.branch.as_str(), info.pr_number))
+                .map(|info| (info.branch.as_str(), info.pr_number, info.is_imported))
                 .collect::<Vec<_>>(),
-            vec![("base", Some(10)), ("middle", Some(22)), ("leaf", Some(30))]
+            vec![
+                ("base", Some(10), true),
+                ("middle", Some(22), false),
+                ("leaf", Some(30), false)
+            ]
         );
     }
 
@@ -2832,7 +2929,7 @@ mod tests {
             ]),
         };
 
-        let contexts = stack_link_contexts_for_sync(&stack, "main", &[]);
+        let contexts = stack_link_contexts_for_sync(&stack, "main", &[], &HashSet::new());
 
         let context_for = |branch: &str| {
             contexts

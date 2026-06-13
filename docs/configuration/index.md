@@ -165,6 +165,8 @@ single_stack = "on"    # "on" | "off"
 
 When body output is enabled, stax appends a managed block to the bottom of the PR body and only rewrites that managed block on future submits.
 
+Stack-link entries use compact PR/MR references and mark the PR being rendered with `👈`. On GitHub, stax keeps native `#123` PR references so GitHub renders its standard linked issue/PR styling; other forges use direct markdown links. The intro text is relative to the PR being rendered, so an imported base PR is described as an imported reference, while a local PR calls out any imported downstack context. Imported branches remain read-only for push and PR metadata updates, but their existing PRs still receive the managed stack links when they are part of the displayed stack.
+
 `single_stack` controls whether stack links are written when the stack contains only one PR. With the default `"on"`, links are always synced per `stack_links`. With `"off"`, stax skips link sync — and removes any stale links left over from a previous `"on"` setting — while the stack has a single PR. As soon as a second PR is submitted on the same stack, links populate on every PR (including the original) automatically.
 
 ## Forge type override

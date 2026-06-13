@@ -287,7 +287,8 @@ stax p                             # Previous branch
 stax get teammate-branch           # Fetch remote branch, track under trunk, checkout
 stax get teammate-branch --parent base-branch  # Track fetched branch under explicit parent
 stax get teammate-branch --no-checkout  # Fetch and track without switching branches
-# Imported branches are read-only during submit; sync --restack refreshes clean imported bases before rebasing descendants.
+# Imported branches are read-only during submit; existing imported PRs still get stack-link comments with relative intro text. GitHub comments keep compact native PR references and mark the rendered PR with 👈.
+# sync --restack refreshes clean imported bases before rebasing descendants.
 stax branch track --parent main    # Track existing branch under parent
 stax branch track --all-prs        # Import your open PRs
 stax branch untrack <branch>       # Remove stax metadata only
