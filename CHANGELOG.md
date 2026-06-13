@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.86.3] - 2026-06-13
+
+### Changed
+- Apple container testing (#495)
+- Revert "[codex] Disable Windows release builds (#488)" (#497)
+- Use mold linker and test-container profile in Rust Tests (#498)
+
 ## [0.86.2] - 2026-06-10
 
 ### Changed
@@ -512,7 +519,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.86.2...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.86.3...HEAD
+[0.86.3]: https://github.com/cesarferreira/stax/compare/v0.86.2...v0.86.3
 [0.86.2]: https://github.com/cesarferreira/stax/compare/v0.86.1...v0.86.2
 [0.86.1]: https://github.com/cesarferreira/stax/compare/v0.86.0...v0.86.1
 [0.86.0]: https://github.com/cesarferreira/stax/compare/v0.85.1...v0.86.0
