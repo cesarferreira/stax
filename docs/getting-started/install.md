@@ -40,21 +40,7 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 
 ## Windows
 
-Prebuilt Windows binaries are not published. Install Rust with the MSVC toolchain, then build and install from crates.io:
-
-```powershell
-cargo install stax --locked --features vendored-openssl
-```
-
-Or build from a local checkout:
-
-```powershell
-git clone https://github.com/cesarferreira/stax.git
-cd stax
-cargo install --path . --locked --features vendored-openssl
-```
-
-Cargo installs `stax.exe` and `st.exe` into `%USERPROFILE%\.cargo\bin`; make sure that directory is on your `PATH`. See [Windows notes](../reference/windows.md) for shell and tmux limitations.
+Download `stax-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/cesarferreira/stax/releases/latest), extract `stax.exe` and `st.exe`, and place them on your `PATH`. See [Windows notes](../reference/windows.md) for shell and tmux limitations.
 
 ## Build from source
 
