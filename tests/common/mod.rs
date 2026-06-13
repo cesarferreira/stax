@@ -78,9 +78,13 @@ fn sh_quote(value: &str) -> String {
 }
 
 /// Delay before the first TUI keystrokes in `script`-based integration tests.
-pub const TUI_SCRIPT_LEAD_DELAY: &str = "sleep 0.2";
+///
+/// Keep this conservative: the `script` PTY helper does not provide a readiness
+/// signal, so sending input too early races the TUI startup/re-render path and
+/// can make multi-round flows silently accept the wrong branch name.
+pub const TUI_SCRIPT_LEAD_DELAY: &str = "sleep 1";
 /// Pause between TUI interaction rounds.
-pub const TUI_SCRIPT_STEP_DELAY: &str = "sleep 0.2";
+pub const TUI_SCRIPT_STEP_DELAY: &str = "sleep 2";
 
 #[allow(dead_code)]
 pub fn run_stax_in_script(cwd: &Path, args: &[&str], input_script: &str) -> Output {
