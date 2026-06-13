@@ -65,7 +65,9 @@ fn apply_sanitized_test_env(cmd: &mut Command) {
         .env_remove("GH_TOKEN")
         .env("GIT_CONFIG_GLOBAL", null_path)
         .env("GIT_CONFIG_SYSTEM", null_path)
-        .env("STAX_DISABLE_UPDATE_CHECK", "1");
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        // Forge mocks return static PR head SHAs; skip the post-push head-sync poll.
+        .env("STAX_TEST_DISABLE_HEAD_SYNC", "1");
 }
 
 // Used by `tui_commands_tests` and `worktree_tests`; other integration test crates
@@ -74,6 +76,11 @@ fn apply_sanitized_test_env(cmd: &mut Command) {
 fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
+
+/// Delay before the first TUI keystrokes in `script`-based integration tests.
+pub const TUI_SCRIPT_LEAD_DELAY: &str = "sleep 0.2";
+/// Pause between TUI interaction rounds.
+pub const TUI_SCRIPT_STEP_DELAY: &str = "sleep 0.2";
 
 #[allow(dead_code)]
 pub fn run_stax_in_script(cwd: &Path, args: &[&str], input_script: &str) -> Output {

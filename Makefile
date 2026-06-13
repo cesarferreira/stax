@@ -1,10 +1,15 @@
-.PHONY: build build-release release install clean test test-native test-local-fast test-local-ramdisk test-docker ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
+.PHONY: build build-release release install clean test test-native test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
 RAMDISK_MOUNT ?= /Volumes/$(RAMDISK_NAME)
 MAC_LOCAL_TEST_THREADS ?= 8
 LEVEL ?= minor
+STAX_TEST_IMAGE ?= stax-test
+CONTAINER ?= $(shell if [ -x /opt/homebrew/opt/container/bin/container ]; then printf '%s\n' /opt/homebrew/opt/container/bin/container; else printf '%s\n' container; fi)
+CONTAINER_MEMORY ?= 8G
+CONTAINER_CARGO_BUILD_JOBS ?= 4
+CONTAINER_CARGO_PROFILE ?= test-container
 
 # Default target
 all: check build test
@@ -100,17 +105,42 @@ test-local-ramdisk: ramdisk-up
 	fi; \
 	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$(RAMDISK_MOUNT)/tmp" TMPDIR="$(RAMDISK_MOUNT)/tmp" NEXTEST_TEST_THREADS="$$threads" cargo nextest run
 
-# Run tests in Linux Docker (fast path on macOS)
-test-docker:
-	mkdir -p .docker-cache/cargo .docker-cache/target
-	docker run --rm -t \
+# Build the pre-baked Linux test image (nextest + mold linker).
+test-image:
+	docker build -t $(STAX_TEST_IMAGE) -f Dockerfile .
+
+# Build the same image into Apple Container's local store.
+test-container-image:
+	$(CONTAINER) build -t $(STAX_TEST_IMAGE) -f Dockerfile .
+
+# Shared container test env (Docker and Apple Container).
+define CONTAINER_TEST_RUN
+	@threads="$${NEXTEST_TEST_THREADS:-$(MAC_LOCAL_TEST_THREADS)}"; \
+	$(1) run --rm -t \
 		-u "$$(id -u):$$(id -g)" \
+		$(2) \
 		-v "$$(pwd):/work" \
 		-w /work \
-		-e CARGO_HOME=/work/.docker-cache/cargo \
-		-v "$$(pwd)/.docker-cache/target:/work/target" \
-		rust:1 \
-		bash -lc 'export PATH="$$CARGO_HOME/bin:/usr/local/cargo/bin:$$PATH"; if ! command -v cargo-nextest >/dev/null 2>&1; then cargo install cargo-nextest --locked; fi && cargo nextest run'
+		-e CARGO_HOME=/work/$(3)/cargo \
+		-e CARGO_INCREMENTAL=0 \
+		-e CARGO_BUILD_JOBS="$(CONTAINER_CARGO_BUILD_JOBS)" \
+		-e STAX_CONTAINER_CARGO_PROFILE="$(CONTAINER_CARGO_PROFILE)" \
+		-e NEXTEST_TEST_THREADS="$$threads" \
+		-e RUST_MIN_STACK=4194304 \
+		-v "$$(pwd)/$(3)/target:/work/target" \
+		$(STAX_TEST_IMAGE) \
+		bash /work/scripts/container-nextest.sh $(4)
+endef
+
+# Run tests in Linux Docker (fast path on macOS)
+test-docker: test-image
+	mkdir -p .docker-cache/cargo .docker-cache/target
+	$(call CONTAINER_TEST_RUN,docker,,.docker-cache,)
+
+# Run tests with Apple container (experimental macOS fast path)
+test-container: test-container-image
+	mkdir -p .container-cache/cargo .container-cache/target
+	$(call CONTAINER_TEST_RUN,$(CONTAINER),-m "$(CONTAINER_MEMORY)",.container-cache,)
 
 # Run fast unit tests only
 test-unit:

@@ -15,12 +15,20 @@ use common::{OutputAssertions, TestRepo};
 
 fn select_menu_option(index: usize) -> String {
     let downs = "\\033[B".repeat(index);
-    format!("sleep 1; printf '{}\\r'", downs)
+    format!(
+        "{}; printf '{}\\r'",
+        common::TUI_SCRIPT_LEAD_DELAY, downs
+    )
 }
 
 fn select_patch_and_stage_first_hunk() -> String {
     let downs = "\\033[B";
-    format!("sleep 1; printf '{}\\r'; sleep 1; printf 'y\\n'", downs)
+    format!(
+        "{lead}; printf '{downs}\\r'; {step}; printf 'y\\n'",
+        lead = common::TUI_SCRIPT_LEAD_DELAY,
+        step = common::TUI_SCRIPT_STEP_DELAY,
+        downs = downs
+    )
 }
 
 fn head_file(repo: &TestRepo, path: &str) -> String {

@@ -6,6 +6,7 @@ Cargo.lock
 /.venv
 /.test-tmp
 /.docker-cache
+/.container-cache
 .worktrees/
 .claude
 .serena
@@ -16,4 +17,3 @@ __pycache__/
 
 .playwright-mcp/
 .superpowers/
-

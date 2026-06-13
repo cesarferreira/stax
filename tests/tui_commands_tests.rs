@@ -77,7 +77,14 @@ fn test_tui_delete_branch_via_dashboard() {
     let branch_name = repo.current_branch();
     repo.run_stax(&["checkout", "main"]).assert_success();
 
-    let output = common::run_stax_in_script(&repo.path(), &[], "printf 'kdy'; sleep 1; printf 'q'");
+    let output = common::run_stax_in_script(
+        &repo.path(),
+        &[],
+        &format!(
+            "printf 'kdy'; {}; printf 'q'",
+            common::TUI_SCRIPT_STEP_DELAY
+        ),
+    );
     assert!(
         output.status.success(),
         "Scripted TUI session failed: {}",
