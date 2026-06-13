@@ -1,10 +1,10 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
 use reqwest::Client;
-use serde::de::DeserializeOwned;
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -220,6 +220,24 @@ impl ForgeClient {
         dispatch!(self, create_stack_comment(number, stack_comment))
     }
 
+    pub async fn create_issue_comment(&self, number: u64, body: &str) -> Result<()> {
+        match self {
+            Self::GitHub(client) => client.create_issue_comment(number, body).await,
+            Self::GitLab(_) | Self::Gitea(_) => {
+                bail!("creating plain PR comments is currently only supported for GitHub")
+            }
+        }
+    }
+
+    pub async fn close_pr(&self, number: u64) -> Result<()> {
+        match self {
+            Self::GitHub(client) => client.close_pr(number).await,
+            Self::GitLab(_) | Self::Gitea(_) => {
+                bail!("closing PRs from stack merge is currently only supported for GitHub")
+            }
+        }
+    }
+
     pub async fn delete_stack_comment(&self, number: u64) -> Result<()> {
         dispatch!(self, delete_stack_comment(number))
     }
@@ -236,12 +254,15 @@ impl ForgeClient {
         sha: Option<&str>,
     ) -> Result<()> {
         match self {
-            // GitHub's merge_pr takes (number, method, commit_title, commit_message).
-            // The `sha` merge-guard is not exposed by the current GitHub client,
-            // so we pass None for commit_message rather than forwarding sha there.
             Self::GitHub(client) => {
                 client
-                    .merge_pr(number, method, commit_title.map(str::to_string), None)
+                    .merge_pr(
+                        number,
+                        method,
+                        commit_title.map(str::to_string),
+                        None,
+                        sha.map(str::to_string),
+                    )
                     .await
             }
             Self::GitLab(client) => client.merge_pr(number, method, commit_title, sha).await,

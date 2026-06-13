@@ -277,15 +277,18 @@ pub(crate) enum Commands {
         /// Merge entire stack (ignore current position)
         #[arg(long)]
         all: bool,
+        /// With --stack, merge the full stack even when current is in the middle
+        #[arg(long, requires = "stack", conflicts_with_all = ["all", "downstack_only"])]
+        full: bool,
         /// Merge ancestors below current, then rebase current branch
-        #[arg(long, visible_alias = "ds", conflicts_with_all = ["all", "remote", "queue"])]
+        #[arg(long, visible_alias = "ds", conflicts_with_all = ["all", "full", "remote", "queue"])]
         downstack_only: bool,
         /// Show merge plan without merging
         #[arg(long)]
         dry_run: bool,
-        /// Merge method: squash, merge, rebase
-        #[arg(long, default_value = "squash")]
-        method: String,
+        /// Merge method: squash, merge, rebase (default: squash; rebase with --stack)
+        #[arg(long)]
+        method: Option<String>,
         /// Keep branches after merge (don't delete)
         #[arg(long)]
         no_delete: bool,
@@ -299,13 +302,16 @@ pub(crate) enum Commands {
         #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "remote", "queue"])]
         when_ready: bool,
         /// Merge via GitHub API only (no local checkout/rebase/push); GitHub updates branches remotely
-        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "queue"])]
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "queue", "stack"])]
         remote: bool,
+        /// Validate the selected tip PR, retarget it to trunk, and merge the selected stack range once
+        #[arg(long, conflicts_with_all = ["no_wait", "remote", "queue"])]
+        stack: bool,
         /// Enqueue PRs into the forge's merge queue instead of merging one-by-one.
         /// Supported on GitHub (merge queue) and GitLab (merge trains). Not available on Gitea.
-        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote"])]
+        #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote", "stack"])]
         queue: bool,
-        /// Polling interval in seconds for --when-ready, --remote, and --queue
+        /// Polling interval in seconds for --when-ready, --remote, --queue, and --stack --when-ready
         #[arg(long, default_value = "15")]
         interval: u64,
         /// Skip post-merge sync (`stax rs`)

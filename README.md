@@ -191,6 +191,8 @@ Merge from the bottom of the stack up to your current branch, with CI and readin
 st merge                  # local cascade merge
 st merge --when-ready     # wait/poll until PRs are mergeable
 st merge --ds             # merge ancestors, rebase current branch
+st merge --stack          # validate current PR once, stack-merge through current
+st merge --stack --full   # stack-merge the full stack even from the middle
 st merge --remote         # merge remotely on GitHub while you keep working
 st merge --all            # merge the whole stack regardless of position
 ```
@@ -271,7 +273,7 @@ st config --set-ai
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
 | `st get <branch>` | Fetch a remote branch, create a local upstream-tracking branch, track it in stax, and check it out |
 | `st ss` | Submit the full stack, open/update linked PRs |
-| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--remote`, `--all`) |
+| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
 | `st ready` | Interactive PR readiness dashboard for all tracked PRs, newest changed PR first: merge, ping, fix, wait, or draft (`--current`/`--stack` for current stack, `--plain` for table output) |
 | `st ci` / `st ci --oneline` | CI status — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |

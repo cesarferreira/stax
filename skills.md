@@ -221,10 +221,14 @@ stax merge --downstack-only        # Merge ancestors below current, then rebase 
 stax merge --ds                    # Alias for --downstack-only
 stax merge --dry-run               # Preview merge plan only
 stax merge --method squash         # squash|merge|rebase
+stax merge --stack                 # GitHub only: validate selected tip once; default scope is bottom through current
+stax merge --stack --downstack-only # Stack-merge ancestors below current; keep current open
+stax merge --stack --full          # Stack-merge full stack even from the middle
+stax merge --stack --when-ready    # Wait only for selected tip PR readiness before stack fast-forward merge
 stax merge --when-ready            # Wait for CI + approval before each merge
 stax merge --remote                # Merge via GitHub API only — no local checkout/rebase/push
 stax merge --remote --all          # Include full stack (GitHub only)
-stax merge --interval 30           # Poll interval in seconds for --when-ready / --remote
+stax merge --interval 30           # Poll interval in seconds for --when-ready / --remote / --stack --when-ready
 stax merge --no-wait               # Fail fast if CI is pending
 stax merge --timeout 60            # Max wait minutes per PR
 stax merge --no-delete             # Keep branches after merge
@@ -456,6 +460,7 @@ stax ss --rerequest-review
 ```bash
 stax ready
 stax merge --when-ready --interval 15
+stax merge --stack --when-ready    # GitHub stack fast-forward: selected tip CI only, defaults to rebase
 ```
 
 ### After Base PR Merges

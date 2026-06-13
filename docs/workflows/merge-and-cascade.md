@@ -23,15 +23,21 @@ st merge --dry-run
 st merge --all
 st merge --downstack-only                 # alias: --ds
 st merge --method squash|merge|rebase
+st merge --stack                           # validate current PR once, land through current
+st merge --stack --downstack-only          # land ancestors below current through one PR
+st merge --stack --full                    # land the full stack even from the middle
+st merge --stack --when-ready              # wait only for the selected tip PR, then land
 st merge --when-ready                       # wait for readiness explicitly
 st merge --when-ready --interval 10
 st merge --no-wait --no-delete --no-sync
 st merge --timeout 60 --yes
 ```
 
-`--downstack-only` (`--ds`) merges only ancestors below the current branch, then rebases the current branch onto trunk and keeps descendants stacked above it. It is incompatible with `--all`, `--remote`, and `--queue`.
+`--downstack-only` (`--ds`) merges only ancestors below the current branch, then rebases the current branch onto trunk and keeps descendants stacked above it. It composes with `--stack`, and is incompatible with `--all`, `--full`, `--remote`, and `--queue`.
 
-`--when-ready` is incompatible with `--dry-run`, `--no-wait`, and `--remote`.
+`--full` is only valid with `--stack`; it includes descendants above the current branch in the selected stack merge.
+
+`--when-ready` is incompatible with `--dry-run`, `--no-wait`, `--remote`, and `--queue`. With `--stack`, it waits only for the selected tip PR.
 
 ### Partial stack merge
 
@@ -56,6 +62,26 @@ st merge --ds
 ```
 
 Merges `auth` and `auth-api`; `auth-ui` is rebased onto `main`, and `auth-tests` remains stacked on `auth-ui`.
+
+## `st merge --stack` (GitHub only)
+
+Fast-forwards the selected stack range through one GitHub PR merge. By default the selected range is stack bottom through the current branch:
+
+```bash
+st merge --stack
+st merge --stack --when-ready
+st merge --stack --downstack-only
+st merge --stack --full
+st merge --stack --dry-run
+```
+
+For `main ← A ← B ← C` while checked out on `B`, stax checks that local `main` matches `origin/main`, verifies the local stack is linear, checks `A` for review blockers, validates CI/mergeability on selected tip PR `B`, retargets `B` to `main`, and merges only `B` through GitHub's merge API. PR `A` is then closed with a comment pointing at `B`; PR `C` remains open and is rebased/retargeted onto `main`.
+
+Use `st merge --stack --downstack-only` to exclude the checked-out branch from the selected range. Use `st merge --stack --full` to include descendants above the current branch and land the full stack through the actual stack tip. The default merge method for `--stack` is `rebase`; pass `--method squash` only when you explicitly want GitHub to squash the selected range into one commit.
+
+This avoids re-running CI for every lower PR because the selected tip already contains that range. If trunk moves before the merge, stax aborts and asks you to restack and wait for fresh selected-tip CI.
+
+For the no-extra-CI behavior, GitHub branch protection should require status checks but should not require branches to be up to date before merging. If GitHub requires up-to-date branches, it can force another revalidation at merge time.
 
 ## `st merge --remote` (GitHub only)
 
