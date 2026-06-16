@@ -1,10 +1,11 @@
 use crate::cache::CiCache;
-use crate::ci::{history, CheckRunInfo};
+use crate::ci::{CheckRunInfo, history};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::github::GitHubClient;
+use crate::github::pr::CiStatus;
 use crate::notifications::{self, BuiltInSound, Sound};
 use crate::remote::RemoteInfo;
 use anyhow::Result;
@@ -211,6 +212,12 @@ fn format_timing_footer(timing: &BranchTiming, overall_status: Option<&str>) -> 
         match overall_status {
             Some("success") => format!("{}  ⏱ {}{}", "passed".green().bold(), elapsed_str, avg_str),
             Some("failure") => format!("{}  ⏱ {}{}", "failed".red().bold(), elapsed_str, avg_str),
+            Some("pending") => format!(
+                "{}  ⏱ {}{}",
+                "pending".yellow().bold(),
+                elapsed_str,
+                avg_str
+            ),
             _ => format!("done  ⏱ {}{}", elapsed_str, avg_str),
         }
     } else {
@@ -407,18 +414,40 @@ pub(crate) async fn fetch_ci_statuses_async(
                 Err(_) => (None, Vec::new()),
             };
 
-            let pr_live = match pr_number {
-                Some(n) => client.get_pr_with_head(*n).await.ok(),
-                None => None,
-            };
-            let pr_is_draft = pr_live.as_ref().map(|p| p.info.is_draft);
-            let pr_title = pr_live.as_ref().map(|p| p.title.clone());
-
-            // Fetch review decision only for open (non-draft) PRs; failures become None.
-            let pr_review_decision = match (pr_number, pr_is_draft) {
-                (Some(n), Some(false)) => client.get_pr_review_decision(*n).await.unwrap_or(None),
+            let pr_merge_status = match (client, pr_number) {
+                (ForgeClient::GitHub(_), Some(n)) => client.get_pr_merge_status(*n).await.ok(),
                 _ => None,
             };
+            let pr_live = match (pr_number, pr_merge_status.is_some()) {
+                (Some(n), false) => client.get_pr_with_head(*n).await.ok(),
+                (None, _) => None,
+                _ => None,
+            };
+            let pr_is_draft = pr_merge_status
+                .as_ref()
+                .map(|p| p.is_draft)
+                .or_else(|| pr_live.as_ref().map(|p| p.info.is_draft));
+            let pr_title = pr_merge_status
+                .as_ref()
+                .map(|p| p.title.clone())
+                .or_else(|| pr_live.as_ref().map(|p| p.title.clone()));
+
+            // Fetch review decision only for open (non-draft) PRs; failures become None.
+            let pr_review_decision = if let Some(pr_status) = &pr_merge_status {
+                pr_status.review_decision.clone()
+            } else {
+                match (pr_number, pr_is_draft) {
+                    (Some(n), Some(false)) => {
+                        client.get_pr_review_decision(*n).await.unwrap_or(None)
+                    }
+                    _ => None,
+                }
+            };
+            let overall_status = pr_merge_status
+                .as_ref()
+                .filter(|pr_status| pr_status.head_sha == sha.as_str())
+                .and_then(|pr_status| ci_status_to_overall_status(&pr_status.ci_status))
+                .or(overall_status);
 
             BranchCiStatus {
                 branch: branch.clone(),
@@ -438,6 +467,15 @@ pub(crate) async fn fetch_ci_statuses_async(
     statuses.sort_by(|a, b| a.branch.cmp(&b.branch));
 
     Ok(statuses)
+}
+
+fn ci_status_to_overall_status(status: &CiStatus) -> Option<String> {
+    match status {
+        CiStatus::Pending => Some("pending".to_string()),
+        CiStatus::Success => Some("success".to_string()),
+        CiStatus::Failure => Some("failure".to_string()),
+        CiStatus::NoCi => None,
+    }
 }
 
 /// Fetch CI statuses for all branches
@@ -461,12 +499,18 @@ fn display_branch_compact(repo: &GitRepo, status: &BranchCiStatus, is_current: b
     if status.check_runs.is_empty() {
         // No CI: single line
         let marker = if is_current { "◉" } else { "○" };
+        let summary = match status.overall_status.as_deref() {
+            Some("pending") => "pending".yellow().bold().to_string(),
+            Some("success") => "passed".green().bold().to_string(),
+            Some("failure") => "failed".red().bold().to_string(),
+            _ => "no CI".dimmed().to_string(),
+        };
         println!(
             "{}  {}  {}  {}",
             marker,
             status.branch.dimmed(),
             format!("({})", status.sha_short).dimmed(),
-            "no CI".dimmed()
+            summary
         );
         return;
     }
@@ -629,12 +673,18 @@ fn display_branch_compact(repo: &GitRepo, status: &BranchCiStatus, is_current: b
 fn display_branch_verbose(repo: &GitRepo, status: &BranchCiStatus, is_current: bool) {
     if status.check_runs.is_empty() {
         let marker = if is_current { "◉" } else { "○" };
+        let summary = match status.overall_status.as_deref() {
+            Some("pending") => "pending".yellow().bold().to_string(),
+            Some("success") => "passed".green().bold().to_string(),
+            Some("failure") => "failed".red().bold().to_string(),
+            _ => "no CI".dimmed().to_string(),
+        };
         println!(
             "{}  {}  {}  {}",
             marker,
             status.branch.dimmed(),
             format!("({})", status.sha_short).dimmed(),
-            "no CI".dimmed()
+            summary
         );
         return;
     }
@@ -809,6 +859,7 @@ fn print_multi_branch_header(statuses: &[BranchCiStatus]) {
 /// Roll-up state of a branch's CI for the `--oneline` view.
 enum CiRollup {
     NoCi,
+    Pending,
     Failing(usize),
     Running { done: usize, total: usize },
     Passing(usize),
@@ -817,9 +868,25 @@ enum CiRollup {
 /// Collapse a branch's check runs into a single roll-up state.
 fn ci_rollup(status: &BranchCiStatus) -> CiRollup {
     if status.check_runs.is_empty() {
-        return CiRollup::NoCi;
+        return if status.overall_status.as_deref() == Some("pending") {
+            CiRollup::Pending
+        } else {
+            CiRollup::NoCi
+        };
     }
     let total = status.check_runs.len();
+    let done = status
+        .check_runs
+        .iter()
+        .filter(|c| c.status == "completed")
+        .count();
+    if status.overall_status.as_deref() == Some("pending") {
+        return if done < total {
+            CiRollup::Running { done, total }
+        } else {
+            CiRollup::Pending
+        };
+    }
     let failed = status
         .check_runs
         .iter()
@@ -834,11 +901,6 @@ fn ci_rollup(status: &BranchCiStatus) -> CiRollup {
     if failed > 0 {
         return CiRollup::Failing(failed);
     }
-    let done = status
-        .check_runs
-        .iter()
-        .filter(|c| c.status == "completed")
-        .count();
     if done < total {
         return CiRollup::Running { done, total };
     }
@@ -851,6 +913,7 @@ fn ci_rollup(status: &BranchCiStatus) -> CiRollup {
 fn oneline_check_summary(status: &BranchCiStatus) -> String {
     match ci_rollup(status) {
         CiRollup::NoCi => "no CI".to_string(),
+        CiRollup::Pending => "pending".to_string(),
         CiRollup::Failing(n) => format!("{} failing", n),
         CiRollup::Running { done, total } => format!("{}/{} running", done, total),
         CiRollup::Passing(n) => format!("{} checks", n),
@@ -969,6 +1032,7 @@ fn oneline_row(
     let summary = oneline_check_summary(status);
     let summary_cell = match ci_rollup(status) {
         CiRollup::NoCi => summary.dimmed(),
+        CiRollup::Pending => summary.yellow().bold(),
         CiRollup::Failing(_) => summary.red().bold(),
         CiRollup::Running { .. } => summary.yellow(),
         CiRollup::Passing(_) => summary.green(),
@@ -1111,6 +1175,10 @@ pub fn record_ci_history(repo: &GitRepo, statuses: &[BranchCiStatus]) {
 /// Check if all CI checks are complete (not pending)
 fn all_checks_complete(statuses: &[BranchCiStatus]) -> bool {
     statuses.iter().all(|s| {
+        if s.overall_status.as_deref() == Some("pending") {
+            return false;
+        }
+
         // Branches with no CI configured are considered "done" (nothing to wait for)
         s.check_runs.is_empty()
             || s.check_runs
@@ -1774,8 +1842,8 @@ fn check_icon_label(check: &CheckRunInfo) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::stack::StackBranch;
     use crate::engine::Stack;
+    use crate::engine::stack::StackBranch;
     use crate::forge::ForgeClient;
     use crate::git::GitRepo;
     use crate::github::GitHubClient;
@@ -1809,12 +1877,14 @@ mod tests {
         let tempdir = TempDir::new().unwrap();
         let dir = tempdir.path();
         let run = |args: &[&str]| {
-            assert!(Command::new("git")
-                .args(args)
-                .current_dir(dir)
-                .status()
-                .unwrap()
-                .success());
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(dir)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
         };
         run(&["init", "-b", "main"]);
         run(&["config", "user.email", "ci-test@stax.local"]);
@@ -1897,6 +1967,48 @@ mod tests {
                     "completed_at": "2026-01-01T00:01:00Z"
                 }
             ]
+        })
+    }
+
+    fn failed_check_runs_body(check_name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "total_count": 1,
+            "check_runs": [
+                {
+                    "id": 1,
+                    "name": check_name,
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "html_url": null,
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:01:00Z"
+                }
+            ]
+        })
+    }
+
+    fn pr_merge_status_body(number: u64, rollup_state: &str, head_sha: &str) -> serde_json::Value {
+        serde_json::json!({
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "number": number,
+                        "title": "PR with pending required checks",
+                        "state": "OPEN",
+                        "updatedAt": "2026-06-02T10:00:00Z",
+                        "isDraft": false,
+                        "mergeable": "MERGEABLE",
+                        "reviewDecision": "APPROVED",
+                        "headRefOid": head_sha,
+                        "statusCheckRollup": { "state": rollup_state },
+                        "reviews": {
+                            "nodes": [
+                                { "state": "APPROVED", "author": { "login": "alice" } }
+                            ]
+                        }
+                    }
+                }
+            }
         })
     }
 
@@ -2010,6 +2122,21 @@ mod tests {
         )];
 
         assert!(ci_watch_should_exit(&statuses, false));
+    }
+
+    #[test]
+    fn ci_watch_waits_when_pr_rollup_is_pending_with_terminal_checks() {
+        let statuses = vec![test_branch_status(
+            "pending",
+            vec![test_check(
+                "buildkite/presubmit",
+                "completed",
+                Some("failure"),
+            )],
+        )];
+
+        assert!(!all_checks_complete(&statuses));
+        assert!(!ci_watch_should_exit(&statuses, false));
     }
 
     #[test]
@@ -2593,6 +2720,108 @@ mod tests {
     }
 
     #[test]
+    fn fetch_ci_statuses_uses_github_pr_rollup_over_low_level_checks() {
+        ensure_crypto_provider();
+        let (_td, repo, sha_b1, _sha_b2) = git_repo_with_two_branches();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mock_server = MockServer::start().await;
+            let path_b1 = format!("/repos/test-owner/test-repo/commits/{sha_b1}/check-runs");
+            Mock::given(method("GET"))
+                .and(path(path_b1.as_str()))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(failed_check_runs_body("buildkite/presubmit")),
+                )
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/repos/test-owner/test-repo/pulls/201"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(pr_json(201, false)))
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/graphql"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(pr_merge_status_body(201, "PENDING", &sha_b1)),
+                )
+                .mount(&mock_server)
+                .await;
+
+            let octocrab = Octocrab::builder()
+                .base_uri(mock_server.uri())
+                .unwrap()
+                .personal_token("test-token".to_string())
+                .build()
+                .unwrap();
+            let gh = GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo");
+            let client = ForgeClient::GitHub(gh);
+            let stack = test_stack_for_ci_fetch(201, 202);
+
+            let statuses = fetch_ci_statuses_async(&repo, &client, &stack, &["b1".to_string()])
+                .await
+                .unwrap();
+
+            assert_eq!(statuses.len(), 1);
+            assert_eq!(statuses[0].overall_status.as_deref(), Some("pending"));
+            assert!(!ci_watch_should_exit(&statuses, false));
+        });
+    }
+
+    #[test]
+    fn fetch_ci_statuses_ignores_github_pr_rollup_for_different_head_sha() {
+        ensure_crypto_provider();
+        let (_td, repo, sha_b1, _sha_b2) = git_repo_with_two_branches();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mock_server = MockServer::start().await;
+            let path_b1 = format!("/repos/test-owner/test-repo/commits/{sha_b1}/check-runs");
+            Mock::given(method("GET"))
+                .and(path(path_b1.as_str()))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(failed_check_runs_body("buildkite/presubmit")),
+                )
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/repos/test-owner/test-repo/pulls/201"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(pr_json(201, false)))
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/graphql"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(pr_merge_status_body(
+                        201,
+                        "PENDING",
+                        "different-remote-head",
+                    )),
+                )
+                .mount(&mock_server)
+                .await;
+
+            let octocrab = Octocrab::builder()
+                .base_uri(mock_server.uri())
+                .unwrap()
+                .personal_token("test-token".to_string())
+                .build()
+                .unwrap();
+            let gh = GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo");
+            let client = ForgeClient::GitHub(gh);
+            let stack = test_stack_for_ci_fetch(201, 202);
+
+            let statuses = fetch_ci_statuses_async(&repo, &client, &stack, &["b1".to_string()])
+                .await
+                .unwrap();
+
+            assert_eq!(statuses.len(), 1);
+            assert_eq!(statuses[0].overall_status.as_deref(), Some("failure"));
+        });
+    }
+
+    #[test]
     fn oneline_summary_all_passed() {
         let status = test_branch_status(
             "success",
@@ -2615,6 +2844,27 @@ mod tests {
             ],
         );
         assert_eq!(oneline_check_summary(&status), "2 failing");
+    }
+
+    #[test]
+    fn oneline_summary_prefers_pending_rollup_over_terminal_checks() {
+        let status = test_branch_status(
+            "pending",
+            vec![test_check(
+                "buildkite/presubmit",
+                "completed",
+                Some("failure"),
+            )],
+        );
+
+        assert_eq!(oneline_check_summary(&status), "pending");
+    }
+
+    #[test]
+    fn oneline_summary_shows_pending_rollup_without_check_runs() {
+        let status = test_branch_status("pending", vec![]);
+
+        assert_eq!(oneline_check_summary(&status), "pending");
     }
 
     #[test]
