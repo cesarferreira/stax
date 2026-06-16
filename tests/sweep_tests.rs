@@ -2,6 +2,8 @@ use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 use serde_json::Value;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -21,6 +23,62 @@ fn merge_branch(repo: &TestRepo, branch: &str) {
         "Failed to merge branch {}: {}",
         branch,
         TestRepo::stderr(&out)
+    );
+}
+
+fn write_branch_pr_metadata(repo: &TestRepo, branch: &str, parent_branch: &str, pr_number: u64) {
+    write_branch_pr_metadata_with_state(repo, branch, parent_branch, pr_number, "OPEN");
+}
+
+fn write_branch_pr_metadata_with_state(
+    repo: &TestRepo,
+    branch: &str,
+    parent_branch: &str,
+    pr_number: u64,
+    state: &str,
+) {
+    let metadata = serde_json::json!({
+        "parentBranchName": parent_branch,
+        "parentBranchRevision": repo.get_commit_sha(parent_branch),
+        "prInfo": {
+            "number": pr_number,
+            "state": state
+        }
+    });
+
+    let mut child = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repo.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("Failed to hash metadata blob");
+    child
+        .stdin
+        .as_mut()
+        .expect("metadata hash stdin")
+        .write_all(metadata.to_string().as_bytes())
+        .expect("Failed to write metadata JSON");
+    let output = child.wait_with_output().expect("Failed to hash metadata");
+    assert!(
+        output.status.success(),
+        "git hash-object failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let blob_hash = String::from_utf8(output.stdout)
+        .expect("metadata hash UTF-8")
+        .trim()
+        .to_string();
+
+    let update_ref = repo.git(&[
+        "update-ref",
+        &format!("refs/branch-metadata/{}", branch),
+        &blob_hash,
+    ]);
+    assert!(
+        update_ref.status.success(),
+        "git update-ref failed: {}",
+        TestRepo::stderr(&update_ref)
     );
 }
 
@@ -344,6 +402,78 @@ fn sweep_delete_removes_gone_branch_without_unique_work() {
     assert!(
         !branches.contains(&"gone-without-local-work".to_string()),
         "gone-without-local-work should be deleted:\n{:?}",
+        branches
+    );
+}
+
+#[test]
+fn sweep_delete_removes_tracked_pr_branch_when_upstream_was_deleted() {
+    let repo = TestRepo::new_with_remote();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["bc", "squash-merged-pr"]).assert_success();
+    repo.create_file("squash-pr.txt", "merged via forge");
+    repo.commit("squash merged pr work");
+    repo.git(&["push", "-u", "origin", "squash-merged-pr"]);
+    write_branch_pr_metadata(&repo, "squash-merged-pr", "main", 42);
+
+    repo.run_stax(&["t"]).assert_success();
+    let remote_path = repo.remote_path().expect("remote repo path");
+    let delete_remote = Command::new("git")
+        .args([
+            "--git-dir",
+            remote_path.to_str().expect("remote path UTF-8"),
+            "update-ref",
+            "-d",
+            "refs/heads/squash-merged-pr",
+        ])
+        .output()
+        .expect("failed to delete branch directly from bare remote");
+    assert!(
+        delete_remote.status.success(),
+        "failed to delete remote branch: {}",
+        String::from_utf8_lossy(&delete_remote.stderr)
+    );
+    let stale_remote_ref = repo.git(&[
+        "show-ref",
+        "--verify",
+        "refs/remotes/origin/squash-merged-pr",
+    ]);
+    assert!(
+        stale_remote_ref.status.success(),
+        "test setup should leave stale local remote-tracking ref before sweep"
+    );
+
+    let out = repo.run_stax(&["sweep", "--delete", "--force"]);
+    out.assert_success();
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.contains(&"squash-merged-pr".to_string()),
+        "sweep --delete --force should delete a tracked PR branch whose upstream was deleted:\n{:?}",
+        branches
+    );
+}
+
+#[test]
+fn sweep_delete_removes_branch_with_merged_pr_metadata() {
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["bc", "metadata-merged-pr"])
+        .assert_success();
+    repo.create_file("metadata-pr.txt", "merged according to forge metadata");
+    repo.commit("metadata merged pr work");
+    write_branch_pr_metadata_with_state(&repo, "metadata-merged-pr", "main", 43, "MERGED");
+
+    repo.run_stax(&["t"]).assert_success();
+    let out = repo.run_stax(&["sweep", "--delete", "--force"]);
+    out.assert_success();
+
+    let branches = repo.list_branches();
+    assert!(
+        !branches.contains(&"metadata-merged-pr".to_string()),
+        "sweep --delete --force should delete a branch whose PR metadata is MERGED:\n{:?}",
         branches
     );
 }
