@@ -8422,10 +8422,234 @@ mod forge_mock_tests {
             body
         );
         assert!(
-            body.contains("PR #102** 👈"),
+            body.contains("  * **PR #101**\n    * **PR #102** 👈"),
             "current PR should keep the pointer, got: {}",
             body
         );
+        assert!(!body.contains("current local branch"));
+    }
+
+    #[tokio::test]
+    async fn test_branch_submit_syncs_imported_downstack_pr_comment() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_github_remote(&repo, home.path());
+        let _remote_root = remote_root.keep();
+
+        let checkout_base = git_with_env(
+            &repo,
+            home.path(),
+            &["checkout", "-B", "imported-base", "main"],
+        );
+        assert!(
+            checkout_base.status.success(),
+            "Failed to create imported base: {}",
+            TestRepo::stderr(&checkout_base)
+        );
+        repo.create_file("base.txt", "base\n");
+        repo.commit("Add imported base");
+        let push_base = git_with_env(
+            &repo,
+            home.path(),
+            &["push", "-u", "origin", "imported-base"],
+        );
+        assert!(
+            push_base.status.success(),
+            "Failed to push imported base: {}",
+            TestRepo::stderr(&push_base)
+        );
+        let checkout_main = git_with_env(&repo, home.path(), &["checkout", "main"]);
+        assert!(
+            checkout_main.status.success(),
+            "Failed to return to main: {}",
+            TestRepo::stderr(&checkout_main)
+        );
+        let delete_imported_base =
+            git_with_env(&repo, home.path(), &["branch", "-D", "imported-base"]);
+        assert!(
+            delete_imported_base.status.success(),
+            "Failed to delete local imported base: {}",
+            TestRepo::stderr(&delete_imported_base)
+        );
+
+        let output = run_stax_with_env(&repo, home.path(), &["get", "imported-base"]);
+        assert!(
+            output.status.success(),
+            "st get failed: {}",
+            TestRepo::stderr(&output)
+        );
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "local-child"]);
+        assert!(
+            output.status.success(),
+            "Failed to create child: {}",
+            TestRepo::stderr(&output)
+        );
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Add child");
+        let child = repo.current_branch();
+        let push_child = git_with_env(&repo, home.path(), &["push", "-u", "origin", &child]);
+        assert!(
+            push_child.status.success(),
+            "Failed to push child: {}",
+            TestRepo::stderr(&push_child)
+        );
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                github_pull_fixture_with_details(
+                    101,
+                    "imported-base",
+                    "main",
+                    "Imported base",
+                    "base body"
+                ),
+                github_pull_fixture_with_details(
+                    102,
+                    &child,
+                    "imported-base",
+                    "Child PR",
+                    "child body"
+                )
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/101/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/repos/test/repo/issues/101/comments"))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(issue_comment_fixture(
+                    901,
+                    "<!-- stax-stack-comment -->\ncreated",
+                )),
+            )
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/101"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                github_pull_fixture_with_details(
+                    101,
+                    "imported-base",
+                    "main",
+                    "Imported base",
+                    "base body",
+                ),
+            ))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/issues/102/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                issue_comment_fixture(902, "<!-- stax-stack-comment -->\nold")
+            ])))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/issues/comments/902"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(issue_comment_fixture(
+                    902,
+                    "<!-- stax-stack-comment -->\nupdated",
+                )),
+            )
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                github_pull_fixture_with_details(
+                    102,
+                    &child,
+                    "imported-base",
+                    "Child PR",
+                    "child body",
+                ),
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["branch", "submit", "--yes", "--no-prompt"],
+        );
+        assert!(
+            output.status.success(),
+            "branch submit failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let base_comment_create = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "POST"
+                    && request.url.path() == "/repos/test/repo/issues/101/comments"
+            })
+            .expect("expected imported reference PR stack-comment create");
+        let payload: serde_json::Value = serde_json::from_slice(&base_comment_create.body).unwrap();
+        let body = payload["body"].as_str().expect("comment body");
+        assert!(
+            body.contains(
+                "This PR is an imported reference. Entries below it are local stack branches; Stax keeps these links in sync without pushing or updating the imported branch:"
+            ),
+            "imported base comment should use imported-reference intro, got: {}",
+            body
+        );
+        assert!(
+            body.contains("  * **PR #101** 👈"),
+            "imported base comment should mark the current imported PR, got: {}",
+            body
+        );
+        assert!(
+            body.contains("    * **PR #102**"),
+            "imported base comment should include local child PR, got: {}",
+            body
+        );
+        assert!(!body.contains("current imported reference"));
+        assert!(!body.contains("local upstack"));
+
+        let child_comment_patch = requests
+            .iter()
+            .find(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/test/repo/issues/comments/902"
+            })
+            .expect("expected child stack-comment update");
+        let payload: serde_json::Value = serde_json::from_slice(&child_comment_patch.body).unwrap();
+        let body = payload["body"].as_str().expect("comment body");
+        assert!(
+            body.contains(
+                "This PR is a local stack branch. Imported downstack entries are read-only context, and local stack branches are shown in stack order:"
+            ),
+            "child comment should use local-stack intro, got: {}",
+            body
+        );
+        assert!(
+            body.contains("  * **PR #101**"),
+            "child comment should include imported reference PR, got: {}",
+            body
+        );
+        assert!(
+            body.contains("    * **PR #102** 👈"),
+            "child comment should mark the current PR with the pointer, got: {}",
+            body
+        );
+        assert!(!body.contains("imported reference downstack"));
+        assert!(!body.contains("current local branch"));
     }
 
     #[tokio::test]

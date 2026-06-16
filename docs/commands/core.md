@@ -12,7 +12,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
-| `st get <branch>` | Fetch a remote branch, create a local upstream-tracking branch, track it in stax, and check it out |
+| `st get <branch>` | Fetch a remote branch, create a local upstream-tracking branch, track it in stax as imported, and check it out |
 
 If you discover a hotfix while working upstack, keep the edits in place:
 

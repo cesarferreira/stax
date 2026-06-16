@@ -1261,6 +1261,31 @@ fn format_merge_error(err: octocrab::Error) -> anyhow::Error {
 pub struct StackPrInfo {
     pub branch: String,
     pub pr_number: Option<u64>,
+    pub is_imported: bool,
+}
+
+fn stack_links_intro(prs: &[StackPrInfo], current_index: Option<usize>, mr_label: &str) -> String {
+    let current = current_index.and_then(|index| prs.get(index).map(|pr| (index, pr)));
+
+    match current {
+        Some((_, current)) if current.is_imported => format!(
+            "This {} is an imported reference. Entries below it are local stack branches; Stax keeps these links in sync without pushing or updating the imported branch:",
+            mr_label
+        ),
+        Some((current, _))
+            if prs
+                .iter()
+                .enumerate()
+                .any(|(index, pr)| index < current && pr.is_imported) =>
+        {
+            format!(
+                "This {} is a local stack branch. Imported downstack entries are read-only context, and local stack branches are shown in stack order:",
+                mr_label
+            )
+        }
+        Some(_) => format!("This {} is part of a local stacked series:", mr_label),
+        None => format!("This {} is part of a stacked series:", mr_label),
+    }
 }
 
 /// Generate the stack links markdown shared by PR comments and PR bodies.
@@ -1279,10 +1304,14 @@ pub fn generate_stack_links_markdown(
         _ => "#",
     };
 
+    let current_index = prs
+        .iter()
+        .position(|pr_info| pr_info.pr_number == Some(current_pr_number));
+
     let mut lines = vec![
         "## Stack Links".to_string(),
         "".to_string(),
-        format!("This {} is part of a stacked series:", mr_label),
+        stack_links_intro(prs, current_index, mr_label),
         "".to_string(),
         format!("* `{}`", trunk),
     ];
@@ -1290,18 +1319,18 @@ pub fn generate_stack_links_markdown(
     // Build stack from bottom (trunk-adjacent) to top (leaf)
     // First PR is closest to trunk, last is the leaf
     for (i, pr_info) in prs.iter().enumerate() {
-        let is_current = pr_info.pr_number == Some(current_pr_number);
-        let pointer = if is_current { " 👈" } else { "" };
+        let pointer = if Some(i) == current_index {
+            " 👈"
+        } else {
+            ""
+        };
 
         let pr_text = match pr_info.pr_number {
             Some(num) => {
                 let label = format!("{} {}{}", mr_label, mr_prefix, num);
                 match remote.forge {
-                    // GitHub auto-links #N references; other forges need full URLs
                     ForgeType::GitHub => format!("**{}**{}", label, pointer),
-                    _ => {
-                        format!("[**{}**]({}){}", label, remote.pr_url(num), pointer)
-                    }
+                    _ => format!("[**{}**]({}){}", label, remote.pr_url(num), pointer),
                 }
             }
             None => format!("`{}`{}", pr_info.branch, pointer),
@@ -1710,14 +1739,17 @@ mod tests {
         let prs = vec![StackPrInfo {
             branch: "feature".to_string(),
             pr_number: Some(1),
+            is_imported: false,
         }];
 
         let comment = generate_stack_comment(&prs, 1, &remote, "main");
 
         assert!(comment.contains("## Stack Links"));
+        assert!(comment.contains("This PR is part of a local stacked series:"));
         assert!(comment.contains("`main`"));
         assert!(comment.contains("PR #1"));
-        assert!(comment.contains("👈")); // Current PR marker
+        assert!(comment.contains("**PR #1** 👈"));
+        assert!(!comment.contains("current local branch"));
         assert!(comment.contains("stax"));
     }
 
@@ -1737,14 +1769,17 @@ mod tests {
             StackPrInfo {
                 branch: "feature-a".to_string(),
                 pr_number: Some(1),
+                is_imported: false,
             },
             StackPrInfo {
                 branch: "feature-b".to_string(),
                 pr_number: Some(2),
+                is_imported: false,
             },
             StackPrInfo {
                 branch: "feature-c".to_string(),
                 pr_number: Some(3),
+                is_imported: false,
             },
         ];
 
@@ -1754,7 +1789,66 @@ mod tests {
         assert!(comment.contains("PR #2"));
         assert!(comment.contains("PR #3"));
         // Only PR #2 should have the pointer
-        assert!(comment.contains("PR #2** 👈"));
+        assert!(comment.contains("  * **PR #1**\n    * **PR #2** 👈\n      * **PR #3**"));
+        assert!(!comment.contains("current local branch"));
+        assert!(!comment.contains("local upstack"));
+    }
+
+    #[test]
+    fn test_generate_stack_comment_intro_relative_to_current_pr() {
+        let remote = crate::remote::RemoteInfo {
+            name: "origin".to_string(),
+            forge: crate::remote::ForgeType::GitHub,
+            host: "github.com".to_string(),
+            namespace: "user".to_string(),
+            repo: "repo".to_string(),
+            base_url: "https://github.com".to_string(),
+            api_base_url: Some("https://api.github.com".to_string()),
+        };
+
+        let prs = vec![
+            StackPrInfo {
+                branch: "imported-base".to_string(),
+                pr_number: Some(10),
+                is_imported: true,
+            },
+            StackPrInfo {
+                branch: "local-middle".to_string(),
+                pr_number: Some(20),
+                is_imported: false,
+            },
+            StackPrInfo {
+                branch: "local-tip".to_string(),
+                pr_number: Some(30),
+                is_imported: false,
+            },
+        ];
+
+        let base_comment = generate_stack_comment(&prs, 10, &remote, "main");
+        assert!(base_comment.contains(
+            "This PR is an imported reference. Entries below it are local stack branches; Stax keeps these links in sync without pushing or updating the imported branch:"
+        ));
+        assert!(base_comment.contains("  * **PR #10** 👈\n    * **PR #20**\n      * **PR #30**"));
+        assert!(!base_comment.contains("current imported reference"));
+        assert!(!base_comment.contains("local upstack"));
+
+        let middle_comment = generate_stack_comment(&prs, 20, &remote, "main");
+        assert!(middle_comment.contains(
+            "This PR is a local stack branch. Imported downstack entries are read-only context, and local stack branches are shown in stack order:"
+        ));
+        assert!(middle_comment.contains("  * **PR #10**\n    * **PR #20** 👈\n      * **PR #30**"));
+        assert!(!middle_comment.contains("imported reference downstack"));
+        assert!(!middle_comment.contains("current local branch"));
+        assert!(!middle_comment.contains("local upstack"));
+
+        let tip_comment = generate_stack_comment(&prs, 30, &remote, "main");
+        assert!(tip_comment.contains(
+            "This PR is a local stack branch. Imported downstack entries are read-only context, and local stack branches are shown in stack order:"
+        ));
+        assert!(tip_comment.contains("  * **PR #10**\n    * **PR #20**\n      * **PR #30** 👈"));
+        assert!(!tip_comment.contains("imported reference downstack"));
+        assert!(!tip_comment.contains("local downstack"));
+        assert!(!tip_comment.contains("current local branch"));
     }
 
     #[test]
@@ -1773,17 +1867,20 @@ mod tests {
             StackPrInfo {
                 branch: "feature-a".to_string(),
                 pr_number: Some(1),
+                is_imported: false,
             },
             StackPrInfo {
                 branch: "feature-b".to_string(),
                 pr_number: None, // No PR yet
+                is_imported: true,
             },
         ];
 
         let comment = generate_stack_comment(&prs, 1, &remote, "main");
 
         assert!(comment.contains("PR #1"));
-        assert!(comment.contains("`feature-b`")); // Branch name in backticks
+        assert!(comment.contains("`feature-b`"));
+        assert!(!comment.contains("imported reference upstack"));
     }
 
     #[test]
@@ -1802,21 +1899,24 @@ mod tests {
             StackPrInfo {
                 branch: "feature-a".to_string(),
                 pr_number: Some(10),
+                is_imported: false,
             },
             StackPrInfo {
                 branch: "feature-b".to_string(),
                 pr_number: Some(11),
+                is_imported: false,
             },
         ];
 
         let comment = generate_stack_comment(&prs, 11, &remote, "main");
 
         // GitLab uses MR terminology and !N prefix
-        assert!(comment.contains("This MR is part of a stacked series:"));
+        assert!(comment.contains("This MR is part of a local stacked series:"));
         assert!(comment.contains("[**MR !10**](https://gitlab.com/user/repo/-/merge_requests/10)"));
         assert!(
             comment.contains("[**MR !11**](https://gitlab.com/user/repo/-/merge_requests/11) 👈")
         );
+        assert!(!comment.contains("current local branch"));
     }
 
     #[test]
@@ -1834,12 +1934,13 @@ mod tests {
         let prs = vec![StackPrInfo {
             branch: "feature".to_string(),
             pr_number: Some(5),
+            is_imported: false,
         }];
 
         let comment = generate_stack_comment(&prs, 5, &remote, "main");
 
         // Gitea uses PR terminology but needs full URLs
-        assert!(comment.contains("This PR is part of a stacked series:"));
+        assert!(comment.contains("This PR is part of a local stacked series:"));
         assert!(comment.contains("[**PR #5**](https://gitea.example.com/org/project/pulls/5) 👈"));
     }
 
@@ -1858,6 +1959,7 @@ mod tests {
         let prs = vec![StackPrInfo {
             branch: "feature".to_string(),
             pr_number: Some(42),
+            is_imported: false,
         }];
 
         let comment = generate_stack_comment(&prs, 42, &remote, "main");
@@ -1943,10 +2045,12 @@ mod tests {
         let info = StackPrInfo {
             branch: "feature".to_string(),
             pr_number: Some(42),
+            is_imported: false,
         };
         let cloned = info.clone();
         assert_eq!(cloned.branch, "feature");
         assert_eq!(cloned.pr_number, Some(42));
+        assert!(!cloned.is_imported);
     }
 
     #[test]

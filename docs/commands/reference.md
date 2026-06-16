@@ -259,6 +259,7 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 - `--restack` · `--restack --auto-stash-pop`
 - `--delete-upstream-gone`
 - `--force` / `--safe` / `--continue` / `--quiet` / `--verbose`
+- Imported branches from `st get` are remote-delete exempt: once they are detected as merged or upstream-gone, sync may delete the local support branch and metadata, but it will not push-delete the imported remote branch.
 
 ### `st restack`
 
@@ -283,6 +284,8 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 - `--parent <branch>` records a non-trunk parent in stax metadata
 - `--no-checkout` fetches and tracks without switching branches
 - `--force` resets an existing divergent local branch to the remote tip
+- Imported branches are read-only support branches: submit uses them as stack bases but does not push them or update their PRs.
+- `st sync --restack` refreshes imported branches from their remote tips before restacking descendants; if an imported branch is checked out in a dirty worktree, sync skips it unless `--force` is used.
 
 ### `st ci`
 

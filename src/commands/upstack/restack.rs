@@ -119,9 +119,12 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
         )? {
             RebaseResult::Success => {
                 let new_parent_rev = repo.branch_commit(&parent_branch_name)?;
+                let source_remote =
+                    BranchMetadata::read(repo.inner(), branch)?.and_then(|meta| meta.source_remote);
                 let updated_meta = BranchMetadata {
                     parent_branch_name: parent_branch_name.clone(),
                     parent_branch_revision: new_parent_rev.clone(),
+                    source_remote,
                     pr_info: live_stack.branches.get(branch).and_then(|br| {
                         br.pr_number.map(|n| crate::engine::PrInfo {
                             number: n,

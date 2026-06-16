@@ -142,6 +142,14 @@ pub fn run(
     let config = Config::load()?;
     let remote_name = config.remote_name().to_string();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
+    let imported_branches = imported_branches_for_remote(&repo, &stack, &remote_name)?;
+    let remote_delete_exempt_imported_branches = imported_branches_for_cleanup(&repo, &stack)?;
+    let mut sync_extra_fetch_refs = extra_fetch_refs.to_vec();
+    for branch in &imported_branches {
+        if !sync_extra_fetch_refs.contains(branch) {
+            sync_extra_fetch_refs.push(branch.clone());
+        }
+    }
 
     if r#continue {
         crate::commands::continue_cmd::run()?;
@@ -193,7 +201,7 @@ pub fn run(
     let output;
     // Remote branch names for merged detection (`None` when `--no-delete`: trunk-only fetch).
     let remote_branches_for_merged: Option<HashSet<String>>;
-    let remote_heads_for_extra_fetch = if !full && !extra_fetch_refs.is_empty() {
+    let remote_heads_for_extra_fetch = if !full && !sync_extra_fetch_refs.is_empty() {
         Some(
             remote::ls_remote_heads(&workdir, &remote_name)
                 .context("Failed to list remote heads before fetch")?,
@@ -203,7 +211,7 @@ pub fn run(
     };
     let fetch_refs = sync_fetch_refs(
         &stack.trunk,
-        extra_fetch_refs,
+        &sync_extra_fetch_refs,
         remote_heads_for_extra_fetch.as_ref(),
     );
 
@@ -512,6 +520,23 @@ pub fn run(
         format!("update {}", stack.trunk),
         update_trunk_started_at.elapsed(),
     ));
+
+    let imported_update_started_at = Instant::now();
+    let updated_imported_branches = refresh_imported_branches(
+        &repo,
+        &workdir,
+        &remote_name,
+        &imported_branches,
+        force,
+        quiet,
+        verbose,
+    )?;
+    if !imported_branches.is_empty() {
+        step_timings.push((
+            "update imported branches".to_string(),
+            imported_update_started_at.elapsed(),
+        ));
+    }
 
     // Kick off trunk diff stats now that trunk is updated. Runs in parallel with
     // merged-branch detection and optional restack (the expensive steps).
@@ -844,15 +869,21 @@ pub fn run(
                 let local_deleted = local_delete.deleted;
                 let local_worktree_blocked = local_delete.worktree_blocked;
 
-                // Delete remote branch
-                let remote_status = Command::new("git")
-                    .args(["push", &remote_name, "--delete", branch])
-                    .current_dir(&workdir)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status();
+                // Imported branches are read-only remote references. Clean them
+                // up locally after merge, but never push-delete someone else's
+                // remote branch.
+                let remote_deleted = if remote_delete_exempt_imported_branches.contains(branch) {
+                    false
+                } else {
+                    let remote_status = Command::new("git")
+                        .args(["push", &remote_name, "--delete", branch])
+                        .current_dir(&workdir)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
 
-                let remote_deleted = remote_status.map(|s| s.success()).unwrap_or(false);
+                    remote_status.map(|s| s.success()).unwrap_or(false)
+                };
 
                 // Only delete metadata if branch no longer exists locally.
                 let local_still_exists = local_branch_exists(&workdir, branch);
@@ -1273,6 +1304,24 @@ pub fn run(
         // Load stack once; orphaned parents are handled in Stack::load (parent → trunk,
         // needs_restack). Keep the stack in memory and update it after each rebase.
         let mut live_stack = Stack::load(&repo)?;
+        for branch in &updated_imported_branches {
+            if let Ok(parent_rev) = repo.branch_commit(branch) {
+                let children = live_stack
+                    .branches
+                    .get(branch.as_str())
+                    .map(|br| br.children.clone())
+                    .unwrap_or_default();
+                for child in &children {
+                    if let Some(child_br) = live_stack.branches.get_mut(child) {
+                        child_br.needs_restack = child_br
+                            .parent_revision
+                            .as_deref()
+                            .map(|rev| rev != parent_rev.as_str())
+                            .unwrap_or(true);
+                    }
+                }
+            }
+        }
         let branches_to_restack: Vec<String> = scope_order
             .iter()
             .filter(|branch| {
@@ -1360,9 +1409,12 @@ pub fn run(
                     RebaseResult::Success => {
                         let metadata_update_started_at = Instant::now();
                         let new_parent_rev = repo.branch_commit(&parent_branch_name)?;
+                        let source_remote = BranchMetadata::read(repo.inner(), branch)?
+                            .and_then(|meta| meta.source_remote);
                         let updated_meta = BranchMetadata {
                             parent_branch_name: parent_branch_name.clone(),
                             parent_branch_revision: new_parent_rev.clone(),
+                            source_remote,
                             pr_info: live_stack.branches.get(branch.as_str()).and_then(|br| {
                                 br.pr_number.map(|n| PrInfo {
                                     number: n,
@@ -1679,6 +1731,147 @@ fn sync_fetch_refs(
         }
     }
     refs
+}
+
+fn imported_branches_for_remote(
+    repo: &GitRepo,
+    stack: &Stack,
+    remote_name: &str,
+) -> Result<Vec<String>> {
+    let mut imported = Vec::new();
+    for branch in stack.branches.keys() {
+        if branch == &stack.trunk {
+            continue;
+        }
+
+        let Some(meta) = BranchMetadata::read(repo.inner(), branch)? else {
+            continue;
+        };
+        if meta.source_remote.as_deref() == Some(remote_name) {
+            imported.push(branch.clone());
+        }
+    }
+    imported.sort();
+    Ok(imported)
+}
+
+fn imported_branches_for_cleanup(repo: &GitRepo, stack: &Stack) -> Result<HashSet<String>> {
+    let mut imported = HashSet::new();
+    for branch in stack.branches.keys() {
+        if branch == &stack.trunk {
+            continue;
+        }
+
+        let Some(meta) = BranchMetadata::read(repo.inner(), branch)? else {
+            continue;
+        };
+        if meta.source_remote.is_some() {
+            imported.insert(branch.clone());
+        }
+    }
+    Ok(imported)
+}
+
+fn refresh_imported_branches(
+    repo: &GitRepo,
+    workdir: &Path,
+    remote_name: &str,
+    imported_branches: &[String],
+    force: bool,
+    quiet: bool,
+    verbose: bool,
+) -> Result<Vec<String>> {
+    let mut updated = Vec::new();
+    for branch in imported_branches {
+        let remote_ref = format!("{}/{}", remote_name, branch);
+        let Some(remote_oid) = resolve_ref_oid(workdir, &remote_ref) else {
+            if !quiet && verbose {
+                println!(
+                    "  {} skipped imported branch {} (missing {})",
+                    "!".yellow(),
+                    branch.cyan(),
+                    remote_ref.dimmed()
+                );
+            }
+            continue;
+        };
+
+        if resolve_ref_oid(workdir, branch).as_deref() == Some(remote_oid.as_str()) {
+            continue;
+        }
+
+        if let Some(branch_worktree) = repo.branch_worktree_path(branch)? {
+            if worktree_dirty(&branch_worktree)? && !force {
+                if !quiet {
+                    println!(
+                        "  {} skipped imported branch {} (checked out with local changes)",
+                        "!".yellow(),
+                        branch.cyan()
+                    );
+                }
+                continue;
+            }
+
+            let output = Command::new("git")
+                .args(["reset", "--hard", &remote_ref])
+                .current_dir(&branch_worktree)
+                .output()
+                .with_context(|| format!("Failed to update imported branch '{}'", branch))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!(
+                    "Failed to update imported branch '{}' to '{}': {}",
+                    branch,
+                    remote_ref,
+                    stderr.trim()
+                );
+            }
+        } else {
+            let output = Command::new("git")
+                .args(["update-ref", &format!("refs/heads/{}", branch), &remote_ref])
+                .current_dir(workdir)
+                .output()
+                .with_context(|| format!("Failed to update imported branch '{}'", branch))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!(
+                    "Failed to update imported branch '{}' to '{}': {}",
+                    branch,
+                    remote_ref,
+                    stderr.trim()
+                );
+            }
+        }
+
+        if !quiet {
+            println!(
+                "  {} updated imported branch {} from {}",
+                "↓".cyan(),
+                branch.cyan(),
+                remote_ref.dimmed()
+            );
+        }
+        updated.push(branch.clone());
+    }
+
+    Ok(updated)
+}
+
+fn worktree_dirty(workdir: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to inspect imported branch worktree")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git status failed: {}", stderr.trim());
+    }
+
+    Ok(!output.stdout.is_empty())
 }
 
 /// Drop stale `refs/remotes/<remote>/<branch>` for stax-tracked branches that no longer exist on the remote.

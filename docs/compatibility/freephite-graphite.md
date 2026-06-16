@@ -40,6 +40,8 @@ st status   # your existing stack appears immediately
 | — | — | `st undo` · `st redo` |
 | — | `gt split -f <path>` | `st split --file <path>` |
 
+`st get` imports the remote branch as a read-only stack base: Stax can create and restack local branches on top of it, but submit skips pushing or updating the imported branch itself. Sync cleanup may delete the imported local support branch after it is merged or upstream-gone, but it will not push-delete the imported remote branch. If the imported branch already has a PR, stack-link comments still include and sync that PR, with labels relative to the PR being rendered.
+
 ## Short alias: `st`
 
 stax also installs as `st`:
