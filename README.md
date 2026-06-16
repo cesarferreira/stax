@@ -279,7 +279,7 @@ st config --set-ai
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
-| `st sweep` | Classify all local branches (merged/gone/stale/active); `--delete` removes merged branches and upstream-gone branches with no unique work |
+| `st sweep` | Classify all local branches (merged/gone/stale/active); `--delete` removes merged branches (including tracked merged PRs) and upstream-gone branches with no unique work |
 | `st update` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs |
 | `st update --force --yes --no-prompt` | Run update without sync or submit prompts |
 | `st update --verbose` | Include detailed sync/restack/submit timing |

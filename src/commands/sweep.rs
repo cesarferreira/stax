@@ -1,10 +1,11 @@
 use crate::config::Config;
 use crate::engine::branch_detect::{
     find_merged_branches_all, find_stale_branches, find_upstream_gone_branches, MergeType,
-    StaleBranchInfo,
+    MergedBranchInfo, StaleBranchInfo,
 };
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
+use crate::remote;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -34,16 +35,53 @@ pub fn run(
 
     // --- Classify all local branches ---
 
-    // 1. Merged (ancestor or squash-merged)
-    let merged_infos: Vec<_> =
+    // 1. Merged (git ancestry plus tracked PR cleanup signals)
+    let mut merged_infos: Vec<_> =
         find_merged_branches_all(&workdir, &trunk, Some(remote_trunk_ref.as_str()))?
             .into_iter()
             .filter(|m| m.branch != trunk && m.branch != current)
             .collect();
-    let merged_set: HashSet<String> = merged_infos.iter().map(|m| m.branch.clone()).collect();
 
     // 2. Upstream-gone
     let gone_branches = find_upstream_gone_branches(&workdir, &trunk)?;
+    let gone_branch_set: HashSet<String> = gone_branches.iter().cloned().collect();
+    let remote_heads = if stack
+        .branches
+        .values()
+        .any(|info| info.pr_number.is_some())
+    {
+        remote::ls_remote_heads(&workdir, &remote_name).ok()
+    } else {
+        None
+    };
+
+    for (branch, info) in &stack.branches {
+        if branch == &trunk
+            || branch == &current
+            || merged_infos.iter().any(|m| &m.branch == branch)
+        {
+            continue;
+        }
+
+        let pr_is_merged = matches!(
+            info.pr_state.as_deref(),
+            Some(state) if state.eq_ignore_ascii_case("merged")
+        );
+        let pr_upstream_deleted = info.pr_number.is_some()
+            && (gone_branch_set.contains(branch)
+                || remote_heads
+                    .as_ref()
+                    .is_some_and(|heads| !heads.contains(branch)));
+        if pr_is_merged || pr_upstream_deleted {
+            merged_infos.push(MergedBranchInfo {
+                branch: branch.clone(),
+                merge_type: MergeType::Ancestor,
+            });
+        }
+    }
+
+    let merged_set: HashSet<String> = merged_infos.iter().map(|m| m.branch.clone()).collect();
+
     // Merged takes precedence over upstream-gone; trunk/current are never candidates.
     let mut gone_set: HashSet<String> = HashSet::new();
     let mut protected_gone_set: HashSet<String> = HashSet::new();
