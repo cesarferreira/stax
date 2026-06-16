@@ -203,6 +203,7 @@ pub fn run() -> Result<()> {
         Commands::Submit { submit } => run_submit(submit, commands::submit::SubmitScope::Stack),
         Commands::Merge {
             all,
+            full,
             downstack_only,
             dry_run,
             method,
@@ -211,18 +212,34 @@ pub fn run() -> Result<()> {
             timeout,
             when_ready,
             remote,
+            stack,
             queue,
             interval,
             no_sync,
             yes,
             quiet,
         } => {
-            let merge_method = method.parse().unwrap_or_default();
+            let default_method = if stack { "rebase" } else { "squash" };
+            let merge_method = method.as_deref().unwrap_or(default_method).parse()?;
             if queue {
                 commands::merge_queue::run(all, timeout, interval, no_sync, yes, quiet)
             } else if remote {
                 commands::merge_remote::run(
                     all,
+                    merge_method,
+                    timeout,
+                    interval,
+                    no_delete,
+                    no_sync,
+                    yes,
+                    quiet,
+                )
+            } else if stack {
+                commands::merge_stack::run(
+                    all || full,
+                    downstack_only,
+                    dry_run,
+                    when_ready,
                     merge_method,
                     timeout,
                     interval,

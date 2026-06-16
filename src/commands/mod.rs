@@ -27,6 +27,7 @@ pub mod merge;
 pub mod merge_queue;
 pub(crate) mod merge_rebase;
 pub mod merge_remote;
+pub mod merge_stack;
 pub mod merge_when_ready;
 pub mod modify;
 pub mod navigate;

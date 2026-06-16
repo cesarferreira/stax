@@ -33,7 +33,9 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 
 - `st merge` — local cascade merge with provenance-aware descendant rebases, then `st rs --force` unless `--no-sync`
 - `st merge --when-ready` — wait for CI + approvals + mergeability; incompatible with `--dry-run`, `--no-wait`, `--remote`
-- `st merge --downstack-only` / `--ds` — merge ancestors below the current branch, then rebase the current branch onto trunk; incompatible with `--all`, `--remote`, and `--queue`
+- `st merge --downstack-only` / `--ds` — merge ancestors below the current branch, then rebase the current branch onto trunk; composes with `--stack`, and is incompatible with `--all`, `--full`, `--remote`, and `--queue`
+- `st merge --stack` — GitHub-only fast-forward stack merge: validate the selected tip PR once, retarget it to trunk, merge only that PR, close selected downstack PRs with a back-reference comment, and rebase/retarget remaining descendants; defaults to `--method rebase`
+- `st merge --stack --full` — include descendants above the current branch and land the full stack through the actual stack tip
 - `st merge --remote` — merge entirely via GitHub API, no local git operations (GitHub only)
 - `st merge --queue` — enqueue PRs into GitHub merge queue / GitLab merge trains
 
@@ -248,7 +250,7 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 ### `st merge`
 
 - `--dry-run` / `--yes`
-- `--all` / `--downstack-only` (`--ds`) / `--method squash|merge|rebase`
+- `--all` / `--downstack-only` (`--ds`) / `--stack` / `--stack --full` / `--method squash|merge|rebase`
 - `--when-ready` · `--when-ready --interval 10`
 - `--remote` · `--remote --all` · `--remote --timeout 60 --interval 10`
 - `--queue` · `--queue --all --yes`

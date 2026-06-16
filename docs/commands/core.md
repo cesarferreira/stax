@@ -35,6 +35,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st merge` | Cascade-merge from stack bottom up to current branch |
 | `st merge --when-ready` | Wait for CI + approvals, then merge (alias: `st mwr`) |
 | `st merge --downstack-only` / `--ds` | Merge ancestors below current, then rebase current branch |
+| `st merge --stack` | Validate the selected tip PR once, retarget it to trunk, and merge through current by default (`--full` includes descendants; GitHub only) |
 | `st merge --remote` | Merge remotely via the GitHub API while you keep working |
 | `st merge --all` | Merge the entire stack regardless of where you are |
 | `st cascade` | Restack, push, and create/update PRs in one shot |

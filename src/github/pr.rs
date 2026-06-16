@@ -798,6 +798,32 @@ impl GitHubClient {
         Ok(())
     }
 
+    /// Add a plain issue comment to a PR conversation.
+    pub async fn create_issue_comment(&self, pr_number: u64, body: &str) -> Result<()> {
+        self.record_api_call("issues.comments.create");
+        self.octocrab
+            .issues(&self.owner, &self.repo)
+            .create_comment(pr_number, body)
+            .await
+            .context("Failed to create comment")?;
+
+        Ok(())
+    }
+
+    /// Close a PR without merging it.
+    pub async fn close_pr(&self, pr_number: u64) -> Result<()> {
+        self.record_api_call("pulls.update.state");
+        self.octocrab
+            .pulls(&self.owner, &self.repo)
+            .update(pr_number)
+            .state(octocrab::params::pulls::State::Closed)
+            .send()
+            .await
+            .context("Failed to close PR")?;
+
+        Ok(())
+    }
+
     /// Delete the stax-managed stack comment on a PR, if present.
     pub async fn delete_stack_comment(&self, pr_number: u64) -> Result<()> {
         let Some(comment_id) = self.find_stack_comment_id(pr_number).await? else {
@@ -911,6 +937,7 @@ impl GitHubClient {
         method: MergeMethod,
         commit_title: Option<String>,
         commit_message: Option<String>,
+        sha: Option<String>,
     ) -> Result<()> {
         let merge_method = match method {
             MergeMethod::Squash => octocrab::params::pulls::MergeMethod::Squash,
@@ -927,6 +954,10 @@ impl GitHubClient {
 
         if let Some(ref message) = commit_message {
             merge_builder = merge_builder.message(message);
+        }
+
+        if let Some(ref sha) = sha {
+            merge_builder = merge_builder.sha(sha);
         }
 
         merge_builder.send().await.map_err(format_merge_error)?;
@@ -2733,7 +2764,9 @@ mod tests {
             .await;
 
         let client = create_test_client(&mock_server).await;
-        let result = client.merge_pr(42, MergeMethod::Squash, None, None).await;
+        let result = client
+            .merge_pr(42, MergeMethod::Squash, None, None, None)
+            .await;
 
         let err = result.expect_err("merge_pr should fail on 405");
         let msg = format!("{:#}", err);
@@ -2766,7 +2799,9 @@ mod tests {
             .await;
 
         let client = create_test_client(&mock_server).await;
-        let result = client.merge_pr(7, MergeMethod::Merge, None, None).await;
+        let result = client
+            .merge_pr(7, MergeMethod::Merge, None, None, None)
+            .await;
 
         let err = result.expect_err("merge_pr should fail on 422");
         let msg = format!("{:#}", err);
