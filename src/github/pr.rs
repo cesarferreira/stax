@@ -381,6 +381,40 @@ struct PullRequestMergeStatusData {
 #[derive(Debug, Deserialize)]
 struct StatusCheckRollupData {
     state: String,
+    contexts: Option<RollupContextConnection>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RollupContextConnection {
+    nodes: Vec<RollupContext>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "__typename")]
+enum RollupContext {
+    CheckRun(CheckRunContext),
+    StatusContext(StatusContextContext),
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckRunContext {
+    name: String,
+    status: String,
+    conclusion: Option<String>,
+    #[serde(rename = "startedAt")]
+    started_at: Option<String>,
+    #[serde(rename = "completedAt")]
+    completed_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StatusContextContext {
+    context: String,
+    state: String,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -455,6 +489,92 @@ fn graphql_check_rollup_status(state: &str) -> CiStatus {
         "PENDING" | "EXPECTED" => CiStatus::Pending,
         "FAILURE" | "ERROR" => CiStatus::Failure,
         _ => CiStatus::NoCi,
+    }
+}
+
+/// Compute the effective CI status from a status-check rollup.
+///
+/// Prefers a deduplicated view of `contexts` (latest run per name wins) over
+/// the raw `state` field. GitHub's `state` aggregates every historical context
+/// on the commit — so a cancelled-then-rerun-successfully check stays FAILURE
+/// even though the latest run passed. Deduping by name avoids that.
+///
+/// Falls back to `graphql_check_rollup_status(state)` when contexts are
+/// unavailable (no permission, empty, or older API responses).
+fn rollup_ci_status(rollup: &StatusCheckRollupData) -> CiStatus {
+    let Some(connection) = rollup.contexts.as_ref() else {
+        return graphql_check_rollup_status(&rollup.state);
+    };
+    if connection.nodes.is_empty() {
+        return graphql_check_rollup_status(&rollup.state);
+    }
+
+    // Dedup by name, keeping the latest by started/created timestamp.
+    let mut latest: HashMap<&str, (&RollupContext, &str)> = HashMap::new();
+    for ctx in &connection.nodes {
+        let (name, sort_key) = match ctx {
+            RollupContext::CheckRun(c) => (
+                c.name.as_str(),
+                c.started_at
+                    .as_deref()
+                    .or(c.completed_at.as_deref())
+                    .unwrap_or(""),
+            ),
+            RollupContext::StatusContext(s) => {
+                (s.context.as_str(), s.created_at.as_deref().unwrap_or(""))
+            }
+            RollupContext::Unknown => continue,
+        };
+        match latest.get(name) {
+            Some((_, existing_key)) if sort_key <= *existing_key => {}
+            _ => {
+                latest.insert(name, (ctx, sort_key));
+            }
+        }
+    }
+
+    if latest.is_empty() {
+        return graphql_check_rollup_status(&rollup.state);
+    }
+
+    let mut has_failure = false;
+    let mut has_pending = false;
+    for (ctx, _) in latest.values() {
+        match ctx {
+            RollupContext::CheckRun(c) => {
+                let status = c.status.to_ascii_uppercase();
+                if status != "COMPLETED" {
+                    has_pending = true;
+                    continue;
+                }
+                let conclusion = c
+                    .conclusion
+                    .as_deref()
+                    .map(|s| s.to_ascii_uppercase())
+                    .unwrap_or_default();
+                match conclusion.as_str() {
+                    "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => {
+                        has_failure = true;
+                    }
+                    // SUCCESS / NEUTRAL / SKIPPED / CANCELLED / STALE / "" → no impact
+                    _ => {}
+                }
+            }
+            RollupContext::StatusContext(s) => match s.state.to_ascii_uppercase().as_str() {
+                "FAILURE" | "ERROR" => has_failure = true,
+                "PENDING" | "EXPECTED" => has_pending = true,
+                _ => {}
+            },
+            RollupContext::Unknown => {}
+        }
+    }
+
+    if has_failure {
+        CiStatus::Failure
+    } else if has_pending {
+        CiStatus::Pending
+    } else {
+        CiStatus::Success
     }
 }
 
@@ -983,6 +1103,23 @@ impl GitHubClient {
                         headRefOid
                         statusCheckRollup {{
                             state
+                            contexts(first: 100) {{
+                                nodes {{
+                                    __typename
+                                    ... on CheckRun {{
+                                        name
+                                        status
+                                        conclusion
+                                        startedAt
+                                        completedAt
+                                    }}
+                                    ... on StatusContext {{
+                                        context
+                                        state
+                                        createdAt
+                                    }}
+                                }}
+                            }}
                         }}
                         reviews(last: 100) {{
                             nodes {{
@@ -1021,7 +1158,7 @@ impl GitHubClient {
         let ci_status = pr
             .status_check_rollup
             .as_ref()
-            .map(|rollup| graphql_check_rollup_status(&rollup.state))
+            .map(rollup_ci_status)
             .unwrap_or(CiStatus::NoCi);
 
         Ok(PrMergeStatus {
@@ -2373,6 +2510,234 @@ mod tests {
         let status = client.get_pr_merge_status(20).await.unwrap();
 
         assert_eq!(status.approvals, 2);
+    }
+
+    fn merge_status_body_with_rollup(rollup: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "number": 30,
+                        "title": "Rollup PR",
+                        "state": "OPEN",
+                        "updatedAt": "2026-06-16T10:00:00Z",
+                        "isDraft": false,
+                        "mergeable": "MERGEABLE",
+                        "reviewDecision": "APPROVED",
+                        "headRefOid": "rollup-head",
+                        "statusCheckRollup": rollup,
+                        "reviews": {
+                            "nodes": [
+                                { "state": "APPROVED", "author": { "login": "alice" } }
+                            ]
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    // GitHub's rollup `state` aggregates every historical context, so a
+    // cancelled-then-rerun-successfully check leaves the rollup at FAILURE.
+    // Dedup by name (latest wins) reflects the actual current CI state.
+    #[tokio::test]
+    async fn test_get_pr_merge_status_dedups_cancelled_then_success() {
+        let mock_server = MockServer::start().await;
+
+        let rollup = serde_json::json!({
+            "state": "FAILURE",
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "checklist",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-06-16T22:21:51Z",
+                        "completedAt": "2026-06-16T22:21:51Z"
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "checklist",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-06-16T22:21:54Z",
+                        "completedAt": "2026-06-16T22:26:55Z"
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "compile_protos",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-06-16T22:21:50Z",
+                        "completedAt": "2026-06-16T22:21:51Z"
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "compile_protos",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-06-16T22:21:54Z",
+                        "completedAt": "2026-06-16T22:22:53Z"
+                    }
+                ]
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(merge_status_body_with_rollup(rollup)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(30).await.unwrap();
+
+        assert_eq!(status.ci_status, CiStatus::Success);
+    }
+
+    // Cancelled re-run with a later run still in progress → pending.
+    #[tokio::test]
+    async fn test_get_pr_merge_status_dedups_cancelled_then_running() {
+        let mock_server = MockServer::start().await;
+
+        let rollup = serde_json::json!({
+            "state": "FAILURE",
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "checklist",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-06-16T22:21:51Z",
+                        "completedAt": "2026-06-16T22:21:51Z"
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "checklist",
+                        "status": "IN_PROGRESS",
+                        "conclusion": null,
+                        "startedAt": "2026-06-16T22:21:54Z",
+                        "completedAt": null
+                    }
+                ]
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(merge_status_body_with_rollup(rollup)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(30).await.unwrap();
+
+        assert_eq!(status.ci_status, CiStatus::Pending);
+    }
+
+    // A real failure (no later passing rerun) is preserved.
+    #[tokio::test]
+    async fn test_get_pr_merge_status_keeps_real_failure() {
+        let mock_server = MockServer::start().await;
+
+        let rollup = serde_json::json!({
+            "state": "FAILURE",
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "build",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE",
+                        "startedAt": "2026-06-16T22:21:51Z",
+                        "completedAt": "2026-06-16T22:22:51Z"
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "lint",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-06-16T22:21:51Z",
+                        "completedAt": "2026-06-16T22:21:55Z"
+                    }
+                ]
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(merge_status_body_with_rollup(rollup)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(30).await.unwrap();
+
+        assert_eq!(status.ci_status, CiStatus::Failure);
+    }
+
+    // A failed Buildkite StatusContext (legacy commit status) still counts.
+    #[tokio::test]
+    async fn test_get_pr_merge_status_uses_status_context_failures() {
+        let mock_server = MockServer::start().await;
+
+        let rollup = serde_json::json!({
+            "state": "FAILURE",
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "StatusContext",
+                        "context": "buildkite/presubmit",
+                        "state": "FAILURE",
+                        "createdAt": "2026-06-16T22:22:00Z"
+                    }
+                ]
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(merge_status_body_with_rollup(rollup)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(30).await.unwrap();
+
+        assert_eq!(status.ci_status, CiStatus::Failure);
+    }
+
+    // No contexts → fall back to the rollup `state` (back-compat with older responses).
+    #[tokio::test]
+    async fn test_get_pr_merge_status_falls_back_to_state_without_contexts() {
+        let mock_server = MockServer::start().await;
+
+        let rollup = serde_json::json!({
+            "state": "FAILURE"
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(merge_status_body_with_rollup(rollup)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(30).await.unwrap();
+
+        assert_eq!(status.ci_status, CiStatus::Failure);
     }
 
     #[tokio::test]
