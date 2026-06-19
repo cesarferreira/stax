@@ -142,7 +142,6 @@ fn run_named_lane(
         base_branch.as_deref(),
     )?;
 
-    let copied_files = repo.tracked_file_count_at(&worktree_path).unwrap_or(0);
     let repo_name = main_repo_workdir
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -153,7 +152,6 @@ fn run_named_lane(
         &worktree_name,
         &branch_name,
         &from_label,
-        copied_files,
         resolved_branch.is_existing(),
     );
 

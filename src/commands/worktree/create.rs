@@ -8,6 +8,7 @@ use super::shared::{
 use crate::commands::shell_setup;
 use crate::config::Config;
 use crate::git::GitRepo;
+use crate::progress::LiveTimer;
 use anyhow::{bail, Context, Result};
 use colored::Colorize;
 use std::fs;
@@ -143,14 +144,16 @@ pub fn run(
     ensure_managed_worktrees_root(&repo, &config, &worktrees_dir)?;
     let main_repo_workdir = repo.main_repo_workdir()?;
     ensure_gitignore(&main_repo_workdir, &config.worktree.root_dir)?;
+
+    let timer = LiveTimer::new(&format!("Creating worktree {}...", worktree_name));
     create_worktree_for_resolved_branch(
         &repo,
         &resolved_branch,
         &worktree_path,
         base_branch.as_deref(),
     )?;
+    timer.finish_ok("done");
 
-    let copied_files = repo.tracked_file_count_at(&worktree_path).unwrap_or(0);
     let repo_name = main_repo_workdir
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -161,7 +164,6 @@ pub fn run(
         &worktree_name,
         &branch_name,
         &from_label,
-        copied_files,
         resolved_branch.is_existing(),
     );
 

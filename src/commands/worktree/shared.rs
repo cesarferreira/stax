@@ -1084,7 +1084,6 @@ pub fn format_create_message(
     worktree_name: &str,
     branch_name: &str,
     from: &str,
-    copied_files: usize,
     existing_branch: bool,
 ) {
     eprintln!(
@@ -1109,18 +1108,6 @@ pub fn format_create_message(
             from.dimmed()
         );
     }
-    eprintln!(
-        "  {} {} {} {}",
-        "Created".dimmed(),
-        worktree_name.yellow(),
-        "and copied".dimmed(),
-        format!(
-            "{} {}",
-            copied_files,
-            if copied_files == 1 { "file" } else { "files" }
-        )
-        .dimmed()
-    );
 }
 
 pub fn format_go_message(worktree: &WorktreeInfo) {
