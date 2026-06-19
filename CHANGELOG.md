@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.87.2] - 2026-06-19
+
+### Fixed
+- Remove blocking git ls-files call and add progress spinner on worktree create
+
 ## [0.87.1] - 2026-06-17
 
 ### Fixed
@@ -536,7 +541,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.87.1...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.87.2...HEAD
+[0.87.2]: https://github.com/cesarferreira/stax/compare/v0.87.1...v0.87.2
 [0.87.1]: https://github.com/cesarferreira/stax/compare/v0.87.0...v0.87.1
 [0.87.0]: https://github.com/cesarferreira/stax/compare/v0.86.3...v0.87.0
 [0.86.3]: https://github.com/cesarferreira/stax/compare/v0.86.2...v0.86.3
