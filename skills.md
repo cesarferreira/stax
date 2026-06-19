@@ -221,7 +221,7 @@ stax merge --downstack-only        # Merge ancestors below current, then rebase 
 stax merge --ds                    # Alias for --downstack-only
 stax merge --dry-run               # Preview merge plan only
 stax merge --method squash         # squash|merge|rebase
-stax merge --stack                 # GitHub only: validate selected tip once; default scope is bottom through current
+stax merge --stack                 # GitHub only: validate selected tip once, merge it, and mark lower PRs as absorbed
 stax merge --stack --downstack-only # Stack-merge ancestors below current; keep current open
 stax merge --stack --full          # Stack-merge full stack even from the middle
 stax merge --stack --when-ready    # Wait only for selected tip PR readiness before stack fast-forward merge
