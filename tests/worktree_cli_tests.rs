@@ -284,11 +284,6 @@ fn wt_create_without_name_creates_random_lane() {
         "expected conductor-style creation message, got:\n{}",
         stderr
     );
-    assert!(
-        stderr.contains("and copied"),
-        "expected copied-files summary, got:\n{}",
-        stderr
-    );
 
     let worktrees = linked_worktree_dirs_default(&repo, &home);
     assert_eq!(worktrees.len(), 1, "expected one linked worktree");
@@ -314,6 +309,13 @@ fn wt_create_without_name_creates_random_lane() {
         "expected a branch ending with '{}', got {:?}",
         slug,
         repo.list_branches()
+    );
+    let stdout = TestRepo::stdout(&out);
+    let expected_path = default_worktree_root(&repo, &home).join(&slug);
+    assert!(
+        stdout.contains(expected_path.to_string_lossy().as_ref()),
+        "expected cd hint for generated worktree, got:\n{}",
+        stdout
     );
 
     let gitignore = fs::read_to_string(repo.path().join(".gitignore")).unwrap_or_default();

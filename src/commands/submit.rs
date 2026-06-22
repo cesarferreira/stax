@@ -1848,27 +1848,23 @@ fn push_branches(
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let rejected = rejected_push_branches(&stdout, branches);
-        let details = stderr.trim();
+        let details = push_failure_details(&stdout, &stderr);
+        let branch_list = branches.join(", ");
         if !rejected.is_empty() {
-            anyhow::bail!(
-                "Failed to push branches {}: rejected {}{}",
-                branches.join(", "),
-                rejected.join(", "),
-                if details.is_empty() {
-                    String::new()
-                } else {
-                    format!(" ({})", details)
-                }
+            let mut message = format!(
+                "Failed to push branches {branch_list}: rejected {}",
+                rejected.join(", ")
             );
+            if !details.is_empty() {
+                message.push('\n');
+                message.push_str(&details);
+            }
+            anyhow::bail!("{message}");
         }
         if details.is_empty() {
-            anyhow::bail!("Failed to push branches: {}", branches.join(", "));
+            anyhow::bail!("Failed to push branches: {branch_list}");
         }
-        anyhow::bail!(
-            "Failed to push branches {}: {}",
-            branches.join(", "),
-            details
-        );
+        anyhow::bail!("Failed to push branches {branch_list}:\n{details}");
     }
     Ok(())
 }
@@ -1991,6 +1987,18 @@ fn rejected_push_branches(porcelain: &str, branches: &[&str]) -> Vec<String> {
             branches.contains(&branch).then(|| branch.to_string())
         })
         .collect()
+}
+
+fn push_failure_details(stdout: &str, stderr: &str) -> String {
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => stdout.to_string(),
+        (true, false) => stderr.to_string(),
+        (false, false) => format!("stdout:\n{stdout}\nstderr:\n{stderr}"),
+    }
 }
 
 fn resolve_branches_for_scope(stack: &Stack, current: &str, scope: SubmitScope) -> Vec<String> {
@@ -2742,7 +2750,7 @@ fn format_duration(duration: Duration) -> String {
 mod tests {
     use super::{
         build_ai_pr_details_prompt, existing_ai_prompt_items, existing_ai_targets_for_auto_accept,
-        parse_ai_pr_details, rejected_push_branches, resolve_ai_targets,
+        parse_ai_pr_details, push_failure_details, rejected_push_branches, resolve_ai_targets,
         resolve_is_draft_without_prompt, stack_link_contexts_for_sync, stack_pr_infos_for_links,
         truncate_ai_diff, AiPrTargets, StackPrInfo, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX,
         PR_TYPE_OPTIONS,
@@ -2779,6 +2787,22 @@ mod tests {
         assert_eq!(
             rejected_push_branches(porcelain, &["feature", "feature-a"]),
             vec!["feature-a".to_string()]
+        );
+    }
+
+    #[test]
+    fn push_failure_details_preserves_stdout_when_stderr_is_empty() {
+        assert_eq!(
+            push_failure_details("pre-push hook blocked submit\n", ""),
+            "pre-push hook blocked submit"
+        );
+    }
+
+    #[test]
+    fn push_failure_details_labels_both_streams() {
+        assert_eq!(
+            push_failure_details("hook stdout\n", "hook stderr\n"),
+            "stdout:\nhook stdout\nstderr:\nhook stderr"
         );
     }
 
