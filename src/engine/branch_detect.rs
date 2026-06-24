@@ -1,3 +1,4 @@
+use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::path::Path;
@@ -9,7 +10,6 @@ pub enum MergeType {
     /// Branch is an ancestor of trunk (git branch --merged).
     Ancestor,
     /// Branch patches are a subset of trunk's patches (squash/rebase merge).
-    #[allow(dead_code)]
     SquashMerge,
 }
 
@@ -32,8 +32,16 @@ pub struct StaleBranchInfo {
 /// branches — not just stax-tracked ones. It uses only git-level merge detection
 /// (no metadata-based heuristics), so it works equally well for untracked branches.
 ///
+/// Detection runs in two passes:
+///   1. `git branch --merged` against local trunk and (optionally) remote trunk —
+///      catches plain (fast-forward / merge-commit) integrations via ancestry.
+///   2. Patch-id provenance (`is_branch_merged_equivalent_to_trunk`) for branches
+///      not caught by ancestry — catches squash- and rebase-merges where the
+///      branch's commits were rewritten into trunk and are no longer ancestors.
+///
 /// `remote_trunk_ref` is e.g. `"origin/main"` — pass it if available for method 1b.
 pub fn find_merged_branches_all(
+    repo: &GitRepo,
     workdir: &Path,
     trunk: &str,
     remote_trunk_ref: Option<&str>,
@@ -77,6 +85,30 @@ pub fn find_merged_branches_all(
                     });
                 }
             }
+        }
+    }
+
+    // Method 2: patch-id provenance for squash/rebase merges.
+    //
+    // `git branch --merged` only finds branches whose tip is an ancestor of
+    // trunk. Squash- and rebase-merges rewrite the branch's commits into trunk,
+    // so the original branch tip is never an ancestor. We detect these by
+    // comparing patch ids: a branch whose patches are all present in trunk is
+    // integrated even though it is not an ancestor.
+    let already_merged: HashSet<String> = merged.iter().map(|m| m.branch.clone()).collect();
+    for branch in repo.list_branches()? {
+        if branch == trunk || already_merged.contains(&branch) {
+            continue;
+        }
+        // Conservative: only classify when patch equivalence is unambiguous.
+        if repo
+            .is_branch_merged_equivalent_to_trunk(&branch)
+            .unwrap_or(false)
+        {
+            merged.push(MergedBranchInfo {
+                branch,
+                merge_type: MergeType::SquashMerge,
+            });
         }
     }
 

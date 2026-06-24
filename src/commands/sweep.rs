@@ -37,7 +37,7 @@ pub fn run(
 
     // 1. Merged (git ancestry plus tracked PR cleanup signals)
     let mut merged_infos: Vec<_> =
-        find_merged_branches_all(&workdir, &trunk, Some(remote_trunk_ref.as_str()))?
+        find_merged_branches_all(&repo, &workdir, &trunk, Some(remote_trunk_ref.as_str()))?
             .into_iter()
             .filter(|m| m.branch != trunk && m.branch != current)
             .collect();
