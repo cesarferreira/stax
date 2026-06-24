@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.88.0] - 2026-06-24
+
+### Changed
+- Revert "fix: show git push hook output on submit failure (#518)"
+- Reapply "fix: show git push hook output on submit failure (#518)"
+- Use real trunk command in tests and assert success (#530)
+
+### Fixed
+- Mark absorbed stack PRs explicitly (#513)
+- Show git push hook output on submit failure
+- Reject zero merge polling interval (#526)
+- Actionable non-interactive error for dirty wt rm (#527)
+- Treat latest cancelled rollup check as CI failure (#528)
+- Correct misleading branch fold --keep help text (#525)
+- Require explicit --yes for quiet stack merges (#529)
+- Print value when clipboard unavailable in copy command (#532)
+- Detect squash-merged branches in sweep (#524)
+- Protect upstream-gone branches with local-only commits in sync (#533)
+
+### Documentation
+- Fix status alias reference (#512)
+- Clarify sync --prune is a no-op (#521)
+- Fix broken links in CONTRIBUTING and tmux page (#522)
+- Document branch.stale_days and git.rerere config keys (#523)
+
 ## [0.87.2] - 2026-06-19
 
 ### Fixed
@@ -541,7 +566,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.87.2...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.88.0...HEAD
+[0.88.0]: https://github.com/cesarferreira/stax/compare/v0.87.2...v0.88.0
 [0.87.2]: https://github.com/cesarferreira/stax/compare/v0.87.1...v0.87.2
 [0.87.1]: https://github.com/cesarferreira/stax/compare/v0.87.0...v0.87.1
 [0.87.0]: https://github.com/cesarferreira/stax/compare/v0.86.3...v0.87.0
