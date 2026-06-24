@@ -80,4 +80,4 @@ CI enforces `cargo fmt --check` and `cargo clippy -- -D warnings` on every PR.
 
 ## Project Structure
 
-See [CLAUDE.md](CLAUDE.md) for a detailed architecture overview including module structure, metadata format, and key patterns.
+See the [documentation](https://cesarferreira.github.io/stax/) and the [concepts pages](docs/concepts/stacked-branches.md) for an overview of how stax models stacked branches, metadata, and the overall architecture.
