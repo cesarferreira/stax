@@ -1205,6 +1205,53 @@ fn wt_remove_confirmed_dirty_worktree_uses_forced_git_remove() {
 }
 
 #[test]
+fn wt_remove_dirty_worktree_non_interactive_fails_with_force_guidance() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["create", "dirty-non-interactive"])
+        .assert_success();
+    let branch = repo.current_branch();
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let dirty_path = repo.path().join("wt-dirty-non-interactive");
+    repo.git(&["worktree", "add", dirty_path.to_str().unwrap(), &branch])
+        .assert_success();
+    fs::write(dirty_path.join("scratch.txt"), "dirty\n").expect("write dirty scratch file");
+
+    // `run_stax` uses a piped (non-terminal) stdin, exercising the
+    // non-interactive code path.
+    let out = repo.run_stax(&["wt", "rm", &branch]);
+    out.assert_failure().assert_stderr_contains("--force");
+
+    assert!(
+        dirty_path.exists(),
+        "dirty worktree should be preserved when confirmation cannot be obtained non-interactively"
+    );
+}
+
+#[test]
+fn wt_remove_dirty_worktree_force_removes_non_interactively() {
+    let repo = TestRepo::new();
+
+    repo.run_stax(&["create", "dirty-force"]).assert_success();
+    let branch = repo.current_branch();
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let dirty_path = repo.path().join("wt-dirty-force");
+    repo.git(&["worktree", "add", dirty_path.to_str().unwrap(), &branch])
+        .assert_success();
+    fs::write(dirty_path.join("scratch.txt"), "dirty\n").expect("write dirty scratch file");
+
+    repo.run_stax(&["wt", "rm", "--force", &branch])
+        .assert_success();
+
+    assert!(
+        !dirty_path.exists(),
+        "expected --force to remove dirty worktree non-interactively"
+    );
+}
+
+#[test]
 fn wt_remove_without_name_removes_current_worktree() {
     let repo = TestRepo::new();
     let home = repo.clean_home();
