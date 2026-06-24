@@ -83,6 +83,27 @@ fn test_checkout_trunk_full_command() {
 }
 
 #[test]
+fn test_trunk_set_existing_branch() {
+    let repo = TestRepo::new();
+    repo.git(&["branch", "develop"]);
+
+    let output = repo.run_stax(&["trunk", "develop"]);
+    output
+        .assert_success()
+        .assert_stdout_contains("Trunk branch set to 'develop'");
+}
+
+#[test]
+fn test_trunk_set_nonexistent_branch_fails() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["trunk", "does-not-exist"]);
+    output
+        .assert_failure()
+        .assert_stderr_contains("does not exist locally");
+}
+
+#[test]
 fn test_get_help() {
     let repo = TestRepo::new();
 

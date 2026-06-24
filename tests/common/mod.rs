@@ -391,6 +391,16 @@ impl TestRepo {
             .expect("Failed to execute stax")
     }
 
+    /// Set the stax trunk branch, asserting the command succeeds.
+    ///
+    /// Wraps `stax trunk <branch>` so test setup fails loudly if the command
+    /// name changes or the trunk cannot be set, rather than silently
+    /// proceeding on an auto-detected trunk.
+    pub fn set_trunk(&self, branch: &str) -> &Self {
+        self.run_stax(&["trunk", branch]).assert_success();
+        self
+    }
+
     /// Run a stax command with additional environment variables.
     pub fn run_stax_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut cmd = sanitized_stax_command();
