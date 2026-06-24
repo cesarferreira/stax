@@ -19,7 +19,7 @@ Stax manages stacked branches: small focused branches layered on top of each oth
 ## Command Map
 
 ```bash
-stax status|s|ls              # Stack status (tree)
+stax status|ls                # Stack status (tree)
 stax ll                        # Stack status with PR URLs/details
 stax log|l                     # Stack status with commits + PR info
 

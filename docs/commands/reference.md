@@ -6,7 +6,7 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 
 | Command | Alias | Description |
 |---|---|---|
-| `st status` | `s`, `ls` | Show stack |
+| `st status` | `ls` | Show stack |
 | `st ll` | | Show stack with PR URLs and full details |
 | `st log` | `l` | Show stack with commits and PR info |
 | `st submit` | `ss` | Submit full current stack |
