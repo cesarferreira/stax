@@ -413,3 +413,40 @@ fn status_requires_clean_repo_state() {
     assert_eq!(cmd.policy(), CommandPolicy::RequiresCleanRepoState);
     assert!(!cmd.allows_during_rebase());
 }
+
+#[test]
+fn merge_when_ready_rejects_zero_interval() {
+    assert!(try_parse_cli(&["stax", "merge", "--when-ready", "--interval", "0"]).is_err());
+}
+
+#[test]
+fn merge_remote_rejects_zero_interval() {
+    assert!(try_parse_cli(&["stax", "merge", "--remote", "--interval", "0"]).is_err());
+}
+
+#[test]
+fn merge_queue_rejects_zero_interval() {
+    assert!(try_parse_cli(&["stax", "merge", "--queue", "--interval", "0"]).is_err());
+}
+
+#[test]
+fn merge_stack_when_ready_rejects_zero_interval() {
+    assert!(try_parse_cli(&[
+        "stax",
+        "merge",
+        "--stack",
+        "--when-ready",
+        "--interval",
+        "0"
+    ])
+    .is_err());
+}
+
+#[test]
+fn merge_accepts_interval_of_one() {
+    let cli = parse_cli(&["stax", "merge", "--when-ready", "--interval", "1"]);
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Merge { interval: 1, .. })
+    ));
+}

@@ -312,7 +312,7 @@ pub(crate) enum Commands {
         #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "remote", "stack"])]
         queue: bool,
         /// Polling interval in seconds for --when-ready, --remote, --queue, and --stack --when-ready
-        #[arg(long, default_value = "15")]
+        #[arg(long, default_value_t = 15, value_parser = clap::value_parser!(u64).range(1..))]
         interval: u64,
         /// Skip post-merge sync (`stax rs`)
         #[arg(long)]
