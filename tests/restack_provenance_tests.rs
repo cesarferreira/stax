@@ -158,7 +158,7 @@ fn test_restack_with_non_ancestor_stored_revision_succeeds() {
     write_branch_metadata_raw(&repo, "my-feature", "main", &current_main_sha);
 
     // Initialize stax trunk
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
 
     repo.git(&["checkout", "my-feature"]);
 
@@ -281,7 +281,7 @@ fn test_restack_with_non_ancestor_revision_preserves_only_feature_commits() {
     // Store parentBranchRevision = M2 (not in feature history, not equal to current main)
     // This triggers needs_restack (M2 ≠ M3) and hits the non-ancestor path.
     write_branch_metadata_raw(&repo, "count-feature", "main", &mid_main_sha);
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
 
     repo.git(&["checkout", "count-feature"]);
     let output = repo.run_stax(&["restack", "--yes", "--quiet"]);
@@ -358,7 +358,7 @@ fn test_many_trunk_commits_linear_restack_only_replays_feature_commits() {
     );
 
     write_branch_metadata_raw(&repo, "busy-feature", "main", &old_main_tip);
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
 
     assert_git_success(
         &repo,
@@ -408,7 +408,7 @@ fn test_sync_restack_many_trunk_commits_preserves_linear_feature_depth() {
     assert_git_success(&repo, &["push", "origin", "main"], "push main");
 
     write_branch_metadata_raw(&repo, "sync-busy", "main", &old_main_tip);
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
 
     assert_git_success(&repo, &["checkout", "sync-busy"], "checkout sync-busy");
     let output = repo.run_stax(&["sync", "--restack", "--force", "--quiet", "--no-delete"]);
@@ -473,7 +473,7 @@ fn test_merging_main_into_feature_inflates_stored_replay_range() {
 
     // Stored boundary stayed at the original fork tip — the canonical mistake.
     write_branch_metadata_raw(&repo, "merged-feature", "main", &fork_point);
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
 
     let stored_to_feature = rev_list_count(&repo, &format!("{fork_point}..merged-feature"));
     let merge_base_out = repo.git(&["merge-base", "main", "merged-feature"]);
@@ -538,7 +538,7 @@ fn build_merge_from_main_fixture(repo: &TestRepo) -> String {
     }
 
     write_branch_metadata_raw(repo, "preflight-feature", "main", &fork_point);
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
     repo.git(&["checkout", "preflight-feature"]);
 
     "preflight-feature".to_string()
@@ -660,7 +660,7 @@ fn test_restack_preflight_silent_on_clean_linear_branch() {
     }
 
     write_branch_metadata_raw(&repo, "linear-quiet", "main", &fork_point);
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
     repo.git(&["checkout", "linear-quiet"]);
 
     let output = repo.run_stax_with_env(
@@ -703,7 +703,7 @@ fn test_genuine_conflict_still_fails_after_fix() {
     // Write metadata with the pre-conflict main SHA as parentBranchRevision
     // (this is the correct merge-base — we want a real conflict, not metadata drift)
     write_branch_metadata_raw(&repo, "conflict-feature", "main", &pre_conflict_sha);
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
 
     repo.git(&["checkout", "conflict-feature"]);
 

@@ -69,7 +69,7 @@ fn test_branch_track_stores_merge_base_not_parent_tip() {
     assert_ne!(divergence_sha, main_tip, "main must have advanced");
 
     // Initialize stax and track the feature branch
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
     repo.git(&["checkout", "my-feature"]);
 
     let output = repo.run_stax(&["branch", "track", "--parent", "main"]);
@@ -104,7 +104,7 @@ fn test_branch_track_at_current_tip_stores_tip_as_merge_base() {
     repo.create_file("feature.txt", "content");
     repo.commit("Feature commit");
 
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
     repo.git(&["checkout", "fresh-feature"]);
 
     let output = repo.run_stax(&["branch", "track", "--parent", "main"]);
@@ -144,7 +144,7 @@ fn test_track_then_restack_with_diverged_main_succeeds() {
     repo.commit("Main unrelated B");
 
     // Initialize stax and track
-    repo.run_stax(&["set-trunk", "main"]);
+    repo.set_trunk("main");
     repo.git(&["checkout", "long-feature"]);
 
     let track_out = repo.run_stax(&["branch", "track", "--parent", "main"]);
