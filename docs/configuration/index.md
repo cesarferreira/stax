@@ -21,6 +21,10 @@ Config is loaded as follows:
 # user = "cesar"
 # date_format = "%m-%d"
 # replacement = "-"
+# stale_days = 30 # days without commits before `stax sweep` calls a branch stale
+
+[git]
+# rerere = true # auto-enable git rerere on `stax init`
 
 [remote]
 # name = "origin"
@@ -152,6 +156,24 @@ date_format = "%m-%d"
 ```
 
 The legacy `prefix` field still works when `format` is unset.
+
+## Stale-branch threshold
+
+```toml
+[branch]
+stale_days = 60
+```
+
+`stale_days` is the number of days without new commits before [`stax sweep`](../commands/sweep.md) classifies a branch as `stale` (default: `30`). The `stax sweep --stale-days <N>` flag overrides this per run.
+
+## Git rerere
+
+```toml
+[git]
+rerere = false
+```
+
+When `rerere` is `true` (the default), `stax init` enables Git's [rerere](https://git-scm.com/docs/git-rerere) ("reuse recorded resolution") so previously resolved merge conflicts are replayed automatically during restacks. Set it to `false` to leave your global Git configuration untouched on init.
 
 ## Stack-links placement
 
