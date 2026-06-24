@@ -130,6 +130,23 @@ fn test_fold_help_surfaces() {
             args,
             stdout
         );
+        // The `--keep` help must accurately describe the destructive behaviour
+        // (it deletes the parent ref) and stay aligned between the nested
+        // `branch fold` and the top-level `fold` alias. The old wording
+        // ("Keep the branch after folding (don't delete)") misleadingly
+        // implied the operation was non-destructive.
+        assert!(
+            stdout.contains("surviving ref"),
+            "expected `--keep` help to describe the surviving ref in `{:?}` help: {}",
+            args,
+            stdout
+        );
+        assert!(
+            !stdout.contains("Keep the branch after folding"),
+            "found stale misleading `--keep` help in `{:?}` help: {}",
+            args,
+            stdout
+        );
     }
 }
 
