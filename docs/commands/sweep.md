@@ -65,7 +65,7 @@ Set the stale threshold globally in `~/.config/stax/config.toml`:
 stale_days = 60
 ```
 
-`--stale-days` overrides this per-run.
+`--stale-days` overrides this per-run. See the [configuration reference](../configuration/index.md#stale-branch-threshold) for details.
 
 ## Safety
 
