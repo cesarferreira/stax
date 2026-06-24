@@ -1,8 +1,8 @@
 //! Fast-forward stack merge through one GitHub PR merge.
 //!
 //! This is the serverless path from issue #293: validate the selected tip PR
-//! once, retarget that PR to trunk, merge it via GitHub's merge API, then close
-//! the selected lower PRs with a back-reference comment.
+//! once, retarget that PR to trunk, merge it via GitHub's merge API, then
+//! absorb the selected lower PRs with a back-reference comment.
 
 use crate::commands::merge::{
     PrBaseUpdate, rebase_and_finalize_remaining_branch, update_pr_base_unless_current,
@@ -267,7 +267,7 @@ pub fn run(
     }
     LiveTimer::maybe_finish_ok(merge_timer, "done");
 
-    reconcile_downstack_prs(&rt, &client, &resolved, tip, quiet)?;
+    absorb_downstack_prs(&rt, &client, &resolved, tip, quiet)?;
 
     rebase_remaining_branches(
         &repo,
@@ -284,7 +284,7 @@ pub fn run(
     }
 
     if !no_sync {
-        run_post_merge_sync(quiet, no_delete);
+        run_post_merge_sync(quiet);
     }
 
     if !quiet {
@@ -301,7 +301,7 @@ pub fn run(
             let action = if pr.pr_number == tip.pr_number {
                 "merged"
             } else {
-                "closed"
+                "absorbed"
             };
             println!(
                 "  {} #{} {} -> {}",
@@ -674,7 +674,7 @@ fn restore_tip_base(
     }
 }
 
-fn reconcile_downstack_prs(
+fn absorb_downstack_prs(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
     prs: &[ResolvedStackPr],
@@ -684,9 +684,9 @@ fn reconcile_downstack_prs(
     for pr in prs.iter().filter(|pr| pr.pr_number != tip.pr_number) {
         let timer = LiveTimer::maybe_new(
             !quiet,
-            &format!("Closing downstack PR #{}...", pr.pr_number),
+            &format!("Marking downstack PR #{} as absorbed...", pr.pr_number),
         );
-        let comment = downstack_landed_comment(tip.pr_number);
+        let comment = downstack_absorbed_comment(tip.pr_number);
         rt.block_on(async { client.create_issue_comment(pr.pr_number, &comment).await })?;
         rt.block_on(async { client.close_pr(pr.pr_number).await })?;
         LiveTimer::maybe_finish_ok(timer, "done");
@@ -735,8 +735,11 @@ fn rebase_remaining_branches(
     Ok(())
 }
 
-fn downstack_landed_comment(tip_pr_number: u64) -> String {
-    format!("Landed as part of stack merge of #{}.", tip_pr_number)
+fn downstack_absorbed_comment(tip_pr_number: u64) -> String {
+    format!(
+        "Absorbed into stack merge of #{}. This PR's commits landed through the selected tip PR.",
+        tip_pr_number
+    )
 }
 
 fn cleanup_local_stack(repo: &GitRepo, scope: &StackMergeScope, quiet: bool) -> Result<()> {
@@ -772,21 +775,24 @@ fn cleanup_local_stack(repo: &GitRepo, scope: &StackMergeScope, quiet: bool) -> 
     Ok(())
 }
 
-fn run_post_merge_sync(quiet: bool, no_delete: bool) {
+fn run_post_merge_sync(quiet: bool) {
     if !quiet {
         println!();
-        println!("{}", "Running post-merge sync...".dimmed());
+        println!(
+            "{}",
+            "Running post-merge sync (no branch deletion)...".dimmed()
+        );
     }
 
     if let Err(err) = crate::commands::sync::run(
-        false,      // restack
-        false,      // prune
-        false,      // full
-        !no_delete, // delete merged branches unless explicitly kept
-        false,      // delete upstream-gone branches
-        true,       // force
-        false,      // safe
-        false,      // continue
+        false, // restack
+        false, // prune
+        false, // full
+        false, // keep branch cleanup scoped to this stack merge
+        false, // delete upstream-gone branches
+        true,  // force
+        false, // safe
+        false, // continue
         quiet,
         false, // verbose
         false, // auto_stash_pop
@@ -842,7 +848,7 @@ fn print_stack_preview(
         let marker = if idx + 1 == prs.len() {
             "(tip, merged)"
         } else {
-            "(closed after tip merge)"
+            "(absorbed after tip merge)"
         };
         println!(
             "  {}. {} (#{}) {}",
@@ -1113,8 +1119,8 @@ mod tests {
     #[test]
     fn downstack_comment_links_to_tip() {
         assert_eq!(
-            downstack_landed_comment(42),
-            "Landed as part of stack merge of #42."
+            downstack_absorbed_comment(42),
+            "Absorbed into stack merge of #42. This PR's commits landed through the selected tip PR."
         );
     }
 }

@@ -285,8 +285,8 @@ fn wt_create_without_name_creates_random_lane() {
         stderr
     );
     assert!(
-        stderr.contains("and copied"),
-        "expected copied-files summary, got:\n{}",
+        stderr.contains("Branched") && stderr.contains("from main"),
+        "expected branch creation summary, got:\n{}",
         stderr
     );
 

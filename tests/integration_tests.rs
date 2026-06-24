@@ -9977,7 +9977,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_stack_retargets_tip_merges_once_and_closes_downstack_prs() {
+    async fn test_merge_stack_retargets_tip_merges_once_and_absorbs_downstack_prs() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
@@ -10059,7 +10059,7 @@ mod forge_mock_tests {
             .and(path("/repos/test/repo/issues/601/comments"))
             .respond_with(ResponseTemplate::new(201).set_body_json(issue_comment_fixture(
                 9001,
-                "Landed as part of stack merge of #602.",
+                "Absorbed into stack merge of #602. This PR's commits landed through the selected tip PR.",
             )))
             .mount(&mock_server)
             .await;
@@ -10127,7 +10127,7 @@ mod forge_mock_tests {
         let comment_payload: Value = serde_json::from_slice(&comment_request.body).unwrap();
         assert_eq!(
             comment_payload["body"],
-            "Landed as part of stack merge of #602."
+            "Absorbed into stack merge of #602. This PR's commits landed through the selected tip PR."
         );
 
         let close_request = &requests[close_idx];
@@ -10244,7 +10244,7 @@ mod forge_mock_tests {
             .and(path("/repos/test/repo/issues/611/comments"))
             .respond_with(ResponseTemplate::new(201).set_body_json(issue_comment_fixture(
                 9002,
-                "Landed as part of stack merge of #612.",
+                "Absorbed into stack merge of #612. This PR's commits landed through the selected tip PR.",
             )))
             .mount(&mock_server)
             .await;

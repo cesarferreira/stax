@@ -191,7 +191,7 @@ Merge from the bottom of the stack up to your current branch, with CI and readin
 st merge                  # local cascade merge
 st merge --when-ready     # wait/poll until PRs are mergeable
 st merge --ds             # merge ancestors, rebase current branch
-st merge --stack          # validate current PR once, stack-merge through current
+st merge --stack          # validate current PR once; absorb lower PRs through current
 st merge --stack --full   # stack-merge the full stack even from the middle
 st merge --remote         # merge remotely on GitHub while you keep working
 st merge --all            # merge the whole stack regardless of position
