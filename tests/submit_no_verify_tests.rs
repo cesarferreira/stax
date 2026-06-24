@@ -50,7 +50,7 @@ mod unix {
         let hook = repo.path().join(".git/hooks/pre-push");
         fs::write(
             &hook,
-            "#!/bin/sh\necho 'pre-push hook blocked submit' >&2\nexit 1\n",
+            "#!/bin/sh\necho 'pre-push hook stdout blocked submit'\necho 'pre-push hook stderr blocked submit' >&2\nexit 1\n",
         )
         .expect("write pre-push hook");
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("chmod pre-push hook");
@@ -91,7 +91,9 @@ mod unix {
         let (repo, branch) = repo_with_failing_pre_push_hook("submit-no-verify");
 
         repo.run_stax(&["ss", "--no-fetch", "--no-pr", "--no-prompt", "--yes"])
-            .assert_failure();
+            .assert_failure()
+            .assert_stderr_contains("pre-push hook stdout blocked submit")
+            .assert_stderr_contains("pre-push hook stderr blocked submit");
         assert!(
             !remote_has_branch(&repo, &branch),
             "branch should not exist after hook-blocked push"
