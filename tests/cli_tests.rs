@@ -357,6 +357,19 @@ fn test_branch_subcommands() {
 }
 
 #[test]
+fn test_branch_fold_keep_help_matches_top_level() {
+    let nested = stax(&["branch", "fold", "--help"]);
+    assert!(nested.status.success());
+    let nested_stdout = String::from_utf8_lossy(&nested.stdout);
+    assert!(nested_stdout.contains("Keep the current branch's name as the surviving ref"));
+
+    let top_level = stax(&["fold", "--help"]);
+    assert!(top_level.status.success());
+    let top_level_stdout = String::from_utf8_lossy(&top_level.stdout);
+    assert!(top_level_stdout.contains("Keep the current branch's name as the surviving ref"));
+}
+
+#[test]
 fn test_bc_shortcut() {
     // bc should work as hidden shortcut
     let output = stax(&["bc", "--help"]);
