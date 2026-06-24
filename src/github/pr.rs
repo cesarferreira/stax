@@ -553,10 +553,17 @@ fn rollup_ci_status(rollup: &StatusCheckRollupData) -> CiStatus {
                     .map(|s| s.to_ascii_uppercase())
                     .unwrap_or_default();
                 match conclusion.as_str() {
-                    "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => {
+                    // A *latest* cancelled run (after dedup) means the required
+                    // workflow never completed successfully — treat it as a
+                    // failure, matching the REST check-run path in client.rs. An
+                    // older cancelled run superseded by a later success/pending
+                    // run won't reach here, since dedup keeps only the latest
+                    // run per check name.
+                    "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE"
+                    | "CANCELLED" => {
                         has_failure = true;
                     }
-                    // SUCCESS / NEUTRAL / SKIPPED / CANCELLED / STALE / "" → no impact
+                    // SUCCESS / NEUTRAL / SKIPPED / STALE / "" → no impact
                     _ => {}
                 }
             }
@@ -2665,6 +2672,50 @@ mod tests {
                         "conclusion": "SUCCESS",
                         "startedAt": "2026-06-16T22:21:51Z",
                         "completedAt": "2026-06-16T22:21:55Z"
+                    }
+                ]
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(merge_status_body_with_rollup(rollup)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let status = client.get_pr_merge_status(30).await.unwrap();
+
+        assert_eq!(status.ci_status, CiStatus::Failure);
+    }
+
+    // The latest run per check name is CANCELLED (never rerun) → failure.
+    // Mirrors the REST check-run path, which treats cancelled as a failure.
+    #[tokio::test]
+    async fn test_get_pr_merge_status_latest_cancelled_is_failure() {
+        let mock_server = MockServer::start().await;
+
+        let rollup = serde_json::json!({
+            "state": "FAILURE",
+            "contexts": {
+                "nodes": [
+                    {
+                        "__typename": "CheckRun",
+                        "name": "build",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-06-16T22:21:50Z",
+                        "completedAt": "2026-06-16T22:21:51Z"
+                    },
+                    {
+                        "__typename": "CheckRun",
+                        "name": "build",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-06-16T22:21:54Z",
+                        "completedAt": "2026-06-16T22:26:55Z"
                     }
                 ]
             }
