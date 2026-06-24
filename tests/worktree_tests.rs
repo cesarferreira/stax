@@ -791,6 +791,13 @@ fn sync_delete_upstream_gone_removes_safe_linked_worktree() {
     let wt_lane = repo.path().join("wt-stale");
     repo.git(&["worktree", "add", wt_lane.to_str().unwrap(), &branch])
         .assert_success();
+
+    // Land the branch's work on trunk and publish it so it carries no commits
+    // unique relative to origin/main and stays a legitimate deletion candidate
+    // under the #478 local-only-work safety guard.
+    repo.git(&["merge", "--ff-only", &branch]).assert_success();
+    repo.git(&["push", "origin", "main"]).assert_success();
+
     repo.git(&["push", "origin", "--delete", &branch])
         .assert_success();
 

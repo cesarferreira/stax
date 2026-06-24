@@ -6,6 +6,7 @@ use crate::commands::worktree::{
     shared::{compute_worktree_details, worktree_removal_blockers_for_cleanup},
 };
 use crate::config::Config;
+use crate::engine::branch_detect::has_unique_commits_since_any_base;
 use crate::engine::{BranchMetadata, PrInfo, Stack};
 use crate::errors::ConflictStopped;
 use crate::forge::ForgeClient;
@@ -981,12 +982,56 @@ pub fn run(
     if delete_upstream_gone {
         let detect_gone_started_at = Instant::now();
         let detect_timer = LiveTimer::maybe_new(!quiet, "Detect upstream-gone branches");
-        let gone = find_upstream_gone_branches(&workdir, &stack.trunk)?;
+        let detected_gone = find_upstream_gone_branches(&workdir, &stack.trunk)?;
+
+        // Protect upstream-gone branches that still carry local-only work
+        // (commits unique relative to BOTH local trunk and origin/<trunk>).
+        // A branch's remote upstream disappearing does not mean its commits
+        // were integrated — users routinely add local commits after the last
+        // push — so deleting such a branch would lose un-pushed work. This
+        // mirrors `stax sweep`, which already classifies these branches as
+        // active rather than deletable (see commands/sweep.rs).
+        let mut gone: Vec<String> = Vec::with_capacity(detected_gone.len());
+        let mut protected_gone: Vec<String> = Vec::new();
+        for branch in detected_gone {
+            if has_unique_commits_since_any_base(
+                &workdir,
+                &branch,
+                &[stack.trunk.as_str(), remote_trunk_ref.as_str()],
+            )? {
+                protected_gone.push(branch);
+            } else {
+                gone.push(branch);
+            }
+        }
+
         step_timings.push((
             "detect upstream-gone branches".to_string(),
             detect_gone_started_at.elapsed(),
         ));
         LiveTimer::maybe_finish_timed(detect_timer);
+
+        if !quiet && !protected_gone.is_empty() {
+            let branch_word = if protected_gone.len() == 1 {
+                "branch"
+            } else {
+                "branches"
+            };
+            println!(
+                "    Protected {} upstream-gone {} with local-only commits:",
+                protected_gone.len().to_string().cyan(),
+                branch_word
+            );
+            for branch in &protected_gone {
+                println!(
+                    "      {} {} {}",
+                    "▸".bright_black(),
+                    branch,
+                    "(has unpushed work)".dimmed()
+                );
+            }
+            println!();
+        }
 
         let delete_gone_started_at = Instant::now();
 

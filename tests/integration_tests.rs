@@ -4704,11 +4704,19 @@ fn test_sync_delete_upstream_gone_deletes_untracked_local_branch() {
     let repo = TestRepo::new_with_remote();
 
     // Create an untracked branch (no stax metadata), push, then delete remote.
+    // Its work is also merged into the remote trunk, so it carries no commits
+    // unique relative to origin/main and remains a legitimate deletion
+    // candidate under the local-only-work safety guard.
     repo.git(&["checkout", "-b", "manual-upstream-gone"]);
     repo.create_file("manual.txt", "manual branch content");
     repo.commit("Manual branch commit");
     repo.git(&["push", "-u", "origin", "manual-upstream-gone"]);
+
+    // Land the branch's work on trunk and publish it.
     repo.git(&["checkout", "main"]);
+    repo.git(&["merge", "--ff-only", "manual-upstream-gone"]);
+    repo.git(&["push", "origin", "main"]);
+
     repo.git(&["push", "origin", "--delete", "manual-upstream-gone"]);
 
     let output = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
@@ -4722,6 +4730,41 @@ fn test_sync_delete_upstream_gone_deletes_untracked_local_branch() {
     assert!(
         !branches.iter().any(|b| b == "manual-upstream-gone"),
         "Expected --delete-upstream-gone to delete the stale local branch"
+    );
+}
+
+#[test]
+fn test_sync_delete_upstream_gone_protects_branch_with_local_only_commits() {
+    // Regression test for #478: a branch whose remote upstream was deleted but
+    // which still carries commits never integrated into trunk must NOT be
+    // deleted by `sync --delete-upstream-gone`. This mirrors the `sweep`
+    // safety guard (sweep_does_not_treat_upstream_gone_with_local_work_as_deletable).
+    let repo = TestRepo::new_with_remote();
+
+    repo.git(&["checkout", "-b", "gone-with-local-work"]);
+    repo.create_file("pushed.txt", "pushed");
+    repo.commit("pushed work");
+    repo.git(&["push", "-u", "origin", "gone-with-local-work"]);
+
+    // Add a commit AFTER the last push — never published anywhere.
+    repo.create_file("local-only.txt", "local only");
+    repo.commit("local-only work");
+
+    repo.git(&["checkout", "main"]);
+    repo.git(&["push", "origin", "--delete", "gone-with-local-work"]);
+
+    let output = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == "gone-with-local-work"),
+        "Expected sync to protect upstream-gone branch with local-only commits, got: {:?}",
+        branches
     );
 }
 
@@ -4745,8 +4788,14 @@ fn test_sync_delete_upstream_gone_reparents_tracked_children() {
     repo.commit("Child commit");
     repo.git(&["push", "-u", "origin", &child_branch]);
 
-    // Delete the parent on the remote so its upstream is gone
+    // Land the parent's work on trunk and publish it so the parent has no
+    // commits unique relative to origin/main and stays a legitimate deletion
+    // candidate under the #478 local-only-work safety guard.
     repo.git(&["checkout", "main"]);
+    repo.git(&["merge", "--ff-only", &parent_branch]);
+    repo.git(&["push", "origin", "main"]);
+
+    // Delete the parent on the remote so its upstream is gone
     repo.git(&["push", "origin", "--delete", &parent_branch]);
 
     // Run sync --delete-upstream-gone; parent should be deleted and the
@@ -4820,8 +4869,15 @@ fn test_sync_delete_upstream_gone_reparents_across_multiple_doomed_ancestors() {
     repo.commit("leaf");
     repo.git(&["push", "-u", "origin", &leaf]);
 
-    // Delete both grand AND mid on the remote. Leaf survives remotely.
+    // Land grand+mid work on trunk and publish it so neither carries commits
+    // unique relative to origin/main; they stay legitimate deletion candidates
+    // under the #478 local-only-work safety guard. Leaf keeps its own unique
+    // commit and survives.
     repo.git(&["checkout", "main"]);
+    repo.git(&["merge", "--ff-only", &mid]);
+    repo.git(&["push", "origin", "main"]);
+
+    // Delete both grand AND mid on the remote. Leaf survives remotely.
     repo.git(&["push", "origin", "--delete", &grand]);
     repo.git(&["push", "origin", "--delete", &mid]);
 

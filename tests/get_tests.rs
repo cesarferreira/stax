@@ -393,6 +393,14 @@ fn sync_delete_upstream_gone_deletes_imported_branch_locally() {
 
     repo.run_stax(&["get", "borrowed-gone"]).assert_success();
     repo.git(&["checkout", "main"]).assert_success();
+
+    // Land the imported branch's work on trunk and publish it so it carries no
+    // commits unique relative to origin/main and stays a legitimate deletion
+    // candidate under the #478 local-only-work safety guard.
+    repo.git(&["merge", "--ff-only", "borrowed-gone"])
+        .assert_success();
+    repo.git(&["push", "origin", "main"]).assert_success();
+
     repo.git(&["push", "origin", "--delete", "borrowed-gone"])
         .assert_success();
 

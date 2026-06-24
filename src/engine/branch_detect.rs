@@ -147,6 +147,43 @@ pub fn find_upstream_gone_branches(workdir: &Path, trunk: &str) -> Result<Vec<St
     Ok(branches.into_iter().collect())
 }
 
+/// Returns `true` if `branch` has at least one commit unique relative to
+/// EVERY base in `bases` (e.g. local trunk and `origin/<trunk>`).
+///
+/// This is the safety predicate used to protect upstream-gone branches that
+/// still carry local-only work from being deleted. A branch is only considered
+/// "safe to delete" (returns `false`) when it has zero unique commits relative
+/// to at least one reachable base. Unresolvable bases (e.g. a missing
+/// `origin/<trunk>` ref) are skipped rather than treated as "no unique work",
+/// so a branch is never classified as deletable on the basis of a base that
+/// could not be evaluated.
+pub fn has_unique_commits_since_any_base(
+    workdir: &Path,
+    branch: &str,
+    bases: &[&str],
+) -> Result<bool> {
+    for base in bases {
+        let range = format!("{}..{}", base, branch);
+        let output = Command::new("git")
+            .args(["rev-list", "--count", &range])
+            .current_dir(workdir)
+            .output()
+            .with_context(|| format!("Failed to count unique commits for '{}'", branch))?;
+
+        if !output.status.success() {
+            continue;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let unique_count = stdout.trim().parse::<u64>().unwrap_or(u64::MAX);
+        if unique_count == 0 {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
 /// Find local branches whose most recent commit is older than `stale_days` days.
 ///
 /// Excludes `trunk`, the current branch, and any branches already in
