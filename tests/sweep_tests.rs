@@ -216,6 +216,52 @@ fn sweep_json_does_not_list_current_merged_branch() {
 }
 
 #[test]
+fn sweep_classifies_squash_merged_branch() {
+    // A branch whose commits were applied to trunk via `git merge --squash`
+    // (and then committed) is integrated even though its tip is not an ancestor
+    // of trunk. sweep must classify it as merged, not active.
+    let repo = TestRepo::new();
+    repo.run_stax(&["init"]).assert_success();
+
+    repo.run_stax(&["bc", "feature-squashed"]).assert_success();
+    repo.create_file("squashed.txt", "squashed contents");
+    repo.commit("feature work to be squashed");
+
+    // Squash-merge the feature into main, leaving the original branch in place.
+    repo.run_stax(&["t"]).assert_success();
+    let squash = repo.git(&["merge", "--squash", "feature-squashed"]);
+    assert!(
+        squash.status.success(),
+        "git merge --squash failed: {}",
+        TestRepo::stderr(&squash)
+    );
+    let commit = repo.git(&["commit", "-m", "Squash merge feature-squashed"]);
+    assert!(
+        commit.status.success(),
+        "commit of squashed changes failed: {}",
+        TestRepo::stderr(&commit)
+    );
+
+    let out = repo.run_stax(&["sweep", "--json"]);
+    out.assert_success();
+    let stdout = TestRepo::stdout(&out);
+    let parsed: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("sweep --json should output valid JSON: {}\n{}", e, stdout));
+    let branch = parsed["branches"]
+        .as_array()
+        .expect("JSON should have branches array")
+        .iter()
+        .find(|b| b["name"].as_str() == Some("feature-squashed"))
+        .expect("feature-squashed should appear in sweep JSON");
+    assert_eq!(
+        branch["status"].as_str(),
+        Some("merged"),
+        "squash-merged branch should be classified as merged, not active:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn sweep_classifies_untracked_merged_branch() {
     // A branch created with plain git (not stax track) and then merged should
     // still be classified as merged by sweep.
