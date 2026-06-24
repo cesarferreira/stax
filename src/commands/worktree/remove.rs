@@ -8,6 +8,7 @@ use crate::git::GitRepo;
 use anyhow::{bail, Result};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
+use std::io::IsTerminal;
 
 fn effective_remove_force(force: bool, confirmed_dirty_removal: bool) -> bool {
     force || confirmed_dirty_removal
@@ -78,6 +79,11 @@ pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()>
             "Warning:".yellow().bold(),
             worktree.name
         );
+        if !std::io::stdin().is_terminal() {
+            bail!(
+                "`st wt rm` needs confirmation to remove a dirty worktree in non-interactive mode. Re-run with `--force`."
+            );
+        }
         let proceed = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Remove anyway?")
             .default(false)
