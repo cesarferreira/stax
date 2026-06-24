@@ -315,6 +315,13 @@ fn wt_create_without_name_creates_random_lane() {
         slug,
         repo.list_branches()
     );
+    let stdout = TestRepo::stdout(&out);
+    let expected_path = default_worktree_root(&repo, &home).join(&slug);
+    assert!(
+        stdout.contains(expected_path.to_string_lossy().as_ref()),
+        "expected cd hint for generated worktree, got:\n{}",
+        stdout
+    );
 
     let gitignore = fs::read_to_string(repo.path().join(".gitignore")).unwrap_or_default();
     assert!(
