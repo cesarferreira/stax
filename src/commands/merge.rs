@@ -12,7 +12,7 @@ use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::io::Write;
 use std::process::Command;
 use std::time::{Duration, Instant};

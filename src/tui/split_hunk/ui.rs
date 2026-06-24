@@ -1,10 +1,10 @@
 use super::app::{FlatItem, HunkSplitApp, HunkSplitMode};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
-    Frame,
 };
 
 pub fn render(f: &mut Frame, app: &mut HunkSplitApp) {

@@ -1,6 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -953,8 +953,8 @@ fn shell_source_cmd() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        refresh_generated_integration_file, shell_snippet, shell_source_line,
-        update_shell_config_contents, ShellKind, INTEGRATION_MARKER,
+        INTEGRATION_MARKER, ShellKind, refresh_generated_integration_file, shell_snippet,
+        shell_source_line, update_shell_config_contents,
     };
     use std::{fs, io::ErrorKind, path::Path, process::Command};
     use tempfile::tempdir;

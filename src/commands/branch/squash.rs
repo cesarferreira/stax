@@ -2,7 +2,7 @@ use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, Input};
+use dialoguer::{Confirm, Input, theme::ColorfulTheme};
 use std::process::Command;
 
 /// Squash all commits on the current branch into a single commit

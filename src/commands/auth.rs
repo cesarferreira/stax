@@ -1,7 +1,7 @@
 use crate::config::Config;
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Password};
+use dialoguer::{Password, theme::ColorfulTheme};
 
 pub fn run(token: Option<String>, from_gh: bool) -> Result<()> {
     let token = if from_gh {
@@ -20,7 +20,9 @@ pub fn run(token: Option<String>, from_gh: bool) -> Result<()> {
                     "Examples: {} (GitHub), or your GitLab/Gitea instance token settings.",
                     "https://github.com/settings/tokens".cyan()
                 );
-                println!("Use a token with API scopes that allow reading/writing merge requests or pull requests.");
+                println!(
+                    "Use a token with API scopes that allow reading/writing merge requests or pull requests."
+                );
                 println!();
 
                 Password::with_theme(&ColorfulTheme::default())

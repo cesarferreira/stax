@@ -103,7 +103,7 @@ fn branch_count_label(count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_restack_conflict_details, render_stack_position, RestackConflictContext};
+    use super::{RestackConflictContext, render_restack_conflict_details, render_stack_position};
 
     #[test]
     fn renders_progress_completed_branches_and_conflicted_files() {

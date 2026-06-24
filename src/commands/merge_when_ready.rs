@@ -1,7 +1,7 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::commands::merge::{
-    rebase_and_finalize_remaining_branch, sync_head_after_push, update_pr_base_unless_current,
-    PrBaseUpdate,
+    PrBaseUpdate, rebase_and_finalize_remaining_branch, sync_head_after_push,
+    update_pr_base_unless_current,
 };
 use crate::commands::merge_rebase::{
     fetch_remote_for_descendant_rebase, rebase_descendant_onto_remote_trunk_with_provenance,
@@ -17,7 +17,7 @@ use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::io::Write;
 use std::process::Command;
 use std::time::{Duration, Instant};

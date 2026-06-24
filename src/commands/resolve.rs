@@ -1,7 +1,7 @@
 use crate::commands::{continue_cmd, generate};
 use crate::config::Config;
 use crate::git::{GitRepo, RebaseResult};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};

@@ -2,7 +2,7 @@ use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect};
+use dialoguer::{Confirm, FuzzySelect, theme::ColorfulTheme};
 
 pub fn run(branch: Option<String>, force: bool) -> Result<()> {
     let repo = GitRepo::open()?;

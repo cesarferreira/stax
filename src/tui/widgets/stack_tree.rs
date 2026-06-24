@@ -1,11 +1,11 @@
 use crate::commands::stack_palette;
 use crate::tui::app::{App, BranchDisplay, FocusedPane, Mode};
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
-    Frame,
 };
 use std::borrow::Borrow;
 

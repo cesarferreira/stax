@@ -1,11 +1,11 @@
 use crate::commands::ready::{ReadyAction, ReadyReason, ReadyRowState};
 use crate::tui::ready::app::ReadyTuiApp;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
-    Frame,
 };
 
 const INDICATOR_WIDTH: usize = 2;
@@ -587,7 +587,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 mod tests {
     use super::*;
     use crate::commands::ready::ReadyBranch;
-    use ratatui::{backend::TestBackend, Terminal};
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn ready_tui_action_style_uses_expected_colors() {
@@ -640,10 +640,11 @@ mod tests {
 
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
         assert_eq!(line.spans[1].style.fg, Some(Color::DarkGray));
-        assert!(line
-            .spans
-            .iter()
-            .any(|span| span.content.as_ref() == "Enter" && span.style.fg == Some(Color::Cyan)));
+        assert!(
+            line.spans
+                .iter()
+                .any(|span| span.content.as_ref() == "Enter" && span.style.fg == Some(Color::Cyan))
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::git::{refs, GitRepo};
+use crate::git::{GitRepo, refs};
 use anyhow::Result;
 use git2::BranchType;
 

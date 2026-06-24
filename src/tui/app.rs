@@ -1,7 +1,7 @@
 use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
-use crate::ci::{history, CheckRunInfo};
+use crate::ci::{CheckRunInfo, history};
 use crate::config::Config;
-use crate::engine::{build_parent_candidates, Stack};
+use crate::engine::{Stack, build_parent_candidates};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
@@ -1798,20 +1798,20 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
 #[cfg(test)]
 mod tests {
     use super::{
-        live_ci_summary_text, run_in_tokio_runtime, spawn_diff_loader, substring_filter_indices,
         App, BranchCiSummary, BranchDisplay, DiffLineType, DiffRequest, DiffUpdate, FocusedPane,
-        Mode,
+        Mode, live_ci_summary_text, run_in_tokio_runtime, spawn_diff_loader,
+        substring_filter_indices,
     };
     use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
     use crate::engine::Stack;
     use crate::git::GitRepo;
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
     use chrono::{TimeZone, Utc};
     use std::future::Ready;
     use std::process::Command;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
     use std::time::Duration;
     use tempfile::TempDir;

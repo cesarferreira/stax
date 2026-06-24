@@ -1,10 +1,10 @@
-use super::app::{worktree_badges, DashboardMode, TmuxState, WorktreeApp};
+use super::app::{DashboardMode, TmuxState, WorktreeApp, worktree_badges};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
-    Frame,
 };
 
 pub fn render(f: &mut Frame, app: &WorktreeApp) {

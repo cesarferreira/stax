@@ -15,7 +15,7 @@
 //! ```
 
 use super::receipt::{OpKind, OpReceipt, PlanSummary};
-use crate::git::{refs, GitRepo};
+use crate::git::{GitRepo, refs};
 use anyhow::Result;
 use colored::Colorize;
 use std::path::PathBuf;

@@ -3,7 +3,7 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, Input};
+use dialoguer::{Confirm, Input, theme::ColorfulTheme};
 use std::io::IsTerminal;
 use std::process::Command;
 

@@ -160,13 +160,9 @@ pub fn run(
             .and_then(|p| repo.commits_ahead_behind(p, name).ok())
             .unwrap_or((0, 0));
 
-        let pr_state = info.and_then(|b| b.pr_state.clone()).and_then(|s| {
-            if s.trim().is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        });
+        let pr_state = info
+            .and_then(|b| b.pr_state.clone())
+            .and_then(|s| if s.trim().is_empty() { None } else { Some(s) });
 
         let pr_number = info.and_then(|b| b.pr_number);
         let pr_url = pr_number.and_then(|n| remote_info.as_ref().map(|r| r.pr_url(n)));

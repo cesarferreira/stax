@@ -17,7 +17,7 @@ use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{Confirm, theme::ColorfulTheme};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +52,31 @@ enum WaitResult {
     Ready(PrMergeStatus),
     Failed(String),
     Timeout,
+}
+
+/// How the stack-merge confirmation should be resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StackMergeConfirmation {
+    /// `--yes` was provided; proceed without prompting.
+    Approved,
+    /// No `--yes` and non-interactive (quiet or no TTY); refuse with an error.
+    RequireYes,
+    /// No `--yes` but interactive; ask the user to confirm.
+    Prompt,
+}
+
+/// Decide how to confirm a stack merge.
+///
+/// `--quiet` suppresses output but must never imply consent for this
+/// destructive remote operation. The only non-interactive approval is `--yes`.
+fn stack_merge_confirmation(yes: bool, quiet: bool, is_terminal: bool) -> StackMergeConfirmation {
+    if yes {
+        StackMergeConfirmation::Approved
+    } else if quiet || !is_terminal {
+        StackMergeConfirmation::RequireYes
+    } else {
+        StackMergeConfirmation::Prompt
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -169,15 +194,26 @@ pub fn run(
         return Ok(());
     }
 
-    if !yes && !quiet {
-        let confirm = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Proceed with fast-forward stack merge?")
-            .default(false)
-            .interact()?;
+    // `--quiet` only suppresses output; it must not imply consent for this
+    // destructive remote operation. The only non-interactive approval is
+    // `--yes`. Without it, prompt when interactive, otherwise fail clearly.
+    match stack_merge_confirmation(yes, quiet, std::io::stdin().is_terminal()) {
+        StackMergeConfirmation::Approved => {}
+        StackMergeConfirmation::RequireYes => {
+            anyhow::bail!(
+                "`stax merge --stack` needs confirmation in non-interactive mode. Re-run with `--yes`."
+            );
+        }
+        StackMergeConfirmation::Prompt => {
+            let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Proceed with fast-forward stack merge?")
+                .default(false)
+                .interact()?;
 
-        if !confirm {
-            println!("{}", "Aborted.".dimmed());
-            return Ok(());
+            if !confirm {
+                println!("{}", "Aborted.".dimmed());
+                return Ok(());
+            }
         }
     }
 
@@ -955,6 +991,52 @@ mod tests {
     use super::*;
     use crate::engine::stack::StackBranch;
     use std::collections::HashMap;
+
+    #[test]
+    fn stack_merge_confirmation_yes_always_approves() {
+        // `--yes` is the only non-interactive approval; works with/without quiet and TTY.
+        assert_eq!(
+            stack_merge_confirmation(true, false, true),
+            StackMergeConfirmation::Approved
+        );
+        assert_eq!(
+            stack_merge_confirmation(true, true, false),
+            StackMergeConfirmation::Approved
+        );
+        assert_eq!(
+            stack_merge_confirmation(true, true, true),
+            StackMergeConfirmation::Approved
+        );
+    }
+
+    #[test]
+    fn stack_merge_confirmation_quiet_without_yes_requires_yes() {
+        // `--quiet` must not imply consent; without `--yes` it must refuse.
+        assert_eq!(
+            stack_merge_confirmation(false, true, true),
+            StackMergeConfirmation::RequireYes
+        );
+        assert_eq!(
+            stack_merge_confirmation(false, true, false),
+            StackMergeConfirmation::RequireYes
+        );
+    }
+
+    #[test]
+    fn stack_merge_confirmation_non_tty_without_yes_requires_yes() {
+        assert_eq!(
+            stack_merge_confirmation(false, false, false),
+            StackMergeConfirmation::RequireYes
+        );
+    }
+
+    #[test]
+    fn stack_merge_confirmation_interactive_without_yes_prompts() {
+        assert_eq!(
+            stack_merge_confirmation(false, false, true),
+            StackMergeConfirmation::Prompt
+        );
+    }
 
     fn status(ci_status: CiStatus) -> PrMergeStatus {
         PrMergeStatus {

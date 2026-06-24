@@ -26,18 +26,18 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::progress::LiveTimer;
 use crate::remote;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use console::Term;
-use dialoguer::{theme::ColorfulTheme, Input, Select};
+use dialoguer::{Input, Select, theme::ColorfulTheme};
 use serde::Deserialize;
 use std::io::IsTerminal;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Output, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1670,11 +1670,7 @@ fn run_wizard(workdir: &Path, parent_branch: &str) -> Result<(String, Option<Str
             .with_prompt("Commit message (Enter to skip)")
             .allow_empty(true)
             .interact_text()?;
-        if m.is_empty() {
-            None
-        } else {
-            Some(m)
-        }
+        if m.is_empty() { None } else { Some(m) }
     } else {
         None
     };

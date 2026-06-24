@@ -1,5 +1,5 @@
 use crate::engine::BranchMetadata;
-use crate::git::{refs, GitRepo};
+use crate::git::{GitRepo, refs};
 use anyhow::Result;
 use git2::BranchType;
 use std::collections::{HashMap, HashSet};

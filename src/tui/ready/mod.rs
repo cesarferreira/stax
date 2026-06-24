@@ -6,10 +6,10 @@ use app::{ReadyTuiApp, ReadyTuiUpdate};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use futures_util::{stream, StreamExt};
-use ratatui::{backend::CrosstermBackend, Terminal};
+use futures_util::{StreamExt, stream};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use crate::commands::open::open_url_in_browser;
 use crate::commands::ready::{
-    fetch_row_for_branch, load_ready_scope, ReadyScope, ReadyScopeMode, READY_FETCH_CONCURRENCY,
+    READY_FETCH_CONCURRENCY, ReadyScope, ReadyScopeMode, fetch_row_for_branch, load_ready_scope,
 };
 use crate::engine::Stack;
 use crate::forge::ForgeClient;

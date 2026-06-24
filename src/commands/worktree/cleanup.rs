@@ -3,9 +3,9 @@ use super::{
     shared::{compute_worktree_details, worktree_removal_blockers_for_cleanup},
 };
 use crate::git::GitRepo;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::PathBuf;

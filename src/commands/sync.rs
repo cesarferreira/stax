@@ -1,6 +1,6 @@
 use crate::cache::CiCache;
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
-use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
+use crate::commands::restack_conflict::{RestackConflictContext, print_restack_conflict};
 use crate::commands::worktree::{
     remove::remove_worktree_with_hooks,
     shared::{compute_worktree_details, worktree_removal_blockers_for_cleanup},
@@ -18,7 +18,7 @@ use crate::progress::LiveTimer;
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use futures_util::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

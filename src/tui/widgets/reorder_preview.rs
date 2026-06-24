@@ -1,10 +1,10 @@
 use crate::tui::app::{App, ReorderState};
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 
 /// Render the reorder preview panel (replaces diff panel in reorder mode)

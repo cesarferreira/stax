@@ -15,10 +15,10 @@
 //! - `-a/--all` flags on the caller should bypass this module; it only runs
 //!   when the index is empty and `--all` wasn't supplied.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use console::Term;
-use dialoguer::{theme::ColorfulTheme, Select};
+use dialoguer::{Select, theme::ColorfulTheme};
 use std::path::Path;
 use std::process::Command;
 

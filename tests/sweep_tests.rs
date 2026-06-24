@@ -308,25 +308,28 @@ fn sweep_does_not_treat_upstream_gone_with_local_work_as_deletable() {
     let repo = TestRepo::new_with_remote();
     repo.run_stax(&["init"]).assert_success();
 
-    assert!(repo
-        .git(&["checkout", "-b", "gone-with-local-work"])
-        .status
-        .success());
+    assert!(
+        repo.git(&["checkout", "-b", "gone-with-local-work"])
+            .status
+            .success()
+    );
     repo.create_file("pushed.txt", "pushed");
     repo.commit("pushed work");
-    assert!(repo
-        .git(&["push", "-u", "origin", "gone-with-local-work"])
-        .status
-        .success());
+    assert!(
+        repo.git(&["push", "-u", "origin", "gone-with-local-work"])
+            .status
+            .success()
+    );
 
     repo.create_file("local-only.txt", "local only");
     repo.commit("local-only work");
 
     assert!(repo.git(&["checkout", "main"]).status.success());
-    assert!(repo
-        .git(&["push", "origin", "--delete", "gone-with-local-work"])
-        .status
-        .success());
+    assert!(
+        repo.git(&["push", "origin", "--delete", "gone-with-local-work"])
+            .status
+            .success()
+    );
     assert!(repo.git(&["fetch", "--prune", "origin"]).status.success());
 
     let out = repo.run_stax(&["sweep", "--json"]);
@@ -362,20 +365,23 @@ fn sweep_delete_removes_gone_branch_without_unique_work() {
     let repo = TestRepo::new_with_remote();
     repo.run_stax(&["init"]).assert_success();
 
-    assert!(repo
-        .git(&["checkout", "-b", "gone-without-local-work"])
-        .status
-        .success());
-    assert!(repo
-        .git(&["push", "-u", "origin", "gone-without-local-work"])
-        .status
-        .success());
+    assert!(
+        repo.git(&["checkout", "-b", "gone-without-local-work"])
+            .status
+            .success()
+    );
+    assert!(
+        repo.git(&["push", "-u", "origin", "gone-without-local-work"])
+            .status
+            .success()
+    );
 
     assert!(repo.git(&["checkout", "main"]).status.success());
-    assert!(repo
-        .git(&["push", "origin", "--delete", "gone-without-local-work"])
-        .status
-        .success());
+    assert!(
+        repo.git(&["push", "origin", "--delete", "gone-without-local-work"])
+            .status
+            .success()
+    );
     assert!(repo.git(&["fetch", "--prune", "origin"]).status.success());
 
     let out = repo.run_stax(&["sweep", "--json"]);

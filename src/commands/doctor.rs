@@ -2,11 +2,11 @@ use crate::commands::skills;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge;
-use crate::git::{refs, GitRepo};
+use crate::git::{GitRepo, refs};
 use crate::remote::{self, RemoteInfo};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::io::IsTerminal;
 use std::process::Command;
 

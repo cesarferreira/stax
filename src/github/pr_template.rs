@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use dialoguer::{theme::ColorfulTheme, FuzzySelect};
+use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 use std::fs;
 use std::path::Path;
 

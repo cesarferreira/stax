@@ -1,15 +1,15 @@
 use super::shared::{
-    build_launch_spec, create_worktree_for_resolved_branch, default_create_base,
+    LaunchOptions, build_launch_spec, create_worktree_for_resolved_branch, default_create_base,
     derive_unique_worktree_name, emit_shell_payload, ensure_gitignore,
     ensure_managed_worktrees_root, find_worktree, format_create_message, format_go_message,
     generate_random_lane_slug, managed_worktrees_dir, pick_branch_interactively,
-    resolve_branch_name, run_blocking_hook, spawn_background_hook, LaunchOptions,
+    resolve_branch_name, run_blocking_hook, spawn_background_hook,
 };
 use crate::commands::shell_setup;
 use crate::config::Config;
 use crate::git::GitRepo;
 use crate::progress::LiveTimer;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use std::fs;
 

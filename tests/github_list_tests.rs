@@ -138,10 +138,12 @@ async fn test_pr_list_json_output() {
     assert_eq!(items[0]["base_branch"], "main");
     assert_eq!(items[0]["state"], "open");
     assert_eq!(items[0]["is_draft"], false);
-    assert!(items[0]["created_at"]
-        .as_str()
-        .unwrap()
-        .contains("2026-03-15"));
+    assert!(
+        items[0]["created_at"]
+            .as_str()
+            .unwrap()
+            .contains("2026-03-15")
+    );
 }
 
 #[tokio::test]
@@ -221,10 +223,12 @@ async fn test_issue_list_json_output() {
     assert_eq!(items[0]["author"], "cesarferreira");
     assert_eq!(items[0]["labels"][0], "cli");
     assert_eq!(items[0]["labels"][1], "enhancement");
-    assert!(items[0]["updated_at"]
-        .as_str()
-        .unwrap()
-        .contains("2026-03-15"));
+    assert!(
+        items[0]["updated_at"]
+            .as_str()
+            .unwrap()
+            .contains("2026-03-15")
+    );
 }
 
 #[tokio::test]

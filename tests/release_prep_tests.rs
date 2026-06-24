@@ -173,10 +173,14 @@ fn test_prepare_release_hook_mode_writes_released_entry_and_refreshes_links() {
     assert!(changelog.contains("## [Unreleased] - ReleaseDate\n\n## [0.2.0] - 2026-04-21"));
     assert!(changelog.contains("### Added\n- Add release generator (#12)"));
     assert!(changelog.contains("### Fixed\n- Handle empty changelog (#13)"));
-    assert!(changelog
-        .contains("[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.2.0...HEAD"));
-    assert!(changelog
-        .contains("[0.2.0]: https://github.com/cesarferreira/stax/compare/v0.1.0...v0.2.0"));
+    assert!(
+        changelog
+            .contains("[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.2.0...HEAD")
+    );
+    assert!(
+        changelog
+            .contains("[0.2.0]: https://github.com/cesarferreira/stax/compare/v0.1.0...v0.2.0")
+    );
     assert!(!changelog.contains("_placeholder_"));
 }
 

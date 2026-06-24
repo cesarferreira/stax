@@ -3,16 +3,16 @@ use crate::commands::worktree::{go, shared::emit_shell_message};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::git::repo::WorktreeInfo;
-use crate::git::{checkout_branch_in, refs, GitRepo};
+use crate::git::{GitRepo, checkout_branch_in, refs};
 use crate::progress::LiveTimer;
 use crate::remote;
 use anyhow::Result;
 use colored::Colorize;
-use console::{colors_enabled_stderr, measure_text_width, truncate_str, Color, Style};
+use console::{Color, Style, colors_enabled_stderr, measure_text_width, truncate_str};
 use crossterm::terminal;
 use dialoguer::{
-    theme::{ColorfulTheme, Theme},
     FuzzySelect,
+    theme::{ColorfulTheme, Theme},
 };
 use fuzzy_matcher::skim::SkimMatcherV2;
 use std::collections::HashSet;
@@ -86,11 +86,7 @@ impl Theme for CheckoutPickerTheme {
 
 fn checkout_style(spec: CheckoutColor) -> Style {
     let style = Style::new().for_stderr().fg(spec.color);
-    if spec.bright {
-        style.bright()
-    } else {
-        style
-    }
+    if spec.bright { style.bright() } else { style }
 }
 
 fn checkout_lane_color(column: usize) -> CheckoutColor {

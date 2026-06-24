@@ -3,7 +3,7 @@ use crate::git::{GitRepo, RebaseResult};
 use crate::remote;
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, FuzzySelect};
+use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 
 /// Update the parent of a tracked branch
 pub fn run(branch: Option<String>, parent: Option<String>, restack: bool) -> Result<()> {

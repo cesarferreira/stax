@@ -1,6 +1,6 @@
 use crate::engine::Stack;
 use crate::git::GitRepo;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use colored::Colorize;
 use std::collections::HashMap;
 use std::io::Write;
@@ -453,11 +453,7 @@ fn get_branch_tip_message(workdir: &Path, branch: &str) -> Option<String> {
         .and_then(|o| {
             if o.status.success() {
                 let msg = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                if msg.is_empty() {
-                    None
-                } else {
-                    Some(msg)
-                }
+                if msg.is_empty() { None } else { Some(msg) }
             } else {
                 None
             }

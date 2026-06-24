@@ -1,6 +1,6 @@
 use crate::commands::shell_setup;
 use crate::update::{self, InstallMethod};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use std::process::Command;
 

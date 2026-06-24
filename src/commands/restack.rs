@@ -1,4 +1,4 @@
-use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
+use crate::commands::restack_conflict::{RestackConflictContext, print_restack_conflict};
 use crate::config::Config;
 use crate::engine::restack_preflight;
 use crate::engine::{BranchMetadata, Stack};
@@ -9,7 +9,7 @@ use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::Path;

@@ -4,8 +4,8 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::github::pr::{
-    generate_stack_links_markdown, remove_stack_links_from_body, upsert_stack_links_in_body,
-    PrInfoWithHead, StackPrInfo,
+    PrInfoWithHead, StackPrInfo, generate_stack_links_markdown, remove_stack_links_from_body,
+    upsert_stack_links_in_body,
 };
 use crate::github::pr_template::{discover_pr_templates, select_template_interactive};
 use crate::ops::receipt::{OpKind, PlanSummary};
@@ -14,7 +14,7 @@ use crate::progress::LiveTimer;
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Editor, Input, Select};
+use dialoguer::{Editor, Input, Select, theme::ColorfulTheme};
 use futures_util::future::join_all;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -2256,11 +2256,7 @@ fn tip_commit_subject(workdir: &Path, branch: &str) -> Option<String> {
         .filter(|o| o.status.success())
         .and_then(|o| {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
+            if s.is_empty() { None } else { Some(s) }
         })
 }
 
@@ -2749,14 +2745,14 @@ fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
+        AiPrTargets, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS, StackPrInfo,
         build_ai_pr_details_prompt, existing_ai_prompt_items, existing_ai_targets_for_auto_accept,
         parse_ai_pr_details, push_failure_details, rejected_push_branches, resolve_ai_targets,
         resolve_is_draft_without_prompt, stack_link_contexts_for_sync, stack_pr_infos_for_links,
-        truncate_ai_diff, AiPrTargets, StackPrInfo, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX,
-        PR_TYPE_OPTIONS,
+        truncate_ai_diff,
     };
-    use crate::engine::stack::StackBranch;
     use crate::engine::Stack;
+    use crate::engine::stack::StackBranch;
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -3071,14 +3067,16 @@ mod tests {
     #[test]
     fn update_title_conflicts_when_ai_generates_title() {
         let err = resolve_ai_targets(true, false, false, true).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--update-title cannot be combined"));
+        assert!(
+            err.to_string()
+                .contains("--update-title cannot be combined")
+        );
 
         let err = resolve_ai_targets(true, true, false, true).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("--update-title cannot be combined"));
+        assert!(
+            err.to_string()
+                .contains("--update-title cannot be combined")
+        );
 
         assert!(resolve_ai_targets(true, false, true, true).is_ok());
     }

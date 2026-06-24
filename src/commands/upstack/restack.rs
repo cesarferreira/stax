@@ -1,6 +1,6 @@
-use crate::commands::restack_conflict::{print_restack_conflict, RestackConflictContext};
+use crate::commands::restack_conflict::{RestackConflictContext, print_restack_conflict};
 use crate::config::Config;
-use crate::engine::{restack_preflight, BranchMetadata, Stack};
+use crate::engine::{BranchMetadata, Stack, restack_preflight};
 use crate::errors::ConflictStopped;
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};

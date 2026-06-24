@@ -5,7 +5,7 @@ use crate::git::GitRepo;
 use crate::ops::receipt::{OpReceipt, OpStatus};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 
 pub fn run(op_id: Option<String>, yes: bool, no_push: bool, quiet: bool) -> Result<()> {
     let repo = GitRepo::open()?;

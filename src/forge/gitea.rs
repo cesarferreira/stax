@@ -1,13 +1,13 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{
+    AuthStyle, PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity, STACK_COMMENT_MARKER,
     aggregate_ci_overall, build_http_client, ci_status_from_string, delete_empty, get_json,
-    make_issue_comment, mergeable_bool, patch_json, post_json, stack_comment_body, AuthStyle,
-    PrActivity, RepoIssueListItem, RepoPrListItem, ReviewActivity, STACK_COMMENT_MARKER,
+    make_issue_comment, mergeable_bool, patch_json, post_json, stack_comment_body,
 };
 use crate::ci::CheckRunInfo;
 use crate::github::client::OpenPrInfo;
