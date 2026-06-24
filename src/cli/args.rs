@@ -1460,7 +1460,8 @@ pub(crate) enum BranchCommands {
     /// Fold current branch into its parent
     #[command(visible_alias = "f")]
     Fold {
-        /// Keep the branch after folding (don't delete)
+        /// Keep the current branch's name as the surviving ref (delete the
+        /// parent ref instead)
         #[arg(short, long)]
         keep: bool,
         /// Skip confirmation prompt
