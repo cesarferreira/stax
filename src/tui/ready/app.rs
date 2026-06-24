@@ -314,9 +314,10 @@ mod tests {
 
         app.reset_for_refresh();
 
-        assert!(app
-            .rows
-            .iter()
-            .all(|row| matches!(row, ReadyRowState::Loading { .. })));
+        assert!(
+            app.rows
+                .iter()
+                .all(|row| matches!(row, ReadyRowState::Loading { .. }))
+        );
     }
 }

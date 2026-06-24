@@ -377,8 +377,7 @@ fn restack_interactive_stash_propagates_to_target_worktree() {
     // Before the fix, this failed because the interactive stash only cleaned wt_b
     // but didn't enable auto_stash_pop for the rebase layer, so wt_a's dirty state
     // caused: "Cannot restack: worktree has uncommitted changes".
-    let output =
-        common::run_stax_in_script(&wt_b, &["restack", "--all"], "printf 'y\\n'; sleep 2");
+    let output = common::run_stax_in_script(&wt_b, &["restack", "--all"], "printf 'y\\n'; sleep 2");
     assert!(
         output.status.success(),
         "Interactive restack should succeed when target worktree is also dirty.\n\

@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{run_stax_in_script_with_env, TestRepo};
+use common::{TestRepo, run_stax_in_script_with_env};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

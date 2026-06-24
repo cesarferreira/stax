@@ -2,7 +2,7 @@ use crate::commands::generate;
 use crate::config::Config;
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, Select};
+use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use std::fs;
 use std::io::IsTerminal;
 

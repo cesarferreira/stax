@@ -1,5 +1,5 @@
 use crate::cache::CiCache;
-use crate::commands::ci::{fetch_ci_statuses, update_ci_cache, BranchCiStatus};
+use crate::commands::ci::{BranchCiStatus, fetch_ci_statuses, update_ci_cache};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;

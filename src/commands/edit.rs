@@ -2,11 +2,11 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::ops::receipt::OpKind;
 use crate::ops::tx::Transaction;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use colored::Colorize;
 use console::Term;
-use dialoguer::theme::ColorfulTheme;
 use dialoguer::Select;
+use dialoguer::theme::ColorfulTheme;
 use std::io::Write;
 use std::process::Command;
 

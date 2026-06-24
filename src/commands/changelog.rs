@@ -1,9 +1,9 @@
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, FuzzySelect};
-use fuzzy_matcher::skim::SkimMatcherV2;
+use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use regex::Regex;
 use serde::Serialize;
 use std::env;

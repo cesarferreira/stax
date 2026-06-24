@@ -1,6 +1,6 @@
 use crate::commands::github_list::{
-    format_relative_time, print_table, split_flexible_width, terminal_width, CellTone, TableCell,
-    TableColumn, TruncationMode,
+    CellTone, TableCell, TableColumn, TruncationMode, format_relative_time, print_table,
+    split_flexible_width, terminal_width,
 };
 use crate::commands::open::open_url_in_browser;
 use crate::config::Config;
@@ -8,7 +8,7 @@ use crate::engine::Stack;
 use crate::forge::{ForgeClient, RepoPrListItem};
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use std::io::Write;
 use std::process::Command;

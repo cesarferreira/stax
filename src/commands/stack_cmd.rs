@@ -1,6 +1,6 @@
 use crate::commands::worktree::shared::platform_shell;
 use crate::engine::{BranchMetadata, Stack};
-use crate::git::{refs, GitRepo};
+use crate::git::{GitRepo, refs};
 use crate::ops::receipt::OpKind;
 use crate::ops::tx::Transaction;
 use anyhow::Result;

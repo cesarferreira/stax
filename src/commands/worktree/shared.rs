@@ -1,12 +1,12 @@
 use crate::commands::generate;
 use crate::config::Config;
 use crate::engine::BranchMetadata;
-use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
-use anyhow::{bail, Context, Result};
+use crate::git::repo::WorktreeInfo;
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, FuzzySelect};
-use serde_json::{json, Value};
+use dialoguer::{FuzzySelect, theme::ColorfulTheme};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1277,10 +1277,10 @@ fn parse_tmux_sessions_output(output: &str) -> Result<Vec<TmuxSession>> {
 #[cfg(test)]
 mod tests {
     use super::{
+        ExistingTmuxSessionBehavior, LaunchOptions, LaunchSpec, WorktreeDetails,
         build_agent_launch_spec_with_options, build_launch_spec, build_tmux_launch_spec,
         default_tmux_session_name, is_tmux_no_server_error, parse_tmux_sessions_output,
-        worktree_removal_blockers_for_cleanup, yolo_flag_for_agent, ExistingTmuxSessionBehavior,
-        LaunchOptions, LaunchSpec, WorktreeDetails,
+        worktree_removal_blockers_for_cleanup, yolo_flag_for_agent,
     };
     use crate::config::Config;
     use crate::git::repo::WorktreeInfo;

@@ -1,6 +1,6 @@
 use crate::commands::github_list::{
-    format_relative_time, print_table, split_flexible_width, terminal_width, CellTone, TableCell,
-    TableColumn, TruncationMode,
+    CellTone, TableCell, TableColumn, TruncationMode, format_relative_time, print_table,
+    split_flexible_width, terminal_width,
 };
 use crate::config::Config;
 use crate::forge::{ForgeClient, RepoIssueListItem};

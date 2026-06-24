@@ -4510,11 +4510,10 @@ fn test_sync_restack_creates_receipt() {
         // May not have a receipt if nothing needed restacking
         if !ops.is_empty() {
             // At least verify the ops directory structure
-            assert!(ops.iter().all(|op| op
-                .path()
-                .extension()
-                .map(|e| e == "json")
-                .unwrap_or(false)));
+            assert!(
+                ops.iter()
+                    .all(|op| op.path().extension().map(|e| e == "json").unwrap_or(false))
+            );
         }
     }
 }
@@ -5378,9 +5377,10 @@ fn test_sync_detects_merged_branch_when_local_trunk_diverged() {
 
     // Go back to feature branch; sync will run non-trunk update path
     repo.run_stax(&["checkout", &branch_name]);
-    assert!(repo
-        .current_branch()
-        .contains("feature-merged-diverged-trunk"));
+    assert!(
+        repo.current_branch()
+            .contains("feature-merged-diverged-trunk")
+    );
 
     let output = repo.run_stax(&["sync", "--force"]);
     assert!(
@@ -5905,7 +5905,10 @@ fn test_merge_full_requires_stack() {
     let output = repo.run_stax(&["merge", "--full"]);
     let stderr = TestRepo::stderr(&output);
 
-    assert!(!output.status.success(), "Expected --full to require --stack");
+    assert!(
+        !output.status.success(),
+        "Expected --full to require --stack"
+    );
     assert!(
         stderr.contains("required") || stderr.contains("requires"),
         "Expected clap requires error, got: {}",
@@ -6935,14 +6938,7 @@ mod forge_mock_tests {
 
     async fn mount_github_review_status(mock_server: &MockServer, number: u64, decision: &str) {
         let head_sha = format!("sha-{}", number);
-        mount_github_merge_status_with_head(
-            mock_server,
-            number,
-            "OPEN",
-            decision,
-            &head_sha,
-        )
-        .await;
+        mount_github_merge_status_with_head(mock_server, number, "OPEN", decision, &head_sha).await;
     }
 
     async fn mount_github_merge_status(
@@ -6952,14 +6948,7 @@ mod forge_mock_tests {
         decision: &str,
     ) {
         let head_sha = format!("sha-{}", number);
-        mount_github_merge_status_with_head(
-            mock_server,
-            number,
-            state,
-            decision,
-            &head_sha,
-        )
-        .await;
+        mount_github_merge_status_with_head(mock_server, number, state, decision, &head_sha).await;
     }
 
     async fn mount_github_merge_status_with_head(
@@ -8871,10 +8860,12 @@ mod forge_mock_tests {
         }));
         let body_patch = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_patch.body).unwrap();
-        assert!(payload["body"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- stax-stack-links:start -->"));
+        assert!(
+            payload["body"]
+                .as_str()
+                .unwrap()
+                .contains("<!-- stax-stack-links:start -->")
+        );
     }
 
     #[tokio::test]
@@ -10018,30 +10009,30 @@ mod forge_mock_tests {
         Mock::given(method("GET"))
             .and(path("/repos/test/repo/pulls/602"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(github_pull_fixture(602, &branch_b, &branch_a, &branch_b_sha)),
+                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
+                    602,
+                    &branch_b,
+                    &branch_a,
+                    &branch_b_sha,
+                )),
             )
             .mount(&mock_server)
             .await;
 
         mount_github_merge_status_with_head(&mock_server, 601, "OPEN", "APPROVED", "sha-a").await;
-        mount_github_merge_status_with_head(
-            &mock_server,
-            602,
-            "OPEN",
-            "APPROVED",
-            &branch_b_sha,
-        )
-        .await;
+        mount_github_merge_status_with_head(&mock_server, 602, "OPEN", "APPROVED", &branch_b_sha)
+            .await;
 
         Mock::given(method("PATCH"))
             .and(path("/repos/test/repo/pulls/602"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(github_pull_fixture(
-                602,
-                &branch_b,
-                "main",
-                &branch_b_sha,
-            )))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
+                    602,
+                    &branch_b,
+                    "main",
+                    &branch_b_sha,
+                )),
+            )
             .mount(&mock_server)
             .await;
 
@@ -10066,9 +10057,10 @@ mod forge_mock_tests {
 
         Mock::given(method("PATCH"))
             .and(path("/repos/test/repo/pulls/601"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(github_pull_fixture(
-                601, &branch_a, "main", "sha-a",
-            )))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(601, &branch_a, "main", "sha-a")),
+            )
             .mount(&mock_server)
             .await;
 
@@ -10194,8 +10186,12 @@ mod forge_mock_tests {
         Mock::given(method("GET"))
             .and(path("/repos/test/repo/pulls/612"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(github_pull_fixture(612, &branch_b, &branch_a, &branch_b_sha)),
+                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
+                    612,
+                    &branch_b,
+                    &branch_a,
+                    &branch_b_sha,
+                )),
             )
             .mount(&mock_server)
             .await;
@@ -10203,30 +10199,30 @@ mod forge_mock_tests {
         Mock::given(method("GET"))
             .and(path("/repos/test/repo/pulls/613"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(github_pull_fixture(613, &branch_c, &branch_b, &branch_c_sha)),
+                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
+                    613,
+                    &branch_c,
+                    &branch_b,
+                    &branch_c_sha,
+                )),
             )
             .mount(&mock_server)
             .await;
 
         mount_github_merge_status_with_head(&mock_server, 611, "OPEN", "APPROVED", "sha-a").await;
-        mount_github_merge_status_with_head(
-            &mock_server,
-            612,
-            "OPEN",
-            "APPROVED",
-            &branch_b_sha,
-        )
-        .await;
+        mount_github_merge_status_with_head(&mock_server, 612, "OPEN", "APPROVED", &branch_b_sha)
+            .await;
 
         Mock::given(method("PATCH"))
             .and(path("/repos/test/repo/pulls/612"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(github_pull_fixture(
-                612,
-                &branch_b,
-                "main",
-                &branch_b_sha,
-            )))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
+                    612,
+                    &branch_b,
+                    "main",
+                    &branch_b_sha,
+                )),
+            )
             .mount(&mock_server)
             .await;
 
@@ -10251,17 +10247,23 @@ mod forge_mock_tests {
 
         Mock::given(method("PATCH"))
             .and(path("/repos/test/repo/pulls/611"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(github_pull_fixture(
-                611, &branch_a, "main", "sha-a",
-            )))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(611, &branch_a, "main", "sha-a")),
+            )
             .mount(&mock_server)
             .await;
 
         Mock::given(method("PATCH"))
             .and(path("/repos/test/repo/pulls/613"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(github_pull_fixture(
-                613, &branch_c, "main", &branch_c_sha,
-            )))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
+                    613,
+                    &branch_c,
+                    "main",
+                    &branch_c_sha,
+                )),
+            )
             .mount(&mock_server)
             .await;
 
@@ -10324,8 +10326,8 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_when_ready_already_merged_pr_still_rebases_next_branch_and_reparents_metadata(
-    ) {
+    async fn test_merge_when_ready_already_merged_pr_still_rebases_next_branch_and_reparents_metadata()
+     {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let home = super::test_tempdir();
@@ -11326,10 +11328,12 @@ mod forge_mock_tests {
             })
             .expect("missing GitLab stack note request");
         let payload: serde_json::Value = serde_json::from_slice(&note_request.body).unwrap();
-        assert!(payload["body"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- stax-stack-comment -->"));
+        assert!(
+            payload["body"]
+                .as_str()
+                .unwrap()
+                .contains("<!-- stax-stack-comment -->")
+        );
     }
 
     #[tokio::test]
@@ -11441,10 +11445,12 @@ mod forge_mock_tests {
             })
             .expect("missing GitLab body update request");
         let payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
-        assert!(payload["description"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- stax-stack-links:start -->"));
+        assert!(
+            payload["description"]
+                .as_str()
+                .unwrap()
+                .contains("<!-- stax-stack-links:start -->")
+        );
     }
 
     #[tokio::test]
@@ -11546,10 +11552,12 @@ mod forge_mock_tests {
             })
             .expect("missing GitLab note update request");
         let note_payload: serde_json::Value = serde_json::from_slice(&note_update.body).unwrap();
-        assert!(note_payload["body"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- stax-stack-comment -->"));
+        assert!(
+            note_payload["body"]
+                .as_str()
+                .unwrap()
+                .contains("<!-- stax-stack-comment -->")
+        );
 
         let body_update = find_body_update(
             &requests,
@@ -11558,10 +11566,12 @@ mod forge_mock_tests {
             "description",
         );
         let body_payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
-        assert!(body_payload["description"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- stax-stack-links:start -->"));
+        assert!(
+            body_payload["description"]
+                .as_str()
+                .unwrap()
+                .contains("<!-- stax-stack-links:start -->")
+        );
     }
 
     #[tokio::test]
@@ -12142,10 +12152,12 @@ mod forge_mock_tests {
             })
             .expect("missing Gitea issue comment request");
         let payload: serde_json::Value = serde_json::from_slice(&comment_request.body).unwrap();
-        assert!(payload["body"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- stax-stack-comment -->"));
+        assert!(
+            payload["body"]
+                .as_str()
+                .unwrap()
+                .contains("<!-- stax-stack-comment -->")
+        );
     }
 
     #[tokio::test]
@@ -12247,10 +12259,12 @@ mod forge_mock_tests {
         let requests = mock_server.received_requests().await.unwrap();
         let body_update = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
-        assert!(payload["body"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- stax-stack-links:start -->"));
+        assert!(
+            payload["body"]
+                .as_str()
+                .unwrap()
+                .contains("<!-- stax-stack-links:start -->")
+        );
     }
 
     #[tokio::test]
@@ -12352,17 +12366,21 @@ mod forge_mock_tests {
             .expect("missing Gitea issue comment update request");
         let comment_payload: serde_json::Value =
             serde_json::from_slice(&comment_update.body).unwrap();
-        assert!(comment_payload["body"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- stax-stack-comment -->"));
+        assert!(
+            comment_payload["body"]
+                .as_str()
+                .unwrap()
+                .contains("<!-- stax-stack-comment -->")
+        );
 
         let body_update = find_body_patch(&requests, "/repos/test/repo/pulls/42");
         let body_payload: serde_json::Value = serde_json::from_slice(&body_update.body).unwrap();
-        assert!(body_payload["body"]
-            .as_str()
-            .unwrap()
-            .contains("<!-- stax-stack-links:start -->"));
+        assert!(
+            body_payload["body"]
+                .as_str()
+                .unwrap()
+                .contains("<!-- stax-stack-links:start -->")
+        );
     }
 
     #[tokio::test]

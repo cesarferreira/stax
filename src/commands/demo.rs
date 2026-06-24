@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use colored::Colorize;
 use console;
-use dialoguer::theme::ColorfulTheme;
 use dialoguer::Select;
+use dialoguer::theme::ColorfulTheme;
 use std::fs;
 use std::path::Path;
 use std::process::Command;

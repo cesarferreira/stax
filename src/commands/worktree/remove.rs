@@ -3,9 +3,9 @@ use super::shared::{
 };
 use crate::config::Config;
 use crate::engine::BranchMetadata;
-use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
-use anyhow::{bail, Result};
+use crate::git::repo::WorktreeInfo;
+use anyhow::{Result, bail};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use std::io::IsTerminal;

@@ -1,14 +1,14 @@
 use crate::config::Config;
 use crate::engine::branch_detect::{
-    find_merged_branches_all, find_stale_branches, find_upstream_gone_branches, MergeType,
-    MergedBranchInfo, StaleBranchInfo,
+    MergeType, MergedBranchInfo, StaleBranchInfo, find_merged_branches_all, find_stale_branches,
+    find_upstream_gone_branches,
 };
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::remote;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::process::Command;
@@ -45,11 +45,7 @@ pub fn run(
     // 2. Upstream-gone
     let gone_branches = find_upstream_gone_branches(&workdir, &trunk)?;
     let gone_branch_set: HashSet<String> = gone_branches.iter().cloned().collect();
-    let remote_heads = if stack
-        .branches
-        .values()
-        .any(|info| info.pr_number.is_some())
-    {
+    let remote_heads = if stack.branches.values().any(|info| info.pr_number.is_some()) {
         remote::ls_remote_heads(&workdir, &remote_name).ok()
     } else {
         None

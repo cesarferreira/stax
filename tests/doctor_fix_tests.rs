@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{run_stax_in_script_with_env, TestRepo};
+use common::{TestRepo, run_stax_in_script_with_env};
 
 #[test]
 fn doctor_fix_applies_git_config_repairs_after_single_confirmation() {

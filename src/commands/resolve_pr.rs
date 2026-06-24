@@ -1,6 +1,6 @@
 use crate::config::Config;
-use crate::engine::metadata::BranchMetadata;
 use crate::engine::Stack;
+use crate::engine::metadata::BranchMetadata;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;

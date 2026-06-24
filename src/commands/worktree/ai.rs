@@ -1,19 +1,20 @@
 use super::shared::{
-    build_agent_launch_spec_with_options, build_tmux_launch_spec, compute_worktree_details,
-    create_worktree_for_resolved_branch, default_create_base, default_tmux_session_name,
-    derive_unique_worktree_name, emit_shell_message, emit_shell_payload, ensure_gitignore,
-    ensure_managed_worktrees_root, find_worktree, format_create_message, format_go_message,
-    list_tmux_sessions, managed_worktrees_dir, resolve_branch_name, run_blocking_hook,
-    spawn_background_hook, status_labels, ExistingTmuxSessionBehavior, LaunchSpec, TmuxSession,
+    ExistingTmuxSessionBehavior, LaunchSpec, TmuxSession, build_agent_launch_spec_with_options,
+    build_tmux_launch_spec, compute_worktree_details, create_worktree_for_resolved_branch,
+    default_create_base, default_tmux_session_name, derive_unique_worktree_name,
+    emit_shell_message, emit_shell_payload, ensure_gitignore, ensure_managed_worktrees_root,
+    find_worktree, format_create_message, format_go_message, list_tmux_sessions,
+    managed_worktrees_dir, resolve_branch_name, run_blocking_hook, spawn_background_hook,
+    status_labels,
 };
 use crate::commands::generate;
 use crate::config::Config;
-use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
-use anyhow::{bail, Context, Result};
+use crate::git::repo::WorktreeInfo;
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use console::{Color, Style, Term};
-use dialoguer::{theme::ColorfulTheme, FuzzySelect, Input};
+use dialoguer::{FuzzySelect, Input, theme::ColorfulTheme};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs;
@@ -603,8 +604,8 @@ fn render_stderr<T: Display>(value: T, style: Style) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_lane_picker_item, has_lane_picker_terminal, lane_picker_prompt, lane_tmux_label,
-        prepare_ai_launch_with_tmux_probe, AiLaneRequest,
+        AiLaneRequest, format_lane_picker_item, has_lane_picker_terminal, lane_picker_prompt,
+        lane_tmux_label, prepare_ai_launch_with_tmux_probe,
     };
     use crate::commands::worktree::shared::LaunchSpec;
     use crate::config::Config;

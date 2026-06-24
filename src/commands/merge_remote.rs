@@ -3,7 +3,7 @@
 //! Dependent PR branches are updated via GitHub's "Update branch" endpoint (`PUT .../update-branch`).
 
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
-use crate::commands::merge::{update_pr_base_unless_current, PrBaseUpdate};
+use crate::commands::merge::{PrBaseUpdate, update_pr_base_unless_current};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
@@ -13,7 +13,7 @@ use crate::progress::LiveTimer;
 use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::io::Write;
 use std::process::Command;
 use std::time::{Duration, Instant};

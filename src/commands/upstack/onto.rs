@@ -1,9 +1,9 @@
-use crate::engine::{build_parent_candidates, BranchMetadata, Stack};
+use crate::engine::{BranchMetadata, Stack, build_parent_candidates};
 use crate::git::{GitRepo, RebaseResult};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use colored::Colorize;
-use dialoguer::theme::ColorfulTheme;
 use dialoguer::FuzzySelect;
+use dialoguer::theme::ColorfulTheme;
 use std::collections::HashSet;
 
 /// Reparent the current branch AND all its descendants onto a new parent.

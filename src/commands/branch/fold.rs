@@ -20,9 +20,9 @@ use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::OpKind;
 use crate::ops::tx::Transaction;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 
 pub fn run(keep_branch: bool, skip_confirm: bool) -> Result<()> {
     let repo = GitRepo::open()?;

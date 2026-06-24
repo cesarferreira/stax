@@ -5,7 +5,7 @@
 //! polls until all PRs are merged.  Finishes with auto-sync and a desktop
 //! notification — the same "land and walk away" experience as Graphite.
 
-use crate::commands::merge::{update_pr_base_unless_current, PrBaseUpdate};
+use crate::commands::merge::{PrBaseUpdate, update_pr_base_unless_current};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
@@ -14,7 +14,7 @@ use crate::progress::LiveTimer;
 use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::process::Command;
 use std::time::{Duration, Instant};
 

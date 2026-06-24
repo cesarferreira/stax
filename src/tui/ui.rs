@@ -1,11 +1,11 @@
 use crate::tui::app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
 use crate::tui::widgets::{render_details, render_diff, render_reorder_preview, render_stack_tree};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
-    Frame,
 };
 use std::collections::HashMap;
 

@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, FuzzySelect};
+use dialoguer::{Confirm, FuzzySelect, theme::ColorfulTheme};
 use std::io::IsTerminal;
 
 /// Run initialization if needed, returns true if initialized (or already was)

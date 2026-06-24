@@ -15,10 +15,7 @@ use common::{OutputAssertions, TestRepo};
 
 fn select_menu_option(index: usize) -> String {
     let downs = "\\033[B".repeat(index);
-    format!(
-        "{}; printf '{}\\r'",
-        common::TUI_SCRIPT_LEAD_DELAY, downs
-    )
+    format!("{}; printf '{}\\r'", common::TUI_SCRIPT_LEAD_DELAY, downs)
 }
 
 fn select_patch_and_stage_first_hunk() -> String {

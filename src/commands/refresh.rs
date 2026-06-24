@@ -1,6 +1,6 @@
 use crate::commands;
 use crate::engine::Stack;
-use crate::git::{local_branch_exists_in, GitRepo};
+use crate::git::{GitRepo, local_branch_exists_in};
 use anyhow::Result;
 use colored::Colorize;
 

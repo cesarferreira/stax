@@ -1,11 +1,11 @@
 use crate::commands::worktree::remove::remove_worktree_with_hooks;
 use crate::commands::worktree::shared::{
-    compute_worktree_details, default_tmux_session_name, find_worktree, list_tmux_sessions,
-    status_labels, TmuxSession, WorktreeDetails,
+    TmuxSession, WorktreeDetails, compute_worktree_details, default_tmux_session_name,
+    find_worktree, list_tmux_sessions, status_labels,
 };
 use crate::config::Config;
-use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
+use crate::git::repo::WorktreeInfo;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -714,7 +714,7 @@ pub fn worktree_badges(record: &WorktreeRecord) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_selection, worktree_badges, PendingCommand, TmuxState, WorktreeRecord};
+    use super::{PendingCommand, TmuxState, WorktreeRecord, default_selection, worktree_badges};
     use crate::git::repo::WorktreeInfo;
     use std::path::PathBuf;
 

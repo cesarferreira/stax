@@ -5,7 +5,7 @@ use crate::forge::{ForgeClient, PrActivity, ReviewActivity};
 use crate::git::GitRepo;
 use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use regex::Regex;
@@ -1386,7 +1386,9 @@ mod tests {
         assert!(prompt.contains("Yesterday:"));
         assert!(prompt.contains("Today:"));
         assert!(prompt.contains("•"));
-        assert!(prompt.contains("Do not include a name, timestamp, avatar, reactions, or preamble"));
+        assert!(
+            prompt.contains("Do not include a name, timestamp, avatar, reactions, or preamble")
+        );
         assert!(!prompt.contains("Do NOT list items"));
     }
 

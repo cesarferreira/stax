@@ -8,7 +8,7 @@ mod widgets;
 pub mod worktree;
 
 use app::{App, ConfirmAction, FocusedPane, InputAction, Mode, PendingCommand};
-use event::{poll_event, KeyAction, KeyContext};
+use event::{KeyAction, KeyContext, poll_event};
 
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
@@ -19,9 +19,9 @@ use anyhow::{Context, Result};
 use crossterm::{
     event::{Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::io::Write;
 use std::process::{Command, Stdio};

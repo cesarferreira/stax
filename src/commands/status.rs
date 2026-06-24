@@ -216,13 +216,9 @@ pub fn run(
             .unwrap_or((0, 0));
         let (lines_added, lines_deleted) = line_diff_stats.get(idx).copied().unwrap_or((0, 0));
 
-        let pr_state = info.and_then(|b| b.pr_state.clone()).and_then(|s| {
-            if s.trim().is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        });
+        let pr_state = info
+            .and_then(|b| b.pr_state.clone())
+            .and_then(|s| if s.trim().is_empty() { None } else { Some(s) });
 
         let pr_number = info.and_then(|b| b.pr_number);
         let pr_url = pr_number.and_then(|n| remote_info.as_ref().map(|r| r.pr_url(n)));
@@ -436,7 +432,7 @@ pub fn run(
 
     let mut trunk_info = String::new();
     trunk_info.push(' '); // Space after tree (same as branches)
-                          // Show cloud icon or space for alignment
+    // Show cloud icon or space for alignment
     if remote_branches.contains(&stack.trunk) {
         trunk_info.push_str(&format!("{} ", "☁️".bright_blue()));
     } else {

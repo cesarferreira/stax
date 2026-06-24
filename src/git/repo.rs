@@ -784,8 +784,7 @@ impl GitRepo {
         let hint = if let Some(remove_cmd) = resolution.remove_worktree_cmd() {
             format!(
                 "run {} to remove the linked worktree; or run {} to keep the worktree and free the branch",
-                remove_cmd,
-                switch_cmd
+                remove_cmd, switch_cmd
             )
         } else {
             format!(

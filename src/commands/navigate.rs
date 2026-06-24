@@ -1,8 +1,8 @@
 use crate::engine::Stack;
-use crate::git::{checkout_branch_in, local_branch_exists_in, refs, GitRepo};
-use anyhow::{bail, Result};
+use crate::git::{GitRepo, checkout_branch_in, local_branch_exists_in, refs};
+use anyhow::{Result, bail};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, FuzzySelect};
+use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 
 /// Move up the stack (to child branches)
 /// If count > 1, moves up multiple branches

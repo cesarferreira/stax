@@ -1,12 +1,12 @@
 use super::shared::{
-    build_launch_spec, emit_shell_payload, find_worktree, format_go_message,
-    pick_worktree_interactively, run_blocking_hook, spawn_background_hook, LaunchOptions,
+    LaunchOptions, build_launch_spec, emit_shell_payload, find_worktree, format_go_message,
+    pick_worktree_interactively, run_blocking_hook, spawn_background_hook,
 };
 use crate::commands::shell_setup;
 use crate::config::Config;
-use crate::git::repo::WorktreeInfo;
 use crate::git::GitRepo;
-use anyhow::{bail, Result};
+use crate::git::repo::WorktreeInfo;
+use anyhow::{Result, bail};
 use colored::Colorize;
 
 pub fn run_path(name: &str) -> Result<()> {

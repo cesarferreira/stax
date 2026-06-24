@@ -5,7 +5,7 @@ use crate::git::GitRepo;
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, FuzzySelect};
+use dialoguer::{FuzzySelect, theme::ColorfulTheme};
 use std::process::Command;
 
 pub fn run(parent: Option<String>, all_prs: bool) -> Result<()> {

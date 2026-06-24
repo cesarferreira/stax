@@ -3,8 +3,8 @@ use crate::cli::args::{
     WorktreeCommands,
 };
 use crate::cli::interactive::{
-    check_interactive_terminal_with_probe, detect_interactive_stdio, has_interactive_terminal,
-    InteractiveTerminalCheck,
+    InteractiveTerminalCheck, check_interactive_terminal_with_probe, detect_interactive_stdio,
+    has_interactive_terminal,
 };
 use clap::Parser;
 use std::cell::Cell;
