@@ -240,7 +240,8 @@ stax rs --restack                  # Sync then restack
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts
-stax sync --prune                  # Prune stale remotes
+stax sync --prune                  # No-op: kept for CLI compatibility (use --full to fetch --prune all remote-tracking refs)
+stax sync --full                   # Fetch all remote branches with --prune (slower; default is trunk-only fetch + ls-remote)
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
 # sync cleanup may delete merged/gone imported support branches locally, but never push-deletes their remotes.
