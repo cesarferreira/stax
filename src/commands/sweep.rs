@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::engine::branch_detect::{
     MergeType, MergedBranchInfo, StaleBranchInfo, find_merged_branches_all, find_stale_branches,
-    find_upstream_gone_branches,
+    find_upstream_gone_branches, has_unique_commits_since_any_base,
 };
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
@@ -485,33 +485,6 @@ fn format_age(days: u64) -> String {
         let years = days / 365;
         format!("({} year{})", years, if years == 1 { "" } else { "s" })
     }
-}
-
-fn has_unique_commits_since_any_base(
-    workdir: &std::path::Path,
-    branch: &str,
-    bases: &[&str],
-) -> Result<bool> {
-    for base in bases {
-        let range = format!("{}..{}", base, branch);
-        let output = Command::new("git")
-            .args(["rev-list", "--count", &range])
-            .current_dir(workdir)
-            .output()
-            .with_context(|| format!("Failed to count unique commits for '{}'", branch))?;
-
-        if !output.status.success() {
-            continue;
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let unique_count = stdout.trim().parse::<u64>().unwrap_or(u64::MAX);
-        if unique_count == 0 {
-            return Ok(false);
-        }
-    }
-
-    Ok(true)
 }
 
 /// Reparent stax-tracked children of `branch` to trunk before deleting it.
