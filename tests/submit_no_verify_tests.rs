@@ -6,46 +6,6 @@ mod unix {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
-    fn configure_submit_remote(repo: &TestRepo) {
-        let remote_path = repo
-            .remote_path()
-            .expect("Expected remote path for repository with origin");
-        let remote_path_str = remote_path.to_string_lossy().to_string();
-
-        let out = repo.git(&[
-            "remote",
-            "set-url",
-            "origin",
-            "https://github.com/test-owner/test-repo.git",
-        ]);
-        assert!(
-            out.status.success(),
-            "set-url failed: {}",
-            TestRepo::stderr(&out)
-        );
-
-        let out = repo.git(&["remote", "set-url", "--push", "origin", &remote_path_str]);
-        assert!(
-            out.status.success(),
-            "set-url --push failed: {}",
-            TestRepo::stderr(&out)
-        );
-
-        let file_url = format!("file://{}", remote_path_str);
-        let instead_of_key = format!("url.{}.insteadOf", file_url.trim_end_matches('/'));
-        let out = repo.git(&[
-            "config",
-            "--local",
-            &instead_of_key,
-            "https://github.com/test-owner/test-repo.git",
-        ]);
-        assert!(
-            out.status.success(),
-            "insteadOf config failed: {}",
-            TestRepo::stderr(&out)
-        );
-    }
-
     fn install_failing_pre_push_hook(repo: &TestRepo) {
         let hook = repo.path().join(".git/hooks/pre-push");
         fs::write(
@@ -58,7 +18,7 @@ mod unix {
 
     fn repo_with_failing_pre_push_hook(branch_name: &str) -> (TestRepo, String) {
         let repo = TestRepo::new_with_remote();
-        configure_submit_remote(&repo);
+        repo.configure_github_like_submit_remote();
 
         repo.run_stax(&["bc", branch_name]).assert_success();
         repo.create_file(
