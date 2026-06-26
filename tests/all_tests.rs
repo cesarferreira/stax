@@ -36,6 +36,8 @@ mod comprehensive_coverage_tests;
 mod conflict_handling_tests;
 #[path = "continue_tests.rs"]
 mod continue_tests;
+#[path = "copy_tests.rs"]
+mod copy_tests;
 #[path = "create_ai_tests.rs"]
 mod create_ai_tests;
 #[path = "create_below_tests.rs"]
