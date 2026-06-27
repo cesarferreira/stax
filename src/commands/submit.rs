@@ -19,7 +19,7 @@ use futures_util::future::join_all;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -74,6 +74,9 @@ pub struct SubmitOptions {
 struct PrPlan {
     branch: String,
     parent: String,
+    publish_ref: String,
+    publish_oid: Option<String>,
+    uses_temporary_publish_ref: bool,
     existing_pr: Option<u64>,
     existing_pr_is_draft: Option<bool>,
     /// Tip commit subject line (for auto-updating PR title)
@@ -100,6 +103,92 @@ struct ExistingPrLookup {
     branch: String,
     existing_pr: Option<PrInfoWithHead>,
     needs_full_scan_fallback: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PublishSource {
+    source_ref: String,
+    oid: Option<String>,
+    is_temporary: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PushSpec {
+    branch: String,
+    source_ref: String,
+    oid: Option<String>,
+}
+
+struct TemporaryPublishRefs {
+    workdir: PathBuf,
+    refs: Vec<String>,
+}
+
+impl TemporaryPublishRefs {
+    fn empty(workdir: &Path) -> Self {
+        Self {
+            workdir: workdir.to_path_buf(),
+            refs: Vec::new(),
+        }
+    }
+}
+
+impl Drop for TemporaryPublishRefs {
+    fn drop(&mut self) {
+        for refname in &self.refs {
+            let _ = Command::new("git")
+                .args(["update-ref", "-d", refname])
+                .current_dir(&self.workdir)
+                .output();
+        }
+    }
+}
+
+struct TemporarySubmitWorktree {
+    workdir: PathBuf,
+    path: PathBuf,
+    active: bool,
+}
+
+impl TemporarySubmitWorktree {
+    fn new(workdir: &Path, path: &Path) -> Self {
+        Self {
+            workdir: workdir.to_path_buf(),
+            path: path.to_path_buf(),
+            active: true,
+        }
+    }
+
+    fn remove(&mut self) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+
+        let remove = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&self.path)
+            .current_dir(&self.workdir)
+            .output()
+            .context("Failed to remove temporary submit worktree")?;
+        if !remove.status.success() {
+            anyhow::bail!("{}", command_output_details("git worktree remove", &remove));
+        }
+
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for TemporarySubmitWorktree {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = Command::new("git")
+                .args(["worktree", "remove", "--force"])
+                .arg(&self.path)
+                .current_dir(&self.workdir)
+                .output();
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -529,6 +618,9 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         )?;
     }
 
+    let (publish_sources, _temporary_publish_refs) =
+        prepare_publish_sources_for_submit(&repo, &stack, scope, &branches_to_submit, quiet)?;
+
     // Build plan - determine which PRs need create vs update
     let planning_timer = LiveTimer::maybe_new(!quiet, "Planning PR operations...");
     let planning_started_at = Instant::now();
@@ -551,8 +643,17 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 .context(format!("No metadata for branch {}", branch))?;
             let is_empty = empty_set.contains(branch);
             let is_imported = is_imported_branch(&meta);
-            let needs_push =
-                !is_imported && branch_needs_push(repo.workdir()?, &remote_info.name, branch);
+            let publish_source = publish_sources
+                .get(branch)
+                .cloned()
+                .unwrap_or_else(|| default_publish_source(repo.workdir().ok(), branch));
+            let needs_push = !is_imported
+                && ref_needs_push(
+                    repo.workdir()?,
+                    &remote_info.name,
+                    branch,
+                    &publish_source.source_ref,
+                );
             let mut existing_pr = None;
             let had_metadata_pr = meta.pr_info.as_ref().filter(|p| p.number > 0).is_some();
 
@@ -642,6 +743,9 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             plans.push(PrPlan {
                 branch: branch.clone(),
                 parent: meta.parent_branch_name,
+                publish_ref: publish_source.source_ref,
+                publish_oid: publish_source.oid,
+                uses_temporary_publish_ref: publish_source.is_temporary,
                 existing_pr,
                 existing_pr_is_draft: None,
                 tip_commit_subject: None,
@@ -737,6 +841,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
 
             let is_empty = empty_set.contains(branch);
             let is_imported = is_imported_branch(&meta);
+            let publish_source = publish_sources
+                .get(branch)
+                .cloned()
+                .unwrap_or_else(|| default_publish_source(repo.workdir().ok(), branch));
 
             // Check if PR exists (skip for empty branches)
             let existing_pr = lookups_by_branch
@@ -799,8 +907,13 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             let base = meta.parent_branch_name.clone();
 
             // Check if we actually need to push
-            let needs_push =
-                !is_imported && branch_needs_push(repo.workdir()?, &remote_info.name, branch);
+            let needs_push = !is_imported
+                && ref_needs_push(
+                    repo.workdir()?,
+                    &remote_info.name,
+                    branch,
+                    &publish_source.source_ref,
+                );
 
             // Check if PR base needs updating (not for empty branches)
             let needs_pr_update = if is_empty {
@@ -817,7 +930,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             // Only computed when the user opts in via `--update-title` so default submits
             // do not silently rewrite PR titles from local commit messages.
             let tip_commit_subject = if update_title && pr_number.is_some() && !is_empty {
-                tip_commit_subject(repo.workdir()?, branch)
+                tip_commit_subject(repo.workdir()?, &publish_source.source_ref)
             } else {
                 None
             };
@@ -831,6 +944,9 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             plans.push(PrPlan {
                 branch: branch.clone(),
                 parent: base,
+                publish_ref: publish_source.source_ref,
+                publish_oid: publish_source.oid,
+                uses_temporary_publish_ref: publish_source.is_temporary,
                 existing_pr: pr_number,
                 existing_pr_is_draft: existing_pr.as_ref().map(|pr| pr.info.is_draft),
                 tip_commit_subject,
@@ -955,7 +1071,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             };
 
             let commit_messages =
-                collect_commit_messages(repo.workdir()?, &plan.parent, &plan.branch);
+                collect_commit_messages(repo.workdir()?, &plan.parent, &plan.publish_ref);
             let default_title = default_pr_title(&commit_messages, &plan.branch);
 
             // Use selected template content if available
@@ -971,7 +1087,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 match generate_ai_pr_details(
                     repo.workdir()?,
                     &plan.parent,
-                    &plan.branch,
+                    &plan.publish_ref,
                     template_content,
                     targets,
                     &mut ai_agent_selection,
@@ -1146,7 +1262,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     match generate_ai_pr_details(
                         repo.workdir()?,
                         &plan.parent,
-                        &plan.branch,
+                        &plan.publish_ref,
                         template_content,
                         selected_targets,
                         &mut ai_agent_selection,
@@ -1237,13 +1353,25 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         for plan in &branches_needing_push {
             // Squash all commits on the branch down to one before pushing
             if squash {
+                if plan.uses_temporary_publish_ref {
+                    anyhow::bail!(
+                        "--squash cannot be combined with scoped submit of a branch that needs a temporary restack. Run `stax restack` first, then submit with --squash."
+                    );
+                }
                 if let Err(e) = squash_branch_commits(repo.workdir()?, &plan.branch, &plan.parent) {
                     if !quiet {
                         println!("  {} squash {}: {}", "⚠".yellow(), plan.branch, e);
                     }
                 }
             }
-            pushed_branches.push((plan.branch.clone(), repo.branch_commit(&plan.branch).ok()));
+            pushed_branches.push(PushSpec {
+                branch: plan.branch.clone(),
+                source_ref: plan.publish_ref.clone(),
+                oid: plan
+                    .publish_oid
+                    .clone()
+                    .or_else(|| rev_parse_ref(repo.workdir().ok(), &plan.publish_ref)),
+            });
         }
 
         let push_timer = LiveTimer::maybe_new(
@@ -1258,18 +1386,18 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 }
             ),
         );
-        let branch_names = pushed_branches
-            .iter()
-            .map(|(branch, _)| branch.as_str())
-            .collect::<Vec<_>>();
-
-        match push_branches(repo.workdir()?, &remote_info.name, &branch_names, no_verify) {
+        match push_branches(
+            repo.workdir()?,
+            &remote_info.name,
+            &pushed_branches,
+            no_verify,
+        ) {
             Ok(()) => {
-                for (branch, local_oid) in &pushed_branches {
+                for spec in &pushed_branches {
                     if let Some(ref mut tx) = tx {
-                        let _ = tx.record_after(&repo, branch);
-                        if let Some(oid) = local_oid {
-                            tx.record_remote_after(&remote_info.name, branch, oid);
+                        let _ = tx.record_after(&repo, &spec.branch);
+                        if let Some(oid) = &spec.oid {
+                            tx.record_remote_after(&remote_info.name, &spec.branch, oid);
                         }
                     }
                 }
@@ -1828,7 +1956,7 @@ fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()>
 fn push_branches(
     workdir: &std::path::Path,
     remote: &str,
-    branches: &[&str],
+    specs: &[PushSpec],
     no_verify: bool,
 ) -> Result<()> {
     let mut args = vec!["push", "--porcelain", "--force-with-lease"];
@@ -1836,7 +1964,11 @@ fn push_branches(
         args.push("--no-verify");
     }
     args.extend(["-u", remote]);
-    args.extend(branches.iter().copied());
+    let refspecs = specs
+        .iter()
+        .map(|spec| format!("{}:refs/heads/{}", spec.source_ref, spec.branch))
+        .collect::<Vec<_>>();
+    args.extend(refspecs.iter().map(String::as_str));
 
     let output = Command::new("git")
         .args(args)
@@ -1847,9 +1979,13 @@ fn push_branches(
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let rejected = rejected_push_branches(&stdout, branches);
+        let rejected = rejected_push_branches(&stdout, specs);
         let details = push_failure_details(&stdout, &stderr);
-        let branch_list = branches.join(", ");
+        let branch_list = specs
+            .iter()
+            .map(|spec| spec.branch.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         if !rejected.is_empty() {
             let mut message = format!(
                 "Failed to push branches {branch_list}: rejected {}",
@@ -1977,15 +2113,19 @@ fn stack_link_contexts_for_sync(
         .collect()
 }
 
-fn rejected_push_branches(porcelain: &str, branches: &[&str]) -> Vec<String> {
+fn rejected_push_branches(porcelain: &str, specs: &[PushSpec]) -> Vec<String> {
     porcelain
         .lines()
         .filter(|line| line.starts_with("!\t"))
         .filter_map(|line| {
             let local_ref = line.split('\t').nth(1)?.split(':').next()?;
-            let branch = local_ref.strip_prefix("refs/heads/")?;
-            branches.contains(&branch).then(|| branch.to_string())
+            specs
+                .iter()
+                .find(|spec| spec.source_ref == local_ref)
+                .map(|spec| spec.branch.clone())
+                .or_else(|| local_ref.strip_prefix("refs/heads/").map(str::to_string))
         })
+        .filter(|branch| specs.iter().any(|spec| spec.branch == *branch))
         .collect()
 }
 
@@ -2089,19 +2229,6 @@ fn validate_narrow_scope_submit(
             continue;
         }
 
-        let needs_restack = stack
-            .branches
-            .get(branch)
-            .map(|b| b.needs_restack)
-            .unwrap_or(false);
-        if needs_restack {
-            anyhow::bail!(
-                "Branch '{}' needs restack before scoped submit.\n\
-                 Run `stax restack` or submit with ancestor scope: `stax downstack submit` / `stax submit`.",
-                branch
-            );
-        }
-
         if !branch_matches_remote(repo.workdir()?, remote_name, &parent) {
             if no_fetch {
                 anyhow::bail!(
@@ -2190,32 +2317,238 @@ fn create_pr_failure_context(plan: &PrPlan) -> String {
     )
 }
 
-/// Check if a branch needs to be pushed (local differs from remote)
-fn branch_needs_push(workdir: &Path, remote: &str, branch: &str) -> bool {
-    // Get local commit
-    let local = Command::new("git")
-        .args(["rev-parse", branch])
+fn prepare_publish_sources_for_submit(
+    repo: &GitRepo,
+    stack: &Stack,
+    scope: SubmitScope,
+    branches_to_submit: &[String],
+    quiet: bool,
+) -> Result<(HashMap<String, PublishSource>, TemporaryPublishRefs)> {
+    let workdir = repo.workdir()?;
+    if !matches!(scope, SubmitScope::Branch | SubmitScope::Upstack) {
+        return Ok((HashMap::new(), TemporaryPublishRefs::empty(workdir)));
+    }
+
+    let mut sources = HashMap::new();
+    let temp_root = std::env::temp_dir().join(format!(
+        "stax-submit-{}-{}",
+        std::process::id(),
+        chrono_like_timestamp()
+    ));
+    let mut temporary_refs = TemporaryPublishRefs::empty(workdir);
+
+    for branch in branches_to_submit {
+        let meta = BranchMetadata::read(repo.inner(), branch)?
+            .with_context(|| format!("No metadata for branch {}", branch))?;
+        if is_imported_branch(&meta) {
+            continue;
+        }
+
+        let parent_source_ref = sources
+            .get(&meta.parent_branch_name)
+            .map(|source: &PublishSource| source.source_ref.clone());
+        let parent_will_publish_from_temp = parent_source_ref.is_some();
+        let branch_needs_temp = stack
+            .branches
+            .get(branch)
+            .map(|br| br.needs_restack)
+            .unwrap_or(false)
+            || parent_will_publish_from_temp;
+
+        if !branch_needs_temp {
+            continue;
+        }
+
+        let onto_ref = parent_source_ref.unwrap_or_else(|| meta.parent_branch_name.clone());
+        let temp_ref = format!(
+            "refs/stax/submit/{}/{}",
+            chrono_like_timestamp(),
+            hex_ref_component(branch)
+        );
+        let temp_worktree = temp_root.join(hex_ref_component(branch));
+        let oid = temporary_rebased_head(
+            workdir,
+            &temp_worktree,
+            branch,
+            &onto_ref,
+            &meta.parent_branch_revision,
+        )
+        .with_context(|| {
+            format!(
+                "Could not prepare temporary restack for scoped submit of '{}'.\n\
+                 Run `stax restack` to resolve it locally, then retry submit.",
+                branch
+            )
+        })?;
+
+        update_ref(workdir, &temp_ref, &oid)?;
+        temporary_refs.refs.push(temp_ref.clone());
+        sources.insert(
+            branch.clone(),
+            PublishSource {
+                source_ref: temp_ref,
+                oid: Some(oid),
+                is_temporary: true,
+            },
+        );
+    }
+
+    if !sources.is_empty() && !quiet {
+        println!(
+            "  {} Prepared {} temporary restack {} for scoped submit",
+            "▸".dimmed(),
+            sources.len().to_string().cyan(),
+            if sources.len() == 1 { "ref" } else { "refs" }
+        );
+    }
+
+    if let Err(err) = remove_path_if_exists(&temp_root) {
+        if !quiet {
+            eprintln!(
+                "  {} could not remove temporary submit worktree root {}: {}",
+                "warning:".yellow(),
+                temp_root.display(),
+                err
+            );
+        }
+    }
+
+    Ok((sources, temporary_refs))
+}
+
+fn temporary_rebased_head(
+    workdir: &Path,
+    temp_worktree: &Path,
+    branch: &str,
+    onto_ref: &str,
+    upstream: &str,
+) -> Result<String> {
+    if let Some(parent) = temp_worktree.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!("Failed to create temporary directory {}", parent.display())
+        })?;
+    }
+
+    let add = Command::new("git")
+        .args(["worktree", "add", "--detach"])
+        .arg(temp_worktree)
+        .arg(branch)
         .current_dir(workdir)
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        .context("Failed to create temporary submit worktree")?;
+    if !add.status.success() {
+        anyhow::bail!("{}", command_output_details("git worktree add", &add));
+    }
+    let mut temp_worktree_guard = TemporarySubmitWorktree::new(workdir, temp_worktree);
+
+    let rebase = Command::new("git")
+        .args(["rebase", "--onto", onto_ref, upstream])
+        .current_dir(temp_worktree)
+        .output()
+        .context("Failed to run temporary submit rebase")?;
+    if !rebase.status.success() {
+        let _ = Command::new("git")
+            .args(["rebase", "--abort"])
+            .current_dir(temp_worktree)
+            .output();
+        anyhow::bail!("{}", command_output_details("git rebase", &rebase));
+    }
+
+    let rev = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(temp_worktree)
+        .output()
+        .context("Failed to read temporary submit head")?;
+    if !rev.status.success() {
+        anyhow::bail!("{}", command_output_details("git rev-parse", &rev));
+    }
+    let oid = String::from_utf8_lossy(&rev.stdout).trim().to_string();
+
+    temp_worktree_guard.remove()?;
+
+    Ok(oid)
+}
+
+fn update_ref(workdir: &Path, refname: &str, oid: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["update-ref", refname, oid])
+        .current_dir(workdir)
+        .output()
+        .with_context(|| format!("Failed to update temporary ref {}", refname))?;
+    if !output.status.success() {
+        anyhow::bail!("{}", command_output_details("git update-ref", &output));
+    }
+    Ok(())
+}
+
+fn command_output_details(command: &str, output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let details = push_failure_details(&stdout, &stderr);
+    if details.is_empty() {
+        format!("{command} failed")
+    } else {
+        format!("{command} failed:\n{details}")
+    }
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<()> {
+    if path.exists() {
+        fs::remove_dir_all(path)
+            .with_context(|| format!("Failed to remove temporary directory {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn chrono_like_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}-{}", duration.as_secs(), duration.subsec_nanos())
+}
+
+fn hex_ref_component(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn default_publish_source(workdir: Option<&Path>, branch: &str) -> PublishSource {
+    PublishSource {
+        source_ref: format!("refs/heads/{branch}"),
+        oid: rev_parse_ref(workdir, branch),
+        is_temporary: false,
+    }
+}
+
+fn ref_needs_push(workdir: &Path, remote: &str, remote_branch: &str, source_ref: &str) -> bool {
+    // Get local commit
+    let local = rev_parse_ref(Some(workdir), source_ref);
 
     // Get remote commit
-    let remote_ref = format!("{}/{}", remote, branch);
-    let remote_commit = Command::new("git")
-        .args(["rev-parse", &remote_ref])
-        .current_dir(workdir)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let remote_ref = format!("{}/{}", remote, remote_branch);
+    let remote_commit = rev_parse_ref(Some(workdir), &remote_ref);
 
     match (local, remote_commit) {
         (Some(l), Some(r)) => l != r, // Need push if different
         (Some(_), None) => true,      // Branch not on remote yet
         _ => true,                    // Default to push if unsure
     }
+}
+
+fn rev_parse_ref(workdir: Option<&Path>, reference: &str) -> Option<String> {
+    let workdir = workdir?;
+    Command::new("git")
+        .args(["rev-parse", reference])
+        .current_dir(workdir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
 fn is_imported_branch(meta: &BranchMetadata) -> bool {
@@ -2745,11 +3078,11 @@ fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AiPrTargets, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS, StackPrInfo,
-        build_ai_pr_details_prompt, existing_ai_prompt_items, existing_ai_targets_for_auto_accept,
-        parse_ai_pr_details, push_failure_details, rejected_push_branches, resolve_ai_targets,
-        resolve_is_draft_without_prompt, stack_link_contexts_for_sync, stack_pr_infos_for_links,
-        truncate_ai_diff,
+        AiPrTargets, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS, PushSpec,
+        StackPrInfo, build_ai_pr_details_prompt, existing_ai_prompt_items,
+        existing_ai_targets_for_auto_accept, parse_ai_pr_details, push_failure_details,
+        rejected_push_branches, resolve_ai_targets, resolve_is_draft_without_prompt,
+        stack_link_contexts_for_sync, stack_pr_infos_for_links, truncate_ai_diff,
     };
     use crate::engine::Stack;
     use crate::engine::stack::StackBranch;
@@ -2771,7 +3104,14 @@ mod tests {
 !\trefs/heads/feature-c:refs/heads/feature-c\t[remote rejected] (hook declined)\n";
 
         assert_eq!(
-            rejected_push_branches(porcelain, &["feature-a", "feature-b", "feature-c"]),
+            rejected_push_branches(
+                porcelain,
+                &[
+                    push_spec("feature-a", "refs/heads/feature-a"),
+                    push_spec("feature-b", "refs/heads/feature-b"),
+                    push_spec("feature-c", "refs/heads/feature-c"),
+                ],
+            ),
             vec!["feature-b".to_string(), "feature-c".to_string()]
         );
     }
@@ -2781,9 +3121,36 @@ mod tests {
         let porcelain = "!\trefs/heads/feature-a:refs/heads/feature-a\t[rejected]\n";
 
         assert_eq!(
-            rejected_push_branches(porcelain, &["feature", "feature-a"]),
+            rejected_push_branches(
+                porcelain,
+                &[
+                    push_spec("feature", "refs/heads/feature"),
+                    push_spec("feature-a", "refs/heads/feature-a"),
+                ],
+            ),
             vec!["feature-a".to_string()]
         );
+    }
+
+    #[test]
+    fn rejected_push_branches_maps_temporary_refspecs_to_branch_names() {
+        let porcelain = "!\trefs/stax/submit/123/feature-a:refs/heads/feature-a\t[rejected]\n";
+
+        assert_eq!(
+            rejected_push_branches(
+                porcelain,
+                &[push_spec("feature-a", "refs/stax/submit/123/feature-a")],
+            ),
+            vec!["feature-a".to_string()]
+        );
+    }
+
+    fn push_spec(branch: &str, source_ref: &str) -> PushSpec {
+        PushSpec {
+            branch: branch.to_string(),
+            source_ref: source_ref.to_string(),
+            oid: None,
+        }
     }
 
     #[test]

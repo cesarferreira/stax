@@ -58,29 +58,6 @@ fn run_git_in(cwd: &Path, args: &[&str]) -> std::process::Output {
     output
 }
 
-fn configure_submit_remote(repo: &TestRepo) {
-    let remote_path = repo
-        .remote_path()
-        .expect("Expected remote path for repository with origin");
-    let remote_path_str = remote_path.to_string_lossy().to_string();
-
-    repo.git(&[
-        "remote",
-        "set-url",
-        "origin",
-        "https://github.com/test-owner/test-repo.git",
-    ]);
-    repo.git(&["remote", "set-url", "--push", "origin", &remote_path_str]);
-
-    let file_url = format!("file://{}", remote_path_str);
-    repo.git(&[
-        "config",
-        "--local",
-        &format!("url.{}.insteadOf", file_url.trim_end_matches('/')),
-        "https://github.com/test-owner/test-repo.git",
-    ]);
-}
-
 fn update_remote_branch_in_clone(
     repo: &TestRepo,
     branch: &str,
@@ -260,7 +237,7 @@ fn get_force_resets_divergent_local_branch() {
 #[test]
 fn submit_does_not_push_imported_support_branch() {
     let repo = TestRepo::new_with_remote();
-    configure_submit_remote(&repo);
+    repo.configure_github_like_submit_remote();
     let original_remote_sha =
         push_remote_only_branch(&repo, "imported-parent", "parent.txt", "remote parent\n");
 

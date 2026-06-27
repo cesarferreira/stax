@@ -29,6 +29,8 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | Command | What it does |
 |---|---|
 | `st ss` | Submit the whole stack — open or update linked PRs |
+| `st branch submit` | Submit only the current branch; if its parent is already synced to the remote, Stax may publish a temporary rebased head without moving your local branch |
+| `st upstack submit` | Submit current branch and descendants; descendants are temporarily chained onto any temporary parent publish heads |
 | `st draft [branch]` | Convert the current (or named) branch's PR to draft |
 | `st undraft [branch]` | Mark the current (or named) branch's PR as ready for review |
 | `st ready` | Open the interactive PR readiness dashboard for all tracked PRs: merge, ping, fix, wait, or draft |
@@ -39,6 +41,8 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st merge --remote` | Merge remotely via the GitHub API while you keep working |
 | `st merge --all` | Merge the entire stack regardless of where you are |
 | `st cascade` | Restack, push, and create/update PRs in one shot |
+
+Scoped submit keeps local branch metadata unchanged when it prepares a temporary publish head. Plain `git commit` work on the branch is included; `st restack` remains the command that updates local branch tips and parent revisions.
 
 ## Sync, restack, update
 

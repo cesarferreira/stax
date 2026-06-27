@@ -216,6 +216,11 @@ stax bs                            # Hidden shortcut alias for branch submit
 stax upstack submit                # Submit current + descendants
 stax downstack submit              # Submit ancestors + current
 
+# branch/upstack submit can publish temporary rebased heads when the excluded
+# parent is already remote-synced; local branch tips and metadata are not moved.
+# Plain git commits on the branch are included. If the parent has local-only
+# commits, use downstack submit / full submit or restack first.
+
 stax merge --all                   # Merge whole stack
 stax merge --downstack-only        # Merge ancestors below current, then rebase current
 stax merge --ds                    # Alias for --downstack-only

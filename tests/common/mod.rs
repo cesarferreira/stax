@@ -229,6 +229,47 @@ impl TestRepo {
         self.remote_dir.as_ref().map(|d| d.path().to_path_buf())
     }
 
+    /// Keep submit tests offline while still giving submit a parseable GitHub URL.
+    pub fn configure_github_like_submit_remote(&self) {
+        let remote_path = self
+            .remote_path()
+            .expect("Expected remote path for repository with origin");
+        let remote_path_str = remote_path.to_string_lossy().to_string();
+
+        let out = self.git(&[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/test-owner/test-repo.git",
+        ]);
+        assert!(
+            out.status.success(),
+            "set-url failed: {}",
+            Self::stderr(&out)
+        );
+
+        let out = self.git(&["remote", "set-url", "--push", "origin", &remote_path_str]);
+        assert!(
+            out.status.success(),
+            "set-url --push failed: {}",
+            Self::stderr(&out)
+        );
+
+        let file_url = format!("file://{}", remote_path_str);
+        let instead_of_key = format!("url.{}.insteadOf", file_url.trim_end_matches('/'));
+        let out = self.git(&[
+            "config",
+            "--local",
+            &instead_of_key,
+            "https://github.com/test-owner/test-repo.git",
+        ]);
+        assert!(
+            out.status.success(),
+            "insteadOf config failed: {}",
+            Self::stderr(&out)
+        );
+    }
+
     /// Simulate pushing a commit to the remote main branch (as if another user did it)
     /// This clones the remote, makes a commit, and pushes back
     pub fn simulate_remote_commit(&self, filename: &str, content: &str, message: &str) {

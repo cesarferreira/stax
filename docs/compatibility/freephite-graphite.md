@@ -42,6 +42,8 @@ st status   # your existing stack appears immediately
 
 `st get` imports the remote branch as a read-only stack base: Stax can create and restack local branches on top of it, but submit skips pushing or updating the imported branch itself. Sync cleanup may delete the imported local support branch after it is merged or upstream-gone, but it will not push-delete the imported remote branch. If the imported branch already has a PR, stack-link comments still include and sync that PR, with labels relative to the PR being rendered.
 
+Like Graphite's branch/upstack submit flow, `st branch submit` and `st upstack submit` can publish stale local branches without forcing an immediate local restack when the excluded parent is already synced to the remote. Stax does this without a central server by creating internal temporary refs for the push; local branch tips and stack metadata stay unchanged until you run `st restack`.
+
 ## Short alias: `st`
 
 stax also installs as `st`:
