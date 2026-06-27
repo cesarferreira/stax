@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.89.0] - 2026-06-27
+
+### Changed
+- Bump actions/checkout from 6 to 7 (#534)
+- Bump ratatui from 0.30.1 to 0.30.2 (#535)
+- Bump rustls from 0.23.40 to 0.23.41 (#536)
+- Cover copy fallback without clipboard (#538)
+- Allow scoped submit with temporary restack (#541)
+
 ## [0.88.0] - 2026-06-24
 
 ### Changed
@@ -566,7 +575,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.88.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.89.0...HEAD
+[0.89.0]: https://github.com/cesarferreira/stax/compare/v0.88.0...v0.89.0
 [0.88.0]: https://github.com/cesarferreira/stax/compare/v0.87.2...v0.88.0
 [0.87.2]: https://github.com/cesarferreira/stax/compare/v0.87.1...v0.87.2
 [0.87.1]: https://github.com/cesarferreira/stax/compare/v0.87.0...v0.87.1
