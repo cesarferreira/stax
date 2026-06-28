@@ -60,7 +60,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st create <name>` | `c`, `add`, `bc` | Create stacked branch (TTY menu when nothing staged and `-m`) |
 | `st create --ai` | | Generate a branch name from local changes (`-a` also generates a first commit message) |
 | `st create <name> --below` | | Insert a new branch below current |
-| `st get <branch>` | | Fetch, checkout, and track a remote branch |
+| `st get [branch|PR]` | | Sync current stack, or fetch, sync/create, checkout, and track a remote branch/PR |
 | `st modify` | `m` | Amend staged changes into current commit (`-a` stages all, `-r` restacks after) |
 | `st rename` | | Rename current branch |
 | `st branch track` | | Track an existing branch |
@@ -289,10 +289,18 @@ If the excluded parent has local-only commits, scoped submit still refuses and a
 
 ### `st get`
 
+- With no argument, `st get` syncs and restacks the current stack, equivalent to the Graphite `gt get` current-stack flow.
+- The argument may be a remote branch name, `origin/<branch>`, or a PR number when forge auth is configured.
 - `--parent <branch>` records a non-trunk parent in stax metadata
 - `--no-checkout` fetches and tracks without switching branches
-- `--force` resets an existing divergent local branch to the remote tip
-- Imported branches are read-only support branches: submit uses them as stack bases but does not push them or update their PRs.
+- `--downstack` skips local upstack branches when the target already exists locally.
+- `--remote-upstack` includes remote-only upstack PR branches discovered from open PR base/head metadata. This is best-effort without Graphite's central backend.
+- `--no-restack` skips the default restack after checkout.
+- `--unfrozen` is accepted for Graphite CLI compatibility; Stax does not currently freeze branches.
+- Existing local branches fast-forward when possible, or rebase local-only commits onto the fetched remote tip when branch histories diverge.
+- `--force` resets an existing local branch to the remote tip instead of preserving local commits.
+- Branches checked out in another linked worktree are skipped instead of being moved from the current worktree.
+- New remote-only branches imported by `st get` are read-only support branches: submit uses them as stack bases but does not push them or update their PRs. Existing Stax-managed branches keep their ownership metadata when synced with `st get`.
 - `st sync --restack` refreshes imported branches from their remote tips before restacking descendants; if an imported branch is checked out in a dirty worktree, sync skips it unless `--force` is used.
 
 ### `st ci`

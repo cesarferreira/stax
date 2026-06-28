@@ -271,7 +271,7 @@ st config --set-ai
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
-| `st get <branch>` | Fetch a remote branch, create a local upstream-tracking branch, track it in stax as imported, and check it out |
+| `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
 | `st ss` | Submit the full stack, open/update linked PRs |
 | `st branch submit` | Submit only the current branch; can publish a temporary rebased head when its parent is already synced remotely |
 | `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
