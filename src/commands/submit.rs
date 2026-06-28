@@ -74,6 +74,7 @@ pub struct SubmitOptions {
 struct PrPlan {
     branch: String,
     parent: String,
+    commit_range_base: String,
     publish_ref: String,
     publish_oid: Option<String>,
     uses_temporary_publish_ref: bool,
@@ -108,6 +109,7 @@ struct ExistingPrLookup {
 #[derive(Debug, Clone)]
 struct PublishSource {
     source_ref: String,
+    commit_range_base: String,
     oid: Option<String>,
     is_temporary: bool,
 }
@@ -643,10 +645,9 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 .context(format!("No metadata for branch {}", branch))?;
             let is_empty = empty_set.contains(branch);
             let is_imported = is_imported_branch(&meta);
-            let publish_source = publish_sources
-                .get(branch)
-                .cloned()
-                .unwrap_or_else(|| default_publish_source(repo.workdir().ok(), branch));
+            let publish_source = publish_sources.get(branch).cloned().unwrap_or_else(|| {
+                default_publish_source(repo.workdir().ok(), branch, &meta.parent_branch_name)
+            });
             let needs_push = !is_imported
                 && ref_needs_push(
                     repo.workdir()?,
@@ -743,6 +744,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             plans.push(PrPlan {
                 branch: branch.clone(),
                 parent: meta.parent_branch_name,
+                commit_range_base: publish_source.commit_range_base,
                 publish_ref: publish_source.source_ref,
                 publish_oid: publish_source.oid,
                 uses_temporary_publish_ref: publish_source.is_temporary,
@@ -841,10 +843,12 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
 
             let is_empty = empty_set.contains(branch);
             let is_imported = is_imported_branch(&meta);
+            // Determine the base branch for PR
+            let base = meta.parent_branch_name.clone();
             let publish_source = publish_sources
                 .get(branch)
                 .cloned()
-                .unwrap_or_else(|| default_publish_source(repo.workdir().ok(), branch));
+                .unwrap_or_else(|| default_publish_source(repo.workdir().ok(), branch, &base));
 
             // Check if PR exists (skip for empty branches)
             let existing_pr = lookups_by_branch
@@ -903,9 +907,6 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 }
             }
 
-            // Determine the base branch for PR
-            let base = meta.parent_branch_name.clone();
-
             // Check if we actually need to push
             let needs_push = !is_imported
                 && ref_needs_push(
@@ -944,6 +945,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             plans.push(PrPlan {
                 branch: branch.clone(),
                 parent: base,
+                commit_range_base: publish_source.commit_range_base,
                 publish_ref: publish_source.source_ref,
                 publish_oid: publish_source.oid,
                 uses_temporary_publish_ref: publish_source.is_temporary,
@@ -1070,8 +1072,11 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 select_template_interactive(&discovered_templates)?
             };
 
-            let commit_messages =
-                collect_commit_messages(repo.workdir()?, &plan.parent, &plan.publish_ref);
+            let commit_messages = collect_commit_messages(
+                repo.workdir()?,
+                &plan.commit_range_base,
+                &plan.publish_ref,
+            );
             let default_title = default_pr_title(&commit_messages, &plan.branch);
 
             // Use selected template content if available
@@ -1086,7 +1091,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             let ai_details = if let Some(targets) = ai_targets {
                 match generate_ai_pr_details(
                     repo.workdir()?,
-                    &plan.parent,
+                    &plan.commit_range_base,
                     &plan.publish_ref,
                     template_content,
                     targets,
@@ -1261,7 +1266,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
 
                     match generate_ai_pr_details(
                         repo.workdir()?,
-                        &plan.parent,
+                        &plan.commit_range_base,
                         &plan.publish_ref,
                         template_content,
                         selected_targets,
@@ -2387,6 +2392,7 @@ fn prepare_publish_sources_for_submit(
             branch.clone(),
             PublishSource {
                 source_ref: temp_ref,
+                commit_range_base: onto_ref,
                 oid: Some(oid),
                 is_temporary: true,
             },
@@ -2517,9 +2523,10 @@ fn hex_ref_component(value: &str) -> String {
         .collect::<String>()
 }
 
-fn default_publish_source(workdir: Option<&Path>, branch: &str) -> PublishSource {
+fn default_publish_source(workdir: Option<&Path>, branch: &str, parent: &str) -> PublishSource {
     PublishSource {
         source_ref: format!("refs/heads/{branch}"),
+        commit_range_base: parent.to_string(),
         oid: rev_parse_ref(workdir, branch),
         is_temporary: false,
     }
