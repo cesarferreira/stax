@@ -12,7 +12,7 @@
 | `st trunk <branch>` | Set trunk to `<branch>` |
 | `st prev` | Toggle to previous branch |
 | `st co` | Interactive branch picker |
-| `st get <branch>` | Fetch, checkout, and track an imported remote branch |
+| `st get [branch|PR]` | Sync the current stack, or fetch, sync/create, checkout, and track a remote branch/PR |
 
 ## Checkout shortcuts
 

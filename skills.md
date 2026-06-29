@@ -30,7 +30,7 @@ stax sweep                     # Classify + optionally delete merged/gone/stale 
 stax restack                   # Rebase branch/stack onto parents
 stax cascade                   # Restack bottom-up and submit updates
 
-stax get <branch>              # Fetch, checkout, and track imported remote branch
+stax get [branch|PR]           # Sync current stack, or fetch/checkout a remote branch or PR stack
 stax checkout|co|bco           # Checkout branch (interactive by default)
 stax trunk|t                   # Checkout trunk
 stax trunk <branch>            # Set trunk branch
@@ -295,10 +295,16 @@ stax top                           # Tip of current stack
 stax bottom                        # Base branch above trunk
 stax p                             # Previous branch
 
-stax get teammate-branch           # Fetch remote branch, track under trunk, checkout
+stax get                           # Sync and restack current stack
+stax get teammate-branch           # Fetch/sync remote branch, track under trunk, checkout
+stax get 123                       # Fetch/sync the branch for PR #123
 stax get teammate-branch --parent base-branch  # Track fetched branch under explicit parent
+stax get teammate-branch --downstack  # Do not sync local upstack descendants
+stax get teammate-branch --remote-upstack  # Include remote-only upstack PR branches when forge metadata is available
 stax get teammate-branch --no-checkout  # Fetch and track without switching branches
-# Imported branches are read-only during submit; existing imported PRs still get stack-link comments with relative intro text. GitHub comments keep compact native PR references and mark the rendered PR with 👈.
+# Existing local branches fast-forward or rebase local-only commits onto the fetched remote tip; use --force only to reset.
+# New remote-only imports are read-only during submit. Existing Stax-managed branches keep ownership metadata. Branches checked out in another linked worktree are skipped.
+# Imported PRs still get stack-link comments with relative intro text. GitHub comments keep compact native PR references and mark the rendered PR with 👈.
 # sync --restack refreshes clean imported bases before rebasing descendants; cleanup can remove them locally after merge/gone.
 stax branch track --parent main    # Track existing branch under parent
 stax branch track --all-prs        # Import your open PRs

@@ -507,19 +507,31 @@ pub(crate) enum Commands {
         shell_output: bool,
     },
 
-    /// Fetch, checkout, and track a remote branch
+    /// Fetch, checkout, and track a remote branch or stack
     Get {
-        /// Remote branch name to fetch
-        branch: String,
+        /// Remote branch name or PR number to fetch; omitted syncs the current stack
+        branch: Option<String>,
         /// Parent branch to record in stax metadata (defaults to trunk)
         #[arg(short, long)]
         parent: Option<String>,
         /// Fetch and track without checking out the branch
         #[arg(long)]
         no_checkout: bool,
-        /// Reset an existing local branch to the remote tip
+        /// Reset an existing local branch instead of preserving local commits
         #[arg(short, long)]
         force: bool,
+        /// When the target exists locally, only sync the target and its downstack
+        #[arg(short, long)]
+        downstack: bool,
+        /// Include remote-only upstack PR branches when forge metadata is available
+        #[arg(short = 'u', long)]
+        remote_upstack: bool,
+        /// Skip restacking after syncing
+        #[arg(long)]
+        no_restack: bool,
+        /// Accepted for Graphite CLI compatibility; Stax does not freeze branches
+        #[arg(short = 'U', long)]
+        unfrozen: bool,
     },
 
     /// Continue after resolving conflicts
