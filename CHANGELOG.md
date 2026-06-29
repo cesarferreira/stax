@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 
+## [0.90.0] - 2026-06-29
+
+### Changed
+- Fix scoped submit PR default ranges (#544)
+- Fix get sync for existing local branches (#546)
+
+### Documentation
+- Add issue list to skills (#548)
+
 ## [0.89.0] - 2026-06-27
 
 ### Changed
@@ -575,7 +584,8 @@ Major release introducing per-feature AI agent and model configuration with an i
 - Expanded `st lane` guide with more examples and use cases (#214)
 
 <!-- next-url -->
-[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.89.0...HEAD
+[Unreleased]: https://github.com/cesarferreira/stax/compare/v0.90.0...HEAD
+[0.90.0]: https://github.com/cesarferreira/stax/compare/v0.89.0...v0.90.0
 [0.89.0]: https://github.com/cesarferreira/stax/compare/v0.88.0...v0.89.0
 [0.88.0]: https://github.com/cesarferreira/stax/compare/v0.87.2...v0.88.0
 [0.87.2]: https://github.com/cesarferreira/stax/compare/v0.87.1...v0.87.2
