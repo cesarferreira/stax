@@ -65,6 +65,7 @@ stax ready --stack             # Same as --current
 stax ready --plain             # Static readiness table for captured/non-interactive output
 stax pr list --ready           # Same readiness view under PR list
 stax ready --all               # Explicit all tracked branch PRs (default)
+stax issue list                # List open issues
 stax open                      # Open repo in browser
 stax comments                  # Show current PR comments
 stax copy [--pr]               # Copy branch name or PR URL
@@ -339,6 +340,7 @@ stax ready --plain                 # Fresh static readiness table: ACTION, PR, B
 stax ready --all                   # Readiness for all tracked branch PRs (default)
 stax ready --json                  # Machine-readable readiness rows
 stax pr list --ready               # Same readiness view under PR list
+stax issue list --limit 50 --json  # List open issues with optional limit and JSON output
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output
 
