@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.91.1] - 2026-07-01
+
+### 💼 Other
+
+- Switch changelog and release notes to git-cliff ([#551](https://github.com/cesarferreira/stax/issues/551))
 ## [0.91.0] - 2026-06-29
 
 ### 💼 Other
