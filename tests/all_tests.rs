@@ -74,8 +74,6 @@ mod navigation_tests;
 mod pr_body_tests;
 #[path = "pr_template_tests.rs"]
 mod pr_template_tests;
-#[path = "release_prep_tests.rs"]
-mod release_prep_tests;
 #[path = "reorder_tests.rs"]
 mod reorder_tests;
 #[path = "rerequest_review_tests.rs"]

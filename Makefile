@@ -1,10 +1,11 @@
-.PHONY: build build-release release install clean test test-native test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
+.PHONY: build build-release release ensure-git-cliff install clean test test-native test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
 RAMDISK_MOUNT ?= /Volumes/$(RAMDISK_NAME)
 MAC_LOCAL_TEST_THREADS ?= 8
 LEVEL ?= minor
+GIT_CLIFF_VERSION ?= 2.13.1
 STAX_TEST_IMAGE ?= stax-test
 CONTAINER ?= $(shell if [ -x /opt/homebrew/opt/container/bin/container ]; then printf '%s\n' /opt/homebrew/opt/container/bin/container; else printf '%s\n' container; fi)
 CONTAINER_MEMORY ?= 8G
@@ -23,8 +24,16 @@ build-release:
 	cargo build --release
 
 # Publish a new release (usage: make release or make release LEVEL=patch)
-release:
+release: ensure-git-cliff
 	cargo release $(LEVEL) --execute --no-confirm
+
+# Ensure git-cliff (changelog generator, used by cargo-release's pre-release hook)
+# is available via cargo, so releasing does not depend on an OS-level install.
+ensure-git-cliff:
+	@command -v git-cliff >/dev/null 2>&1 || { \
+		echo "git-cliff not found; installing v$(GIT_CLIFF_VERSION) via cargo..."; \
+		cargo install git-cliff --version $(GIT_CLIFF_VERSION) --locked; \
+	}
 
 # Install to ~/.cargo/bin
 install:
