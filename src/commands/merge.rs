@@ -469,6 +469,15 @@ pub fn run(
                 println!("{}", "Running post-merge sync...".dimmed());
             }
 
+            // After squash merges, local trunk may have commits not on remote (diverged).
+            // Reset it to origin/<trunk> so sync finds a clean fast-forward state.
+            let workdir = repo.workdir()?.to_path_buf();
+            let remote_trunk = format!("origin/{}", scope.trunk);
+            let _ = Command::new("git")
+                .args(["reset", "--hard", &remote_trunk])
+                .current_dir(&workdir)
+                .output();
+
             // Release merge-side handles before sync opens a fresh repo view.
             drop(rt);
             drop(client);
