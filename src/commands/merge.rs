@@ -12,7 +12,6 @@ use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::io::Write;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -170,9 +169,6 @@ pub fn run(
     }
 
     LiveTimer::maybe_finish_ok(fetch_status_timer, "done");
-    if !quiet {
-        println!();
-    }
 
     // Display the merge plan
     if !quiet {
@@ -182,20 +178,18 @@ pub fn run(
     // Dry run - just show plan and exit
     if dry_run {
         if !quiet {
-            println!();
-            println!("{}", "Dry run - no changes made.".dimmed());
+            println!("{}", "  Dry run — no changes made.".dimmed());
         }
         return Ok(());
     }
 
     // Confirm with user
     if !yes && !quiet {
-        let confirm = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Proceed?")
-            .default(true)
-            .interact()?;
-
-        if !confirm {
+        print!("Proceed? [Y/n] ");
+        std::io::stdout().flush().ok();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        if input.trim().eq_ignore_ascii_case("n") {
             println!("{}", "Aborted.".dimmed());
             return Ok(());
         }
@@ -203,7 +197,6 @@ pub fn run(
 
     // Execute the merge
     if !quiet {
-        println!();
         println!("Merging stack...");
     }
 
@@ -600,12 +593,30 @@ fn print_merge_plan(scope: &MergeScope, method: &MergeMethod) {
     let n = scope.to_merge.len();
     let pr_word = if n == 1 { "PR" } else { "PRs" };
     println!(
-        "  {} ▸ {} to merge → {} ({})",
+        "  {} {} to merge → {} ({}):",
         n.to_string().bold(),
         pr_word,
         scope.trunk.cyan(),
         method.as_str()
     );
+    for (i, branch_info) in scope.to_merge.iter().enumerate() {
+        let pr_str = branch_info
+            .pr_number
+            .map(|n| format!(" (#{n})"))
+            .unwrap_or_default();
+        let current_marker = if branch_info.is_current {
+            format!("  {}", "← current".dimmed())
+        } else {
+            String::new()
+        };
+        println!(
+            "    {}. {}{}{}",
+            i + 1,
+            branch_info.branch.bold(),
+            pr_str.dimmed(),
+            current_marker
+        );
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
