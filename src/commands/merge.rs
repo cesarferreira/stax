@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::{GitRepo, RebaseResult};
-use crate::github::pr::{CiStatus, MergeMethod, PrMergeStatus};
+use crate::github::pr::{MergeMethod, PrMergeStatus};
 use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
@@ -22,6 +22,7 @@ const DUPLICATE_PR_BASE_RECHECK_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Information about a branch in the merge scope
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct MergeBranchInfo {
     branch: String,
     pr_number: Option<u64>,
@@ -173,9 +174,9 @@ pub fn run(
         println!();
     }
 
-    // Display the merge preview
+    // Display the merge plan
     if !quiet {
-        print_merge_preview(&scope, &method);
+        print_merge_plan(&scope, &method);
     }
 
     // Dry run - just show plan and exit
@@ -189,21 +190,8 @@ pub fn run(
 
     // Confirm with user
     if !yes && !quiet {
-        let has_waiting = scope.to_merge.iter().any(|b| {
-            b.pr_status
-                .as_ref()
-                .map(|s| s.is_waiting())
-                .unwrap_or(false)
-        });
-
-        let prompt = if has_waiting && !no_wait {
-            "Proceed with merge? (will wait for pending checks)"
-        } else {
-            "Proceed with merge?"
-        };
-
         let confirm = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt(prompt)
+            .with_prompt("Proceed?")
             .default(true)
             .interact()?;
 
@@ -216,39 +204,27 @@ pub fn run(
     // Execute the merge
     if !quiet {
         println!();
-        print_header("Merging Stack");
+        println!("Merging stack...");
     }
 
     let timeout = Duration::from_secs(timeout_mins * 60);
     let mut merged_prs: Vec<(String, u64)> = Vec::new();
     let mut failed_pr: Option<(String, u64, String)> = None;
-    let total = scope.to_merge.len();
 
     for (idx, branch_info) in scope.to_merge.iter().enumerate() {
         let pr_number = branch_info.pr_number.unwrap();
-        let position = idx + 1;
         let next_branch = scope.to_merge.get(idx + 1);
-
-        if !quiet {
-            println!();
-            println!(
-                "[{}/{}] {} (#{})",
-                position.to_string().cyan(),
-                total,
-                branch_info.branch.bold(),
-                pr_number
-            );
-        }
 
         // Check if already merged
         let is_merged = rt.block_on(async { client.is_pr_merged(pr_number).await })?;
         if is_merged {
-            if !quiet {
-                println!("      {} Already merged", "✓".green());
-            }
+            let timer =
+                LiveTimer::maybe_new(!quiet, &format!("#{} {}...", pr_number, branch_info.branch));
+            LiveTimer::maybe_finish_ok(timer, "already merged");
             merged_prs.push((branch_info.branch.clone(), pr_number));
         } else {
-            // Wait for CI and approval if needed
+            // Wait for CI and approval if needed (kept outside the per-PR spinner
+            // because it can span minutes).
             if !no_wait {
                 match wait_for_pr_ready(&rt, &client, pr_number, timeout, quiet)? {
                     WaitResult::Ready => {}
@@ -281,18 +257,18 @@ pub fn run(
 
             // Merge the PR
             let merge_timer =
-                LiveTimer::maybe_new(!quiet, &format!("Merging ({})...", method.as_str()));
+                LiveTimer::maybe_new(!quiet, &format!("#{} {}...", pr_number, branch_info.branch));
 
             match rt.block_on(async { client.merge_pr(pr_number, method, None, None).await }) {
                 Ok(()) => {
-                    LiveTimer::maybe_finish_ok(merge_timer, "done");
+                    LiveTimer::maybe_finish_ok(merge_timer, "merged");
                     merged_prs.push((branch_info.branch.clone(), pr_number));
 
                     // Record CI history for the merged branch
                     record_ci_history_for_branch(&repo, &rt, &client, &stack, &branch_info.branch);
                 }
                 Err(e) => {
-                    LiveTimer::maybe_finish_err(merge_timer, "failed");
+                    LiveTimer::maybe_finish_err(merge_timer, &format!("{:#}", e));
                     failed_pr = Some((branch_info.branch.clone(), pr_number, format!("{:#}", e)));
                     break;
                 }
@@ -482,72 +458,17 @@ pub fn run(
     println!();
 
     if let Some((branch, pr, reason)) = failed_pr {
-        print_header_error("Merge Stopped");
-        println!();
-        println!("Progress:");
-        for (merged_branch, merged_pr) in &merged_prs {
-            println!(
-                "  {} #{} {} → merged",
-                "✓".green(),
-                merged_pr,
-                merged_branch
-            );
-        }
         println!("  {} #{} {} → {}", "✗".red(), pr, branch, reason);
-        println!();
-        println!("{}", "Already merged PRs remain merged.".dimmed());
-        println!(
-            "{}",
-            "Fix the issue and run 'stax merge' to continue.".dimmed()
-        );
+        println!("{}", "Fix the issue and run 'stax merge' again.".dimmed());
     } else {
-        print_header_success("Stack Merged!");
-        println!();
+        let pr_word = if merged_prs.len() == 1 { "PR" } else { "PRs" };
         println!(
-            "Merged {} {} into {}:",
+            "{} {} {} merged into {}",
+            "✓".green(),
             merged_prs.len(),
-            if merged_prs.len() == 1 { "PR" } else { "PRs" },
+            pr_word,
             scope.trunk.cyan()
         );
-        for (branch, pr) in &merged_prs {
-            println!("  {} #{} {}", "✓".green(), pr, branch);
-        }
-
-        if !scope.remaining.is_empty() {
-            println!();
-            println!("Remaining in stack (rebased onto {}):", scope.trunk.cyan());
-            for remaining in &scope.remaining {
-                if let Some(pr) = remaining.pr_number {
-                    println!("  {} #{} {}", "○".dimmed(), pr, remaining.branch);
-                } else {
-                    println!("  {} {}", "○".dimmed(), remaining.branch);
-                }
-            }
-            println!(
-                "{}",
-                "Tip: Run 'stax merge' again to continue merging the rest of the stack.".dimmed()
-            );
-        }
-
-        if !no_delete && !merged_prs.is_empty() {
-            println!();
-            println!("Cleanup:");
-            println!(
-                "  • Deleted {} local {}",
-                merged_prs.len(),
-                if merged_prs.len() == 1 {
-                    "branch"
-                } else {
-                    "branches"
-                }
-            );
-            let checkout_after_cleanup = if scope.downstack_only {
-                &scope.current
-            } else {
-                &scope.trunk
-            };
-            println!("  • Switched to: {}", checkout_after_cleanup.cyan());
-        }
 
         if !no_sync {
             if !quiet {
@@ -674,154 +595,20 @@ fn calculate_merge_scope(
     }
 }
 
-/// Print the merge preview box
-fn print_merge_preview(scope: &MergeScope, method: &MergeMethod) {
-    print_header("Stack Merge");
-    println!();
-
-    // Find the current branch for display
-    let current = scope
-        .to_merge
-        .iter()
-        .chain(scope.remaining.iter())
-        .find(|b| b.is_current)
-        .map(|b| b.branch.as_str())
-        .unwrap_or("unknown");
-
-    let current_pr = scope
-        .to_merge
-        .iter()
-        .chain(scope.remaining.iter())
-        .find(|b| b.is_current)
-        .and_then(|b| b.pr_number)
-        .map(|n| format!(" (PR #{})", n))
-        .unwrap_or_default();
-
+/// Print the one-line merge plan summary
+fn print_merge_plan(scope: &MergeScope, method: &MergeMethod) {
+    let n = scope.to_merge.len();
+    let pr_word = if n == 1 { "PR" } else { "PRs" };
     println!(
-        "You are on: {}{}",
-        current.cyan().bold(),
-        current_pr.dimmed()
-    );
-    println!();
-
-    let pr_word = if scope.to_merge.len() == 1 {
-        "PR"
-    } else {
-        "PRs"
-    };
-    let scope_label = if scope.downstack_only {
-        "below current"
-    } else {
-        "from bottom → current"
-    };
-    println!(
-        "This will merge {} {} {}:",
-        scope.to_merge.len().to_string().bold(),
+        "  {} ▸ {} to merge → {} ({})",
+        n.to_string().bold(),
         pr_word,
-        scope_label
-    );
-    println!();
-
-    // Print branches to merge
-    print_branch_box(&scope.to_merge, true, &scope.trunk);
-
-    // Print remaining branches if any
-    if !scope.remaining.is_empty() {
-        println!();
-        print_branch_box(&scope.remaining, false, &scope.trunk);
-    }
-
-    println!();
-    println!(
-        "Merge method: {} {}",
-        method.as_str().cyan(),
-        "(change with --method)".dimmed()
+        scope.trunk.cyan(),
+        method.as_str()
     );
 }
 
-/// Print branch info as a checklist
-fn print_branch_box(branches: &[MergeBranchInfo], included: bool, trunk: &str) {
-    println!();
-
-    for (idx, branch) in branches.iter().enumerate() {
-        let pr_text = branch
-            .pr_number
-            .map(|n| format!("#{}", n))
-            .unwrap_or_else(|| "no PR".to_string());
-
-        // Branch header
-        let current_marker = if branch.is_current {
-            " (current)".cyan().to_string()
-        } else {
-            String::new()
-        };
-
-        println!(
-            "  {}. {}{} {}",
-            branch.position.to_string().bold(),
-            branch.branch.bold(),
-            current_marker,
-            format!("({})", pr_text).dimmed()
-        );
-
-        if included {
-            if let Some(ref pr_status) = branch.pr_status {
-                // Checklist items
-                let ci_check = match pr_status.ci_status {
-                    CiStatus::Success => format!("  {} CI checks passed", "✓".green()),
-                    CiStatus::Pending => format!("  {} CI checks running...", "○".yellow()),
-                    CiStatus::Failure => format!("  {} CI checks failed", "✗".red()),
-                    CiStatus::NoCi => format!("  {} No CI checks required", "✓".green()),
-                };
-                println!("{}", ci_check);
-
-                let review_check = if pr_status.changes_requested {
-                    format!("  {} Changes requested", "✗".red())
-                } else if pr_status.approvals > 0 {
-                    format!(
-                        "  {} Approved ({} review{})",
-                        "✓".green(),
-                        pr_status.approvals,
-                        if pr_status.approvals == 1 { "" } else { "s" }
-                    )
-                } else {
-                    format!("  {} Awaiting review...", "○".yellow())
-                };
-                println!("{}", review_check);
-
-                let mergeable_check = if pr_status.mergeable == Some(false) {
-                    format!("  {} Has merge conflicts", "✗".red())
-                } else if pr_status.mergeable == Some(true) {
-                    format!("  {} No conflicts", "✓".green())
-                } else {
-                    format!("  {} Checking conflicts...", "○".yellow())
-                };
-                println!("{}", mergeable_check);
-
-                // Merge target
-                let merge_into = merge_target_label(branch.position, trunk);
-                println!("  {} Merge into {}", "→".dimmed(), merge_into);
-            } else {
-                println!("  {} Fetching status...", "○".yellow());
-            }
-        } else {
-            println!("  {} Not included in this merge", "·".dimmed());
-            println!(
-                "  {} Will be rebased onto {}",
-                "→".dimmed(),
-                remaining_rebase_target_label(idx, branches, trunk)
-            );
-        }
-
-        // Add spacing between branches
-        if idx < branches.len() - 1 {
-            println!();
-        }
-    }
-
-    println!();
-}
-
+#[cfg_attr(not(test), allow(dead_code))]
 fn merge_target_label(position: usize, trunk: &str) -> String {
     if position == 1 {
         trunk.to_string()
@@ -830,6 +617,7 @@ fn merge_target_label(position: usize, trunk: &str) -> String {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn remaining_rebase_target_label<'a>(
     idx: usize,
     branches: &'a [MergeBranchInfo],
@@ -843,6 +631,7 @@ fn remaining_rebase_target_label<'a>(
 }
 
 /// Strip ANSI codes for length calculation
+#[cfg_attr(not(test), allow(dead_code))]
 fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut in_escape = false;
@@ -865,12 +654,14 @@ fn strip_ansi(s: &str) -> String {
 }
 
 /// Calculate the display width of a string, accounting for ANSI codes and wide Unicode chars
+#[cfg_attr(not(test), allow(dead_code))]
 fn display_width(s: &str) -> usize {
     let stripped = strip_ansi(s);
     stripped.chars().map(char_width).sum()
 }
 
 /// Get the display width of a single character
+#[cfg_attr(not(test), allow(dead_code))]
 fn char_width(c: char) -> usize {
     // Use unicode_width crate logic for accurate width calculation
     // For now, use a simplified approach that works for our specific use case
@@ -889,50 +680,6 @@ fn char_width(c: char) -> usize {
         // Everything else (including emojis) - assume width 2
         _ => 2,
     }
-}
-
-fn print_header(title: &str) {
-    let width: usize = 56;
-    let title_width = display_width(title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        title.bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
-}
-
-fn print_header_success(title: &str) {
-    let width: usize = 56;
-    let full_title = format!("✓ {}", title);
-    let title_width = display_width(&full_title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        full_title.green().bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
-}
-
-fn print_header_error(title: &str) {
-    let width: usize = 56;
-    let full_title = format!("✗ {}", title);
-    let title_width = display_width(&full_title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        full_title.red().bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
 }
 
 /// Result of waiting for a PR to be ready
@@ -1305,6 +1052,7 @@ fn record_ci_history_for_branch(
 mod tests {
     use super::*;
     use crate::engine::stack::StackBranch;
+    use crate::github::pr::CiStatus;
     use std::collections::HashMap;
 
     fn create_test_stack() -> Stack {
