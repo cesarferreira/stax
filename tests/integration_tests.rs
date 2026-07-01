@@ -9497,7 +9497,7 @@ mod forge_mock_tests {
         let merge_stderr = TestRepo::stderr(&merge_output);
         let merge_combined = format!("{}{}", merge_stdout, merge_stderr);
         assert!(
-            merge_stdout.contains("Already merged"),
+            merge_stdout.contains("already merged"),
             "Expected merge output to include already-merged path. Output:\n{}",
             merge_stdout
         );
