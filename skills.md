@@ -134,13 +134,13 @@ sw <name>                      # Quick-switch (shell alias installed by stax set
 ### Contributor Release Workflow
 
 ```bash
-make release                     # Run cargo release (minor); hook finalizes CHANGELOG.md inside the release commit
+make release                     # Run cargo release (minor); git-cliff regenerates CHANGELOG.md inside the release commit
 make release LEVEL=patch         # Same flow with a patch bump
 make release LEVEL=major         # Same flow with a major bump
-cargo release patch --no-confirm # Dry-run cargo release only; hook leaves CHANGELOG.md untouched
+cargo release patch --no-confirm # Dry-run cargo release only (no bump/tag/push)
 ```
 
-Release prep rewrites the next released changelog entry from non-merge commits since the latest `v*` tag inside `cargo release`'s pre-release hook, refreshes the compare links, and restores an empty `Unreleased` header for follow-up work. Prefixes map to changelog sections as follows: `feat` → `Added`, `fix` → `Fixed`, `docs` → `Documentation`, everything else → `Changed`.
+Release prep regenerates `CHANGELOG.md` with [git-cliff](https://git-cliff.org/) (config in `cliff.toml`) inside `cargo release`'s pre-release hook, grouping the commits since the latest `v*` tag under the new version. Conventional prefixes map to grouped sections (`feat` → Features, `fix` → Bug Fixes, `docs` → Documentation, etc.); non-conventional subjects land in `Other` rather than being dropped. git-cliff must be installed locally (`cargo install git-cliff`).
 
 ### Create and Edit Branches
 

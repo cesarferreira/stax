@@ -408,7 +408,7 @@ make release LEVEL=patch      # patch bump
 make release LEVEL=major      # major bump
 ```
 
-Release automation now finalizes the next versioned entry in `CHANGELOG.md` from commits since the latest `v*` tag inside `cargo release`'s pre-release hook, refreshes the compare links, and leaves a fresh `Unreleased` header for follow-up work. If there are no commits since the last tag, the release exits early instead of creating an empty changelog entry.
+Release automation regenerates `CHANGELOG.md` with [git-cliff](https://git-cliff.org/) inside `cargo release`'s pre-release hook, grouping the commits since the latest `v*` tag under the new version (config in [`cliff.toml`](cliff.toml)). See [docs/workflows/releasing.md](docs/workflows/releasing.md).
 
 Project docs and architecture: [docs/index.md](docs/index.md). Contributor guidelines: [AGENTS.md](AGENTS.md).
 
