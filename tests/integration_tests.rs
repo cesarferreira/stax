@@ -10017,7 +10017,7 @@ mod forge_mock_tests {
         );
         assert!(
             combined.contains("A pull request already exists for base branch 'main'")
-                && combined.contains("Merge Stopped"),
+                && combined.contains("Fix the issue and run 'stax merge' again."),
             "Expected duplicate PR base error to surface. Output:\n{}",
             combined
         );
@@ -10558,7 +10558,7 @@ mod forge_mock_tests {
         let merge_stderr = TestRepo::stderr(&merge_output);
         let merge_combined = format!("{}{}", merge_stdout, merge_stderr);
         assert!(
-            merge_stdout.contains("Already merged"),
+            merge_stdout.contains("already merged"),
             "Expected merge-when-ready output to include already-merged path. Output:\n{}",
             merge_stdout
         );
