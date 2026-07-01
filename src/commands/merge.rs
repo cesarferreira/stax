@@ -13,6 +13,7 @@ use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -365,16 +366,24 @@ pub fn run(
                 .context("Failed to push")?;
 
             if !push_status.status.success() {
-                LiveTimer::maybe_finish_err(push_timer, "failed");
-                failed_pr = Some((
-                    next_branch.branch.clone(),
-                    next_pr,
-                    "Failed to push rebased branch".to_string(),
-                ));
-                break;
+                // If the next PR is already merged the push isn't needed — skip the error.
+                let next_is_merged = rt
+                    .block_on(async { client.is_pr_merged(next_pr).await })
+                    .unwrap_or(false);
+                if next_is_merged {
+                    LiveTimer::maybe_finish_ok(push_timer, "skipped (already merged)");
+                } else {
+                    LiveTimer::maybe_finish_err(push_timer, "failed");
+                    failed_pr = Some((
+                        next_branch.branch.clone(),
+                        next_pr,
+                        "Failed to push rebased branch".to_string(),
+                    ));
+                    break;
+                }
+            } else {
+                LiveTimer::maybe_finish_ok(push_timer, "done");
             }
-
-            LiveTimer::maybe_finish_ok(push_timer, "done");
             sync_head_after_push(&rt, &client, next_pr, &repo, &next_branch.branch);
         }
     }
@@ -470,13 +479,21 @@ pub fn run(
             }
 
             // After squash merges, local trunk may have commits not on remote (diverged).
-            // Reset it to origin/<trunk> so sync finds a clean fast-forward state.
+            // Update the trunk ref directly so sync finds a clean fast-forward state, but only
+            // when doing so would not discard local-only trunk content.
             let workdir = repo.workdir()?.to_path_buf();
-            let remote_trunk = format!("origin/{}", scope.trunk);
-            let _ = Command::new("git")
-                .args(["reset", "--hard", &remote_trunk])
-                .current_dir(&workdir)
-                .output();
+            if local_trunk_reset_is_safe(&workdir, &scope.trunk) {
+                if !quiet {
+                    println!("{}", "  Resetting local trunk to remote...".dimmed());
+                }
+                // Use update-ref so this works whether or not trunk is currently checked out.
+                let remote_ref = format!("refs/remotes/origin/{}", scope.trunk);
+                let local_ref = format!("refs/heads/{}", scope.trunk);
+                let _ = Command::new("git")
+                    .args(["update-ref", &local_ref, &remote_ref])
+                    .current_dir(&workdir)
+                    .output();
+            }
 
             // Release merge-side handles before sync opens a fresh repo view.
             drop(rt);
@@ -1065,6 +1082,42 @@ fn record_ci_history_for_branch(
     if let Ok(statuses) = fetch_ci_statuses(repo, rt, client, stack, &branches) {
         // Record the CI history (silently - we don't want to interrupt the merge flow)
         record_ci_history(repo, &statuses);
+    }
+}
+
+/// Returns true when resetting the local trunk to `origin/<trunk>` would not discard any
+/// local-only trunk content. False when the trunk has not diverged (nothing to do) or when
+/// local trunk holds content that is absent from the remote (would be lost by the reset).
+fn local_trunk_reset_is_safe(workdir: &Path, trunk: &str) -> bool {
+    let remote_trunk = format!("origin/{}", trunk);
+
+    let diverged = Command::new("git")
+        .args(["rev-list", "--count", &format!("{}..{}", remote_trunk, trunk)])
+        .current_dir(workdir)
+        .output();
+    match diverged {
+        Ok(out) if out.status.success() => {
+            let count = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if count == "0" {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+
+    let lost = Command::new("git")
+        .args([
+            "diff",
+            "--diff-filter=D",
+            "--name-only",
+            trunk,
+            &remote_trunk,
+        ])
+        .current_dir(workdir)
+        .output();
+    match lost {
+        Ok(out) if out.status.success() => out.stdout.iter().all(|b| b.is_ascii_whitespace()),
+        _ => false,
     }
 }
 

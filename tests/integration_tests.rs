@@ -9526,6 +9526,294 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
+    async fn test_merge_resets_diverged_trunk_after_squash_merge() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+
+        // Both stack PRs resolve during merge scope validation.
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/201",
+                    "id": 201,
+                    "number": 201,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "trunk-diverged-a", "sha": "sha-a", "label": "test:trunk-diverged-a" },
+                    "base": { "ref": "main", "sha": "main-sha" }
+                },
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/202",
+                    "id": 202,
+                    "number": 202,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "trunk-diverged-b", "sha": "sha-b", "label": "test:trunk-diverged-b" },
+                    "base": { "ref": "trunk-diverged-a", "sha": "sha-a" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        // Both PRs are already merged on the remote.
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/201"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/201",
+                "id": 201,
+                "number": 201,
+                "state": "closed",
+                "draft": false,
+                "merged_at": "2024-01-01T00:00:00Z",
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "head": { "ref": "trunk-diverged-a", "sha": "sha-a", "label": "test:trunk-diverged-a" },
+                "base": { "ref": "main", "sha": "main-sha" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/202"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/202",
+                "id": 202,
+                "number": 202,
+                "state": "closed",
+                "draft": false,
+                "merged_at": "2024-01-01T00:00:00Z",
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "head": { "ref": "trunk-diverged-b", "sha": "sha-b", "label": "test:trunk-diverged-b" },
+                "base": { "ref": "main", "sha": "main-sha" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        mount_github_merge_status(&mock_server, 201, "MERGED", "APPROVED").await;
+        mount_github_merge_status(&mock_server, 202, "MERGED", "APPROVED").await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        // Add a commit to the local trunk that will also land on the remote via squash merge.
+        repo.create_file("robin.txt", "robin data");
+        repo.commit("add robin");
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "trunk-diverged-a"]);
+        assert!(
+            output.status.success(),
+            "Failed to create trunk-diverged-a: {}",
+            TestRepo::stderr(&output)
+        );
+        let branch_a = repo.current_branch();
+        repo.create_file("change_a.txt", "a");
+        repo.commit("change a");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(
+            push_a.status.success(),
+            "Failed to push trunk-diverged-a: {}",
+            TestRepo::stderr(&push_a)
+        );
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "trunk-diverged-b"]);
+        assert!(
+            output.status.success(),
+            "Failed to create trunk-diverged-b: {}",
+            TestRepo::stderr(&output)
+        );
+        let branch_b = repo.current_branch();
+        repo.create_file("change_b.txt", "b");
+        repo.commit("change b");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(
+            push_b.status.success(),
+            "Failed to push trunk-diverged-b: {}",
+            TestRepo::stderr(&push_b)
+        );
+
+        // Simulate GitHub squash-merging both branches into the remote trunk.
+        squash_merge_branch_on_fake_remote(&remote_root, &branch_a);
+        squash_merge_branch_on_fake_remote(&remote_root, &branch_b);
+
+        // Fetch so stax sees the merged remote state.
+        let fetch = git_with_env(&repo, home.path(), &["fetch", "origin"]);
+        assert!(
+            fetch.status.success(),
+            "Failed to fetch origin: {}",
+            TestRepo::stderr(&fetch)
+        );
+
+        let output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["merge", "--yes", "--no-wait", "--no-delete"],
+        );
+        assert!(
+            output.status.success(),
+            "Merge failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        let count_output = repo.git(&["rev-list", "--count", "origin/main..main"]);
+        assert_eq!(
+            TestRepo::stdout(&count_output).trim(),
+            "0",
+            "Expected local trunk to be reset to remote after squash merge. Stdout:\n{}",
+            TestRepo::stdout(&output)
+        );
+
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            !stdout.contains("diverged (local has commits"),
+            "Should not warn diverged after reset. Output:\n{}",
+            stdout
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_no_sync_skips_trunk_reset() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/201",
+                    "id": 201,
+                    "number": 201,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "trunk-diverged-a", "sha": "sha-a", "label": "test:trunk-diverged-a" },
+                    "base": { "ref": "main", "sha": "main-sha" }
+                },
+                {
+                    "url": "https://api.github.com/repos/test/repo/pulls/202",
+                    "id": 202,
+                    "number": 202,
+                    "state": "open",
+                    "draft": false,
+                    "head": { "ref": "trunk-diverged-b", "sha": "sha-b", "label": "test:trunk-diverged-b" },
+                    "base": { "ref": "trunk-diverged-a", "sha": "sha-a" }
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/201"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/201",
+                "id": 201,
+                "number": 201,
+                "state": "closed",
+                "draft": false,
+                "merged_at": "2024-01-01T00:00:00Z",
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "head": { "ref": "trunk-diverged-a", "sha": "sha-a", "label": "test:trunk-diverged-a" },
+                "base": { "ref": "main", "sha": "main-sha" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/202"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": "https://api.github.com/repos/test/repo/pulls/202",
+                "id": 202,
+                "number": 202,
+                "state": "closed",
+                "draft": false,
+                "merged_at": "2024-01-01T00:00:00Z",
+                "mergeable": true,
+                "mergeable_state": "clean",
+                "head": { "ref": "trunk-diverged-b", "sha": "sha-b", "label": "test:trunk-diverged-b" },
+                "base": { "ref": "main", "sha": "main-sha" }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        mount_github_merge_status(&mock_server, 201, "MERGED", "APPROVED").await;
+        mount_github_merge_status(&mock_server, 202, "MERGED", "APPROVED").await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        repo.create_file("robin.txt", "robin data");
+        repo.commit("add robin");
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "trunk-diverged-a"]);
+        assert!(
+            output.status.success(),
+            "Failed to create trunk-diverged-a: {}",
+            TestRepo::stderr(&output)
+        );
+        let branch_a = repo.current_branch();
+        repo.create_file("change_a.txt", "a");
+        repo.commit("change a");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(
+            push_a.status.success(),
+            "Failed to push trunk-diverged-a: {}",
+            TestRepo::stderr(&push_a)
+        );
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "trunk-diverged-b"]);
+        assert!(
+            output.status.success(),
+            "Failed to create trunk-diverged-b: {}",
+            TestRepo::stderr(&output)
+        );
+        let branch_b = repo.current_branch();
+        repo.create_file("change_b.txt", "b");
+        repo.commit("change b");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(
+            push_b.status.success(),
+            "Failed to push trunk-diverged-b: {}",
+            TestRepo::stderr(&push_b)
+        );
+
+        squash_merge_branch_on_fake_remote(&remote_root, &branch_a);
+        squash_merge_branch_on_fake_remote(&remote_root, &branch_b);
+
+        let fetch = git_with_env(&repo, home.path(), &["fetch", "origin"]);
+        assert!(
+            fetch.status.success(),
+            "Failed to fetch origin: {}",
+            TestRepo::stderr(&fetch)
+        );
+
+        let output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["merge", "--yes", "--no-wait", "--no-delete", "--no-sync"],
+        );
+        assert!(
+            output.status.success(),
+            "Merge failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        let count_output = repo.git(&["rev-list", "--count", "origin/main..main"]);
+        let count: u32 = TestRepo::stdout(&count_output).trim().parse().unwrap_or(0);
+        assert!(
+            count > 0,
+            "Local trunk should still have extra commit when --no-sync. Count: {}",
+            count
+        );
+    }
+
+    #[tokio::test]
     async fn test_merge_retargets_next_pr_after_merging_parent_pr() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
