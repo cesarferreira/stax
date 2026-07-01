@@ -13,6 +13,7 @@ stax
 - Full-height stack tree with PR status, sync indicators, and ahead/behind counts
 - Selected-branch summary with recommended next actions and live CI progress
 - Patch viewer with a compact diffstat header and scrollable body
+- Runtime pane toggles for small terminals (`1` Stack, `2` Summary, `3` Patch)
 - Keyboard-driven checkout, restack, submit, create, rename, delete
 - Reorder mode for reparenting branches
 
@@ -36,6 +37,7 @@ The main `st` TUI is focused on stacks and patches. Worktree management lives in
 | `d` | Delete branch |
 | `/` | Search / filter branches |
 | `Tab` | Toggle focus between stack and patch panes |
+| `1` / `2` / `3` | Show/hide Stack, Summary, and Patch panes |
 | `?` | Show keybindings |
 | `q`/`Esc` | Quit |
 

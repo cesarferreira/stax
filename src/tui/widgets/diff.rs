@@ -14,12 +14,12 @@ pub fn render_diff(f: &mut Frame, app: &App, area: Rect) {
 
     let title = if let Some(b) = branch {
         if let Some(parent) = &b.parent {
-            format!(" Patch: {} ← {} ", b.name, parent)
+            format!(" [3] Patch: {} ← {} ", b.name, parent)
         } else {
-            format!(" {} ", b.name)
+            format!(" [3] {} ", b.name)
         }
     } else {
-        " Patch ".to_string()
+        " [3] Patch ".to_string()
     };
 
     let (border_color, title_style) = if is_focused {

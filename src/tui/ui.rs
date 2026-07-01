@@ -1,4 +1,4 @@
-use crate::tui::app::{App, ConfirmAction, FocusedPane, InputAction, Mode};
+use crate::tui::app::{App, ConfirmAction, FocusedPane, InputAction, Mode, PaneVisibility};
 use crate::tui::widgets::{render_details, render_diff, render_reorder_preview, render_stack_tree};
 use ratatui::{
     Frame,
@@ -11,13 +11,13 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DashboardLayout {
-    stack: Rect,
-    summary: Rect,
-    patch: Rect,
+    stack: Option<Rect>,
+    summary: Option<Rect>,
+    patch: Option<Rect>,
     status: Rect,
 }
 
-fn dashboard_layout(area: Rect) -> DashboardLayout {
+fn dashboard_layout(area: Rect, visibility: PaneVisibility) -> DashboardLayout {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -26,40 +26,121 @@ fn dashboard_layout(area: Rect) -> DashboardLayout {
         ])
         .split(area);
 
-    let main_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(chunks[0]);
+    let main = chunks[0];
+    let status = chunks[1];
 
-    let left_chunks = Layout::default()
+    match (visibility.stack, visibility.summary, visibility.patch) {
+        (true, true, true) => {
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+                .split(main);
+
+            let left_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(8),     // stack
+                    Constraint::Length(10), // branch summary
+                ])
+                .split(main_chunks[0]);
+
+            DashboardLayout {
+                stack: Some(left_chunks[0]),
+                summary: Some(left_chunks[1]),
+                patch: Some(main_chunks[1]),
+                status,
+            }
+        }
+        (true, true, false) => {
+            let chunks = stack_summary_layout(main);
+            DashboardLayout {
+                stack: Some(chunks[0]),
+                summary: Some(chunks[1]),
+                patch: None,
+                status,
+            }
+        }
+        (true, false, true) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+                .split(main);
+            DashboardLayout {
+                stack: Some(chunks[0]),
+                summary: None,
+                patch: Some(chunks[1]),
+                status,
+            }
+        }
+        (false, true, true) => {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+                .split(main);
+            DashboardLayout {
+                stack: None,
+                summary: Some(chunks[0]),
+                patch: Some(chunks[1]),
+                status,
+            }
+        }
+        (true, false, false) => DashboardLayout {
+            stack: Some(main),
+            summary: None,
+            patch: None,
+            status,
+        },
+        (false, true, false) => DashboardLayout {
+            stack: None,
+            summary: Some(main),
+            patch: None,
+            status,
+        },
+        (false, false, true) => DashboardLayout {
+            stack: None,
+            summary: None,
+            patch: Some(main),
+            status,
+        },
+        (false, false, false) => DashboardLayout {
+            stack: Some(main),
+            summary: None,
+            patch: None,
+            status,
+        },
+    }
+}
+
+fn stack_summary_layout(area: Rect) -> [Rect; 2] {
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(8),     // stack
             Constraint::Length(10), // branch summary
         ])
-        .split(main_chunks[0]);
-
-    DashboardLayout {
-        stack: left_chunks[0],
-        summary: left_chunks[1],
-        patch: main_chunks[1],
-        status: chunks[1],
-    }
+        .split(area);
+    [chunks[0], chunks[1]]
 }
 
 /// Main UI render function
 pub fn render(f: &mut Frame, app: &App) {
     let show_reorder_preview = matches!(app.mode, Mode::Reorder)
         || matches!(app.mode, Mode::Confirm(ConfirmAction::ApplyReorder));
-    let layout = dashboard_layout(f.area());
+    let layout = dashboard_layout(f.area(), app.pane_visibility);
 
-    render_stack_tree(f, app, layout.stack);
-    render_details(f, app, layout.summary);
+    if let Some(area) = layout.stack {
+        render_stack_tree(f, app, area);
+    }
+    if let Some(area) = layout.summary {
+        render_details(f, app, area);
+    }
 
-    if show_reorder_preview {
-        render_reorder_preview(f, app, layout.patch);
-    } else {
-        render_diff(f, app, layout.patch);
+    if let Some(area) = layout.patch {
+        if show_reorder_preview {
+            render_reorder_preview(f, app, area);
+        } else {
+            render_diff(f, app, area);
+        }
     }
 
     // Status bar
@@ -89,6 +170,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
             Mode::Normal => {
                 let (focus_label, focus_color, focus_hint) = match app.focused_pane {
                     FocusedPane::Stack => (" STACK ", Color::Cyan, "browse branches"),
+                    FocusedPane::Summary => (" SUMMARY ", Color::Blue, "inspect branch"),
                     FocusedPane::Diff => (" PATCH ", Color::Green, "scroll patch"),
                 };
                 let branch_count = app.branches.len();
@@ -242,6 +324,8 @@ fn build_normal_shortcuts(app: &App) -> Line<'static> {
 
     spans.push(key_hint("/", Color::Cyan));
     spans.push(Span::raw(" search  "));
+    spans.push(key_hint("1/2/3", Color::Blue));
+    spans.push(Span::raw(" panes  "));
     spans.push(key_hint("m", Color::Magenta));
     spans.push(Span::raw(" move  "));
     spans.push(key_hint("?", Color::Yellow));
@@ -282,6 +366,9 @@ fn render_help_modal(f: &mut Frame) {
         Line::from("  ↓/j      Move selection down"),
         Line::from("  Enter    Checkout selected branch"),
         Line::from("  Tab      Switch focus to patch scrolling"),
+        Line::from("  1        Show/hide Stack pane"),
+        Line::from("  2        Show/hide Summary pane"),
+        Line::from("  3        Show/hide Patch pane"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Actions",
@@ -604,29 +691,72 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::{build_tree_prefix, dashboard_layout};
+    use crate::tui::app::PaneVisibility;
     use ratatui::layout::Rect;
 
     #[test]
     fn dashboard_layout_places_summary_under_stack() {
-        let layout = dashboard_layout(Rect::new(0, 0, 100, 40));
+        let layout = dashboard_layout(Rect::new(0, 0, 100, 40), PaneVisibility::default());
+        let stack = layout.stack.expect("stack pane");
+        let summary = layout.summary.expect("summary pane");
+        let patch = layout.patch.expect("patch pane");
 
-        assert_eq!(layout.stack.x, 0);
-        assert_eq!(layout.summary.x, 0);
-        assert_eq!(layout.summary.y, layout.stack.y + layout.stack.height);
-        assert_eq!(layout.summary.width, layout.stack.width);
-        assert!(layout.patch.x > layout.stack.x);
-        assert_eq!(layout.patch.y, 0);
-        assert_eq!(layout.patch.height, 36);
+        assert_eq!(stack.x, 0);
+        assert_eq!(summary.x, 0);
+        assert_eq!(summary.y, stack.y + stack.height);
+        assert_eq!(summary.width, stack.width);
+        assert!(patch.x > stack.x);
+        assert_eq!(patch.y, 0);
+        assert_eq!(patch.height, 36);
     }
 
     #[test]
     fn dashboard_layout_keeps_reorder_preview_on_right() {
-        let layout = dashboard_layout(Rect::new(0, 0, 100, 40));
+        let layout = dashboard_layout(Rect::new(0, 0, 100, 40), PaneVisibility::default());
+        let summary = layout.summary.expect("summary pane");
+        let patch = layout.patch.expect("patch pane");
 
-        assert_eq!(layout.summary.x, layout.stack.x);
-        assert!(layout.patch.x > layout.summary.x);
-        assert_eq!(layout.patch.y, 0);
-        assert_eq!(layout.patch.height, 36);
+        assert_eq!(summary.x, layout.stack.expect("stack pane").x);
+        assert!(patch.x > summary.x);
+        assert_eq!(patch.y, 0);
+        assert_eq!(patch.height, 36);
+    }
+
+    #[test]
+    fn dashboard_layout_expands_stack_when_summary_and_patch_are_hidden() {
+        let layout = dashboard_layout(
+            Rect::new(0, 0, 100, 40),
+            PaneVisibility {
+                stack: true,
+                summary: false,
+                patch: false,
+            },
+        );
+
+        assert_eq!(layout.stack, Some(Rect::new(0, 0, 100, 36)));
+        assert_eq!(layout.summary, None);
+        assert_eq!(layout.patch, None);
+        assert_eq!(layout.status, Rect::new(0, 36, 100, 4));
+    }
+
+    #[test]
+    fn dashboard_layout_expands_stack_and_summary_when_patch_is_hidden() {
+        let layout = dashboard_layout(
+            Rect::new(0, 0, 100, 40),
+            PaneVisibility {
+                stack: true,
+                summary: true,
+                patch: false,
+            },
+        );
+        let stack = layout.stack.expect("stack pane");
+        let summary = layout.summary.expect("summary pane");
+
+        assert_eq!(stack.width, 100);
+        assert_eq!(summary.width, 100);
+        assert_eq!(summary.y, 26);
+        assert_eq!(summary.height, 10);
+        assert_eq!(layout.patch, None);
     }
 
     #[test]
