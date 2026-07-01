@@ -7,7 +7,7 @@ use crate::git::GitRepo;
 use crate::git::repo::WorktreeInfo;
 use anyhow::{Result, bail};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use std::io::IsTerminal;
 
 fn effective_remove_force(force: bool, confirmed_dirty_removal: bool) -> bool {

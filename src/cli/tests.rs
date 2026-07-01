@@ -431,15 +431,17 @@ fn merge_queue_rejects_zero_interval() {
 
 #[test]
 fn merge_stack_when_ready_rejects_zero_interval() {
-    assert!(try_parse_cli(&[
-        "stax",
-        "merge",
-        "--stack",
-        "--when-ready",
-        "--interval",
-        "0"
-    ])
-    .is_err());
+    assert!(
+        try_parse_cli(&[
+            "stax",
+            "merge",
+            "--stack",
+            "--when-ready",
+            "--interval",
+            "0"
+        ])
+        .is_err()
+    );
 }
 
 #[test]
