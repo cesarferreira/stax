@@ -1,0 +1,45 @@
+{
+    "$schema": "https://raw.githubusercontent.com/cesarferreira/robin/refs/heads/main/schema/robin.schema.json",
+    "scripts": {
+        "build": {
+            "cmd": "cargo build",
+            "desc": "Build the debug binary"
+        },
+        "release": {
+            "cmd": "cargo build --release",
+            "desc": "Build the optimized release binary"
+        },
+        "test": {
+            "cmd": "make test",
+            "desc": "Run the full test suite (Docker-backed on macOS)"
+        },
+        "test:native": {
+            "cmd": "make test-native",
+            "desc": "Run the full test suite natively on the host"
+        },
+        "test:one": {
+            "cmd": "cargo nextest run {{name}}",
+            "desc": "Run a single test by name filter"
+        },
+        "check": {
+            "cmd": "cargo check && cargo clippy -- -D warnings",
+            "desc": "Type-check and lint (both required before commit)"
+        },
+        "fmt": {
+            "cmd": "cargo fmt",
+            "desc": "Format the code"
+        },
+        "install": {
+            "cmd": "cargo install --path .",
+            "desc": "Install stax locally from source"
+        },
+        "run": {
+            "cmd": "cargo run --",
+            "desc": "Run stax from source with arguments"
+        },
+        "verify": {
+            "cmd": ["@fmt", "@check", "@test"],
+            "desc": "Full pre-commit gate: format, check + lint, then test"
+        }
+    }
+}

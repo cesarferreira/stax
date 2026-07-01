@@ -204,7 +204,7 @@ pub fn run(
 
         let confirm = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(prompt)
-            .default(false)
+            .default(true)
             .interact()?;
 
         if !confirm {
@@ -269,11 +269,12 @@ pub fn run(
                 // Check if ready without waiting
                 let status = rt.block_on(async { client.get_pr_merge_status(pr_number).await })?;
                 if !status.is_ready() {
-                    failed_pr = Some((
-                        branch_info.branch.clone(),
-                        pr_number,
-                        format!("PR not ready: {}", status.status_text()),
-                    ));
+                    let reason = if status.is_blocked() {
+                        blocked_reason(&status)
+                    } else {
+                        format!("PR not ready: {}", status.status_text())
+                    };
+                    failed_pr = Some((branch_info.branch.clone(), pr_number, reason));
                     break;
                 }
             }
@@ -440,11 +441,6 @@ pub fn run(
 
     // Cleanup merged branches
     if !no_delete && !merged_prs.is_empty() {
-        if !quiet {
-            println!();
-            println!("{}", "Cleaning up merged branches...".dimmed());
-        }
-
         for (branch, _pr) in &merged_prs {
             // Delete local branch
             let local_deleted = Command::new("git")
@@ -527,6 +523,10 @@ pub fn run(
                     println!("  {} {}", "○".dimmed(), remaining.branch);
                 }
             }
+            println!(
+                "{}",
+                "Tip: Run 'stax merge' again to continue merging the rest of the stack.".dimmed()
+            );
         }
 
         if !no_delete && !merged_prs.is_empty() {
@@ -547,14 +547,6 @@ pub fn run(
                 &scope.trunk
             };
             println!("  • Switched to: {}", checkout_after_cleanup.cyan());
-        }
-
-        if !scope.remaining.is_empty() {
-            println!();
-            println!(
-                "{}",
-                "Tip: Run 'stax merge' again to continue merging the rest of the stack.".dimmed()
-            );
         }
 
         if !no_sync {
@@ -950,6 +942,14 @@ enum WaitResult {
     Timeout,
 }
 
+/// Map a blocked `PrMergeStatus` to a descriptive, actionable message.
+fn blocked_reason(status: &PrMergeStatus) -> String {
+    if status.is_draft {
+        return "PR is in Draft state — remove Draft status before merging".to_string();
+    }
+    status.status_text().to_string()
+}
+
 /// Wait for a PR to be ready to merge (CI passed, approved)
 fn wait_for_pr_ready(
     rt: &tokio::runtime::Runtime,
@@ -978,7 +978,7 @@ fn wait_for_pr_ready(
             if !quiet && last_status.is_some() {
                 println!(); // End the waiting line
             }
-            return Ok(WaitResult::Failed(status.status_text().to_string()));
+            return Ok(WaitResult::Failed(blocked_reason(&status)));
         }
 
         // Check timeout
@@ -1579,5 +1579,48 @@ mod tests {
         let _ready = WaitResult::Ready;
         let _failed = WaitResult::Failed("CI failed".to_string());
         let _timeout = WaitResult::Timeout;
+    }
+
+    fn merge_status(state: &str) -> PrMergeStatus {
+        PrMergeStatus {
+            number: 1,
+            title: "test".to_string(),
+            state: state.to_string(),
+            updated_at: None,
+            is_draft: false,
+            mergeable: Some(true),
+            mergeable_state: "clean".to_string(),
+            ci_status: CiStatus::Success,
+            review_decision: None,
+            approvals: 0,
+            changes_requested: false,
+            head_sha: "abc123".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_blocked_reason_draft_explains_fix() {
+        let mut status = merge_status("open");
+        status.is_draft = true;
+
+        let reason = blocked_reason(&status);
+        assert!(reason.contains("Draft"));
+        assert!(reason.contains("remove Draft"));
+    }
+
+    #[test]
+    fn test_blocked_reason_changes_requested() {
+        let mut status = merge_status("open");
+        status.changes_requested = true;
+
+        assert_eq!(blocked_reason(&status), "Changes requested");
+    }
+
+    #[test]
+    fn test_blocked_reason_ci_failed() {
+        let mut status = merge_status("open");
+        status.ci_status = CiStatus::Failure;
+
+        assert_eq!(blocked_reason(&status), "CI failed");
     }
 }
