@@ -1769,16 +1769,15 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         )?;
 
         let stack_links_started_at = Instant::now();
-        let effective_stack_links_mode =
-            if native_stack_linked && stack_links_when_native == StackLinksWhenNative::Off {
-                StackLinksMode::Off
-            } else {
-                if single_stack_mode == SingleStackMode::Off && stack_link_contexts.len() <= 1 {
-                    StackLinksMode::Off
-                } else {
-                    stack_links_mode
-                }
-            };
+        let native_forces_links_off =
+            native_stack_linked && stack_links_when_native == StackLinksWhenNative::Off;
+        let single_stack_skips_links =
+            single_stack_mode == SingleStackMode::Off && stack_link_contexts.len() <= 1;
+        let effective_stack_links_mode = if native_forces_links_off || single_stack_skips_links {
+            StackLinksMode::Off
+        } else {
+            stack_links_mode
+        };
         for (pr_number, _branch, stack_link_pr_infos) in &stack_link_contexts {
             let sync_timer =
                 LiveTimer::maybe_new(!quiet, &format!("Syncing stack links on #{}...", pr_number));
@@ -2158,12 +2157,15 @@ fn maybe_link_native_stack(
         return Ok(false);
     }
 
-    if gh_stack::extension_status() != ExtensionStatus::Installed {
+    // Cheap cached check before spawning any `gh` subprocess: if this repo has
+    // already been marked feature-disabled, `auto` mode stays quiet without
+    // probing the extension on every submit.
+    if mode == NativeStackMode::Auto && gh_stack::feature_enabled(workdir) == FeatureState::Disabled
+    {
         return Ok(false);
     }
 
-    if mode == NativeStackMode::Auto && gh_stack::feature_enabled(workdir) == FeatureState::Disabled
-    {
+    if gh_stack::extension_status() != ExtensionStatus::Installed {
         return Ok(false);
     }
 

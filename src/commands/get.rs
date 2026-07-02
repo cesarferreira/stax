@@ -83,7 +83,7 @@ pub fn run(options: GetOptions) -> Result<()> {
 
     let stack = Stack::load(&repo)?;
     let targets = if let Some(native_targets) =
-        native_stack_targets(&config, requested, &target, &trunk)
+        native_stack_targets(&repo, &config, requested, &target, &trunk)
             .filter(|targets| !targets.is_empty())
     {
         native_targets
@@ -339,20 +339,24 @@ fn collect_targets(
 }
 
 fn native_stack_targets(
+    repo: &GitRepo,
     config: &Config,
     requested: &str,
     requested_target: &GetTarget,
     trunk: &str,
 ) -> Option<Vec<GetTarget>> {
-    if requested.parse::<u64>().is_err()
-        || gh_stack::extension_status() != ExtensionStatus::Installed
-    {
+    // Cheap gating before spawning any `gh` subprocess: only numeric PR requests
+    // on GitHub remotes can resolve to a native stack.
+    if requested.parse::<u64>().is_err() {
         return None;
     }
 
-    let repo = GitRepo::open().ok()?;
-    let remote_info = RemoteInfo::from_repo(&repo, config).ok()?;
+    let remote_info = RemoteInfo::from_repo(repo, config).ok()?;
     if remote_info.forge != ForgeType::GitHub {
+        return None;
+    }
+
+    if gh_stack::extension_status() != ExtensionStatus::Installed {
         return None;
     }
 
@@ -446,7 +450,10 @@ fn ordered_native_entries(config: &Config, entries: &[NativeStackEntry]) -> Vec<
                         .any(|seen: &NativeStackEntry| &seen.branch == base)
             })
         }) else {
-            return entries.to_vec();
+            // Cycle / unresolvable base: fall back to the normalized entries in
+            // their original order rather than the raw (un-normalized) input.
+            ordered.extend(remaining);
+            return ordered;
         };
         ordered.push(remaining.remove(index));
     }
