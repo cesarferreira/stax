@@ -185,16 +185,23 @@ pub fn run_update(dry_run: bool) -> Result<()> {
     println!("Fetching latest skills from GitHub…");
     let remote_body = fetch_remote_skills()?;
 
+    // The target is always the running binary's version — that's what
+    // `build_content` stamps into each skill file and what drives update/staleness
+    // decisions. The remote skills.md marker is informational only; when it lags
+    // behind (the upstream comment isn't always bumped in lockstep), surface it as
+    // a dimmed note rather than something that looks like a mismatch to worry about.
     let remote_body_version = extract_skills_version(&remote_body);
 
-    if let Some(v) = &remote_body_version {
+    println!("Target version: {}", format!("v{PKG_VERSION}").green());
+    if let Some(v) = remote_body_version
+        .as_deref()
+        .filter(|v| *v != PKG_VERSION)
+    {
         println!(
-            "Remote skills.md marker: {}  (target: {})",
-            format!("v{v}").dimmed(),
-            format!("v{PKG_VERSION}").green(),
+            "{}",
+            format!("(remote skills.md marker is v{v} — informational only, does not affect updates)")
+                .dimmed(),
         );
-    } else {
-        println!("Target version: {}", format!("v{PKG_VERSION}").green());
     }
     println!();
 
