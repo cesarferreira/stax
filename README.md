@@ -199,20 +199,6 @@ st merge --all            # merge the whole stack regardless of position
 
 → [Merge and cascade](docs/workflows/merge-and-cascade.md)
 
-### Native GitHub Stacked PRs
-
-When a GitHub repo has native Stacked PRs enabled and you have the `github/gh-stack` extension installed, `st ss` automatically registers the submitted PRs as a native GitHub Stack. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top.
-
-```bash
-gh extension install github/gh-stack
-st doctor --fix          # can offer the install when missing
-st ss                    # auto-links native stack when available
-st stack link            # manually re-link the current stack
-st stack unlink          # remove the native GitHub Stack object
-```
-
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior.
-
 ### AI conflict resolution
 
 When a rebase stops on a conflict, `st resolve` sends only the conflicted text files to your configured AI agent, applies the result, and resumes the rebase automatically. If the AI returns invalid output, touches a non-conflicted file, or leaves extra conflicts behind, stax bails out and preserves the in-progress rebase so you can inspect or continue manually.

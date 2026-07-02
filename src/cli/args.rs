@@ -78,12 +78,6 @@ pub(crate) struct SubmitOptions {
     /// Re-request review from existing reviewers when updating PRs
     #[arg(long)]
     pub(crate) rerequest_review: bool,
-    /// Force-attempt native GitHub Stack registration via `gh stack`
-    #[arg(long, conflicts_with = "no_native_stack")]
-    pub(crate) native_stack: bool,
-    /// Skip native GitHub Stack registration for this submit
-    #[arg(long, conflicts_with = "native_stack")]
-    pub(crate) no_native_stack: bool,
     /// Squash all commits on each branch into one before pushing
     #[arg(long)]
     pub(crate) squash: bool,
@@ -117,13 +111,6 @@ impl From<SubmitOptions> for commands::submit::SubmitOptions {
             title: submit.title,
             body: submit.body,
             rerequest_review: submit.rerequest_review,
-            native_stack_override: if submit.no_native_stack {
-                Some(crate::config::NativeStackMode::Off)
-            } else if submit.native_stack {
-                Some(crate::config::NativeStackMode::Link)
-            } else {
-                None
-            },
             squash: submit.squash,
             update_title: submit.update_title,
         }
@@ -1355,12 +1342,6 @@ pub(crate) enum StackCommands {
         #[arg(long, value_enum, default_value_t = RestackSubmitAfter::No)]
         submit_after: RestackSubmitAfter,
     },
-
-    /// Register the current stack as a native GitHub Stack via `gh stack`
-    Link,
-
-    /// Remove the native GitHub Stack object via `gh stack`
-    Unlink,
 }
 
 #[derive(Subcommand)]

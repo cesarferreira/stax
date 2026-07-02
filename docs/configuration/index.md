@@ -35,8 +35,6 @@ Config is loaded as follows:
 [submit]
 # stack_links = "comment" # "comment" | "body" | "both" | "off"
 # single_stack = "on"     # "on" | "off" — when "off", skip stack-link sync while the stack has only one PR
-# native_stack = "auto"   # "auto" | "off" | "link" — auto-register native GitHub Stacked PRs when available
-# stack_links_when_native = "keep" # "keep" | "off" — keep stax body/comment links even when native registration succeeds
 
 [ci]
 # alert = false
@@ -192,22 +190,6 @@ When body output is enabled, stax appends a managed block to the bottom of the P
 Stack-link entries use compact PR/MR references and mark the PR being rendered with `👈`. On GitHub, stax keeps native `#123` PR references so GitHub renders its standard linked issue/PR styling; other forges use direct markdown links. The intro text is relative to the PR being rendered, so an imported base PR is described as an imported reference, while a local PR calls out any imported downstack context. Imported branches remain read-only for push and PR metadata updates, but their existing PRs still receive the managed stack links when they are part of the displayed stack.
 
 `single_stack` controls whether stack links are written when the stack contains only one PR. With the default `"on"`, links are always synced per `stack_links`. With `"off"`, stax skips link sync — and removes any stale links left over from a previous `"on"` setting — while the stack has a single PR. As soon as a second PR is submitted on the same stack, links populate on every PR (including the original) automatically.
-
-## Native GitHub Stacked PRs
-
-```toml
-[submit]
-native_stack = "auto"              # "auto" | "off" | "link"
-stack_links_when_native = "keep"   # "keep" | "off"
-```
-
-`native_stack = "auto"` is the default. On GitHub remotes, stax checks for the `github/gh-stack` extension and tries to register submitted multi-PR stacks with GitHub's native Stacked PRs feature. If the extension is missing, the repo does not have private-preview access, or the remote is not GitHub, submit silently keeps the existing stax behavior.
-
-Use `native_stack = "off"` to disable native registration. Use `"link"` to force an attempt even when the repo's feature cache is unknown or disabled. Per run, `st submit --native-stack` forces an attempt and `st submit --no-native-stack` skips it.
-
-`stack_links_when_native = "keep"` preserves stax's body/comment stack links when native registration succeeds. Set it to `"off"` only if you want the GitHub native stack map without stax-managed PR body/comment links.
-
-`st doctor` reports whether `gh-stack` is installed and `st doctor --fix` can install it with `gh extension install github/gh-stack` after confirmation.
 
 ## Forge type override
 
