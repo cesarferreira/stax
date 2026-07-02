@@ -713,6 +713,8 @@ pub fn run() -> Result<()> {
                 auto_stash_pop,
                 submit_after.into(),
             ),
+            StackCommands::Link => commands::stack_cmd::run_link(),
+            StackCommands::Unlink => commands::stack_cmd::run_unlink(),
         },
         // Hidden shortcuts
         Commands::Bc {

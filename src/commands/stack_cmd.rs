@@ -1,8 +1,11 @@
 use crate::commands::worktree::shared::platform_shell;
+use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, refs};
+use crate::github::gh_stack::{self, ExtensionStatus, LinkOutcome};
 use crate::ops::receipt::OpKind;
 use crate::ops::tx::Transaction;
+use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::Result;
 use colored::Colorize;
 use git2::BranchType;
@@ -12,6 +15,106 @@ use std::io::{self, Write};
 // =========================================================================
 // validate
 // =========================================================================
+
+pub fn run_link() -> Result<()> {
+    let repo = GitRepo::open()?;
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(&repo, &config)?;
+    if remote_info.forge != ForgeType::GitHub {
+        anyhow::bail!(
+            "`stax stack link` is only supported for GitHub remotes (found {})",
+            remote_info.forge
+        );
+    }
+    ensure_gh_stack_extension()?;
+
+    let stack = Stack::load(&repo)?;
+    let current = repo.current_branch()?;
+    let pr_numbers = current_stack_pr_numbers(&stack, &current)?;
+    if pr_numbers.is_empty() {
+        anyhow::bail!("Native GitHub Stacks require at least one PR in the current stack");
+    }
+
+    match gh_stack::link_stack(&pr_numbers, &stack.trunk, &remote_info.name) {
+        LinkOutcome::Linked => {
+            gh_stack::set_feature_enabled(repo.workdir()?, true)?;
+            println!(
+                "{} {}",
+                "✓".green(),
+                format!("Linked {} PRs as a native GitHub Stack", pr_numbers.len()).dimmed()
+            );
+            Ok(())
+        }
+        LinkOutcome::FeatureDisabled { message } => {
+            gh_stack::set_feature_enabled(repo.workdir()?, false)?;
+            anyhow::bail!("GitHub native Stacked PRs are not enabled for this repo: {message}");
+        }
+        LinkOutcome::SinglePrValidationRejected { message } => {
+            anyhow::bail!("GitHub rejected the native Stack link: {message}");
+        }
+        LinkOutcome::Failed { message } => {
+            anyhow::bail!("Failed to link native GitHub Stack: {message}");
+        }
+    }
+}
+
+pub fn run_unlink() -> Result<()> {
+    let repo = GitRepo::open()?;
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(&repo, &config)?;
+    if remote_info.forge != ForgeType::GitHub {
+        anyhow::bail!(
+            "`stax stack unlink` is only supported for GitHub remotes (found {})",
+            remote_info.forge
+        );
+    }
+    ensure_gh_stack_extension()?;
+
+    match gh_stack::unlink_stack() {
+        LinkOutcome::Linked => {
+            println!("{}", "✓ Native GitHub Stack removed".green());
+            Ok(())
+        }
+        LinkOutcome::FeatureDisabled { message } => {
+            anyhow::bail!("GitHub native Stacked PRs are not enabled for this repo: {message}");
+        }
+        LinkOutcome::SinglePrValidationRejected { message } => {
+            anyhow::bail!("GitHub rejected the native Stack unlink: {message}");
+        }
+        LinkOutcome::Failed { message } => {
+            anyhow::bail!("Failed to remove native GitHub Stack: {message}");
+        }
+    }
+}
+
+fn ensure_gh_stack_extension() -> Result<()> {
+    match gh_stack::extension_status() {
+        ExtensionStatus::Installed => Ok(()),
+        ExtensionStatus::NoExtension => {
+            anyhow::bail!(
+                "`gh-stack` extension is not installed. Run `gh extension install github/gh-stack`."
+            )
+        }
+        ExtensionStatus::NoGh => {
+            anyhow::bail!("GitHub CLI `gh` is not installed or not available on PATH.")
+        }
+    }
+}
+
+fn current_stack_pr_numbers(stack: &Stack, current: &str) -> Result<Vec<u64>> {
+    stack
+        .current_stack(current)
+        .into_iter()
+        .filter(|branch| branch != &stack.trunk)
+        .map(|branch| {
+            stack
+                .branches
+                .get(&branch)
+                .and_then(|info| info.pr_number)
+                .ok_or_else(|| anyhow::anyhow!("Branch '{branch}' does not have PR metadata"))
+        })
+        .collect()
+}
 
 pub fn run_validate() -> Result<()> {
     let repo = GitRepo::open()?;

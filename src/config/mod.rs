@@ -110,6 +110,13 @@ pub struct SubmitConfig {
     /// Where stax-managed stack links should be synced on submit.
     #[serde(default)]
     pub stack_links: StackLinksMode,
+    /// Whether to register a native GitHub Stack via `gh stack` after submit.
+    #[serde(default)]
+    pub native_stack: NativeStackMode,
+    /// Whether stax-managed stack links should still sync when native stack
+    /// registration succeeds.
+    #[serde(default)]
+    pub stack_links_when_native: StackLinksWhenNative,
     /// Whether to sync stack links when the stack has only one PR.
     /// `On` (default) always syncs per `stack_links`. `Off` skips link sync
     /// (and cleans up stale links) while the stack has <= 1 PRs; once a 2nd
@@ -138,6 +145,23 @@ pub enum StackLinksMode {
     Comment,
     Body,
     Both,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NativeStackMode {
+    Off,
+    Link,
+    #[default]
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum StackLinksWhenNative {
+    #[default]
+    Keep,
     Off,
 }
 
