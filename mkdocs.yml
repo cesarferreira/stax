@@ -1,0 +1,89 @@
+site_name: stax
+site_description: A modern CLI for stacked Git branches and PRs.
+site_url: https://cesarferreira.github.io/stax/
+repo_url: https://github.com/cesarferreira/stax
+repo_name: cesarferreira/stax
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - toc.integrate
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Install: getting-started/install.md
+      - Quick Start: getting-started/quick-start.md
+  - Concepts:
+      - Stacked Branches: concepts/stacked-branches.md
+      - Multiple Stacks: concepts/multiple-stacks.md
+  - Interface:
+      - Interactive TUI: interface/tui.md
+  - Commands:
+      - Core Commands: commands/core.md
+      - Full Reference: commands/reference.md
+      - Navigation: commands/navigation.md
+      - Stack Health: commands/stack-health.md
+  - Worktrees:
+      - Worktree Command: worktrees/index.md
+      - Multi-Worktree Behavior: workflows/multi-worktree.md
+      - AI Worktree Lanes: workflows/agent-worktrees.md
+  - Workflows:
+      - Merge and Cascade: workflows/merge-and-cascade.md
+      - Standup and Changelog: workflows/reporting.md
+  - Safety:
+      - Undo and Redo: safety/undo-redo.md
+  - Configuration:
+      - Config Reference: configuration/index.md
+  - Integrations:
+      - GitHub Native Stacked PRs: integrations/github-native-stacks.md
+      - PR Templates and AI: integrations/pr-templates-and-ai.md
+      - Claude Code: integrations/claude-code.md
+      - Codex: integrations/codex.md
+      - Gemini CLI: integrations/gemini-cli.md
+      - OpenCode: integrations/opencode.md
+      - tmux: integrations/tmux.md
+  - Compatibility:
+      - Freephite and Graphite: compatibility/freephite-graphite.md
+  - Benchmarks: reference/benchmarks.md

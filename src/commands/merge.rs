@@ -1,0 +1,1488 @@
+use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
+use crate::commands::merge_rebase::{
+    fetch_remote_for_descendant_rebase, rebase_descendant_onto_parent_with_provenance,
+    rebase_descendant_onto_remote_trunk_with_provenance,
+};
+use crate::config::Config;
+use crate::engine::Stack;
+use crate::forge::ForgeClient;
+use crate::git::{GitRepo, RebaseResult};
+use crate::github::gh_stack::{self, ExtensionStatus, FeatureState};
+use crate::github::pr::{MergeMethod, PrMergeStatus};
+use crate::progress::LiveTimer;
+use crate::remote::{ForgeType, RemoteInfo};
+use anyhow::{Context, Result};
+use colored::Colorize;
+use std::io::Write;
+use std::path::Path;
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+const DUPLICATE_PR_BASE_RECHECK_TIMEOUT: Duration = Duration::from_secs(2);
+const DUPLICATE_PR_BASE_RECHECK_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Information about a branch in the merge scope
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct MergeBranchInfo {
+    branch: String,
+    pr_number: Option<u64>,
+    pr_status: Option<PrMergeStatus>,
+    is_current: bool,
+    position: usize,
+}
+
+/// Result of the merge scope calculation
+struct MergeScope {
+    /// Branches to merge (bottom to current)
+    to_merge: Vec<MergeBranchInfo>,
+    /// Branches not included (above current)
+    remaining: Vec<MergeBranchInfo>,
+    /// The trunk branch name
+    trunk: String,
+    /// The branch that was checked out when merge started
+    current: String,
+    /// Whether current branch is excluded from the merge scope
+    downstack_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrBaseUpdate {
+    Updated,
+    AlreadyTargeted,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    all: bool,
+    downstack_only: bool,
+    dry_run: bool,
+    method: MergeMethod,
+    no_delete: bool,
+    no_wait: bool,
+    timeout_mins: u64,
+    no_sync: bool,
+    yes: bool,
+    quiet: bool,
+) -> Result<()> {
+    let repo = GitRepo::open()?;
+    let current = repo.current_branch()?;
+    let stack = Stack::load(&repo)?;
+    let config = Config::load()?;
+
+    // Check if we're on a tracked branch
+    if current == stack.trunk {
+        if !quiet {
+            println!(
+                "{}",
+                "You are on trunk. Checkout a branch in a stack to merge.".yellow()
+            );
+        }
+        return Ok(());
+    }
+
+    if !stack.branches.contains_key(&current) {
+        if !quiet {
+            println!(
+                "{}",
+                format!(
+                    "Branch '{}' is not tracked. Run 'stax branch track' first.",
+                    current
+                )
+                .yellow()
+            );
+        }
+        return Ok(());
+    }
+
+    // Calculate merge scope based on current position
+    let mut scope = calculate_merge_scope(&stack, &current, all, downstack_only);
+
+    if scope.to_merge.is_empty() {
+        if !quiet {
+            println!("{}", "No branches to merge.".yellow());
+        }
+        return Ok(());
+    }
+
+    // Set up forge client for PR lookups
+    let remote_info = RemoteInfo::from_repo(&repo, &config);
+    let rt = tokio::runtime::Runtime::new()?;
+
+    // Try to create forge client (may fail if no remote or no token)
+    let client = remote_info.as_ref().ok().and_then(|info| {
+        let _enter = rt.enter();
+        ForgeClient::new(info).ok()
+    });
+
+    // For branches missing PR metadata, check the forge for existing PRs
+    if let Some(ref client) = client {
+        for branch_info in &mut scope.to_merge {
+            if branch_info.pr_number.is_none() {
+                if let Ok(Some(pr_info)) =
+                    rt.block_on(async { client.find_pr(&branch_info.branch).await })
+                {
+                    branch_info.pr_number = Some(pr_info.number);
+                }
+            }
+        }
+    }
+
+    // Check that all branches have PRs (after forge lookup)
+    let missing_prs: Vec<_> = scope
+        .to_merge
+        .iter()
+        .filter(|b| b.pr_number.is_none())
+        .map(|b| b.branch.clone())
+        .collect();
+
+    if !missing_prs.is_empty() {
+        anyhow::bail!(
+            "The following branches don't have PRs:\n  {}\n\nRun 'stax submit' first to create PRs.",
+            missing_prs.join("\n  ")
+        );
+    }
+
+    // Get remote info and client (will fail with clear error if not available)
+    let remote_info = remote_info?;
+    let client = client.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Failed to connect to the configured forge. Check your token and remote configuration."
+        )
+    })?;
+    let native_stack_capable = remote_info.forge == ForgeType::GitHub
+        && gh_stack::feature_enabled(repo.workdir()?) == FeatureState::Enabled;
+
+    let fetch_status_timer = LiveTimer::maybe_new(!quiet, "Fetching PR status...");
+
+    // Fetch status for branches to merge
+    for branch_info in &mut scope.to_merge {
+        if let Some(pr_num) = branch_info.pr_number {
+            let status = rt.block_on(async { client.get_pr_merge_status(pr_num).await })?;
+            branch_info.pr_status = Some(status);
+        }
+    }
+
+    // Fetch status for remaining branches too (for display)
+    for branch_info in &mut scope.remaining {
+        if let Some(pr_num) = branch_info.pr_number {
+            if let Ok(status) = rt.block_on(async { client.get_pr_merge_status(pr_num).await }) {
+                branch_info.pr_status = Some(status);
+            }
+        }
+    }
+
+    LiveTimer::maybe_finish_ok(fetch_status_timer, "done");
+
+    // Display the merge plan
+    if !quiet {
+        print_merge_plan(&scope, &method);
+    }
+
+    // Dry run - just show plan and exit
+    if dry_run {
+        if !quiet {
+            println!("{}", "  Dry run — no changes made.".dimmed());
+        }
+        return Ok(());
+    }
+
+    // Confirm with user
+    if !yes && !quiet {
+        print!("Proceed? [Y/n] ");
+        std::io::stdout().flush().ok();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        if input.trim().eq_ignore_ascii_case("n") {
+            println!("{}", "Aborted.".dimmed());
+            return Ok(());
+        }
+    }
+
+    // Execute the merge
+    if !quiet {
+        println!("Merging stack...");
+    }
+
+    let timeout = Duration::from_secs(timeout_mins * 60);
+    let mut merged_prs: Vec<(String, u64)> = Vec::new();
+    let mut failed_pr: Option<(String, u64, String)> = None;
+
+    for (idx, branch_info) in scope.to_merge.iter().enumerate() {
+        let pr_number = branch_info.pr_number.unwrap();
+        let next_branch = scope.to_merge.get(idx + 1);
+
+        // Check if already merged
+        let is_merged = rt.block_on(async { client.is_pr_merged(pr_number).await })?;
+        if is_merged {
+            let timer =
+                LiveTimer::maybe_new(!quiet, &format!("#{} {}...", pr_number, branch_info.branch));
+            LiveTimer::maybe_finish_ok(timer, "already merged");
+            merged_prs.push((branch_info.branch.clone(), pr_number));
+        } else {
+            // Wait for CI and approval if needed (kept outside the per-PR spinner
+            // because it can span minutes).
+            if !no_wait {
+                match wait_for_pr_ready(&rt, &client, pr_number, timeout, quiet)? {
+                    WaitResult::Ready => {}
+                    WaitResult::Failed(reason) => {
+                        failed_pr = Some((branch_info.branch.clone(), pr_number, reason));
+                        break;
+                    }
+                    WaitResult::Timeout => {
+                        failed_pr = Some((
+                            branch_info.branch.clone(),
+                            pr_number,
+                            "Timeout waiting for CI".to_string(),
+                        ));
+                        break;
+                    }
+                }
+            } else {
+                // Check if ready without waiting
+                let status = rt.block_on(async { client.get_pr_merge_status(pr_number).await })?;
+                if !status.is_ready() {
+                    let reason = if status.is_blocked() {
+                        blocked_reason(&status)
+                    } else {
+                        format!("PR not ready: {}", status.status_text())
+                    };
+                    failed_pr = Some((branch_info.branch.clone(), pr_number, reason));
+                    break;
+                }
+            }
+
+            // Merge the PR
+            let merge_timer =
+                LiveTimer::maybe_new(!quiet, &format!("#{} {}...", pr_number, branch_info.branch));
+
+            match rt.block_on(async { client.merge_pr(pr_number, method, None, None).await }) {
+                Ok(()) => {
+                    LiveTimer::maybe_finish_ok(merge_timer, "merged");
+                    merged_prs.push((branch_info.branch.clone(), pr_number));
+
+                    // Record CI history for the merged branch
+                    record_ci_history_for_branch(&repo, &rt, &client, &stack, &branch_info.branch);
+                }
+                Err(e) => {
+                    LiveTimer::maybe_finish_err(merge_timer, &format!("{:#}", e));
+                    failed_pr = Some((branch_info.branch.clone(), pr_number, format!("{:#}", e)));
+                    break;
+                }
+            }
+
+            // Retarget next PR to trunk after successful merge
+            if let Some(next_branch) = next_branch {
+                let next_pr = next_branch.pr_number.unwrap();
+                if native_stack_covers_dependency(pr_number, next_pr, native_stack_capable) {
+                    if !quiet {
+                        println!(
+                            "  {} {}",
+                            "skip:".dimmed(),
+                            format!(
+                                "native GitHub Stack will retarget dependent PR #{}",
+                                next_pr
+                            )
+                            .dimmed()
+                        );
+                    }
+                    continue;
+                }
+                let update_base_timer = LiveTimer::maybe_new(
+                    !quiet,
+                    &format!("Retargeting #{} to {}...", next_pr, scope.trunk),
+                );
+
+                match update_pr_base_unless_current(
+                    &rt,
+                    &client,
+                    next_pr,
+                    &scope.trunk,
+                    &next_branch.branch,
+                ) {
+                    Ok(PrBaseUpdate::Updated) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "done");
+                    }
+                    Ok(PrBaseUpdate::AlreadyTargeted) => {
+                        LiveTimer::maybe_finish_ok(update_base_timer, "already on base");
+                    }
+                    Err(e) => {
+                        LiveTimer::maybe_finish_err(update_base_timer, "failed");
+                        failed_pr = Some((
+                            branch_info.branch.clone(),
+                            pr_number,
+                            format!("Failed to retarget dependent PR #{}: {:#}", next_pr, e),
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If there are more PRs, rebase the next one onto trunk.
+        if let Some(next_branch) = next_branch {
+            let next_pr = next_branch.pr_number.unwrap();
+
+            // Fetch latest from remote
+            let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching latest...");
+            let fetch_ok = fetch_remote_for_descendant_rebase(&repo, &remote_info.name)?;
+            if !fetch_ok {
+                LiveTimer::maybe_finish_warn(fetch_timer, "warning");
+            } else {
+                LiveTimer::maybe_finish_ok(fetch_timer, "done");
+            }
+
+            // Rebase next branch onto trunk
+            let rebase_timer = LiveTimer::maybe_new(
+                !quiet,
+                &format!("Rebasing {} onto {}...", next_branch.branch, scope.trunk),
+            );
+
+            let rebase_result = rebase_descendant_onto_remote_trunk_with_provenance(
+                &repo,
+                &next_branch.branch,
+                &scope.trunk,
+                &remote_info.name,
+            )?;
+            match rebase_result {
+                RebaseResult::Success => {
+                    LiveTimer::maybe_finish_ok(rebase_timer, "done");
+                }
+                RebaseResult::Conflict => {
+                    let abort_dir = repo
+                        .branch_worktree_path(&next_branch.branch)?
+                        .unwrap_or(repo.workdir()?.to_path_buf());
+                    let _ = Command::new("git")
+                        .args(["rebase", "--abort"])
+                        .current_dir(&abort_dir)
+                        .output();
+
+                    LiveTimer::maybe_finish_err(rebase_timer, "conflict");
+                    failed_pr = Some((
+                        next_branch.branch.clone(),
+                        next_pr,
+                        "Rebase conflict".to_string(),
+                    ));
+                    break;
+                }
+            }
+
+            // Force push the rebased branch
+            let push_timer =
+                LiveTimer::maybe_new(!quiet, &format!("Pushing {}...", next_branch.branch));
+
+            let push_status = Command::new("git")
+                .args([
+                    "push",
+                    "--force-with-lease",
+                    &remote_info.name,
+                    &next_branch.branch,
+                ])
+                .current_dir(repo.workdir()?)
+                .output()
+                .context("Failed to push")?;
+
+            if !push_status.status.success() {
+                // If the next PR is already merged the push isn't needed — skip the error.
+                let next_is_merged = rt
+                    .block_on(async { client.is_pr_merged(next_pr).await })
+                    .unwrap_or(false);
+                if next_is_merged {
+                    LiveTimer::maybe_finish_ok(push_timer, "skipped (already merged)");
+                } else {
+                    LiveTimer::maybe_finish_err(push_timer, "failed");
+                    failed_pr = Some((
+                        next_branch.branch.clone(),
+                        next_pr,
+                        "Failed to push rebased branch".to_string(),
+                    ));
+                    break;
+                }
+            } else {
+                LiveTimer::maybe_finish_ok(push_timer, "done");
+            }
+            sync_head_after_push(&rt, &client, next_pr, &repo, &next_branch.branch);
+        }
+    }
+
+    // Rebase remaining branches while preserving their relative stack chain.
+    // First remaining branch is rebased onto trunk, then each subsequent branch
+    // is rebased onto the previous remaining branch.
+    if !merged_prs.is_empty() && !scope.remaining.is_empty() && failed_pr.is_none() {
+        if !quiet {
+            println!();
+            println!("{}", "Rebasing remaining stack branches...".dimmed());
+        }
+
+        for (idx, remaining) in scope.remaining.iter().enumerate() {
+            let previous = if idx == 0 {
+                None
+            } else {
+                Some(scope.remaining[idx - 1].branch.as_str())
+            };
+            rebase_and_finalize_remaining_branch(
+                &repo,
+                &rt,
+                &client,
+                &remote_info.name,
+                &scope.trunk,
+                &remaining.branch,
+                remaining.pr_number,
+                previous,
+                quiet,
+            )?;
+        }
+    }
+
+    // Cleanup merged branches
+    if !no_delete && !merged_prs.is_empty() {
+        for (branch, _pr) in &merged_prs {
+            // Delete local branch
+            let local_deleted = Command::new("git")
+                .args(["branch", "-D", branch])
+                .current_dir(repo.workdir()?)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            // Delete remote branch
+            let remote_deleted = Command::new("git")
+                .args(["push", &remote_info.name, "--delete", branch])
+                .current_dir(repo.workdir()?)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+
+            // Delete metadata
+            let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+
+            if !quiet {
+                if local_deleted && remote_deleted {
+                    println!("  {} {} deleted", "✓".green(), branch.dimmed());
+                } else if local_deleted {
+                    println!("  {} {} deleted (local only)", "✓".green(), branch.dimmed());
+                }
+            }
+        }
+
+        let checkout_after_cleanup = if scope.downstack_only {
+            &scope.current
+        } else {
+            &scope.trunk
+        };
+        let _ = repo.checkout(checkout_after_cleanup);
+    }
+
+    // Print summary
+    println!();
+
+    if let Some((branch, pr, reason)) = failed_pr {
+        println!("  {} #{} {} → {}", "✗".red(), pr, branch, reason);
+        println!("{}", "Fix the issue and run 'stax merge' again.".dimmed());
+    } else {
+        let pr_word = if merged_prs.len() == 1 { "PR" } else { "PRs" };
+        println!(
+            "{} {} {} merged into {}",
+            "✓".green(),
+            merged_prs.len(),
+            pr_word,
+            scope.trunk.cyan()
+        );
+
+        if !no_sync {
+            if !quiet {
+                println!();
+                println!("{}", "Running post-merge sync...".dimmed());
+            }
+
+            // After squash merges, local trunk may have commits not on remote (diverged).
+            // Update the trunk ref directly so sync finds a clean fast-forward state, but only
+            // when doing so would not discard local-only trunk content.
+            let workdir = repo.workdir()?.to_path_buf();
+            if local_trunk_reset_is_safe(&workdir, &scope.trunk) {
+                if !quiet {
+                    println!("{}", "  Resetting local trunk to remote...".dimmed());
+                }
+                // Use update-ref so this works whether or not trunk is currently checked out.
+                let remote_ref = format!("refs/remotes/origin/{}", scope.trunk);
+                let local_ref = format!("refs/heads/{}", scope.trunk);
+                let _ = Command::new("git")
+                    .args(["update-ref", &local_ref, &remote_ref])
+                    .current_dir(&workdir)
+                    .output();
+            }
+
+            // Release merge-side handles before sync opens a fresh repo view.
+            drop(rt);
+            drop(client);
+            drop(repo);
+
+            if let Err(err) = crate::commands::sync::run(
+                false,      // restack
+                false,      // prune
+                false,      // full (fast trunk + ls-remote when deleting merged)
+                !no_delete, // delete merged branches unless explicitly kept
+                false,      // delete upstream-gone branches
+                true,       // force
+                false,      // safe
+                false,      // continue
+                quiet,
+                false, // verbose
+                false, // auto_stash_pop
+                &[],
+            ) {
+                if !quiet {
+                    println!();
+                    println!(
+                        "{} {}",
+                        "warning:".yellow().bold(),
+                        format!("post-merge sync failed: {}", err).yellow()
+                    );
+                    println!(
+                        "{}",
+                        "Run 'stax rs --force' manually to sync local state.".dimmed()
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn native_stack_covers_dependency(
+    current_pr: u64,
+    next_pr: u64,
+    native_stack_capable: bool,
+) -> bool {
+    if !native_stack_capable || gh_stack::extension_status() != ExtensionStatus::Installed {
+        return false;
+    }
+
+    gh_stack::view_stack(&current_pr.to_string())
+        .map(|entries| {
+            let numbers = entries
+                .iter()
+                .filter_map(|entry| entry.pr_number)
+                .collect::<Vec<_>>();
+            numbers.contains(&current_pr) && numbers.contains(&next_pr)
+        })
+        .unwrap_or(false)
+}
+
+/// Calculate which branches to merge based on current position
+fn calculate_merge_scope(
+    stack: &Stack,
+    current: &str,
+    all: bool,
+    downstack_only: bool,
+) -> MergeScope {
+    // Get ancestors of current branch (from current up to trunk)
+    let mut ancestors = stack.ancestors(current);
+    ancestors.reverse(); // Now bottom-to-top (trunk-adjacent first)
+
+    // Remove trunk from ancestors if present
+    ancestors.retain(|b| b != &stack.trunk);
+
+    // Build list of branches from bottom to current
+    let mut to_merge: Vec<MergeBranchInfo> = Vec::new();
+
+    for (idx, branch) in ancestors.iter().enumerate() {
+        let branch_info = stack.branches.get(branch);
+        let pr_number = branch_info.and_then(|b| b.pr_number);
+
+        to_merge.push(MergeBranchInfo {
+            branch: branch.clone(),
+            pr_number,
+            pr_status: None,
+            is_current: false,
+            position: idx + 1,
+        });
+    }
+
+    let current_info = stack.branches.get(current);
+    let current_pr = current_info.and_then(|b| b.pr_number);
+    let current_position = to_merge.len() + 1;
+
+    let current_branch_info = MergeBranchInfo {
+        branch: current.to_string(),
+        pr_number: current_pr,
+        pr_status: None,
+        is_current: true,
+        position: current_position,
+    };
+
+    let mut remaining: Vec<MergeBranchInfo> = Vec::new();
+
+    if downstack_only {
+        remaining.push(current_branch_info);
+    } else {
+        to_merge.push(current_branch_info);
+    }
+
+    // Get descendants (branches above current)
+    let descendants = stack.descendants(current);
+
+    for (idx, branch) in descendants.iter().enumerate() {
+        let branch_info = stack.branches.get(branch);
+        let pr_number = branch_info.and_then(|b| b.pr_number);
+
+        remaining.push(MergeBranchInfo {
+            branch: branch.clone(),
+            pr_number,
+            pr_status: None,
+            is_current: false,
+            position: current_position + idx + 1,
+        });
+    }
+
+    // If --all flag, merge everything
+    if all && !remaining.is_empty() {
+        to_merge.extend(remaining);
+        remaining = Vec::new();
+    }
+
+    MergeScope {
+        to_merge,
+        remaining,
+        trunk: stack.trunk.clone(),
+        current: current.to_string(),
+        downstack_only,
+    }
+}
+
+/// Print the one-line merge plan summary
+fn print_merge_plan(scope: &MergeScope, method: &MergeMethod) {
+    let n = scope.to_merge.len();
+    let pr_word = if n == 1 { "PR" } else { "PRs" };
+    println!(
+        "  {} {} to merge → {} ({}):",
+        n.to_string().bold(),
+        pr_word,
+        scope.trunk.cyan(),
+        method.as_str()
+    );
+    for (i, branch_info) in scope.to_merge.iter().enumerate() {
+        let pr_str = branch_info
+            .pr_number
+            .map(|n| format!(" (#{n})"))
+            .unwrap_or_default();
+        let current_marker = if branch_info.is_current {
+            format!("  {}", "← current".dimmed())
+        } else {
+            String::new()
+        };
+        println!(
+            "    {}. {}{}{}",
+            i + 1,
+            branch_info.branch.bold(),
+            pr_str.dimmed(),
+            current_marker
+        );
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn merge_target_label(position: usize, trunk: &str) -> String {
+    if position == 1 {
+        trunk.to_string()
+    } else {
+        format!("{trunk} (after rebase)")
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn remaining_rebase_target_label<'a>(
+    idx: usize,
+    branches: &'a [MergeBranchInfo],
+    trunk: &'a str,
+) -> &'a str {
+    if idx == 0 {
+        trunk
+    } else {
+        &branches[idx - 1].branch
+    }
+}
+
+/// Strip ANSI codes for length calculation
+#[cfg_attr(not(test), allow(dead_code))]
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_escape = false;
+
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+            continue;
+        }
+        if in_escape {
+            if c == 'm' {
+                in_escape = false;
+            }
+            continue;
+        }
+        result.push(c);
+    }
+
+    result
+}
+
+/// Calculate the display width of a string, accounting for ANSI codes and wide Unicode chars
+#[cfg_attr(not(test), allow(dead_code))]
+fn display_width(s: &str) -> usize {
+    let stripped = strip_ansi(s);
+    stripped.chars().map(char_width).sum()
+}
+
+/// Get the display width of a single character
+#[cfg_attr(not(test), allow(dead_code))]
+fn char_width(c: char) -> usize {
+    // Use unicode_width crate logic for accurate width calculation
+    // For now, use a simplified approach that works for our specific use case
+    match c {
+        // Control characters and zero-width
+        '\x00'..='\x1f' | '\x7f' => 0,
+        // ASCII is width 1
+        '\x20'..='\x7e' => 1,
+        // Box drawing characters are width 1
+        '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╭' | '╮' | '╯' | '╰'
+        | '║' | '═' => 1,
+        // Arrows - typically width 1 in most terminals
+        '←' | '→' | '↑' | '↓' => 1,
+        // Checkmarks and X marks - width 1 in most monospace fonts
+        '✓' | '✗' | '✔' | '✘' => 1,
+        // Everything else (including emojis) - assume width 2
+        _ => 2,
+    }
+}
+
+/// Result of waiting for a PR to be ready
+enum WaitResult {
+    Ready,
+    Failed(String),
+    Timeout,
+}
+
+/// Map a blocked `PrMergeStatus` to a descriptive, actionable message.
+fn blocked_reason(status: &PrMergeStatus) -> String {
+    if status.is_draft {
+        return "PR is in Draft state — remove Draft status before merging".to_string();
+    }
+    status.status_text().to_string()
+}
+
+/// Wait for a PR to be ready to merge (CI passed, approved)
+fn wait_for_pr_ready(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    timeout: Duration,
+    quiet: bool,
+) -> Result<WaitResult> {
+    let start = Instant::now();
+    let poll_interval = Duration::from_secs(10);
+    let mut last_status: Option<String> = None;
+
+    loop {
+        let status = rt.block_on(async { client.get_pr_merge_status(pr_number).await })?;
+
+        // Check if ready
+        if status.is_ready() {
+            if !quiet && last_status.is_some() {
+                println!(); // End the waiting line
+            }
+            return Ok(WaitResult::Ready);
+        }
+
+        // Check if blocked (won't become ready)
+        if status.is_blocked() {
+            if !quiet && last_status.is_some() {
+                println!(); // End the waiting line
+            }
+            return Ok(WaitResult::Failed(blocked_reason(&status)));
+        }
+
+        // Check timeout
+        if start.elapsed() > timeout {
+            if !quiet && last_status.is_some() {
+                println!(); // End the waiting line
+            }
+            return Ok(WaitResult::Timeout);
+        }
+
+        // Show waiting status
+        if !quiet {
+            let elapsed = start.elapsed().as_secs();
+            let status_text = format!(
+                "      {} Waiting for {}... ({}s)",
+                "⏳".yellow(),
+                status.status_text().to_lowercase(),
+                elapsed
+            );
+
+            // Clear and rewrite the line
+            if last_status.is_some() {
+                print!("\r{}\r", " ".repeat(80));
+            }
+            print!("{}", status_text);
+            std::io::stdout().flush().ok();
+            last_status = Some(status_text);
+        }
+
+        // Wait before next poll
+        std::thread::sleep(poll_interval);
+    }
+}
+
+/// Best-effort wait until the forge reports `expected_sha` as the PR head.
+/// Silently times out so the next merge attempt surfaces the real error.
+fn wait_for_github_head_sync(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    expected_sha: &str,
+    max_wait: Duration,
+) {
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(500);
+    loop {
+        if let Ok(sha) = rt.block_on(async { client.get_pr_head_sha(pr_number).await }) {
+            if sha == expected_sha {
+                return;
+            }
+        }
+        // Stop before sleeping past the deadline.
+        if start.elapsed() + poll_interval >= max_wait {
+            return;
+        }
+        std::thread::sleep(poll_interval);
+    }
+}
+
+/// Extract a concise, user-visible reason from `git push` stderr output.
+/// Returns the first non-empty line, or a generic fallback when stderr is empty.
+fn summarize_git_stderr(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    text.lines()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or("push rejected")
+        .to_string()
+}
+
+/// Retarget a PR base unless the forge already reports the desired base.
+///
+/// The preflight read validates that the PR number still belongs to the
+/// expected stack branch when that read succeeds. GitHub can sometimes return a
+/// duplicate base/head validation after the retarget has effectively applied, so
+/// that specific error is treated as idempotent only after a follow-up read
+/// confirms the intended base.
+pub(crate) fn update_pr_base_unless_current(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    new_base: &str,
+    expected_head: &str,
+) -> Result<PrBaseUpdate> {
+    // Best-effort read: if this fails, let PATCH run and surface the real forge error.
+    if let Ok(current_pr) = rt.block_on(async { client.get_pr_with_head(pr_number).await }) {
+        ensure_pr_head_matches(pr_number, &current_pr.head, expected_head)?;
+
+        if current_pr.info.base == new_base {
+            return Ok(PrBaseUpdate::AlreadyTargeted);
+        }
+    }
+
+    let update_result = rt.block_on(async { client.update_pr_base(pr_number, new_base).await });
+    match update_result {
+        Ok(()) => Ok(PrBaseUpdate::Updated),
+        Err(e) => {
+            if is_duplicate_pr_base_error(&e, new_base, expected_head)
+                && pr_base_matches_after_duplicate_error(rt, client, pr_number, new_base)
+            {
+                return Ok(PrBaseUpdate::AlreadyTargeted);
+            }
+
+            Err(e).with_context(|| format!("failed to retarget PR #{} to {}", pr_number, new_base))
+        }
+    }
+}
+
+fn ensure_pr_head_matches(pr_number: u64, actual_head: &str, expected_head: &str) -> Result<()> {
+    if actual_head != expected_head {
+        anyhow::bail!(
+            "PR #{} is for head branch '{}', expected '{}'",
+            pr_number,
+            actual_head,
+            expected_head
+        );
+    }
+
+    Ok(())
+}
+
+/// Re-read a PR briefly after GitHub reports a duplicate base/head pair.
+///
+/// This covers a stale-response race: the update endpoint can reject a retarget
+/// as a duplicate even though subsequent PR reads show the same PR now targets
+/// the requested base.
+fn pr_base_matches_after_duplicate_error(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    new_base: &str,
+) -> bool {
+    let deadline = Instant::now() + DUPLICATE_PR_BASE_RECHECK_TIMEOUT;
+
+    loop {
+        if let Ok(pr) = rt.block_on(async { client.get_pr(pr_number).await }) {
+            if pr.base == new_base {
+                return true;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return false;
+        }
+
+        std::thread::sleep(DUPLICATE_PR_BASE_RECHECK_INTERVAL);
+    }
+}
+
+/// Detect GitHub's duplicate base/head validation for the exact target pair.
+fn is_duplicate_pr_base_error(error: &anyhow::Error, new_base: &str, expected_head: &str) -> bool {
+    let message = format!("{:#}", error);
+    message.contains("A pull request already exists")
+        && message.contains(&format!("base branch '{}'", new_base))
+        && message.contains(&format!("head branch '{}'", expected_head))
+}
+
+/// Push a rebased remaining-stack branch and — only on success — retarget its
+/// PR base. Surfaces push or retarget failures via the supplied `LiveTimer`;
+/// on any failure the PR base is left pointing at the previous parent so the
+/// on-forge state cannot diverge from the remote branch contents.
+#[allow(clippy::too_many_arguments)]
+fn finalize_remaining_branch_push(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    remote_name: &str,
+    branch: &str,
+    pr_number: Option<u64>,
+    new_base: &str,
+    timer: Option<LiveTimer>,
+) -> Result<()> {
+    let push_output = Command::new("git")
+        .args(["push", "--force-with-lease", remote_name, branch])
+        .current_dir(repo.workdir()?)
+        .output();
+
+    let push_err = match &push_output {
+        Ok(out) if out.status.success() => None,
+        Ok(out) => Some(summarize_git_stderr(&out.stderr)),
+        Err(e) => Some(e.to_string()),
+    };
+
+    if let Some(reason) = push_err {
+        LiveTimer::maybe_finish_err(
+            timer,
+            &format!("push failed; PR base unchanged ({})", reason),
+        );
+        return Ok(());
+    }
+
+    if let Some(pr_num) = pr_number {
+        if let Err(e) = update_pr_base_unless_current(rt, client, pr_num, new_base, branch) {
+            LiveTimer::maybe_finish_err(timer, &format!("retarget failed: {:#}", e));
+            return Ok(());
+        }
+    }
+
+    LiveTimer::maybe_finish_ok(timer, "done");
+    Ok(())
+}
+
+/// Fetch, rebase, push, and retarget a single remaining-stack branch while
+/// preserving the relative chain: when `previous_remaining` is `None` the
+/// branch rebases onto `trunk`, otherwise it rebases onto the preceding
+/// remaining branch so the stack topology stays intact.
+///
+/// Failures (fetch, rebase conflict, push rejection, retarget) are surfaced
+/// via live-timer messages but do not abort the outer loop — other remaining
+/// branches can still be processed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rebase_and_finalize_remaining_branch(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    remote_name: &str,
+    trunk: &str,
+    branch: &str,
+    pr_number: Option<u64>,
+    previous_remaining: Option<&str>,
+    quiet: bool,
+) -> Result<()> {
+    let parent_is_trunk = previous_remaining.is_none();
+    let parent_branch = previous_remaining
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| trunk.to_string());
+
+    let fetch_timer = LiveTimer::maybe_new(!quiet, "Fetching latest...");
+    let fetch_ok = fetch_remote_for_descendant_rebase(repo, remote_name)?;
+    if !fetch_ok {
+        LiveTimer::maybe_finish_warn(fetch_timer, "warning");
+    } else {
+        LiveTimer::maybe_finish_ok(fetch_timer, "done");
+    }
+
+    let remaining_timer = LiveTimer::maybe_new(
+        !quiet,
+        &format!("Rebasing {} onto {}...", branch, parent_branch),
+    );
+
+    let rebase_result = if parent_is_trunk {
+        rebase_descendant_onto_remote_trunk_with_provenance(repo, branch, trunk, remote_name)
+    } else {
+        rebase_descendant_onto_parent_with_provenance(
+            repo,
+            branch,
+            &parent_branch,
+            remote_name,
+            false,
+        )
+    };
+
+    match rebase_result {
+        Ok(RebaseResult::Success) => {
+            finalize_remaining_branch_push(
+                repo,
+                rt,
+                client,
+                remote_name,
+                branch,
+                pr_number,
+                &parent_branch,
+                remaining_timer,
+            )?;
+        }
+        Ok(RebaseResult::Conflict) => {
+            let abort_dir = repo
+                .branch_worktree_path(branch)?
+                .unwrap_or(repo.workdir()?.to_path_buf());
+            let _ = Command::new("git")
+                .args(["rebase", "--abort"])
+                .current_dir(&abort_dir)
+                .output();
+            LiveTimer::maybe_finish_warn(remaining_timer, "conflict (skipped)");
+        }
+        Err(_) => {
+            LiveTimer::maybe_finish_err(remaining_timer, "failed");
+        }
+    }
+
+    Ok(())
+}
+
+/// After a force-push, briefly wait for the forge to acknowledge the new head
+/// SHA so the next merge call doesn't race against an in-flight update and
+/// return `405 Base branch was modified`.
+pub(crate) fn sync_head_after_push(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+    repo: &GitRepo,
+    branch: &str,
+) {
+    if std::env::var_os("STAX_TEST_DISABLE_HEAD_SYNC").is_some() {
+        return;
+    }
+    if let Ok(pushed_sha) = repo.rev_parse(branch) {
+        wait_for_github_head_sync(rt, client, pr_number, &pushed_sha, Duration::from_secs(15));
+    }
+}
+
+/// Record CI history for a single branch after it's merged
+fn record_ci_history_for_branch(
+    repo: &GitRepo,
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    stack: &Stack,
+    branch: &str,
+) {
+    // Verify the branch still exists before fetching CI status
+    if repo.branch_commit(branch).is_err() {
+        return; // Branch might already be deleted
+    }
+
+    // Fetch CI statuses for this single branch
+    let branches = vec![branch.to_string()];
+    if let Ok(statuses) = fetch_ci_statuses(repo, rt, client, stack, &branches) {
+        // Record the CI history (silently - we don't want to interrupt the merge flow)
+        record_ci_history(repo, &statuses);
+    }
+}
+
+/// Returns true when resetting the local trunk to `origin/<trunk>` would not discard any
+/// local-only trunk content. False when the trunk has not diverged (nothing to do) or when
+/// local trunk holds content that is absent from the remote (would be lost by the reset).
+fn local_trunk_reset_is_safe(workdir: &Path, trunk: &str) -> bool {
+    let remote_trunk = format!("origin/{}", trunk);
+
+    let diverged = Command::new("git")
+        .args([
+            "rev-list",
+            "--count",
+            &format!("{}..{}", remote_trunk, trunk),
+        ])
+        .current_dir(workdir)
+        .output();
+    match diverged {
+        Ok(out) if out.status.success() => {
+            let count = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if count == "0" {
+                return false;
+            }
+        }
+        _ => return false,
+    }
+
+    let lost = Command::new("git")
+        .args([
+            "diff",
+            "--diff-filter=D",
+            "--name-only",
+            trunk,
+            &remote_trunk,
+        ])
+        .current_dir(workdir)
+        .output();
+    match lost {
+        Ok(out) if out.status.success() => out.stdout.iter().all(|b| b.is_ascii_whitespace()),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::stack::StackBranch;
+    use crate::github::pr::CiStatus;
+    use std::collections::HashMap;
+
+    fn create_test_stack() -> Stack {
+        let mut branches = HashMap::new();
+
+        branches.insert(
+            "main".to_string(),
+            StackBranch {
+                name: "main".to_string(),
+                parent: None,
+                parent_revision: None,
+                children: vec!["feature-a".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+
+        branches.insert(
+            "feature-a".to_string(),
+            StackBranch {
+                name: "feature-a".to_string(),
+                parent: Some("main".to_string()),
+                parent_revision: None,
+                children: vec!["feature-b".to_string()],
+                needs_restack: false,
+                pr_number: Some(1),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        branches.insert(
+            "feature-b".to_string(),
+            StackBranch {
+                name: "feature-b".to_string(),
+                parent: Some("feature-a".to_string()),
+                parent_revision: None,
+                children: vec!["feature-c".to_string()],
+                needs_restack: false,
+                pr_number: Some(2),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        branches.insert(
+            "feature-c".to_string(),
+            StackBranch {
+                name: "feature-c".to_string(),
+                parent: Some("feature-b".to_string()),
+                parent_revision: None,
+                children: vec![],
+                needs_restack: false,
+                pr_number: Some(3),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_strip_ansi_empty_string() {
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn test_strip_ansi_no_codes() {
+        assert_eq!(strip_ansi("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_strip_ansi_with_color_codes() {
+        // Red text: \x1b[31mred\x1b[0m
+        assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
+    }
+
+    #[test]
+    fn test_strip_ansi_with_multiple_codes() {
+        // Bold + red: \x1b[1m\x1b[31mtext\x1b[0m
+        assert_eq!(strip_ansi("\x1b[1m\x1b[31mtext\x1b[0m"), "text");
+    }
+
+    #[test]
+    fn test_strip_ansi_complex() {
+        let colored = "\x1b[32m✓\x1b[0m \x1b[1mBold\x1b[0m \x1b[33mYellow\x1b[0m";
+        assert_eq!(strip_ansi(colored), "✓ Bold Yellow");
+    }
+
+    #[test]
+    fn test_strip_ansi_preserves_unicode() {
+        let with_emoji = "\x1b[32m✓\x1b[0m Success 🎉";
+        assert_eq!(strip_ansi(with_emoji), "✓ Success 🎉");
+    }
+
+    #[test]
+    fn test_display_width_ascii() {
+        assert_eq!(display_width("hello"), 5);
+        assert_eq!(display_width("hello world"), 11);
+    }
+
+    #[test]
+    fn test_display_width_symbols() {
+        // Check marks and X marks are width 1
+        assert_eq!(display_width("✓"), 1);
+        assert_eq!(display_width("✗"), 1);
+        // Other emojis are width 2
+        assert_eq!(display_width("⏳"), 2);
+    }
+
+    #[test]
+    fn test_display_width_mixed() {
+        // "✓ passed" = 1 (checkmark) + 1 (space) + 6 (passed) = 8
+        assert_eq!(display_width("✓ passed"), 8);
+        // "~ pending" = 1 (~) + 1 (space) + 7 (pending) = 9 (using ASCII now)
+        assert_eq!(display_width("~ pending"), 9);
+    }
+
+    #[test]
+    fn test_display_width_with_ansi() {
+        // ANSI codes should be ignored
+        assert_eq!(display_width("\x1b[32m✓\x1b[0m passed"), 8);
+    }
+
+    #[test]
+    fn test_merge_branch_info_creation() {
+        let info = MergeBranchInfo {
+            branch: "feature-test".to_string(),
+            pr_number: Some(42),
+            pr_status: None,
+            is_current: true,
+            position: 1,
+        };
+
+        assert_eq!(info.branch, "feature-test");
+        assert_eq!(info.pr_number, Some(42));
+        assert!(info.is_current);
+        assert_eq!(info.position, 1);
+    }
+
+    #[test]
+    fn test_merge_scope_creation() {
+        let scope = MergeScope {
+            to_merge: vec![
+                MergeBranchInfo {
+                    branch: "feature-a".to_string(),
+                    pr_number: Some(1),
+                    pr_status: None,
+                    is_current: false,
+                    position: 1,
+                },
+                MergeBranchInfo {
+                    branch: "feature-b".to_string(),
+                    pr_number: Some(2),
+                    pr_status: None,
+                    is_current: true,
+                    position: 2,
+                },
+            ],
+            remaining: vec![MergeBranchInfo {
+                branch: "feature-c".to_string(),
+                pr_number: Some(3),
+                pr_status: None,
+                is_current: false,
+                position: 3,
+            }],
+            trunk: "main".to_string(),
+            current: "feature-b".to_string(),
+            downstack_only: false,
+        };
+
+        assert_eq!(scope.to_merge.len(), 2);
+        assert_eq!(scope.remaining.len(), 1);
+        assert_eq!(scope.trunk, "main");
+    }
+
+    #[test]
+    fn test_calculate_merge_scope_downstack_only_excludes_current() {
+        let stack = create_test_stack();
+
+        let scope = calculate_merge_scope(&stack, "feature-b", false, true);
+
+        let to_merge: Vec<_> = scope.to_merge.iter().map(|b| b.branch.as_str()).collect();
+        let remaining: Vec<_> = scope.remaining.iter().map(|b| b.branch.as_str()).collect();
+
+        assert_eq!(to_merge, vec!["feature-a"]);
+        assert_eq!(remaining, vec!["feature-b", "feature-c"]);
+        assert!(scope.remaining[0].is_current);
+        assert_eq!(scope.remaining[0].position, 2);
+        assert_eq!(scope.current, "feature-b");
+        assert!(scope.downstack_only);
+    }
+
+    #[test]
+    fn test_calculate_merge_scope_downstack_only_direct_child_has_no_merge_targets() {
+        let stack = create_test_stack();
+
+        let scope = calculate_merge_scope(&stack, "feature-a", false, true);
+
+        let remaining: Vec<_> = scope.remaining.iter().map(|b| b.branch.as_str()).collect();
+
+        assert!(scope.to_merge.is_empty());
+        assert_eq!(remaining, vec!["feature-a", "feature-b", "feature-c"]);
+        assert!(scope.remaining[0].is_current);
+    }
+
+    #[test]
+    fn test_merge_target_label_uses_configured_trunk() {
+        assert_eq!(merge_target_label(1, "master"), "master");
+        assert_eq!(merge_target_label(2, "master"), "master (after rebase)");
+    }
+
+    #[test]
+    fn test_remaining_rebase_target_label_preserves_remaining_chain() {
+        let branches = vec![
+            MergeBranchInfo {
+                branch: "feature-b".to_string(),
+                pr_number: Some(2),
+                pr_status: None,
+                is_current: false,
+                position: 2,
+            },
+            MergeBranchInfo {
+                branch: "feature-c".to_string(),
+                pr_number: Some(3),
+                pr_status: None,
+                is_current: false,
+                position: 3,
+            },
+        ];
+
+        assert_eq!(
+            remaining_rebase_target_label(0, &branches, "master"),
+            "master"
+        );
+        assert_eq!(
+            remaining_rebase_target_label(1, &branches, "master"),
+            "feature-b"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_pr_base_error_matches_requested_base_and_head() {
+        let err = anyhow::anyhow!(
+            "GitHub: Validation Failed\nErrors:\n- {{\"message\":\"A pull request already exists for base branch 'master' and head branch 'jonny/feature'\"}}"
+        );
+
+        assert!(is_duplicate_pr_base_error(&err, "master", "jonny/feature"));
+        assert!(!is_duplicate_pr_base_error(&err, "main", "jonny/feature"));
+        assert!(!is_duplicate_pr_base_error(&err, "master", "other/feature"));
+    }
+
+    #[test]
+    fn test_pr_head_mismatch_bails() {
+        let err = ensure_pr_head_matches(42, "wrong-head", "expected-head")
+            .expect_err("head mismatch should fail");
+        let message = format!("{:#}", err);
+
+        assert!(message.contains("PR #42 is for head branch 'wrong-head'"));
+        assert!(message.contains("expected 'expected-head'"));
+    }
+
+    #[test]
+    fn test_wait_result_variants() {
+        // Test that all variants can be created
+        let _ready = WaitResult::Ready;
+        let _failed = WaitResult::Failed("CI failed".to_string());
+        let _timeout = WaitResult::Timeout;
+    }
+
+    fn merge_status(state: &str) -> PrMergeStatus {
+        PrMergeStatus {
+            number: 1,
+            title: "test".to_string(),
+            state: state.to_string(),
+            updated_at: None,
+            is_draft: false,
+            mergeable: Some(true),
+            mergeable_state: "clean".to_string(),
+            ci_status: CiStatus::Success,
+            review_decision: None,
+            approvals: 0,
+            changes_requested: false,
+            head_sha: "abc123".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_blocked_reason_draft_explains_fix() {
+        let mut status = merge_status("open");
+        status.is_draft = true;
+
+        let reason = blocked_reason(&status);
+        assert!(reason.contains("Draft"));
+        assert!(reason.contains("remove Draft"));
+    }
+
+    #[test]
+    fn test_blocked_reason_changes_requested() {
+        let mut status = merge_status("open");
+        status.changes_requested = true;
+
+        assert_eq!(blocked_reason(&status), "Changes requested");
+    }
+
+    #[test]
+    fn test_blocked_reason_ci_failed() {
+        let mut status = merge_status("open");
+        status.ci_status = CiStatus::Failure;
+
+        assert_eq!(blocked_reason(&status), "CI failed");
+    }
+}

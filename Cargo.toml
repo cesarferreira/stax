@@ -1,0 +1,113 @@
+[package]
+name = "stax"
+version = "0.91.2"
+edition = "2024"
+default-run = "stax"
+description = "Fast stacked Git branches and PRs"
+license = "MIT"
+authors = ["Cesar Ferreira"]
+repository = "https://github.com/cesarferreira/stax"
+# Integration tests are consolidated into a single binary (tests/all_tests.rs)
+# instead of one binary per file. Linking ~50 separate test binaries (each
+# statically linking the whole stax lib + octocrab/git2/ratatui) dominated build
+# time; one binary links once. Disable auto-discovery so the per-file targets
+# are not also built.
+autotests = false
+
+[lib]
+name = "stax"
+path = "src/lib.rs"
+
+[[bin]]
+name = "stax"
+path = "src/main.rs"
+
+[[bin]]
+name = "st"
+path = "src/bin/st.rs"
+
+# Single consolidated integration-test binary. See `autotests = false` above.
+[[test]]
+name = "all_tests"
+path = "tests/all_tests.rs"
+
+[features]
+default = []
+vendored-openssl = ["git2/vendored-openssl"]
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Git (no ssh — we use HTTPS + token auth exclusively)
+git2 = { version = "0.21", default-features = false, features = ["https"] }
+
+# GitHub API
+octocrab = "0.53.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Terminal UI
+dialoguer = { version = "0.12", features = ["fuzzy-select", "editor"] }
+console = "0.16"
+colored = "3"
+fuzzy-matcher = "0.3"
+indicatif = "0.18"
+ratatui = "0.30"
+crossterm = "0.29"
+termimad = "0.34"
+
+# Error handling
+anyhow = "1"
+signal-hook = "0.4"
+
+# Clipboard (text-only — skip image support to avoid pulling in the image crate)
+arboard = { version = "3", default-features = false }
+
+# Regex
+regex = "1"
+
+# Config
+toml = "1"
+dirs = "6"
+chrono = "0.4"
+
+# Update checking
+update-informer = "1"
+
+# Temp files
+tempfile = "3"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+
+# TLS crypto provider (needed to install default provider for tests using octocrab)
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
+wiremock = "0.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Full debuginfo makes linking the ~50 integration-test binaries dominate
+# build time (each statically links the whole stax lib + octocrab/git2/ratatui).
+# `line-tables-only` keeps file/line numbers in panic backtraces while cutting
+# the per-binary relink from ~13s to ~5s. `unpacked` skips the dsymutil pack
+# step on macOS, which further speeds linking.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+# `test` inherits from `dev`, but be explicit so test-binary links stay fast.
+[profile.test]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+# Linux container test runs (Docker / Apple Container / CI): skip debuginfo for
+# faster linking when target/ is bind-mounted from the macOS host.
+[profile.test-container]
+inherits = "test"
+debug = 0

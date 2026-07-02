@@ -1,0 +1,245 @@
+# Configuration
+
+```bash
+st config                     # show current configuration
+st config --set-ai            # interactively pick AI agent/model
+st config --reset-ai          # clear saved AI defaults and re-prompt
+st config --reset-ai --no-prompt
+```
+
+Config is loaded as follows:
+
+1. `STAX_CONFIG_DIR/config.toml` when `STAX_CONFIG_DIR` is set.
+2. Otherwise, `~/.config/stax/config.toml` is loaded.
+3. If present, `stax.toml` at the current git repository root overlays only the values it sets.
+
+## Example config
+
+```toml
+[branch]
+# format = "{user}/{date}/{message}"
+# user = "cesar"
+# date_format = "%m-%d"
+# replacement = "-"
+# stale_days = 30 # days without commits before `stax sweep` calls a branch stale
+
+[git]
+# rerere = true # auto-enable git rerere on `stax init`
+
+[remote]
+# name = "origin"
+# base_url = "https://github.com"
+# api_base_url = "https://github.company.com/api/v3"
+# forge = "github" # "github" | "gitlab" | "gitea" — override auto-detection
+
+[submit]
+# stack_links = "comment" # "comment" | "body" | "both" | "off"
+# single_stack = "on"     # "on" | "off" — when "off", skip stack-link sync while the stack has only one PR
+# native_stack = "auto"   # "auto" | "off" | "link" — auto-register native GitHub Stacked PRs when available
+# stack_links_when_native = "keep" # "keep" | "off" — keep stax body/comment links even when native registration succeeds
+
+[ci]
+# alert = false
+# success_alert_sound = "/path/to/ci-success.wav"
+# error_alert_sound = "/path/to/ci-error.wav"
+
+[auth]
+# use_gh_cli = true
+# allow_github_token_env = false
+# gh_hostname = "github.company.com"
+
+[ui]
+# tips = true
+
+[restack]
+# preflight_auto_repair = true # automatically use merge-base when stored parent
+                               # boundary would replay a much larger range
+# preflight_warn = true        # print a notice when that automatic repair happens
+
+[ai]
+# agent = "claude" # "codex" | "gemini" | "opencode" — global default
+# model = "claude-sonnet-4-5-20250929"
+
+# Per-feature overrides — optional, fall back to [ai] above
+[ai.generate]   # st create --ai, st gen / st generate, st submit --ai
+# agent = "codex"
+# model = "o4-mini"
+
+[ai.standup]    # st standup --ai
+# agent = "gemini"
+# model = "gemini-2.5-pro"
+
+[ai.resolve]    # st resolve
+# agent = "claude"
+# model = "claude-opus-4-5"
+
+[ai.lane]       # st lane / st worktree create --ai
+# agent = "claude"
+# (model is intentionally not inherited from [ai] for interactive lanes)
+
+[worktree]
+# root_dir = "" # default: ~/.stax/worktrees/<repo>
+
+[worktree.hooks]
+# post_create = "" # blocking hook run in a new worktree before launch
+# post_start  = "" # background hook after creation
+# post_go     = "" # background hook after entering an existing worktree
+# pre_remove  = "" # blocking hook before removal
+# post_remove = "" # background hook after removal
+#
+# Example — keep VS Code / Cursor aware of every lane:
+#   post_start = "code --add ."
+#   post_go    = "code --add ."
+```
+
+## AI configuration
+
+### Set agent + model
+
+Pick an agent and model for any feature (or the global default):
+
+```bash
+st config --set-ai
+```
+
+You're asked which feature to configure (`generate`, `standup`, `resolve`, `lane`, or global default), then prompted for agent and model. The choice is written to the appropriate `[ai.*]` section.
+
+### First-use prompting
+
+The first time you run an AI-powered command without a configured agent (e.g. `st standup --ai`), stax opens the picker automatically and persists the choice for future runs — no manual config editing required.
+
+### Resolution order
+
+For AI-powered commands, agent and model are resolved in this order:
+
+| Priority | Source |
+|---|---|
+| 1 | CLI flag (`--agent`, `--model`) where the command exposes one |
+| 2 | Per-feature config (`[ai.generate]`, `[ai.standup]`, …) |
+| 3 | Global config (`[ai]`) |
+| 4 | Interactive first-use prompt (persisted) |
+
+> **Note:** `[ai.lane]` intentionally does not fall back to `[ai].model`. Interactive coding agents are a different workload from one-shot generation; a cheap model set for `st generate` should not silently apply to a long-running `st lane` session.
+
+### "Using …" confirmation
+
+When stax invokes an AI agent it prints a confirmation line to stderr:
+
+```text
+  Using claude with model claude-opus-4-5
+  Using codex
+```
+
+### Reset saved defaults
+
+```bash
+st config --reset-ai              # clear + re-prompt
+st config --reset-ai --no-prompt  # clear only
+```
+
+## CI watch alerts
+
+```toml
+[ci]
+alert = true
+# success_alert_sound = "/path/to/ci-success.wav"
+# error_alert_sound = "/path/to/ci-error.wav"
+```
+
+When `alert` is true, `st ci --watch` plays bundled success/error sounds after CI completes. Set either path to override one outcome while keeping the other bundled default.
+
+## Branch naming format
+
+```toml
+[branch]
+format = "{user}/{date}/{message}"
+user = "cesar"
+date_format = "%m-%d"
+```
+
+The legacy `prefix` field still works when `format` is unset.
+
+## Stale-branch threshold
+
+```toml
+[branch]
+stale_days = 60
+```
+
+`stale_days` is the number of days without new commits before [`stax sweep`](../commands/sweep.md) classifies a branch as `stale` (default: `30`). The `stax sweep --stale-days <N>` flag overrides this per run.
+
+## Git rerere
+
+```toml
+[git]
+rerere = false
+```
+
+When `rerere` is `true` (the default), `stax init` enables Git's [rerere](https://git-scm.com/docs/git-rerere) ("reuse recorded resolution") so previously resolved merge conflicts are replayed automatically during restacks. Set it to `false` to leave your global Git configuration untouched on init.
+
+## Stack-links placement
+
+Where `st submit` writes the stack graph for a PR:
+
+```toml
+[submit]
+stack_links = "body"   # "comment" | "body" | "both" | "off"
+single_stack = "on"    # "on" | "off"
+```
+
+When body output is enabled, stax appends a managed block to the bottom of the PR body and only rewrites that managed block on future submits.
+
+Stack-link entries use compact PR/MR references and mark the PR being rendered with `👈`. On GitHub, stax keeps native `#123` PR references so GitHub renders its standard linked issue/PR styling; other forges use direct markdown links. The intro text is relative to the PR being rendered, so an imported base PR is described as an imported reference, while a local PR calls out any imported downstack context. Imported branches remain read-only for push and PR metadata updates, but their existing PRs still receive the managed stack links when they are part of the displayed stack.
+
+`single_stack` controls whether stack links are written when the stack contains only one PR. With the default `"on"`, links are always synced per `stack_links`. With `"off"`, stax skips link sync — and removes any stale links left over from a previous `"on"` setting — while the stack has a single PR. As soon as a second PR is submitted on the same stack, links populate on every PR (including the original) automatically.
+
+## Native GitHub Stacked PRs
+
+```toml
+[submit]
+native_stack = "auto"              # "auto" | "off" | "link"
+stack_links_when_native = "keep"   # "keep" | "off"
+```
+
+`native_stack = "auto"` is the default. On GitHub remotes, stax checks for the `github/gh-stack` extension and tries to register submitted multi-PR stacks with GitHub's native Stacked PRs feature. If the extension is missing, the repo does not have private-preview access, or the remote is not GitHub, submit silently keeps the existing stax behavior.
+
+Use `native_stack = "off"` to disable native registration. Use `"link"` to force an attempt even when the repo's feature cache is unknown or disabled. Per run, `st submit --native-stack` forces an attempt and `st submit --no-native-stack` skips it.
+
+`stack_links_when_native = "keep"` preserves stax's body/comment stack links when native registration succeeds. Set it to `"off"` only if you want the GitHub native stack map without stax-managed PR body/comment links.
+
+`st doctor` reports whether `gh-stack` is installed and `st doctor --fix` can install it with `gh extension install github/gh-stack` after confirmation.
+
+## Forge type override
+
+By default stax detects the forge from the remote hostname. If your self-hosted instance has a generic hostname like `git.mycompany.com`, override it:
+
+```toml
+[remote]
+base_url = "https://git.mycompany.com"
+forge = "gitlab"
+```
+
+Accepted values: `"github"`, `"gitlab"`, `"gitea"`, `"forgejo"` (Forgejo is treated as Gitea).
+
+Auto-detection fallback: hostnames containing `gitlab` → GitLab, `gitea`/`forgejo` → Gitea, otherwise → GitHub.
+
+## Auth tokens by forge
+
+| Forge | Auth sources (checked in order) |
+|---|---|
+| GitHub | `STAX_GITHUB_TOKEN`, credentials file, `gh` CLI, `GITHUB_TOKEN` |
+| GitLab | `STAX_GITLAB_TOKEN`, `GITLAB_TOKEN`, `STAX_FORGE_TOKEN`, credentials file |
+| Gitea | `STAX_GITEA_TOKEN`, `GITEA_TOKEN`, `STAX_FORGE_TOKEN`, credentials file |
+
+`stax auth` writes `~/.config/stax/.credentials` (mode `600`). That shared token is reused for GitHub, GitLab, and Gitea when forge-specific env vars are not set.
+
+### GitHub resolution order
+
+1. `STAX_GITHUB_TOKEN`
+2. `~/.config/stax/.credentials`
+3. `gh auth token` (`auth.use_gh_cli = true`)
+4. `GITHUB_TOKEN` (only when `auth.allow_github_token_env = true`)
+
+```bash
+st auth status
+```

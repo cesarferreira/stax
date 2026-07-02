@@ -1,0 +1,60 @@
+name: Rust Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-latest-test-container
+      - name: Run unit tests
+        env:
+          RUST_MIN_STACK: 4194304
+        run: cargo nextest run --lib --bins --cargo-profile test-container
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Install mold linker
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-latest-test-container
+      - name: Run integration tests
+        env:
+          RUST_MIN_STACK: 4194304
+        run: cargo nextest run --tests --cargo-profile test-container

@@ -1,0 +1,178 @@
+use crate::git::refs;
+use anyhow::Result;
+use git2::Repository;
+use serde::{Deserialize, Serialize};
+
+/// Metadata stored for each tracked branch
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchMetadata {
+    /// Name of the parent branch
+    #[serde(default)]
+    pub parent_branch_name: String,
+    /// Commit SHA of parent when this branch was last rebased
+    #[serde(default)]
+    pub parent_branch_revision: String,
+    /// Remote this branch was imported from with `stax get`.
+    ///
+    /// Imported branches are tracked so local branches can stack on top of
+    /// them, but submit should not push or update their PRs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_remote: Option<String>,
+    /// PR information (if submitted)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_info: Option<PrInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrInfo {
+    #[serde(default)]
+    pub number: u64,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_draft: Option<bool>,
+}
+
+impl BranchMetadata {
+    /// Create new metadata for a branch
+    pub fn new(parent_name: &str, parent_revision: &str) -> Self {
+        Self {
+            parent_branch_name: parent_name.to_string(),
+            parent_branch_revision: parent_revision.to_string(),
+            source_remote: None,
+            pr_info: None,
+        }
+    }
+
+    /// Read metadata for a branch from git refs
+    pub fn read(repo: &Repository, branch: &str) -> Result<Option<Self>> {
+        match refs::read_metadata(repo, branch)? {
+            Some(json) => {
+                let mut meta: Self = serde_json::from_str(&json)?;
+
+                // Backward/partial-compatibility guard:
+                // Some historical/broken metadata records may miss parent fields.
+                if meta.parent_branch_name.trim().is_empty() {
+                    meta.parent_branch_name =
+                        refs::read_trunk(repo)?.unwrap_or_else(|| "main".to_string());
+                }
+
+                if meta.parent_branch_revision.trim().is_empty() {
+                    if let Ok(parent_ref) =
+                        repo.find_branch(&meta.parent_branch_name, git2::BranchType::Local)
+                    {
+                        if let Ok(commit) = parent_ref.get().peel_to_commit() {
+                            meta.parent_branch_revision = commit.id().to_string();
+                        }
+                    }
+                }
+
+                Ok(Some(meta))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Write metadata for a branch to git refs
+    pub fn write(&self, repo: &Repository, branch: &str) -> Result<()> {
+        let json = serde_json::to_string(self)?;
+        refs::write_metadata(repo, branch, &json)
+    }
+
+    /// Delete metadata for a branch
+    pub fn delete(repo: &Repository, branch: &str) -> Result<()> {
+        refs::delete_metadata(repo, branch)
+    }
+
+    /// Check if the branch needs restacking (parent has moved)
+    pub fn needs_restack(&self, repo: &Repository) -> Result<bool> {
+        if self.source_remote.is_some() {
+            return Ok(false);
+        }
+
+        let parent_ref = repo.find_branch(&self.parent_branch_name, git2::BranchType::Local)?;
+        let current_parent_rev = parent_ref.get().peel_to_commit()?.id().to_string();
+        Ok(current_parent_rev != self.parent_branch_revision)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_new() {
+        let meta = BranchMetadata::new("main", "abc123");
+        assert_eq!(meta.parent_branch_name, "main");
+        assert_eq!(meta.parent_branch_revision, "abc123");
+        assert!(meta.source_remote.is_none());
+        assert!(meta.pr_info.is_none());
+    }
+
+    #[test]
+    fn test_metadata_serialization() {
+        let meta = BranchMetadata::new("main", "abc123");
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("parentBranchName"));
+        assert!(json.contains("main"));
+    }
+
+    #[test]
+    fn test_metadata_deserialization() {
+        let json = r#"{"parentBranchName":"main","parentBranchRevision":"abc123"}"#;
+        let meta: BranchMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.parent_branch_name, "main");
+        assert_eq!(meta.parent_branch_revision, "abc123");
+    }
+
+    #[test]
+    fn test_metadata_with_pr_info() {
+        let json = r#"{
+            "parentBranchName": "main",
+            "parentBranchRevision": "abc123",
+            "prInfo": {
+                "number": 42,
+                "state": "OPEN",
+                "isDraft": false
+            }
+        }"#;
+        let meta: BranchMetadata = serde_json::from_str(json).unwrap();
+        assert!(meta.pr_info.is_some());
+        let pr = meta.pr_info.unwrap();
+        assert_eq!(pr.number, 42);
+        assert_eq!(pr.state, "OPEN");
+    }
+
+    #[test]
+    fn test_metadata_deserialization_missing_parent_fields_uses_defaults() {
+        let json = r#"{
+            "prInfo": {
+                "number": 99,
+                "state": "OPEN"
+            }
+        }"#;
+        let meta: BranchMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.parent_branch_name, "");
+        assert_eq!(meta.parent_branch_revision, "");
+        assert!(meta.pr_info.is_some());
+    }
+
+    #[test]
+    fn test_freephite_compatibility() {
+        // This JSON format matches freephite's metadata format
+        let freephite_json = r#"{
+            "parentBranchName": "main",
+            "parentBranchRevision": "deadbeef1234567890",
+            "prInfo": {
+                "number": 123,
+                "state": "OPEN",
+                "isDraft": true
+            }
+        }"#;
+        let meta: BranchMetadata = serde_json::from_str(freephite_json).unwrap();
+        assert_eq!(meta.parent_branch_name, "main");
+        assert_eq!(meta.parent_branch_revision, "deadbeef1234567890");
+    }
+}

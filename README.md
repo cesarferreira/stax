@@ -1,0 +1,431 @@
+<div align="center">
+  <h1>stax</h1>
+
+  <p><strong>Stacked Git branches and PRs — fast, safe, and built for humans and AI agents.</strong></p>
+
+  <p>
+    <a href="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml"><img alt="CI" src="https://github.com/cesarferreira/stax/actions/workflows/rust-tests.yml/badge.svg"></a>
+    <a href="https://crates.io/crates/stax"><img alt="Crates.io" src="https://img.shields.io/crates/v/stax"></a>
+    <a href="https://github.com/cesarferreira/stax/releases"><img alt="Release" src="https://img.shields.io/github/v/release/cesarferreira/stax?color=blue"></a>
+    <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
+  </p>
+
+  <p>
+    <a href="#install">Install</a>
+    &nbsp;·&nbsp;
+    <a href="#quickstart">Quickstart</a>
+    &nbsp;·&nbsp;
+    <a href="#commands">Commands</a>
+    &nbsp;·&nbsp;
+    <a href="https://cesarferreira.github.io/stax/">Docs</a>
+  </p>
+
+  <br>
+
+  <img src="assets/screenshot.png" width="880" alt="stax in action">
+</div>
+
+---
+
+## Why stax
+
+One giant PR is slow to review and risky to merge. A stack of small PRs is the answer — but managing stacks by hand with `git rebase --onto` is a footgun. **stax** makes stacks a first-class Git primitive.
+
+- **Stack, don't wait.** Keep shipping on top of in-review PRs. `st create`, `st ss`, done.
+- **Native-fast.** A single Rust binary that starts in ~25ms. `st ls` benches ~70× faster than Graphite and ~215× faster than Freephite on this repo.
+- **Agent-native.** Run parallel AI agents on isolated branches (`st lane`), auto-resolve rebase conflicts (`st resolve`), and generate branch names, commit messages, and PR details from real diffs.
+- **Undo-first.** Every destructive op snapshots state. `st undo` / `st redo` rescue risky rebases instantly.
+- **Batteries-included TUI.** Run bare `st` to browse the stack, inspect diffs, and watch CI hydrate live.
+
+> `stax` installs two binaries: `stax` and the short alias `st`. This README uses `st`.
+
+## Install
+
+The shortest path on macOS and Linux:
+
+```bash
+brew install cesarferreira/tap/stax
+```
+
+<details>
+<summary><strong>Other installation methods</strong> — cargo-binstall, prebuilt binaries, Windows, from source</summary>
+
+### cargo-binstall
+
+```bash
+cargo binstall stax
+```
+
+### Prebuilt binaries
+
+Download the latest binary from [GitHub Releases](https://github.com/cesarferreira/stax/releases):
+
+```bash
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-aarch64-apple-darwin.tar.gz | tar xz
+# macOS (Intel)
+curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-apple-darwin.tar.gz | tar xz
+# Linux (x86_64)
+curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-x86_64-unknown-linux-gnu.tar.gz | tar xz
+# Linux (arm64)
+curl -fsSL https://github.com/cesarferreira/stax/releases/latest/download/stax-aarch64-unknown-linux-gnu.tar.gz | tar xz
+
+mkdir -p ~/.local/bin
+mv stax st ~/.local/bin/
+# Ensure ~/.local/bin is on your PATH:
+# echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
+**Windows (x86_64):** download `stax-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/cesarferreira/stax/releases), extract `stax.exe` and `st.exe`, and place them on your `PATH`. See [Windows notes](#windows-notes).
+
+### Build from source
+
+Prereqs:
+- Debian/Ubuntu: `sudo apt-get install libssl-dev pkg-config`
+- Fedora/RHEL: `sudo dnf install openssl-devel`
+- Arch: `sudo pacman -S openssl pkg-config`
+- macOS: OpenSSL included
+
+Then:
+
+```bash
+cargo install --path . --locked
+# or
+make install
+# or
+task install
+```
+
+No system OpenSSL? Use the vendored feature:
+
+```bash
+cargo install --path . --locked --features vendored-openssl
+```
+
+</details>
+
+Verify the install:
+
+```bash
+st --version
+```
+
+<a id="quickstart"></a>
+## Quickstart
+
+`st setup` handles shell integration, AI agent skills, and GitHub auth in a single step:
+
+```bash
+st setup --yes
+```
+
+<details>
+<summary>Alternative auth options</summary>
+
+```bash
+# Import from GitHub CLI
+gh auth login && st auth --from-gh
+
+# Enter a token interactively
+st auth
+
+# Or via env var
+export STAX_GITHUB_TOKEN="ghp_xxxx"
+```
+
+By default stax ignores ambient `GITHUB_TOKEN`. Opt in with `auth.allow_github_token_env = true`.
+
+</details>
+
+Now ship a two-branch stack end-to-end:
+
+```bash
+# 1. Stack two branches on trunk
+st create auth-api
+st create auth-ui
+
+# 2. See the stack
+st ls
+# ◉  auth-ui        1↑
+# ○  auth-api       1↑
+# ○  main
+
+# 3. Submit the whole stack as linked PRs
+st ss
+
+# 4. After the bottom PR merges on GitHub…
+st update          # sync trunk, restack this stack, update PRs
+```
+
+Picked the wrong trunk? Run `st trunk main` or `st init --trunk <branch>` to reconfigure.
+
+Next: [Quick Start guide](docs/getting-started/quick-start.md) · [Merge & cascade workflow](docs/workflows/merge-and-cascade.md)
+
+## Highlights
+
+### Parallel AI lanes
+
+Spin up multiple AI agents on isolated branches, all tracked as normal stax branches:
+
+```bash
+st lane fix-auth-refresh "Fix the token refresh edge case from #142"
+st lane stabilize-ci     "Stabilize the 3 flaky tests in the checkout flow"
+st lane api-docs         "Update API docs for the /users endpoint"
+```
+
+Each lane is a real Git worktree with normal stax metadata — it appears in `st ls`, participates in restack/sync/undo, and re-attaches via tmux any time. No hidden scratch directories, no lost work.
+
+```bash
+st wt         # open the worktree dashboard
+st wt rs      # restack every lane at once when trunk moves
+st ss         # submit PRs for the ones that are ready
+```
+
+→ [Agent worktrees](docs/workflows/agent-worktrees.md) · [Multi-worktree workflow](docs/workflows/multi-worktree.md)
+
+### Cascade stack merge
+
+Merge from the bottom of the stack up to your current branch, with CI and readiness checks:
+
+```bash
+st merge                  # local cascade merge
+st merge --when-ready     # wait/poll until PRs are mergeable
+st merge --ds             # merge ancestors, rebase current branch
+st merge --stack          # validate current PR once; absorb lower PRs through current
+st merge --stack --full   # stack-merge the full stack even from the middle
+st merge --remote         # merge remotely on GitHub while you keep working
+st merge --all            # merge the whole stack regardless of position
+```
+
+→ [Merge and cascade](docs/workflows/merge-and-cascade.md)
+
+### Native GitHub Stacked PRs
+
+When a GitHub repo has native Stacked PRs enabled and you have the `github/gh-stack` extension installed, `st ss` automatically registers the submitted PRs as a native GitHub Stack. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top.
+
+```bash
+gh extension install github/gh-stack
+st doctor --fix          # can offer the install when missing
+st ss                    # auto-links native stack when available
+st stack link            # manually re-link the current stack
+st stack unlink          # remove the native GitHub Stack object
+```
+
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior.
+
+### AI conflict resolution
+
+When a rebase stops on a conflict, `st resolve` sends only the conflicted text files to your configured AI agent, applies the result, and resumes the rebase automatically. If the AI returns invalid output, touches a non-conflicted file, or leaves extra conflicts behind, stax bails out and preserves the in-progress rebase so you can inspect or continue manually.
+
+```bash
+st resolve
+st resolve --agent codex --model gpt-5.3-codex
+```
+
+Before each rebase, stax also runs a **preflight repair** that compares the
+stored parent boundary against `merge-base(parent, branch)`. When they diverge
+sharply — the “my restack hit conflicts on files I never touched” case — stax
+automatically uses the merge-base boundary for that rebase and prints a
+one-line notice. Silence the notice with `[restack] preflight_warn = false` or
+`--quiet`; disable the automatic correction with
+`[restack] preflight_auto_repair = false`.
+
+### Undo / redo
+
+`restack`, `submit`, and `reorder` each snapshot branch state before they touch anything. Recovery is one command away.
+
+```bash
+st restack
+st undo
+st redo
+```
+
+→ [Undo/redo safety](docs/safety/undo-redo.md)
+
+### Interactive TUI
+
+<p align="center">
+  <img alt="stax TUI" src="assets/tui.png" width="760">
+</p>
+
+Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summaries and cached patches, watching live CI hydrate, and running common ops without leaving the terminal.
+
+→ [TUI guide](docs/interface/tui.md)
+
+### AI branch names, PR details, and standups
+
+```bash
+st create --ai -a --yes   # generate branch name + first commit message
+st ss --ai --yes          # generate PR titles/bodies during submit
+st gen                    # interactive: PR body, PR title, or commit message (AI)
+st generate --pr-body     # non-interactive: refresh PR body from branch diff + context
+st generate --pr-title    # non-interactive: refresh PR title from branch diff
+st generate --commit-msg  # non-interactive: amend HEAD commit message with AI
+st standup --ai           # spoken-style daily engineering summary
+st standup --ai --style slack  # Slack-ready Yesterday/Today bullets
+```
+
+Each AI feature (`generate`, `standup`, `resolve`, `lane`) can use a different agent/model. `st create --ai`, `st submit --ai`, and `st generate` / `st gen` (PR body/title, commit message) share the `generate` setting. Configure with:
+
+```bash
+st config --set-ai
+```
+
+→ [PR templates & AI](docs/integrations/pr-templates-and-ai.md) · [Reporting](docs/workflows/reporting.md)
+
+<a id="commands"></a>
+## Commands
+
+| Command | What it does |
+|---|---|
+| `st` | Launch interactive TUI |
+| `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
+| `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
+| `st watch --current` | Watch only the current stack |
+| `st create <name>` / `st add <name>` | Create a branch stacked on current |
+| `st create --ai -a --yes` | Generate branch name + first commit message |
+| `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
+| `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
+| `st ss` | Submit the full stack, open/update linked PRs |
+| `st branch submit` | Submit only the current branch; can publish a temporary rebased head when its parent is already synced remotely |
+| `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
+| `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
+| `st ready` | Interactive PR readiness dashboard for all tracked PRs, newest changed PR first: merge, ping, fix, wait, or draft (`--current`/`--stack` for current stack, `--plain` for table output) |
+| `st ci` / `st ci --oneline` | CI status — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |
+| `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
+| `st ci -w --strict` | Watch CI but exit as soon as any check fails |
+| `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
+| `st sweep` | Classify all local branches (merged/gone/stale/active); `--delete` removes merged branches (including tracked merged PRs) and upstream-gone branches with no unique work |
+| `st update` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs |
+| `st update --force --yes --no-prompt` | Run update without sync or submit prompts |
+| `st update --verbose` | Include detailed sync/restack/submit timing |
+| `st restack` | Rebase current stack onto parents locally |
+| `st cascade` | Restack + push + open/update PRs |
+| `st split` | Split a branch into stacked branches (by commit or `--hunk`) |
+| `st lane <name> "<task>"` | Spawn an AI agent on a new lane |
+| `st wt` | Open the worktree dashboard |
+| `st resolve` | AI-resolve an in-progress rebase conflict |
+| `st create --ai` | Generate a branch name from local changes |
+| `st gen` / `st generate` | AI: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
+| `st ss --ai` | Submit with AI-generated PR title/body suggestions |
+| `st standup` | Summarize recent engineering activity |
+| `st tmux status` | Print a tmux-formatted status string (branch, stack position, PR, CI) for `status-right` |
+| `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
+| `st undo` / `st redo` | Recover / reapply risky operations |
+| `st run <cmd>` | Run a command on each branch in the stack |
+| `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
+| `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |
+| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · PR readiness · list issues |
+
+Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands/reference.md](docs/commands/reference.md)
+
+## Performance
+
+Benchmarked with `hyperfine` on this repo. Absolute times vary by repo and machine; the ratios do not.
+
+| Benchmark      | stax     | vs [Freephite](https://github.com/bradymadden97/freephite) | vs [Graphite](https://github.com/withgraphite/graphite-cli) |
+|----------------|----------|-----------------|----------------|
+| `st ls`        | baseline | **214.76×** faster | **69.72×** faster |
+| `st rs` (sync) | baseline | **2.41×** faster  | —              |
+
+stax is wire-compatible with Freephite/Graphite for common stacked-branch workflows.
+
+→ [Full benchmarks](docs/reference/benchmarks.md) · [Compatibility notes](docs/compatibility/freephite-graphite.md)
+
+## Configuration
+
+```bash
+st config                  # open the config editor
+st config --set-ai         # pick AI agent + model
+st config --reset-ai       # clear saved AI pairing and re-prompt
+```
+
+Config lives at `~/.config/stax/config.toml`. When `STAX_CONFIG_DIR` is unset,
+a repo-root `stax.toml` overlays only the values it sets:
+
+```toml
+[submit]
+stack_links = "body"   # "comment" | "body" | "both" | "off"
+single_stack = "on"    # "on" | "off" — when "off", skip stack-link sync while only one PR exists
+```
+
+→ [Full config reference](docs/configuration/index.md)
+
+## Integrations
+
+### tmux
+
+[**stax.tmux**](https://github.com/cesarferreira/stax.tmux) is a TPM-compatible plugin that puts your stack in the tmux status bar and adds keybindings for common actions:
+
+<p align="center">
+  <img src="assets/tmux.png" width="880" alt="stax.tmux status bar">
+</p>
+
+- Live status bar — branch, stack position, PR state, CI state; auto-refreshes in the background
+- Keybindings — `prefix + S` popup, `prefix + ]`/`[` up/down, `prefix + M-s` sync
+- Window auto-rename — tmux window title follows the current branch
+
+Install via TPM:
+
+```tmux
+set -g @plugin 'cesarferreira/stax.tmux'
+```
+
+See the [stax.tmux README](https://github.com/cesarferreira/stax.tmux) for full setup and configuration options.
+
+---
+
+AI and editor integration guides:
+
+- [Claude Code](docs/integrations/claude-code.md)
+- [Codex](docs/integrations/codex.md)
+- [Gemini CLI](docs/integrations/gemini-cli.md)
+- [OpenCode](docs/integrations/opencode.md)
+- [PR templates + AI generation](docs/integrations/pr-templates-and-ai.md)
+
+Shared skill/instruction file used across agents: [skills.md](skills.md)
+
+`st changelog` can generate notes between refs, and `st changelog find [query]`
+or `st changelog --find [query]` fuzzy-finds commits in the selected range.
+Use `--path` to scope either mode to a subdirectory.
+
+<a id="windows-notes"></a>
+<details>
+<summary><strong>Windows notes</strong> — shell integration, worktrees, tmux</summary>
+
+stax runs on Windows (x86_64) with prebuilt binaries on [Releases](https://github.com/cesarferreira/stax/releases). Most commands work identically, with these limitations:
+
+- **Shell integration is not available.** `st setup` supports bash/zsh/fish only. On Windows:
+  - `st wt c` / `st wt go` create and navigate worktrees but cannot auto-`cd` the parent shell. Manually `cd` to the printed path.
+  - The `sw` quick alias is not available.
+  - `st wt rm` (bare) cannot relocate the shell. Specify: `st wt rm <name>`.
+- **Worktree commands still work.** `st wt c/go/ls/ll/cleanup/rm/prune/restack` all function — only the shell-level `cd` is missing.
+- **tmux integration requires WSL** or a Unix-like environment. The [stax.tmux](https://github.com/cesarferreira/stax.tmux) plugin is Unix-only.
+
+Everything else — stacked branches, PRs, restack, sync, undo/redo, TUI, AI generation — works on Windows without limitation.
+
+</details>
+
+## Contributing
+
+Before opening a PR, run:
+
+```bash
+make test
+```
+
+To cut a release, run:
+
+```bash
+make release                  # default minor bump
+make release LEVEL=patch      # patch bump
+make release LEVEL=major      # major bump
+```
+
+Release automation regenerates `CHANGELOG.md` with [git-cliff](https://git-cliff.org/) inside `cargo release`'s pre-release hook, grouping the commits since the latest `v*` tag under the new version (config in [`cliff.toml`](cliff.toml)). See [docs/workflows/releasing.md](docs/workflows/releasing.md).
+
+Project docs and architecture: [docs/index.md](docs/index.md). Contributor guidelines: [AGENTS.md](AGENTS.md).
+
+## License
+
+MIT &copy; Cesar Ferreira
