@@ -1,11 +1,8 @@
 use crate::commands::open::open_url_in_browser;
-use crate::config::{
-    Config, NativeStackMode, SingleStackMode, StackLinksMode, StackLinksWhenNative,
-};
+use crate::config::{Config, SingleStackMode, StackLinksMode};
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
-use crate::github::gh_stack::{self, ExtensionStatus, FeatureState, LinkOutcome};
 use crate::github::pr::{
     PrInfoWithHead, StackPrInfo, generate_stack_links_markdown, remove_stack_links_from_body,
     upsert_stack_links_in_body,
@@ -14,7 +11,7 @@ use crate::github::pr_template::{discover_pr_templates, select_template_interact
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
-use crate::remote::{self, ForgeType, RemoteInfo};
+use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{Editor, Input, Select, theme::ColorfulTheme};
@@ -70,7 +67,6 @@ pub struct SubmitOptions {
     pub title: bool,
     pub body: bool,
     pub rerequest_review: bool,
-    pub native_stack_override: Option<NativeStackMode>,
     pub squash: bool,
     pub update_title: bool,
 }
@@ -363,7 +359,6 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         title: ai_title,
         body: body_scope,
         rerequest_review,
-        native_stack_override,
         squash,
         update_title,
     } = options;
@@ -383,8 +378,6 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let config = Config::load()?;
     let stack_links_mode = config.submit.stack_links;
     let single_stack_mode = config.submit.single_stack;
-    let stack_links_when_native = config.submit.stack_links_when_native;
-    let native_stack_mode = native_stack_override.unwrap_or(config.submit.native_stack);
 
     // Track if --draft was explicitly passed (we'll ask interactively if not)
     let draft_flag_set = draft;
@@ -1759,25 +1752,13 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             &imported_stack_branches,
         );
 
-        let native_stack_linked = maybe_link_native_stack(
-            repo.workdir()?,
-            &remote_info,
-            &stack.trunk,
-            native_stack_mode,
-            &stack_link_contexts,
-            quiet,
-        )?;
-
         let stack_links_started_at = Instant::now();
-        let native_forces_links_off =
-            native_stack_linked && stack_links_when_native == StackLinksWhenNative::Off;
-        let single_stack_skips_links =
-            single_stack_mode == SingleStackMode::Off && stack_link_contexts.len() <= 1;
-        let effective_stack_links_mode = if native_forces_links_off || single_stack_skips_links {
-            StackLinksMode::Off
-        } else {
-            stack_links_mode
-        };
+        let effective_stack_links_mode =
+            if single_stack_mode == SingleStackMode::Off && stack_link_contexts.len() <= 1 {
+                StackLinksMode::Off
+            } else {
+                stack_links_mode
+            };
         for (pr_number, _branch, stack_link_pr_infos) in &stack_link_contexts {
             let sync_timer =
                 LiveTimer::maybe_new(!quiet, &format!("Syncing stack links on #{}...", pr_number));
@@ -2135,64 +2116,6 @@ fn stack_link_contexts_for_sync(
             Some((pr_number, info.branch, context))
         })
         .collect()
-}
-
-fn maybe_link_native_stack(
-    workdir: &Path,
-    remote_info: &RemoteInfo,
-    trunk: &str,
-    mode: NativeStackMode,
-    stack_link_contexts: &[(u64, String, Vec<StackPrInfo>)],
-    quiet: bool,
-) -> Result<bool> {
-    if mode == NativeStackMode::Off || remote_info.forge != ForgeType::GitHub {
-        return Ok(false);
-    }
-
-    let pr_numbers = stack_link_contexts
-        .iter()
-        .map(|(pr_number, _, _)| *pr_number)
-        .collect::<Vec<_>>();
-    if pr_numbers.is_empty() {
-        return Ok(false);
-    }
-
-    // Cheap cached check before spawning any `gh` subprocess: if this repo has
-    // already been marked feature-disabled, `auto` mode stays quiet without
-    // probing the extension on every submit.
-    if mode == NativeStackMode::Auto && gh_stack::feature_enabled(workdir) == FeatureState::Disabled
-    {
-        return Ok(false);
-    }
-
-    if gh_stack::extension_status() != ExtensionStatus::Installed {
-        return Ok(false);
-    }
-
-    match gh_stack::link_stack(&pr_numbers, trunk, &remote_info.name) {
-        LinkOutcome::Linked => {
-            gh_stack::set_feature_enabled(workdir, true)?;
-            if !quiet {
-                println!("{} {}", "✓".green(), "Native GitHub Stack linked".dimmed());
-            }
-            Ok(true)
-        }
-        LinkOutcome::FeatureDisabled { .. } => {
-            gh_stack::set_feature_enabled(workdir, false)?;
-            Ok(false)
-        }
-        LinkOutcome::SinglePrValidationRejected { .. } => Ok(false),
-        LinkOutcome::Failed { message } => {
-            if !quiet {
-                println!(
-                    "  {} {}",
-                    "note:".dimmed(),
-                    format!("native GitHub Stack link skipped: {message}").dimmed()
-                );
-            }
-            Ok(false)
-        }
-    }
 }
 
 fn rejected_push_branches(porcelain: &str, specs: &[PushSpec]) -> Vec<String> {
