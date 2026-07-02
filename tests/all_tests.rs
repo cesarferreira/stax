@@ -64,6 +64,8 @@ mod fix_tests;
 mod fold_tests;
 #[path = "get_tests.rs"]
 mod get_tests;
+#[path = "gh_stack_tests.rs"]
+mod gh_stack_tests;
 #[path = "github_list_tests.rs"]
 mod github_list_tests;
 #[path = "integration_tests.rs"]

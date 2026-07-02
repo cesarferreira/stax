@@ -3,7 +3,8 @@ use crate::config::Config;
 use crate::engine::{BranchMetadata, PrInfo, Stack};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
-use crate::remote::RemoteInfo;
+use crate::github::gh_stack::{self, ExtensionStatus, NativeStackEntry};
+use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use std::collections::{HashMap, HashSet};
@@ -81,7 +82,14 @@ pub fn run(options: GetOptions) -> Result<()> {
     let requested_branch = target.branch.clone();
 
     let stack = Stack::load(&repo)?;
-    let targets = collect_targets(&repo, &workdir, &config, &stack, target, &options, &trunk)?;
+    let targets = if let Some(native_targets) =
+        native_stack_targets(&config, requested, &target, &trunk)
+            .filter(|targets| !targets.is_empty())
+    {
+        native_targets
+    } else {
+        collect_targets(&repo, &workdir, &config, &stack, target, &options, &trunk)?
+    };
     let mut skipped = Vec::new();
 
     for target in &targets {
@@ -328,6 +336,122 @@ fn collect_targets(
     }
 
     Ok(targets)
+}
+
+fn native_stack_targets(
+    config: &Config,
+    requested: &str,
+    requested_target: &GetTarget,
+    trunk: &str,
+) -> Option<Vec<GetTarget>> {
+    if requested.parse::<u64>().is_err()
+        || gh_stack::extension_status() != ExtensionStatus::Installed
+    {
+        return None;
+    }
+
+    let repo = GitRepo::open().ok()?;
+    let remote_info = RemoteInfo::from_repo(&repo, config).ok()?;
+    if remote_info.forge != ForgeType::GitHub {
+        return None;
+    }
+
+    let entries = gh_stack::view_stack(requested).ok()?;
+    if entries.len() < 2 {
+        return None;
+    }
+
+    let targets = native_entries_to_targets(config, &entries, requested_target, trunk);
+    if targets
+        .iter()
+        .any(|target| target.branch == requested_target.branch)
+    {
+        Some(targets)
+    } else {
+        None
+    }
+}
+
+fn native_entries_to_targets(
+    config: &Config,
+    entries: &[NativeStackEntry],
+    requested_target: &GetTarget,
+    trunk: &str,
+) -> Vec<GetTarget> {
+    let mut targets = Vec::new();
+    let mut previous_branch: Option<String> = None;
+
+    for entry in ordered_native_entries(config, entries) {
+        let Ok(branch) = normalize_remote_branch(&entry.branch, config.remote_name()) else {
+            continue;
+        };
+        let parent = entry
+            .base
+            .as_deref()
+            .and_then(|base| normalize_remote_branch(base, config.remote_name()).ok())
+            .or_else(|| previous_branch.clone())
+            .unwrap_or_else(|| trunk.to_string());
+        let pr_info = entry.pr_number.map(|number| PrInfo {
+            number,
+            state: "OPEN".to_string(),
+            is_draft: None,
+        });
+
+        targets.push(GetTarget {
+            required_remote: branch == requested_target.branch,
+            branch: branch.clone(),
+            parent,
+            pr_info,
+        });
+        previous_branch = Some(branch);
+    }
+
+    targets
+}
+
+fn ordered_native_entries(config: &Config, entries: &[NativeStackEntry]) -> Vec<NativeStackEntry> {
+    let mut normalized = Vec::new();
+    for entry in entries {
+        let Ok(branch) = normalize_remote_branch(&entry.branch, config.remote_name()) else {
+            continue;
+        };
+        let base = entry
+            .base
+            .as_deref()
+            .and_then(|base| normalize_remote_branch(base, config.remote_name()).ok());
+        normalized.push(NativeStackEntry {
+            branch,
+            pr_number: entry.pr_number,
+            base,
+        });
+    }
+
+    if normalized.iter().any(|entry| entry.base.is_none()) {
+        return normalized;
+    }
+
+    let by_branch = normalized
+        .iter()
+        .map(|entry| (entry.branch.clone(), entry.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut ordered = Vec::new();
+    let mut remaining = normalized;
+
+    while !remaining.is_empty() {
+        let Some(index) = remaining.iter().position(|entry| {
+            entry.base.as_ref().is_none_or(|base| {
+                !by_branch.contains_key(base)
+                    || ordered
+                        .iter()
+                        .any(|seen: &NativeStackEntry| &seen.branch == base)
+            })
+        }) else {
+            return entries.to_vec();
+        };
+        ordered.push(remaining.remove(index));
+    }
+
+    ordered
 }
 
 fn add_existing_stack_target(

@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge;
 use crate::git::{GitRepo, refs};
+use crate::github::gh_stack::{self, ExtensionStatus, FeatureState};
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Result, bail};
 use colored::Colorize;
@@ -33,6 +34,7 @@ enum RepairAction {
         key: &'static str,
         value: &'static str,
     },
+    InstallGhStackExtension,
     UpdateSkills,
 }
 
@@ -41,6 +43,9 @@ impl RepairAction {
         match self {
             RepairAction::SetGitConfig { key, value } => {
                 format!("Set git config {key}={value}")
+            }
+            RepairAction::InstallGhStackExtension => {
+                "Install GitHub gh-stack extension".to_string()
             }
             RepairAction::UpdateSkills => "Update stale AI agent skill files".to_string(),
         }
@@ -123,6 +128,44 @@ pub fn run(fix: bool) -> Result<()> {
             )
             .yellow()
         );
+    }
+
+    if remote_info
+        .as_ref()
+        .map(|info| info.forge == crate::remote::ForgeType::GitHub)
+        .unwrap_or(false)
+    {
+        match gh_stack::extension_status() {
+            ExtensionStatus::Installed => {
+                let feature = gh_stack::feature_enabled(repo.workdir()?);
+                let feature_label = match feature {
+                    FeatureState::Enabled => "repo feature cache: enabled",
+                    FeatureState::Disabled => "repo feature cache: disabled",
+                    FeatureState::Unknown => "repo feature cache: unknown",
+                };
+                println!(
+                    "{} {} {}",
+                    "✓".green(),
+                    "GitHub native stacks: gh-stack extension installed".dimmed(),
+                    format!("({feature_label})").dimmed()
+                );
+            }
+            ExtensionStatus::NoExtension => {
+                repair_plan.push(RepairAction::InstallGhStackExtension);
+                println!(
+                    "{} {}",
+                    "⚠".yellow(),
+                    "GitHub native stacks: gh-stack extension missing (run `gh extension install github/gh-stack`)".yellow()
+                );
+            }
+            ExtensionStatus::NoGh => {
+                println!(
+                    "{} {}",
+                    "⚠".yellow(),
+                    "GitHub native stacks: GitHub CLI `gh` not found (optional)".yellow()
+                );
+            }
+        }
     }
 
     if repo.is_dirty()? {
@@ -389,6 +432,10 @@ fn apply_repair_action(action: &RepairAction) -> Result<()> {
         }
         RepairAction::UpdateSkills => {
             skills::run_update(false)?;
+        }
+        RepairAction::InstallGhStackExtension => {
+            gh_stack::install_extension()?;
+            println!("{} {}", "✓".green(), action.description().dimmed());
         }
     }
 

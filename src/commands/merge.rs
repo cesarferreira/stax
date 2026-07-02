@@ -7,9 +7,10 @@ use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::{GitRepo, RebaseResult};
+use crate::github::gh_stack::{self, ExtensionStatus, FeatureState};
 use crate::github::pr::{MergeMethod, PrMergeStatus};
 use crate::progress::LiveTimer;
-use crate::remote::RemoteInfo;
+use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use std::io::Write;
@@ -149,6 +150,8 @@ pub fn run(
             "Failed to connect to the configured forge. Check your token and remote configuration."
         )
     })?;
+    let native_stack_capable = remote_info.forge == ForgeType::GitHub
+        && gh_stack::feature_enabled(repo.workdir()?) == FeatureState::Enabled;
 
     let fetch_status_timer = LiveTimer::maybe_new(!quiet, "Fetching PR status...");
 
@@ -271,6 +274,20 @@ pub fn run(
             // Retarget next PR to trunk after successful merge
             if let Some(next_branch) = next_branch {
                 let next_pr = next_branch.pr_number.unwrap();
+                if native_stack_covers_dependency(pr_number, next_pr, native_stack_capable) {
+                    if !quiet {
+                        println!(
+                            "  {} {}",
+                            "skip:".dimmed(),
+                            format!(
+                                "native GitHub Stack will retarget dependent PR #{}",
+                                next_pr
+                            )
+                            .dimmed()
+                        );
+                    }
+                    continue;
+                }
                 let update_base_timer = LiveTimer::maybe_new(
                     !quiet,
                     &format!("Retargeting #{} to {}...", next_pr, scope.trunk),
@@ -531,6 +548,26 @@ pub fn run(
     }
 
     Ok(())
+}
+
+fn native_stack_covers_dependency(
+    current_pr: u64,
+    next_pr: u64,
+    native_stack_capable: bool,
+) -> bool {
+    if !native_stack_capable || gh_stack::extension_status() != ExtensionStatus::Installed {
+        return false;
+    }
+
+    gh_stack::view_stack(&current_pr.to_string())
+        .map(|entries| {
+            let numbers = entries
+                .iter()
+                .filter_map(|entry| entry.pr_number)
+                .collect::<Vec<_>>();
+            numbers.contains(&current_pr) && numbers.contains(&next_pr)
+        })
+        .unwrap_or(false)
 }
 
 /// Calculate which branches to merge based on current position
@@ -1092,7 +1129,11 @@ fn local_trunk_reset_is_safe(workdir: &Path, trunk: &str) -> bool {
     let remote_trunk = format!("origin/{}", trunk);
 
     let diverged = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", remote_trunk, trunk)])
+        .args([
+            "rev-list",
+            "--count",
+            &format!("{}..{}", remote_trunk, trunk),
+        ])
         .current_dir(workdir)
         .output();
     match diverged {
