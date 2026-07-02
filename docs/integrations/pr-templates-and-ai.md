@@ -121,7 +121,7 @@ st generate --pr-body --no-prompt
 | `--template <name>` | Use a specific PR template |
 | `--no-template` | Skip PR template |
 
-Supported agents: `claude`, `codex`, `gemini`, `opencode`. When `codex` is selected, stax tries OpenAI's live Models API first (using `OPENAI_API_KEY`) before falling back to local Codex defaults.
+Supported agents: `claude`, `codex`, `gemini`, `opencode`. When `codex` is selected, stax tries OpenAI's live Models API first (using `OPENAI_API_KEY`) before falling back to local Codex defaults. The interactive model picker also includes an **Edit config file to use another model** entry for custom/provider-specific model IDs that are not in stax's built-in list.
 
 To forget the saved AI pairing and re-prompt:
 
@@ -146,6 +146,7 @@ st generate --pr-body --agent codex --model gpt-5.3-codex
 st generate --pr-body --agent claude --model claude-haiku-4-5-20251001
 st generate --pr-body --agent gemini --model gemini-2.5-flash
 st generate --pr-body --agent opencode
+st generate --pr-body --agent opencode --model opencode/gpt-5.5-fast
 st generate --pr-body --edit
 st generate --pr-body --template feature
 st gen --pr-title --agent claude
