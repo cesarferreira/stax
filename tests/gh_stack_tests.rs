@@ -418,6 +418,113 @@ exit 1
 }
 
 #[tokio::test]
+async fn submit_auto_registers_single_pr_native_stack_seed() {
+    let mock_server = MockServer::start().await;
+
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_config(&home, &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+    let branches = repo.create_stack(&["native-single"]);
+    repo.git(&["push", "-u", "origin", &branches[0]])
+        .assert_success();
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+
+    mock_existing_pr(&mock_server, 10, &branches[0], "main").await;
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.6"; exit 0 ;;
+  "stack link")
+    printf '%s\n' "$@" >> "$GH_ARGS_FILE"
+    exit 0
+    ;;
+esac
+exit 1
+"#,
+    );
+    let args_file = fake.path().join("args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["submit", "--no-fetch", "--yes", "--no-prompt"],
+        &[
+            ("HOME", &home),
+            ("STAX_GITHUB_TOKEN", "test-token"),
+            ("PATH", &path),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    let args = fs::read_to_string(&args_file).expect("gh stack link args written");
+    assert_eq!(args, "stack\nlink\n10\n--base\nmain\n--remote\norigin\n");
+    assert_eq!(
+        git_stdout(&repo, &["config", "--get", "stax.nativeStack.enabled"]),
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn submit_single_pr_native_stack_validation_rejection_is_harmless() {
+    let mock_server = MockServer::start().await;
+
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_config(&home, &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+    let branches = repo.create_stack(&["native-single-rejected"]);
+    repo.git(&["push", "-u", "origin", &branches[0]])
+        .assert_success();
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+
+    mock_existing_pr(&mock_server, 10, &branches[0], "main").await;
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.6"; exit 0 ;;
+  "stack link")
+    printf '%s\n' "$@" >> "$GH_ARGS_FILE"
+    echo "native stacks require at least two PRs" >&2
+    exit 4
+    ;;
+esac
+exit 1
+"#,
+    );
+    let args_file = fake.path().join("args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["submit", "--no-fetch", "--yes", "--no-prompt", "--quiet"],
+        &[
+            ("HOME", &home),
+            ("STAX_GITHUB_TOKEN", "test-token"),
+            ("PATH", &path),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    assert!(
+        TestRepo::stderr(&output).trim().is_empty(),
+        "single-PR native validation rejection should be silent, stderr was:\n{}",
+        TestRepo::stderr(&output)
+    );
+    let args = fs::read_to_string(&args_file).expect("gh stack link attempt recorded");
+    assert_eq!(args, "stack\nlink\n10\n--base\nmain\n--remote\norigin\n");
+    let cached = repo.git(&["config", "--get", "stax.nativeStack.enabled"]);
+    assert!(
+        !cached.status.success(),
+        "single-PR validation rejection should not cache native stack as disabled"
+    );
+}
+
+#[tokio::test]
 async fn submit_feature_disabled_caches_false_and_does_not_retry() {
     let mock_server = MockServer::start().await;
 

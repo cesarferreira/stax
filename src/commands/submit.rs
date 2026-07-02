@@ -2154,7 +2154,7 @@ fn maybe_link_native_stack(
         .iter()
         .map(|(pr_number, _, _)| *pr_number)
         .collect::<Vec<_>>();
-    if pr_numbers.len() < 2 {
+    if pr_numbers.is_empty() {
         return Ok(false);
     }
 
@@ -2179,6 +2179,7 @@ fn maybe_link_native_stack(
             gh_stack::set_feature_enabled(workdir, false)?;
             Ok(false)
         }
+        LinkOutcome::SinglePrValidationRejected { .. } => Ok(false),
         LinkOutcome::Failed { message } => {
             if !quiet {
                 println!(

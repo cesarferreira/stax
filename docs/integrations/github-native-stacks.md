@@ -7,10 +7,10 @@ GitHub's native Stacked PRs feature adds a stack map, final-target branch protec
 stax still owns local stack management: branch creation, parent metadata, restack, submit, PR bodies, and body/comment stack links. After `st submit` creates or updates the PRs, stax can run:
 
 ```bash
-gh stack link <bottom-pr> <next-pr> ... --base <trunk> --remote <remote>
+gh stack link <pr> [<next-pr> ...] --base <trunk> --remote <remote>
 ```
 
-That registers the already-submitted PRs as a native GitHub Stack. stax passes PR numbers in bottom-to-top order and keeps its own body/comment stack links unless you opt out.
+That registers one or more already-submitted PRs as a native GitHub Stack. stax passes PR numbers in bottom-to-top order and keeps its own body/comment stack links unless you opt out.
 
 ## Requirements
 

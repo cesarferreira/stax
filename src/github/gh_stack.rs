@@ -22,6 +22,7 @@ pub enum FeatureState {
 pub enum LinkOutcome {
     Linked,
     FeatureDisabled { message: String },
+    SinglePrValidationRejected { message: String },
     Failed { message: String },
 }
 
@@ -132,6 +133,11 @@ pub fn link_stack_with_env(
         Ok(output) if feature_disabled_output(&output) => LinkOutcome::FeatureDisabled {
             message: command_message(&output),
         },
+        Ok(output) if single_pr_validation_output(pr_numbers, &output) => {
+            LinkOutcome::SinglePrValidationRejected {
+                message: command_message(&output),
+            }
+        }
         Ok(output) => LinkOutcome::Failed {
             message: command_message(&output),
         },
@@ -282,6 +288,20 @@ fn feature_disabled_output(output: &Output) -> bool {
         || message.contains("not enabled")
         || message.contains("not been enabled")
         || message.contains("feature has been enabled")
+}
+
+fn single_pr_validation_output(pr_numbers: &[u64], output: &Output) -> bool {
+    if pr_numbers.len() != 1 {
+        return false;
+    }
+
+    let message = command_message(output).to_lowercase();
+    (message.contains("require") || message.contains("requires") || message.contains("need"))
+        && (message.contains("at least two")
+            || message.contains("at least 2")
+            || message.contains("multiple pr")
+            || message.contains("more than one")
+            || message.contains("minimum of two"))
 }
 
 fn command_message(output: &Output) -> String {

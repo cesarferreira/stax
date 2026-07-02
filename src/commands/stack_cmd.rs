@@ -31,8 +31,8 @@ pub fn run_link() -> Result<()> {
     let stack = Stack::load(&repo)?;
     let current = repo.current_branch()?;
     let pr_numbers = current_stack_pr_numbers(&stack, &current)?;
-    if pr_numbers.len() < 2 {
-        anyhow::bail!("Native GitHub Stacks require at least two PRs in the current stack");
+    if pr_numbers.is_empty() {
+        anyhow::bail!("Native GitHub Stacks require at least one PR in the current stack");
     }
 
     match gh_stack::link_stack(&pr_numbers, &stack.trunk, &remote_info.name) {
@@ -48,6 +48,9 @@ pub fn run_link() -> Result<()> {
         LinkOutcome::FeatureDisabled { message } => {
             gh_stack::set_feature_enabled(repo.workdir()?, false)?;
             anyhow::bail!("GitHub native Stacked PRs are not enabled for this repo: {message}");
+        }
+        LinkOutcome::SinglePrValidationRejected { message } => {
+            anyhow::bail!("GitHub rejected the native Stack link: {message}");
         }
         LinkOutcome::Failed { message } => {
             anyhow::bail!("Failed to link native GitHub Stack: {message}");
@@ -74,6 +77,9 @@ pub fn run_unlink() -> Result<()> {
         }
         LinkOutcome::FeatureDisabled { message } => {
             anyhow::bail!("GitHub native Stacked PRs are not enabled for this repo: {message}");
+        }
+        LinkOutcome::SinglePrValidationRejected { message } => {
+            anyhow::bail!("GitHub rejected the native Stack unlink: {message}");
         }
         LinkOutcome::Failed { message } => {
             anyhow::bail!("Failed to remove native GitHub Stack: {message}");
