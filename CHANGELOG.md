@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.92.0] - 2026-07-02
+
+### 🐛 Bug Fixes
+
+- Keep skills.md version marker in sync and clarify update output ([#561](https://github.com/cesarferreira/stax/issues/561))
+- Add TUI pane visibility toggles ([#555](https://github.com/cesarferreira/stax/issues/555))
+- Don't flag empty never-pushed branches as merged ([#562](https://github.com/cesarferreira/stax/issues/562))
 ## [0.91.2] - 2026-07-02
 
 ### 🐛 Bug Fixes
