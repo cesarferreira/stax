@@ -10,6 +10,8 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 | `st ll` | | Show stack with PR URLs and full details |
 | `st log` | `l` | Show stack with commits and PR info |
 | `st submit` | `ss` | Submit full current stack |
+| `st stack link` | | Register the current PR stack as a native GitHub Stack via `gh stack link` |
+| `st stack unlink` | | Remove the native GitHub Stack object via `gh stack unstack` |
 | `st merge` | | Cascade-merge from bottom to current (see flags below) |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
 | `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
@@ -154,7 +156,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st init` | Initialize stax or reconfigure trunk (`--trunk <branch>`) |
 | `st cli upgrade` | Detect install method and run the matching upgrade |
 | `st doctor` | Check repo health |
-| `st doctor --fix` | Apply safe local repairs after one confirmation (recommended Git config and stale AI skills) |
+| `st doctor --fix` | Apply safe local repairs after one confirmation (recommended Git config, stale AI skills, and optional `gh-stack` install) |
 | `st skills` | Manage installed AI agent skill files (`list`, `update`, `update --dry-run`) |
 | `st continue` | Continue after conflicts |
 | `st open` | Open repository in browser |
@@ -256,9 +258,10 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 - `--ai` generate PR title and body with AI; narrow with `--title` or `--body`
 - `--template <name>` / `--no-template` / `--edit`
 - `--rerequest-review` / `--update-title`
+- `--native-stack` force-attempt native GitHub Stack registration for this submit; `--no-native-stack` skips it
 - `--yes` / `--no-prompt`
 
-Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.config/stax/config.toml`.
+Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` and `native_stack = "auto" | "off" | "link"` in `~/.config/stax/config.toml`.
 
 ### `st merge`
 

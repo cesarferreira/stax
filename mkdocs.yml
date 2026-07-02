@@ -77,6 +77,7 @@ nav:
   - Configuration:
       - Config Reference: configuration/index.md
   - Integrations:
+      - GitHub Native Stacked PRs: integrations/github-native-stacks.md
       - PR Templates and AI: integrations/pr-templates-and-ai.md
       - Claude Code: integrations/claude-code.md
       - Codex: integrations/codex.md

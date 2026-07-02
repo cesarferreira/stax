@@ -29,6 +29,8 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | Command | What it does |
 |---|---|
 | `st ss` | Submit the whole stack — open or update linked PRs |
+| `st stack link` | Register the current PR stack as a native GitHub Stack when `gh-stack` is available |
+| `st stack unlink` | Remove the native GitHub Stack object for the current stack |
 | `st branch submit` | Submit only the current branch; if its parent is already synced to the remote, Stax may publish a temporary rebased head without moving your local branch |
 | `st upstack submit` | Submit current branch and descendants; descendants are temporarily chained onto any temporary parent publish heads |
 | `st draft [branch]` | Convert the current (or named) branch's PR to draft |
@@ -43,6 +45,8 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st cascade` | Restack, push, and create/update PRs in one shot |
 
 Scoped submit keeps local branch metadata unchanged when it prepares a temporary publish head. Plain `git commit` work on the branch is included; `st restack` remains the command that updates local branch tips and parent revisions.
+
+On GitHub repos with native Stacked PRs enabled, `st ss` auto-registers the submitted PRs with GitHub via `gh stack link` when the `github/gh-stack` extension is installed. Repos without access or users without the extension keep the normal stax stack links and see no behavior change.
 
 ## Sync, restack, update
 
