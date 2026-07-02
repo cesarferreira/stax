@@ -473,6 +473,52 @@ fn list_remote_heads(repo: &TestRepo) -> Vec<String> {
         .collect()
 }
 
+fn write_branch_pr_metadata(repo: &TestRepo, branch: &str, parent_branch: &str, pr_number: u64) {
+    let metadata = serde_json::json!({
+        "parentBranchName": parent_branch,
+        "parentBranchRevision": repo.get_commit_sha(parent_branch),
+        "prInfo": {
+            "number": pr_number,
+            "state": "OPEN"
+        }
+    });
+
+    let mut child = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repo.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to hash metadata blob");
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .expect("metadata hash stdin")
+        .write_all(metadata.to_string().as_bytes())
+        .expect("Failed to write metadata JSON");
+    let output = child.wait_with_output().expect("Failed to hash metadata");
+    assert!(
+        output.status.success(),
+        "git hash-object failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let blob_hash = String::from_utf8(output.stdout)
+        .expect("metadata hash UTF-8")
+        .trim()
+        .to_string();
+    let update_ref = repo.git(&[
+        "update-ref",
+        &format!("refs/branch-metadata/{}", branch),
+        &blob_hash,
+    ]);
+    assert!(
+        update_ref.status.success(),
+        "git update-ref failed: {}",
+        TestRepo::stderr(&update_ref)
+    );
+}
+
 // =============================================================================
 // Test Infrastructure Tests
 // =============================================================================
@@ -4967,6 +5013,82 @@ fn test_sync_detects_branch_with_empty_diff_against_trunk() {
             || stdout.contains("feature-empty-diff")
             || stdout.contains("deleted"),
         "Expected sync to detect branch with empty diff, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_sync_preserves_empty_never_pushed_branch() {
+    let repo = TestRepo::new_with_remote();
+
+    let create = repo.run_stax(&["bc", "empty-never-pushed"]);
+    assert!(
+        create.status.success(),
+        "Failed to create empty branch: {}",
+        TestRepo::stderr(&create)
+    );
+    let branch_name = repo.current_branch();
+    assert_eq!(
+        repo.get_commit_sha("main"),
+        repo.get_commit_sha(&branch_name),
+        "test branch should have no commits beyond main"
+    );
+
+    repo.run_stax(&["t"]);
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let branches = repo.list_branches();
+    assert!(
+        branches.contains(&branch_name),
+        "empty never-pushed branch should not be deleted by sync.\nstdout:\n{}\nbranches: {:?}",
+        stdout,
+        branches
+    );
+    assert!(
+        !stdout.contains(&branch_name),
+        "empty never-pushed branch should not be reported as merged.\nstdout:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_sync_deletes_empty_branch_with_pr_metadata() {
+    let repo = TestRepo::new_with_remote();
+
+    let create = repo.run_stax(&["bc", "empty-with-pr"]);
+    assert!(
+        create.status.success(),
+        "Failed to create empty branch: {}",
+        TestRepo::stderr(&create)
+    );
+    let branch_name = repo.current_branch();
+    write_branch_pr_metadata(&repo, &branch_name, "main", 4242);
+
+    repo.run_stax(&["t"]);
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let branches = repo.list_branches();
+    assert!(
+        !branches.contains(&branch_name),
+        "empty branch with PR metadata should still be deleted by sync.\nstdout:\n{}\nbranches: {:?}",
+        stdout,
+        branches
+    );
+    assert!(
+        stdout.contains("cleaned 1 merged") || stdout.contains(&branch_name),
+        "Expected sync to report the PR-backed branch cleanup, got:\n{}",
         stdout
     );
 }

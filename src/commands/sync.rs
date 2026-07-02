@@ -1953,6 +1953,32 @@ struct MergedBranchInfo {
     merge_type: MergeType,
 }
 
+fn should_spare_empty_never_submitted_branch(
+    workdir: &Path,
+    stack: &Stack,
+    branch: &str,
+) -> Result<bool> {
+    let Some(info) = stack.branches.get(branch) else {
+        return Ok(false);
+    };
+    if info.pr_number.is_some() {
+        return Ok(false);
+    }
+
+    // Use the recorded parent revision so branches with real commits that were
+    // later merged into trunk are not mistaken for never-started branches.
+    let parent = info
+        .parent_revision
+        .as_deref()
+        .or(info.parent.as_deref())
+        .unwrap_or(&stack.trunk);
+    Ok(!has_unique_commits_since_any_base(
+        workdir,
+        branch,
+        &[parent],
+    )?)
+}
+
 fn find_merged_branches(
     repo: &GitRepo,
     workdir: &std::path::Path,
@@ -1981,7 +2007,9 @@ fn find_merged_branches(
         }
 
         // Only include branches we're tracking
-        if stack.branches.contains_key(branch) {
+        if stack.branches.contains_key(branch)
+            && !should_spare_empty_never_submitted_branch(workdir, stack, branch)?
+        {
             merged.push(MergedBranchInfo {
                 branch: branch.to_string(),
                 merge_type: MergeType::Ancestor,
@@ -2009,6 +2037,7 @@ fn find_merged_branches(
             // Only include branches we're tracking (and avoid duplicates)
             if stack.branches.contains_key(branch)
                 && !merged.iter().any(|info| info.branch == branch)
+                && !should_spare_empty_never_submitted_branch(workdir, stack, branch)?
             {
                 merged.push(MergedBranchInfo {
                     branch: branch.to_string(),
@@ -2117,6 +2146,9 @@ fn find_merged_branches(
 
     for branch in stack.branches.keys() {
         if branch == &stack.trunk || merged.iter().any(|m| &m.branch == branch) {
+            continue;
+        }
+        if should_spare_empty_never_submitted_branch(workdir, stack, branch)? {
             continue;
         }
         // Remote still exists -> not merged via squash-delete; skip expensive check.
