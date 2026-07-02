@@ -7,3 +7,12 @@ tag-name = "v{{version}}"
 # Regenerate CHANGELOG.md with git-cliff inside cargo-release's release commit.
 # --tag treats the not-yet-tagged commits as belonging to the version being released.
 pre-release-hook = ["git-cliff", "-o", "CHANGELOG.md", "--tag", "v{{version}}"]
+
+# Keep the skills.md version marker in sync with the crate version so the remote
+# marker read by `stax skills update` matches the release target instead of
+# lagging behind at a stale value.
+[[pre-release-replacements]]
+file = "skills.md"
+search = "<!-- stax-skills-version: [0-9]+\\.[0-9]+\\.[0-9]+ -->"
+replace = "<!-- stax-skills-version: {{version}} -->"
+exactly = 1
