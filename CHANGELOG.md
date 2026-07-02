@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.91.2] - 2026-07-02
+
+### 🐛 Bug Fixes
+
+- Reset local trunk to remote before post-merge sync to avoid diverged warning
+- Guard trunk reset against wrong-branch and push-failure edge cases
+
+### 💼 Other
+
+- Improve merge prompts and blocked PR feedback ([#556](https://github.com/cesarferreira/stax/issues/556))
+- Streamline merge command output ([#557](https://github.com/cesarferreira/stax/issues/557))
 ## [0.91.1] - 2026-07-01
 
 ### 💼 Other
