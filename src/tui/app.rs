@@ -290,11 +290,62 @@ impl BranchDisplay {
 }
 
 /// Which pane is focused
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusedPane {
     #[default]
     Stack,
+    Summary,
     Diff,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiPane {
+    Stack,
+    Summary,
+    Patch,
+}
+
+/// Runtime visibility for dashboard panes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneVisibility {
+    pub stack: bool,
+    pub summary: bool,
+    pub patch: bool,
+}
+
+impl Default for PaneVisibility {
+    fn default() -> Self {
+        Self {
+            stack: true,
+            summary: true,
+            patch: true,
+        }
+    }
+}
+
+impl PaneVisibility {
+    pub fn is_visible(self, pane: TuiPane) -> bool {
+        match pane {
+            TuiPane::Stack => self.stack,
+            TuiPane::Summary => self.summary,
+            TuiPane::Patch => self.patch,
+        }
+    }
+
+    fn set_visible(&mut self, pane: TuiPane, visible: bool) {
+        match pane {
+            TuiPane::Stack => self.stack = visible,
+            TuiPane::Summary => self.summary = visible,
+            TuiPane::Patch => self.patch = visible,
+        }
+    }
+
+    pub fn visible_count(self) -> usize {
+        [self.stack, self.summary, self.patch]
+            .into_iter()
+            .filter(|visible| *visible)
+            .count()
+    }
 }
 
 /// Application mode
@@ -389,6 +440,7 @@ pub struct App {
     pub selected_diff: Vec<DiffLine>,
     pub diff_scroll: usize,
     pub focused_pane: FocusedPane,
+    pub pane_visibility: PaneVisibility,
     pub diff_stat: Vec<DiffStatLine>,
     pub status_message: Option<String>,
     pub status_set_at: Option<Instant>,
@@ -449,6 +501,7 @@ impl App {
             selected_diff: Vec::new(),
             diff_scroll: 0,
             focused_pane: FocusedPane::Stack,
+            pane_visibility: PaneVisibility::default(),
             diff_stat: Vec::new(),
             status_message: initial_status,
             status_set_at,
@@ -830,6 +883,68 @@ impl App {
     /// Calculate total scrollable lines in diff view (stats header + diff content)
     pub fn total_diff_lines(&self) -> usize {
         self.selected_diff.len()
+    }
+
+    pub fn toggle_pane_visibility(&mut self, pane: TuiPane) {
+        let currently_visible = self.pane_visibility.is_visible(pane);
+        if currently_visible && self.pane_visibility.visible_count() == 1 {
+            self.set_status("At least one pane must remain visible");
+            return;
+        }
+
+        self.pane_visibility.set_visible(pane, !currently_visible);
+        self.ensure_focus_visible();
+
+        let pane_name = match pane {
+            TuiPane::Stack => "Stack",
+            TuiPane::Summary => "Summary",
+            TuiPane::Patch => "Patch",
+        };
+        let state = if currently_visible { "hidden" } else { "shown" };
+        self.set_status(format!("{} pane {}", pane_name, state));
+    }
+
+    fn focused_pane_is_visible(&self) -> bool {
+        match self.focused_pane {
+            FocusedPane::Stack => self.pane_visibility.stack,
+            FocusedPane::Summary => self.pane_visibility.summary,
+            FocusedPane::Diff => self.pane_visibility.patch,
+        }
+    }
+
+    fn ensure_focus_visible(&mut self) {
+        if self.focused_pane_is_visible() {
+            return;
+        }
+
+        self.focused_pane = if self.pane_visibility.stack {
+            FocusedPane::Stack
+        } else if self.pane_visibility.patch {
+            FocusedPane::Diff
+        } else {
+            FocusedPane::Summary
+        };
+    }
+
+    pub fn focus_next_visible_pane(&mut self) {
+        let panes = [FocusedPane::Stack, FocusedPane::Summary, FocusedPane::Diff];
+        let current = panes
+            .iter()
+            .position(|pane| *pane == self.focused_pane)
+            .unwrap_or(0);
+
+        for offset in 1..=panes.len() {
+            let next = panes[(current + offset) % panes.len()].clone();
+            let is_visible = match next {
+                FocusedPane::Stack => self.pane_visibility.stack,
+                FocusedPane::Summary => self.pane_visibility.summary,
+                FocusedPane::Diff => self.pane_visibility.patch,
+            };
+            if is_visible {
+                self.focused_pane = next;
+                return;
+            }
+        }
     }
 
     /// Set a status message (auto-clears after timeout)
@@ -1799,8 +1914,8 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
 mod tests {
     use super::{
         App, BranchCiSummary, BranchDisplay, DiffLineType, DiffRequest, DiffUpdate, FocusedPane,
-        Mode, live_ci_summary_text, run_in_tokio_runtime, spawn_diff_loader,
-        substring_filter_indices,
+        Mode, PaneVisibility, TuiPane, live_ci_summary_text, run_in_tokio_runtime,
+        spawn_diff_loader, substring_filter_indices,
     };
     use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
     use crate::engine::Stack;
@@ -1895,6 +2010,7 @@ mod tests {
             selected_diff: Vec::new(),
             diff_scroll: 0,
             focused_pane: FocusedPane::Stack,
+            pane_visibility: PaneVisibility::default(),
             diff_stat: Vec::new(),
             status_message: None,
             status_set_at: None,
@@ -1952,6 +2068,49 @@ mod tests {
         );
         assert!(app.selected_diff.is_empty());
         assert!(app.diff_stat.is_empty());
+    }
+
+    #[test]
+    fn toggling_patch_hides_it_and_moves_focus_to_stack() {
+        let (_tempdir, repo) = test_repo();
+        let mut app = minimal_app(repo, vec![skeleton_branch("main", None, true)]);
+        app.focused_pane = FocusedPane::Diff;
+
+        app.toggle_pane_visibility(TuiPane::Patch);
+
+        assert!(!app.pane_visibility.patch);
+        assert_eq!(app.focused_pane, FocusedPane::Stack);
+        assert_eq!(app.status_message.as_deref(), Some("Patch pane hidden"));
+    }
+
+    #[test]
+    fn toggling_does_not_hide_last_visible_pane() {
+        let (_tempdir, repo) = test_repo();
+        let mut app = minimal_app(repo, vec![skeleton_branch("main", None, true)]);
+        app.pane_visibility = PaneVisibility {
+            stack: true,
+            summary: false,
+            patch: false,
+        };
+
+        app.toggle_pane_visibility(TuiPane::Stack);
+
+        assert!(app.pane_visibility.stack);
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("At least one pane must remain visible")
+        );
+    }
+
+    #[test]
+    fn tab_skips_hidden_patch_pane() {
+        let (_tempdir, repo) = test_repo();
+        let mut app = minimal_app(repo, vec![skeleton_branch("main", None, true)]);
+        app.pane_visibility.patch = false;
+
+        app.focus_next_visible_pane();
+
+        assert_eq!(app.focused_pane, FocusedPane::Summary);
     }
 
     #[test]

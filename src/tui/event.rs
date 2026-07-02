@@ -36,6 +36,9 @@ pub enum KeyAction {
     Quit,
     ReorderMode,
     MovePicker,
+    ToggleStackPane,
+    ToggleSummaryPane,
+    TogglePatchPane,
 
     // Reorder mode actions
     MoveUp,

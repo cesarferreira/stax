@@ -274,11 +274,15 @@ pub fn render_stack_tree(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let title = if search_active && !app.search_query.is_empty() {
-        format!(" Stack /{} ({} matches) ", app.search_query, branches.len())
+        format!(
+            " [1] Stack /{} ({} matches) ",
+            app.search_query,
+            branches.len()
+        )
     } else if search_active {
-        format!(" Stack (filter: all {}) ", branches.len())
+        format!(" [1] Stack (filter: all {}) ", branches.len())
     } else {
-        format!(" Stack ({}) ", app.branches.len())
+        format!(" [1] Stack ({}) ", app.branches.len())
     };
 
     let (border_color, title_style) = if is_focused {

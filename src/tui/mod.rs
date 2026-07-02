@@ -7,7 +7,7 @@ pub(crate) mod ui;
 mod widgets;
 pub mod worktree;
 
-use app::{App, ConfirmAction, FocusedPane, InputAction, Mode, PendingCommand};
+use app::{App, ConfirmAction, FocusedPane, InputAction, Mode, PendingCommand, TuiPane};
 use event::{KeyAction, KeyContext, poll_event};
 
 use crate::engine::BranchMetadata;
@@ -170,6 +170,9 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
                 'q' => Some(KeyAction::Quit),
                 'o' => Some(KeyAction::ReorderMode),
                 'm' => Some(KeyAction::MovePicker),
+                '1' => Some(KeyAction::ToggleStackPane),
+                '2' => Some(KeyAction::ToggleSummaryPane),
+                '3' => Some(KeyAction::TogglePatchPane),
                 _ => None,
             };
 
@@ -177,14 +180,13 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
                 return handle_normal_action(app, mapped_action);
             }
         }
-        KeyAction::Tab => {
-            app.focused_pane = match app.focused_pane {
-                FocusedPane::Stack => FocusedPane::Diff,
-                FocusedPane::Diff => FocusedPane::Stack,
-            };
-        }
+        KeyAction::Tab => app.focus_next_visible_pane(),
+        KeyAction::ToggleStackPane => app.toggle_pane_visibility(TuiPane::Stack),
+        KeyAction::ToggleSummaryPane => app.toggle_pane_visibility(TuiPane::Summary),
+        KeyAction::TogglePatchPane => app.toggle_pane_visibility(TuiPane::Patch),
         KeyAction::Up => match app.focused_pane {
             FocusedPane::Stack => app.select_previous(),
+            FocusedPane::Summary => {}
             FocusedPane::Diff => {
                 if app.diff_scroll > 0 {
                     app.diff_scroll -= 1;
@@ -193,6 +195,7 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
         },
         KeyAction::Down => match app.focused_pane {
             FocusedPane::Stack => app.select_next(),
+            FocusedPane::Summary => {}
             FocusedPane::Diff => {
                 if app.diff_scroll < app.total_diff_lines().saturating_sub(1) {
                     app.diff_scroll += 1;

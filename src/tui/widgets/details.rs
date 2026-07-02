@@ -1,4 +1,4 @@
-use crate::tui::app::{App, BranchDisplay};
+use crate::tui::app::{App, BranchDisplay, FocusedPane};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -10,6 +10,7 @@ use ratatui::{
 /// Render the details panel (bottom left)
 pub fn render_details(f: &mut Frame, app: &App, area: Rect) {
     let branch = app.selected_branch();
+    let is_focused = app.focused_pane == FocusedPane::Summary;
 
     let content = if let Some(branch) = branch {
         build_details_content(app, branch)
@@ -17,16 +18,22 @@ pub fn render_details(f: &mut Frame, app: &App, area: Rect) {
         vec![Line::from("No branch selected")]
     };
 
+    let (border_color, title_style) = if is_focused {
+        (
+            Color::Cyan,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (Color::DarkGray, Style::default().fg(Color::DarkGray))
+    };
+
     let paragraph = Paragraph::new(content).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(Span::styled(
-                " Summary ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .border_style(Style::default().fg(Color::Cyan)),
+            .title(Span::styled(" [2] Summary ", title_style))
+            .border_style(Style::default().fg(border_color)),
     );
 
     f.render_widget(paragraph, area);
