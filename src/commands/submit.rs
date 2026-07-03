@@ -7,8 +7,8 @@ use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::github::gh_stack::{self, ExtensionStatus, FeatureState, LinkOutcome};
 use crate::github::pr::{
-    PrInfoWithHead, StackPrInfo, generate_stack_links_markdown, remove_stack_links_from_body,
-    upsert_stack_links_in_body,
+    PrInfoWithHead, StackPrInfo, generate_stack_links_markdown, is_native_stack_base_locked_error,
+    remove_stack_links_from_body, upsert_stack_links_in_body,
 };
 use crate::github::pr_template::{discover_pr_templates, select_template_interactive};
 use crate::ops::receipt::{OpKind, PlanSummary};
@@ -2621,16 +2621,6 @@ fn update_ref(workdir: &Path, refname: &str, oid: &str) -> Result<()> {
         anyhow::bail!("{}", command_output_details("git update-ref", &output));
     }
     Ok(())
-}
-
-/// True when a PR base-update failure is GitHub rejecting the change because
-/// the PR is registered in a native GitHub Stack (private preview). GitHub
-/// owns base-branch management for stacked PRs once linked, and returns this
-/// validation error for `PATCH .../pulls/{n}` calls that touch `base` — even
-/// when the requested value matches the PR's current base.
-fn is_native_stack_base_locked_error(err: &anyhow::Error) -> bool {
-    err.chain()
-        .any(|cause| cause.to_string().to_lowercase().contains("part of a stack"))
 }
 
 fn command_output_details(command: &str, output: &std::process::Output) -> String {

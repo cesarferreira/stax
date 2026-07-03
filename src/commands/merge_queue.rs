@@ -232,6 +232,20 @@ pub fn run(
             Ok(PrBaseUpdate::AlreadyTargeted) => {
                 LiveTimer::maybe_finish_ok(retarget_timer, "already on base")
             }
+            Ok(PrBaseUpdate::NativeStackLocked) => {
+                LiveTimer::maybe_finish_err(retarget_timer, "locked");
+                failed = Some((
+                    branch.branch.clone(),
+                    branch.pr_number,
+                    format!(
+                        "PR #{} is registered in a native GitHub Stack, which locks its base \
+                         branch and prevents retargeting it to {} for the queue. Run `st stack \
+                         unlink` first if you need to enqueue it out of stack order.",
+                        branch.pr_number, trunk
+                    ),
+                ));
+                break;
+            }
             Err(e) => {
                 LiveTimer::maybe_finish_err(retarget_timer, "failed");
                 failed = Some((
@@ -283,6 +297,18 @@ pub fn run(
                         }
                         Ok(PrBaseUpdate::AlreadyTargeted) => {
                             LiveTimer::maybe_finish_ok(rollback_timer, "already restored")
+                        }
+                        Ok(PrBaseUpdate::NativeStackLocked) => {
+                            LiveTimer::maybe_finish_warn(rollback_timer, "skipped (native Stack)");
+                            if !quiet {
+                                println!(
+                                    "      {} #{} manages its base via GitHub's native Stack; \
+                                     restore it with `st stack link` if it isn't updated \
+                                     automatically",
+                                    "note:".dimmed(),
+                                    branch.pr_number
+                                );
+                            }
                         }
                         Err(rb_err) => {
                             LiveTimer::maybe_finish_err(rollback_timer, "rollback failed");

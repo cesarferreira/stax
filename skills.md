@@ -224,6 +224,12 @@ stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment l
 # Native Stacked PRs (private preview) reject Personal Access Tokens — stax
 # strips GH_TOKEN/GITHUB_TOKEN before calling `gh stack`, but you still need
 # an OAuth-authenticated `gh` account (`gh auth login`) to exist at all.
+# Once linked, GitHub owns base-branch transitions for those PRs and rejects
+# any PATCH touching `base` ("...part of a stack"). stax treats this as
+# non-fatal in submit/merge cascade retargets (prints a note, continues);
+# `stax merge --stack`/`--queue` fail with an actionable message instead,
+# since merging out of stack order needs a real base change (run
+# `stax stack unlink` first if that's what you want).
 
 stax branch submit                 # Submit current branch only
 stax bs                            # Hidden shortcut alias for branch submit

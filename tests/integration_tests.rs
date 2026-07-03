@@ -10333,6 +10333,275 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
+    async fn test_merge_treats_native_stack_base_lock_as_non_fatal() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-lock-a"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-lock-b"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                github_pull_fixture(101, &branch_a, "main", "sha-a"),
+                github_pull_fixture(102, &branch_b, &branch_a, "sha-b")
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/101"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(101, &branch_a, "main", "sha-a")),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // GitHub never actually applies the retarget: the PR remains
+        // registered in a native Stack, so every re-check still shows the
+        // original base.
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(102, &branch_b, &branch_a, "sha-b")),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "message": "Validation Failed",
+                "documentation_url": "https://docs.github.com/rest/pulls/pulls#update-a-pull-request",
+                "errors": [{
+                    "resource": "PullRequest",
+                    "field": "base",
+                    "code": "invalid",
+                    "message": "Cannot change the base branch because the pull request is part of a stack."
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test/repo/pulls/101/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "merge-a-commit",
+                "merged": true,
+                "message": "Pull Request successfully merged"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test/repo/pulls/102/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "merge-b-commit",
+                "merged": true,
+                "message": "Pull Request successfully merged"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        mount_github_review_status(&mock_server, 101, "APPROVED").await;
+        mount_github_review_status(&mock_server, 102, "APPROVED").await;
+
+        let merge_output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["merge", "--yes", "--no-wait", "--no-delete", "--no-sync"],
+        );
+        assert!(
+            merge_output.status.success(),
+            "Merge should not abort when GitHub locks the base of a natively-stacked PR: {}\n{}",
+            TestRepo::stderr(&merge_output),
+            TestRepo::stdout(&merge_output)
+        );
+
+        let stdout = TestRepo::stdout(&merge_output);
+        assert!(
+            stdout.contains("native Stack"),
+            "Expected a soft note about the native Stack base lock. Output:\n{}",
+            stdout
+        );
+
+        let requests = mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        let patch_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/102");
+        let merge_a_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/101/merge");
+        let merge_b_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/102/merge");
+        assert!(
+            patch_idx > merge_a_idx,
+            "Expected the locked retarget attempt after the parent PR merged, requests were: {:?}",
+            requests
+                .iter()
+                .map(|request| format!("{} {}", request.method, request.url.path()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            merge_b_idx > patch_idx,
+            "Expected the dependent PR to still be merged despite the locked retarget, requests were: {:?}",
+            requests
+                .iter()
+                .map(|request| format!("{} {}", request.method, request.url.path()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_treats_native_stack_base_lock_as_done_when_github_applies_it() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-lock-auto-a"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-lock-auto-b"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                github_pull_fixture(101, &branch_a, "main", "sha-a"),
+                github_pull_fixture(102, &branch_b, &branch_a, "sha-b")
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/101"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(101, &branch_a, "main", "sha-a")),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // GitHub rejects the explicit PATCH, but applies the retarget itself
+        // shortly after (e.g. once the merged branch is deleted).
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(102, &branch_b, &branch_a, "sha-b")),
+            )
+            .with_priority(1)
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(102, &branch_b, "main", "sha-b")),
+            )
+            .with_priority(2)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/102"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "message": "Validation Failed",
+                "documentation_url": "https://docs.github.com/rest/pulls/pulls#update-a-pull-request",
+                "errors": [{
+                    "resource": "PullRequest",
+                    "field": "base",
+                    "code": "invalid",
+                    "message": "Cannot change the base branch because the pull request is part of a stack."
+                }]
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test/repo/pulls/101/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "merge-a-commit",
+                "merged": true,
+                "message": "Pull Request successfully merged"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test/repo/pulls/102/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "merge-b-commit",
+                "merged": true,
+                "message": "Pull Request successfully merged"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        mount_github_review_status(&mock_server, 101, "APPROVED").await;
+        mount_github_review_status(&mock_server, 102, "APPROVED").await;
+
+        let merge_output = run_stax_with_env(
+            &repo,
+            home.path(),
+            &["merge", "--yes", "--no-wait", "--no-delete", "--no-sync"],
+        );
+        assert!(
+            merge_output.status.success(),
+            "Merge failed: {}\n{}",
+            TestRepo::stderr(&merge_output),
+            TestRepo::stdout(&merge_output)
+        );
+
+        let stdout = TestRepo::stdout(&merge_output);
+        assert!(
+            stdout.contains("already on base"),
+            "Expected the native Stack lock to be treated as already applied once GitHub \
+             caught up. Output:\n{}",
+            stdout
+        );
+        assert!(
+            !stdout.contains("native Stack"),
+            "Did not expect the soft-skip note once GitHub applied the retarget. Output:\n{}",
+            stdout
+        );
+    }
+
+    #[tokio::test]
     async fn test_merge_surfaces_duplicate_retarget_error_when_base_does_not_change() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;

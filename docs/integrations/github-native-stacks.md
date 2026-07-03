@@ -64,6 +64,18 @@ If no OAuth-authenticated `gh` account is available at all, native registration 
 
 `stack_links_when_native = "keep"` means PR body/comment links continue to sync even when GitHub native registration succeeds.
 
+## Base branch ownership after linking
+
+Once a stack is registered natively, GitHub owns base-branch transitions for the linked PRs and rejects any `PATCH` that touches `base` — even from stax's own retarget calls — with:
+
+```
+Cannot change the base branch because the pull request is part of a stack.
+```
+
+stax treats this as non-fatal wherever it would otherwise just be re-affirming or cascading a base after a merge (`st submit`, and the retarget-after-merge step in `st merge`, `st merge --queue`, `st merge --remote`, and `st merge --when-ready`): it prints a short `note:` and continues instead of aborting. GitHub either applies the retarget itself shortly after (e.g. once the merged branch is deleted) or leaves it for `st stack link` to reconcile later.
+
+Where a base change to trunk is a hard precondition — merging a single PR out of stack order with `st merge --stack` or `st merge --queue` — stax fails with a clear message instead, since proceeding without the real base would merge into the wrong target. Run `st stack unlink` first if you need to do that.
+
 ## Manual commands
 
 ```bash

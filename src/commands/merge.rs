@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::{GitRepo, RebaseResult};
-use crate::github::pr::{MergeMethod, PrMergeStatus};
+use crate::github::pr::{MergeMethod, PrMergeStatus, is_native_stack_base_locked_error};
 use crate::progress::LiveTimer;
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
@@ -49,6 +49,12 @@ struct MergeScope {
 pub(crate) enum PrBaseUpdate {
     Updated,
     AlreadyTargeted,
+    /// GitHub rejected the retarget because the PR is registered in a native
+    /// Stack (private preview) and a follow-up read still shows the old
+    /// base. Callers should treat this as "skipped, not fatal" — GitHub may
+    /// apply the retarget itself once the merged branch is deleted, or the
+    /// stack may need to be re-linked with `st stack link`.
+    NativeStackLocked,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -288,6 +294,10 @@ pub fn run(
                     }
                     Ok(PrBaseUpdate::AlreadyTargeted) => {
                         LiveTimer::maybe_finish_ok(update_base_timer, "already on base");
+                    }
+                    Ok(PrBaseUpdate::NativeStackLocked) => {
+                        LiveTimer::maybe_finish_warn(update_base_timer, "skipped (native Stack)");
+                        print_native_stack_locked_note(quiet, next_pr);
                     }
                     Err(e) => {
                         LiveTimer::maybe_finish_err(update_base_timer, "failed");
@@ -861,14 +871,44 @@ pub(crate) fn update_pr_base_unless_current(
         Ok(()) => Ok(PrBaseUpdate::Updated),
         Err(e) => {
             if is_duplicate_pr_base_error(&e, new_base, expected_head)
-                && pr_base_matches_after_duplicate_error(rt, client, pr_number, new_base)
+                && pr_base_matches_after_recheck(rt, client, pr_number, new_base)
             {
                 return Ok(PrBaseUpdate::AlreadyTargeted);
+            }
+
+            if is_native_stack_base_locked_error(&e) {
+                // GitHub may apply the retarget itself shortly after (e.g. once
+                // the merged branch is deleted) — give it a moment before
+                // treating this as merely skipped rather than done.
+                if pr_base_matches_after_recheck(rt, client, pr_number, new_base) {
+                    return Ok(PrBaseUpdate::AlreadyTargeted);
+                }
+                return Ok(PrBaseUpdate::NativeStackLocked);
             }
 
             Err(e).with_context(|| format!("failed to retarget PR #{} to {}", pr_number, new_base))
         }
     }
+}
+
+/// Print a soft note explaining a skipped retarget on a natively-stacked PR.
+///
+/// Used at cascade sites (retargeting a dependent PR to trunk after its
+/// predecessor merged) where GitHub owning the base transition is fine to
+/// leave for it — or for `st stack link` — to resolve, rather than aborting.
+pub(crate) fn print_native_stack_locked_note(quiet: bool, pr_number: u64) {
+    if quiet {
+        return;
+    }
+    println!(
+        "  {} {}",
+        "note:".dimmed(),
+        format!(
+            "#{pr_number} manages its base via GitHub's native Stack; \
+             retarget it with `st stack link` if it isn't updated automatically"
+        )
+        .dimmed()
+    );
 }
 
 fn ensure_pr_head_matches(pr_number: u64, actual_head: &str, expected_head: &str) -> Result<()> {
@@ -884,12 +924,14 @@ fn ensure_pr_head_matches(pr_number: u64, actual_head: &str, expected_head: &str
     Ok(())
 }
 
-/// Re-read a PR briefly after GitHub reports a duplicate base/head pair.
+/// Re-read a PR briefly after a retarget PATCH was rejected, to check whether
+/// the base ended up correct anyway.
 ///
-/// This covers a stale-response race: the update endpoint can reject a retarget
-/// as a duplicate even though subsequent PR reads show the same PR now targets
-/// the requested base.
-fn pr_base_matches_after_duplicate_error(
+/// Covers two races: (1) GitHub reports a duplicate base/head validation even
+/// though subsequent PR reads show the same PR now targets the requested
+/// base, and (2) a native-Stack base lock where GitHub applies the retarget
+/// itself shortly after (e.g. once the merged branch is deleted).
+fn pr_base_matches_after_recheck(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
     pr_number: u64,

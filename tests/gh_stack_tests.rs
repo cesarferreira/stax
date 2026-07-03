@@ -150,6 +150,58 @@ exit 1
 }
 
 #[test]
+fn extension_status_reports_no_gh_when_gh_binary_is_missing() {
+    // An empty PATH (no `gh` anywhere) must be classified as `NoGh`, not
+    // silently treated as `NoExtension` or crash/hang the caller.
+    let empty_dir = TempDir::new().expect("empty temp dir");
+
+    let status = stax::github::gh_stack::extension_status_with_path(
+        empty_dir.path().to_str().expect("utf8 path"),
+    );
+
+    assert_eq!(status, stax::github::gh_stack::ExtensionStatus::NoGh);
+}
+
+#[test]
+fn extension_status_reports_no_extension_when_gh_stack_not_in_extension_list() {
+    // `gh` is present and working, but the user never installed the
+    // `github/gh-stack` extension — the single most common "no gh-stack"
+    // scenario for real users.
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-eco github/gh-eco v1.0.0"; exit 0 ;;
+esac
+exit 1
+"#,
+    );
+
+    let status =
+        stax::github::gh_stack::extension_status_with_path(&path_with_fake_gh(fake.path()));
+
+    assert_eq!(status, stax::github::gh_stack::ExtensionStatus::NoExtension);
+}
+
+#[test]
+fn extension_status_reports_no_extension_when_extension_list_is_empty() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") exit 0 ;;
+esac
+exit 1
+"#,
+    );
+
+    let status =
+        stax::github::gh_stack::extension_status_with_path(&path_with_fake_gh(fake.path()));
+
+    assert_eq!(status, stax::github::gh_stack::ExtensionStatus::NoExtension);
+}
+
+#[test]
 fn detects_outdated_gh_stack_extension_without_link_command() {
     let fake = fake_gh_dir(
         r#"#!/bin/sh
@@ -626,6 +678,160 @@ exit 1
     assert!(
         !stderr.contains("should not be called"),
         "must not shell out to `gh stack link` when PRs are missing, stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn stack_link_fails_with_actionable_message_when_extension_not_installed() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+    let branches = repo.create_stack(&["stacklink-a", "stacklink-b"]);
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-eco github/gh-eco v1.0.0"; exit 0 ;;
+  "stack link") echo "should not be called" >&2; exit 1 ;;
+esac
+exit 1
+"#,
+    );
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(&["stack", "link"], &[("HOME", &home), ("PATH", &path)]);
+
+    assert!(
+        !output.status.success(),
+        "link should fail cleanly without the gh-stack extension"
+    );
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("gh-stack") && stderr.contains("gh extension install github/gh-stack"),
+        "expected an actionable install hint, stderr was:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("should not be called"),
+        "must not shell out to `gh stack link` when the extension isn't installed, stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn stack_unlink_fails_with_actionable_message_when_extension_not_installed() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+    let branches = repo.create_stack(&["stackunlink-a", "stackunlink-b"]);
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-eco github/gh-eco v1.0.0"; exit 0 ;;
+  "stack unstack") echo "should not be called" >&2; exit 1 ;;
+esac
+exit 1
+"#,
+    );
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(&["stack", "unlink"], &[("HOME", &home), ("PATH", &path)]);
+
+    assert!(
+        !output.status.success(),
+        "unlink should fail cleanly without the gh-stack extension"
+    );
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("gh-stack") && stderr.contains("gh extension install github/gh-stack"),
+        "expected an actionable install hint, stderr was:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("should not be called"),
+        "must not shell out to gh-stack when the extension isn't installed, stderr was:\n{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn submit_multi_pr_stack_succeeds_without_gh_stack_extension_installed() {
+    // The most common real-world case: a user who has never installed
+    // `github/gh-stack` at all. `st submit` with the default config
+    // (`native_stack = "auto"`) must behave exactly as if native-stack
+    // support didn't exist — no hang, no error, no `gh stack link` call,
+    // and stax's own PR/body-link management proceeds normally.
+    let mock_server = MockServer::start().await;
+
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_config(&home, &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+    let branches = repo.create_stack(&["no-extension-bottom", "no-extension-top"]);
+    repo.git(&["push", "-u", "origin", &branches[0], &branches[1]])
+        .assert_success();
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    mock_existing_pr(&mock_server, 10, &branches[0], "main").await;
+    mock_existing_pr(&mock_server, 20, &branches[1], &branches[0]).await;
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") exit 0 ;;
+  "stack link") echo "should not be called" >&2; exit 1 ;;
+esac
+exit 1
+"#,
+    );
+    let args_file = fake.path().join("args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["submit", "--no-fetch", "--yes", "--no-prompt"],
+        &[
+            ("HOME", &home),
+            ("STAX_GITHUB_TOKEN", "test-token"),
+            ("PATH", &path),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    assert!(
+        !args_file.exists(),
+        "submit must never invoke `gh stack link` when the extension isn't installed"
+    );
+    let feature_cache = repo.git(&["config", "--get", "stax.nativeStack.enabled"]);
+    assert!(
+        !feature_cache.status.success(),
+        "the native-stack feature cache must stay unset when gh-stack was never called, but got: {}",
+        TestRepo::stdout(&feature_cache)
+    );
+
+    // stax's own PR management (body/comment stack links) must be entirely
+    // unaffected by the absence of gh-stack.
+    let requests = mock_server.received_requests().await.unwrap();
+    assert!(
+        requests.iter().any(|request| {
+            request.method.as_str() == "PATCH"
+                && request.url.path() == "/repos/test-owner/test-repo/pulls/10"
+        }),
+        "stax body stack links for #10 should still sync without gh-stack installed"
+    );
+    assert!(
+        requests.iter().any(|request| {
+            request.method.as_str() == "PATCH"
+                && request.url.path() == "/repos/test-owner/test-repo/pulls/20"
+        }),
+        "stax body stack links for #20 should still sync without gh-stack installed"
     );
 }
 
