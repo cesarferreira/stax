@@ -272,8 +272,8 @@ st config --set-ai
 | `st create --ai -a --yes` | Generate branch name + first commit message |
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
 | `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
-| `st ss` | Submit the full stack, open/update linked PRs |
-| `st branch submit` | Submit only the current branch; can publish a temporary rebased head when its parent is already synced remotely |
+| `st ss` | Submit the full stack, open/update linked PRs; temporary-publishes branches that need restack |
+| `st branch submit` | Submit only the current branch; can publish a temporary rebased head when needed |
 | `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
 | `st ready` | Interactive PR readiness dashboard for all tracked PRs, newest changed PR first: merge, ping, fix, wait, or draft (`--current`/`--stack` for current stack, `--plain` for table output) |

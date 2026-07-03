@@ -621,7 +621,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     }
 
     let (publish_sources, _temporary_publish_refs) =
-        prepare_publish_sources_for_submit(&repo, &stack, scope, &branches_to_submit, quiet)?;
+        prepare_publish_sources_for_submit(&repo, &stack, &branches_to_submit, quiet)?;
 
     // Build plan - determine which PRs need create vs update
     let planning_timer = LiveTimer::maybe_new(!quiet, "Planning PR operations...");
@@ -1360,7 +1360,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             if squash {
                 if plan.uses_temporary_publish_ref {
                     anyhow::bail!(
-                        "--squash cannot be combined with scoped submit of a branch that needs a temporary restack. Run `stax restack` first, then submit with --squash."
+                        "--squash cannot be combined with submitting a branch that needs a temporary restack. Run `stax restack` first, then submit with --squash."
                     );
                 }
                 if let Err(e) = squash_branch_commits(repo.workdir()?, &plan.branch, &plan.parent) {
@@ -2325,15 +2325,10 @@ fn create_pr_failure_context(plan: &PrPlan) -> String {
 fn prepare_publish_sources_for_submit(
     repo: &GitRepo,
     stack: &Stack,
-    scope: SubmitScope,
     branches_to_submit: &[String],
     quiet: bool,
 ) -> Result<(HashMap<String, PublishSource>, TemporaryPublishRefs)> {
     let workdir = repo.workdir()?;
-    if !matches!(scope, SubmitScope::Branch | SubmitScope::Upstack) {
-        return Ok((HashMap::new(), TemporaryPublishRefs::empty(workdir)));
-    }
-
     let mut sources = HashMap::new();
     let temp_root = std::env::temp_dir().join(format!(
         "stax-submit-{}-{}",
@@ -2380,7 +2375,7 @@ fn prepare_publish_sources_for_submit(
         )
         .with_context(|| {
             format!(
-                "Could not prepare temporary restack for scoped submit of '{}'.\n\
+                "Could not prepare temporary restack for submit of '{}'.\n\
                  Run `stax restack` to resolve it locally, then retry submit.",
                 branch
             )
@@ -2401,7 +2396,7 @@ fn prepare_publish_sources_for_submit(
 
     if !sources.is_empty() && !quiet {
         println!(
-            "  {} Prepared {} temporary restack {} for scoped submit",
+            "  {} Prepared {} temporary restack {} for submit",
             "▸".dimmed(),
             sources.len().to_string().cyan(),
             if sources.len() == 1 { "ref" } else { "refs" }

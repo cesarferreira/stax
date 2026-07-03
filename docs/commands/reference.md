@@ -269,9 +269,9 @@ Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` in `~/.conf
 - `--stop-here`
 - `--submit-after ask|yes|no`
 
-### Scoped submit temporary restack
+### Temporary publish restack
 
-`st branch submit` and `st upstack submit` can publish a temporary rebased head without moving local branch tips. When a submitted branch needs restack but its excluded parent already matches the remote, Stax creates an internal temporary ref, replays the branch's current commits onto the synced parent for the push, and keeps local metadata unchanged. `st upstack submit` chains descendants onto those temporary publish heads so the remote stack stays linear.
+`st submit`, `st downstack submit`, `st branch submit`, and `st upstack submit` can publish a temporary rebased head without moving local branch tips. When a submitted branch needs restack, Stax creates an internal temporary ref, replays the branch's current commits onto the submitted parent for the push, and keeps local metadata unchanged. Descendants chain onto those temporary publish heads so the remote stack stays linear.
 
 If the excluded parent has local-only commits, scoped submit still refuses and asks you to include ancestors with `st downstack submit` / `st submit` or restack first. `--squash` also requires a local restack first because squashing rewrites local branch history.
 
