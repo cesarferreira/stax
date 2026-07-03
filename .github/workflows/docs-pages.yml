@@ -51,4 +51,4 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v5
         with:
-          timeout: 1800000
+          timeout: 1800000 # 30 minutes in milliseconds to accommodate Pages queue delays
