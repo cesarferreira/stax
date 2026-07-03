@@ -46,7 +46,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 
 Scoped submit keeps local branch metadata unchanged when it prepares a temporary publish head. Plain `git commit` work on the branch is included; `st restack` remains the command that updates local branch tips and parent revisions.
 
-On GitHub repos with native Stacked PRs enabled, `st ss` auto-registers the submitted PRs with GitHub via `gh stack link` when the `github/gh-stack` extension is installed. Repos without access or users without the extension keep the normal stax stack links and see no behavior change.
+On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register the submitted PRs with GitHub via `gh stack link` when the `github/gh-stack` extension is installed. Repos without access or users without the extension keep the normal stax stack links and see no behavior change. stax strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before calling `gh stack`, since the private-preview native-stack API only accepts an OAuth-authenticated `gh` login; `st doctor` recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics. See [Native GitHub Stacked PRs](../integrations/github-native-stacks.md).
 
 ## Sync, restack, update
 

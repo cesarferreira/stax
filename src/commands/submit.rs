@@ -2184,6 +2184,22 @@ fn maybe_link_native_stack(
             gh_stack::set_feature_enabled(workdir, false)?;
             Ok(false)
         }
+        // Not a durable repo-level fact (unlike `FeatureDisabled`) — the
+        // active `gh` account may change on a later run — so this must
+        // never be cached.
+        LinkOutcome::AuthTokenUnsupported { .. } => {
+            if !quiet {
+                println!(
+                    "  {} {}",
+                    "note:".dimmed(),
+                    "native GitHub Stack link skipped: no OAuth-authenticated `gh` account found \
+                     (Personal Access Tokens are not supported during private preview). Run `gh \
+                     auth login` to add one."
+                        .dimmed()
+                );
+            }
+            Ok(false)
+        }
         LinkOutcome::SinglePrValidationRejected { .. } => Ok(false),
         LinkOutcome::Failed { message } => {
             if !quiet {

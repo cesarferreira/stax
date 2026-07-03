@@ -4,6 +4,17 @@ use std::process::{Command, Output};
 
 const FEATURE_ENABLED_KEY: &str = "stax.nativeStack.enabled";
 
+/// Below this version, `gh-stack` reports Personal Access Token rejections
+/// with the same ambiguous "Stacked PRs are not enabled" message it uses for
+/// a genuinely feature-disabled repo (fixed in v0.0.6's "PAT auth warning"
+/// change, which introduced the distinct "Personal access tokens are not
+/// supported" message `auth_token_unsupported_output` matches on). Below
+/// this version, an auth-token issue can still be misclassified as
+/// `FeatureDisabled` and incorrectly cached. This is purely a `doctor`
+/// diagnostic — `gh stack link` itself still works on any version that
+/// passes `link_command_supported` (added after v0.0.1).
+const RECOMMENDED_GH_STACK_VERSION: (u32, u32, u32) = (0, 0, 6);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtensionStatus {
     NoGh,
@@ -12,6 +23,20 @@ pub enum ExtensionStatus {
     /// (added after v0.0.1), so stax cannot register native stacks with it.
     Outdated,
     Installed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionStatus {
+    /// Version string on the `gh extension list` line couldn't be parsed
+    /// (unreleased/dev build, unexpected format, etc.) — not treated as an
+    /// error since `link_command_supported` already gates real capability.
+    Unknown,
+    BelowRecommended {
+        installed: String,
+    },
+    MeetsRecommended {
+        installed: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,9 +49,24 @@ pub enum FeatureState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkOutcome {
     Linked,
-    FeatureDisabled { message: String },
-    SinglePrValidationRejected { message: String },
-    Failed { message: String },
+    FeatureDisabled {
+        message: String,
+    },
+    /// GitHub's native Stacked PRs API is in private preview and rejects
+    /// Personal Access Tokens outright — only OAuth app tokens (the ones
+    /// stored via `gh auth login`) are accepted. This is distinct from
+    /// `FeatureDisabled` (the repo/org not having the feature at all) and
+    /// must never be cached as such, since it depends on which `gh` account
+    /// is active rather than any durable repo-level fact.
+    AuthTokenUnsupported {
+        message: String,
+    },
+    SinglePrValidationRejected {
+        message: String,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 pub fn extension_status() -> ExtensionStatus {
@@ -80,6 +120,60 @@ fn link_command_supported(env: &[(&str, &str)]) -> bool {
         }
         Err(_) => false,
     }
+}
+
+pub fn version_status() -> VersionStatus {
+    version_status_with_env(&[])
+}
+
+pub fn version_status_with_path(path: &str) -> VersionStatus {
+    version_status_with_env(&[("PATH", path)])
+}
+
+/// Checks the installed `github/gh-stack` version against
+/// `RECOMMENDED_GH_STACK_VERSION`. Informational only — never blocks `gh
+/// stack link` from being attempted; surfaced by `stax doctor` so users on
+/// an old version know to upgrade for reliable auth-error diagnostics.
+pub fn version_status_with_env(env: &[(&str, &str)]) -> VersionStatus {
+    let Some(installed) = installed_gh_stack_version(env) else {
+        return VersionStatus::Unknown;
+    };
+
+    if parse_semver(&installed).is_some_and(|v| v >= RECOMMENDED_GH_STACK_VERSION) {
+        VersionStatus::MeetsRecommended { installed }
+    } else {
+        VersionStatus::BelowRecommended { installed }
+    }
+}
+
+/// Extracts the raw version string (e.g. `"0.0.7"`) from the `gh extension
+/// list` line for `github/gh-stack`, if present and parseable.
+fn installed_gh_stack_version(env: &[(&str, &str)]) -> Option<String> {
+    let output = gh_command(env).args(["extension", "list"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .find(|line| line.contains("github/gh-stack"))
+        .and_then(|line| {
+            line.split_whitespace()
+                .find_map(|token| {
+                    token
+                        .strip_prefix('v')
+                        .filter(|v| parse_semver(v).is_some())
+                })
+                .map(str::to_string)
+        })
+}
+
+fn parse_semver(version: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
 }
 
 pub fn feature_enabled(repo_path: impl AsRef<Path>) -> FeatureState {
@@ -148,6 +242,12 @@ pub fn link_stack_with_env(
 
     match command.output() {
         Ok(output) if output.status.success() => LinkOutcome::Linked,
+        // Must be checked before `feature_disabled_output`: gh-stack's PAT
+        // rejection message also contains "private preview", which would
+        // otherwise be misclassified as the repo/org lacking the feature.
+        Ok(output) if auth_token_unsupported_output(&output) => LinkOutcome::AuthTokenUnsupported {
+            message: command_message(&output),
+        },
         Ok(output) if feature_disabled_output(&output) => LinkOutcome::FeatureDisabled {
             message: command_message(&output),
         },
@@ -179,6 +279,9 @@ pub fn unlink_stack() -> LinkOutcome {
 pub fn unlink_stack_with_env(env: &[(&str, &str)]) -> LinkOutcome {
     match gh_command(env).args(["stack", "unstack"]).output() {
         Ok(output) if output.status.success() => LinkOutcome::Linked,
+        Ok(output) if auth_token_unsupported_output(&output) => LinkOutcome::AuthTokenUnsupported {
+            message: command_message(&output),
+        },
         Ok(output) if feature_disabled_output(&output) => LinkOutcome::FeatureDisabled {
             message: command_message(&output),
         },
@@ -230,8 +333,18 @@ pub fn upgrade_extension_with_env(env: &[(&str, &str)]) -> Result<()> {
     Ok(())
 }
 
+/// `gh` env vars that override the CLI's stored (OAuth) credentials.
+/// GitHub's native Stacked PRs API is in private preview and rejects
+/// Personal Access Tokens, so stax strips these before shelling out to
+/// `gh stack`, letting `gh` fall back to a keyring-stored OAuth account
+/// even when a PAT is exported for other tooling (CI scripts, other CLIs).
+const AUTH_OVERRIDE_ENV_VARS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN"];
+
 fn gh_command(env: &[(&str, &str)]) -> Command {
     let mut command = Command::new("gh");
+    for var in AUTH_OVERRIDE_ENV_VARS {
+        command.env_remove(var);
+    }
     for (key, value) in env {
         command.env(key, value);
     }
@@ -244,6 +357,12 @@ fn feature_disabled_output(output: &Output) -> bool {
         || message.contains("not enabled")
         || message.contains("not been enabled")
         || message.contains("feature has been enabled")
+}
+
+fn auth_token_unsupported_output(output: &Output) -> bool {
+    command_message(output)
+        .to_lowercase()
+        .contains("personal access token")
 }
 
 fn single_pr_validation_output(pr_numbers: &[u64], output: &Output) -> bool {

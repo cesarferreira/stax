@@ -3,7 +3,7 @@ use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge;
 use crate::git::{GitRepo, refs};
-use crate::github::gh_stack::{self, ExtensionStatus, FeatureState};
+use crate::github::gh_stack::{self, ExtensionStatus, FeatureState, VersionStatus};
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Result, bail};
 use colored::Colorize;
@@ -153,6 +153,19 @@ pub fn run(fix: bool) -> Result<()> {
                     "GitHub native stacks: gh-stack extension installed".dimmed(),
                     format!("({feature_label})").dimmed()
                 );
+                if let VersionStatus::BelowRecommended { installed } = gh_stack::version_status() {
+                    repair_plan.push(RepairAction::UpgradeGhStackExtension);
+                    println!(
+                        "{} {}",
+                        "⚠".yellow(),
+                        format!(
+                            "gh-stack v{installed} predates v0.0.6's Personal Access Token \
+                             detection — auth issues may be misreported as \"not enabled for \
+                             this repo\" (run `gh extension upgrade gh-stack`)"
+                        )
+                        .yellow()
+                    );
+                }
             }
             ExtensionStatus::Outdated => {
                 repair_plan.push(RepairAction::UpgradeGhStackExtension);

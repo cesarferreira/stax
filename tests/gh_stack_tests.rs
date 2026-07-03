@@ -194,6 +194,183 @@ exit 1
 }
 
 #[test]
+fn version_status_flags_versions_below_recommended() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "extension list" ]; then
+  echo "gh-stack github/gh-stack v0.0.4"
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    let status = stax::github::gh_stack::version_status_with_path(&path_with_fake_gh(fake.path()));
+
+    assert_eq!(
+        status,
+        stax::github::gh_stack::VersionStatus::BelowRecommended {
+            installed: "0.0.4".to_string()
+        }
+    );
+}
+
+#[test]
+fn version_status_accepts_recommended_or_newer_versions() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "extension list" ]; then
+  echo "gh-stack github/gh-stack v0.0.7"
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    let status = stax::github::gh_stack::version_status_with_path(&path_with_fake_gh(fake.path()));
+
+    assert_eq!(
+        status,
+        stax::github::gh_stack::VersionStatus::MeetsRecommended {
+            installed: "0.0.7".to_string()
+        }
+    );
+}
+
+#[test]
+fn version_status_is_unknown_when_version_cannot_be_parsed() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "extension list" ]; then
+  echo "gh-stack github/gh-stack (unknown)"
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    let status = stax::github::gh_stack::version_status_with_path(&path_with_fake_gh(fake.path()));
+
+    assert_eq!(status, stax::github::gh_stack::VersionStatus::Unknown);
+}
+
+#[test]
+fn doctor_recommends_upgrade_for_gh_stack_below_recommended_version() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.4"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+esac
+exit 1
+"#,
+    );
+    let home = repo.clean_home();
+    let git_config = repo.path().join("test-global-gitconfig");
+    let git_config_str = git_config.to_string_lossy().into_owned();
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["doctor"],
+        &[
+            ("HOME", &home),
+            ("GIT_CONFIG_GLOBAL", &git_config_str),
+            ("PATH", &path),
+        ],
+    );
+
+    output.assert_success();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("v0.0.4") && stdout.contains("gh extension upgrade gh-stack"),
+        "expected a version-upgrade recommendation, stdout was:\n{stdout}"
+    );
+}
+
+#[test]
+fn link_stack_classifies_pat_rejection_distinctly_from_feature_disabled() {
+    // gh-stack's PAT-rejection message also contains "private preview", so
+    // this must not be misclassified as the repo/org lacking the feature
+    // (which would get permanently cached as `FeatureDisabled`).
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack link" ]; then
+  echo "Personal access tokens are not supported by gh stack during private preview" >&2
+  echo "  Run gh auth login to authenticate with OAuth instead." >&2
+  exit 1
+fi
+exit 1
+"#,
+    );
+
+    let outcome = stax::github::gh_stack::link_stack_with_path(
+        &[10, 20],
+        "main",
+        "origin",
+        &path_with_fake_gh(fake.path()),
+    );
+
+    assert!(
+        matches!(
+            outcome,
+            stax::github::gh_stack::LinkOutcome::AuthTokenUnsupported { .. }
+        ),
+        "expected AuthTokenUnsupported, got {outcome:?}"
+    );
+}
+
+#[test]
+fn link_stack_strips_ambient_token_env_vars_before_calling_gh() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack link" ]; then
+  {
+    echo "GH_TOKEN=${GH_TOKEN:-unset}"
+    echo "GITHUB_TOKEN=${GITHUB_TOKEN:-unset}"
+  } > "$ENV_DUMP_FILE"
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let env_dump_file = fake.path().join("env.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    // Simulate PAT env vars exported ambiently in the user's shell (e.g. for
+    // other tooling/CI scripts) that would otherwise shadow an existing
+    // OAuth-authenticated `gh` login. `Command` inherits these by default
+    // unless explicitly removed, so this reproduces the real-world bug.
+    unsafe {
+        std::env::set_var("GH_TOKEN", "ghp_should_be_stripped");
+        std::env::set_var("GITHUB_TOKEN", "ghp_should_also_be_stripped");
+    }
+
+    let outcome = stax::github::gh_stack::link_stack_with_env(
+        &[10, 20],
+        "main",
+        "origin",
+        &[
+            ("PATH", path.as_str()),
+            ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+        ],
+    );
+
+    unsafe {
+        std::env::remove_var("GH_TOKEN");
+        std::env::remove_var("GITHUB_TOKEN");
+    }
+
+    assert_eq!(outcome, stax::github::gh_stack::LinkOutcome::Linked);
+    let dump = fs::read_to_string(env_dump_file).expect("env dump written");
+    assert_eq!(dump, "GH_TOKEN=unset\nGITHUB_TOKEN=unset\n");
+}
+
+#[test]
 fn link_stack_passes_pr_numbers_bottom_to_top_with_base_and_remote() {
     let fake = fake_gh_dir(
         r#"#!/bin/sh
@@ -397,10 +574,7 @@ exit 1
     );
     let path = path_with_fake_gh(fake.path());
 
-    let output = repo.run_stax_with_env(
-        &["stack", "link"],
-        &[("HOME", &home), ("PATH", &path)],
-    );
+    let output = repo.run_stax_with_env(&["stack", "link"], &[("HOME", &home), ("PATH", &path)]);
 
     assert!(!output.status.success(), "single-PR link should fail");
     let stderr = TestRepo::stderr(&output);
@@ -438,10 +612,12 @@ exit 1
     );
     let path = path_with_fake_gh(fake.path());
 
-    let output =
-        repo.run_stax_with_env(&["stack", "link"], &[("HOME", &home), ("PATH", &path)]);
+    let output = repo.run_stax_with_env(&["stack", "link"], &[("HOME", &home), ("PATH", &path)]);
 
-    assert!(!output.status.success(), "link should fail when a branch lacks a PR");
+    assert!(
+        !output.status.success(),
+        "link should fail when a branch lacks a PR"
+    );
     let stderr = TestRepo::stderr(&output);
     assert!(
         stderr.contains(&branches[1]) && stderr.contains("stax submit"),
@@ -646,5 +822,63 @@ exit 1
     assert_eq!(
         args, "link\n",
         "second submit should not retry gh stack link"
+    );
+}
+
+#[tokio::test]
+async fn submit_auth_token_unsupported_does_not_cache_feature_disabled() {
+    let mock_server = MockServer::start().await;
+
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_config(&home, &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+    let branches = repo.create_stack(&["pat-bottom", "pat-top"]);
+    repo.git(&["push", "-u", "origin", &branches[0], &branches[1]])
+        .assert_success();
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    mock_existing_pr(&mock_server, 10, &branches[0], "main").await;
+    mock_existing_pr(&mock_server, 20, &branches[1], &branches[0]).await;
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.6"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack link")
+    echo "Personal access tokens are not supported by gh stack during private preview" >&2
+    exit 1
+    ;;
+esac
+exit 1
+"#,
+    );
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["submit", "--no-fetch", "--yes", "--no-prompt"],
+        &[
+            ("HOME", &home),
+            ("STAX_GITHUB_TOKEN", "test-token"),
+            ("PATH", &path),
+        ],
+    );
+
+    output.assert_success();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("no OAuth-authenticated") || stdout.contains("gh auth login"),
+        "expected an actionable auth note, stdout was:\n{stdout}"
+    );
+    // Unlike a genuine feature-disabled response, an auth-token rejection is
+    // not a durable repo-level fact — it must not be cached, so a later
+    // submit retries once the user's `gh` auth situation changes.
+    let cached = repo.git(&["config", "--get", "stax.nativeStack.enabled"]);
+    assert!(
+        !cached.status.success(),
+        "auth-token-unsupported outcome must not cache the native stack feature as disabled"
     );
 }

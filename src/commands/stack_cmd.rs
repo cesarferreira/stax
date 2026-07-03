@@ -56,6 +56,15 @@ pub fn run_link() -> Result<()> {
             gh_stack::set_feature_enabled(repo.workdir()?, false)?;
             anyhow::bail!("GitHub native Stacked PRs are not enabled for this repo: {message}");
         }
+        LinkOutcome::AuthTokenUnsupported { message } => {
+            anyhow::bail!(
+                "GitHub rejected the native Stack link: {message}\n\n\
+                 stax already ignores GH_TOKEN/GITHUB_TOKEN when talking to `gh stack`, but no \
+                 OAuth-authenticated `gh` account was found. Run `gh auth login` (or `gh auth \
+                 switch` if you already have one) to add an OAuth-authenticated account, then \
+                 retry."
+            );
+        }
         LinkOutcome::SinglePrValidationRejected { message } => {
             anyhow::bail!("GitHub rejected the native Stack link: {message}");
         }
@@ -84,6 +93,15 @@ pub fn run_unlink() -> Result<()> {
         }
         LinkOutcome::FeatureDisabled { message } => {
             anyhow::bail!("GitHub native Stacked PRs are not enabled for this repo: {message}");
+        }
+        LinkOutcome::AuthTokenUnsupported { message } => {
+            anyhow::bail!(
+                "GitHub rejected the native Stack unlink: {message}\n\n\
+                 stax already ignores GH_TOKEN/GITHUB_TOKEN when talking to `gh stack`, but no \
+                 OAuth-authenticated `gh` account was found. Run `gh auth login` (or `gh auth \
+                 switch` if you already have one) to add an OAuth-authenticated account, then \
+                 retry."
+            );
         }
         LinkOutcome::SinglePrValidationRejected { message } => {
             anyhow::bail!("GitHub rejected the native Stack unlink: {message}");
