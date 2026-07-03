@@ -2248,11 +2248,17 @@ fn maybe_link_native_stack(
         LinkOutcome::SinglePrValidationRejected { .. } => Ok(false),
         LinkOutcome::Failed { message } => {
             if !quiet {
-                println!(
-                    "  {} {}",
-                    "note:".dimmed(),
-                    format!("native GitHub Stack link skipped: {message}").dimmed()
-                );
+                let note = if gh_stack::is_stack_fork_conflict(&message) {
+                    "native GitHub Stack link skipped: this stack has forked — another branch \
+                     sharing the same ancestor PRs is already registered as a native Stack, and \
+                     GitHub's native Stack feature only supports one linear chain at a time. \
+                     stax's own PR body/comment stack links still keep this branch's PRs \
+                     connected."
+                        .to_string()
+                } else {
+                    format!("native GitHub Stack link skipped: {message}")
+                };
+                println!("  {} {}", "note:".dimmed(), note.dimmed());
             }
             Ok(false)
         }

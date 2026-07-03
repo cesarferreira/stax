@@ -835,6 +835,110 @@ exit 1
     );
 }
 
+/// The fake `gh stack link` response gh-stack gives when a local stack has
+/// forked: another branch sharing the same ancestor PRs already anchors a
+/// native GitHub Stack, and GitHub's native Stack feature only supports one
+/// linear chain at a time.
+const FORK_CONFLICT_GH_STACK_SCRIPT: &str = r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.7"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack link")
+    {
+      echo "Looking up PRs for 2 branches..."
+      echo "Checking existing stacks..."
+      echo "Cannot update stack: this would remove #999 from the stack"
+      echo "Current stack: #10, #20, #999"
+      echo "Include all existing PRs in the command to update the stack"
+    } >&2
+    exit 1
+    ;;
+esac
+exit 1
+"#;
+
+#[tokio::test]
+async fn submit_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_dump() {
+    let mock_server = MockServer::start().await;
+
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_config(&home, &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+    let branches = repo.create_stack(&["fork-conflict-bottom", "fork-conflict-top"]);
+    repo.git(&["push", "-u", "origin", &branches[0], &branches[1]])
+        .assert_success();
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    mock_existing_pr(&mock_server, 10, &branches[0], "main").await;
+    mock_existing_pr(&mock_server, 20, &branches[1], &branches[0]).await;
+
+    let fake = fake_gh_dir(FORK_CONFLICT_GH_STACK_SCRIPT);
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["submit", "--no-fetch", "--yes", "--no-prompt"],
+        &[
+            ("HOME", &home),
+            ("STAX_GITHUB_TOKEN", "test-token"),
+            ("PATH", &path),
+        ],
+    );
+
+    output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("this stack has forked"),
+        "expected a plain-language fork-conflict note, stdout was:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Include all existing PRs"),
+        "the raw multi-line gh-stack dump should not leak to the user, stdout was:\n{stdout}"
+    );
+
+    // Non-fatal: the fork conflict must not have blocked native-stack
+    // caching from being left alone (it's not a durable repo-level fact),
+    // nor stax's own PR management.
+    let feature_cache = repo.git(&["config", "--get", "stax.nativeStack.enabled"]);
+    assert!(
+        !feature_cache.status.success(),
+        "a forked-stack conflict must not be cached as feature-disabled, but got: {}",
+        TestRepo::stdout(&feature_cache)
+    );
+}
+
+#[test]
+fn stack_link_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_dump() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+    let branches = repo.create_stack(&["fork-conflict-link-a", "fork-conflict-link-b"]);
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    let fake = fake_gh_dir(FORK_CONFLICT_GH_STACK_SCRIPT);
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(&["stack", "link"], &[("HOME", &home), ("PATH", &path)]);
+
+    assert!(
+        !output.status.success(),
+        "linking a forked stack should fail"
+    );
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("shares ancestor PRs") && stderr.contains("stax stack unlink"),
+        "expected a plain-language fork-conflict explanation with unlink guidance, stderr was:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("would remove #999"),
+        "the underlying gh-stack detail should still be included for debugging, stderr was:\n{stderr}"
+    );
+}
+
 #[tokio::test]
 async fn submit_auto_registers_native_stack_and_keeps_stax_links() {
     let mock_server = MockServer::start().await;

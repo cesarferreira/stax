@@ -69,6 +69,16 @@ pub fn run_link() -> Result<()> {
             anyhow::bail!("GitHub rejected the native Stack link: {message}");
         }
         LinkOutcome::Failed { message } => {
+            if gh_stack::is_stack_fork_conflict(&message) {
+                anyhow::bail!(
+                    "Cannot link this stack natively: it shares ancestor PRs with another \
+                     branch that's already registered as a native GitHub Stack. GitHub's native \
+                     Stack feature only supports one linear chain at a time — unlink the other \
+                     branch's stack first (run `stax stack unlink` from that branch, or remove \
+                     the stack from the GitHub PR UI) if you want this one linked instead.\n\n\
+                     gh-stack said: {message}"
+                );
+            }
             anyhow::bail!("Failed to link native GitHub Stack: {message}");
         }
     }

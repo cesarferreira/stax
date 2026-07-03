@@ -365,6 +365,20 @@ fn auth_token_unsupported_output(output: &Output) -> bool {
         .contains("personal access token")
 }
 
+/// True when `gh stack link` rejected the request because the requested PR
+/// chain shares ancestor PRs with another branch that's already registered
+/// as a native GitHub Stack. GitHub's native Stack feature is inherently
+/// linear — a PR can only anchor one native-stack "tip" at a time — so this
+/// fires whenever a *local* stack forks (two branches created off the same
+/// ancestor branch each try to register their own native Stack). gh-stack
+/// reports this as e.g. `"Cannot update stack: this would remove #123 from
+/// the stack"`, which stax surfaces as a plain-language note instead of the
+/// raw multi-line CLI dump.
+pub(crate) fn is_stack_fork_conflict(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("would remove") && lower.contains("from the stack")
+}
+
 fn single_pr_validation_output(pr_numbers: &[u64], output: &Output) -> bool {
     if pr_numbers.len() != 1 {
         return false;
