@@ -92,8 +92,6 @@ Then:
 cargo install --path . --locked
 # or
 make install
-# or
-task install
 ```
 
 No system OpenSSL? Use the vendored feature:
