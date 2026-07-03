@@ -1136,6 +1136,74 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Remove untracked files and directories from a worktree.
+    ///
+    /// This deliberately uses `git clean -fd` and NEVER `-x`: gitignored
+    /// dependency directories (node_modules, .venv, vendor, ...) must survive so
+    /// a recycled warm slot stays warm. Adding `-x` would wipe them.
+    pub fn git_clean_fd(&self, cwd: &Path) -> Result<()> {
+        let output = self.run_git(cwd, &["clean", "-fd"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!("git clean -fd failed in '{}': {}", cwd.display(), stderr);
+        }
+        Ok(())
+    }
+
+    /// Create and switch to a brand-new `branch` at `base` inside a worktree.
+    pub fn switch_new_branch_in(&self, cwd: &Path, branch: &str, base: &str) -> Result<()> {
+        let output = self.run_git(cwd, &["switch", "-c", branch, base])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git switch -c {} {} failed in '{}': {}",
+                branch,
+                base,
+                cwd.display(),
+                stderr
+            );
+        }
+        Ok(())
+    }
+
+    /// Switch an existing `branch` inside a worktree.
+    pub fn switch_branch_in(&self, cwd: &Path, branch: &str) -> Result<()> {
+        let output = self.run_git(cwd, &["switch", branch])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git switch {} failed in '{}': {}",
+                branch,
+                cwd.display(),
+                stderr
+            );
+        }
+        Ok(())
+    }
+
+    /// Park a slot for reuse: move it OFF its lane branch (so that branch can be
+    /// checked out elsewhere), reset it hard to `trunk`, and remove untracked
+    /// files while preserving gitignored dependency dirs.
+    pub fn park_slot(&self, cwd: &Path, trunk: &str) -> Result<()> {
+        // Detaching first avoids "branch already checked out" if the lane branch
+        // is later adopted into another worktree; reset --hard onto trunk then
+        // gives the slot trunk's tree without holding trunk's ref checked out.
+        if self.switch_branch_in(cwd, trunk).is_err() {
+            let output = self.run_git(cwd, &["switch", "--detach"])?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                anyhow::bail!(
+                    "git switch --detach failed in '{}': {}",
+                    cwd.display(),
+                    stderr
+                );
+            }
+        }
+        self.reset_hard_in_path(cwd, trunk)?;
+        self.git_clean_fd(cwd)?;
+        Ok(())
+    }
+
     /// Resolve the worktree path where a branch rebase would run.
     /// Returns the linked worktree path if one exists, otherwise the main workdir.
     pub(crate) fn branch_rebase_target_workdir(&self, branch: &str) -> Result<PathBuf> {

@@ -1,4 +1,5 @@
 use crate::commands::generate;
+use crate::commands::worktree::pool;
 use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
@@ -1080,12 +1081,12 @@ pub fn spawn_background_hook(command: Option<&str>, cwd: &Path, label: &str) -> 
     Ok(())
 }
 
-/// Run the standard post-create setup for a freshly created worktree: seed
-/// configured dependency paths, then run the `post_create` (blocking) and
-/// `post_start` (background) hooks. Skipped entirely when `no_verify` is set.
+/// Run the standard post-create setup for a freshly created worktree: run the
+/// `post_create` (blocking) and `post_start` (background) hooks. Skipped
+/// entirely when `no_verify` is set.
 pub fn run_post_create_setup(
     config: &Config,
-    main_workdir: &Path,
+    _main_workdir: &Path,
     worktree_path: &Path,
     no_verify: bool,
 ) -> Result<()> {
@@ -1093,8 +1094,6 @@ pub fn run_post_create_setup(
         return Ok(());
     }
 
-    let seed_paths = resolve_seed_paths(config, main_workdir);
-    seed_worktree_dependencies(main_workdir, worktree_path, &seed_paths)?;
     run_blocking_hook(
         config.worktree.hooks.post_create.as_deref(),
         worktree_path,
@@ -1109,247 +1108,153 @@ pub fn run_post_create_setup(
     Ok(())
 }
 
-/// Resolve the paths to seed for this worktree creation. An explicit
-/// `worktree.seed_paths` list replaces auto-detection; otherwise stax detects
-/// common dependency directories from project markers in the main checkout.
-fn resolve_seed_paths(config: &Config, main_workdir: &Path) -> Vec<String> {
-    if !config.worktree.seed_paths.is_empty() || !config.worktree.auto_seed {
-        return config.worktree.seed_paths.clone();
-    }
-
-    detect_default_seed_paths(main_workdir)
-}
-
-fn detect_default_seed_paths(main_workdir: &Path) -> Vec<String> {
-    let mut paths = Vec::new();
-
-    if is_seed_candidate(main_workdir, "node_modules")
-        && any_marker_exists(
-            main_workdir,
-            &[
-                "package.json",
-                "package-lock.json",
-                "pnpm-lock.yaml",
-                "yarn.lock",
-                "bun.lock",
-                "bun.lockb",
-            ],
-        )
-    {
-        paths.push("node_modules".to_string());
-    }
-
-    if any_marker_exists(
-        main_workdir,
-        &[
-            "pyproject.toml",
-            "requirements.txt",
-            "uv.lock",
-            "poetry.lock",
-            "Pipfile",
-        ],
-    ) {
-        for venv in [".venv", "venv"] {
-            if is_seed_candidate(main_workdir, venv) {
-                paths.push(venv.to_string());
-            }
-        }
-    }
-
-    if is_seed_candidate(main_workdir, "vendor")
-        && any_marker_exists(main_workdir, &["go.mod", "composer.json"])
-    {
-        paths.push("vendor".to_string());
-    }
-
-    if is_seed_candidate(main_workdir, "vendor/bundle") && path_exists(main_workdir, "Gemfile") {
-        paths.push("vendor/bundle".to_string());
-    }
-
-    paths
-}
-
-fn path_exists(root: &Path, rel: &str) -> bool {
-    root.join(rel).exists()
-}
-
-fn is_seed_candidate(root: &Path, rel: &str) -> bool {
-    path_exists(root, rel) && is_git_ignored(root, rel)
-}
-
-fn is_git_ignored(root: &Path, rel: &str) -> bool {
-    matches!(
-        Command::new("git")
-            .args(["check-ignore", "-q", "--", rel])
-            .current_dir(root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status(),
-        Ok(status) if status.success()
-    )
-}
-
-fn any_marker_exists(root: &Path, markers: &[&str]) -> bool {
-    markers.iter().any(|marker| path_exists(root, marker))
-}
-
-/// Clone configured dependency/cache paths from the main checkout into a freshly
-/// created worktree so lanes start warm instead of re-installing everything.
-///
-/// Each entry is a repo-relative path (typically gitignored, e.g. `node_modules`,
-/// `.venv`, or `vendor`). Missing sources and already-present destinations are
-/// skipped. Uses copy-on-write (reflink) via the platform `cp` when the
-/// filesystem supports it, falling back to a plain recursive copy.
-pub fn seed_worktree_dependencies(
-    main_workdir: &Path,
-    worktree_path: &Path,
-    seed_paths: &[String],
-) -> Result<()> {
-    let entries: Vec<&str> = seed_paths
-        .iter()
-        .map(|p| p.trim())
-        .filter(|p| !p.is_empty())
-        .collect();
-    if entries.is_empty() {
+/// Run the configured `worktree.reconcile` command inside `cwd` to re-sync
+/// dependencies for a recycled warm slot. Non-fatal: a missing command is a
+/// no-op and a failing command only warns, so adoption never fails because a
+/// dependency re-sync failed.
+pub fn run_reconcile_hook(config: &Config, cwd: &Path) -> Result<()> {
+    let Some(command) = config
+        .worktree
+        .reconcile
+        .as_deref()
+        .filter(|cmd| !cmd.trim().is_empty())
+    else {
         return Ok(());
+    };
+
+    let timer = LiveTimer::new("Reconciling dependencies...");
+    let status = platform_shell(command)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+
+    match status {
+        Ok(status) if status.success() => timer.finish_ok("done"),
+        Ok(status) => {
+            timer.finish_ok("done");
+            eprintln!(
+                "{}",
+                format!("Warning: reconcile hook exited with status {}", status).yellow()
+            );
+        }
+        Err(error) => {
+            timer.finish_ok("done");
+            eprintln!(
+                "{}",
+                format!("Warning: could not run reconcile hook: {}", error).yellow()
+            );
+        }
     }
 
-    let timer = LiveTimer::new("Seeding dependencies...");
-    let mut seeded = 0usize;
-    for rel in entries {
-        validate_seed_path(rel)?;
-        let src = main_workdir.join(rel);
-        if !src.exists() {
-            continue;
+    Ok(())
+}
+
+/// Outcome of resolving a worktree directory for a new lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdoptOutcome {
+    /// An idle warm slot at this path was recycled.
+    Adopted(PathBuf),
+    /// A fresh worktree was created cold at this path.
+    Cold(PathBuf),
+}
+
+impl AdoptOutcome {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Adopted(path) | Self::Cold(path) => path.as_path(),
         }
-        let dst = worktree_path.join(rel);
-        if dst.exists() {
-            continue;
-        }
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "Failed to create parent directory for seeded path '{}'",
-                    rel
-                )
+    }
+}
+
+/// Materialize a worktree for `resolved_branch`. When `worktree.reuse_slots` is
+/// enabled and an idle warm slot is available, adopt it (switch to the fresh
+/// lane branch, reset to base, clean untracked files but keep gitignored deps,
+/// run the reconcile hook) and record the new branch in the manifest. Otherwise
+/// fall back to a cold `git worktree add` at `cold_path`.
+pub fn adopt_or_create_worktree(
+    repo: &GitRepo,
+    config: &Config,
+    resolved_branch: &ResolvedBranchName,
+    cold_path: &Path,
+    base_branch: Option<&str>,
+    worktrees_dir: &Path,
+) -> Result<AdoptOutcome> {
+    if config.worktree.reuse_slots
+        && let Some(slot) = pool::acquire_idle_slot(worktrees_dir)?
+    {
+        if slot.path.exists() {
+            match adopt_slot(repo, config, resolved_branch, &slot.path, base_branch) {
+                Ok(()) => {
+                    pool::with_lock(worktrees_dir, |pool| {
+                        pool.remove_path(&slot.path);
+                        Ok(())
+                    })?;
+                    return Ok(AdoptOutcome::Adopted(slot.path.clone()));
+                }
+                Err(error) => {
+                    eprintln!(
+                        "{}",
+                        format!(
+                            "Warning: could not adopt warm slot '{}': {}. Falling back to a cold worktree.",
+                            slot.path.display(),
+                            error
+                        )
+                        .yellow()
+                    );
+                    // Drop the unusable slot from the manifest so it isn't
+                    // handed out again.
+                    pool::with_lock(worktrees_dir, |pool| {
+                        pool.remove_path(&slot.path);
+                        Ok(())
+                    })?;
+                }
+            }
+        } else {
+            // Slot directory vanished from disk; forget it.
+            pool::with_lock(worktrees_dir, |pool| {
+                pool.remove_path(&slot.path);
+                Ok(())
             })?;
         }
-        reflink_or_copy(&src, &dst)
-            .with_context(|| format!("Failed to seed worktree path '{}'", rel))?;
-        seeded += 1;
     }
 
-    timer.finish_ok(&format!(
-        "done ({} path{})",
-        seeded,
-        if seeded == 1 { "" } else { "s" }
-    ));
-    Ok(())
+    let timer = LiveTimer::new("Creating worktree...");
+    create_worktree_for_resolved_branch(repo, resolved_branch, cold_path, base_branch)?;
+    timer.finish_ok("done");
+    Ok(AdoptOutcome::Cold(cold_path.to_path_buf()))
 }
 
-/// Reject absolute paths and `..` traversal so seeding stays inside the worktree.
-fn validate_seed_path(rel: &str) -> Result<()> {
-    let path = Path::new(rel);
-    if path.is_absolute() {
-        bail!(
-            "worktree.seed_paths entry '{}' must be a repo-relative path",
-            rel
-        );
-    }
-    if path
-        .components()
-        .any(|comp| matches!(comp, std::path::Component::ParentDir))
-    {
-        bail!("worktree.seed_paths entry '{}' must not contain '..'", rel);
-    }
-    Ok(())
-}
-
-/// Copy `src` to `dst`, preferring a copy-on-write clone when supported.
-fn reflink_or_copy(src: &Path, dst: &Path) -> Result<()> {
-    if try_reflink(src, dst) {
-        return Ok(());
-    }
-
-    // A failed reflink attempt may have left a partial destination behind; clear
-    // it before the plain-copy fallback so we don't merge into stale contents.
-    if dst.exists() {
-        if dst.is_dir() {
-            let _ = fs::remove_dir_all(dst);
-        } else {
-            let _ = fs::remove_file(dst);
+/// Recycle an existing (parked) slot directory into a worktree for
+/// `resolved_branch`. Switches the slot to the lane branch, resets it hard onto
+/// the base, removes untracked files (keeping gitignored deps), and runs the
+/// non-fatal reconcile hook.
+fn adopt_slot(
+    repo: &GitRepo,
+    config: &Config,
+    resolved_branch: &ResolvedBranchName,
+    slot_path: &Path,
+    base_branch: Option<&str>,
+) -> Result<()> {
+    let timer = LiveTimer::new("Adopting warm worktree...");
+    match &resolved_branch.source {
+        ResolvedBranchSource::New => {
+            let from_branch = base_branch.context("Base branch is required for a new branch")?;
+            repo.switch_new_branch_in(slot_path, &resolved_branch.name, from_branch)?;
+            repo.git_clean_fd(slot_path)?;
+            let parent_rev = repo.branch_commit(from_branch)?;
+            let meta = BranchMetadata::new(from_branch, &parent_rev);
+            meta.write(repo.inner(), &resolved_branch.name)?;
+        }
+        ResolvedBranchSource::Local | ResolvedBranchSource::Remote { .. } => {
+            repo.switch_branch_in(slot_path, &resolved_branch.name)?;
+            repo.git_clean_fd(slot_path)?;
         }
     }
+    timer.finish_ok("done");
 
-    copy_recursive(src, dst)
-}
-
-/// Attempt a copy-on-write clone via the platform `cp`. Returns `false` (rather
-/// than erroring) when the tool is missing or the filesystem lacks reflink
-/// support, so the caller can fall back to a regular copy.
-fn try_reflink(src: &Path, dst: &Path) -> bool {
-    let mut cmd = Command::new("cp");
-    if cfg!(target_os = "macos") {
-        cmd.arg("-c").arg("-R");
-    } else if cfg!(target_os = "linux") {
-        cmd.arg("--reflink=auto").arg("-a");
-    } else {
-        return false;
-    }
-    cmd.arg(src).arg(dst);
-
-    matches!(
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status(),
-        Ok(status) if status.success()
-    )
-}
-
-/// Recursively copy a file, directory, or symlink, preserving symlinks as links.
-fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(src)
-        .with_context(|| format!("Failed to read metadata for {}", src.display()))?;
-    let file_type = metadata.file_type();
-
-    if file_type.is_symlink() {
-        #[cfg(unix)]
-        {
-            let target = fs::read_link(src)?;
-            std::os::unix::fs::symlink(target, dst)
-                .with_context(|| format!("Failed to recreate symlink {}", dst.display()))?;
-            return Ok(());
-        }
-        #[cfg(not(unix))]
-        {
-            // No symlink support: fall back to copying the resolved target.
-            if src.is_dir() {
-                return copy_dir_contents(src, dst);
-            }
-            fs::copy(src, dst).with_context(|| format!("Failed to copy {}", src.display()))?;
-            return Ok(());
-        }
-    }
-
-    if file_type.is_dir() {
-        copy_dir_contents(src, dst)
-    } else {
-        fs::copy(src, dst).with_context(|| format!("Failed to copy {}", src.display()))?;
-        Ok(())
-    }
-}
-
-fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)
-        .with_context(|| format!("Failed to create directory {}", dst.display()))?;
-    for entry in
-        fs::read_dir(src).with_context(|| format!("Failed to read directory {}", src.display()))?
-    {
-        let entry = entry?;
-        copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
-    }
+    run_reconcile_hook(config, slot_path)?;
     Ok(())
 }
 

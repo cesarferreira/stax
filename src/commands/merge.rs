@@ -1092,7 +1092,11 @@ fn local_trunk_reset_is_safe(workdir: &Path, trunk: &str) -> bool {
     let remote_trunk = format!("origin/{}", trunk);
 
     let diverged = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..{}", remote_trunk, trunk)])
+        .args([
+            "rev-list",
+            "--count",
+            &format!("{}..{}", remote_trunk, trunk),
+        ])
         .current_dir(workdir)
         .output();
     match diverged {

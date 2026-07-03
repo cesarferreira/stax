@@ -111,21 +111,22 @@ fn config_load_overlays_repo_stax_toml_when_present() {
 }
 
 #[test]
-fn worktree_seed_paths_default_is_empty() {
+fn worktree_reuse_slots_default() {
     let config = Config::default();
-    assert!(config.worktree.auto_seed);
-    assert!(config.worktree.seed_paths.is_empty());
+    assert!(config.worktree.reuse_slots);
+    assert_eq!(config.worktree.max_idle_slots, 4);
+    assert!(config.worktree.reconcile.is_none());
 }
 
 #[test]
-fn worktree_seed_paths_parse_and_overlay() {
+fn worktree_pool_config_parse_and_overlay() {
     let _guard = env_lock();
 
     let original_home = env::var("HOME").ok();
     let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
     let original_dir = env::current_dir().unwrap();
     let temp_dir =
-        std::env::temp_dir().join(format!("stax-test-seed-config-{}", std::process::id()));
+        std::env::temp_dir().join(format!("stax-test-pool-config-{}", std::process::id()));
     let repo_dir = temp_dir.join("repo");
     let home_dir = temp_dir.join("home");
     let global_config_dir = home_dir.join(".config").join("stax");
@@ -134,12 +135,12 @@ fn worktree_seed_paths_parse_and_overlay() {
     fs::create_dir_all(&global_config_dir).unwrap();
     fs::write(
         global_config_dir.join("config.toml"),
-        "[worktree]\nseed_paths = [\"node_modules\", \".venv\"]\n",
+        "[worktree]\nreuse_slots = true\nmax_idle_slots = 8\n",
     )
     .unwrap();
     fs::write(
         repo_dir.join("stax.toml"),
-        "[worktree]\nauto_seed = false\nseed_paths = [\"target\", \".env\"]\n",
+        "[worktree]\nreuse_slots = false\nmax_idle_slots = 2\nreconcile = \"pnpm install\"\n",
     )
     .unwrap();
 
@@ -153,9 +154,10 @@ fn worktree_seed_paths_parse_and_overlay() {
     env::set_current_dir(&repo_dir).unwrap();
 
     let config = Config::load().unwrap();
-    assert!(!config.worktree.auto_seed);
-    // Repo-level array replaces the global one for the same key.
-    assert_eq!(config.worktree.seed_paths, vec!["target", ".env"]);
+    // Repo-level values overlay the global ones.
+    assert!(!config.worktree.reuse_slots);
+    assert_eq!(config.worktree.max_idle_slots, 2);
+    assert_eq!(config.worktree.reconcile.as_deref(), Some("pnpm install"));
 
     env::set_current_dir(original_dir).unwrap();
     restore_env_var("HOME", original_home);

@@ -1,5 +1,5 @@
 use super::shared::{
-    LaunchOptions, build_launch_spec, create_worktree_for_resolved_branch, default_create_base,
+    LaunchOptions, adopt_or_create_worktree, build_launch_spec, default_create_base,
     derive_unique_worktree_name, emit_shell_payload, ensure_gitignore,
     ensure_managed_worktrees_root, find_worktree, format_create_message, format_go_message,
     generate_random_lane_slug, managed_worktrees_dir, pick_branch_interactively,
@@ -8,7 +8,6 @@ use super::shared::{
 use crate::commands::shell_setup;
 use crate::config::Config;
 use crate::git::GitRepo;
-use crate::progress::LiveTimer;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use std::fs;
@@ -145,14 +144,15 @@ pub fn run(
     let main_repo_workdir = repo.main_repo_workdir()?;
     ensure_gitignore(&main_repo_workdir, &config.worktree.root_dir)?;
 
-    let timer = LiveTimer::new(&format!("Creating worktree {}...", worktree_name));
-    create_worktree_for_resolved_branch(
+    let outcome = adopt_or_create_worktree(
         &repo,
+        &config,
         &resolved_branch,
         &worktree_path,
         base_branch.as_deref(),
+        &worktrees_dir,
     )?;
-    timer.finish_ok("done");
+    let worktree_path = outcome.path().to_path_buf();
 
     let repo_name = main_repo_workdir
         .file_name()

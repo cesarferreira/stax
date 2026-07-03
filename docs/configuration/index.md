@@ -77,17 +77,18 @@ Config is loaded as follows:
 
 [worktree]
 # root_dir = "" # default: ~/.stax/worktrees/<repo>
-# auto_seed = true
-#   Auto-detect common gitignored dependency dirs in the main checkout and clone
-#   them into new worktrees when seed_paths is empty. Detected defaults include
-#   node_modules, .venv / venv, vendor, and vendor/bundle when matching project
-#   markers exist and Git ignores the candidate path. stax never auto-copies
-#   .env.
-# seed_paths = ["node_modules", ".venv"]
-#   Optional explicit repo-relative list. When non-empty, this replaces
-#   auto-detection. Uses copy-on-write (reflink) when supported, otherwise a
-#   plain recursive copy. Missing sources and already-present destinations are
-#   skipped. Skipped entirely with `--no-verify` (same as hooks).
+# reuse_slots = true
+#   Warm-slot recycling. Removing a clean, merged-equivalent worktree parks it
+#   (reset --hard trunk + `git clean -fd`, keeping gitignored deps like
+#   node_modules / .venv) instead of deleting it, and the next create/lane adopts
+#   that slot instead of a cold `git worktree add`. Set false to always
+#   cold-create and real-remove (no pool manifest).
+# max_idle_slots = 4
+#   Maximum idle slots kept parked. Parking beyond the cap does a real remove;
+#   `worktree cleanup` evicts the oldest excess slots.
+# reconcile = "pnpm install"
+#   Optional command run (non-fatally) inside a slot after it is adopted, to
+#   re-sync dependencies. A missing or failing command only warns.
 
 [worktree.hooks]
 # post_create = "" # blocking hook run in a new worktree before launch

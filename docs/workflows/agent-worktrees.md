@@ -128,25 +128,27 @@ st lane big-refactor --agent claude --agent-arg=--verbose "pull apart the auth m
 
 Do not pass `--model` via `--agent-arg` — stax handles that via `--model`. Like `--yolo`, ignored when reattaching.
 
-## Warm-start dependencies
+## Warm-start dependencies (slot recycling)
 
-A fresh worktree only contains tracked files, so gitignored artifacts like `node_modules/` or `.venv/` are missing. By default, stax detects common dependency directories that are ignored by Git in the main checkout and clones them into each new lane so agents do not re-install from scratch.
+A fresh worktree only contains tracked files, so gitignored artifacts like `node_modules/` or `.venv/` are missing. Instead of re-copying those on every create, stax **recycles** worktrees: removing a clean, merged-equivalent lane parks it as an idle warm slot rather than deleting it, and the next lane adopts that slot.
 
-Auto-detection is conservative: stax only seeds a directory when the source exists, `git check-ignore` says Git ignores it, and matching project markers exist (`package.json` for `node_modules`, Python project files for `.venv` / `venv`, `go.mod` or `composer.json` for `vendor`, `Gemfile` for `vendor/bundle`). It never auto-copies `.env`.
+Parking moves the slot off its lane branch, resets it hard to trunk, and runs `git clean -fd`. It never uses `-x`, so gitignored dependency directories stay on disk. Adopting switches the slot to the fresh lane branch and cleans untracked files — the built deps are already present, so agents do not re-install from scratch.
 
 ```toml
 # Optional overrides in ~/.config/stax/config.toml or repo-root stax.toml
 [worktree]
-auto_seed = true                 # default
-seed_paths = ["node_modules"]    # replace auto-detected paths
+reuse_slots = true               # default; false = cold create + real remove
+max_idle_slots = 4               # cap on parked idle slots
+reconcile = "pnpm install"       # optional, non-fatal deps re-sync on adopt
 ```
 
-- Paths are repo-relative. Absolute paths or `..` traversal are rejected.
-- stax uses copy-on-write (reflink via `cp -c` on macOS/APFS, `cp --reflink=auto` on Linux/Btrfs+XFS) when the filesystem supports it, so seeding is near-instant and uses almost no extra disk. On other filesystems it falls back to a plain recursive copy.
-- Missing sources and already-present destinations are skipped.
-- Seeding runs **before** `post_create`, so an install hook (for example `pnpm install`) only has to reconcile the warm cache instead of rebuilding it.
-- `--no-verify` skips seeding and hooks for that command. Set `auto_seed = false` to disable automatic detection.
-- For Rust projects, prefer a shared `CARGO_TARGET_DIR` when possible; copying `target/` is available via explicit `seed_paths`, but it can be large.
+- `git clean -fd` (never `-fdx`) is what keeps gitignored deps alive across a park.
+- Adopting reuses the same directory the slot was parked in, so nothing is copied.
+- `reconcile` runs inside the adopted slot to re-sync deps; it is non-fatal, so a failing command only warns and never fails the create.
+- Parking beyond `max_idle_slots` falls back to a real removal; `st wt cleanup` evicts the oldest excess idle slots.
+- A `--force` (or confirmed) dirty removal never parks — it always really removes the worktree.
+- `--no-verify` skips hooks for that command. Set `reuse_slots = false` to disable recycling entirely.
+- For Rust projects, a shared `CARGO_TARGET_DIR` still pairs well with slot recycling to keep `target/` warm across lanes.
 
 ## VS Code / Cursor integration
 

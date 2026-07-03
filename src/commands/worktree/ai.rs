@@ -1,6 +1,6 @@
 use super::shared::{
-    ExistingTmuxSessionBehavior, LaunchSpec, TmuxSession, build_agent_launch_spec_with_options,
-    build_tmux_launch_spec, compute_worktree_details, create_worktree_for_resolved_branch,
+    ExistingTmuxSessionBehavior, LaunchSpec, TmuxSession, adopt_or_create_worktree,
+    build_agent_launch_spec_with_options, build_tmux_launch_spec, compute_worktree_details,
     default_create_base, default_tmux_session_name, derive_unique_worktree_name,
     emit_shell_message, emit_shell_payload, ensure_gitignore, ensure_managed_worktrees_root,
     find_worktree, format_create_message, format_go_message, list_tmux_sessions,
@@ -136,12 +136,15 @@ fn run_named_lane(
     ensure_managed_worktrees_root(repo, config, &worktrees_dir)?;
     let main_repo_workdir = repo.main_repo_workdir()?;
     ensure_gitignore(&main_repo_workdir, &config.worktree.root_dir)?;
-    create_worktree_for_resolved_branch(
+    let outcome = adopt_or_create_worktree(
         repo,
+        config,
         &resolved_branch,
         &worktree_path,
         base_branch.as_deref(),
+        &worktrees_dir,
     )?;
+    let worktree_path = outcome.path().to_path_buf();
 
     let repo_name = main_repo_workdir
         .file_name()
