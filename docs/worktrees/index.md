@@ -191,6 +191,17 @@ Override in `~/.config/stax/config.toml`, or set shared project overrides in rep
 # root_dir = ""             # default external root
 # root_dir = ".worktrees"   # keep worktrees inside the repo
 
+# Warm-slot recycling: a removed worktree is parked and reused by the next lane
+# instead of being deleted, keeping built gitignored deps on disk.
+reuse_slots = true        # default; set false to always cold-create / real-remove
+
+# Maximum number of idle warm slots to keep parked.
+max_idle_slots = 4
+
+# Optional: command run (non-fatally) inside a slot after it is adopted, to
+# re-sync deps (e.g. "pnpm install", "uv sync").
+# reconcile = "pnpm install"
+
 [worktree.hooks]
 post_create = ""   # blocking hook before launch
 post_start  = ""   # background hook after creation
@@ -201,6 +212,12 @@ post_remove = ""   # background hook after removal
 
 - Relative `root_dir` values resolve under the main repo root.
 - Repo-local roots like `.worktrees` are added to `.gitignore` automatically.
+- Warm-slot recycling (default): removing a clean, merged-equivalent worktree **parks** it instead of deleting it — stax moves it off its lane branch, resets it hard to trunk, and runs `git clean -fd`. That never uses `-x`, so gitignored dependency directories (`node_modules`, `.venv`, `vendor`, …) survive on disk.
+- The next `create` / `lane` **adopts** an idle parked slot instead of a cold `git worktree add`: it switches the slot to the fresh lane branch, resets to the base, cleans untracked files, and runs the `reconcile` hook. Adopting reuses the same directory, so the built deps are already there.
+- `reconcile` re-syncs deps after adoption (e.g. `pnpm install`, `uv sync`). It is **non-fatal** — a missing or failing command only warns and never fails the create.
+- `max_idle_slots` caps how many idle slots are kept; parking beyond the cap falls back to a real removal, and `worktree cleanup` evicts the oldest excess slots.
+- A `--force` (or confirmed) dirty removal **never** parks — it always does a real `git worktree remove`.
+- Set `reuse_slots = false` to opt out entirely: cold `git worktree add` on create, real `git worktree remove` on removal, and no pool manifest.
 - `post_create` and `pre_remove` are **blocking**; `post_start`, `post_go`, `post_remove` run in the **background**.
 - `--no-verify` on `create` / `go` skips hooks for that command.
 

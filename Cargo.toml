@@ -79,6 +79,9 @@ chrono = "0.4"
 # Update checking
 update-informer = "1"
 
+# Advisory file locking for the warm-worktree pool manifest
+fs4 = "0.13"
+
 # Temp files
 tempfile = "3"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }

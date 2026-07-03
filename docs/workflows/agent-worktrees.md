@@ -128,6 +128,28 @@ st lane big-refactor --agent claude --agent-arg=--verbose "pull apart the auth m
 
 Do not pass `--model` via `--agent-arg` — stax handles that via `--model`. Like `--yolo`, ignored when reattaching.
 
+## Warm-start dependencies (slot recycling)
+
+A fresh worktree only contains tracked files, so gitignored artifacts like `node_modules/` or `.venv/` are missing. Instead of re-copying those on every create, stax **recycles** worktrees: removing a clean, merged-equivalent lane parks it as an idle warm slot rather than deleting it, and the next lane adopts that slot.
+
+Parking moves the slot off its lane branch, resets it hard to trunk, and runs `git clean -fd`. It never uses `-x`, so gitignored dependency directories stay on disk. Adopting switches the slot to the fresh lane branch and cleans untracked files — the built deps are already present, so agents do not re-install from scratch.
+
+```toml
+# Optional overrides in ~/.config/stax/config.toml or repo-root stax.toml
+[worktree]
+reuse_slots = true               # default; false = cold create + real remove
+max_idle_slots = 4               # cap on parked idle slots
+reconcile = "pnpm install"       # optional, non-fatal deps re-sync on adopt
+```
+
+- `git clean -fd` (never `-fdx`) is what keeps gitignored deps alive across a park.
+- Adopting reuses the same directory the slot was parked in, so nothing is copied.
+- `reconcile` runs inside the adopted slot to re-sync deps; it is non-fatal, so a failing command only warns and never fails the create.
+- Parking beyond `max_idle_slots` falls back to a real removal; `st wt cleanup` evicts the oldest excess idle slots.
+- A `--force` (or confirmed) dirty removal never parks — it always really removes the worktree.
+- `--no-verify` skips hooks for that command. Set `reuse_slots = false` to disable recycling entirely.
+- For Rust projects, a shared `CARGO_TARGET_DIR` still pairs well with slot recycling to keep `target/` warm across lanes.
+
 ## VS Code / Cursor integration
 
 Keep your existing VS Code window aware of every new lane as an extra folder in the Explorer:

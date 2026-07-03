@@ -1,8 +1,10 @@
 use crate::commands::generate;
+use crate::commands::worktree::pool;
 use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use crate::git::repo::WorktreeInfo;
+use crate::progress::LiveTimer;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
@@ -1076,6 +1078,183 @@ pub fn spawn_background_hook(command: Option<&str>, cwd: &Path, label: &str) -> 
         .spawn()
         .with_context(|| format!("Failed to start {} hook", label))?;
 
+    Ok(())
+}
+
+/// Run the standard post-create setup for a freshly created worktree: run the
+/// `post_create` (blocking) and `post_start` (background) hooks. Skipped
+/// entirely when `no_verify` is set.
+pub fn run_post_create_setup(
+    config: &Config,
+    _main_workdir: &Path,
+    worktree_path: &Path,
+    no_verify: bool,
+) -> Result<()> {
+    if no_verify {
+        return Ok(());
+    }
+
+    run_blocking_hook(
+        config.worktree.hooks.post_create.as_deref(),
+        worktree_path,
+        "post_create",
+    )?;
+    spawn_background_hook(
+        config.worktree.hooks.post_start.as_deref(),
+        worktree_path,
+        "post_start",
+    )?;
+
+    Ok(())
+}
+
+/// Run the configured `worktree.reconcile` command inside `cwd` to re-sync
+/// dependencies for a recycled warm slot. Non-fatal: a missing command is a
+/// no-op and a failing command only warns, so adoption never fails because a
+/// dependency re-sync failed.
+pub fn run_reconcile_hook(config: &Config, cwd: &Path) -> Result<()> {
+    let Some(command) = config
+        .worktree
+        .reconcile
+        .as_deref()
+        .filter(|cmd| !cmd.trim().is_empty())
+    else {
+        return Ok(());
+    };
+
+    let timer = LiveTimer::new("Reconciling dependencies...");
+    let status = platform_shell(command)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+
+    match status {
+        Ok(status) if status.success() => timer.finish_ok("done"),
+        Ok(status) => {
+            timer.finish_ok("done");
+            eprintln!(
+                "{}",
+                format!("Warning: reconcile hook exited with status {}", status).yellow()
+            );
+        }
+        Err(error) => {
+            timer.finish_ok("done");
+            eprintln!(
+                "{}",
+                format!("Warning: could not run reconcile hook: {}", error).yellow()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Outcome of resolving a worktree directory for a new lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdoptOutcome {
+    /// An idle warm slot at this path was recycled.
+    Adopted(PathBuf),
+    /// A fresh worktree was created cold at this path.
+    Cold(PathBuf),
+}
+
+impl AdoptOutcome {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Adopted(path) | Self::Cold(path) => path.as_path(),
+        }
+    }
+}
+
+/// Materialize a worktree for `resolved_branch`. When `worktree.reuse_slots` is
+/// enabled and an idle warm slot is available, adopt it (switch to the fresh
+/// lane branch, reset to base, clean untracked files but keep gitignored deps,
+/// run the reconcile hook) and record the new branch in the manifest. Otherwise
+/// fall back to a cold `git worktree add` at `cold_path`.
+pub fn adopt_or_create_worktree(
+    repo: &GitRepo,
+    config: &Config,
+    resolved_branch: &ResolvedBranchName,
+    cold_path: &Path,
+    base_branch: Option<&str>,
+    worktrees_dir: &Path,
+) -> Result<AdoptOutcome> {
+    if config.worktree.reuse_slots
+        && let Some(slot) = pool::acquire_idle_slot(worktrees_dir)?
+    {
+        if slot.path.exists() {
+            match adopt_slot(repo, config, resolved_branch, &slot.path, base_branch) {
+                Ok(()) => {
+                    pool::with_lock(worktrees_dir, |pool| {
+                        pool.remove_path(&slot.path);
+                        Ok(())
+                    })?;
+                    return Ok(AdoptOutcome::Adopted(slot.path.clone()));
+                }
+                Err(error) => {
+                    eprintln!(
+                        "{}",
+                        format!(
+                            "Warning: could not adopt warm slot '{}': {}. Falling back to a cold worktree.",
+                            slot.path.display(),
+                            error
+                        )
+                        .yellow()
+                    );
+                    // Drop the unusable slot from the manifest so it isn't
+                    // handed out again.
+                    pool::with_lock(worktrees_dir, |pool| {
+                        pool.remove_path(&slot.path);
+                        Ok(())
+                    })?;
+                }
+            }
+        } else {
+            // Slot directory vanished from disk; forget it.
+            pool::with_lock(worktrees_dir, |pool| {
+                pool.remove_path(&slot.path);
+                Ok(())
+            })?;
+        }
+    }
+
+    let timer = LiveTimer::new("Creating worktree...");
+    create_worktree_for_resolved_branch(repo, resolved_branch, cold_path, base_branch)?;
+    timer.finish_ok("done");
+    Ok(AdoptOutcome::Cold(cold_path.to_path_buf()))
+}
+
+/// Recycle an existing (parked) slot directory into a worktree for
+/// `resolved_branch`. Switches the slot to the lane branch, resets it hard onto
+/// the base, removes untracked files (keeping gitignored deps), and runs the
+/// non-fatal reconcile hook.
+fn adopt_slot(
+    repo: &GitRepo,
+    config: &Config,
+    resolved_branch: &ResolvedBranchName,
+    slot_path: &Path,
+    base_branch: Option<&str>,
+) -> Result<()> {
+    let timer = LiveTimer::new("Adopting warm worktree...");
+    match &resolved_branch.source {
+        ResolvedBranchSource::New => {
+            let from_branch = base_branch.context("Base branch is required for a new branch")?;
+            repo.switch_new_branch_in(slot_path, &resolved_branch.name, from_branch)?;
+            repo.git_clean_fd(slot_path)?;
+            let parent_rev = repo.branch_commit(from_branch)?;
+            let meta = BranchMetadata::new(from_branch, &parent_rev);
+            meta.write(repo.inner(), &resolved_branch.name)?;
+        }
+        ResolvedBranchSource::Local | ResolvedBranchSource::Remote { .. } => {
+            repo.switch_branch_in(slot_path, &resolved_branch.name)?;
+            repo.git_clean_fd(slot_path)?;
+        }
+    }
+    timer.finish_ok("done");
+
+    run_reconcile_hook(config, slot_path)?;
     Ok(())
 }
 

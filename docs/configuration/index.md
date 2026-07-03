@@ -77,6 +77,18 @@ Config is loaded as follows:
 
 [worktree]
 # root_dir = "" # default: ~/.stax/worktrees/<repo>
+# reuse_slots = true
+#   Warm-slot recycling. Removing a clean, merged-equivalent worktree parks it
+#   (reset --hard trunk + `git clean -fd`, keeping gitignored deps like
+#   node_modules / .venv) instead of deleting it, and the next create/lane adopts
+#   that slot instead of a cold `git worktree add`. Set false to always
+#   cold-create and real-remove (no pool manifest).
+# max_idle_slots = 4
+#   Maximum idle slots kept parked. Parking beyond the cap does a real remove;
+#   `worktree cleanup` evicts the oldest excess slots.
+# reconcile = "pnpm install"
+#   Optional command run (non-fatally) inside a slot after it is adopted, to
+#   re-sync dependencies. A missing or failing command only warns.
 
 [worktree.hooks]
 # post_create = "" # blocking hook run in a new worktree before launch

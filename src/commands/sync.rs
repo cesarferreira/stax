@@ -2344,6 +2344,7 @@ fn delete_local_branch_for_sync(
         config,
         &cleanup.resolution.worktree,
         force_remove_linked_worktree,
+        crate::commands::worktree::remove::RemovalMode::AllowParking,
     );
     match removed_worktree {
         Ok(display_name) => {

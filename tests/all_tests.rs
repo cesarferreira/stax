@@ -112,5 +112,7 @@ mod upstack_onto_tests;
 mod validate_tests;
 #[path = "worktree_cli_tests.rs"]
 mod worktree_cli_tests;
+#[path = "worktree_pool_tests.rs"]
+mod worktree_pool_tests;
 #[path = "worktree_tests.rs"]
 mod worktree_tests;

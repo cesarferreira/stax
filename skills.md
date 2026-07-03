@@ -411,6 +411,18 @@ stax wt cleanup                                   # Prune stale entries + remove
 # Lower-level worktree control
 stax wt c review-pass --agent codex -- "address the open PR comments"  # Create + launch agent
 stax wt go review-pass --agent codex --tmux       # Re-enter + launch agent in existing lane
+
+# Warm-start dependencies: by default, removing a clean, merged-equivalent
+# worktree parks it as a reusable warm slot (reset --hard trunk + `git clean -fd`,
+# which keeps gitignored deps like node_modules / .venv) instead of deleting it.
+# The next create/lane adopts that slot instead of a cold `git worktree add`, so
+# built deps survive. A --force dirty removal never parks.
+#
+# Optional ~/.config/stax/config.toml or repo-root stax.toml overrides:
+[worktree]
+reuse_slots = false               # disable recycling (cold create + real remove)
+max_idle_slots = 4                # cap on parked idle slots
+reconcile = "pnpm install"        # non-fatal deps re-sync on adopt
 ```
 
 ### Maintenance, Safety, and Setup

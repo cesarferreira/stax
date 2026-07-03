@@ -193,14 +193,13 @@ pub fn run_update(dry_run: bool) -> Result<()> {
     let remote_body_version = extract_skills_version(&remote_body);
 
     println!("Target version: {}", format!("v{PKG_VERSION}").green());
-    if let Some(v) = remote_body_version
-        .as_deref()
-        .filter(|v| *v != PKG_VERSION)
-    {
+    if let Some(v) = remote_body_version.as_deref().filter(|v| *v != PKG_VERSION) {
         println!(
             "{}",
-            format!("(remote skills.md marker is v{v} — informational only, does not affect updates)")
-                .dimmed(),
+            format!(
+                "(remote skills.md marker is v{v} — informational only, does not affect updates)"
+            )
+            .dimmed(),
         );
     }
     println!();

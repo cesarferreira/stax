@@ -181,6 +181,8 @@ st wt rs      # restack every lane at once when trunk moves
 st ss         # submit PRs for the ones that are ready
 ```
 
+Lanes start warm: instead of deleting a removed worktree, stax parks it as a reusable warm slot (resetting it to trunk and running `git clean -fd`, which keeps gitignored dependency directories like `node_modules` or `.venv`). The next lane adopts that slot instead of a cold checkout, so agents keep their built deps and don't re-install from scratch. Set `worktree.reconcile` to re-sync deps on adopt, or `worktree.reuse_slots = false` to opt out.
+
 → [Agent worktrees](docs/workflows/agent-worktrees.md) · [Multi-worktree workflow](docs/workflows/multi-worktree.md)
 
 ### Cascade stack merge

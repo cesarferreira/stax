@@ -257,6 +257,18 @@ pub struct WorktreeConfig {
     /// ~/.stax/worktrees/<repo>.
     #[serde(default = "default_worktree_root_dir")]
     pub root_dir: String,
+    /// Recycle removed worktrees as warm slots instead of deleting them, so a new
+    /// lane can adopt an existing directory (keeping built gitignored deps) rather
+    /// than a cold `git worktree add` (default: true).
+    #[serde(default = "default_true")]
+    pub reuse_slots: bool,
+    /// Maximum number of idle warm slots to keep parked in the pool (default: 4).
+    #[serde(default = "default_max_idle_slots")]
+    pub max_idle_slots: usize,
+    /// Optional command run (non-fatally) inside a worktree after it is adopted
+    /// from the warm pool, to re-sync dependencies (e.g. "pnpm install").
+    #[serde(default)]
+    pub reconcile: Option<String>,
     #[serde(default)]
     pub hooks: WorktreeHooksConfig,
 }
@@ -284,6 +296,9 @@ impl Default for WorktreeConfig {
     fn default() -> Self {
         Self {
             root_dir: default_worktree_root_dir(),
+            reuse_slots: true,
+            max_idle_slots: default_max_idle_slots(),
+            reconcile: None,
             hooks: WorktreeHooksConfig::default(),
         }
     }
@@ -304,6 +319,10 @@ impl Default for GitConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_max_idle_slots() -> usize {
+    4
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
