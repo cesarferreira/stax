@@ -98,6 +98,13 @@ struct PrPlan {
     // Track if this is a no-op (already synced)
     needs_push: bool,
     needs_pr_update: bool,
+    /// True only when the PR's base branch itself differs from the desired
+    /// parent — as opposed to `needs_pr_update`, which is also set by a plain
+    /// push with no base change. GitHub's native Stacked PRs API rejects any
+    /// `PATCH .../pulls/{n}` call that includes `base` once a PR is part of a
+    /// registered stack, even when the value is unchanged, so this must gate
+    /// the `update_pr_base` call separately to avoid firing it on every push.
+    needs_base_update: bool,
     // Empty branches get pushed but no PR created
     is_empty: bool,
     // Branches imported with `stax get` are read-only support branches.
@@ -767,6 +774,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 is_draft: None,
                 needs_push,
                 needs_pr_update: false,
+                needs_base_update: false,
                 is_empty,
                 is_imported,
             });
@@ -934,6 +942,16 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 true // New PR always needs creation
             };
 
+            // Unlike `needs_pr_update` (also true on a plain push with no base
+            // change), this is only true when the base itself is actually
+            // wrong — the one case where calling `update_pr_base` is required.
+            let needs_base_update = !is_empty
+                && !is_imported
+                && existing_pr
+                    .as_ref()
+                    .map(|pr| pr.info.base != base)
+                    .unwrap_or(false);
+
             // Capture tip commit subject for auto-updating PR title on existing PRs.
             // Only computed when the user opts in via `--update-title` so default submits
             // do not silently rewrite PR titles from local commit messages.
@@ -968,6 +986,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 is_draft: None,
                 needs_push,
                 needs_pr_update,
+                needs_base_update,
                 is_empty,
                 is_imported,
             });
@@ -1518,10 +1537,36 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         &format!("Updating {} #{}...", plan.branch, existing_pr_number),
                     );
 
-                    // Update base if needed
-                    client
-                        .update_pr_base(existing_pr_number, &plan.parent)
-                        .await?;
+                    // Update base only when it actually differs — `needs_pr_update`
+                    // is also true for a plain push with no base change, and GitHub's
+                    // native Stacked PRs API rejects *any* base PATCH (even a no-op)
+                    // once a PR is registered in a stack.
+                    if plan.needs_base_update {
+                        if let Err(e) = client
+                            .update_pr_base(existing_pr_number, &plan.parent)
+                            .await
+                        {
+                            if is_native_stack_base_locked_error(&e) {
+                                if !quiet {
+                                    println!(
+                                        "      {} {}",
+                                        "note:".dimmed(),
+                                        format!(
+                                            "skipped base update for #{existing_pr_number} — \
+                                             GitHub manages the base for PRs registered in a \
+                                             native Stack; run `st stack link` to re-sync"
+                                        )
+                                        .dimmed()
+                                    );
+                                }
+                            } else {
+                                LiveTimer::maybe_finish_warn(update_timer, "failed");
+                                return Err(e).context(format!(
+                                    "Failed to update PR base for #{existing_pr_number}"
+                                ));
+                            }
+                        }
+                    }
 
                     // Auto-update PR title from tip commit subject when it has changed
                     if plan.needs_title_update {
@@ -2576,6 +2621,16 @@ fn update_ref(workdir: &Path, refname: &str, oid: &str) -> Result<()> {
         anyhow::bail!("{}", command_output_details("git update-ref", &output));
     }
     Ok(())
+}
+
+/// True when a PR base-update failure is GitHub rejecting the change because
+/// the PR is registered in a native GitHub Stack (private preview). GitHub
+/// owns base-branch management for stacked PRs once linked, and returns this
+/// validation error for `PATCH .../pulls/{n}` calls that touch `base` — even
+/// when the requested value matches the PR's current base.
+fn is_native_stack_base_locked_error(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|cause| cause.to_string().to_lowercase().contains("part of a stack"))
 }
 
 fn command_output_details(command: &str, output: &std::process::Output) -> String {

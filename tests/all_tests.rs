@@ -100,6 +100,8 @@ mod status_tests;
 mod submit_fetch_failure_tests;
 #[path = "submit_no_verify_tests.rs"]
 mod submit_no_verify_tests;
+#[path = "submit_pr_base_tests.rs"]
+mod submit_pr_base_tests;
 #[path = "sweep_tests.rs"]
 mod sweep_tests;
 #[path = "track_all_prs_tests.rs"]
