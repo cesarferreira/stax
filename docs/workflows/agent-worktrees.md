@@ -130,9 +130,9 @@ Do not pass `--model` via `--agent-arg` — stax handles that via `--model`. Lik
 
 ## Warm-start dependencies
 
-A fresh worktree only contains tracked files, so gitignored artifacts like `node_modules/` or `.venv/` are missing. By default, stax detects common dependency directories in the main checkout and clones them into each new lane so agents do not re-install from scratch.
+A fresh worktree only contains tracked files, so gitignored artifacts like `node_modules/` or `.venv/` are missing. By default, stax detects common dependency directories that are ignored by Git in the main checkout and clones them into each new lane so agents do not re-install from scratch.
 
-Auto-detection is conservative: stax only seeds a directory when the source exists and matching project markers exist (`package.json` for `node_modules`, Python project files for `.venv` / `venv`, `go.mod` or `composer.json` for `vendor`, `Gemfile` for `vendor/bundle`). It never auto-copies `.env`.
+Auto-detection is conservative: stax only seeds a directory when the source exists, `git check-ignore` says Git ignores it, and matching project markers exist (`package.json` for `node_modules`, Python project files for `.venv` / `venv`, `go.mod` or `composer.json` for `vendor`, `Gemfile` for `vendor/bundle`). It never auto-copies `.env`.
 
 ```toml
 # Optional overrides in ~/.config/stax/config.toml or repo-root stax.toml

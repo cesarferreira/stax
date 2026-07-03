@@ -59,6 +59,7 @@ fn wt_create_auto_seeds_detected_node_modules_without_config() {
     let repo = TestRepo::new();
     let home = repo.clean_home();
 
+    repo.create_file(".gitignore", "node_modules/\n");
     repo.create_file("package.json", "{}");
     repo.create_file("package-lock.json", "{}");
     repo.create_file("node_modules/dep.txt", "cached-dep");
@@ -74,6 +75,24 @@ fn wt_create_auto_seeds_detected_node_modules_without_config() {
         worktree.display()
     );
     assert_eq!(fs::read_to_string(&seeded).unwrap(), "cached-dep");
+}
+
+#[test]
+fn wt_create_does_not_auto_seed_detected_paths_unless_git_ignored() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+
+    repo.create_file("package.json", "{}");
+    repo.create_file("node_modules/dep.txt", "cached-dep");
+
+    let out = repo.run_stax_with_env(&["wt", "c", "not-ignored"], &[("HOME", home.as_str())]);
+    out.assert_success();
+
+    let worktree = single_worktree(&repo, &home);
+    assert!(
+        !worktree.join("node_modules").exists(),
+        "auto-seeding should only copy paths ignored by git"
+    );
 }
 
 #[test]

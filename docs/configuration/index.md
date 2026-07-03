@@ -78,10 +78,11 @@ Config is loaded as follows:
 [worktree]
 # root_dir = "" # default: ~/.stax/worktrees/<repo>
 # auto_seed = true
-#   Auto-detect common dependency dirs in the main checkout and clone them into
-#   new worktrees when seed_paths is empty. Detected defaults include
+#   Auto-detect common gitignored dependency dirs in the main checkout and clone
+#   them into new worktrees when seed_paths is empty. Detected defaults include
 #   node_modules, .venv / venv, vendor, and vendor/bundle when matching project
-#   markers exist. stax never auto-copies .env.
+#   markers exist and Git ignores the candidate path. stax never auto-copies
+#   .env.
 # seed_paths = ["node_modules", ".venv"]
 #   Optional explicit repo-relative list. When non-empty, this replaces
 #   auto-detection. Uses copy-on-write (reflink) when supported, otherwise a

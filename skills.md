@@ -413,10 +413,10 @@ stax wt c review-pass --agent codex -- "address the open PR comments"  # Create 
 stax wt go review-pass --agent codex --tmux       # Re-enter + launch agent in existing lane
 
 # Warm-start dependencies: by default, new worktrees auto-clone detected
-# gitignored dependency dirs from the main checkout (`node_modules`, `.venv`,
-# `venv`, `vendor` with matching project markers). Copy-on-write (reflink)
-# when supported, plain copy otherwise. Skipped by --no-verify. stax never
-# auto-copies .env.
+# dependency dirs that Git ignores in the main checkout (`node_modules`, `.venv`,
+# `venv`, `vendor` with matching project markers). Copy-on-write (reflink) when
+# supported, plain copy otherwise. Skipped by --no-verify. stax never auto-copies
+# .env.
 #
 # Optional ~/.config/stax/config.toml or repo-root stax.toml overrides:
 [worktree]

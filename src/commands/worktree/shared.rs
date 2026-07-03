@@ -1123,7 +1123,7 @@ fn resolve_seed_paths(config: &Config, main_workdir: &Path) -> Vec<String> {
 fn detect_default_seed_paths(main_workdir: &Path) -> Vec<String> {
     let mut paths = Vec::new();
 
-    if path_exists(main_workdir, "node_modules")
+    if is_seed_candidate(main_workdir, "node_modules")
         && any_marker_exists(
             main_workdir,
             &[
@@ -1150,19 +1150,19 @@ fn detect_default_seed_paths(main_workdir: &Path) -> Vec<String> {
         ],
     ) {
         for venv in [".venv", "venv"] {
-            if path_exists(main_workdir, venv) {
+            if is_seed_candidate(main_workdir, venv) {
                 paths.push(venv.to_string());
             }
         }
     }
 
-    if path_exists(main_workdir, "vendor")
+    if is_seed_candidate(main_workdir, "vendor")
         && any_marker_exists(main_workdir, &["go.mod", "composer.json"])
     {
         paths.push("vendor".to_string());
     }
 
-    if path_exists(main_workdir, "vendor/bundle") && path_exists(main_workdir, "Gemfile") {
+    if is_seed_candidate(main_workdir, "vendor/bundle") && path_exists(main_workdir, "Gemfile") {
         paths.push("vendor/bundle".to_string());
     }
 
@@ -1171,6 +1171,23 @@ fn detect_default_seed_paths(main_workdir: &Path) -> Vec<String> {
 
 fn path_exists(root: &Path, rel: &str) -> bool {
     root.join(rel).exists()
+}
+
+fn is_seed_candidate(root: &Path, rel: &str) -> bool {
+    path_exists(root, rel) && is_git_ignored(root, rel)
+}
+
+fn is_git_ignored(root: &Path, rel: &str) -> bool {
+    matches!(
+        Command::new("git")
+            .args(["check-ignore", "-q", "--", rel])
+            .current_dir(root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status(),
+        Ok(status) if status.success()
+    )
 }
 
 fn any_marker_exists(root: &Path, markers: &[&str]) -> bool {

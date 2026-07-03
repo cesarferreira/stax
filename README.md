@@ -181,7 +181,7 @@ st wt rs      # restack every lane at once when trunk moves
 st ss         # submit PRs for the ones that are ready
 ```
 
-Lanes start warm: stax automatically clones detected dependency directories like `node_modules` or `.venv` from the main checkout into each new worktree via copy-on-write when possible, so agents don't re-install from scratch. Use `worktree.seed_paths` only when you want to replace the detected defaults.
+Lanes start warm: stax automatically clones detected, gitignored dependency directories like `node_modules` or `.venv` from the main checkout into each new worktree via copy-on-write when possible, so agents don't re-install from scratch. Use `worktree.seed_paths` only when you want to replace the detected defaults.
 
 → [Agent worktrees](docs/workflows/agent-worktrees.md) · [Multi-worktree workflow](docs/workflows/multi-worktree.md)
 
