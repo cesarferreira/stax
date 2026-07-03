@@ -257,9 +257,13 @@ pub struct WorktreeConfig {
     /// ~/.stax/worktrees/<repo>.
     #[serde(default = "default_worktree_root_dir")]
     pub root_dir: String,
+    /// Automatically clone common dependency directories from the main checkout
+    /// into each newly created worktree when seed_paths is empty.
+    #[serde(default = "default_true")]
+    pub auto_seed: bool,
     /// Repo-relative paths (typically gitignored) that stax clones from the main
-    /// checkout into each newly created worktree, so lanes start warm instead of
-    /// re-installing dependencies. Uses copy-on-write (reflink) when the
+    /// checkout into each newly created worktree. When non-empty, this explicit
+    /// list replaces automatic detection. Uses copy-on-write (reflink) when the
     /// filesystem supports it, falling back to a plain recursive copy.
     #[serde(default)]
     pub seed_paths: Vec<String>,
@@ -290,6 +294,7 @@ impl Default for WorktreeConfig {
     fn default() -> Self {
         Self {
             root_dir: default_worktree_root_dir(),
+            auto_seed: true,
             seed_paths: Vec::new(),
             hooks: WorktreeHooksConfig::default(),
         }

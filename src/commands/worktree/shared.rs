@@ -1093,7 +1093,8 @@ pub fn run_post_create_setup(
         return Ok(());
     }
 
-    seed_worktree_dependencies(main_workdir, worktree_path, &config.worktree.seed_paths)?;
+    let seed_paths = resolve_seed_paths(config, main_workdir);
+    seed_worktree_dependencies(main_workdir, worktree_path, &seed_paths)?;
     run_blocking_hook(
         config.worktree.hooks.post_create.as_deref(),
         worktree_path,
@@ -1108,12 +1109,80 @@ pub fn run_post_create_setup(
     Ok(())
 }
 
+/// Resolve the paths to seed for this worktree creation. An explicit
+/// `worktree.seed_paths` list replaces auto-detection; otherwise stax detects
+/// common dependency directories from project markers in the main checkout.
+fn resolve_seed_paths(config: &Config, main_workdir: &Path) -> Vec<String> {
+    if !config.worktree.seed_paths.is_empty() || !config.worktree.auto_seed {
+        return config.worktree.seed_paths.clone();
+    }
+
+    detect_default_seed_paths(main_workdir)
+}
+
+fn detect_default_seed_paths(main_workdir: &Path) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    if path_exists(main_workdir, "node_modules")
+        && any_marker_exists(
+            main_workdir,
+            &[
+                "package.json",
+                "package-lock.json",
+                "pnpm-lock.yaml",
+                "yarn.lock",
+                "bun.lock",
+                "bun.lockb",
+            ],
+        )
+    {
+        paths.push("node_modules".to_string());
+    }
+
+    if any_marker_exists(
+        main_workdir,
+        &[
+            "pyproject.toml",
+            "requirements.txt",
+            "uv.lock",
+            "poetry.lock",
+            "Pipfile",
+        ],
+    ) {
+        for venv in [".venv", "venv"] {
+            if path_exists(main_workdir, venv) {
+                paths.push(venv.to_string());
+            }
+        }
+    }
+
+    if path_exists(main_workdir, "vendor")
+        && any_marker_exists(main_workdir, &["go.mod", "composer.json"])
+    {
+        paths.push("vendor".to_string());
+    }
+
+    if path_exists(main_workdir, "vendor/bundle") && path_exists(main_workdir, "Gemfile") {
+        paths.push("vendor/bundle".to_string());
+    }
+
+    paths
+}
+
+fn path_exists(root: &Path, rel: &str) -> bool {
+    root.join(rel).exists()
+}
+
+fn any_marker_exists(root: &Path, markers: &[&str]) -> bool {
+    markers.iter().any(|marker| path_exists(root, marker))
+}
+
 /// Clone configured dependency/cache paths from the main checkout into a freshly
 /// created worktree so lanes start warm instead of re-installing everything.
 ///
 /// Each entry is a repo-relative path (typically gitignored, e.g. `node_modules`,
-/// `target`, `.venv`, `.env`). Missing sources and already-present destinations
-/// are skipped. Uses copy-on-write (reflink) via the platform `cp` when the
+/// `.venv`, or `vendor`). Missing sources and already-present destinations are
+/// skipped. Uses copy-on-write (reflink) via the platform `cp` when the
 /// filesystem supports it, falling back to a plain recursive copy.
 pub fn seed_worktree_dependencies(
     main_workdir: &Path,

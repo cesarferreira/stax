@@ -128,23 +128,25 @@ st lane big-refactor --agent claude --agent-arg=--verbose "pull apart the auth m
 
 Do not pass `--model` via `--agent-arg` — stax handles that via `--model`. Like `--yolo`, ignored when reattaching.
 
-## Warm-start dependencies (`seed_paths`)
+## Warm-start dependencies
 
-A fresh worktree only contains tracked files, so gitignored artifacts like `node_modules/`, `target/`, `.venv/`, or a local `.env` are missing — every lane would otherwise start cold and force the agent to re-install before doing any work.
+A fresh worktree only contains tracked files, so gitignored artifacts like `node_modules/` or `.venv/` are missing. By default, stax detects common dependency directories in the main checkout and clones them into each new lane so agents do not re-install from scratch.
 
-`worktree.seed_paths` clones those paths from the main checkout into each new worktree automatically:
+Auto-detection is conservative: stax only seeds a directory when the source exists and matching project markers exist (`package.json` for `node_modules`, Python project files for `.venv` / `venv`, `go.mod` or `composer.json` for `vendor`, `Gemfile` for `vendor/bundle`). It never auto-copies `.env`.
 
 ```toml
-# ~/.config/stax/config.toml (or repo-root stax.toml)
+# Optional overrides in ~/.config/stax/config.toml or repo-root stax.toml
 [worktree]
-seed_paths = ["node_modules", "target", ".venv", ".env"]
+auto_seed = true                 # default
+seed_paths = ["node_modules"]    # replace auto-detected paths
 ```
 
 - Paths are repo-relative. Absolute paths or `..` traversal are rejected.
 - stax uses copy-on-write (reflink via `cp -c` on macOS/APFS, `cp --reflink=auto` on Linux/Btrfs+XFS) when the filesystem supports it, so seeding is near-instant and uses almost no extra disk. On other filesystems it falls back to a plain recursive copy.
-- Missing sources and already-present destinations are skipped, so the list is safe to share across a team.
-- Seeding runs **before** `post_create`, so an install hook (e.g. `pnpm install`) only has to reconcile the warm cache instead of rebuilding it.
-- `--no-verify` skips seeding (and hooks) for that command.
+- Missing sources and already-present destinations are skipped.
+- Seeding runs **before** `post_create`, so an install hook (for example `pnpm install`) only has to reconcile the warm cache instead of rebuilding it.
+- `--no-verify` skips seeding and hooks for that command. Set `auto_seed = false` to disable automatic detection.
+- For Rust projects, prefer a shared `CARGO_TARGET_DIR` when possible; copying `target/` is available via explicit `seed_paths`, but it can be large.
 
 ## VS Code / Cursor integration
 

@@ -113,6 +113,7 @@ fn config_load_overlays_repo_stax_toml_when_present() {
 #[test]
 fn worktree_seed_paths_default_is_empty() {
     let config = Config::default();
+    assert!(config.worktree.auto_seed);
     assert!(config.worktree.seed_paths.is_empty());
 }
 
@@ -138,7 +139,7 @@ fn worktree_seed_paths_parse_and_overlay() {
     .unwrap();
     fs::write(
         repo_dir.join("stax.toml"),
-        "[worktree]\nseed_paths = [\"target\", \".env\"]\n",
+        "[worktree]\nauto_seed = false\nseed_paths = [\"target\", \".env\"]\n",
     )
     .unwrap();
 
@@ -152,6 +153,7 @@ fn worktree_seed_paths_parse_and_overlay() {
     env::set_current_dir(&repo_dir).unwrap();
 
     let config = Config::load().unwrap();
+    assert!(!config.worktree.auto_seed);
     // Repo-level array replaces the global one for the same key.
     assert_eq!(config.worktree.seed_paths, vec!["target", ".env"]);
 

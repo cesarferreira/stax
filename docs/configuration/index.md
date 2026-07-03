@@ -77,13 +77,16 @@ Config is loaded as follows:
 
 [worktree]
 # root_dir = "" # default: ~/.stax/worktrees/<repo>
-# seed_paths = ["node_modules", "target", ".venv", ".env"]
-#   Repo-relative paths (usually gitignored) that stax clones from the main
-#   checkout into every new worktree so lanes start warm instead of
-#   re-installing dependencies. Uses copy-on-write (reflink) when the
-#   filesystem supports it, otherwise a plain recursive copy. Missing sources
-#   and already-present destinations are skipped. Skipped entirely with
-#   `--no-verify` (same as hooks).
+# auto_seed = true
+#   Auto-detect common dependency dirs in the main checkout and clone them into
+#   new worktrees when seed_paths is empty. Detected defaults include
+#   node_modules, .venv / venv, vendor, and vendor/bundle when matching project
+#   markers exist. stax never auto-copies .env.
+# seed_paths = ["node_modules", ".venv"]
+#   Optional explicit repo-relative list. When non-empty, this replaces
+#   auto-detection. Uses copy-on-write (reflink) when supported, otherwise a
+#   plain recursive copy. Missing sources and already-present destinations are
+#   skipped. Skipped entirely with `--no-verify` (same as hooks).
 
 [worktree.hooks]
 # post_create = "" # blocking hook run in a new worktree before launch

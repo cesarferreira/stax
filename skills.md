@@ -412,12 +412,16 @@ stax wt cleanup                                   # Prune stale entries + remove
 stax wt c review-pass --agent codex -- "address the open PR comments"  # Create + launch agent
 stax wt go review-pass --agent codex --tmux       # Re-enter + launch agent in existing lane
 
-# Warm-start dependencies: clone gitignored deps into every new worktree so
-# lanes/agents don't re-install from scratch. Copy-on-write (reflink) when the
-# filesystem supports it, plain copy otherwise. Skipped by --no-verify.
-# ~/.config/stax/config.toml or repo-root stax.toml:
+# Warm-start dependencies: by default, new worktrees auto-clone detected
+# gitignored dependency dirs from the main checkout (`node_modules`, `.venv`,
+# `venv`, `vendor` with matching project markers). Copy-on-write (reflink)
+# when supported, plain copy otherwise. Skipped by --no-verify. stax never
+# auto-copies .env.
+#
+# Optional ~/.config/stax/config.toml or repo-root stax.toml overrides:
 [worktree]
-seed_paths = ["node_modules", "target", ".venv", ".env"]
+auto_seed = false                 # disable auto detection
+seed_paths = ["node_modules"]      # replace auto-detected paths
 ```
 
 ### Maintenance, Safety, and Setup

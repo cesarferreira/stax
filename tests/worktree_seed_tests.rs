@@ -48,6 +48,92 @@ fn write_seed_config(home: &str, seed_paths: &[&str]) {
     .expect("write config.toml");
 }
 
+fn write_seed_config_raw(home: &str, contents: &str) {
+    let config_dir = PathBuf::from(home).join(".config").join("stax");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(config_dir.join("config.toml"), contents).expect("write config.toml");
+}
+
+#[test]
+fn wt_create_auto_seeds_detected_node_modules_without_config() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+
+    repo.create_file("package.json", "{}");
+    repo.create_file("package-lock.json", "{}");
+    repo.create_file("node_modules/dep.txt", "cached-dep");
+
+    let out = repo.run_stax_with_env(&["wt", "c", "auto-js"], &[("HOME", home.as_str())]);
+    out.assert_success();
+
+    let worktree = single_worktree(&repo, &home);
+    let seeded = worktree.join("node_modules").join("dep.txt");
+    assert!(
+        seeded.exists(),
+        "expected auto-seeded node_modules/dep.txt in {}",
+        worktree.display()
+    );
+    assert_eq!(fs::read_to_string(&seeded).unwrap(), "cached-dep");
+}
+
+#[test]
+fn wt_create_does_not_auto_seed_env_files() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+
+    repo.create_file("package.json", "{}");
+    repo.create_file(".env", "SECRET=1");
+
+    let out = repo.run_stax_with_env(&["wt", "c", "no-env"], &[("HOME", home.as_str())]);
+    out.assert_success();
+
+    let worktree = single_worktree(&repo, &home);
+    assert!(
+        !worktree.join(".env").exists(),
+        ".env should never be auto-seeded"
+    );
+}
+
+#[test]
+fn wt_create_explicit_seed_paths_override_auto_detection() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    write_seed_config(&home, &[".cache/tool"]);
+
+    repo.create_file("package.json", "{}");
+    repo.create_file("node_modules/dep.txt", "cached-dep");
+    repo.create_file(".cache/tool/cache.txt", "tool-cache");
+
+    let out = repo.run_stax_with_env(&["wt", "c", "override"], &[("HOME", home.as_str())]);
+    out.assert_success();
+
+    let worktree = single_worktree(&repo, &home);
+    assert!(
+        !worktree.join("node_modules").exists(),
+        "explicit seed_paths should replace auto-detected paths"
+    );
+    assert!(worktree.join(".cache/tool/cache.txt").exists());
+}
+
+#[test]
+fn wt_create_auto_seed_false_disables_default_detection() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    write_seed_config_raw(&home, "[worktree]\nauto_seed = false\n");
+
+    repo.create_file("package.json", "{}");
+    repo.create_file("node_modules/dep.txt", "cached-dep");
+
+    let out = repo.run_stax_with_env(&["wt", "c", "disabled"], &[("HOME", home.as_str())]);
+    out.assert_success();
+
+    let worktree = single_worktree(&repo, &home);
+    assert!(
+        !worktree.join("node_modules").exists(),
+        "auto_seed = false should skip default dependency detection"
+    );
+}
+
 #[test]
 fn wt_create_seeds_configured_dependency_paths() {
     let repo = TestRepo::new();
