@@ -187,17 +187,23 @@ Lanes start warm: instead of deleting a removed worktree, stax parks it as a reu
 <a id="native-github-stacked-prs"></a>
 ### Native GitHub Stacked PRs
 
-When a GitHub repo has native Stacked PRs enabled and you have the `github/gh-stack` extension installed, `st ss`/`st bs` automatically register the submitted PRs as a native GitHub Stack — no extra command required. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top.
+When a GitHub repo has native Stacked PRs enabled, stax can register your submitted PRs as a native GitHub Stack automatically. This requires GitHub's [`github/gh-stack`](https://github.com/github/gh-stack) CLI extension — install it once:
 
 ```bash
 gh extension install github/gh-stack
-st doctor --fix          # can offer the install, or an upgrade, when needed
+# or let stax install it for you:
+st doctor --fix
+```
+
+That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR stacks under the hood, no extra command required. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top.
+
+```bash
 st ss                    # auto-links native stack when available
 st stack link            # manually re-link the current stack
 st stack unlink          # remove the native GitHub Stack object
 ```
 
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. stax also strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before talking to `gh stack`, since GitHub's private-preview native-stack API rejects Personal Access Tokens and only accepts an OAuth-authenticated `gh` login. `st doctor` recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics.
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. stax also strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before talking to `gh stack`, since GitHub's private-preview native-stack API rejects Personal Access Tokens and only accepts an OAuth-authenticated `gh` login (`gh auth login`). `st doctor` recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics, and reports whether the extension is missing, outdated, or up to date.
 
 → [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 

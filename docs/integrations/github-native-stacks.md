@@ -2,6 +2,37 @@
 
 GitHub's native Stacked PRs feature adds a stack map, final-target branch protection, and native stack rebase/merge controls to the GitHub PR UI. stax can register its existing stacked PRs with that native feature when the repo has access.
 
+## Install
+
+This feature needs the [`github/gh-stack`](https://github.com/github/gh-stack) GitHub CLI extension. Install it once:
+
+```bash
+gh extension install github/gh-stack
+# or let stax install it for you:
+st doctor --fix
+```
+
+Upgrade it the same way:
+
+```bash
+gh extension upgrade gh-stack
+# or:
+st doctor --fix
+```
+
+No further setup is required — once the extension is installed, native stack registration is fully automatic (see [Default behavior](#default-behavior) below).
+
+## Requirements
+
+- GitHub remote.
+- Repo has GitHub native Stacked PRs enabled.
+- GitHub CLI `gh` is installed and logged in with an **OAuth-authenticated account** (`gh auth login`). GitHub's native Stacked PRs API is in private preview and rejects Personal Access Tokens outright.
+- `github/gh-stack` extension is installed (see [Install](#install) above), and recent enough to provide the `gh stack link` command (added after `v0.0.1`). Older versions fail with `unknown flag: --base`.
+
+`st doctor` reports this status — including when the installed extension is too old to expose `gh stack link`, or missing entirely. `st doctor --fix` can install the extension when `gh` is available, or upgrade it when it is outdated.
+
+**Recommended: v0.0.6+.** Versions below v0.0.6 report Personal Access Token rejections with the same message used for a genuinely feature-disabled repo ("Stacked PRs are not enabled..."), so stax can't tell the two apart and may incorrectly cache the repo as unsupported. `st doctor` flags this with a soft warning (and `--fix` upgrades it) even though `gh stack link` itself works on any version that exposes the `link` command.
+
 ## How it works
 
 stax still owns local stack management: branch creation, parent metadata, restack, submit, PR bodies, and body/comment stack links. After `st submit` creates or updates the PRs, stax can run:
@@ -12,27 +43,7 @@ gh stack link <pr> [<next-pr> ...] --base <trunk> --remote <remote>
 
 That registers one or more already-submitted PRs as a native GitHub Stack. stax passes PR numbers in bottom-to-top order and keeps its own body/comment stack links unless you opt out.
 
-## Requirements
-
-- GitHub remote.
-- Repo has GitHub native Stacked PRs enabled.
-- GitHub CLI `gh` is installed and logged in with an **OAuth-authenticated account** (`gh auth login`). GitHub's native Stacked PRs API is in private preview and rejects Personal Access Tokens outright.
-- `github/gh-stack` extension is installed:
-
-```bash
-gh extension install github/gh-stack
-```
-
-The extension must be recent enough to provide the `gh stack link` command (added after `v0.0.1`). Older versions fail with `unknown flag: --base`.
-
-```bash
-gh extension upgrade gh-stack
-```
-
-`st doctor` reports this status — including when the installed extension is too old to expose `gh stack link`. `st doctor --fix` can install the extension when `gh` is available, or upgrade it when it is outdated.
-
-**Recommended: v0.0.6+.** Versions below v0.0.6 report Personal Access Token rejections with the same message used for a genuinely feature-disabled repo ("Stacked PRs are not enabled..."), so stax can't tell the two apart and may incorrectly cache the repo as unsupported. `st doctor` flags this with a soft warning (and `--fix` upgrades it) even though `gh stack link` itself works on any version that exposes the `link` command.
-
+<a id="default-behavior"></a>
 ## Default behavior
 
 The default is zero-config:
