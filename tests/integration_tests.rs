@@ -7328,7 +7328,8 @@ mod forge_mock_tests {
             .env("GIT_CONFIG_SYSTEM", &gitconfig)
             .env(token_env, "mock-token")
             .env("STAX_DISABLE_UPDATE_CHECK", "1")
-            .env("STAX_TEST_DISABLE_HEAD_SYNC", "1");
+            .env("STAX_TEST_DISABLE_HEAD_SYNC", "1")
+            .env("STAX_STACK_MERGE_ABSORBED_WAIT_SECS", "0");
         command.output().expect("Failed to execute stax")
     }
 
@@ -10434,7 +10435,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_stack_retargets_tip_merges_once_and_absorbs_downstack_prs() {
+    async fn test_merge_stack_does_not_close_downstack_pr_when_github_marks_it_merged() {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
 
@@ -10463,12 +10464,13 @@ mod forge_mock_tests {
         write_branch_pr_metadata(&repo, &branch_a, "main", 601, Some(false));
         write_branch_pr_metadata(&repo, &branch_b, &branch_a, 602, Some(false));
 
+        let mut merged_branch_a = github_pull_fixture(601, &branch_a, "main", "sha-a");
+        merged_branch_a["state"] = serde_json::json!("closed");
+        merged_branch_a["merged_at"] = serde_json::json!("2024-01-01T00:00:00Z");
+
         Mock::given(method("GET"))
             .and(path("/repos/test/repo/pulls/601"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(github_pull_fixture(601, &branch_a, "main", "sha-a")),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(merged_branch_a))
             .mount(&mock_server)
             .await;
 
@@ -10512,24 +10514,6 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        Mock::given(method("POST"))
-            .and(path("/repos/test/repo/issues/601/comments"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(issue_comment_fixture(
-                9001,
-                "Absorbed into stack merge of #602. This PR's commits landed through the selected tip PR.",
-            )))
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("PATCH"))
-            .and(path("/repos/test/repo/pulls/601"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(github_pull_fixture(601, &branch_a, "main", "sha-a")),
-            )
-            .mount(&mock_server)
-            .await;
-
         let merge_output = run_stax_with_env(
             &repo,
             home.path(),
@@ -10557,15 +10541,24 @@ mod forge_mock_tests {
                 .map(|request| format!("{} {}", request.method, request.url.path()))
                 .collect::<Vec<_>>()
         );
+        assert!(
+            requests.iter().all(|request| {
+                request.url.path() != "/repos/test/repo/issues/601/comments"
+                    && !(request.method.as_str() == "PATCH"
+                        && request.url.path() == "/repos/test/repo/pulls/601")
+            }),
+            "Expected no absorbed comment or close call once GitHub reports PR #601 merged, requests were: {:?}",
+            requests
+                .iter()
+                .map(|request| format!("{} {}", request.method, request.url.path()))
+                .collect::<Vec<_>>()
+        );
 
         let tip_patch_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/602");
         let merge_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/602/merge");
-        let comment_idx =
-            find_request_index(&requests, "POST", "/repos/test/repo/issues/601/comments");
-        let close_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/601");
         assert!(
-            tip_patch_idx < merge_idx && merge_idx < comment_idx && comment_idx < close_idx,
-            "Expected retarget -> tip merge -> comment -> close order, requests were: {:?}",
+            tip_patch_idx < merge_idx,
+            "Expected retarget -> tip merge order, requests were: {:?}",
             requests
                 .iter()
                 .map(|request| format!("{} {}", request.method, request.url.path()))
@@ -10580,17 +10573,6 @@ mod forge_mock_tests {
         let merge_payload: Value = serde_json::from_slice(&merge_request.body).unwrap();
         assert_eq!(merge_payload["merge_method"], "rebase");
         assert_eq!(merge_payload["sha"], branch_b_sha);
-
-        let comment_request = &requests[comment_idx];
-        let comment_payload: Value = serde_json::from_slice(&comment_request.body).unwrap();
-        assert_eq!(
-            comment_payload["body"],
-            "Absorbed into stack merge of #602. This PR's commits landed through the selected tip PR."
-        );
-
-        let close_request = &requests[close_idx];
-        let close_payload: Value = serde_json::from_slice(&close_request.body).unwrap();
-        assert_eq!(close_payload["state"], "closed");
     }
 
     #[tokio::test]

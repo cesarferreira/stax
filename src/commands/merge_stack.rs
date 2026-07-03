@@ -2,7 +2,7 @@
 //!
 //! This is the serverless path from issue #293: validate the selected tip PR
 //! once, retarget that PR to trunk, merge it via GitHub's merge API, then
-//! absorb the selected lower PRs with a back-reference comment.
+//! reconcile selected lower PRs as merged or absorbed.
 
 use crate::commands::merge::{
     PrBaseUpdate, rebase_and_finalize_remaining_branch, update_pr_base_unless_current,
@@ -303,7 +303,7 @@ pub fn run(
     }
     LiveTimer::maybe_finish_ok(merge_timer, "done");
 
-    absorb_downstack_prs(&rt, &client, &resolved, tip, quiet)?;
+    let github_merged_downstack = absorb_downstack_prs(&rt, &client, &resolved, tip, quiet)?;
 
     rebase_remaining_branches(
         &repo,
@@ -336,6 +336,8 @@ pub fn run(
         for pr in &resolved {
             let action = if pr.pr_number == tip.pr_number {
                 "merged"
+            } else if github_merged_downstack.contains(&pr.pr_number) {
+                "merged by GitHub"
             } else {
                 "absorbed"
             };
@@ -716,19 +718,58 @@ fn absorb_downstack_prs(
     prs: &[ResolvedStackPr],
     tip: &ResolvedStackPr,
     quiet: bool,
-) -> Result<()> {
+) -> Result<Vec<u64>> {
+    let mut github_merged = Vec::new();
+
     for pr in prs.iter().filter(|pr| pr.pr_number != tip.pr_number) {
         let timer = LiveTimer::maybe_new(
             !quiet,
-            &format!("Marking downstack PR #{} as absorbed...", pr.pr_number),
+            &format!(
+                "Waiting for downstack PR #{} to be marked merged...",
+                pr.pr_number
+            ),
         );
+        if wait_for_downstack_pr_merged(rt, client, pr.pr_number)? {
+            github_merged.push(pr.pr_number);
+            LiveTimer::maybe_finish_ok(timer, "merged by GitHub");
+            continue;
+        }
+
         let comment = downstack_absorbed_comment(tip.pr_number);
         rt.block_on(async { client.create_issue_comment(pr.pr_number, &comment).await })?;
         rt.block_on(async { client.close_pr(pr.pr_number).await })?;
-        LiveTimer::maybe_finish_ok(timer, "done");
+        LiveTimer::maybe_finish_ok(timer, "closed as absorbed");
     }
 
-    Ok(())
+    Ok(github_merged)
+}
+
+fn wait_for_downstack_pr_merged(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    pr_number: u64,
+) -> Result<bool> {
+    let timeout = downstack_merged_wait();
+    let interval = Duration::from_secs(2);
+    let start = Instant::now();
+
+    loop {
+        if rt.block_on(async { client.is_pr_merged(pr_number).await })? {
+            return Ok(true);
+        }
+        if start.elapsed() >= timeout {
+            return Ok(false);
+        }
+        std::thread::sleep(interval);
+    }
+}
+
+fn downstack_merged_wait() -> Duration {
+    let seconds = std::env::var("STAX_STACK_MERGE_ABSORBED_WAIT_SECS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(20);
+    Duration::from_secs(seconds)
 }
 
 fn rebase_remaining_branches(
@@ -884,7 +925,7 @@ fn print_stack_preview(
         let marker = if idx + 1 == prs.len() {
             "(tip, merged)"
         } else {
-            "(absorbed after tip merge)"
+            "(reconciled after tip merge)"
         };
         println!(
             "  {}. {} (#{}) {}",
