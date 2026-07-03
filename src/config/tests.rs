@@ -111,6 +111,57 @@ fn config_load_overlays_repo_stax_toml_when_present() {
 }
 
 #[test]
+fn worktree_seed_paths_default_is_empty() {
+    let config = Config::default();
+    assert!(config.worktree.seed_paths.is_empty());
+}
+
+#[test]
+fn worktree_seed_paths_parse_and_overlay() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let original_dir = env::current_dir().unwrap();
+    let temp_dir =
+        std::env::temp_dir().join(format!("stax-test-seed-config-{}", std::process::id()));
+    let repo_dir = temp_dir.join("repo");
+    let home_dir = temp_dir.join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        "[worktree]\nseed_paths = [\"node_modules\", \".venv\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        "[worktree]\nseed_paths = [\"target\", \".env\"]\n",
+    )
+    .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+    Command::new("git")
+        .arg("init")
+        .current_dir(&repo_dir)
+        .output()
+        .unwrap();
+    env::set_current_dir(&repo_dir).unwrap();
+
+    let config = Config::load().unwrap();
+    // Repo-level array replaces the global one for the same key.
+    assert_eq!(config.worktree.seed_paths, vec!["target", ".env"]);
+
+    env::set_current_dir(original_dir).unwrap();
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn config_load_discovers_repo_stax_toml_from_nested_directory() {
     let _guard = env_lock();
 

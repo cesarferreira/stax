@@ -4,7 +4,7 @@ use super::shared::{
     default_create_base, default_tmux_session_name, derive_unique_worktree_name,
     emit_shell_message, emit_shell_payload, ensure_gitignore, ensure_managed_worktrees_root,
     find_worktree, format_create_message, format_go_message, list_tmux_sessions,
-    managed_worktrees_dir, resolve_branch_name, run_blocking_hook, spawn_background_hook,
+    managed_worktrees_dir, resolve_branch_name, run_post_create_setup, spawn_background_hook,
     status_labels,
 };
 use crate::commands::generate;
@@ -156,18 +156,7 @@ fn run_named_lane(
         resolved_branch.is_existing(),
     );
 
-    if !no_verify {
-        run_blocking_hook(
-            config.worktree.hooks.post_create.as_deref(),
-            &worktree_path,
-            "post_create",
-        )?;
-        spawn_background_hook(
-            config.worktree.hooks.post_start.as_deref(),
-            &worktree_path,
-            "post_start",
-        )?;
-    }
+    run_post_create_setup(config, &main_repo_workdir, &worktree_path, no_verify)?;
 
     emit_or_execute_launch(&worktree_path, &prepared, shell_output)
 }

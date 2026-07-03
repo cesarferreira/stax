@@ -128,6 +128,24 @@ st lane big-refactor --agent claude --agent-arg=--verbose "pull apart the auth m
 
 Do not pass `--model` via `--agent-arg` — stax handles that via `--model`. Like `--yolo`, ignored when reattaching.
 
+## Warm-start dependencies (`seed_paths`)
+
+A fresh worktree only contains tracked files, so gitignored artifacts like `node_modules/`, `target/`, `.venv/`, or a local `.env` are missing — every lane would otherwise start cold and force the agent to re-install before doing any work.
+
+`worktree.seed_paths` clones those paths from the main checkout into each new worktree automatically:
+
+```toml
+# ~/.config/stax/config.toml (or repo-root stax.toml)
+[worktree]
+seed_paths = ["node_modules", "target", ".venv", ".env"]
+```
+
+- Paths are repo-relative. Absolute paths or `..` traversal are rejected.
+- stax uses copy-on-write (reflink via `cp -c` on macOS/APFS, `cp --reflink=auto` on Linux/Btrfs+XFS) when the filesystem supports it, so seeding is near-instant and uses almost no extra disk. On other filesystems it falls back to a plain recursive copy.
+- Missing sources and already-present destinations are skipped, so the list is safe to share across a team.
+- Seeding runs **before** `post_create`, so an install hook (e.g. `pnpm install`) only has to reconcile the warm cache instead of rebuilding it.
+- `--no-verify` skips seeding (and hooks) for that command.
+
 ## VS Code / Cursor integration
 
 Keep your existing VS Code window aware of every new lane as an extra folder in the Explorer:

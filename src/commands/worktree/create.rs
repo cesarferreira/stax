@@ -3,7 +3,7 @@ use super::shared::{
     derive_unique_worktree_name, emit_shell_payload, ensure_gitignore,
     ensure_managed_worktrees_root, find_worktree, format_create_message, format_go_message,
     generate_random_lane_slug, managed_worktrees_dir, pick_branch_interactively,
-    resolve_branch_name, run_blocking_hook, spawn_background_hook,
+    resolve_branch_name, run_post_create_setup, spawn_background_hook,
 };
 use crate::commands::shell_setup;
 use crate::config::Config;
@@ -167,18 +167,7 @@ pub fn run(
         resolved_branch.is_existing(),
     );
 
-    if !no_verify {
-        run_blocking_hook(
-            config.worktree.hooks.post_create.as_deref(),
-            &worktree_path,
-            "post_create",
-        )?;
-        spawn_background_hook(
-            config.worktree.hooks.post_start.as_deref(),
-            &worktree_path,
-            "post_start",
-        )?;
-    }
+    run_post_create_setup(&config, &main_repo_workdir, &worktree_path, no_verify)?;
 
     if shell_output {
         emit_shell_payload(&worktree_path, launch.as_ref());

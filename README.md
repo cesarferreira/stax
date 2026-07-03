@@ -181,6 +181,8 @@ st wt rs      # restack every lane at once when trunk moves
 st ss         # submit PRs for the ones that are ready
 ```
 
+Lanes start warm: set `worktree.seed_paths` to clone gitignored dependencies (`node_modules`, `target`, `.venv`, `.env`) into every new worktree via copy-on-write, so agents don't re-install from scratch.
+
 → [Agent worktrees](docs/workflows/agent-worktrees.md) · [Multi-worktree workflow](docs/workflows/multi-worktree.md)
 
 ### Cascade stack merge

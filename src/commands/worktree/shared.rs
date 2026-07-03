@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use crate::git::repo::WorktreeInfo;
+use crate::progress::LiveTimer;
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
@@ -1076,6 +1077,193 @@ pub fn spawn_background_hook(command: Option<&str>, cwd: &Path, label: &str) -> 
         .spawn()
         .with_context(|| format!("Failed to start {} hook", label))?;
 
+    Ok(())
+}
+
+/// Run the standard post-create setup for a freshly created worktree: seed
+/// configured dependency paths, then run the `post_create` (blocking) and
+/// `post_start` (background) hooks. Skipped entirely when `no_verify` is set.
+pub fn run_post_create_setup(
+    config: &Config,
+    main_workdir: &Path,
+    worktree_path: &Path,
+    no_verify: bool,
+) -> Result<()> {
+    if no_verify {
+        return Ok(());
+    }
+
+    seed_worktree_dependencies(main_workdir, worktree_path, &config.worktree.seed_paths)?;
+    run_blocking_hook(
+        config.worktree.hooks.post_create.as_deref(),
+        worktree_path,
+        "post_create",
+    )?;
+    spawn_background_hook(
+        config.worktree.hooks.post_start.as_deref(),
+        worktree_path,
+        "post_start",
+    )?;
+
+    Ok(())
+}
+
+/// Clone configured dependency/cache paths from the main checkout into a freshly
+/// created worktree so lanes start warm instead of re-installing everything.
+///
+/// Each entry is a repo-relative path (typically gitignored, e.g. `node_modules`,
+/// `target`, `.venv`, `.env`). Missing sources and already-present destinations
+/// are skipped. Uses copy-on-write (reflink) via the platform `cp` when the
+/// filesystem supports it, falling back to a plain recursive copy.
+pub fn seed_worktree_dependencies(
+    main_workdir: &Path,
+    worktree_path: &Path,
+    seed_paths: &[String],
+) -> Result<()> {
+    let entries: Vec<&str> = seed_paths
+        .iter()
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let timer = LiveTimer::new("Seeding dependencies...");
+    let mut seeded = 0usize;
+    for rel in entries {
+        validate_seed_path(rel)?;
+        let src = main_workdir.join(rel);
+        if !src.exists() {
+            continue;
+        }
+        let dst = worktree_path.join(rel);
+        if dst.exists() {
+            continue;
+        }
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed to create parent directory for seeded path '{}'",
+                    rel
+                )
+            })?;
+        }
+        reflink_or_copy(&src, &dst)
+            .with_context(|| format!("Failed to seed worktree path '{}'", rel))?;
+        seeded += 1;
+    }
+
+    timer.finish_ok(&format!(
+        "done ({} path{})",
+        seeded,
+        if seeded == 1 { "" } else { "s" }
+    ));
+    Ok(())
+}
+
+/// Reject absolute paths and `..` traversal so seeding stays inside the worktree.
+fn validate_seed_path(rel: &str) -> Result<()> {
+    let path = Path::new(rel);
+    if path.is_absolute() {
+        bail!(
+            "worktree.seed_paths entry '{}' must be a repo-relative path",
+            rel
+        );
+    }
+    if path
+        .components()
+        .any(|comp| matches!(comp, std::path::Component::ParentDir))
+    {
+        bail!("worktree.seed_paths entry '{}' must not contain '..'", rel);
+    }
+    Ok(())
+}
+
+/// Copy `src` to `dst`, preferring a copy-on-write clone when supported.
+fn reflink_or_copy(src: &Path, dst: &Path) -> Result<()> {
+    if try_reflink(src, dst) {
+        return Ok(());
+    }
+
+    // A failed reflink attempt may have left a partial destination behind; clear
+    // it before the plain-copy fallback so we don't merge into stale contents.
+    if dst.exists() {
+        if dst.is_dir() {
+            let _ = fs::remove_dir_all(dst);
+        } else {
+            let _ = fs::remove_file(dst);
+        }
+    }
+
+    copy_recursive(src, dst)
+}
+
+/// Attempt a copy-on-write clone via the platform `cp`. Returns `false` (rather
+/// than erroring) when the tool is missing or the filesystem lacks reflink
+/// support, so the caller can fall back to a regular copy.
+fn try_reflink(src: &Path, dst: &Path) -> bool {
+    let mut cmd = Command::new("cp");
+    if cfg!(target_os = "macos") {
+        cmd.arg("-c").arg("-R");
+    } else if cfg!(target_os = "linux") {
+        cmd.arg("--reflink=auto").arg("-a");
+    } else {
+        return false;
+    }
+    cmd.arg(src).arg(dst);
+
+    matches!(
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status(),
+        Ok(status) if status.success()
+    )
+}
+
+/// Recursively copy a file, directory, or symlink, preserving symlinks as links.
+fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(src)
+        .with_context(|| format!("Failed to read metadata for {}", src.display()))?;
+    let file_type = metadata.file_type();
+
+    if file_type.is_symlink() {
+        #[cfg(unix)]
+        {
+            let target = fs::read_link(src)?;
+            std::os::unix::fs::symlink(target, dst)
+                .with_context(|| format!("Failed to recreate symlink {}", dst.display()))?;
+            return Ok(());
+        }
+        #[cfg(not(unix))]
+        {
+            // No symlink support: fall back to copying the resolved target.
+            if src.is_dir() {
+                return copy_dir_contents(src, dst);
+            }
+            fs::copy(src, dst).with_context(|| format!("Failed to copy {}", src.display()))?;
+            return Ok(());
+        }
+    }
+
+    if file_type.is_dir() {
+        copy_dir_contents(src, dst)
+    } else {
+        fs::copy(src, dst).with_context(|| format!("Failed to copy {}", src.display()))?;
+        Ok(())
+    }
+}
+
+fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)
+        .with_context(|| format!("Failed to create directory {}", dst.display()))?;
+    for entry in
+        fs::read_dir(src).with_context(|| format!("Failed to read directory {}", src.display()))?
+    {
+        let entry = entry?;
+        copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+    }
     Ok(())
 }
 

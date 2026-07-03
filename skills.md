@@ -411,6 +411,13 @@ stax wt cleanup                                   # Prune stale entries + remove
 # Lower-level worktree control
 stax wt c review-pass --agent codex -- "address the open PR comments"  # Create + launch agent
 stax wt go review-pass --agent codex --tmux       # Re-enter + launch agent in existing lane
+
+# Warm-start dependencies: clone gitignored deps into every new worktree so
+# lanes/agents don't re-install from scratch. Copy-on-write (reflink) when the
+# filesystem supports it, plain copy otherwise. Skipped by --no-verify.
+# ~/.config/stax/config.toml or repo-root stax.toml:
+[worktree]
+seed_paths = ["node_modules", "target", ".venv", ".env"]
 ```
 
 ### Maintenance, Safety, and Setup

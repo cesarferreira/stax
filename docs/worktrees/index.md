@@ -191,6 +191,10 @@ Override in `~/.config/stax/config.toml`, or set shared project overrides in rep
 # root_dir = ""             # default external root
 # root_dir = ".worktrees"   # keep worktrees inside the repo
 
+# Warm-start dependencies: clone these paths from the main checkout into every
+# new worktree so lanes don't re-install from scratch.
+seed_paths = ["node_modules", "target", ".venv", ".env"]
+
 [worktree.hooks]
 post_create = ""   # blocking hook before launch
 post_start  = ""   # background hook after creation
@@ -201,7 +205,8 @@ post_remove = ""   # background hook after removal
 
 - Relative `root_dir` values resolve under the main repo root.
 - Repo-local roots like `.worktrees` are added to `.gitignore` automatically.
+- `seed_paths` are repo-relative (usually gitignored) paths cloned from the main checkout into each new worktree, using copy-on-write (reflink) when the filesystem supports it and a plain recursive copy otherwise. Missing sources and already-present destinations are skipped. Seeding runs before `post_create`, so install hooks can build on the warm cache.
 - `post_create` and `pre_remove` are **blocking**; `post_start`, `post_go`, `post_remove` run in the **background**.
-- `--no-verify` on `create` / `go` skips hooks for that command.
+- `--no-verify` on `create` / `go` skips hooks **and** seeding for that command.
 
 For the full config surface, see [Configuration](../configuration/index.md).
