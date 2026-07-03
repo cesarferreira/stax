@@ -16,11 +16,18 @@ fn effective_remove_force(force: bool, confirmed_dirty_removal: bool) -> bool {
     force || confirmed_dirty_removal
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemovalMode {
+    AllowParking,
+    RealRemove,
+}
+
 pub(crate) fn remove_worktree_with_hooks(
     repo: &GitRepo,
     config: &Config,
     worktree: &WorktreeInfo,
     force: bool,
+    mode: RemovalMode,
 ) -> Result<String> {
     if worktree.is_main {
         bail!("Cannot remove the main worktree.");
@@ -44,13 +51,19 @@ pub(crate) fn remove_worktree_with_hooks(
         .branch
         .clone()
         .unwrap_or_else(|| worktree.name.clone());
+    let removing_current_process_worktree = process_is_inside_worktree(&worktree.path);
+    let pool_dir = if config.worktree.reuse_slots && !removing_current_process_worktree {
+        pool_dir_for(repo, config, &worktree.path)?
+    } else {
+        None
+    };
 
     // A `--force` dirty removal must NEVER park: the caller explicitly asked to
     // discard the worktree, so parking (which keeps the directory) would defeat
     // the intent and hand out a slot that still carries the dirty tree.
-    if config.worktree.reuse_slots && !force {
-        if let Some(worktrees_dir) = pool_dir_for(repo, config, &worktree.path)? {
-            if try_park_slot(repo, config, worktree, &worktrees_dir)? {
+    if mode == RemovalMode::AllowParking && config.worktree.reuse_slots && !force {
+        if let Some(worktrees_dir) = pool_dir.as_deref() {
+            if try_park_slot(repo, config, worktree, worktrees_dir)? {
                 spawn_background_hook(
                     config.worktree.hooks.post_remove.as_deref(),
                     &main_workdir,
@@ -65,9 +78,9 @@ pub(crate) fn remove_worktree_with_hooks(
 
     // Real removal: forget any pooled slot entry that referenced this path.
     if config.worktree.reuse_slots {
-        if let Some(worktrees_dir) = pool_dir_for(repo, config, &worktree.path)? {
+        if let Some(worktrees_dir) = pool_dir.as_deref() {
             let path = worktree.path.clone();
-            let _ = pool::with_lock(&worktrees_dir, |pool| {
+            let _ = pool::with_lock(worktrees_dir, |pool| {
                 pool.remove_path(&path);
                 Ok(())
             });
@@ -81,6 +94,16 @@ pub(crate) fn remove_worktree_with_hooks(
     )?;
 
     Ok(display_name)
+}
+
+fn process_is_inside_worktree(worktree_path: &std::path::Path) -> bool {
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    let canonical_cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    let canonical_worktree =
+        std::fs::canonicalize(worktree_path).unwrap_or_else(|_| worktree_path.to_path_buf());
+    canonical_cwd.starts_with(canonical_worktree)
 }
 
 /// The managed worktrees directory when `worktree_path` lives inside it (so its
@@ -142,7 +165,24 @@ fn try_park_slot(
     Ok(true)
 }
 
+pub(crate) fn run_real_remove(
+    name: Option<String>,
+    force: bool,
+    delete_branch: bool,
+) -> Result<()> {
+    run_with_mode(name, force, delete_branch, RemovalMode::RealRemove)
+}
+
 pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()> {
+    run_with_mode(name, force, delete_branch, RemovalMode::AllowParking)
+}
+
+fn run_with_mode(
+    name: Option<String>,
+    force: bool,
+    delete_branch: bool,
+    mode: RemovalMode,
+) -> Result<()> {
     let repo = GitRepo::open()?;
     let config = Config::load()?;
     let worktree = match name {
@@ -189,7 +229,7 @@ pub fn run(name: Option<String>, force: bool, delete_branch: bool) -> Result<()>
     let branch = worktree.branch.clone();
     let main_workdir = repo.main_repo_workdir()?;
     let remove_force = effective_remove_force(force, confirmed_dirty_removal);
-    let display_name = remove_worktree_with_hooks(&repo, &config, &worktree, remove_force)?;
+    let display_name = remove_worktree_with_hooks(&repo, &config, &worktree, remove_force, mode)?;
 
     if delete_branch {
         let repo = GitRepo::open_from_path(&main_workdir)?;

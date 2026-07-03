@@ -616,7 +616,13 @@ fn spawn_removal_operation(
         let _ = sender.send(RemovalUpdate::RunningPreHook);
         let _ = sender.send(RemovalUpdate::RemovingWorktree);
 
-        match remove_worktree_with_hooks(&repo, &config, &worktree, force) {
+        match remove_worktree_with_hooks(
+            &repo,
+            &config,
+            &worktree,
+            force,
+            crate::commands::worktree::remove::RemovalMode::AllowParking,
+        ) {
             Ok(display_name) => {
                 let _ = sender.send(RemovalUpdate::Success {
                     removed_name: display_name,

@@ -142,7 +142,7 @@ pub fn run(force: bool, yes: bool, dry_run: bool) -> Result<()> {
     let mut removed = 0usize;
     let mut failed = 0usize;
     for candidate in &plan.candidates {
-        match remove::run(Some(candidate.path.display().to_string()), force, false) {
+        match remove::run_real_remove(Some(candidate.path.display().to_string()), force, false) {
             Ok(()) => removed += 1,
             Err(error) => {
                 failed += 1;
