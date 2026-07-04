@@ -86,7 +86,7 @@ jobs:
   release:
     name: Release
     needs: build
-    if: always() && needs.build.result != 'cancelled'
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
 
     steps:
@@ -109,6 +109,24 @@ jobs:
 
       - name: List artifacts
         run: ls -la artifacts/
+
+      - name: Verify release artifacts
+        run: |
+          set -euo pipefail
+          expected_artifacts=(
+            stax-x86_64-apple-darwin.tar.gz
+            stax-aarch64-apple-darwin.tar.gz
+            stax-x86_64-unknown-linux-gnu.tar.gz
+            stax-aarch64-unknown-linux-gnu.tar.gz
+            stax-x86_64-pc-windows-msvc.zip
+          )
+
+          for artifact in "${expected_artifacts[@]}"; do
+            test -f "artifacts/${artifact}" || {
+              echo "Missing release artifact: ${artifact}" >&2
+              exit 1
+            }
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
