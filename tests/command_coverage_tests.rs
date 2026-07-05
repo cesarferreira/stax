@@ -116,6 +116,51 @@ fn test_get_help() {
         .assert_stdout_contains("--force");
 }
 
+#[test]
+fn test_full_command_reference_mentions_visible_top_level_commands() {
+    let repo = TestRepo::new();
+    let output = repo.run_stax(&["--help"]);
+    output.assert_success();
+
+    let stdout = TestRepo::stdout(&output);
+    let docs = include_str!("../docs/commands/reference.md");
+    let mut in_commands = false;
+    let mut missing = Vec::new();
+
+    for line in stdout.lines() {
+        if line.starts_with("Commands:") {
+            in_commands = true;
+            continue;
+        }
+        if line.starts_with("Options:") {
+            in_commands = false;
+        }
+        if !in_commands || line.trim().is_empty() {
+            continue;
+        }
+
+        let Some(command) = line.split_whitespace().next() else {
+            continue;
+        };
+        if command == "help" {
+            continue;
+        }
+
+        let documented = docs.contains(&format!("`st {command}"))
+            || docs.contains(&format!("`stax {command}"))
+            || docs.contains(&format!("### `{command}`"));
+        if !documented {
+            missing.push(command.to_string());
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "docs/commands/reference.md is missing visible top-level commands: {}",
+        missing.join(", ")
+    );
+}
+
 // =============================================================================
 // Sync Command Tests
 // =============================================================================
