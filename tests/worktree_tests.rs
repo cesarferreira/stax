@@ -101,6 +101,20 @@ exec "$REAL_GIT" "$@"
 }
 
 #[cfg(unix)]
+fn assert_git_log_does_not_contain(log_path: &Path, forbidden_calls: &[&str], context: &str) {
+    let git_calls = fs::read_to_string(log_path).unwrap_or_default();
+    for forbidden in forbidden_calls {
+        assert!(
+            !git_calls.lines().any(|line| line == *forbidden),
+            "{} should not call `{}`; git calls were:\n{}",
+            context,
+            forbidden,
+            git_calls
+        );
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn status_uses_cached_repo_data_without_git_subprocess_scans() {
     let repo = TestRepo::new_with_remote();
@@ -145,19 +159,50 @@ fn status_uses_cached_repo_data_without_git_subprocess_scans() {
         stdout
     );
 
-    let git_calls = fs::read_to_string(&log_path).unwrap_or_default();
-    for forbidden in [
-        "rev-parse --git-dir",
-        "branch -r --format=%(refname)",
-        "worktree list --porcelain",
-    ] {
-        assert!(
-            !git_calls.lines().any(|line| line == forbidden),
-            "status should not call `{}`; git calls were:\n{}",
-            forbidden,
-            git_calls
-        );
-    }
+    assert_git_log_does_not_contain(
+        &log_path,
+        &[
+            "rev-parse --git-dir",
+            "branch -r --format=%(refname)",
+            "worktree list --porcelain",
+        ],
+        "status",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worktree_create_does_not_count_tracked_files_with_ls_files() {
+    let repo = TestRepo::new();
+
+    let shim_dir = TempDir::new().expect("git shim tempdir");
+    git_shim_path(&shim_dir);
+    let log_path = shim_dir.path().join("git.log");
+    let path_env = format!(
+        "{}:{}",
+        shim_dir.path().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let log_env = log_path.to_string_lossy().into_owned();
+    let real_git = real_git_path();
+
+    let output = repo.run_stax_with_env(
+        &[
+            "worktree",
+            "create",
+            "perf-guard",
+            "--no-verify",
+            "--shell-output",
+        ],
+        &[
+            ("PATH", path_env.as_str()),
+            ("GIT_SHIM_LOG", log_env.as_str()),
+            ("REAL_GIT", real_git.as_str()),
+        ],
+    );
+    output.assert_success();
+
+    assert_git_log_does_not_contain(&log_path, &["ls-files -z"], "worktree create");
 }
 
 #[test]
