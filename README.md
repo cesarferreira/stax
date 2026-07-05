@@ -400,6 +400,8 @@ Before opening a PR, run:
 make test
 ```
 
+On macOS this uses Docker when available. On Linux and other native paths it runs nextest with the optimized test profile and sanitized test environment.
+
 To cut a release, run:
 
 ```bash
