@@ -11,6 +11,7 @@ CONTAINER ?= $(shell if [ -x /opt/homebrew/opt/container/bin/container ]; then p
 CONTAINER_MEMORY ?= 8G
 CONTAINER_CARGO_BUILD_JOBS ?= 4
 CONTAINER_CARGO_PROFILE ?= test-container
+NATIVE_CARGO_PROFILE ?= test-container
 
 # Default target
 all: check build test
@@ -49,18 +50,14 @@ test:
 	@if [ "$$(uname)" = "Darwin" ] && command -v docker >/dev/null 2>&1; then \
 		$(MAKE) test-docker; \
 	else \
-		cargo nextest run; \
+		$(MAKE) test-local-fast; \
 	fi
 
 # Run all tests natively on host
 test-native:
-	@if [ "$$(uname)" = "Darwin" ]; then \
-		$(MAKE) test-local-fast; \
-	else \
-		cargo nextest run; \
-	fi
+	$(MAKE) test-local-fast
 
-# Run tests with macOS-friendly defaults (custom temp root + capped concurrency)
+# Run tests with automation-friendly native defaults (custom temp root, token-free env, optimized profile)
 test-local-fast:
 	mkdir -p .test-tmp
 	@threads="$${NEXTEST_TEST_THREADS:-}"; \
@@ -70,7 +67,7 @@ test-local-fast:
 	if [ -z "$$threads" ]; then \
 		threads="num-cpus"; \
 	fi; \
-	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" cargo nextest run
+	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" RUST_MIN_STACK=4194304 cargo nextest run --cargo-profile "$(NATIVE_CARGO_PROFILE)"
 
 # Create a RAM disk for fast local test temp dirs (macOS only)
 ramdisk-up:
