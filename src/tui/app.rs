@@ -1,4 +1,7 @@
-use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
+use crate::cache::{
+    CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache, TuiPaneVisibilityState,
+    TuiStateCache,
+};
 use crate::ci::{CheckRunInfo, history};
 use crate::config::Config;
 use crate::engine::{Stack, build_parent_candidates};
@@ -346,6 +349,28 @@ impl PaneVisibility {
             .filter(|visible| *visible)
             .count()
     }
+
+    fn from_persisted(state: TuiPaneVisibilityState) -> Self {
+        let visibility = Self {
+            stack: state.stack,
+            summary: state.summary,
+            patch: state.patch,
+        };
+
+        if visibility.visible_count() == 0 {
+            Self::default()
+        } else {
+            visibility
+        }
+    }
+
+    fn to_persisted(self) -> TuiPaneVisibilityState {
+        TuiPaneVisibilityState {
+            stack: self.stack,
+            summary: self.summary,
+            patch: self.patch,
+        }
+    }
 }
 
 /// Application mode
@@ -481,6 +506,10 @@ impl App {
         let git_dir = repo.git_dir()?;
         let cache = CiCache::load(git_dir);
         let diff_cache_dir = repo.common_git_dir()?;
+        let pane_visibility = TuiStateCache::load(&diff_cache_dir)
+            .panes
+            .map(PaneVisibility::from_persisted)
+            .unwrap_or_default();
         let git_dir = git_dir.to_path_buf();
         let status_set_at = initial_status.as_ref().map(|_| Instant::now());
 
@@ -501,7 +530,7 @@ impl App {
             selected_diff: Vec::new(),
             diff_scroll: 0,
             focused_pane: FocusedPane::Stack,
-            pane_visibility: PaneVisibility::default(),
+            pane_visibility,
             diff_stat: Vec::new(),
             status_message: initial_status,
             status_set_at,
@@ -894,6 +923,7 @@ impl App {
 
         self.pane_visibility.set_visible(pane, !currently_visible);
         self.ensure_focus_visible();
+        self.persist_tui_state();
 
         let pane_name = match pane {
             TuiPane::Stack => "Stack",
@@ -902,6 +932,12 @@ impl App {
         };
         let state = if currently_visible { "hidden" } else { "shown" };
         self.set_status(format!("{} pane {}", pane_name, state));
+    }
+
+    fn persist_tui_state(&self) {
+        let mut state = TuiStateCache::load(&self.diff_cache_dir);
+        state.panes = Some(self.pane_visibility.to_persisted());
+        let _ = state.save(&self.diff_cache_dir);
     }
 
     fn focused_pane_is_visible(&self) -> bool {
@@ -1914,10 +1950,12 @@ fn spawn_ci_loader(repo_path: PathBuf, branch: String) -> Receiver<CiUpdate> {
 mod tests {
     use super::{
         App, BranchCiSummary, BranchDisplay, DiffLineType, DiffRequest, DiffUpdate, FocusedPane,
-        Mode, PaneVisibility, TuiPane, live_ci_summary_text, run_in_tokio_runtime,
-        spawn_diff_loader, substring_filter_indices,
+        Mode, PaneVisibility, TuiPane, TuiPaneVisibilityState, live_ci_summary_text,
+        run_in_tokio_runtime, spawn_diff_loader, substring_filter_indices,
     };
-    use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
+    use crate::cache::{
+        CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache, TuiStateCache,
+    };
     use crate::engine::Stack;
     use crate::git::GitRepo;
     use anyhow::{Result, anyhow};
@@ -2081,6 +2119,32 @@ mod tests {
         assert!(!app.pane_visibility.patch);
         assert_eq!(app.focused_pane, FocusedPane::Stack);
         assert_eq!(app.status_message.as_deref(), Some("Patch pane hidden"));
+    }
+
+    #[test]
+    fn toggling_pane_visibility_persists_for_next_tui_load() {
+        let (_tempdir, repo) = test_repo();
+        let cache_dir = repo.common_git_dir().expect("common git dir");
+        let mut app = minimal_app(repo, vec![skeleton_branch("main", None, true)]);
+
+        app.toggle_pane_visibility(TuiPane::Summary);
+
+        let state = TuiStateCache::load(&cache_dir);
+        let panes = state.panes.expect("pane visibility should be persisted");
+        assert!(panes.stack);
+        assert!(!panes.summary);
+        assert!(panes.patch);
+    }
+
+    #[test]
+    fn invalid_persisted_pane_visibility_falls_back_to_default() {
+        let visibility = PaneVisibility::from_persisted(TuiPaneVisibilityState {
+            stack: false,
+            summary: false,
+            patch: false,
+        });
+
+        assert_eq!(visibility, PaneVisibility::default());
     }
 
     #[test]
