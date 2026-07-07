@@ -187,3 +187,59 @@ async fn submit_treats_native_stack_base_lock_as_non_fatal() {
         "expected a soft note about the locked base, got: {stdout}"
     );
 }
+
+/// `stax update` (sync + restack + submit) reuses the exact same submit
+/// planning/PR-update logic as `stax submit`. Regression coverage for a real
+/// user report: `st update` was surfacing the raw GitHub "part of a stack"
+/// error as a fatal failure instead of the soft note above, even though
+/// `stax submit` alone handled it gracefully — see
+/// `submit_treats_native_stack_base_lock_as_non_fatal`.
+#[tokio::test]
+async fn update_treats_native_stack_base_lock_as_non_fatal() {
+    let mock_server = MockServer::start().await;
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_test_config(Path::new(&home), &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+
+    repo.create_stack(&["base-locked-update"]);
+    let branch = repo.current_branch();
+    repo.git(&["push", "-u", "origin", &branch])
+        .assert_success();
+
+    // Local metadata says the parent is "main", but GitHub still reports a
+    // stale base for the PR — a genuine mismatch, not a push-only no-op.
+    write_branch_pr_metadata(&repo, &branch, "main", 503);
+    mock_existing_pr_reads(&mock_server, 503, &branch, "stale-base").await;
+
+    Mock::given(method("PATCH"))
+        .and(path("/repos/test-owner/test-repo/pulls/503"))
+        .respond_with(ResponseTemplate::new(422).set_body_json(serde_json::json!({
+            "message": "Validation Failed",
+            "documentation_url": "https://docs.github.com/rest/pulls/pulls#update-a-pull-request",
+            "errors": [{
+                "code": "invalid",
+                "field": "base",
+                "message": "Cannot change the base branch because the pull request is part of a stack.",
+                "resource": "PullRequest"
+            }]
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let output = repo.run_stax_with_env(
+        &["update", "--force", "--yes", "--no-prompt"],
+        &[("STAX_GITHUB_TOKEN", "test-token")],
+    );
+    assert!(
+        output.status.success(),
+        "update should not abort on a native-stack base lock: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("skipped base update") && stdout.contains("native Stack"),
+        "expected a soft note about the locked base, got: {stdout}"
+    );
+}
