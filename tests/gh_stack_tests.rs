@@ -1045,6 +1045,88 @@ fn stack_link_explains_forked_native_stack_reorder_conflict_instead_of_raw_gh_st
     );
 }
 
+/// A local stack that genuinely forks (one branch has two children, both
+/// included in this submit) must never even invoke `gh stack link` — the
+/// real-world failure mode isn't just gh-stack rejecting the request; it can
+/// also silently accept a linearized version of a forked branch set and
+/// misrepresent which branch each PR actually builds on. stax must detect
+/// the fork itself and skip proactively.
+#[tokio::test]
+async fn submit_skips_native_link_proactively_when_local_stack_has_forked() {
+    let mock_server = MockServer::start().await;
+
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_config(&home, &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+
+    let bottom_branches = repo.create_stack(&["fork-proactive-bottom"]);
+    let bottom = bottom_branches[0].clone();
+
+    repo.run_stax(&["bc", "fork-proactive-a"]);
+    repo.create_file("fork-proactive-a.txt", "a\n");
+    repo.commit("Commit for fork-proactive-a");
+    let fork_a = repo.current_branch();
+
+    repo.run_stax(&["checkout", &bottom]).assert_success();
+    repo.run_stax(&["bc", "fork-proactive-b"]);
+    repo.create_file("fork-proactive-b.txt", "b\n");
+    repo.commit("Commit for fork-proactive-b");
+    let fork_b = repo.current_branch();
+
+    repo.git(&["push", "-u", "origin", &bottom, &fork_a, &fork_b])
+        .assert_success();
+    write_branch_pr_metadata(&repo, &bottom, "main", 10);
+    write_branch_pr_metadata(&repo, &fork_a, &bottom, 20);
+    write_branch_pr_metadata(&repo, &fork_b, &bottom, 30);
+
+    mock_existing_pr(&mock_server, 10, &bottom, "main").await;
+    mock_existing_pr(&mock_server, 20, &fork_a, &bottom).await;
+    mock_existing_pr(&mock_server, 30, &fork_b, &bottom).await;
+
+    // Submitting from the shared bottom branch pulls both forks into scope.
+    repo.run_stax(&["checkout", &bottom]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.7"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack link")
+    printf '%s\n' "$@" >> "$GH_ARGS_FILE"
+    exit 0
+    ;;
+esac
+exit 1
+"#,
+    );
+    let args_file = fake.path().join("args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["submit", "--no-fetch", "--yes", "--no-prompt"],
+        &[
+            ("HOME", &home),
+            ("STAX_GITHUB_TOKEN", "test-token"),
+            ("PATH", &path),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    assert!(
+        !args_file.exists(),
+        "a genuinely forked local stack must never invoke `gh stack link`"
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("this local stack has forked"),
+        "expected a proactive fork note, stdout was:\n{stdout}"
+    );
+}
+
 #[tokio::test]
 async fn submit_auto_registers_native_stack_and_keeps_stax_links() {
     let mock_server = MockServer::start().await;
