@@ -1641,6 +1641,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         branch: plan.branch.clone(),
                         pr_number: Some(pr.number),
                         is_imported: plan.is_imported,
+                        depth: stack.ancestors(&plan.branch).len(),
                     });
                 } else {
                     // Toggle draft status even when no other update is needed
@@ -1717,6 +1718,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         branch: plan.branch.clone(),
                         pr_number: Some(existing_pr_number),
                         is_imported: plan.is_imported,
+                        depth: stack.ancestors(&plan.branch).len(),
                     });
                 }
             } else {
@@ -1777,6 +1779,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
                     is_imported: plan.is_imported,
+                    depth: stack.ancestors(&plan.branch).len(),
                 });
             }
         }
@@ -1809,6 +1812,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             &remote_info,
             &stack.trunk,
             native_stack_mode,
+            &stack,
             &stack_link_contexts,
             quiet,
         )?;
@@ -2097,11 +2101,16 @@ fn stack_pr_infos_for_links(
             let is_imported = processed_info
                 .map(|info| info.is_imported)
                 .unwrap_or_else(|| imported_branches.contains(&branch));
+            // Depth from trunk (not list position) so a forked stack's
+            // siblings render at the same indent instead of nesting under
+            // one another — see `generate_stack_links_markdown`.
+            let depth = stack.ancestors(&branch).len();
 
             StackPrInfo {
                 branch,
                 pr_number,
                 is_imported,
+                depth,
             }
         })
         .collect()
@@ -2133,6 +2142,7 @@ async fn discover_stack_link_pr_infos(
                 branch: info.branch,
                 pr_number: Some(pr.info.number),
                 is_imported: info.is_imported,
+                depth: info.depth,
             });
         }
     }
@@ -2182,11 +2192,40 @@ fn stack_link_contexts_for_sync(
         .collect()
 }
 
+/// True when `branches` doesn't form a single linear chain — i.e. some
+/// branch in the set has more than one child branch also in the set.
+///
+/// GitHub's native Stack feature can only represent one straight line, so
+/// handing `gh stack link` a forked branch set is unsafe: gh-stack sometimes
+/// rejects it outright (see `gh_stack::is_stack_fork_conflict`), but it can
+/// also silently *accept* it and linearize the PRs in whatever order it was
+/// given — misrepresenting which branch each PR actually builds on (e.g. a
+/// PR appearing to depend on a sibling instead of their shared parent).
+/// stax must detect this itself before ever invoking `gh stack link`, not
+/// rely on gh-stack to catch it.
+fn stack_has_fork(stack: &Stack, branches: &HashSet<&str>) -> bool {
+    branches.iter().any(|branch| {
+        stack
+            .branches
+            .get(*branch)
+            .map(|info| {
+                info.children
+                    .iter()
+                    .filter(|child| branches.contains(child.as_str()))
+                    .count()
+                    > 1
+            })
+            .unwrap_or(false)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn maybe_link_native_stack(
     workdir: &Path,
     remote_info: &RemoteInfo,
     trunk: &str,
     mode: NativeStackMode,
+    stack: &Stack,
     stack_link_contexts: &[(u64, String, Vec<StackPrInfo>)],
     quiet: bool,
 ) -> Result<bool> {
@@ -2214,6 +2253,25 @@ fn maybe_link_native_stack(
     }
 
     if gh_stack::extension_status() != ExtensionStatus::Installed {
+        return Ok(false);
+    }
+
+    let branch_set: HashSet<&str> = stack_link_contexts
+        .iter()
+        .map(|(_, branch, _)| branch.as_str())
+        .collect();
+    if stack_has_fork(stack, &branch_set) {
+        if !quiet {
+            println!(
+                "  {} {}",
+                "note:".dimmed(),
+                "native GitHub Stack link skipped: this local stack has forked — a branch \
+                 here has more than one child branch, and GitHub's native Stack feature only \
+                 supports one linear chain at a time. stax's own PR body/comment stack links \
+                 still keep this branch's PRs connected."
+                    .dimmed()
+            );
+        }
         return Ok(false);
     }
 
@@ -3231,7 +3289,7 @@ mod tests {
         StackPrInfo, build_ai_pr_details_prompt, existing_ai_prompt_items,
         existing_ai_targets_for_auto_accept, parse_ai_pr_details, push_failure_details,
         rejected_push_branches, resolve_ai_targets, resolve_is_draft_without_prompt,
-        stack_link_contexts_for_sync, stack_pr_infos_for_links, truncate_ai_diff,
+        stack_has_fork, stack_link_contexts_for_sync, stack_pr_infos_for_links, truncate_ai_diff,
     };
     use crate::engine::Stack;
     use crate::engine::stack::StackBranch;
@@ -3386,6 +3444,7 @@ mod tests {
                 branch: "middle".to_string(),
                 pr_number: Some(22),
                 is_imported: false,
+                depth: 0, // unused: this is a lookup-only input, not rendered
             }],
             &imported_branches,
         );
@@ -3401,6 +3460,94 @@ mod tests {
                 ("leaf", Some(30), false)
             ]
         );
+    }
+
+    /// A local stack that forks (two branches created off the same ancestor)
+    /// must render its siblings at the same depth in the Stack Links list,
+    /// not nested one under the other by list position — see real-world
+    /// report where `test-4` and `test-3-1` (both children of `test-3`)
+    /// rendered as `test-4 > test-3-1` instead of siblings.
+    #[test]
+    fn stack_pr_infos_for_links_gives_forked_siblings_equal_depth() {
+        let stack = Stack {
+            trunk: "main".to_string(),
+            branches: HashMap::from([
+                (
+                    "main".to_string(),
+                    StackBranch {
+                        name: "main".to_string(),
+                        parent: None,
+                        parent_revision: None,
+                        children: vec!["bottom".to_string()],
+                        needs_restack: false,
+                        pr_number: None,
+                        pr_state: None,
+                        pr_is_draft: None,
+                    },
+                ),
+                (
+                    "bottom".to_string(),
+                    StackBranch {
+                        name: "bottom".to_string(),
+                        parent: Some("main".to_string()),
+                        parent_revision: Some("main-sha".to_string()),
+                        children: vec!["fork-a".to_string(), "fork-b".to_string()],
+                        needs_restack: false,
+                        pr_number: Some(1),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "fork-a".to_string(),
+                    StackBranch {
+                        name: "fork-a".to_string(),
+                        parent: Some("bottom".to_string()),
+                        parent_revision: Some("bottom-sha".to_string()),
+                        children: vec![],
+                        needs_restack: false,
+                        pr_number: Some(2),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "fork-b".to_string(),
+                    StackBranch {
+                        name: "fork-b".to_string(),
+                        parent: Some("bottom".to_string()),
+                        parent_revision: Some("bottom-sha".to_string()),
+                        children: vec![],
+                        needs_restack: false,
+                        pr_number: Some(3),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+            ]),
+        };
+
+        let infos = stack_pr_infos_for_links(&stack, "bottom", &[], &HashSet::new());
+        let depths: HashMap<&str, usize> = infos
+            .iter()
+            .map(|info| (info.branch.as_str(), info.depth))
+            .collect();
+
+        assert_eq!(depths["bottom"], 1);
+        assert_eq!(
+            depths["fork-a"], depths["fork-b"],
+            "sibling branches sharing a parent must render at the same depth"
+        );
+        assert_eq!(depths["fork-a"], 2);
+
+        // The same tree must be flagged as a fork so native-stack linking
+        // proactively skips it instead of handing gh-stack a linearized list.
+        let all_branches: HashSet<&str> = HashSet::from(["bottom", "fork-a", "fork-b"]);
+        assert!(stack_has_fork(&stack, &all_branches));
+
+        // A linear subset (no sibling pair both present) is not a fork.
+        let linear_subset: HashSet<&str> = HashSet::from(["bottom", "fork-a"]);
+        assert!(!stack_has_fork(&stack, &linear_subset));
     }
 
     #[test]

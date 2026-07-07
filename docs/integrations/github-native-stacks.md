@@ -76,6 +76,12 @@ stax treats this as non-fatal wherever it would otherwise just be re-affirming o
 
 Where a base change to trunk is a hard precondition — merging a single PR out of stack order with `st merge --stack` or `st merge --queue` — stax fails with a clear message instead, since proceeding without the real base would merge into the wrong target. Run `st stack unlink` first if you need to do that.
 
+## Forked stacks aren't supported
+
+GitHub's native Stack feature can only represent a single straight line of PRs. If a branch in your local stack has two or more children (e.g. `test-3` has both `test-4` and `test-3-1` branching off it), stax detects that fork itself and skips native registration for that submit, printing a `note:` instead — it never hands `gh stack link` a branch set that doesn't form a real linear chain. This matters because gh-stack doesn't reliably reject forked input: it sometimes does (surfacing as a `409`/`422` from GitHub), but it can also silently accept it and linearize the PRs in whatever order it was given, which would misrepresent which branch each PR actually builds on.
+
+stax's own PR body/comment stack links (see [`stack_links`](../configuration/index.md)) have no such limitation and continue to render forked stacks correctly, with sibling branches indented at the same depth. Run `st stack unlink` on one side of the fork if you need that side registered as its own native stack.
+
 ## Manual commands
 
 ```bash

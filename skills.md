@@ -230,6 +230,12 @@ stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment l
 # `stax merge --stack`/`--queue` fail with an actionable message instead,
 # since merging out of stack order needs a real base change (run
 # `stax stack unlink` first if that's what you want).
+# GitHub's native Stack feature only supports one linear chain — if a branch
+# in the local stack has two+ children (a fork), stax detects this itself
+# and skips native `gh stack link` for that submit (prints a note) rather
+# than handing gh-stack a branch set it might silently mis-linearize.
+# stax's own body/comment stack links have no such limit and render forked
+# siblings at equal depth.
 
 stax branch submit                 # Submit current branch only
 stax bs                            # Hidden shortcut alias for branch submit

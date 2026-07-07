@@ -1459,6 +1459,13 @@ pub struct StackPrInfo {
     pub branch: String,
     pub pr_number: Option<u64>,
     pub is_imported: bool,
+    /// 1-based distance from trunk (number of ancestors, trunk included).
+    /// Used to indent this entry in the rendered Stack Links list — siblings
+    /// sharing a parent (a forked local stack) get the same depth instead of
+    /// being nested under one another by list position. Callers that only
+    /// use a `StackPrInfo` as a branch/PR-number lookup key (not for
+    /// rendering) may pass `0`.
+    pub depth: usize,
 }
 
 fn stack_links_intro(prs: &[StackPrInfo], current_index: Option<usize>, mr_label: &str) -> String {
@@ -1533,8 +1540,9 @@ pub fn generate_stack_links_markdown(
             None => format!("`{}`{}", pr_info.branch, pointer),
         };
 
-        // Indent based on position in stack (2 spaces per level)
-        let indent = "  ".repeat(i + 1);
+        // Indent based on actual depth from trunk (2 spaces per level), not
+        // list position — a forked stack has siblings at the same depth.
+        let indent = "  ".repeat(pr_info.depth.max(1));
         lines.push(format!("{}* {}", indent, pr_text));
     }
 
@@ -1974,6 +1982,7 @@ mod tests {
             branch: "feature".to_string(),
             pr_number: Some(1),
             is_imported: false,
+            depth: 1,
         }];
 
         let comment = generate_stack_comment(&prs, 1, &remote, "main");
@@ -2004,16 +2013,19 @@ mod tests {
                 branch: "feature-a".to_string(),
                 pr_number: Some(1),
                 is_imported: false,
+                depth: 1,
             },
             StackPrInfo {
                 branch: "feature-b".to_string(),
                 pr_number: Some(2),
                 is_imported: false,
+                depth: 2,
             },
             StackPrInfo {
                 branch: "feature-c".to_string(),
                 pr_number: Some(3),
                 is_imported: false,
+                depth: 3,
             },
         ];
 
@@ -2045,16 +2057,19 @@ mod tests {
                 branch: "imported-base".to_string(),
                 pr_number: Some(10),
                 is_imported: true,
+                depth: 1,
             },
             StackPrInfo {
                 branch: "local-middle".to_string(),
                 pr_number: Some(20),
                 is_imported: false,
+                depth: 2,
             },
             StackPrInfo {
                 branch: "local-tip".to_string(),
                 pr_number: Some(30),
                 is_imported: false,
+                depth: 3,
             },
         ];
 
@@ -2085,6 +2100,51 @@ mod tests {
         assert!(!tip_comment.contains("current local branch"));
     }
 
+    /// Siblings that share a parent (a forked local stack) must render at
+    /// the same indent, not nested one under the other — depth comes from
+    /// each entry's actual position in the branch tree, not its position in
+    /// the list.
+    #[test]
+    fn test_generate_stack_comment_renders_forked_siblings_at_equal_depth() {
+        let remote = crate::remote::RemoteInfo {
+            name: "origin".to_string(),
+            forge: crate::remote::ForgeType::GitHub,
+            host: "github.com".to_string(),
+            namespace: "user".to_string(),
+            repo: "repo".to_string(),
+            base_url: "https://github.com".to_string(),
+            api_base_url: Some("https://api.github.com".to_string()),
+        };
+
+        let prs = vec![
+            StackPrInfo {
+                branch: "bottom".to_string(),
+                pr_number: Some(1),
+                is_imported: false,
+                depth: 1,
+            },
+            StackPrInfo {
+                branch: "fork-a".to_string(),
+                pr_number: Some(2),
+                is_imported: false,
+                depth: 2,
+            },
+            StackPrInfo {
+                branch: "fork-b".to_string(),
+                pr_number: Some(3),
+                is_imported: false,
+                depth: 2,
+            },
+        ];
+
+        let comment = generate_stack_comment(&prs, 1, &remote, "main");
+
+        assert!(
+            comment.contains("  * **PR #1** 👈\n    * **PR #2**\n    * **PR #3**"),
+            "fork-a and fork-b share a parent and must be indented equally, got:\n{comment}"
+        );
+    }
+
     #[test]
     fn test_generate_stack_comment_without_pr() {
         let remote = crate::remote::RemoteInfo {
@@ -2102,11 +2162,13 @@ mod tests {
                 branch: "feature-a".to_string(),
                 pr_number: Some(1),
                 is_imported: false,
+                depth: 1,
             },
             StackPrInfo {
                 branch: "feature-b".to_string(),
                 pr_number: None, // No PR yet
                 is_imported: true,
+                depth: 2,
             },
         ];
 
@@ -2134,11 +2196,13 @@ mod tests {
                 branch: "feature-a".to_string(),
                 pr_number: Some(10),
                 is_imported: false,
+                depth: 1,
             },
             StackPrInfo {
                 branch: "feature-b".to_string(),
                 pr_number: Some(11),
                 is_imported: false,
+                depth: 2,
             },
         ];
 
@@ -2169,6 +2233,7 @@ mod tests {
             branch: "feature".to_string(),
             pr_number: Some(5),
             is_imported: false,
+            depth: 1,
         }];
 
         let comment = generate_stack_comment(&prs, 5, &remote, "main");
@@ -2194,6 +2259,7 @@ mod tests {
             branch: "feature".to_string(),
             pr_number: Some(42),
             is_imported: false,
+            depth: 1,
         }];
 
         let comment = generate_stack_comment(&prs, 42, &remote, "main");
@@ -2280,6 +2346,7 @@ mod tests {
             branch: "feature".to_string(),
             pr_number: Some(42),
             is_imported: false,
+            depth: 1,
         };
         let cloned = info.clone();
         assert_eq!(cloned.branch, "feature");
