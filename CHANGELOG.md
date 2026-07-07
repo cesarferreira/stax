@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.94.0] - 2026-07-07
+
+### 🚀 Features
+
+- Native GitHub Stacked PR integration ([#565](https://github.com/cesarferreira/stax/issues/565))
+
+### 🐛 Bug Fixes
+
+- Render forked stack siblings at equal depth in Stack Links ([#587](https://github.com/cesarferreira/stax/issues/587))
 ## [0.93.1] - 2026-07-07
 
 ### 🐛 Bug Fixes
