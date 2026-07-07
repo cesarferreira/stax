@@ -1,4 +1,4 @@
-<!-- stax-skills-version: 0.93.0 -->
+<!-- stax-skills-version: 0.93.1 -->
 # Stax Skills for AI Coding Agents
 
 This document teaches AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode) how to use `stax` to manage stacked Git branches and PRs.

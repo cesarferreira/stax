@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.93.1] - 2026-07-07
+
+### 🐛 Bug Fixes
+
+- Persist TUI pane visibility ([#585](https://github.com/cesarferreira/stax/issues/585))
+
+### 🚜 Refactor
+
+- Remove tracked file count helper ([#581](https://github.com/cesarferreira/stax/issues/581))
 ## [0.93.0] - 2026-07-06
 
 ### 🚀 Features
