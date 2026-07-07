@@ -189,6 +189,47 @@ impl TuiDiffCache {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct TuiPaneVisibilityState {
+    pub stack: bool,
+    pub summary: bool,
+    pub patch: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct TuiStateCache {
+    #[serde(default)]
+    pub panes: Option<TuiPaneVisibilityState>,
+}
+
+impl TuiStateCache {
+    fn cache_path(git_dir: &std::path::Path) -> PathBuf {
+        git_dir.join("stax").join("tui-state.json")
+    }
+
+    pub fn load(git_dir: &std::path::Path) -> Self {
+        let path = Self::cache_path(git_dir);
+        if !path.exists() {
+            return Self::default();
+        }
+
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, git_dir: &std::path::Path) -> Result<()> {
+        let path = Self::cache_path(git_dir);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(&path, json)?;
+        Ok(())
+    }
+}
+
 /// Cache for ahead/behind commit counts, keyed by (base_sha:head_sha).
 ///
 /// The key encodes the current tip OIDs of both refs, so the cache
