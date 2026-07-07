@@ -27,14 +27,17 @@ cargo run -- <command>
 
 ## Running Tests
 
-The test suite is process/filesystem heavy (spawns `git` and `stax` subprocesses). On macOS, running tests inside Docker is significantly faster.
+The test suite is process/filesystem heavy (spawns `git` and `stax` subprocesses). `make test` uses Docker on macOS when available; otherwise it runs native nextest with the optimized test profile, sanitized token env, disabled update checks, and a repo-local temp directory.
 
 ```bash
 # Full test suite (preferred — uses Docker on macOS when available)
 make test
 
-# Full suite natively (slower on macOS)
+# Full suite natively through the same optimized local path
 make test-native
+
+# Explicit optimized local nextest path used by native full-suite runs
+make test-local-fast
 
 # Rebuild the pre-baked Linux test image (after Dockerfile changes)
 make test-image

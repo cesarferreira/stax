@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.93.0] - 2026-07-06
+
+### 🚀 Features
+
+- *(worktree)* Auto-seed dependencies into new worktrees ([#570](https://github.com/cesarferreira/stax/issues/570))
+
+### 🐛 Bug Fixes
+
+- Let GitHub mark downstack stack PRs merged ([#574](https://github.com/cesarferreira/stax/issues/574))
+- Fail closed on release build failures ([#576](https://github.com/cesarferreira/stax/issues/576))
+- Speed up native full-test path ([#578](https://github.com/cesarferreira/stax/issues/578))
+
+### 💼 Other
+
+- Add native GitHub Stacked PR integration ([#564](https://github.com/cesarferreira/stax/issues/564))
+- Revert "Add native GitHub Stacked PR integration ([#564](https://github.com/cesarferreira/stax/issues/564))" ([#566](https://github.com/cesarferreira/stax/issues/566))
+- Increase GitHub Pages deploy timeout to handle queued deployments ([#569](https://github.com/cesarferreira/stax/issues/569))
+- Fix full stack temporary submit restacks ([#572](https://github.com/cesarferreira/stax/issues/572))
+
+### 📚 Documentation
+
+- Remove nonexistent task install path ([#575](https://github.com/cesarferreira/stax/issues/575))
+- Document merge when-ready queue conflict ([#580](https://github.com/cesarferreira/stax/issues/580))
+- Cover visible commands in reference ([#582](https://github.com/cesarferreira/stax/issues/582))
+
+### 🧪 Testing
+
+- Cover copy pr clipboard fallback ([#577](https://github.com/cesarferreira/stax/issues/577))
 ## [0.92.0] - 2026-07-02
 
 ### 🐛 Bug Fixes

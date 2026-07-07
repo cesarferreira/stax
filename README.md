@@ -234,7 +234,7 @@ st redo
   <img alt="stax TUI" src="assets/tui.png" width="760">
 </p>
 
-Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summaries and cached patches, watching live CI hydrate, and running common ops without leaving the terminal.
+Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summaries and cached patches, watching live CI hydrate, and running common ops without leaving the terminal. Stack/Summary/Patch pane visibility is remembered per repo.
 
 → [TUI guide](docs/interface/tui.md)
 
@@ -399,6 +399,8 @@ Before opening a PR, run:
 ```bash
 make test
 ```
+
+On macOS this uses Docker when available. On Linux and other native paths it runs nextest with the optimized test profile and sanitized test environment.
 
 To cut a release, run:
 

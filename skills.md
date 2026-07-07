@@ -1,4 +1,4 @@
-<!-- stax-skills-version: 0.92.0 -->
+<!-- stax-skills-version: 0.93.0 -->
 # Stax Skills for AI Coding Agents
 
 This document teaches AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode) how to use `stax` to manage stacked Git branches and PRs.
@@ -621,7 +621,7 @@ Symbols:
 
 ## Tips
 
-- Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, unchanged branch diffs can be reused from the repo-local TUI cache on reopen, and `1`/`2`/`3` toggle the Stack/Summary/Patch panes for small terminals.
+- Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, unchanged branch diffs can be reused from the repo-local TUI cache on reopen, and `1`/`2`/`3` toggle the Stack/Summary/Patch panes for small terminals. Pane visibility is remembered per repo.
 - Use `stax --help` or `stax <command> --help` for exact flags.
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.
 - Use `--yes` for non-interactive scripting.

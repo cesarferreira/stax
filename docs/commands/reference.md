@@ -28,11 +28,12 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 | `st cascade` | | Restack from bottom and submit updates |
 | `st diff` | | Show per-branch diffs vs parent |
 | `st range-diff` | | Show range-diff for branches needing restack |
+| `st stack` | `s` | Stack command namespace for `submit` and `restack` (`st stack submit`, `st stack restack`) |
 
 ### `st merge` variants
 
 - `st merge` — local cascade merge with provenance-aware descendant rebases, then `st rs --force` unless `--no-sync`
-- `st merge --when-ready` — wait for CI + approvals + mergeability; incompatible with `--dry-run`, `--no-wait`, `--remote`
+- `st merge --when-ready` — wait for CI + approvals + mergeability; incompatible with `--dry-run`, `--no-wait`, `--remote`, and `--queue`
 - `st merge --downstack-only` / `--ds` — merge ancestors below the current branch, then rebase the current branch onto trunk; composes with `--stack`, and is incompatible with `--all`, `--full`, `--remote`, and `--queue`
 - `st merge --stack` — GitHub-only fast-forward stack merge: validate the selected tip PR once, retarget it to trunk, merge only that PR, wait briefly for selected downstack PRs to become merged in GitHub, and rebase/retarget remaining descendants; defaults to `--method rebase`
 - `st merge --stack --full` — include descendants above the current branch and land the full stack through the actual stack tip
@@ -63,6 +64,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st get [branch|PR]` | | Sync current stack, or fetch, sync/create, checkout, and track a remote branch/PR |
 | `st modify` | `m` | Amend staged changes into current commit (`-a` stages all, `-r` restacks after) |
 | `st rename` | | Rename current branch |
+| `st move [target]` | `mv` | Move the current branch and descendants onto a new parent (`st upstack onto` parity alias; picker when omitted) |
 | `st branch track` | | Track an existing branch |
 | `st branch track --all-prs` | | Track all open PRs (GitHub, GitLab, Gitea) |
 | `st branch untrack` | `ut` | Remove stax metadata |
@@ -128,6 +130,8 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
 | `st pr list --ready` | Open live PR readiness for all tracked branch PRs, newest changed PR first (`--current`/`--stack` limits to the current stack, `--plain` prints a table) |
 | `st ready` | Short alias for `st pr list --ready` (`--current`, `--stack`, `--all`, `--plain`, `--json`) |
+| `st draft [branch]` | Mark the current or named branch's PR as a draft |
+| `st undraft [branch]` | Mark the current or named branch's PR as ready for review |
 | `st issue list` | List open issues |
 | `st comments` | Show PR comments |
 | `st copy` · `st copy --pr` | Copy branch name · PR URL |
@@ -137,6 +141,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st changelog --find [query]` | Flag form of commit fuzzy-find |
 | `st generate` · `st gen` | AI generation: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
 | `st ss --ai` | Submit with AI-generated PR title/body suggestions |
+| `st watch` | Live auto-refreshing stack status with CI and PR state (`--current`, `--interval <seconds>`) |
 
 ## Utilities
 
@@ -150,9 +155,17 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st cli upgrade` | Detect install method and run the matching upgrade |
 | `st doctor` | Check repo health |
 | `st doctor --fix` | Apply safe local repairs after one confirmation (recommended Git config and stale AI skills) |
+| `st skills` | Manage installed AI agent skill files (`list`, `update`, `update --dry-run`) |
 | `st continue` | Continue after conflicts |
 | `st open` | Open repository in browser |
 | `st demo` | Interactive tutorial — no auth or repo required |
+
+### `st tmux`
+
+| Command | Description |
+|---|---|
+| `st tmux status` | Print a compact tmux-formatted status string for `status-right` |
+| `st tmux popup` | Open `stax watch --current` in a tmux display-popup |
 
 ## Worktrees
 

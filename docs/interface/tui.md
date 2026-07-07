@@ -13,11 +13,11 @@ stax
 - Full-height stack tree with PR status, sync indicators, and ahead/behind counts
 - Selected-branch summary with recommended next actions and live CI progress
 - Patch viewer with a compact diffstat header and scrollable body
-- Runtime pane toggles for small terminals (`1` Stack, `2` Summary, `3` Patch)
+- Runtime pane toggles for small terminals (`1` Stack, `2` Summary, `3` Patch), remembered per repo
 - Keyboard-driven checkout, restack, submit, create, rename, delete
 - Reorder mode for reparenting branches
 
-The dashboard renders immediately from local stack data, then fetches live CI for the selected branch in the background. Diffs are loaded lazily and cached under the repo's common `.git/stax` directory, so reopening the TUI can show unchanged branch patches immediately. While checks are running, the stack row shows a completed/total counter and the summary pane expands with pass/fail/running counts plus elapsed/ETA.
+The dashboard renders immediately from local stack data, then fetches live CI for the selected branch in the background. Diffs are loaded lazily and cached under the repo's common `.git/stax` directory, so reopening the TUI can show unchanged branch patches immediately. Pane visibility is also saved there, so `1`/`2`/`3` layouts stick across launches. While checks are running, the stack row shows a completed/total counter and the summary pane expands with pass/fail/running counts plus elapsed/ETA.
 
 The main `st` TUI is focused on stacks and patches. Worktree management lives in the dedicated [`st wt` dashboard](../worktrees/index.md#dashboard).
 
