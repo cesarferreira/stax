@@ -939,6 +939,112 @@ fn stack_link_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_dump
     );
 }
 
+/// The fake `gh stack link` response gh-stack gives when it doesn't detect a
+/// forked stack up front and instead attempts to reorder PRs to fit its
+/// assumed linear chain, which fails once it hits a branch it can't
+/// reparent — a real-world variant of the same forked-stack limitation as
+/// `FORK_CONFLICT_GH_STACK_SCRIPT` above, but with different wording.
+const FORK_CONFLICT_REORDER_GH_STACK_SCRIPT: &str = r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.7"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack link")
+    {
+      echo "Looking up PRs for 2 branches..."
+      echo "Checking existing stacks..."
+      echo "failed to update base branch for PR #999 to fork-conflict-reorder-top: HTTP 422: Validation Failed"
+      echo "PullRequest.base is invalid"
+      echo "Failed to update stack (HTTP 409): Stack contents have changed"
+    } >&2
+    exit 1
+    ;;
+esac
+exit 1
+"#;
+
+#[tokio::test]
+async fn submit_explains_forked_native_stack_reorder_conflict_instead_of_raw_gh_stack_dump() {
+    let mock_server = MockServer::start().await;
+
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_config(&home, &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+    let branches =
+        repo.create_stack(&["fork-conflict-reorder-bottom", "fork-conflict-reorder-top"]);
+    repo.git(&["push", "-u", "origin", &branches[0], &branches[1]])
+        .assert_success();
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    mock_existing_pr(&mock_server, 10, &branches[0], "main").await;
+    mock_existing_pr(&mock_server, 20, &branches[1], &branches[0]).await;
+
+    let fake = fake_gh_dir(FORK_CONFLICT_REORDER_GH_STACK_SCRIPT);
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["submit", "--no-fetch", "--yes", "--no-prompt"],
+        &[
+            ("HOME", &home),
+            ("STAX_GITHUB_TOKEN", "test-token"),
+            ("PATH", &path),
+        ],
+    );
+
+    output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("this stack has forked"),
+        "expected a plain-language fork-conflict note, stdout was:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("PullRequest.base is invalid"),
+        "the raw multi-line gh-stack dump should not leak to the user, stdout was:\n{stdout}"
+    );
+
+    let feature_cache = repo.git(&["config", "--get", "stax.nativeStack.enabled"]);
+    assert!(
+        !feature_cache.status.success(),
+        "a forked-stack reorder conflict must not be cached as feature-disabled, but got: {}",
+        TestRepo::stdout(&feature_cache)
+    );
+}
+
+#[test]
+fn stack_link_explains_forked_native_stack_reorder_conflict_instead_of_raw_gh_stack_dump() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+    let branches = repo.create_stack(&[
+        "fork-conflict-reorder-link-a",
+        "fork-conflict-reorder-link-b",
+    ]);
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    let fake = fake_gh_dir(FORK_CONFLICT_REORDER_GH_STACK_SCRIPT);
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(&["stack", "link"], &[("HOME", &home), ("PATH", &path)]);
+
+    assert!(
+        !output.status.success(),
+        "linking a forked stack should fail"
+    );
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("shares ancestor PRs") && stderr.contains("stax stack unlink"),
+        "expected a plain-language fork-conflict explanation with unlink guidance, stderr was:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Stack contents have changed"),
+        "the underlying gh-stack detail should still be included for debugging, stderr was:\n{stderr}"
+    );
+}
+
 #[tokio::test]
 async fn submit_auto_registers_native_stack_and_keeps_stax_links() {
     let mock_server = MockServer::start().await;

@@ -371,12 +371,19 @@ fn auth_token_unsupported_output(output: &Output) -> bool {
 /// linear — a PR can only anchor one native-stack "tip" at a time — so this
 /// fires whenever a *local* stack forks (two branches created off the same
 /// ancestor branch each try to register their own native Stack). gh-stack
-/// reports this as e.g. `"Cannot update stack: this would remove #123 from
-/// the stack"`, which stax surfaces as a plain-language note instead of the
-/// raw multi-line CLI dump.
+/// surfaces this in a couple of different shapes depending on whether it
+/// detects the conflict up front or only after attempting a reorder:
+///   - `"Cannot update stack: this would remove #123 from the stack"`
+///   - `"Failed to update stack (HTTP 409): Stack contents have changed"`
+///     (seen alongside a `422 PullRequest.base is invalid` on the branch
+///     gh-stack tried to reparent to fit its assumed linear order)
+///
+/// Both are surfaced as the same plain-language note instead of the raw
+/// multi-line CLI dump.
 pub(crate) fn is_stack_fork_conflict(message: &str) -> bool {
     let lower = message.to_lowercase();
-    lower.contains("would remove") && lower.contains("from the stack")
+    (lower.contains("would remove") && lower.contains("from the stack"))
+        || lower.contains("stack contents have changed")
 }
 
 fn single_pr_validation_output(pr_numbers: &[u64], output: &Output) -> bool {
