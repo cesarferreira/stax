@@ -1641,6 +1641,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         branch: plan.branch.clone(),
                         pr_number: Some(pr.number),
                         is_imported: plan.is_imported,
+                        depth: stack.ancestors(&plan.branch).len(),
                     });
                 } else {
                     // Toggle draft status even when no other update is needed
@@ -1717,6 +1718,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         branch: plan.branch.clone(),
                         pr_number: Some(existing_pr_number),
                         is_imported: plan.is_imported,
+                        depth: stack.ancestors(&plan.branch).len(),
                     });
                 }
             } else {
@@ -1777,6 +1779,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     branch: plan.branch.clone(),
                     pr_number: Some(pr.number),
                     is_imported: plan.is_imported,
+                    depth: stack.ancestors(&plan.branch).len(),
                 });
             }
         }
@@ -2097,11 +2100,16 @@ fn stack_pr_infos_for_links(
             let is_imported = processed_info
                 .map(|info| info.is_imported)
                 .unwrap_or_else(|| imported_branches.contains(&branch));
+            // Depth from trunk (not list position) so a forked stack's
+            // siblings render at the same indent instead of nesting under
+            // one another — see `generate_stack_links_markdown`.
+            let depth = stack.ancestors(&branch).len();
 
             StackPrInfo {
                 branch,
                 pr_number,
                 is_imported,
+                depth,
             }
         })
         .collect()
@@ -2133,6 +2141,7 @@ async fn discover_stack_link_pr_infos(
                 branch: info.branch,
                 pr_number: Some(pr.info.number),
                 is_imported: info.is_imported,
+                depth: info.depth,
             });
         }
     }
@@ -3386,6 +3395,7 @@ mod tests {
                 branch: "middle".to_string(),
                 pr_number: Some(22),
                 is_imported: false,
+                depth: 0, // unused: this is a lookup-only input, not rendered
             }],
             &imported_branches,
         );
@@ -3401,6 +3411,85 @@ mod tests {
                 ("leaf", Some(30), false)
             ]
         );
+    }
+
+    /// A local stack that forks (two branches created off the same ancestor)
+    /// must render its siblings at the same depth in the Stack Links list,
+    /// not nested one under the other by list position — see real-world
+    /// report where `test-4` and `test-3-1` (both children of `test-3`)
+    /// rendered as `test-4 > test-3-1` instead of siblings.
+    #[test]
+    fn stack_pr_infos_for_links_gives_forked_siblings_equal_depth() {
+        let stack = Stack {
+            trunk: "main".to_string(),
+            branches: HashMap::from([
+                (
+                    "main".to_string(),
+                    StackBranch {
+                        name: "main".to_string(),
+                        parent: None,
+                        parent_revision: None,
+                        children: vec!["bottom".to_string()],
+                        needs_restack: false,
+                        pr_number: None,
+                        pr_state: None,
+                        pr_is_draft: None,
+                    },
+                ),
+                (
+                    "bottom".to_string(),
+                    StackBranch {
+                        name: "bottom".to_string(),
+                        parent: Some("main".to_string()),
+                        parent_revision: Some("main-sha".to_string()),
+                        children: vec!["fork-a".to_string(), "fork-b".to_string()],
+                        needs_restack: false,
+                        pr_number: Some(1),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "fork-a".to_string(),
+                    StackBranch {
+                        name: "fork-a".to_string(),
+                        parent: Some("bottom".to_string()),
+                        parent_revision: Some("bottom-sha".to_string()),
+                        children: vec![],
+                        needs_restack: false,
+                        pr_number: Some(2),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+                (
+                    "fork-b".to_string(),
+                    StackBranch {
+                        name: "fork-b".to_string(),
+                        parent: Some("bottom".to_string()),
+                        parent_revision: Some("bottom-sha".to_string()),
+                        children: vec![],
+                        needs_restack: false,
+                        pr_number: Some(3),
+                        pr_state: Some("OPEN".to_string()),
+                        pr_is_draft: Some(false),
+                    },
+                ),
+            ]),
+        };
+
+        let infos = stack_pr_infos_for_links(&stack, "bottom", &[], &HashSet::new());
+        let depths: HashMap<&str, usize> = infos
+            .iter()
+            .map(|info| (info.branch.as_str(), info.depth))
+            .collect();
+
+        assert_eq!(depths["bottom"], 1);
+        assert_eq!(
+            depths["fork-a"], depths["fork-b"],
+            "sibling branches sharing a parent must render at the same depth"
+        );
+        assert_eq!(depths["fork-a"], 2);
     }
 
     #[test]
