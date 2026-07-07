@@ -24,6 +24,8 @@ stax ll                        # Stack status with PR URLs/details
 stax log|l                     # Stack status with commits + PR info
 
 stax submit|ss                 # Submit full stack
+stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
+stax stack unlink              # Remove native GitHub Stack object
 stax merge                     # Merge PRs from stack bottom upward
 stax sync|rs                   # Sync trunk + clean merged branches
 stax sweep                     # Classify + optionally delete merged/gone/stale branches
@@ -206,11 +208,28 @@ stax submit --ai --title           # Generate/update PR title only
 stax submit --ai --body            # Generate/update PR body only
 stax submit --ai --yes             # Accept generated new-PR details
 stax submit --rerequest-review     # Re-request existing reviewers on update
+stax submit --native-stack         # Force-attempt native GitHub Stack registration for this run
+stax submit --no-native-stack      # Skip native GitHub Stack registration for this run
 
 # ~/.config/stax/config.toml; repo-root stax.toml overlays shared values
 [submit]
 stack_links = "body"               # "comment" | "body" | "both" | "off"
 single_stack = "on"                # "on" | "off" — when "off", skip stack-link sync while only one PR exists; populates on all PRs as soon as the stack reaches 2
+native_stack = "auto"              # "auto" | "off" | "link" — auto-register native GitHub Stacked PRs when gh-stack + repo access are available
+stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment links when native registration succeeds
+
+# Native GitHub Stacked PRs are additive. Repos/users without access or without
+# `github/gh-stack` installed behave exactly as normal stax. `stax doctor --fix`
+# can offer `gh extension install github/gh-stack` when `gh` is installed.
+# Native Stacked PRs (private preview) reject Personal Access Tokens — stax
+# strips GH_TOKEN/GITHUB_TOKEN before calling `gh stack`, but you still need
+# an OAuth-authenticated `gh` account (`gh auth login`) to exist at all.
+# Once linked, GitHub owns base-branch transitions for those PRs and rejects
+# any PATCH touching `base` ("...part of a stack"). stax treats this as
+# non-fatal in submit/merge cascade retargets (prints a note, continues);
+# `stax merge --stack`/`--queue` fail with an actionable message instead,
+# since merging out of stack order needs a real base change (run
+# `stax stack unlink` first if that's what you want).
 
 stax branch submit                 # Submit current branch only
 stax bs                            # Hidden shortcut alias for branch submit

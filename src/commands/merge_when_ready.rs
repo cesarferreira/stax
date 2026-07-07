@@ -1,7 +1,7 @@
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
 use crate::commands::merge::{
-    PrBaseUpdate, rebase_and_finalize_remaining_branch, sync_head_after_push,
-    update_pr_base_unless_current,
+    PrBaseUpdate, print_native_stack_locked_note, rebase_and_finalize_remaining_branch,
+    sync_head_after_push, update_pr_base_unless_current,
 };
 use crate::commands::merge_rebase::{
     fetch_remote_for_descendant_rebase, rebase_descendant_onto_remote_trunk_with_provenance,
@@ -344,6 +344,10 @@ pub fn run(
                     }
                     Ok(PrBaseUpdate::AlreadyTargeted) => {
                         LiveTimer::maybe_finish_ok(update_base_timer, "already on base");
+                    }
+                    Ok(PrBaseUpdate::NativeStackLocked) => {
+                        LiveTimer::maybe_finish_warn(update_base_timer, "skipped (native Stack)");
+                        print_native_stack_locked_note(quiet, next_branch.pr_number);
                     }
                     Err(e) => {
                         LiveTimer::maybe_finish_err(update_base_timer, "failed");

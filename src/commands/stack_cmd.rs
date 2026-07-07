@@ -1,8 +1,11 @@
 use crate::commands::worktree::shared::platform_shell;
+use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::{GitRepo, refs};
+use crate::github::gh_stack::{self, ExtensionStatus, LinkOutcome};
 use crate::ops::receipt::OpKind;
 use crate::ops::tx::Transaction;
+use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::Result;
 use colored::Colorize;
 use git2::BranchType;
@@ -12,6 +15,168 @@ use std::io::{self, Write};
 // =========================================================================
 // validate
 // =========================================================================
+
+pub fn run_link() -> Result<()> {
+    let repo = GitRepo::open()?;
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(&repo, &config)?;
+    if remote_info.forge != ForgeType::GitHub {
+        anyhow::bail!(
+            "`stax stack link` is only supported for GitHub remotes (found {})",
+            remote_info.forge
+        );
+    }
+    ensure_gh_stack_extension()?;
+
+    let stack = Stack::load(&repo)?;
+    let current = repo.current_branch()?;
+    let pr_numbers = current_stack_pr_numbers(&stack, &current)?;
+    // `gh stack link` requires at least two PRs — a native stack is inherently
+    // multi-PR. Fail early with a clear message instead of surfacing gh-stack's
+    // raw "requires at least 2 arg(s)" error.
+    if pr_numbers.len() < 2 {
+        anyhow::bail!(
+            "Native GitHub Stacks require at least 2 PRs in the current stack (found {}). \
+             Submit another branch in this stack, then run `stax stack link` again.",
+            pr_numbers.len()
+        );
+    }
+
+    match gh_stack::link_stack(&pr_numbers, &stack.trunk, &remote_info.name) {
+        LinkOutcome::Linked => {
+            gh_stack::set_feature_enabled(repo.workdir()?, true)?;
+            println!(
+                "{} {}",
+                "✓".green(),
+                format!("Linked {} PRs as a native GitHub Stack", pr_numbers.len()).dimmed()
+            );
+            Ok(())
+        }
+        LinkOutcome::FeatureDisabled { message } => {
+            gh_stack::set_feature_enabled(repo.workdir()?, false)?;
+            anyhow::bail!("GitHub native Stacked PRs are not enabled for this repo: {message}");
+        }
+        LinkOutcome::AuthTokenUnsupported { message } => {
+            anyhow::bail!(
+                "GitHub rejected the native Stack link: {message}\n\n\
+                 stax already ignores GH_TOKEN/GITHUB_TOKEN when talking to `gh stack`, but no \
+                 OAuth-authenticated `gh` account was found. Run `gh auth login` (or `gh auth \
+                 switch` if you already have one) to add an OAuth-authenticated account, then \
+                 retry."
+            );
+        }
+        LinkOutcome::SinglePrValidationRejected { message } => {
+            anyhow::bail!("GitHub rejected the native Stack link: {message}");
+        }
+        LinkOutcome::Failed { message } => {
+            if gh_stack::is_stack_fork_conflict(&message) {
+                anyhow::bail!(
+                    "Cannot link this stack natively: it shares ancestor PRs with another \
+                     branch that's already registered as a native GitHub Stack. GitHub's native \
+                     Stack feature only supports one linear chain at a time — unlink the other \
+                     branch's stack first (run `stax stack unlink` from that branch, or remove \
+                     the stack from the GitHub PR UI) if you want this one linked instead.\n\n\
+                     gh-stack said: {message}"
+                );
+            }
+            anyhow::bail!("Failed to link native GitHub Stack: {message}");
+        }
+    }
+}
+
+pub fn run_unlink() -> Result<()> {
+    let repo = GitRepo::open()?;
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(&repo, &config)?;
+    if remote_info.forge != ForgeType::GitHub {
+        anyhow::bail!(
+            "`stax stack unlink` is only supported for GitHub remotes (found {})",
+            remote_info.forge
+        );
+    }
+    ensure_gh_stack_extension()?;
+
+    match gh_stack::unlink_stack() {
+        LinkOutcome::Linked => {
+            println!("{}", "✓ Native GitHub Stack removed".green());
+            Ok(())
+        }
+        LinkOutcome::FeatureDisabled { message } => {
+            anyhow::bail!("GitHub native Stacked PRs are not enabled for this repo: {message}");
+        }
+        LinkOutcome::AuthTokenUnsupported { message } => {
+            anyhow::bail!(
+                "GitHub rejected the native Stack unlink: {message}\n\n\
+                 stax already ignores GH_TOKEN/GITHUB_TOKEN when talking to `gh stack`, but no \
+                 OAuth-authenticated `gh` account was found. Run `gh auth login` (or `gh auth \
+                 switch` if you already have one) to add an OAuth-authenticated account, then \
+                 retry."
+            );
+        }
+        LinkOutcome::SinglePrValidationRejected { message } => {
+            anyhow::bail!("GitHub rejected the native Stack unlink: {message}");
+        }
+        LinkOutcome::Failed { message } => {
+            // `gh stack unstack` operates on a locally-tracked stack, but stacks
+            // registered via `gh stack link` (the seam stax uses) carry no local
+            // tracking — so unstack reports the current branch is not part of a
+            // stack. Explain the limitation rather than the raw gh-stack error.
+            if message.to_lowercase().contains("not part of a stack") {
+                anyhow::bail!(
+                    "No locally-tracked native stack for the current branch. Native stacks that \
+                     stax registers via `gh stack link` are not tracked locally, so `gh stack \
+                     unstack` cannot remove them. Run `gh stack checkout <pr>` to adopt the stack \
+                     locally first, or remove the stack from the GitHub PR UI."
+                );
+            }
+            anyhow::bail!("Failed to remove native GitHub Stack: {message}");
+        }
+    }
+}
+
+fn ensure_gh_stack_extension() -> Result<()> {
+    match gh_stack::extension_status() {
+        ExtensionStatus::Installed => Ok(()),
+        ExtensionStatus::Outdated => {
+            anyhow::bail!(
+                "`gh-stack` extension is outdated and lacks `gh stack link`. Run `gh extension upgrade gh-stack`."
+            )
+        }
+        ExtensionStatus::NoExtension => {
+            anyhow::bail!(
+                "`gh-stack` extension is not installed. Run `gh extension install github/gh-stack`."
+            )
+        }
+        ExtensionStatus::NoGh => {
+            anyhow::bail!("GitHub CLI `gh` is not installed or not available on PATH.")
+        }
+    }
+}
+
+fn current_stack_pr_numbers(stack: &Stack, current: &str) -> Result<Vec<u64>> {
+    let mut pr_numbers = Vec::new();
+    let mut missing = Vec::new();
+
+    for branch in stack.current_stack(current) {
+        if branch == stack.trunk {
+            continue;
+        }
+        match stack.branches.get(&branch).and_then(|info| info.pr_number) {
+            Some(number) => pr_numbers.push(number),
+            None => missing.push(branch),
+        }
+    }
+
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "These branches have no PR yet, so they cannot be linked into a native stack:\n  {}\n\n\
+             Run `stax submit` to create PRs for the stack, then `stax stack link` again.",
+            missing.join("\n  ")
+        );
+    }
+
+    Ok(pr_numbers)
+}
 
 pub fn run_validate() -> Result<()> {
     let repo = GitRepo::open()?;

@@ -1,17 +1,20 @@
 use crate::commands::open::open_url_in_browser;
-use crate::config::{Config, SingleStackMode, StackLinksMode};
+use crate::config::{
+    Config, NativeStackMode, SingleStackMode, StackLinksMode, StackLinksWhenNative,
+};
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
+use crate::github::gh_stack::{self, ExtensionStatus, FeatureState, LinkOutcome};
 use crate::github::pr::{
-    PrInfoWithHead, StackPrInfo, generate_stack_links_markdown, remove_stack_links_from_body,
-    upsert_stack_links_in_body,
+    PrInfoWithHead, StackPrInfo, generate_stack_links_markdown, is_native_stack_base_locked_error,
+    remove_stack_links_from_body, upsert_stack_links_in_body,
 };
 use crate::github::pr_template::{discover_pr_templates, select_template_interactive};
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
 use crate::progress::LiveTimer;
-use crate::remote::{self, RemoteInfo};
+use crate::remote::{self, ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{Editor, Input, Select, theme::ColorfulTheme};
@@ -67,6 +70,7 @@ pub struct SubmitOptions {
     pub title: bool,
     pub body: bool,
     pub rerequest_review: bool,
+    pub native_stack_override: Option<NativeStackMode>,
     pub squash: bool,
     pub update_title: bool,
 }
@@ -94,6 +98,13 @@ struct PrPlan {
     // Track if this is a no-op (already synced)
     needs_push: bool,
     needs_pr_update: bool,
+    /// True only when the PR's base branch itself differs from the desired
+    /// parent — as opposed to `needs_pr_update`, which is also set by a plain
+    /// push with no base change. GitHub's native Stacked PRs API rejects any
+    /// `PATCH .../pulls/{n}` call that includes `base` once a PR is part of a
+    /// registered stack, even when the value is unchanged, so this must gate
+    /// the `update_pr_base` call separately to avoid firing it on every push.
+    needs_base_update: bool,
     // Empty branches get pushed but no PR created
     is_empty: bool,
     // Branches imported with `stax get` are read-only support branches.
@@ -359,6 +370,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         title: ai_title,
         body: body_scope,
         rerequest_review,
+        native_stack_override,
         squash,
         update_title,
     } = options;
@@ -378,6 +390,8 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let config = Config::load()?;
     let stack_links_mode = config.submit.stack_links;
     let single_stack_mode = config.submit.single_stack;
+    let stack_links_when_native = config.submit.stack_links_when_native;
+    let native_stack_mode = native_stack_override.unwrap_or(config.submit.native_stack);
 
     // Track if --draft was explicitly passed (we'll ask interactively if not)
     let draft_flag_set = draft;
@@ -760,6 +774,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 is_draft: None,
                 needs_push,
                 needs_pr_update: false,
+                needs_base_update: false,
                 is_empty,
                 is_imported,
             });
@@ -927,6 +942,16 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 true // New PR always needs creation
             };
 
+            // Unlike `needs_pr_update` (also true on a plain push with no base
+            // change), this is only true when the base itself is actually
+            // wrong — the one case where calling `update_pr_base` is required.
+            let needs_base_update = !is_empty
+                && !is_imported
+                && existing_pr
+                    .as_ref()
+                    .map(|pr| pr.info.base != base)
+                    .unwrap_or(false);
+
             // Capture tip commit subject for auto-updating PR title on existing PRs.
             // Only computed when the user opts in via `--update-title` so default submits
             // do not silently rewrite PR titles from local commit messages.
@@ -961,6 +986,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 is_draft: None,
                 needs_push,
                 needs_pr_update,
+                needs_base_update,
                 is_empty,
                 is_imported,
             });
@@ -1511,10 +1537,36 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         &format!("Updating {} #{}...", plan.branch, existing_pr_number),
                     );
 
-                    // Update base if needed
-                    client
-                        .update_pr_base(existing_pr_number, &plan.parent)
-                        .await?;
+                    // Update base only when it actually differs — `needs_pr_update`
+                    // is also true for a plain push with no base change, and GitHub's
+                    // native Stacked PRs API rejects *any* base PATCH (even a no-op)
+                    // once a PR is registered in a stack.
+                    if plan.needs_base_update {
+                        if let Err(e) = client
+                            .update_pr_base(existing_pr_number, &plan.parent)
+                            .await
+                        {
+                            if is_native_stack_base_locked_error(&e) {
+                                if !quiet {
+                                    println!(
+                                        "      {} {}",
+                                        "note:".dimmed(),
+                                        format!(
+                                            "skipped base update for #{existing_pr_number} — \
+                                             GitHub manages the base for PRs registered in a \
+                                             native Stack; run `st stack link` to re-sync"
+                                        )
+                                        .dimmed()
+                                    );
+                                }
+                            } else {
+                                LiveTimer::maybe_finish_warn(update_timer, "failed");
+                                return Err(e).context(format!(
+                                    "Failed to update PR base for #{existing_pr_number}"
+                                ));
+                            }
+                        }
+                    }
 
                     // Auto-update PR title from tip commit subject when it has changed
                     if plan.needs_title_update {
@@ -1752,13 +1804,25 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             &imported_stack_branches,
         );
 
+        let native_stack_linked = maybe_link_native_stack(
+            repo.workdir()?,
+            &remote_info,
+            &stack.trunk,
+            native_stack_mode,
+            &stack_link_contexts,
+            quiet,
+        )?;
+
         let stack_links_started_at = Instant::now();
-        let effective_stack_links_mode =
-            if single_stack_mode == SingleStackMode::Off && stack_link_contexts.len() <= 1 {
-                StackLinksMode::Off
-            } else {
-                stack_links_mode
-            };
+        let native_forces_links_off =
+            native_stack_linked && stack_links_when_native == StackLinksWhenNative::Off;
+        let single_stack_skips_links =
+            single_stack_mode == SingleStackMode::Off && stack_link_contexts.len() <= 1;
+        let effective_stack_links_mode = if native_forces_links_off || single_stack_skips_links {
+            StackLinksMode::Off
+        } else {
+            stack_links_mode
+        };
         for (pr_number, _branch, stack_link_pr_infos) in &stack_link_contexts {
             let sync_timer =
                 LiveTimer::maybe_new(!quiet, &format!("Syncing stack links on #{}...", pr_number));
@@ -2116,6 +2180,89 @@ fn stack_link_contexts_for_sync(
             Some((pr_number, info.branch, context))
         })
         .collect()
+}
+
+fn maybe_link_native_stack(
+    workdir: &Path,
+    remote_info: &RemoteInfo,
+    trunk: &str,
+    mode: NativeStackMode,
+    stack_link_contexts: &[(u64, String, Vec<StackPrInfo>)],
+    quiet: bool,
+) -> Result<bool> {
+    if mode == NativeStackMode::Off || remote_info.forge != ForgeType::GitHub {
+        return Ok(false);
+    }
+
+    let pr_numbers = stack_link_contexts
+        .iter()
+        .map(|(pr_number, _, _)| *pr_number)
+        .collect::<Vec<_>>();
+    // `gh stack link` requires at least two PRs; a single-PR stack cannot form a
+    // native stack. Skip quietly — once a second PR joins the stack, the next
+    // submit registers both.
+    if pr_numbers.len() < 2 {
+        return Ok(false);
+    }
+
+    // Cheap cached check before spawning any `gh` subprocess: if this repo has
+    // already been marked feature-disabled, `auto` mode stays quiet without
+    // probing the extension on every submit.
+    if mode == NativeStackMode::Auto && gh_stack::feature_enabled(workdir) == FeatureState::Disabled
+    {
+        return Ok(false);
+    }
+
+    if gh_stack::extension_status() != ExtensionStatus::Installed {
+        return Ok(false);
+    }
+
+    match gh_stack::link_stack(&pr_numbers, trunk, &remote_info.name) {
+        LinkOutcome::Linked => {
+            gh_stack::set_feature_enabled(workdir, true)?;
+            if !quiet {
+                println!("{} {}", "✓".green(), "Native GitHub Stack linked".dimmed());
+            }
+            Ok(true)
+        }
+        LinkOutcome::FeatureDisabled { .. } => {
+            gh_stack::set_feature_enabled(workdir, false)?;
+            Ok(false)
+        }
+        // Not a durable repo-level fact (unlike `FeatureDisabled`) — the
+        // active `gh` account may change on a later run — so this must
+        // never be cached.
+        LinkOutcome::AuthTokenUnsupported { .. } => {
+            if !quiet {
+                println!(
+                    "  {} {}",
+                    "note:".dimmed(),
+                    "native GitHub Stack link skipped: no OAuth-authenticated `gh` account found \
+                     (Personal Access Tokens are not supported during private preview). Run `gh \
+                     auth login` to add one."
+                        .dimmed()
+                );
+            }
+            Ok(false)
+        }
+        LinkOutcome::SinglePrValidationRejected { .. } => Ok(false),
+        LinkOutcome::Failed { message } => {
+            if !quiet {
+                let note = if gh_stack::is_stack_fork_conflict(&message) {
+                    "native GitHub Stack link skipped: this stack has forked — another branch \
+                     sharing the same ancestor PRs is already registered as a native Stack, and \
+                     GitHub's native Stack feature only supports one linear chain at a time. \
+                     stax's own PR body/comment stack links still keep this branch's PRs \
+                     connected."
+                        .to_string()
+                } else {
+                    format!("native GitHub Stack link skipped: {message}")
+                };
+                println!("  {} {}", "note:".dimmed(), note.dimmed());
+            }
+            Ok(false)
+        }
+    }
 }
 
 fn rejected_push_branches(porcelain: &str, specs: &[PushSpec]) -> Vec<String> {

@@ -13,6 +13,28 @@ const STACK_COMMENT_MARKER: &str = "<!-- stax-stack-comment -->";
 const STACK_LINKS_BODY_START_MARKER: &str = "<!-- stax-stack-links:start -->";
 const STACK_LINKS_BODY_END_MARKER: &str = "<!-- stax-stack-links:end -->";
 
+/// True when a PR base-update failure is GitHub rejecting the change because
+/// the PR is registered in a native GitHub Stack (private preview). GitHub
+/// owns base-branch management for stacked PRs once linked, and returns this
+/// validation error for `PATCH .../pulls/{n}` calls that touch `base` — even
+/// when the requested value matches the PR's current base, or when the
+/// caller is trying to perform a legitimate retarget (e.g. a merge cascade
+/// moving the next PR onto trunk).
+///
+/// Matches on GitHub's exact wording ("...pull request is part of a
+/// stack.") rather than the shorter "part of a stack" fragment, so a
+/// hypothetical negated message like "...is not part of a stack" can never
+/// be misclassified as a lock (the two phrases aren't substrings of one
+/// another, since "not " breaks the contiguous match).
+pub(crate) fn is_native_stack_base_locked_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .to_string()
+            .to_lowercase()
+            .contains("pull request is part of a stack")
+    })
+}
+
 /// A comment on a PR issue thread (conversation comment)
 #[derive(Debug, Clone)]
 pub struct IssueComment {
@@ -1591,6 +1613,43 @@ mod tests {
     use octocrab::Octocrab;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn is_native_stack_base_locked_error_matches_githubs_exact_wording() {
+        let err = anyhow::anyhow!(
+            "Cannot change the base branch because the pull request is part of a stack."
+        )
+        .context("Failed to update PR base");
+
+        assert!(is_native_stack_base_locked_error(&err));
+    }
+
+    #[test]
+    fn is_native_stack_base_locked_error_ignores_unrelated_validation_errors() {
+        let err = anyhow::anyhow!(
+            "A pull request already exists for base branch 'main' and head branch 'feature'"
+        )
+        .context("Failed to update PR base");
+
+        assert!(!is_native_stack_base_locked_error(&err));
+    }
+
+    #[test]
+    fn is_native_stack_base_locked_error_ignores_generic_errors() {
+        let err = anyhow::anyhow!("connection reset by peer").context("Failed to update PR base");
+
+        assert!(!is_native_stack_base_locked_error(&err));
+    }
+
+    #[test]
+    fn is_native_stack_base_locked_error_does_not_misfire_on_negated_wording() {
+        // Guards against a hypothetical future GitHub message that negates
+        // stack membership — must not collide with the lock detector.
+        let err = anyhow::anyhow!("The pull request is not part of a stack, so this is a no-op")
+            .context("Failed to update PR base");
+
+        assert!(!is_native_stack_base_locked_error(&err));
+    }
 
     #[test]
     fn test_merge_method_from_str_squash() {

@@ -3,7 +3,9 @@
 //! Dependent PR branches are updated via GitHub's "Update branch" endpoint (`PUT .../update-branch`).
 
 use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
-use crate::commands::merge::{PrBaseUpdate, update_pr_base_unless_current};
+use crate::commands::merge::{
+    PrBaseUpdate, print_native_stack_locked_note, update_pr_base_unless_current,
+};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
@@ -238,6 +240,10 @@ pub fn run(
                     Ok(PrBaseUpdate::AlreadyTargeted) => {
                         LiveTimer::maybe_finish_ok(update_base_timer, "already on base")
                     }
+                    Ok(PrBaseUpdate::NativeStackLocked) => {
+                        LiveTimer::maybe_finish_warn(update_base_timer, "skipped (native Stack)");
+                        print_native_stack_locked_note(quiet, next_branch.pr_number);
+                    }
                     Err(e) => {
                         LiveTimer::maybe_finish_err(update_base_timer, "failed");
                         failed_pr = Some((
@@ -304,6 +310,10 @@ pub fn run(
                     }
                     Ok(PrBaseUpdate::AlreadyTargeted) => {
                         LiveTimer::maybe_finish_ok(update_base_timer, "already on base")
+                    }
+                    Ok(PrBaseUpdate::NativeStackLocked) => {
+                        LiveTimer::maybe_finish_warn(update_base_timer, "skipped (native Stack)");
+                        print_native_stack_locked_note(quiet, next_branch.pr_number);
                     }
                     Err(e) => {
                         LiveTimer::maybe_finish_err(update_base_timer, "failed");
@@ -376,6 +386,10 @@ pub fn run(
                 Ok(PrBaseUpdate::Updated) => LiveTimer::maybe_finish_ok(base_timer, "done"),
                 Ok(PrBaseUpdate::AlreadyTargeted) => {
                     LiveTimer::maybe_finish_ok(base_timer, "already on base")
+                }
+                Ok(PrBaseUpdate::NativeStackLocked) => {
+                    LiveTimer::maybe_finish_warn(base_timer, "skipped (native Stack)");
+                    print_native_stack_locked_note(quiet, pr_num);
                 }
                 Err(e) => {
                     LiveTimer::maybe_finish_err(base_timer, "failed");

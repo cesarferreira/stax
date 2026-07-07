@@ -267,6 +267,15 @@ pub fn run(
                 LiveTimer::maybe_finish_ok(retarget_timer, "already on base");
                 false
             }
+            Ok(PrBaseUpdate::NativeStackLocked) => {
+                LiveTimer::maybe_finish_err(retarget_timer, "locked");
+                anyhow::bail!(
+                    "PR #{} is registered in a native GitHub Stack, which locks its base branch. \
+                     Merge it via the normal stack order (`st merge`) instead of merging out of \
+                     order, or run `st stack unlink` first if you need to retarget it manually.",
+                    tip.pr_number
+                );
+            }
             Err(e) => {
                 LiveTimer::maybe_finish_err(retarget_timer, "failed");
                 return Err(e);

@@ -34,6 +34,7 @@ One giant PR is slow to review and risky to merge. A stack of small PRs is the a
 - **Stack, don't wait.** Keep shipping on top of in-review PRs. `st create`, `st ss`, done.
 - **Native-fast.** A single Rust binary that starts in ~25ms. `st ls` benches ~70× faster than Graphite and ~215× faster than Freephite on this repo.
 - **Agent-native.** Run parallel AI agents on isolated branches (`st lane`), auto-resolve rebase conflicts (`st resolve`), and generate branch names, commit messages, and PR details from real diffs.
+- **GitHub-native stacks, automatically.** When your repo has GitHub's native Stacked PRs enabled and `github/gh-stack` is installed, `st ss` registers the stack with GitHub under the hood — zero config, zero extra commands. See [Native GitHub Stacked PRs](#native-github-stacked-prs).
 - **Undo-first.** Every destructive op snapshots state. `st undo` / `st redo` rescue risky rebases instantly.
 - **Batteries-included TUI.** Run bare `st` to browse the stack, inspect diffs, and watch CI hydrate live.
 
@@ -182,6 +183,29 @@ st ss         # submit PRs for the ones that are ready
 Lanes start warm: instead of deleting a removed worktree, stax parks it as a reusable warm slot (resetting it to trunk and running `git clean -fd`, which keeps gitignored dependency directories like `node_modules` or `.venv`). The next lane adopts that slot instead of a cold checkout, so agents keep their built deps and don't re-install from scratch. Set `worktree.reconcile` to re-sync deps on adopt, or `worktree.reuse_slots = false` to opt out.
 
 → [Agent worktrees](docs/workflows/agent-worktrees.md) · [Multi-worktree workflow](docs/workflows/multi-worktree.md)
+
+<a id="native-github-stacked-prs"></a>
+### Native GitHub Stacked PRs
+
+When a GitHub repo has native Stacked PRs enabled, stax can register your submitted PRs as a native GitHub Stack automatically. This requires GitHub's [`github/gh-stack`](https://github.com/github/gh-stack) CLI extension — install it once:
+
+```bash
+gh extension install github/gh-stack
+# or let stax install it for you:
+st doctor --fix
+```
+
+That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR stacks under the hood, no extra command required. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top.
+
+```bash
+st ss                    # auto-links native stack when available
+st stack link            # manually re-link the current stack
+st stack unlink          # remove the native GitHub Stack object
+```
+
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. stax also strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before talking to `gh stack`, since GitHub's private-preview native-stack API rejects Personal Access Tokens and only accepts an OAuth-authenticated `gh` login (`gh auth login`). `st doctor` recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics, and reports whether the extension is missing, outdated, or up to date.
+
+→ [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 
 ### Cascade stack merge
 
