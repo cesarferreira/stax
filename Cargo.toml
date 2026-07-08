@@ -43,7 +43,7 @@ clap = { version = "4", features = ["derive"] }
 git2 = { version = "0.21", default-features = false, features = ["https"] }
 
 # GitHub API
-octocrab = "0.53.1"
+octocrab = "0.54.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
