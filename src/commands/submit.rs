@@ -2252,7 +2252,11 @@ fn maybe_link_native_stack(
         return Ok(false);
     }
 
-    if gh_stack::extension_status() != ExtensionStatus::Installed {
+    let extension_status = gh_stack::extension_status();
+    if extension_status != ExtensionStatus::Installed {
+        if mode == NativeStackMode::Link && !quiet {
+            print_native_stack_unavailable_note(extension_status);
+        }
         return Ok(false);
     }
 
@@ -2321,6 +2325,26 @@ fn maybe_link_native_stack(
             Ok(false)
         }
     }
+}
+
+fn print_native_stack_unavailable_note(status: ExtensionStatus) {
+    let note = match status {
+        ExtensionStatus::NoGh => {
+            "native GitHub Stack link skipped: GitHub CLI `gh` is not installed or not usable. \
+             Install `gh`, run `gh auth login`, then retry; `st doctor --fix` can help diagnose setup."
+        }
+        ExtensionStatus::NoExtension => {
+            "native GitHub Stack link skipped: gh-stack extension missing. Run `st doctor --fix` \
+             or `gh extension install github/gh-stack`, then retry."
+        }
+        ExtensionStatus::Outdated => {
+            "native GitHub Stack link skipped: gh-stack extension is outdated and lacks \
+             `gh stack link`. Run `st doctor --fix` or `gh extension upgrade gh-stack`, then retry."
+        }
+        ExtensionStatus::Installed => return,
+    };
+
+    println!("  {} {}", "note:".dimmed(), note.dimmed());
 }
 
 fn rejected_push_branches(porcelain: &str, specs: &[PushSpec]) -> Vec<String> {

@@ -130,6 +130,43 @@ async fn mock_existing_pr(mock_server: &MockServer, number: u64, branch: &str, b
         .await;
 }
 
+async fn run_multi_pr_submit_with_fake_gh(
+    fake_gh_script: &str,
+    submit_args: &[&str],
+) -> (std::process::Output, bool) {
+    let mock_server = MockServer::start().await;
+
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    write_config(&home, &mock_server.uri());
+    repo.configure_github_like_submit_remote();
+    let branches = repo.create_stack(&["native-setup-bottom", "native-setup-top"]);
+    repo.git(&["push", "-u", "origin", &branches[0], &branches[1]])
+        .assert_success();
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    mock_existing_pr(&mock_server, 10, &branches[0], "main").await;
+    mock_existing_pr(&mock_server, 20, &branches[1], &branches[0]).await;
+
+    let fake = fake_gh_dir(fake_gh_script);
+    let args_file = fake.path().join("args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        submit_args,
+        &[
+            ("HOME", &home),
+            ("STAX_GITHUB_TOKEN", "test-token"),
+            ("PATH", &path),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    let called_stack_link = args_file.exists();
+    (output, called_stack_link)
+}
+
 #[test]
 fn detects_installed_gh_stack_extension_from_gh_extension_list() {
     let fake = fake_gh_dir(
@@ -805,6 +842,11 @@ exit 1
     );
 
     output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        !stdout.contains("gh-stack extension missing"),
+        "default auto mode should stay quiet when gh-stack is missing, stdout was:\n{stdout}"
+    );
     assert!(
         !args_file.exists(),
         "submit must never invoke `gh stack link` when the extension isn't installed"
@@ -832,6 +874,105 @@ exit 1
                 && request.url.path() == "/repos/test-owner/test-repo/pulls/20"
         }),
         "stax body stack links for #20 should still sync without gh-stack installed"
+    );
+}
+
+#[tokio::test]
+async fn submit_native_stack_override_explains_unusable_gh_cli() {
+    let (output, called_stack_link) = run_multi_pr_submit_with_fake_gh(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) exit 127 ;;
+  "stack link") printf '%s\n' "$@" > "$GH_ARGS_FILE"; exit 1 ;;
+esac
+exit 1
+"#,
+        &[
+            "submit",
+            "--native-stack",
+            "--no-fetch",
+            "--yes",
+            "--no-prompt",
+        ],
+    )
+    .await;
+
+    output.assert_success();
+    assert!(
+        !called_stack_link,
+        "--native-stack should not invoke `gh stack link` when gh is unusable"
+    );
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("GitHub CLI `gh`")
+            && stdout.contains("gh auth login")
+            && stdout.contains("st doctor --fix"),
+        "expected an actionable gh setup note, stdout was:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn submit_native_stack_override_explains_missing_gh_stack_extension() {
+    let (output, called_stack_link) = run_multi_pr_submit_with_fake_gh(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-eco github/gh-eco v1.0.0"; exit 0 ;;
+  "stack link") printf '%s\n' "$@" > "$GH_ARGS_FILE"; exit 1 ;;
+esac
+exit 1
+"#,
+        &[
+            "submit",
+            "--native-stack",
+            "--no-fetch",
+            "--yes",
+            "--no-prompt",
+        ],
+    )
+    .await;
+
+    output.assert_success();
+    assert!(
+        !called_stack_link,
+        "--native-stack should not invoke `gh stack link` when gh-stack is missing"
+    );
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("gh-stack extension missing")
+            && stdout.contains("st doctor --fix")
+            && stdout.contains("gh extension install github/gh-stack"),
+        "expected an actionable missing-extension note, stdout was:\n{stdout}"
+    );
+}
+
+#[tokio::test]
+async fn submit_native_stack_override_explains_outdated_gh_stack_extension() {
+    let (output, called_stack_link) = run_multi_pr_submit_with_fake_gh(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.71.0"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.1"; exit 0 ;;
+  "stack --help") printf 'Available Commands:\n  add   Add a new branch\n  view  View the current stack\n'; exit 0 ;;
+  "stack link") printf '%s\n' "$@" > "$GH_ARGS_FILE"; exit 1 ;;
+esac
+exit 1
+"#,
+        &["submit", "--native-stack", "--no-fetch", "--yes", "--no-prompt"],
+    )
+    .await;
+
+    output.assert_success();
+    assert!(
+        !called_stack_link,
+        "--native-stack should not invoke `gh stack link` when gh-stack lacks link support"
+    );
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("gh-stack extension is outdated")
+            && stdout.contains("st doctor --fix")
+            && stdout.contains("gh extension upgrade gh-stack"),
+        "expected an actionable outdated-extension note, stdout was:\n{stdout}"
     );
 }
 
