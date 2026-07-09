@@ -5,6 +5,13 @@ const protocol = @import("protocol.zig");
 
 const testing = std.testing;
 const Effects = native_sdk.Effects(model_mod.Msg);
+const canvas = native_sdk.canvas;
+const WorkspaceUi = canvas.Ui(model_mod.Msg);
+const WorkspaceView = canvas.CompiledMarkupView(
+    model_mod.Model,
+    model_mod.Msg,
+    @embedFile("app.native"),
+);
 
 const snapshot_json =
     \\{
@@ -373,4 +380,70 @@ test "bridge exits surface truncation malformed schema and spawn failures" {
         .reason = .spawn_failed,
     } }, &fx);
     try testing.expect(std.mem.indexOf(u8, model.errorText(), "start") != null);
+}
+
+fn findByText(widget: canvas.Widget, value: []const u8) ?canvas.Widget {
+    if (std.mem.eql(u8, widget.text, value)) return widget;
+    for (widget.children) |child| {
+        if (findByText(child, value)) |found| return found;
+    }
+    return null;
+}
+
+fn findRowSelecting(tree: WorkspaceUi.Tree, widget: canvas.Widget, index: usize) ?canvas.Widget {
+    if (widget.kind == .list_item) {
+        if (tree.msgForPointer(widget.id, .up)) |msg| {
+            if (msg == .select_branch and msg.select_branch == index) return widget;
+        }
+    }
+    for (widget.children) |child| {
+        if (findRowSelecting(tree, child, index)) |found| return found;
+    }
+    return null;
+}
+
+test "workspace renders the stack branch and patch panes" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var model = initModel();
+    defer model.deinit();
+    var ui = WorkspaceUi.init(arena_state.allocator());
+
+    const tree = try ui.finalize(WorkspaceView.build(&ui, &model));
+
+    try testing.expect(findByText(tree.root, "Stack") != null);
+    try testing.expect(findByText(tree.root, "Branch") != null);
+    try testing.expect(findByText(tree.root, "Patch") != null);
+}
+
+test "workspace branch rows dispatch typed selection messages" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var model = initModel();
+    defer model.deinit();
+    var fx = Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    try loadSnapshot(&model, &fx);
+    var ui = WorkspaceUi.init(arena_state.allocator());
+    const tree = try ui.finalize(WorkspaceView.build(&ui, &model));
+
+    const main_row = findRowSelecting(tree, tree.root, 1).?;
+    const msg = tree.msgForPointer(main_row.id, .up).?;
+
+    try testing.expectEqual(@as(usize, 1), msg.select_branch);
+}
+
+test "split resize messages round trip through the model" {
+    var model = initModel();
+    defer model.deinit();
+    var fx = Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    model_mod.update(&model, .{ .stack_resized = 0.38 }, &fx);
+    model_mod.update(&model, .{ .inspector_resized = 0.47 }, &fx);
+
+    try testing.expectApproxEqAbs(@as(f32, 0.38), model.pane_stack_ratio, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 0.47), model.pane_inspector_ratio, 0.001);
 }

@@ -1,15 +1,166 @@
-<!-- The whole view. Embedded into the binary and hot-reloaded in dev:
-     edit this file while the app runs and the window updates without
-     losing the count. Validate with: native markup check src/app.native -->
-<column gap="12" padding="16">
-  <row gap="8" cross="center">
-    <text grow="1">Counter</text>
-    <button size="sm" variant="ghost" on-press="reset">Reset</button>
-  </row>
-  <row gap="8" main="center" cross="center" grow="1">
-    <button variant="secondary" on-press="decrement">-</button>
-    <text>{count}</text>
-    <button variant="primary" on-press="increment">+</button>
-  </row>
-  <status-bar>count: {count}</status-bar>
-</column>
+<!-- Native SDK workspace for stacked Git branches. This is compiled into
+     release builds and hot-reloaded from disk while running in Debug. -->
+<stack background="background">
+  <column grow="1">
+    <row height="58" padding="12" gap="10" cross="center" background="surface" window-drag="true">
+      <text><span weight="bold">Stax</span></text>
+      <badge variant="secondary">WORKSHOP</badge>
+      <text grow="1" foreground="text_muted">{repositoryName}</text>
+      <button size="sm" variant="ghost" icon="folder-open" label="Choose repository" on-press="choose_repository"></button>
+      <button size="sm" variant="ghost" icon="refresh-cw" label="Refresh repository" disabled="{actionsDisabled}" on-press="refresh"></button>
+    </row>
+
+    <split value="{pane_stack_ratio}" on-resize="stack_resized" grow="1">
+      <column min-width="250" background="surface_subtle">
+        <column padding="12" gap="10">
+          <row cross="center">
+            <text grow="1"><span weight="bold">Stack</span></text>
+            <badge variant="secondary">SEARCH</badge>
+          </row>
+          <text-field size="sm" text="{filterText}" placeholder="Filter branches" label="Filter stack branches" autofocus="{filter_focused}" on-input="filter_changed" />
+        </column>
+        <tree label="Stack branches" grow="1">
+          <list virtualized="true" virtual-item-extent="50" grow="1">
+            <for each="branchRows" as="row" key="name">
+              <list-item role="treeitem" selected="{row.is_selected}" on-press="select_branch:{row.index}" label="{row.name}" padding="10" gap="8">
+                <column grow="1" gap="3">
+                  <row gap="6" cross="center">
+                    <icon name="git-branch" foreground="text_muted" />
+                    <text grow="1">{row.name}</text>
+                    <if test="{row.is_current}"><badge>HEAD</badge></if>
+                  </row>
+                  <row gap="6">
+                    <text grow="1" foreground="text_muted">{row.parent}</text>
+                    <text foreground="text_muted">↑{row.ahead} ↓{row.behind}</text>
+                  </row>
+                </column>
+              </list-item>
+            </for>
+          </list>
+        </tree>
+        <if test="{showRepositoryPrompt}">
+          <column padding="16" gap="10" main="center" cross="center" grow="1">
+            <icon name="folder-open" foreground="text_muted" />
+            <text foreground="text_muted" text-alignment="center" wrap="true">Choose a Git repository to inspect its stack.</text>
+            <button variant="primary" icon="folder-open" on-press="choose_repository">Choose Repository</button>
+          </column>
+        </if>
+      </column>
+
+      <split value="{pane_inspector_ratio}" on-resize="inspector_resized" grow="1">
+        <column min-width="300" background="background">
+          <row padding="14" cross="center" background="surface">
+            <text grow="1"><span weight="bold">Branch</span></text>
+            <badge variant="secondary">INSPECTOR</badge>
+          </row>
+          <if test="{hasBranchSelection}">
+            <scroll grow="1">
+              <column padding="18" gap="18">
+                <column gap="6">
+                  <text size="heading">{selectedBranchName}</text>
+                  <text foreground="text_muted">Based on {selectedParent}</text>
+                </column>
+
+                <column gap="8">
+                  <row main="space_between"><text foreground="text_muted">Distance</text><text>{selectedDistance}</text></row>
+                  <row main="space_between"><text foreground="text_muted">Pull request</text><text>{selectedPullRequest}</text></row>
+                  <row main="space_between"><text foreground="text_muted">Checks</text><text>{selectedCi}</text></row>
+                </column>
+
+                <alert text="Next step">
+                  <column gap="4">
+                    <text>{selectedRecommendation}</text>
+                    <text foreground="text_muted" wrap="true">Actions run through the bundled st engine in this repository.</text>
+                  </column>
+                </alert>
+
+                <column gap="8">
+                  <button variant="primary" icon="git-branch" disabled="{actionsDisabled}" on-press="request_checkout">Checkout</button>
+                  <button variant="secondary" icon="git-merge" disabled="{actionsDisabled}" on-press="request_restack">Restack</button>
+                  <button variant="secondary" icon="send" disabled="{actionsDisabled}" on-press="request_submit">Submit Stack</button>
+                  <button variant="ghost" icon="external-link" disabled="{openPrDisabled}" on-press="request_open_pr">Open Pull Request</button>
+                </column>
+              </column>
+            </scroll>
+          </if>
+          <else>
+            <column padding="20" gap="8" main="center" cross="center" grow="1">
+              <icon name="git-branch" foreground="text_muted" />
+              <text foreground="text_muted">Select a branch from the stack.</text>
+            </column>
+          </else>
+        </column>
+
+        <column min-width="340" background="surface_subtle">
+          <row padding="14" cross="center" background="surface">
+            <text grow="1"><span weight="bold">Patch</span></text>
+            <text foreground="text_muted">{diffSummary}</text>
+          </row>
+          <if test="{diffTruncated}">
+            <alert text="Patch truncated">
+              <column padding="8">
+                <text wrap="true">The engine limited this patch to keep the desktop protocol below its 512 KiB cap.</text>
+              </column>
+            </alert>
+          </if>
+          <if test="{loading_diff}">
+            <column grow="1" main="center" cross="center" gap="8">
+              <spinner />
+              <text foreground="text_muted">Loading patch…</text>
+            </column>
+          </if>
+          <if test="{hasDiff}">
+            <list virtualized="true" virtual-item-extent="22" grow="1" background="background">
+              <for each="diffRows" as="row" key="index">
+                <if test="{row.is_addition}"><text height="22" foreground="success"><span mono>{row.text}</span></text></if>
+                <else>
+                  <if test="{row.is_deletion}"><text height="22" foreground="destructive"><span mono>{row.text}</span></text></if>
+                  <else>
+                    <if test="{row.is_hunk}"><text height="22" foreground="info"><span mono>{row.text}</span></text></if>
+                    <else>
+                      <if test="{row.is_file}"><text height="22"><span weight="bold" mono>{row.text}</span></text></if>
+                      <else><text height="22" foreground="text_muted"><span mono>{row.text}</span></text></else>
+                    </else>
+                  </else>
+                </else>
+              </for>
+            </list>
+          </if>
+          <if test="{showEmptyPatch}">
+            <column grow="1" main="center" cross="center" gap="8">
+              <icon name="git-pull-request" foreground="text_muted" />
+              <text foreground="text_muted">Select a branch to load its patch.</text>
+            </column>
+          </if>
+        </column>
+      </split>
+    </split>
+
+    <status-bar>{statusLine}</status-bar>
+  </column>
+
+  <if test="{hasConfirmation}">
+    <dialog text="{confirmationTitle}" on-dismiss="cancel_confirmation">
+      <column padding="18" gap="16">
+        <text wrap="true">{confirmationMessage}</text>
+        <row gap="8" main="end">
+          <button variant="ghost" on-press="cancel_confirmation">Cancel</button>
+          <button variant="primary" on-press="confirm_action">Continue</button>
+        </row>
+      </column>
+    </dialog>
+  </if>
+
+  <if test="{hasError}">
+    <dialog text="Stax needs attention" on-dismiss="dismiss_error">
+      <column padding="18" gap="14">
+        <text wrap="true">{errorText}</text>
+        <row gap="8" main="end">
+          <button variant="ghost" on-press="copy_diagnostics">Copy Diagnostics</button>
+          <button variant="secondary" icon="folder-open" on-press="choose_repository">Choose Repository</button>
+          <button variant="primary" on-press="refresh">Retry</button>
+        </row>
+      </column>
+    </dialog>
+  </if>
+</stack>

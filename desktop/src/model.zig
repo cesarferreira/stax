@@ -9,6 +9,7 @@ pub const diff_effect_key = bridge.diff_key;
 pub const action_effect_key = bridge.action_key;
 pub const recents_read_effect_key = bridge.recents_read_key;
 pub const recents_write_effect_key = bridge.recents_write_key;
+pub const clipboard_effect_key = bridge.clipboard_key;
 
 const max_path_bytes = 1024;
 const max_request_id_bytes = 64;
@@ -26,6 +27,7 @@ pub const Confirmation = enum {
 };
 
 pub const BranchRow = struct {
+    index: usize,
     name: []const u8,
     parent: []const u8,
     column: usize,
@@ -37,12 +39,35 @@ pub const BranchRow = struct {
 };
 
 pub const DiffRow = struct {
+    index: usize,
     text: []const u8,
     kind: protocol.DiffLineKind,
+    is_addition: bool,
+    is_deletion: bool,
+    is_file: bool,
+    is_hunk: bool,
 };
 
 pub const Msg = union(enum) {
+    pub const view_unbound = .{
+        "repository_selected",
+        "repository_picker_cancelled",
+        "recents_loaded",
+        "recents_saved",
+        "snapshot_exit",
+        "diff_exit",
+        "action_line",
+        "action_exit",
+        "select_next",
+        "select_previous",
+        "app_activated",
+        "focus_filter",
+        "diagnostics_copied",
+        "dismiss",
+    };
+
     repository_selected: []const u8,
+    repository_picker_cancelled,
     recents_loaded: native_sdk.EffectFileResult,
     recents_saved: native_sdk.EffectFileResult,
     snapshot_exit: native_sdk.EffectExit,
@@ -50,6 +75,8 @@ pub const Msg = union(enum) {
     action_line: native_sdk.EffectLine,
     action_exit: native_sdk.EffectExit,
     select_branch: usize,
+    select_next,
+    select_previous,
     request_checkout,
     request_restack,
     request_submit,
@@ -57,11 +84,61 @@ pub const Msg = union(enum) {
     confirm_action,
     cancel_confirmation,
     refresh,
+    app_activated,
+    choose_repository,
+    focus_filter,
+    stack_resized: f32,
+    inspector_resized: f32,
+    copy_diagnostics,
+    diagnostics_copied: native_sdk.EffectClipboardResult,
+    dismiss,
     dismiss_error,
     filter_changed: native_sdk.canvas.TextInputEvent,
 };
 
 pub const Model = struct {
+    pub const view_unbound = .{
+        "allocator",
+        "snapshot_arena",
+        "diff_arena",
+        "selected_index",
+        "selection_generation",
+        "engine_storage",
+        "engine_len",
+        "store_storage",
+        "store_len",
+        "repository_storage",
+        "repository_len",
+        "request_sequence",
+        "snapshot_request_storage",
+        "snapshot_request_len",
+        "diff_request_storage",
+        "diff_request_len",
+        "action_request_storage",
+        "action_request_len",
+        "error_storage",
+        "error_len",
+        "status_storage",
+        "status_len",
+        "recent_storage",
+        "recent_lens",
+        "recent_count",
+        "recent_serialized",
+        "recent_serialized_len",
+        "filter",
+        "focused_pane",
+        "confirmation",
+        "active_action",
+        "action_terminal_seen",
+        "loading_snapshot",
+        "needs_repository_picker",
+        "repositoryPath",
+        "selectedBranch",
+        "hasRepository",
+        "hasSnapshot",
+        "isBusy",
+    };
+
     allocator: std.mem.Allocator,
     snapshot_arena: std.heap.ArenaAllocator,
     diff_arena: std.heap.ArenaAllocator,
@@ -99,7 +176,8 @@ pub const Model = struct {
 
     filter: native_sdk.canvas.TextBuffer(96) = .{},
     pane_stack_ratio: f32 = 0.32,
-    pane_inspector_ratio: f32 = 0.29,
+    pane_inspector_ratio: f32 = 0.43,
+    filter_focused: bool = false,
     focused_pane: u8 = 0,
 
     confirmation: Confirmation = .none,
@@ -143,8 +221,12 @@ pub const Model = struct {
     pub fn branchRows(self: *const Model, arena: std.mem.Allocator) []const BranchRow {
         const snapshot = self.snapshot orelse return &.{};
         const rows = arena.alloc(BranchRow, snapshot.branches.len) catch return &.{};
+        const filter = self.filter.text();
+        var row_count: usize = 0;
         for (snapshot.branches, 0..) |branch, index| {
-            rows[index] = .{
+            if (filter.len > 0 and std.mem.indexOf(u8, branch.name, filter) == null) continue;
+            rows[row_count] = .{
+                .index = index,
                 .name = branch.name,
                 .parent = branch.parent orelse "",
                 .column = branch.column,
@@ -154,15 +236,92 @@ pub const Model = struct {
                 .behind = branch.behind,
                 .status = @tagName(branch.recommended_action),
             };
+            row_count += 1;
         }
-        return rows;
+        return rows[0..row_count];
+    }
+
+    pub fn filterText(self: *const Model) []const u8 {
+        return self.filter.text();
     }
 
     pub fn diffRows(self: *const Model, arena: std.mem.Allocator) []const DiffRow {
         const diff = self.diff orelse return &.{};
         const rows = arena.alloc(DiffRow, diff.lines.len) catch return &.{};
-        for (diff.lines, 0..) |line, index| rows[index] = .{ .text = line.text, .kind = line.kind };
+        for (diff.lines, 0..) |line, index| rows[index] = .{
+            .index = index,
+            .text = line.text,
+            .kind = line.kind,
+            .is_addition = line.kind == .addition,
+            .is_deletion = line.kind == .deletion,
+            .is_file = line.kind == .file,
+            .is_hunk = line.kind == .hunk,
+        };
         return rows;
+    }
+
+    pub fn repositoryName(self: *const Model) []const u8 {
+        if (self.snapshot) |snapshot| return snapshot.repository_name;
+        if (self.repository_len > 0) return self.repositoryPath();
+        return "No repository selected";
+    }
+
+    pub fn selectedBranchName(self: *const Model) []const u8 {
+        return self.selectedBranch() orelse "No branch selected";
+    }
+
+    pub fn selectedParent(self: *const Model) []const u8 {
+        const branch = self.selectedBranchSnapshot() orelse return "—";
+        return branch.parent orelse "Trunk";
+    }
+
+    pub fn selectedDistance(self: *const Model, arena: std.mem.Allocator) []const u8 {
+        const branch = self.selectedBranchSnapshot() orelse return "No stack distance";
+        return std.fmt.allocPrint(arena, "{d} ahead · {d} behind", .{ branch.ahead, branch.behind }) catch "";
+    }
+
+    pub fn selectedPullRequest(self: *const Model, arena: std.mem.Allocator) []const u8 {
+        const branch = self.selectedBranchSnapshot() orelse return "No pull request";
+        const pull_request = branch.pull_request orelse return "No pull request";
+        const draft = if (pull_request.is_draft) " · draft" else "";
+        return std.fmt.allocPrint(arena, "PR #{d} · {s}{s}", .{ pull_request.number, pull_request.state, draft }) catch "";
+    }
+
+    pub fn selectedCi(self: *const Model) []const u8 {
+        const branch = self.selectedBranchSnapshot() orelse return "CI unavailable";
+        return branch.ci_state orelse "CI not reported";
+    }
+
+    pub fn selectedRecommendation(self: *const Model) []const u8 {
+        const branch = self.selectedBranchSnapshot() orelse return "none";
+        return switch (branch.recommended_action) {
+            .none => "Up to date",
+            .checkout => "Checkout recommended",
+            .restack => "Restack recommended",
+            .submit_stack => "Submit stack recommended",
+            .open_pr => "Open pull request",
+        };
+    }
+
+    pub fn diffSummary(self: *const Model, arena: std.mem.Allocator) []const u8 {
+        const diff = self.diff orelse return "No patch loaded";
+        return std.fmt.allocPrint(arena, "{d} files · +{d} −{d}", .{ diff.files.len, diff.additions, diff.deletions }) catch "";
+    }
+
+    pub fn confirmationTitle(self: *const Model) []const u8 {
+        return switch (self.confirmation) {
+            .none => "Confirm action",
+            .restack => "Restack selected branch?",
+            .submit_stack => "Submit this stack?",
+        };
+    }
+
+    pub fn confirmationMessage(self: *const Model) []const u8 {
+        return switch (self.confirmation) {
+            .none => "",
+            .restack => "This rewrites the selected branch onto its parent.",
+            .submit_stack => "This pushes the stack and updates its pull requests.",
+        };
     }
 
     pub fn statusLine(self: *const Model, _: std.mem.Allocator) []const u8 {
@@ -192,6 +351,36 @@ pub const Model = struct {
         return self.diff != null;
     }
 
+    pub fn hasBranchSelection(self: *const Model) bool {
+        return self.selectedBranchSnapshot() != null;
+    }
+
+    pub fn hasConfirmation(self: *const Model) bool {
+        return self.confirmation != .none;
+    }
+
+    pub fn diffTruncated(self: *const Model) bool {
+        return if (self.diff) |diff| diff.truncated else false;
+    }
+
+    pub fn actionsDisabled(self: *const Model) bool {
+        return self.isBusy() or !self.hasBranchSelection();
+    }
+
+    pub fn openPrDisabled(self: *const Model) bool {
+        if (self.actionsDisabled()) return true;
+        const branch = self.selectedBranchSnapshot() orelse return true;
+        return branch.pull_request == null or branch.pull_request.?.url == null;
+    }
+
+    pub fn showRepositoryPrompt(self: *const Model) bool {
+        return !self.hasRepository() and !self.needs_repository_picker;
+    }
+
+    pub fn showEmptyPatch(self: *const Model) bool {
+        return !self.loading_diff and self.diff == null;
+    }
+
     pub fn isBusy(self: *const Model) bool {
         return self.loading_snapshot or self.loading_diff or self.active_action != null;
     }
@@ -202,6 +391,25 @@ pub const Model = struct {
 
     fn storePath(self: *const Model) []const u8 {
         return self.store_storage[0..self.store_len];
+    }
+
+    fn selectedBranchSnapshot(self: *const Model) ?protocol.BranchSnapshot {
+        const snapshot = self.snapshot orelse return null;
+        if (self.selected_index >= snapshot.branches.len) return null;
+        return snapshot.branches[self.selected_index];
+    }
+
+    fn moveSelection(self: *Model, fx: *Effects, direction: enum { previous, next }) void {
+        const snapshot = self.snapshot orelse return;
+        if (snapshot.branches.len == 0) return;
+        const next_index = switch (direction) {
+            .previous => if (self.selected_index == 0) snapshot.branches.len - 1 else self.selected_index - 1,
+            .next => (self.selected_index + 1) % snapshot.branches.len,
+        };
+        if (next_index == self.selected_index) return;
+        self.selected_index = next_index;
+        self.selection_generation +%= 1;
+        self.requestDiff(fx);
     }
 
     fn snapshotRequestId(self: *const Model) []const u8 {
@@ -360,6 +568,7 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.persistRecents(fx);
             model.requestSnapshot(fx);
         },
+        .repository_picker_cancelled => model.needs_repository_picker = false,
         .recents_loaded => |result| handleRecentsLoaded(model, result, fx),
         .recents_saved => |result| {
             if (result.outcome != .ok) model.setStatus("Recent repositories could not be saved.");
@@ -375,6 +584,8 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.selection_generation +%= 1;
             model.requestDiff(fx);
         },
+        .select_next => model.moveSelection(fx, .next),
+        .select_previous => model.moveSelection(fx, .previous),
         .request_checkout => model.startAction(fx, .checkout),
         .request_restack => model.requestConfirmation(.restack),
         .request_submit => model.requestConfirmation(.submit_stack),
@@ -386,8 +597,32 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
         },
         .cancel_confirmation => model.confirmation = .none,
         .refresh => if (model.active_action == null) model.requestSnapshot(fx),
+        .app_activated => if (model.hasRepository() and model.active_action == null) model.requestSnapshot(fx),
+        .choose_repository => model.needs_repository_picker = true,
+        .focus_filter => model.filter_focused = true,
+        .stack_resized => |fraction| model.pane_stack_ratio = fraction,
+        .inspector_resized => |fraction| model.pane_inspector_ratio = fraction,
+        .copy_diagnostics => fx.writeClipboard(.{
+            .key = clipboard_effect_key,
+            .text = model.errorText(),
+            .on_result = Effects.clipboardMsg(.diagnostics_copied),
+        }),
+        .diagnostics_copied => |result| {
+            if (result.outcome == .ok) {
+                model.setStatus("Diagnostics copied.");
+            } else {
+                model.setStatus("Diagnostics could not be copied.");
+            }
+        },
+        .dismiss => {
+            model.confirmation = .none;
+            model.clearError();
+        },
         .dismiss_error => model.clearError(),
-        .filter_changed => |event| model.filter.apply(event),
+        .filter_changed => |event| {
+            model.filter_focused = false;
+            model.filter.apply(event);
+        },
     }
 }
 

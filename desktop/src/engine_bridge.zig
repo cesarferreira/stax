@@ -3,6 +3,7 @@ pub const diff_key: u64 = 2;
 pub const action_key: u64 = 3;
 pub const recents_read_key: u64 = 4;
 pub const recents_write_key: u64 = 5;
+pub const clipboard_key: u64 = 6;
 
 pub const Action = enum {
     checkout,
