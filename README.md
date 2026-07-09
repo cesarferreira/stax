@@ -333,6 +333,10 @@ Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands
 
 Benchmarked with `hyperfine` on this repo. Absolute times vary by repo and machine; the ratios do not.
 
+Run `make benchmark-status` for deterministic cold 10/50/100-branch scaling
+fixtures, or add global `--trace` to a command to see instrumented Git
+subprocess and wall-clock timings.
+
 | Benchmark      | stax     | vs [Freephite](https://github.com/bradymadden97/freephite) | vs [Graphite](https://github.com/withgraphite/graphite-cli) |
 |----------------|----------|-----------------|----------------|
 | `st ls`        | baseline | **214.76×** faster | **69.72×** faster |

@@ -9,6 +9,10 @@ pub(crate) const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
 #[command(version)]
 #[command(about = "Fast stacked Git branches and PRs", long_about = None)]
 pub(crate) struct Cli {
+    /// Show Git subprocess timings and a command summary
+    #[arg(long, global = true)]
+    pub(crate) trace: bool,
+
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }

@@ -15,8 +15,6 @@ use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-pub(crate) const READY_FETCH_CONCURRENCY: usize = 6;
-
 const ACTION_WIDTH: usize = 7;
 const PR_WIDTH: usize = 7;
 const REVIEWS_MIN_WIDTH: usize = 7;
@@ -422,7 +420,7 @@ async fn fetch_readiness_rows(
             .iter()
             .map(|branch| fetch_row_for_branch(repo, client, remote, stack, branch)),
     )
-    .buffer_unordered(READY_FETCH_CONCURRENCY);
+    .buffer_unordered(crate::parallel::IO_CONCURRENCY_LIMIT);
 
     while let Some(result) = pending.next().await {
         match result? {
@@ -908,7 +906,7 @@ mod tests {
 
     #[test]
     fn readiness_fetches_multiple_rows_per_batch() {
-        assert!(READY_FETCH_CONCURRENCY > 1);
+        assert!(crate::parallel::IO_CONCURRENCY_LIMIT > 1);
     }
 
     fn run_git(path: &std::path::Path, args: &[&str]) {

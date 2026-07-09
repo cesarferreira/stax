@@ -7,6 +7,8 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
+use super::command;
+
 pub struct GitRepo {
     repo: Repository,
 }
@@ -159,18 +161,11 @@ fn derive_worktree_names(candidates: &[WorktreeLabelCandidate]) -> Vec<String> {
 }
 
 fn run_git_in(cwd: &Path, args: &[&str]) -> Result<Output> {
-    Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .with_context(|| format!("Failed to run git {}", args.join(" ")))
+    command::output(cwd, args).with_context(|| format!("Failed to run git {}", args.join(" ")))
 }
 
 pub fn checkout_branch_in(workdir: &Path, branch: &str) -> Result<()> {
-    let output = Command::new("git")
-        .args(["checkout", branch])
-        .current_dir(workdir)
-        .output()
+    let output = command::output(workdir, &["checkout", branch])
         .with_context(|| format!("Failed to run git checkout {}", branch))?;
 
     if !output.status.success() {
@@ -183,10 +178,7 @@ pub fn checkout_branch_in(workdir: &Path, branch: &str) -> Result<()> {
 
 pub fn local_branch_exists_in(workdir: &Path, branch: &str) -> bool {
     let local_ref = format!("refs/heads/{}", branch);
-    Command::new("git")
-        .args(["show-ref", "--verify", "--quiet", &local_ref])
-        .current_dir(workdir)
-        .status()
+    command::status(workdir, &["show-ref", "--verify", "--quiet", &local_ref])
         .map(|status| status.success())
         .unwrap_or(false)
 }
@@ -291,11 +283,7 @@ impl GitRepo {
     }
 
     fn run_git(&self, cwd: &Path, args: &[&str]) -> Result<Output> {
-        Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .with_context(|| format!("Failed to run git {}", args.join(" ")))
+        command::output(cwd, args).with_context(|| format!("Failed to run git {}", args.join(" ")))
     }
 
     pub(crate) fn normalize_path(path: &Path) -> PathBuf {
@@ -889,44 +877,29 @@ impl GitRepo {
         }
 
         if !misses.is_empty() {
-            // Compute all misses in parallel git subprocesses.
-            let handles: Vec<_> = misses
-                .iter()
-                .map(|(_, base, head)| {
-                    let workdir = workdir.clone();
+            // Compute cache misses with a shared concurrency cap.
+            let computed: Vec<Result<(usize, usize)>> =
+                crate::parallel::map_ordered(&misses, |(_, base, head)| {
                     let range = format!("{}...{}", base, head);
-                    std::thread::spawn(move || -> Result<(usize, usize)> {
-                        let output = Command::new("git")
-                            .args(["rev-list", "--left-right", "--count", &range])
-                            .current_dir(&workdir)
-                            .output()
+                    let output =
+                        command::output(&workdir, &["rev-list", "--left-right", "--count", &range])
                             .context("git rev-list failed")?;
 
-                        if !output.status.success() {
-                            return Ok((0, 0));
-                        }
+                    if !output.status.success() {
+                        return Ok((0, 0));
+                    }
 
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let parts: Vec<&str> = stdout.trim().split('\t').collect();
-                        if parts.len() != 2 {
-                            return Ok((0, 0));
-                        }
-                        // left  = commits in base not in head → behind
-                        // right = commits in head not in base → ahead
-                        let behind: usize = parts[0].parse().unwrap_or(0);
-                        let ahead: usize = parts[1].parse().unwrap_or(0);
-                        Ok((ahead, behind))
-                    })
-                })
-                .collect();
-
-            let computed: Vec<Result<(usize, usize)>> = handles
-                .into_iter()
-                .map(|h| {
-                    h.join()
-                        .unwrap_or_else(|_| anyhow::bail!("ahead/behind worker panicked"))
-                })
-                .collect();
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let parts: Vec<&str> = stdout.trim().split('\t').collect();
+                    if parts.len() != 2 {
+                        return Ok((0, 0));
+                    }
+                    // left  = commits in base not in head → behind
+                    // right = commits in head not in base → ahead
+                    let behind: usize = parts[0].parse().unwrap_or(0);
+                    let ahead: usize = parts[1].parse().unwrap_or(0);
+                    Ok((ahead, behind))
+                });
 
             let mut cache_dirty = false;
             for ((orig_idx, _, _), result) in misses.iter().zip(computed.iter()) {
@@ -1946,10 +1919,7 @@ Use --auto-stash-pop or stash/commit changes first.",
         // Use merge-base diff (A...B) to match PR semantics and avoid showing unrelated
         // parent-side changes when the parent branch has advanced.
         let range = format!("{}...{}", parent, branch);
-        let output = Command::new("git")
-            .args(["diff", "--color=never", &range])
-            .current_dir(self.workdir()?)
-            .output()
+        let output = command::output(self.workdir()?, &["diff", "--color=never", &range])
             .context("Failed to get diff")?;
 
         if !output.status.success() {
@@ -1963,10 +1933,7 @@ Use --auto-stash-pop or stash/commit changes first.",
     /// Get diff stat (numstat) between a branch and its parent
     pub fn diff_stat(&self, branch: &str, parent: &str) -> Result<Vec<(String, usize, usize)>> {
         let range = format!("{}...{}", parent, branch);
-        let output = Command::new("git")
-            .args(["diff", "--numstat", &range])
-            .current_dir(self.workdir()?)
-            .output()
+        let output = command::output(self.workdir()?, &["diff", "--numstat", &range])
             .context("Failed to get diff stat")?;
 
         if !output.status.success() {
