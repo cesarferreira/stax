@@ -6,7 +6,8 @@ RAMDISK_MOUNT ?= /Volumes/$(RAMDISK_NAME)
 MAC_LOCAL_TEST_THREADS ?= 8
 LEVEL ?= minor
 GIT_CLIFF_VERSION ?= 2.13.1
-STAX_TEST_IMAGE ?= stax-test
+TEST_IMAGE_HASH := $(shell git hash-object Dockerfile | cut -c1-12)
+STAX_TEST_IMAGE ?= stax-test:$(TEST_IMAGE_HASH)
 CONTAINER ?= $(shell if [ -x /opt/homebrew/opt/container/bin/container ]; then printf '%s\n' /opt/homebrew/opt/container/bin/container; else printf '%s\n' container; fi)
 CONTAINER_MEMORY ?= 8G
 CONTAINER_CARGO_BUILD_JOBS ?= 4
@@ -113,11 +114,13 @@ test-local-ramdisk: ramdisk-up
 
 # Build the pre-baked Linux test image (nextest + mold linker).
 test-image:
-	docker build -t $(STAX_TEST_IMAGE) -f Dockerfile .
+	@docker image inspect $(STAX_TEST_IMAGE) >/dev/null 2>&1 || \
+		docker build -t $(STAX_TEST_IMAGE) -f Dockerfile .
 
 # Build the same image into Apple Container's local store.
 test-container-image:
-	$(CONTAINER) build -t $(STAX_TEST_IMAGE) -f Dockerfile .
+	@$(CONTAINER) image inspect $(STAX_TEST_IMAGE) >/dev/null 2>&1 || \
+		$(CONTAINER) build -t $(STAX_TEST_IMAGE) -f Dockerfile .
 
 # Shared container test env (Docker and Apple Container).
 define CONTAINER_TEST_RUN
@@ -140,13 +143,13 @@ endef
 
 # Run tests in Linux Docker (fast path on macOS)
 test-docker: test-image
-	mkdir -p .docker-cache/cargo .docker-cache/target
-	$(call CONTAINER_TEST_RUN,docker,,.docker-cache,)
+	mkdir -p .docker-cache/$(TEST_IMAGE_HASH)/cargo .docker-cache/$(TEST_IMAGE_HASH)/target
+	$(call CONTAINER_TEST_RUN,docker,,.docker-cache/$(TEST_IMAGE_HASH),)
 
 # Run tests with Apple container (experimental macOS fast path)
 test-container: test-container-image
-	mkdir -p .container-cache/cargo .container-cache/target
-	$(call CONTAINER_TEST_RUN,$(CONTAINER),-m "$(CONTAINER_MEMORY)",.container-cache,)
+	mkdir -p .container-cache/$(TEST_IMAGE_HASH)/cargo .container-cache/$(TEST_IMAGE_HASH)/target
+	$(call CONTAINER_TEST_RUN,$(CONTAINER),-m "$(CONTAINER_MEMORY)",.container-cache/$(TEST_IMAGE_HASH),)
 
 # Run fast unit tests only
 test-unit:
@@ -158,8 +161,8 @@ test-integration:
 
 # Run clippy and check
 check:
-	cargo check
-	cargo clippy -- -D warnings
+	cargo check --all-targets --all-features
+	./scripts/lint.sh
 
 # Format code
 fmt:
@@ -168,7 +171,7 @@ fmt:
 # Lint (check formatting)
 lint:
 	cargo fmt -- --check
-	cargo clippy -- -D warnings
+	./scripts/lint.sh
 
 # Run with arguments (usage: make run ARGS="status")
 run:
