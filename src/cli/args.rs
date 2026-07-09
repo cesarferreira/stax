@@ -1359,7 +1359,7 @@ pub(crate) enum StackCommands {
     /// Register the current stack as a native GitHub Stack via `gh stack`
     Link,
 
-    /// Remove the native GitHub Stack object via `gh stack`
+    /// Unstack a locally tracked native GitHub Stack via `gh stack`
     Unlink,
 }
 

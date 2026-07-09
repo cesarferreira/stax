@@ -200,10 +200,10 @@ That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR
 ```bash
 st ss                    # auto-links native stack when available
 st stack link            # manually re-link the current stack
-st stack unlink          # remove the native GitHub Stack object
+st stack unlink          # unstack a locally tracked native GitHub Stack
 ```
 
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. stax also strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before talking to `gh stack`, since GitHub's private-preview native-stack API rejects Personal Access Tokens and only accepts an OAuth-authenticated `gh` login (`gh auth login`). `st doctor` recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics, and reports whether the extension is missing, outdated, or up to date.
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. stax also strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before talking to `gh stack`, since GitHub's private-preview native-stack API rejects Personal Access Tokens and only accepts an OAuth-authenticated `gh` login (`gh auth login`). `st doctor` recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics, and reports whether the extension is missing, outdated, or up to date. `st stack unlink` delegates to `gh stack unstack`, so stacks that stax registered with `gh stack link` may need `gh stack checkout <pr>` first to create gh-stack's local tracking; otherwise remove the native stack in the GitHub UI.
 
 → [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 

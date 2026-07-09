@@ -11,7 +11,7 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 | `st log` | `l` | Show stack with commits and PR info |
 | `st submit` | `ss` | Submit full current stack |
 | `st stack link` | | Register the current PR stack as a native GitHub Stack via `gh stack link` |
-| `st stack unlink` | | Remove the native GitHub Stack object via `gh stack unstack` |
+| `st stack unlink` | | Unstack a locally tracked native GitHub Stack via `gh stack unstack`; stax-linked stacks may require `gh stack checkout <pr>` first |
 | `st merge` | | Cascade-merge from bottom to current (see flags below) |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
 | `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
