@@ -1,5 +1,6 @@
 use crate::common::TestRepo;
 use serde_json::Value;
+use std::process::Output;
 
 fn terminal_json(output: &std::process::Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
@@ -9,6 +10,22 @@ fn terminal_json(output: &std::process::Output) -> Value {
             String::from_utf8_lossy(&output.stderr),
         )
     })
+}
+
+fn desktop_diff(repo: &TestRepo, branch: &str, request_id: &str) -> Output {
+    let repo_path = repo.path().to_string_lossy().into_owned();
+    repo.run_stax(&[
+        "desktop",
+        "diff",
+        "--repo",
+        &repo_path,
+        "--schema-version",
+        "1",
+        "--request-id",
+        request_id,
+        "--branch",
+        branch,
+    ])
 }
 
 #[test]
@@ -138,4 +155,88 @@ fn snapshot_rejects_a_non_repository_folder() {
     assert_eq!(event["ok"], false);
     assert_eq!(event["error"]["code"], "invalid_repository");
     assert_eq!(event["error"]["recovery"], "choose_repository");
+}
+
+#[test]
+fn diff_reports_structured_text_changes() {
+    let repo = TestRepo::new();
+    std::fs::create_dir(repo.path().join("src")).unwrap();
+    std::fs::write(repo.path().join("src/example.txt"), "old\nkeep\n").unwrap();
+    assert!(repo.git(&["add", "src/example.txt"]).status.success());
+    assert!(repo.git(&["commit", "-m", "Add example"]).status.success());
+    assert!(repo.run_stax(&["create", "feature/diff"]).status.success());
+    std::fs::write(repo.path().join("src/example.txt"), "new\nkeep\n").unwrap();
+    assert!(repo.git(&["add", "src/example.txt"]).status.success());
+    assert!(
+        repo.git(&["commit", "-m", "Update example"])
+            .status
+            .success()
+    );
+
+    let output = desktop_diff(&repo, "feature/diff", "req-diff");
+
+    assert!(
+        output.status.success(),
+        "diff failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let event = terminal_json(&output);
+    assert_eq!(event["data"]["branch"], "feature/diff");
+    assert_eq!(event["data"]["parent"], "main");
+    assert_eq!(event["data"]["files"][0]["path"], "src/example.txt");
+    let lines = event["data"]["lines"].as_array().unwrap();
+    assert!(lines.iter().any(|line| line["kind"] == "addition"));
+    assert!(lines.iter().any(|line| line["kind"] == "deletion"));
+    assert_eq!(event["data"]["truncated"], false);
+}
+
+#[test]
+fn diff_reports_an_empty_tracked_branch() {
+    let repo = TestRepo::new();
+    assert!(repo.run_stax(&["create", "feature/empty"]).status.success());
+
+    let output = desktop_diff(&repo, "feature/empty", "req-empty-diff");
+
+    assert!(output.status.success());
+    let event = terminal_json(&output);
+    assert_eq!(event["data"]["files"], serde_json::json!([]));
+    assert_eq!(event["data"]["lines"], serde_json::json!([]));
+    assert_eq!(event["data"]["truncated"], false);
+}
+
+#[test]
+fn diff_rejects_an_unknown_branch() {
+    let repo = TestRepo::new();
+
+    let output = desktop_diff(&repo, "missing/branch", "req-missing-diff");
+
+    assert!(!output.status.success());
+    let event = terminal_json(&output);
+    assert_eq!(event["error"]["code"], "branch_not_found");
+    assert_eq!(event["error"]["recovery"], "refresh");
+}
+
+#[test]
+fn diff_truncates_oversized_patch_before_transport_limit() {
+    let repo = TestRepo::new();
+    assert!(
+        repo.run_stax(&["create", "feature/large-diff"])
+            .status
+            .success()
+    );
+    let large_line = format!("{}\n", "x".repeat(470 * 1024));
+    std::fs::write(repo.path().join("large.txt"), large_line).unwrap();
+    assert!(repo.git(&["add", "large.txt"]).status.success());
+    assert!(
+        repo.git(&["commit", "-m", "Add large file"])
+            .status
+            .success()
+    );
+
+    let output = desktop_diff(&repo, "feature/large-diff", "req-large-diff");
+
+    assert!(output.status.success());
+    assert!(output.stdout.len() < 512 * 1024);
+    let event = terminal_json(&output);
+    assert_eq!(event["data"]["truncated"], true);
 }

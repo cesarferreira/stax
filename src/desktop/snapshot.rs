@@ -150,6 +150,15 @@ fn recommended_action(
     }
 }
 
+pub(super) fn generation(repo: &GitRepo, stack: &Stack) -> anyhow::Result<String> {
+    let workdir = repo.workdir()?;
+    let canonical_workdir =
+        std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    let current_branch = repo.current_branch()?;
+    let ordered = display_order(stack);
+    snapshot_generation(repo, &canonical_workdir, &current_branch, &ordered)
+}
+
 fn snapshot_generation(
     repo: &GitRepo,
     canonical_workdir: &Path,

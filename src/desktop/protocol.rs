@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 pub(crate) const SCHEMA_VERSION: u32 = 1;
+pub(crate) const MAX_DIFF_TEXT_BYTES: usize = 448 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DesktopAction {
@@ -96,6 +97,42 @@ pub(crate) struct RepositorySnapshot {
     pub(crate) repository_state: RepositoryState,
     pub(crate) dirty: bool,
     pub(crate) branches: Vec<BranchSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiffLineKind {
+    File,
+    Hunk,
+    Context,
+    Addition,
+    Deletion,
+    Metadata,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DiffFileSnapshot {
+    pub(crate) path: String,
+    pub(crate) additions: usize,
+    pub(crate) deletions: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DiffLineSnapshot {
+    pub(crate) kind: DiffLineKind,
+    pub(crate) text: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DiffSnapshot {
+    pub(crate) generation: String,
+    pub(crate) branch: String,
+    pub(crate) parent: String,
+    pub(crate) additions: usize,
+    pub(crate) deletions: usize,
+    pub(crate) files: Vec<DiffFileSnapshot>,
+    pub(crate) lines: Vec<DiffLineSnapshot>,
+    pub(crate) truncated: bool,
 }
 
 impl DesktopError {
