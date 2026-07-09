@@ -11,7 +11,6 @@ pub(crate) enum DesktopAction {
     OpenPr,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub(crate) struct ProgressEvent<'a> {
     pub(crate) schema_version: u32,
@@ -133,6 +132,13 @@ pub(crate) struct DiffSnapshot {
     pub(crate) files: Vec<DiffFileSnapshot>,
     pub(crate) lines: Vec<DiffLineSnapshot>,
     pub(crate) truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ActionResult {
+    pub(crate) action: &'static str,
+    pub(crate) branch: Option<String>,
+    pub(crate) summary: String,
 }
 
 impl DesktopError {

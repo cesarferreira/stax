@@ -28,6 +28,46 @@ fn desktop_diff(repo: &TestRepo, branch: &str, request_id: &str) -> Output {
     ])
 }
 
+fn desktop_action(
+    repo: &TestRepo,
+    action: &str,
+    branch: Option<&str>,
+    request_id: &str,
+    env: &[(&str, &str)],
+) -> Output {
+    let repo_path = repo.path().to_string_lossy().into_owned();
+    let mut args = vec![
+        "desktop",
+        "action",
+        "--repo",
+        &repo_path,
+        "--schema-version",
+        "1",
+        "--request-id",
+        request_id,
+        "--action",
+        action,
+    ];
+    if let Some(branch) = branch {
+        args.extend(["--branch", branch]);
+    }
+    repo.run_stax_with_env(&args, env)
+}
+
+fn json_lines(output: &Output) -> Vec<Value> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|error| {
+                panic!(
+                    "desktop stdout line was not JSON: {error}\nline={line}\nstderr={}",
+                    String::from_utf8_lossy(&output.stderr)
+                )
+            })
+        })
+        .collect()
+}
+
 #[test]
 fn rejects_unsupported_desktop_schema_with_machine_error() {
     let repo = TestRepo::new();
@@ -239,4 +279,135 @@ fn diff_truncates_oversized_patch_before_transport_limit() {
     assert!(output.stdout.len() < 512 * 1024);
     let event = terminal_json(&output);
     assert_eq!(event["data"]["truncated"], true);
+}
+
+#[test]
+fn action_checkout_switches_to_the_selected_branch() {
+    let repo = TestRepo::new();
+    assert!(
+        repo.run_stax(&["create", "feature/action-checkout"])
+            .status
+            .success()
+    );
+    assert!(repo.git(&["checkout", "main"]).status.success());
+
+    let output = desktop_action(
+        &repo,
+        "checkout",
+        Some("feature/action-checkout"),
+        "req-action-checkout",
+        &[],
+    );
+
+    assert!(
+        output.status.success(),
+        "checkout failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(repo.current_branch(), "feature/action-checkout");
+    let events = json_lines(&output);
+    assert!(events.iter().any(|event| event["phase"] == "checking_out"));
+    let terminal = events.last().unwrap();
+    assert_eq!(terminal["type"], "result");
+    assert_eq!(terminal["ok"], true);
+    assert_eq!(terminal["data"]["action"], "checkout");
+}
+
+#[test]
+fn action_restack_rejects_a_dirty_repository() {
+    let repo = TestRepo::new();
+    assert!(
+        repo.run_stax(&["create", "feature/dirty-restack"])
+            .status
+            .success()
+    );
+    std::fs::write(repo.path().join("dirty.txt"), "dirty\n").unwrap();
+
+    let output = desktop_action(
+        &repo,
+        "restack",
+        Some("feature/dirty-restack"),
+        "req-action-dirty",
+        &[],
+    );
+
+    assert!(!output.status.success());
+    let events = json_lines(&output);
+    assert_eq!(events.last().unwrap()["error"]["code"], "dirty_repository");
+}
+
+#[test]
+fn action_rejects_an_unknown_branch() {
+    let repo = TestRepo::new();
+
+    let output = desktop_action(
+        &repo,
+        "checkout",
+        Some("missing/action-branch"),
+        "req-action-missing",
+        &[],
+    );
+
+    assert!(!output.status.success());
+    let events = json_lines(&output);
+    assert_eq!(events.last().unwrap()["error"]["code"], "branch_not_found");
+}
+
+#[test]
+fn action_open_pr_without_metadata_preserves_current_branch() {
+    let repo = TestRepo::new();
+    assert!(repo.run_stax(&["create", "feature/no-pr"]).status.success());
+    assert!(repo.git(&["checkout", "main"]).status.success());
+
+    let output = desktop_action(
+        &repo,
+        "open-pr",
+        Some("feature/no-pr"),
+        "req-action-no-pr",
+        &[("STAX_DESKTOP_NO_OPEN", "1")],
+    );
+
+    assert!(!output.status.success());
+    assert_eq!(repo.current_branch(), "main");
+    let events = json_lines(&output);
+    assert_eq!(events.last().unwrap()["error"]["code"], "no_pull_request");
+}
+
+#[test]
+fn action_submit_captures_child_output_as_machine_json() {
+    let repo = TestRepo::new();
+    assert!(
+        repo.run_stax(&["create", "feature/submit-no-remote"])
+            .status
+            .success()
+    );
+    std::fs::write(repo.path().join("submit.txt"), "submit\n").unwrap();
+    assert!(repo.git(&["add", "submit.txt"]).status.success());
+    assert!(
+        repo.git(&["commit", "-m", "Add submit change"])
+            .status
+            .success()
+    );
+
+    let output = desktop_action(
+        &repo,
+        "submit-stack",
+        Some("feature/submit-no-remote"),
+        "req-action-submit",
+        &[],
+    );
+
+    assert!(!output.status.success());
+    let events = json_lines(&output);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["type"] == "result")
+            .count(),
+        1
+    );
+    let terminal = events.last().unwrap();
+    assert_eq!(terminal["type"], "result");
+    assert_eq!(terminal["ok"], false);
+    assert_eq!(terminal["error"]["code"], "operation_failed");
 }

@@ -2,11 +2,14 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+mod action;
 mod diff;
 pub(crate) mod protocol;
 mod snapshot;
 
-use protocol::{DesktopAction, DesktopError, DiffSnapshot, RepositorySnapshot, TerminalEvent};
+use protocol::{
+    ActionResult, DesktopAction, DesktopError, DiffSnapshot, RepositorySnapshot, TerminalEvent,
+};
 
 const NATIVE_SDK_TRANSPORT_BYTES: usize = 512 * 1024;
 
@@ -42,8 +45,10 @@ pub(crate) fn run_action(
     branch: Option<String>,
 ) -> Result<()> {
     validate_schema(schema_version, &request_id)?;
-    let _ = (repo, action, branch);
-    not_implemented(&request_id, "action")
+    match action::run(&repo, action, branch.as_deref(), &request_id) {
+        Ok(result) => emit_terminal(&TerminalEvent::success(&request_id, result)),
+        Err(error) => fail::<ActionResult>(&request_id, error),
+    }
 }
 
 fn validate_schema(schema_version: u32, request_id: &str) -> Result<()> {
@@ -54,18 +59,6 @@ fn validate_schema(schema_version: u32, request_id: &str) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn not_implemented(request_id: &str, operation: &str) -> Result<()> {
-    fail::<serde_json::Value>(
-        request_id,
-        DesktopError::operation(
-            "not_implemented",
-            format!("Desktop {operation} is not implemented."),
-            "The desktop engine protocol is still being initialized.",
-            "retry",
-        ),
-    )
 }
 
 fn fail<T: serde::Serialize>(request_id: &str, error: DesktopError) -> Result<()> {
