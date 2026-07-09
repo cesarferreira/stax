@@ -17,3 +17,8 @@ __pycache__/
 
 .playwright-mcp/
 .superpowers/
+/desktop/node_modules
+/desktop/zig-cache
+/desktop/zig-out
+/desktop/dist
+/desktop/assets/icon.png

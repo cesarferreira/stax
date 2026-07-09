@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "devDependencies": {
+    "@native-sdk/cli": "0.4.1"
+  },
+  "scripts": {
+    "check": "native check",
+    "test": "native test",
+    "build": "native build -Dautomation=true",
+    "dev": "native dev"
+  }
+}

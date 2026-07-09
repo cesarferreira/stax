@@ -1,0 +1,15 @@
+<!-- The whole view. Embedded into the binary and hot-reloaded in dev:
+     edit this file while the app runs and the window updates without
+     losing the count. Validate with: native markup check src/app.native -->
+<column gap="12" padding="16">
+  <row gap="8" cross="center">
+    <text grow="1">Counter</text>
+    <button size="sm" variant="ghost" on-press="reset">Reset</button>
+  </row>
+  <row gap="8" main="center" cross="center" grow="1">
+    <button variant="secondary" on-press="decrement">-</button>
+    <text>{count}</text>
+    <button variant="primary" on-press="increment">+</button>
+  </row>
+  <status-bar>count: {count}</status-bar>
+</column>
