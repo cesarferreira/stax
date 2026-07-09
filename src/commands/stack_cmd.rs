@@ -321,7 +321,7 @@ pub fn run_validate() -> Result<()> {
             "{}",
             format!("{} issue(s) found. Run `stax fix` to repair.", issues).yellow()
         );
-        std::process::exit(1);
+        return Err(crate::errors::SilentExit(crate::errors::exit_codes::GENERAL).into());
     }
 
     Ok(())
@@ -614,7 +614,7 @@ pub fn run_test(
         for b in &failed_branches {
             println!("  {}", b.red());
         }
-        std::process::exit(1);
+        return Err(crate::errors::SilentExit(crate::errors::exit_codes::GENERAL).into());
     }
 
     Ok(())

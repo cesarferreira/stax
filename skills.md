@@ -462,7 +462,7 @@ stax undo --no-push                # Undo locally only
 stax redo                          # Re-apply last undone operation
 stax redo <op-id> --no-push        # Redo locally only
 
-stax validate                      # Validate stack metadata health
+stax validate                      # Validate stack metadata health (read-only; never prunes refs)
 stax fix --dry-run                 # Preview metadata repairs
 stax fix --yes                     # Apply metadata repairs non-interactively
 
@@ -637,7 +637,7 @@ Symbols:
 2. Sync often (`stax rs`).
 3. Restack after merges (`stax rs --restack`); squash-merged local parents collapse to their updated parent before descendants rebase.
 4. Prefer amend flow (`stax m`) to keep one commit per branch.
-5. Validate and repair metadata (`stax validate`, `stax fix`) before deep stack surgery.
+5. Validate and repair metadata (`stax validate`, `stax fix`) before deep stack surgery. Validation is read-only; only `fix` removes orphaned refs.
 6. Check stack shape (`stax ls` / `stax ll`) before submit or merge.
 7. Use `stax lane <name> [prompt]` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
 8. After trunk moves, run `stax wt rs` once instead of rebasing each agent worktree manually.

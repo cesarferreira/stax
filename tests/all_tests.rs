@@ -84,6 +84,8 @@ mod rerequest_review_tests;
 mod resolve_tests;
 #[path = "restack_provenance_tests.rs"]
 mod restack_provenance_tests;
+#[path = "runtime_safety_tests.rs"]
+mod runtime_safety_tests;
 #[path = "scoped_submit_tests.rs"]
 mod scoped_submit_tests;
 #[path = "split_hunk_tests.rs"]

@@ -10,6 +10,7 @@ pub mod cli;
 mod commands;
 mod config;
 mod engine;
+pub mod entrypoint;
 pub mod errors;
 mod forge;
 mod git;
