@@ -10,6 +10,7 @@ pub(crate) enum DesktopAction {
     OpenPr,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub(crate) struct ProgressEvent<'a> {
     pub(crate) schema_version: u32,
@@ -39,6 +40,62 @@ pub(crate) struct DesktopError {
     pub(crate) message: String,
     pub(crate) details: String,
     pub(crate) recovery: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RepositoryState {
+    Normal,
+    RebaseInProgress,
+    ConflictInProgress,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RecommendedAction {
+    None,
+    Checkout,
+    Restack,
+    SubmitStack,
+    OpenPr,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PullRequestSnapshot {
+    pub(crate) number: u64,
+    pub(crate) state: String,
+    pub(crate) is_draft: bool,
+    pub(crate) url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct BranchSnapshot {
+    pub(crate) name: String,
+    pub(crate) parent: Option<String>,
+    pub(crate) column: usize,
+    pub(crate) is_current: bool,
+    pub(crate) is_trunk: bool,
+    pub(crate) ahead: usize,
+    pub(crate) behind: usize,
+    pub(crate) needs_restack: bool,
+    pub(crate) has_remote: bool,
+    pub(crate) unpushed: usize,
+    pub(crate) unpulled: usize,
+    pub(crate) pull_request: Option<PullRequestSnapshot>,
+    pub(crate) ci_state: Option<String>,
+    pub(crate) recommended_action: RecommendedAction,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RepositorySnapshot {
+    pub(crate) generation: String,
+    pub(crate) repository_path: String,
+    pub(crate) repository_name: String,
+    pub(crate) trunk: String,
+    pub(crate) current_branch: String,
+    pub(crate) repository_state: RepositoryState,
+    pub(crate) dirty: bool,
+    pub(crate) branches: Vec<BranchSnapshot>,
 }
 
 impl DesktopError {

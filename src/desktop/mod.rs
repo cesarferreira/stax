@@ -3,13 +3,16 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 pub(crate) mod protocol;
+mod snapshot;
 
-use protocol::{DesktopAction, DesktopError, TerminalEvent};
+use protocol::{DesktopAction, DesktopError, RepositorySnapshot, TerminalEvent};
 
 pub(crate) fn run_snapshot(repo: PathBuf, schema_version: u32, request_id: String) -> Result<()> {
     validate_schema(schema_version, &request_id)?;
-    let _ = repo;
-    not_implemented(&request_id, "snapshot")
+    match snapshot::build(&repo) {
+        Ok(snapshot) => emit_terminal(&TerminalEvent::success(&request_id, snapshot)),
+        Err(error) => fail::<RepositorySnapshot>(&request_id, error),
+    }
 }
 
 pub(crate) fn run_diff(
@@ -37,13 +40,16 @@ pub(crate) fn run_action(
 
 fn validate_schema(schema_version: u32, request_id: &str) -> Result<()> {
     if schema_version != protocol::SCHEMA_VERSION {
-        return fail(request_id, DesktopError::unsupported_schema(schema_version));
+        return fail::<serde_json::Value>(
+            request_id,
+            DesktopError::unsupported_schema(schema_version),
+        );
     }
     Ok(())
 }
 
 fn not_implemented(request_id: &str, operation: &str) -> Result<()> {
-    fail(
+    fail::<serde_json::Value>(
         request_id,
         DesktopError::operation(
             "not_implemented",
@@ -54,11 +60,9 @@ fn not_implemented(request_id: &str, operation: &str) -> Result<()> {
     )
 }
 
-fn fail(request_id: &str, error: DesktopError) -> Result<()> {
+fn fail<T: serde::Serialize>(request_id: &str, error: DesktopError) -> Result<()> {
     let code = error.code;
-    emit_terminal(&TerminalEvent::<serde_json::Value>::failure(
-        request_id, error,
-    ))?;
+    emit_terminal(&TerminalEvent::<T>::failure(request_id, error))?;
     anyhow::bail!("desktop request failed: {code}")
 }
 
