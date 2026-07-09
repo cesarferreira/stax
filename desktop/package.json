@@ -6,7 +6,8 @@
   "scripts": {
     "check": "native check",
     "test": "native test",
-    "build": "native build -Dautomation=true",
+    "build": "native build",
+    "build:automation": "native build -Dautomation=true",
     "dev": "bash scripts/dev-macos.sh"
   }
 }

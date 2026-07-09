@@ -3,10 +3,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DESKTOP="$ROOT/desktop"
-APP="$DESKTOP/dist/Stax.app"
+APP="${STAX_DESKTOP_APP:-$DESKTOP/dist/Stax.app}"
 APP_BIN="$APP/Contents/MacOS/Stax"
 ENGINE_BIN="$APP/Contents/Resources/bin/st"
 JQ="$(command -v jq)"
+MODE="${STAX_DESKTOP_SMOKE_MODE:-production}"
 
 test -x "$APP_BIN"
 test -x "$ENGINE_BIN"
@@ -47,35 +48,56 @@ STAX_DISABLE_UPDATE_CHECK=1 "$ENGINE_BIN" desktop snapshot \
   --request-id smoke | "$JQ" -e \
   '.ok == true and .schema_version == 1 and .data.trunk != null' >/dev/null
 
-SMOKE_HOME="$WORK/home"
-mkdir -p "$SMOKE_HOME/Library/Application Support/Stax"
-printf '%s\n' "$FIXTURE_REPO" > "$SMOKE_HOME/Library/Application Support/Stax/recent-repositories"
-EMPTY_PATH="$WORK/empty-path"
-mkdir -p "$EMPTY_PATH"
+if [[ "$MODE" == "automation" ]]; then
+  SMOKE_HOME="$WORK/home"
+  mkdir -p "$SMOKE_HOME/Library/Application Support/Stax"
+  printf '%s\n' "$FIXTURE_REPO" > "$SMOKE_HOME/Library/Application Support/Stax/recent-repositories"
+  EMPTY_PATH="$WORK/empty-path"
+  mkdir -p "$EMPTY_PATH"
 
-rm -rf "$DESKTOP/.zig-cache/native-sdk-automation"
-(
-  cd "$DESKTOP"
-  env \
-    HOME="$SMOKE_HOME" \
-    PATH="$EMPTY_PATH:/usr/bin:/bin" \
-    STAX_DISABLE_UPDATE_CHECK=1 \
-    "$APP_BIN"
-) >"$WORK/app.log" 2>&1 &
-APP_PID=$!
+  rm -rf "$DESKTOP/.zig-cache/native-sdk-automation"
+  (
+    cd "$DESKTOP"
+    env \
+      HOME="$SMOKE_HOME" \
+      PATH="$EMPTY_PATH:/usr/bin:/bin" \
+      STAX_DISABLE_UPDATE_CHECK=1 \
+      "$APP_BIN"
+  ) >"$WORK/app.log" 2>&1 &
+  APP_PID=$!
 
-(
-  cd "$DESKTOP"
-  npm exec -- native automate wait >/dev/null
-  npm exec -- native automate assert \
-    'gpu_nonblank=true' \
-    'name="Stack"' \
-    'name="Branch"' \
-    'name="Patch"' \
-    'name="repository"'
-  npm exec -- native automate assert --absent \
-    'error event=' \
-    'dispatch_errors=[1-9]'
-)
+  (
+    cd "$DESKTOP"
+    npm exec -- native automate wait >/dev/null
+    npm exec -- native automate assert \
+      'gpu_nonblank=true' \
+      'name="Stack"' \
+      'name="Branch"' \
+      'name="Patch"' \
+      'name="repository"'
+    npm exec -- native automate assert --absent \
+      'error event=' \
+      'dispatch_errors=[1-9]'
+  )
+elif [[ "$MODE" == "production" ]]; then
+  /usr/bin/open -F -n "$APP"
+  for _ in {1..20}; do
+    APP_PID="$(/usr/bin/pgrep -n -f -x "$APP_BIN" || true)"
+    [[ -n "$APP_PID" ]] && break
+    sleep 0.1
+  done
+  if [[ -z "$APP_PID" ]]; then
+    echo "packaged app exited during Launch Services startup" >&2
+    exit 1
+  fi
+  sleep 1
+  if ! kill -0 "$APP_PID" 2>/dev/null; then
+    echo "packaged app exited during Launch Services startup" >&2
+    exit 1
+  fi
+else
+  echo "unknown desktop smoke mode: $MODE" >&2
+  exit 2
+fi
 
-echo "Stax.app smoke test passed"
+echo "Stax.app $MODE smoke test passed"
