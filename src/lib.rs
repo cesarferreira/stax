@@ -9,6 +9,7 @@ mod ci;
 pub mod cli;
 mod commands;
 mod config;
+mod desktop;
 mod engine;
 pub mod entrypoint;
 pub mod errors;

@@ -236,6 +236,57 @@ pub(crate) struct AiLaneArgs {
     pub(crate) agent_arg: Vec<String>,
 }
 
+#[derive(Args, Clone)]
+pub(crate) struct DesktopRequest {
+    #[arg(long)]
+    pub(crate) repo: PathBuf,
+    #[arg(long, default_value_t = 1)]
+    pub(crate) schema_version: u32,
+    #[arg(long)]
+    pub(crate) request_id: String,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum DesktopActionArg {
+    Checkout,
+    Restack,
+    SubmitStack,
+    OpenPr,
+}
+
+impl From<DesktopActionArg> for crate::desktop::protocol::DesktopAction {
+    fn from(value: DesktopActionArg) -> Self {
+        match value {
+            DesktopActionArg::Checkout => Self::Checkout,
+            DesktopActionArg::Restack => Self::Restack,
+            DesktopActionArg::SubmitStack => Self::SubmitStack,
+            DesktopActionArg::OpenPr => Self::OpenPr,
+        }
+    }
+}
+
+#[derive(Clone, Subcommand)]
+pub(crate) enum DesktopCommands {
+    Snapshot {
+        #[command(flatten)]
+        request: DesktopRequest,
+    },
+    Diff {
+        #[command(flatten)]
+        request: DesktopRequest,
+        #[arg(long)]
+        branch: String,
+    },
+    Action {
+        #[command(flatten)]
+        request: DesktopRequest,
+        #[arg(long, value_enum)]
+        action: DesktopActionArg,
+        #[arg(long)]
+        branch: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 pub(crate) enum Commands {
     /// Internal worker that refreshes the cached release check.
@@ -1249,6 +1300,12 @@ pub(crate) enum Commands {
         /// Accept default setup actions without prompting
         #[arg(short, long, conflicts_with_all = ["print", "refresh"])]
         yes: bool,
+    },
+
+    #[command(hide = true)]
+    Desktop {
+        #[command(subcommand)]
+        command: DesktopCommands,
     },
 
     // Hidden top-level shortcuts for convenience

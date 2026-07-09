@@ -48,6 +48,8 @@ mod create_insert_tests;
 mod create_rollback_tests;
 #[path = "demo_tests.rs"]
 mod demo_tests;
+#[path = "desktop_tests.rs"]
+mod desktop_tests;
 #[path = "detach_tests.rs"]
 mod detach_tests;
 #[path = "doctor_fix_tests.rs"]

@@ -38,6 +38,33 @@ pub fn run() -> Result<()> {
     let _trace = crate::git::command::TraceGuard::start(cli.trace);
     update::spawn_background_check();
 
+    if let Some(Commands::Desktop { command }) = &cli.command {
+        return match command.clone() {
+            DesktopCommands::Snapshot { request } => crate::desktop::run_snapshot(
+                request.repo,
+                request.schema_version,
+                request.request_id,
+            ),
+            DesktopCommands::Diff { request, branch } => crate::desktop::run_diff(
+                request.repo,
+                request.schema_version,
+                request.request_id,
+                branch,
+            ),
+            DesktopCommands::Action {
+                request,
+                action,
+                branch,
+            } => crate::desktop::run_action(
+                request.repo,
+                request.schema_version,
+                request.request_id,
+                action.into(),
+                branch,
+            ),
+        };
+    }
+
     if let Some(Commands::Setup {
         print,
         refresh,
@@ -855,6 +882,9 @@ pub fn run() -> Result<()> {
         },
         Commands::Setup { .. } => {
             unreachable!("setup returns before repo initialization")
+        }
+        Commands::Desktop { .. } => {
+            unreachable!("desktop returns before repo initialization")
         }
         Commands::Lane {
             name,
