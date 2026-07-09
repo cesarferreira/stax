@@ -1,3 +1,4 @@
+pub(crate) mod command;
 pub mod refs;
 pub mod repo;
 

@@ -34,6 +34,7 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
+    let _trace = crate::git::command::TraceGuard::start(cli.trace);
     update::spawn_background_check();
 
     if let Some(Commands::Setup {

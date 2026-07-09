@@ -16,6 +16,7 @@ mod forge;
 mod git;
 mod notifications;
 mod ops;
+mod parallel;
 mod progress;
 mod remote;
 mod tui;
