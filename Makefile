@@ -203,8 +203,7 @@ desktop-build:
 	npm run --prefix desktop build
 
 desktop-dev:
-	cargo build --bin st
-	STAX_DESKTOP_ENGINE="$$(pwd)/target/debug/st" npm run --prefix desktop dev
+	npm run --prefix desktop dev
 
 desktop-package:
 	bash desktop/scripts/package-macos.sh

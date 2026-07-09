@@ -894,8 +894,21 @@ fn validateCollectExit(model: *Model, exit: native_sdk.EffectExit, label: []cons
         return false;
     }
     if (exit.output.len == 0) {
-        _ = label;
-        model.setError("The bundled engine returned no terminal result.");
+        if (std.mem.indexOf(u8, exit.stderr_tail, "unrecognized subcommand 'desktop'") != null) {
+            model.setError("The bundled engine does not support the desktop protocol. Rebuild the app and engine together.");
+            return false;
+        }
+        if (exit.stderr_tail.len > 0) {
+            var buffer: [max_error_bytes]u8 = undefined;
+            const prefix = "The bundled engine {s} command failed: ";
+            const reserved = prefix.len + label.len;
+            const detail = exit.stderr_tail[0..@min(exit.stderr_tail.len, buffer.len -| reserved)];
+            const text = std.fmt.bufPrint(&buffer, prefix ++ "{s}", .{ label, detail }) catch
+                "The bundled engine returned no terminal result.";
+            model.setError(text);
+            return false;
+        }
+        model.setError("The bundled engine returned no terminal result. Rebuild the app and engine together.");
         return false;
     }
     return true;

@@ -487,6 +487,25 @@ test "bridge exits surface truncation malformed schema and spawn failures" {
     try testing.expect(std.mem.indexOf(u8, model.errorText(), "start") != null);
 }
 
+test "empty bridge output explains an incompatible development engine" {
+    var model = initModel();
+    defer model.deinit();
+    var fx = Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    model_mod.update(&model, .{ .repository_selected = "/tmp/repo" }, &fx);
+
+    model_mod.update(&model, .{ .snapshot_exit = .{
+        .key = model_mod.snapshot_effect_key,
+        .code = 2,
+        .reason = .exited,
+        .stderr_tail = "error: unrecognized subcommand 'desktop'",
+    } }, &fx);
+
+    try testing.expect(std.mem.indexOf(u8, model.errorText(), "does not support the desktop protocol") != null);
+    try testing.expect(std.mem.indexOf(u8, model.errorText(), "Rebuild") != null);
+}
+
 test "malformed diff response clears loading state" {
     var model = initModel();
     defer model.deinit();

@@ -7,6 +7,6 @@
     "check": "native check",
     "test": "native test",
     "build": "native build -Dautomation=true",
-    "dev": "native dev"
+    "dev": "bash scripts/dev-macos.sh"
   }
 }
