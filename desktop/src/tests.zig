@@ -252,6 +252,26 @@ test "snapshot success selects current branch and requests its diff" {
     try testing.expectEqualStrings("feature/ui", request.argv[10]);
 }
 
+test "parsed snapshots own strings after the effect scratch is reused" {
+    var model = initModel();
+    defer model.deinit();
+    var fx = Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    try loadSnapshot(&model, &fx);
+    const request = fx.pendingSpawnAt(0).?;
+    const json = try diffFixture(testing.allocator, request.argv[8], "generation-one");
+    defer testing.allocator.free(json);
+
+    try fx.feedOutput(model_mod.diff_effect_key, json);
+    try fx.feedExit(model_mod.diff_effect_key, 0);
+    drainEffects(&model, &fx);
+
+    try testing.expect(model.diff != null);
+    try testing.expectEqualStrings("feature/ui", model.selectedBranch().?);
+    try testing.expectEqualStrings("repo", model.snapshot.?.repository_name);
+}
+
 test "selection generation ignores late diff responses" {
     var model = initModel();
     defer model.deinit();

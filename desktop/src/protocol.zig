@@ -127,7 +127,7 @@ pub fn parseTerminal(
         TerminalEnvelope(T),
         allocator,
         bytes,
-        .{ .ignore_unknown_fields = false },
+        .{ .ignore_unknown_fields = false, .allocate = .alloc_always },
     );
     try expectSchema(value.schema_version);
     if (!std.mem.eql(u8, value.type, "result")) return error.UnexpectedEventType;
@@ -141,7 +141,7 @@ pub fn parseProgress(allocator: std.mem.Allocator, bytes: []const u8) !ProgressE
         ProgressEvent,
         allocator,
         bytes,
-        .{ .ignore_unknown_fields = false },
+        .{ .ignore_unknown_fields = false, .allocate = .alloc_always },
     );
     try expectSchema(value.schema_version);
     if (!std.mem.eql(u8, value.type, "progress")) return error.UnexpectedEventType;
