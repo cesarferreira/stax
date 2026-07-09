@@ -282,6 +282,35 @@ fn diff_truncates_oversized_patch_before_transport_limit() {
 }
 
 #[test]
+fn diff_truncates_json_expanding_patch_before_transport_limit() {
+    let repo = TestRepo::new();
+    assert!(
+        repo.run_stax(&["create", "feature/escaped-diff"])
+            .status
+            .success()
+    );
+    let escaped_line = format!("{}\n", "\\".repeat(300 * 1024));
+    std::fs::write(repo.path().join("escaped.txt"), escaped_line).unwrap();
+    assert!(repo.git(&["add", "escaped.txt"]).status.success());
+    assert!(
+        repo.git(&["commit", "-m", "Add escaped content"])
+            .status
+            .success()
+    );
+
+    let output = desktop_diff(&repo, "feature/escaped-diff", "req-escaped-diff");
+
+    assert!(
+        output.status.success(),
+        "diff failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.len() < 512 * 1024);
+    let event = terminal_json(&output);
+    assert_eq!(event["data"]["truncated"], true);
+}
+
+#[test]
 fn action_checkout_switches_to_the_selected_branch() {
     let repo = TestRepo::new();
     assert!(

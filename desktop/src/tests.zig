@@ -252,6 +252,91 @@ test "snapshot success selects current branch and requests its diff" {
     try testing.expectEqualStrings("feature/ui", request.argv[10]);
 }
 
+test "failed repository selection cannot redirect actions away from the visible snapshot" {
+    var model = initModel();
+    defer model.deinit();
+    var fx = Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    try loadSnapshot(&model, &fx);
+    try testing.expectEqualStrings("/tmp/repo", model.repositoryPath());
+
+    model_mod.update(&model, .{ .repository_selected = "/tmp/other" }, &fx);
+    try testing.expectEqualStrings("/tmp/repo", model.repositoryPath());
+    try testing.expect(model.actionsDisabled());
+
+    var request_id: ?[]const u8 = null;
+    var index: usize = 0;
+    while (index < fx.pendingSpawnCount()) : (index += 1) {
+        const request = fx.pendingSpawnAt(index).?;
+        if (request.key == model_mod.snapshot_effect_key and std.mem.eql(u8, request.argv[4], "/tmp/other")) {
+            request_id = request.argv[8];
+            break;
+        }
+    }
+    const failure = try std.fmt.allocPrint(
+        testing.allocator,
+        "{{\"schema_version\":1,\"request_id\":\"{s}\",\"type\":\"result\",\"ok\":false,\"error\":{{\"code\":\"invalid_repository\",\"message\":\"Not a repository\",\"details\":\"missing .git\",\"recovery\":\"choose_repository\"}}}}",
+        .{request_id.?},
+    );
+    defer testing.allocator.free(failure);
+    model_mod.update(&model, .{ .snapshot_exit = .{
+        .key = model_mod.snapshot_effect_key,
+        .code = 1,
+        .reason = .exited,
+        .output = failure,
+    } }, &fx);
+
+    try testing.expectEqualStrings("/tmp/repo", model.repositoryPath());
+    try testing.expectEqualStrings("feature/ui", model.selectedBranch().?);
+    const recents = model.recentRows(testing.allocator);
+    defer testing.allocator.free(recents);
+    try testing.expectEqual(@as(usize, 1), recents.len);
+    try testing.expectEqualStrings("/tmp/repo", recents[0].path);
+    model_mod.update(&model, .request_checkout, &fx);
+    var found_checkout = false;
+    index = 0;
+    while (index < fx.pendingSpawnCount()) : (index += 1) {
+        const request = fx.pendingSpawnAt(index).?;
+        if (request.key == model_mod.action_effect_key) {
+            try testing.expectEqualStrings("/tmp/repo", request.argv[4]);
+            found_checkout = true;
+        }
+    }
+    try testing.expect(found_checkout);
+}
+
+test "invalid persisted recent is removed after validation" {
+    var model = initModel();
+    defer model.deinit();
+    var fx = Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+
+    model_mod.update(&model, .{ .recents_loaded = .{
+        .key = model_mod.recents_read_effect_key,
+        .outcome = .ok,
+        .bytes = "/tmp/missing\n",
+    } }, &fx);
+    const request = fx.pendingSpawnAt(0).?;
+    const failure = try std.fmt.allocPrint(
+        testing.allocator,
+        "{{\"schema_version\":1,\"request_id\":\"{s}\",\"type\":\"result\",\"ok\":false,\"error\":{{\"code\":\"invalid_repository\",\"message\":\"Not a repository\",\"details\":\"missing .git\",\"recovery\":\"choose_repository\"}}}}",
+        .{request.argv[8]},
+    );
+    defer testing.allocator.free(failure);
+
+    model_mod.update(&model, .{ .snapshot_exit = .{
+        .key = model_mod.snapshot_effect_key,
+        .code = 1,
+        .reason = .exited,
+        .output = failure,
+    } }, &fx);
+
+    try testing.expectEqual(@as(usize, 0), model.recentRows(testing.allocator).len);
+    try testing.expect(model.needs_repository_picker);
+}
+
 test "parsed snapshots own strings after the effect scratch is reused" {
     var model = initModel();
     defer model.deinit();
@@ -400,6 +485,27 @@ test "bridge exits surface truncation malformed schema and spawn failures" {
         .reason = .spawn_failed,
     } }, &fx);
     try testing.expect(std.mem.indexOf(u8, model.errorText(), "start") != null);
+}
+
+test "malformed diff response clears loading state" {
+    var model = initModel();
+    defer model.deinit();
+    var fx = Effects.init(testing.allocator);
+    defer fx.deinit();
+    fx.executor = .fake;
+    try loadSnapshot(&model, &fx);
+    try testing.expect(model.loading_diff);
+
+    model_mod.update(&model, .{ .diff_exit = .{
+        .key = model_mod.diff_effect_key,
+        .code = 0,
+        .reason = .exited,
+        .output = "{",
+    } }, &fx);
+
+    try testing.expect(!model.loading_diff);
+    try testing.expect(!model.actionsDisabled());
+    try testing.expect(std.mem.indexOf(u8, model.errorText(), "malformed") != null);
 }
 
 fn findByText(widget: canvas.Widget, value: []const u8) ?canvas.Widget {

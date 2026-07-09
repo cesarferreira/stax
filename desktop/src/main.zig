@@ -156,17 +156,24 @@ const AppHost = struct {
 };
 
 fn resolveEnginePath(init: std.process.Init, allocator: std.mem.Allocator) ![]const u8 {
-    if (init.environ_map.get("STAX_DESKTOP_ENGINE")) |path| return path;
-
-    var args = std.process.Args.Iterator.init(init.minimal.args);
-    const executable = args.next() orelse "";
-    if (std.fs.path.dirname(executable)) |macos_dir| {
-        if (std.mem.eql(u8, std.fs.path.basename(macos_dir), "MacOS")) {
-            const contents_dir = std.fs.path.dirname(macos_dir) orelse macos_dir;
-            return std.fs.path.join(allocator, &.{ contents_dir, "Resources", "bin", "st" });
-        }
+    if (builtin.mode == .Debug) {
+        if (init.environ_map.get("STAX_DESKTOP_ENGINE")) |path| return path;
     }
-    return "../target/debug/st";
+
+    var executable_dir_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const executable_dir_len = try std.process.executableDirPath(init.io, &executable_dir_buffer);
+    return bundledEnginePath(allocator, executable_dir_buffer[0..executable_dir_len]);
+}
+
+fn bundledEnginePath(allocator: std.mem.Allocator, executable_dir: []const u8) ![]const u8 {
+    if (!std.mem.eql(u8, std.fs.path.basename(executable_dir), "MacOS")) {
+        return error.BundledEngineUnavailable;
+    }
+    const contents_dir = std.fs.path.dirname(executable_dir) orelse return error.BundledEngineUnavailable;
+    if (!std.mem.eql(u8, std.fs.path.basename(contents_dir), "Contents")) {
+        return error.BundledEngineUnavailable;
+    }
+    return std.fs.path.join(allocator, &.{ contents_dir, "Resources", "bin", "st" });
 }
 
 fn resolveStorePath(init: std.process.Init, allocator: std.mem.Allocator) ![]const u8 {
@@ -223,4 +230,20 @@ pub fn main(init: std.process.Init) !void {
 
 test {
     _ = @import("tests.zig");
+}
+
+test "bundle engine path is derived from the executable directory" {
+    const path = try bundledEnginePath(
+        std.testing.allocator,
+        "/Applications/Stax.app/Contents/MacOS",
+    );
+    defer std.testing.allocator.free(path);
+    try std.testing.expectEqualStrings(
+        "/Applications/Stax.app/Contents/Resources/bin/st",
+        path,
+    );
+    try std.testing.expectError(
+        error.BundledEngineUnavailable,
+        bundledEnginePath(std.testing.allocator, "/tmp/zig-out/bin"),
+    );
 }

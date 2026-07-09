@@ -1,6 +1,6 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 use crate::commands::resolve_pr::resolve_pr_number;
 use crate::config::Config;
@@ -14,6 +14,21 @@ use super::protocol::{ActionResult, DesktopAction, DesktopError, ProgressEvent, 
 struct ChildCommand {
     phase: &'static str,
     args: Vec<String>,
+}
+
+const MAX_CHILD_STREAM_BYTES: usize = 16 * 1024;
+
+struct ChildOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+}
+
+struct CapturedStream {
+    bytes: Vec<u8>,
+    truncated: bool,
 }
 
 pub(super) fn run(
@@ -140,7 +155,16 @@ fn open_pull_request(
                 )
             })?;
         if !output.status.success() {
-            return Err(child_failure(&["/usr/bin/open", &url], &output));
+            return Err(child_failure(
+                &["/usr/bin/open", &url],
+                ChildOutput {
+                    status: output.status,
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                },
+            ));
         }
     }
 
@@ -223,7 +247,7 @@ fn emit_progress(request_id: &str, phase: &str, message: &str) -> Result<(), Des
     stdout.flush().map_err(bridge_error)
 }
 
-fn run_stax_child(repo_path: &Path, args: &[&str]) -> Result<Output, DesktopError> {
+fn run_stax_child(repo_path: &Path, args: &[&str]) -> Result<ChildOutput, DesktopError> {
     let executable = std::env::current_exe().map_err(|error| {
         DesktopError::operation(
             "engine_unavailable",
@@ -232,12 +256,14 @@ fn run_stax_child(repo_path: &Path, args: &[&str]) -> Result<Output, DesktopErro
             "reinstall_app",
         )
     })?;
-    Command::new(executable)
+    let mut child = Command::new(executable)
         .args(args)
         .current_dir(repo_path)
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| {
             DesktopError::operation(
                 "operation_failed",
@@ -245,28 +271,101 @@ fn run_stax_child(repo_path: &Path, args: &[&str]) -> Result<Output, DesktopErro
                 error.to_string(),
                 "retry",
             )
-        })
+        })?;
+    let stdout = child.stdout.take().ok_or_else(capture_error)?;
+    let stderr = child.stderr.take().ok_or_else(capture_error)?;
+    let stdout_thread = std::thread::Builder::new()
+        .name("stax-desktop-stdout".to_string())
+        .spawn(move || read_bounded(stdout))
+        .map_err(capture_io_error)?;
+    let stderr_thread = std::thread::Builder::new()
+        .name("stax-desktop-stderr".to_string())
+        .spawn(move || read_bounded(stderr))
+        .map_err(capture_io_error)?;
+    let status = child.wait().map_err(capture_io_error)?;
+    let stdout = stdout_thread
+        .join()
+        .map_err(|_| capture_error())?
+        .map_err(capture_io_error)?;
+    let stderr = stderr_thread
+        .join()
+        .map_err(|_| capture_error())?
+        .map_err(capture_io_error)?;
+    Ok(ChildOutput {
+        status,
+        stdout: stdout.bytes,
+        stderr: stderr.bytes,
+        stdout_truncated: stdout.truncated,
+        stderr_truncated: stderr.truncated,
+    })
 }
 
-fn ensure_child_success(args: &[&str], output: Output) -> Result<(), DesktopError> {
+fn ensure_child_success(args: &[&str], output: ChildOutput) -> Result<(), DesktopError> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(child_failure(args, &output))
+        Err(child_failure(args, output))
     }
 }
 
-fn child_failure(args: &[&str], output: &Output) -> DesktopError {
+fn child_failure(args: &[&str], output: ChildOutput) -> DesktopError {
+    let stdout_marker = if output.stdout_truncated {
+        "\n...[stdout truncated]"
+    } else {
+        ""
+    };
+    let stderr_marker = if output.stderr_truncated {
+        "\n...[stderr truncated]"
+    } else {
+        ""
+    };
     DesktopError::operation(
         "operation_failed",
         "The stax operation failed.",
         format!(
-            "command: st {}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+            "command: st {}\nstatus: {}\nstdout:\n{}{}\nstderr:\n{}{}",
             args.join(" "),
             output.status,
             String::from_utf8_lossy(&output.stdout),
+            stdout_marker,
             String::from_utf8_lossy(&output.stderr),
+            stderr_marker,
         ),
+        "retry",
+    )
+}
+
+fn read_bounded(mut reader: impl Read) -> std::io::Result<CapturedStream> {
+    let mut bytes = Vec::with_capacity(MAX_CHILD_STREAM_BYTES);
+    let mut truncated = false;
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let remaining = MAX_CHILD_STREAM_BYTES.saturating_sub(bytes.len());
+        let keep = remaining.min(read);
+        bytes.extend_from_slice(&buffer[..keep]);
+        truncated |= keep < read;
+    }
+    Ok(CapturedStream { bytes, truncated })
+}
+
+fn capture_error() -> DesktopError {
+    DesktopError::operation(
+        "operation_failed",
+        "The stax operation output could not be captured.",
+        "A bundled engine output stream was unavailable.",
+        "retry",
+    )
+}
+
+fn capture_io_error(error: std::io::Error) -> DesktopError {
+    DesktopError::operation(
+        "operation_failed",
+        "The stax operation output could not be captured.",
+        error.to_string(),
         "retry",
     )
 }
@@ -291,6 +390,8 @@ fn bridge_error(error: impl std::fmt::Display) -> DesktopError {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
 
     #[test]
@@ -309,6 +410,15 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn child_output_capture_is_bounded_and_marks_truncation() {
+        let input = vec![b'x'; MAX_CHILD_STREAM_BYTES * 3];
+        let captured = read_bounded(Cursor::new(input)).unwrap();
+
+        assert_eq!(captured.bytes.len(), MAX_CHILD_STREAM_BYTES);
+        assert!(captured.truncated);
     }
 
     #[test]

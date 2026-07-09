@@ -5,7 +5,21 @@
     <row height="58" padding="12" gap="10" cross="center" background="surface" window-drag="true">
       <text><span weight="bold">Stax</span></text>
       <badge variant="secondary">WORKSHOP</badge>
-      <text grow="1" foreground="text_muted">{repositoryName}</text>
+      <panel grow="1" on-press="toggle_recents" label="Recent repositories">
+        <row cross="center" gap="6">
+          <text grow="1" foreground="text_muted">{repositoryName}</text>
+          <icon name="chevron-down" foreground="text_muted" />
+        </row>
+        <if test="{recentsOpen}">
+          <dropdown-menu anchor="below" anchor-alignment="stretch" on-dismiss="close_recents">
+            <for each="recentRows" as="recent" key="path">
+              <menu-item on-press="select_recent:{recent.index}">{recent.label}</menu-item>
+            </for>
+            <separator />
+            <menu-item on-press="choose_repository">Open Repository...</menu-item>
+          </dropdown-menu>
+        </if>
+      </panel>
       <button size="sm" variant="ghost" icon="folder-open" label="Choose repository" on-press="choose_repository"></button>
       <button size="sm" variant="ghost" icon="refresh-cw" label="Refresh repository" disabled="{actionsDisabled}" on-press="refresh"></button>
     </row>

@@ -19,6 +19,7 @@ pub fn requestSnapshot(
     request_id: []const u8,
 ) void {
     const Fx = @TypeOf(fx.*);
+    fx.cancel(snapshot_key);
     const argv = [_][]const u8{
         engine_path,
         "desktop",

@@ -29,10 +29,7 @@ pub(crate) fn run_diff(
 ) -> Result<()> {
     validate_schema(schema_version, &request_id)?;
     match diff::build(&repo, &branch) {
-        Ok(snapshot) => {
-            let event = TerminalEvent::success(&request_id, snapshot);
-            emit_terminal_bounded(&event, &request_id)
-        }
+        Ok(snapshot) => emit_diff_terminal(snapshot, &request_id),
         Err(error) => fail::<DiffSnapshot>(&request_id, error),
     }
 }
@@ -76,32 +73,48 @@ fn emit_terminal<T: serde::Serialize>(event: &protocol::TerminalEvent<'_, T>) ->
     Ok(())
 }
 
-fn emit_terminal_bounded<T: serde::Serialize>(
-    event: &protocol::TerminalEvent<'_, T>,
-    request_id: &str,
-) -> Result<()> {
+fn emit_diff_terminal(mut snapshot: DiffSnapshot, request_id: &str) -> Result<()> {
     use std::io::Write;
 
-    let mut payload = serde_json::to_vec(event)?;
-    payload.push(b'\n');
-    if payload.len() > NATIVE_SDK_TRANSPORT_BYTES {
-        return fail::<T>(
+    loop {
+        let event = TerminalEvent::success(request_id, &snapshot);
+        let mut payload = serde_json::to_vec(&event)?;
+        payload.push(b'\n');
+        if payload.len() <= NATIVE_SDK_TRANSPORT_BYTES {
+            let mut stdout = std::io::stdout().lock();
+            stdout.write_all(&payload)?;
+            stdout.flush()?;
+            return Ok(());
+        }
+
+        snapshot.truncated = true;
+        if !snapshot.lines.is_empty() {
+            let keep = proportional_keep(snapshot.lines.len(), payload.len());
+            snapshot.lines.truncate(keep);
+            continue;
+        }
+        if !snapshot.files.is_empty() {
+            let keep = proportional_keep(snapshot.files.len(), payload.len());
+            snapshot.files.truncate(keep);
+            continue;
+        }
+
+        return fail::<DiffSnapshot>(
             request_id,
             DesktopError::operation(
                 "bridge_payload_too_large",
                 "The desktop response exceeded the bridge transport limit.",
                 format!(
-                    "Serialized response was {} bytes; the limit is {} bytes.",
-                    payload.len(),
-                    NATIVE_SDK_TRANSPORT_BYTES
+                    "Serialized response was {} bytes after removing patch detail.",
+                    payload.len()
                 ),
                 "reinstall_app",
             ),
         );
     }
+}
 
-    let mut stdout = std::io::stdout().lock();
-    stdout.write_all(&payload)?;
-    stdout.flush()?;
-    Ok(())
+fn proportional_keep(item_count: usize, payload_bytes: usize) -> usize {
+    let keep = item_count.saturating_mul(NATIVE_SDK_TRANSPORT_BYTES) / payload_bytes;
+    keep.min(item_count.saturating_sub(1))
 }

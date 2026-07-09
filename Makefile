@@ -204,7 +204,7 @@ desktop-build:
 
 desktop-dev:
 	cargo build --bin st
-	npm run --prefix desktop dev
+	STAX_DESKTOP_ENGINE="$$(pwd)/target/debug/st" npm run --prefix desktop dev
 
 desktop-package:
 	bash desktop/scripts/package-macos.sh

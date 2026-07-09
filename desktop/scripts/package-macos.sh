@@ -4,11 +4,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
+  echo "Stax.app packaging currently requires Apple Silicon macOS." >&2
+  exit 1
+fi
+
 cargo build --release --bin st
+/usr/bin/file target/release/st | grep -q 'Mach-O 64-bit executable arm64'
 npm ci --prefix desktop
 npm run --prefix desktop check
 npm run --prefix desktop test
 npm run --prefix desktop build
+/usr/bin/file desktop/zig-out/bin/Stax | grep -q 'Mach-O 64-bit executable arm64'
 
 rm -rf desktop/dist/Stax.app
 (

@@ -48,6 +48,12 @@ pub const DiffRow = struct {
     is_hunk: bool,
 };
 
+pub const RecentRow = struct {
+    index: usize,
+    path: []const u8,
+    label: []const u8,
+};
+
 pub const Msg = union(enum) {
     pub const view_unbound = .{
         "repository_selected",
@@ -75,8 +81,11 @@ pub const Msg = union(enum) {
     action_line: native_sdk.EffectLine,
     action_exit: native_sdk.EffectExit,
     select_branch: usize,
+    select_recent: usize,
     select_next,
     select_previous,
+    toggle_recents,
+    close_recents,
     request_checkout,
     request_restack,
     request_submit,
@@ -112,6 +121,8 @@ pub const Model = struct {
         "request_sequence",
         "snapshot_request_storage",
         "snapshot_request_len",
+        "snapshot_repository_storage",
+        "snapshot_repository_len",
         "diff_request_storage",
         "diff_request_len",
         "action_request_storage",
@@ -132,6 +143,7 @@ pub const Model = struct {
         "action_terminal_seen",
         "loading_snapshot",
         "needs_repository_picker",
+        "recents_open",
         "repositoryPath",
         "selectedBranch",
         "hasRepository",
@@ -158,6 +170,8 @@ pub const Model = struct {
     request_sequence: u64 = 0,
     snapshot_request_storage: [max_request_id_bytes]u8 = undefined,
     snapshot_request_len: usize = 0,
+    snapshot_repository_storage: [max_path_bytes]u8 = undefined,
+    snapshot_repository_len: usize = 0,
     diff_request_storage: [max_request_id_bytes]u8 = undefined,
     diff_request_len: usize = 0,
     action_request_storage: [max_request_id_bytes]u8 = undefined,
@@ -186,6 +200,7 @@ pub const Model = struct {
     loading_snapshot: bool = false,
     loading_diff: bool = false,
     needs_repository_picker: bool = false,
+    recents_open: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Model {
         return .{
@@ -257,6 +272,19 @@ pub const Model = struct {
             .is_file = line.kind == .file,
             .is_hunk = line.kind == .hunk,
         };
+        return rows;
+    }
+
+    pub fn recentRows(self: *const Model, arena: std.mem.Allocator) []const RecentRow {
+        const rows = arena.alloc(RecentRow, self.recent_count) catch return &.{};
+        for (0..self.recent_count) |index| {
+            const path = self.recent_storage[index][0..self.recent_lens[index]];
+            rows[index] = .{
+                .index = index,
+                .path = path,
+                .label = std.fs.path.basename(path),
+            };
+        }
         return rows;
     }
 
@@ -381,6 +409,10 @@ pub const Model = struct {
         return !self.loading_diff and self.diff == null;
     }
 
+    pub fn recentsOpen(self: *const Model) bool {
+        return self.recents_open;
+    }
+
     pub fn isBusy(self: *const Model) bool {
         return self.loading_snapshot or self.loading_diff or self.active_action != null;
     }
@@ -414,6 +446,10 @@ pub const Model = struct {
 
     fn snapshotRequestId(self: *const Model) []const u8 {
         return self.snapshot_request_storage[0..self.snapshot_request_len];
+    }
+
+    fn snapshotRepositoryPath(self: *const Model) []const u8 {
+        return self.snapshot_repository_storage[0..self.snapshot_repository_len];
     }
 
     fn diffRequestId(self: *const Model) []const u8 {
@@ -453,11 +489,16 @@ pub const Model = struct {
         return value;
     }
 
-    fn requestSnapshot(self: *Model, fx: *Effects) void {
-        if (self.engine_len == 0 or self.repository_len == 0) {
+    fn requestSnapshotFor(self: *Model, fx: *Effects, repository_path: []const u8) void {
+        if (self.engine_len == 0 or repository_path.len == 0) {
             self.setError("The bundled engine or repository path is unavailable.");
             return;
         }
+        copyFixed(
+            &self.snapshot_repository_storage,
+            &self.snapshot_repository_len,
+            repository_path,
+        );
         self.loading_snapshot = true;
         self.setStatus("Refreshing repository…");
         const request_id = self.nextRequestId(
@@ -465,7 +506,20 @@ pub const Model = struct {
             &self.snapshot_request_storage,
             &self.snapshot_request_len,
         );
-        bridge.requestSnapshot(fx, self.enginePath(), self.repositoryPath(), request_id);
+        bridge.requestSnapshot(fx, self.enginePath(), self.snapshotRepositoryPath(), request_id);
+    }
+
+    fn requestSnapshot(self: *Model, fx: *Effects) void {
+        self.requestSnapshotFor(fx, self.repositoryPath());
+    }
+
+    fn beginRepositorySelection(self: *Model, fx: *Effects, path: []const u8) void {
+        fx.cancel(diff_effect_key);
+        self.loading_diff = false;
+        self.needs_repository_picker = false;
+        self.recents_open = false;
+        self.clearError();
+        self.requestSnapshotFor(fx, path);
     }
 
     fn requestDiff(self: *Model, fx: *Effects) void {
@@ -528,6 +582,24 @@ pub const Model = struct {
         if (self.recent_count < max_recents) self.recent_count += 1;
     }
 
+    fn removeRecentPath(self: *Model, path: []const u8) void {
+        var index: usize = 0;
+        while (index < self.recent_count) {
+            const recent = self.recent_storage[index][0..self.recent_lens[index]];
+            if (!std.mem.eql(u8, recent, path)) {
+                index += 1;
+                continue;
+            }
+            var next = index;
+            while (next + 1 < self.recent_count) : (next += 1) {
+                self.recent_storage[next] = self.recent_storage[next + 1];
+                self.recent_lens[next] = self.recent_lens[next + 1];
+            }
+            self.recent_count -= 1;
+            self.recent_lens[self.recent_count] = 0;
+        }
+    }
+
     fn persistRecents(self: *Model, fx: *Effects) void {
         self.recent_serialized_len = 0;
         for (0..self.recent_count) |index| {
@@ -562,11 +634,7 @@ pub fn boot(model: *Model, fx: *Effects) void {
 pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
     switch (msg) {
         .repository_selected => |path| {
-            copyFixed(&model.repository_storage, &model.repository_len, path);
-            model.needs_repository_picker = false;
-            model.addRecent(path);
-            model.persistRecents(fx);
-            model.requestSnapshot(fx);
+            model.beginRepositorySelection(fx, path);
         },
         .repository_picker_cancelled => model.needs_repository_picker = false,
         .recents_loaded => |result| handleRecentsLoaded(model, result, fx),
@@ -584,8 +652,15 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             model.selection_generation +%= 1;
             model.requestDiff(fx);
         },
+        .select_recent => |index| {
+            if (index >= model.recent_count) return;
+            const path = model.recent_storage[index][0..model.recent_lens[index]];
+            model.beginRepositorySelection(fx, path);
+        },
         .select_next => model.moveSelection(fx, .next),
         .select_previous => model.moveSelection(fx, .previous),
+        .toggle_recents => model.recents_open = !model.recents_open,
+        .close_recents => model.recents_open = false,
         .request_checkout => model.startAction(fx, .checkout),
         .request_restack => model.requestConfirmation(.restack),
         .request_submit => model.requestConfirmation(.submit_stack),
@@ -596,9 +671,12 @@ pub fn update(model: *Model, msg: Msg, fx: *Effects) void {
             .submit_stack => model.startAction(fx, .submit_stack),
         },
         .cancel_confirmation => model.confirmation = .none,
-        .refresh => if (model.active_action == null) model.requestSnapshot(fx),
-        .app_activated => if (model.hasRepository() and model.active_action == null) model.requestSnapshot(fx),
-        .choose_repository => model.needs_repository_picker = true,
+        .refresh => if (model.active_action == null and !model.loading_snapshot) model.requestSnapshot(fx),
+        .app_activated => if (model.hasRepository() and model.active_action == null and !model.loading_snapshot) model.requestSnapshot(fx),
+        .choose_repository => {
+            model.recents_open = false;
+            model.needs_repository_picker = true;
+        },
         .focus_filter => model.filter_focused = true,
         .stack_resized => |fraction| model.pane_stack_ratio = fraction,
         .inspector_resized => |fraction| model.pane_inspector_ratio = fraction,
@@ -662,13 +740,15 @@ fn handleRecentsLoaded(model: *Model, result: native_sdk.EffectFileResult, fx: *
         return;
     }
     const first = model.recent_storage[0][0..model.recent_lens[0]];
-    copyFixed(&model.repository_storage, &model.repository_len, first);
-    model.requestSnapshot(fx);
+    model.beginRepositorySelection(fx, first);
 }
 
 fn handleSnapshotExit(model: *Model, exit: native_sdk.EffectExit, fx: *Effects) void {
-    model.loading_snapshot = false;
-    if (!validateCollectExit(model, exit, "snapshot")) return;
+    if (exit.reason == .cancelled) return;
+    if (!validateCollectExit(model, exit, "snapshot")) {
+        model.loading_snapshot = false;
+        return;
+    }
 
     var next_arena = std.heap.ArenaAllocator.init(model.allocator);
     var keep_arena = false;
@@ -678,13 +758,17 @@ fn handleSnapshotExit(model: *Model, exit: native_sdk.EffectExit, fx: *Effects) 
         next_arena.allocator(),
         exit.output,
     ) catch |err| {
+        model.loading_snapshot = false;
         setParseError(model, err);
         return;
     };
     if (!std.mem.eql(u8, envelope.request_id, model.snapshotRequestId())) return;
+    model.loading_snapshot = false;
     if (!envelope.ok) {
         setProtocolError(model, envelope.@"error".?);
         if (std.mem.eql(u8, envelope.@"error".?.code, "invalid_repository")) {
+            model.removeRecentPath(model.snapshotRepositoryPath());
+            model.persistRecents(fx);
             model.needs_repository_picker = true;
         }
         return;
@@ -695,6 +779,14 @@ fn handleSnapshotExit(model: *Model, exit: native_sdk.EffectExit, fx: *Effects) 
     model.snapshot_arena = next_arena;
     keep_arena = true;
     model.snapshot = snapshot;
+    model.removeRecentPath(model.snapshotRepositoryPath());
+    copyFixed(
+        &model.repository_storage,
+        &model.repository_len,
+        snapshot.repository_path,
+    );
+    model.addRecent(snapshot.repository_path);
+    model.persistRecents(fx);
     model.clearError();
     model.status_len = 0;
     model.selected_index = 0;
@@ -723,6 +815,7 @@ fn handleDiffExit(model: *Model, exit: native_sdk.EffectExit) void {
         next_arena.allocator(),
         exit.output,
     ) catch |err| {
+        model.loading_diff = false;
         setParseError(model, err);
         return;
     };
