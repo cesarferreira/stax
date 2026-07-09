@@ -16,6 +16,10 @@ Stax manages stacked branches: small focused branches layered on top of each oth
 - **Parent**: The branch a stacked branch is based on
 - **Tracked branch**: A branch with stax metadata (parent and PR linkage)
 
+## Desktop app
+
+`Stax.app` is the Apple Silicon macOS workspace for inspecting a stack, viewing branch details and patches, and running Checkout, Restack, Submit Stack, or Open Pull Request. It uses a bundled `st` engine; restack and submit require confirmation. Branch creation, reordering, merge/cascade, worktrees, lanes, repair, undo/redo, configuration, and other advanced workflows remain CLI/TUI-only. Contributors can run it with `make desktop-dev` or build the signed local bundle with `make desktop-package`.
+
 ## Command Map
 
 ```bash

@@ -59,6 +59,7 @@ nav:
       - Stacked Branches: concepts/stacked-branches.md
       - Multiple Stacks: concepts/multiple-stacks.md
   - Interface:
+      - Desktop App: interface/desktop.md
       - Interactive TUI: interface/tui.md
   - Commands:
       - Core Commands: commands/core.md

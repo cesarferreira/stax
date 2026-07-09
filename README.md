@@ -101,6 +101,21 @@ No system OpenSSL? Use the vendored feature:
 cargo install --path . --locked --features vendored-openssl
 ```
 
+#### Build the macOS desktop app
+
+The Native SDK desktop app currently targets Apple Silicon macOS 11 or newer. It requires Rust, Node.js/npm, Zig 0.16, and `jq`:
+
+```bash
+# Run the app from source with markup hot reload
+make desktop-dev
+
+# Or build, assemble, ad-hoc sign, and smoke-test Stax.app
+make desktop-package
+open desktop/dist/Stax.app
+```
+
+The packaged app is self-contained: it uses the release `st` engine staged inside `Stax.app`, not an installation from `PATH`.
+
 </details>
 
 Verify the install:
@@ -262,6 +277,14 @@ st redo
 Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summaries and cached patches, watching live CI hydrate, and running common ops without leaving the terminal. Stack/Summary/Patch pane visibility is remembered per repo.
 
 → [TUI guide](docs/interface/tui.md)
+
+### Native macOS workspace
+
+The Native SDK desktop app turns the same stax engine into a focused three-pane Workshop: browse the stack, inspect a selected branch, review its patch, and run Checkout, Restack, Submit Stack, or Open Pull Request. Restack and submit are confirmed before they run, actions are serialized, and the app refreshes when it becomes active.
+
+The first release target is Apple Silicon macOS. Advanced workflows remain available in the CLI and TUI.
+
+→ [Desktop app guide](docs/interface/desktop.md)
 
 ### AI branch names, PR details, and standups
 

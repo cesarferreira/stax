@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff install clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint benchmark-status all
+.PHONY: build build-release release ensure-git-cliff install clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint benchmark-status all desktop-check desktop-test desktop-build desktop-dev desktop-package desktop-smoke
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -191,3 +191,23 @@ run:
 demo: install
 	@echo "=== stax demo ==="
 	stax --help
+
+# Native SDK desktop app (Apple Silicon macOS first).
+desktop-check:
+	npm run --prefix desktop check
+
+desktop-test:
+	npm run --prefix desktop test
+
+desktop-build:
+	npm run --prefix desktop build
+
+desktop-dev:
+	cargo build --bin st
+	npm run --prefix desktop dev
+
+desktop-package:
+	bash desktop/scripts/package-macos.sh
+
+desktop-smoke:
+	bash desktop/scripts/smoke-macos.sh
