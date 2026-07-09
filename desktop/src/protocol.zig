@@ -12,7 +12,7 @@ pub const ProtocolError = struct {
 pub const ProgressEvent = struct {
     schema_version: u32,
     request_id: []const u8,
-    @"type": []const u8,
+    type: []const u8,
     phase: []const u8,
     message: []const u8,
 };
@@ -107,7 +107,7 @@ pub fn TerminalEnvelope(comptime T: type) type {
     return struct {
         schema_version: u32,
         request_id: []const u8,
-        @"type": []const u8,
+        type: []const u8,
         ok: bool,
         data: ?T = null,
         @"error": ?ProtocolError = null,
@@ -130,7 +130,7 @@ pub fn parseTerminal(
         .{ .ignore_unknown_fields = false },
     );
     try expectSchema(value.schema_version);
-    if (!std.mem.eql(u8, value.@"type", "result")) return error.UnexpectedEventType;
+    if (!std.mem.eql(u8, value.type, "result")) return error.UnexpectedEventType;
     if (value.ok == (value.data == null)) return error.InvalidTerminalEnvelope;
     if (value.ok == (value.@"error" != null)) return error.InvalidTerminalEnvelope;
     return value;
@@ -144,6 +144,6 @@ pub fn parseProgress(allocator: std.mem.Allocator, bytes: []const u8) !ProgressE
         .{ .ignore_unknown_fields = false },
     );
     try expectSchema(value.schema_version);
-    if (!std.mem.eql(u8, value.@"type", "progress")) return error.UnexpectedEventType;
+    if (!std.mem.eql(u8, value.type, "progress")) return error.UnexpectedEventType;
     return value;
 }
