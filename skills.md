@@ -25,7 +25,7 @@ stax log|l                     # Stack status with commits + PR info
 
 stax submit|ss                 # Submit full stack
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
-stax stack unlink              # Remove native GitHub Stack object
+stax stack unlink              # Unstack locally tracked native stack; stax-linked stacks may need gh stack checkout <pr>
 stax merge                     # Merge PRs from stack bottom upward
 stax sync|rs                   # Sync trunk + clean merged branches
 stax sweep                     # Classify + optionally delete merged/gone/stale branches
