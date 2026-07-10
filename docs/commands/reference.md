@@ -261,6 +261,12 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 
 ### `st submit`
 
+- `--dry-run` / `--plan` prints a read-only plan without fetching, pushing, editing metadata, or calling forge mutation APIs; add `--json` for the versioned machine-readable schema (currently version 2; action strings are extensible)
+- Plans query live remote head IDs with `git ls-remote` without updating local tracking refs; `--no-fetch` deliberately plans from cached tracking refs instead
+- A stale branch, and each submitted descendant that must follow its temporary publish head, reports `evaluate_after_temporary_restack` because the final push decision depends on the rewritten commit ID
+- Stack-link plans report `update_unless_native_link_succeeds` when native-stack success would suppress Stax-managed links
+- Stack-link and native-stack plans report `evaluate_after_pr_discovery` when PRs missing from local metadata could change link or fork eligibility at runtime
+- Native-stack plans otherwise report `skip` for known exclusions or `attempt` when the prerequisites are known
 - `--draft` / `--publish` / `--no-pr` / `--no-fetch` / `--no-verify` / `--open` / `--quiet` / `--verbose`
 - `--no-verify` (`-n`) skips pre-push hooks while pushing branches
 - `--reviewers alice,bob --labels bug,urgent --assignees alice`
@@ -272,6 +278,18 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 - `--yes` / `--no-prompt`
 
 Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` and `native_stack = "auto" | "off" | "link"` in `~/.config/stax/config.toml`.
+
+### `st completions`
+
+Generate a completion script without requiring an initialized repository:
+
+```bash
+st completions bash
+st completions zsh
+st completions fish
+st completions powershell
+st completions elvish
+```
 
 ### `st merge`
 
