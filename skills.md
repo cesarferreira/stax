@@ -227,6 +227,8 @@ stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment l
 # Native GitHub Stacked PRs are additive. Repos/users without access or without
 # `github/gh-stack` installed behave exactly as normal stax. `stax doctor --fix`
 # can offer `gh extension install github/gh-stack` when `gh` is installed.
+# `stax submit --native-stack` still keeps submit non-blocking, but prints an
+# actionable note when `gh`, `github/gh-stack`, or `gh stack link` support is missing.
 # Native Stacked PRs (private preview) reject Personal Access Tokens — stax
 # strips GH_TOKEN/GITHUB_TOKEN before calling `gh stack`, but you still need
 # an OAuth-authenticated `gh` account (`gh auth login`) to exist at all.
