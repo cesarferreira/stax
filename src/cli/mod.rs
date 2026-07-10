@@ -548,18 +548,24 @@ pub fn run() -> Result<()> {
         Commands::Edit { yes, no_verify } => commands::edit::run(yes, no_verify),
         Commands::Validate => commands::stack_cmd::run_validate(),
         Commands::Fix { dry_run, yes } => commands::stack_cmd::run_fix(dry_run, yes),
+        Commands::Freeze { branch } => commands::freeze::run(branch, true),
+        Commands::Unfreeze { branch } => commands::freeze::run(branch, false),
         Commands::Run {
             cmd,
             all,
             stack,
             fail_fast,
+            parallel,
+            jobs,
         }
         | Commands::Test {
             cmd,
             all,
             stack,
             fail_fast,
-        } => commands::stack_cmd::run_test(cmd, all, stack, fail_fast),
+            parallel,
+            jobs,
+        } => commands::stack_cmd::run_test(cmd, all, stack, fail_fast, parallel, jobs),
         Commands::Demo => unreachable!(),        // Handled above
         Commands::UpdateCheck => unreachable!(), // Handled before setup/config work
         Commands::Standup {

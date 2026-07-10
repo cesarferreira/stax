@@ -375,6 +375,9 @@ stax issue list --limit 50 --json  # List open issues with optional limit and JS
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output
 stax next / stax n                  # Next unmerged branch; deterministic on forks
+stax freeze [branch]                # Protect branch from restacks and sync history rewrites (including imported refresh/squash cleanup)
+stax unfreeze [branch]              # Remove freeze protection
+stax run --parallel --jobs 4 <cmd>  # Concurrent checks; command receives STAX_RUN_BRANCH
 
 stax ci                            # CI for current branch, full per-check table (elapsed/ETA + avg from recent successful runs of the same checks)
 stax ci --stack                    # CI for current stack (defaults to the one-line-per-branch roll-up)

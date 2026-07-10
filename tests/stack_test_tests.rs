@@ -278,3 +278,61 @@ fn test_stack_run_all_excludes_trunk() {
         stdout
     );
 }
+
+#[test]
+fn test_stack_run_parallel_uses_isolated_worktrees_and_restores_current_branch() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["parallel-a", "parallel-b"]);
+    let original = repo.current_branch();
+
+    let output = repo.run_stax(&["run", "--parallel", "--jobs", "2", "pwd"]);
+    output.assert_success();
+    output.assert_stdout_contains("parallel worktree");
+    assert_eq!(repo.current_branch(), original);
+    for branch in branches {
+        output.assert_stdout_contains(&branch);
+    }
+
+    let worktrees = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    assert_eq!(worktrees.matches("worktree ").count(), 1);
+}
+
+#[test]
+fn test_stack_run_parallel_exposes_original_branch_name() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["parallel-context-a", "parallel-context-b"]);
+
+    let output = repo.run_stax(&[
+        "run",
+        "--parallel",
+        "--jobs",
+        "2",
+        "printf 'context=%s\\n' \"$STAX_RUN_BRANCH\"",
+    ]);
+
+    output.assert_success();
+    for branch in branches {
+        output.assert_stdout_contains(&format!("context={branch}"));
+    }
+}
+
+#[test]
+fn test_stack_run_parallel_propagates_failures_and_cleans_worktrees() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["parallel-fail-a", "parallel-fail-b"]);
+
+    let output = repo.run_stax(&["run", "--parallel", "false"]);
+    output.assert_failure();
+    output.assert_stdout_contains("2 failed");
+    let worktrees = TestRepo::stdout(&repo.git(&["worktree", "list", "--porcelain"]));
+    assert_eq!(worktrees.matches("worktree ").count(), 1);
+}
+
+#[test]
+fn test_stack_run_parallel_rejects_zero_jobs() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["parallel-jobs"]);
+    let output = repo.run_stax(&["run", "--parallel", "--jobs", "0", "true"]);
+    output.assert_failure();
+    output.assert_stderr_contains("invalid value");
+}
