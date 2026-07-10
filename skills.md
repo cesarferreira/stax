@@ -191,6 +191,9 @@ stax split                         # Split current branch into multiple stacked 
 ```bash
 stax submit                        # Submit full stack
 stax ss                            # Alias for submit
+stax submit --plan                 # Read-only action plan (no fetch/push/metadata writes)
+stax submit --plan --json          # Versioned v2 plan for automation (action strings are extensible)
+                                      # Live remote heads are read without fetching; chained restacks and unresolved PR/link decisions are runtime-evaluated
 stax submit --draft                # Create draft PRs
 stax submit --no-pr                # Push only (no PR create/update)
 stax submit --no-fetch             # Skip git fetch
@@ -210,6 +213,7 @@ stax submit --ai --yes             # Accept generated new-PR details
 stax submit --rerequest-review     # Re-request existing reviewers on update
 stax submit --native-stack         # Force-attempt native GitHub Stack registration for this run
 stax submit --no-native-stack      # Skip native GitHub Stack registration for this run
+stax completions zsh               # Generate completions: bash|zsh|fish|powershell|elvish
 
 # ~/.config/stax/config.toml; repo-root stax.toml overlays shared values
 [submit]

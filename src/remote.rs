@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use git2::{ConfigLevel, Repository};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -221,6 +221,11 @@ pub fn get_existing_remote_branches_from_repo(
 
 /// Remote branch names from `git ls-remote --heads` (no object transfer).
 pub fn ls_remote_heads(workdir: &Path, remote: &str) -> Result<HashSet<String>> {
+    Ok(ls_remote_head_oids(workdir, remote)?.into_keys().collect())
+}
+
+/// Remote branch names and object IDs from `git ls-remote --heads` (no object transfer).
+pub fn ls_remote_head_oids(workdir: &Path, remote: &str) -> Result<HashMap<String, String>> {
     let output = Command::new("git")
         .args(["ls-remote", "--heads", remote])
         .current_dir(workdir)
@@ -237,19 +242,19 @@ pub fn ls_remote_heads(workdir: &Path, remote: &str) -> Result<HashSet<String>> 
     }
 
     let prefix = "refs/heads/";
-    let mut names = HashSet::new();
+    let mut heads = HashMap::new();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if let Some((_, refpart)) = line.split_once('\t') {
+        if let Some((oid, refpart)) = line.split_once('\t') {
             if let Some(name) = refpart.strip_prefix(prefix) {
-                names.insert(name.to_string());
+                heads.insert(name.to_string(), oid.to_string());
             }
         }
     }
-    Ok(names)
+    Ok(heads)
 }
 
 /// Fetch only the given branch tips from `remote` (plus any objects reachable from them).

@@ -64,4 +64,16 @@ st setup --yes       # shell integration, AI skills, and auth from gh (if availa
 st cli upgrade       # later, upgrade via the install method you used
 ```
 
+For native shell completion, evaluate or install the generated script. For example:
+
+```bash
+source <(st completions bash)
+source <(st completions zsh)
+st completions fish | source
+# PowerShell
+st completions powershell | Out-String | Invoke-Expression
+# Elvish
+eval (st completions elvish | slurp)
+```
+
 Next: [Quick start →](quick-start.md)
