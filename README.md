@@ -300,6 +300,8 @@ st config --set-ai
 | `st submit --plan [--json]` | Preview fetch, push, PR, retarget, metadata, and stack-link actions without changing local or remote state |
 | `st branch submit` | Submit only the current branch; can publish a temporary rebased head when needed |
 | `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
+| `st reviews --stack [--json]` | Stack-wide review/comment inbox, including inline file/line locations on GitHub (`st comments` remains the current-PR view) |
+| `st next` | Move to the next unmerged branch upstack; fork choices are deterministic |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
 | `st ready` | Interactive PR readiness dashboard for all tracked PRs, newest changed PR first: merge, ping, fix, wait, or draft (`--current`/`--stack` for current stack, `--plain` for table output) |
 | `st ci` / `st ci --oneline` | CI status — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |

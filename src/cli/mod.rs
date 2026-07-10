@@ -446,6 +446,7 @@ pub fn run() -> Result<()> {
         Commands::Top => commands::navigate::top(),
         Commands::Bottom => commands::navigate::bottom(),
         Commands::Prev => commands::navigate::prev(),
+        Commands::Next => commands::navigate::next(),
         Commands::Create {
             name,
             all,
@@ -491,7 +492,12 @@ pub fn run() -> Result<()> {
         Commands::Open => commands::open::run(),
         Commands::Draft { branch } => commands::draft::run(branch, true),
         Commands::Undraft { branch } => commands::draft::run(branch, false),
-        Commands::Comments { plain } => commands::comments::run(plain),
+        Commands::Comments {
+            plain,
+            stack,
+            all,
+            json,
+        } => commands::comments::run(plain, stack, all, json),
         Commands::Ci {
             all,
             stack,

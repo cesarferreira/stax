@@ -716,6 +716,10 @@ pub(crate) enum Commands {
     #[command(visible_alias = "p")]
     Prev,
 
+    /// Switch to the next unmerged branch upstack
+    #[command(visible_alias = "n")]
+    Next,
+
     /// Branch management commands
     #[command(subcommand, visible_alias = "b")]
     Branch(BranchCommands),
@@ -812,11 +816,21 @@ pub(crate) enum Commands {
         branch: Option<String>,
     },
 
-    /// Show comments on the current branch's PR
+    /// Show PR comments as a current-branch view or stack-wide review inbox
+    #[command(visible_alias = "reviews")]
     Comments {
         /// Output raw markdown without rendering
-        #[arg(long)]
+        #[arg(long, conflicts_with = "json")]
         plain: bool,
+        /// Include every PR in the current stack
+        #[arg(long, conflicts_with = "all")]
+        stack: bool,
+        /// Include every tracked PR in the repository
+        #[arg(long, conflicts_with = "stack")]
+        all: bool,
+        /// Output the inbox as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show CI status for all branches in the stack

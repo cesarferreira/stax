@@ -11,6 +11,7 @@
 | `st trunk` / `st t` | Jump to trunk |
 | `st trunk <branch>` | Set trunk to `<branch>` |
 | `st prev` | Toggle to previous branch |
+| `st next` / `st n` | Move to the first unmerged descendant; forked children are ordered by branch name |
 | `st co` | Interactive branch picker |
 | `st get [branch|PR]` | Sync the current stack, or fetch, sync/create, checkout, and track a remote branch/PR |
 
