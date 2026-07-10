@@ -52,6 +52,7 @@ pub mod staging;
 pub mod standup;
 pub mod status;
 pub mod submit;
+pub(crate) mod submit_plan;
 pub mod sweep;
 pub mod sync;
 pub mod tmux;

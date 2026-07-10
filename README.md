@@ -297,6 +297,7 @@ st config --set-ai
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
 | `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
 | `st ss` | Submit the full stack, open/update linked PRs; temporary-publishes branches that need restack |
+| `st submit --plan [--json]` | Preview fetch, push, PR, retarget, metadata, and stack-link actions without changing local or remote state |
 | `st branch submit` | Submit only the current branch; can publish a temporary rebased head when needed |
 | `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
@@ -323,6 +324,7 @@ st config --set-ai
 | `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |
+| `st completions <shell>` | Generate completions for Bash, Zsh, Fish, PowerShell, or Elvish |
 | `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
 | `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |
 | `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · PR readiness · list issues |

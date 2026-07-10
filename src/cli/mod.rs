@@ -1,6 +1,7 @@
 use crate::{commands, config::Config, git::GitRepo, tui, update};
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
+use clap_complete::generate;
 
 mod args;
 mod interactive;
@@ -110,6 +111,10 @@ pub fn run() -> Result<()> {
 
     // Commands that don't need repo initialization
     match &command {
+        Commands::Completions { shell } => {
+            generate(*shell, &mut Cli::command(), "st", &mut std::io::stdout());
+            return Ok(());
+        }
         Commands::Auth {
             token,
             from_gh,
@@ -183,6 +188,7 @@ pub fn run() -> Result<()> {
     }
 
     let result = match command {
+        Commands::Completions { .. } => unreachable!("handled before repository initialization"),
         Commands::Status {
             json,
             stack,

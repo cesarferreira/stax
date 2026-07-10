@@ -19,6 +19,12 @@ pub(crate) struct Cli {
 
 #[derive(Args, Clone)]
 pub(crate) struct SubmitOptions {
+    /// Show the submit plan without fetching, pushing, or changing metadata
+    #[arg(long = "dry-run", visible_alias = "plan")]
+    pub(crate) dry_run: bool,
+    /// Output the read-only submit plan as JSON
+    #[arg(long, requires = "dry_run")]
+    pub(crate) json: bool,
     /// Create new PRs as drafts; convert existing PRs to draft
     #[arg(short, long, conflicts_with = "publish")]
     pub(crate) draft: bool,
@@ -99,6 +105,8 @@ pub(crate) struct SubmitOptions {
 impl From<SubmitOptions> for commands::submit::SubmitOptions {
     fn from(submit: SubmitOptions) -> Self {
         Self {
+            dry_run: submit.dry_run,
+            json: submit.json,
             draft: submit.draft,
             publish: submit.publish,
             no_pr: submit.no_pr,
@@ -225,6 +233,13 @@ pub(crate) enum Commands {
     /// Internal worker that refreshes the cached release check.
     #[command(name = "__update-check", hide = true)]
     UpdateCheck,
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 
     /// Show all stacks (simple tree view)
     #[command(visible_alias = "ls")]

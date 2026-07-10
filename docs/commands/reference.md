@@ -261,6 +261,7 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 
 ### `st submit`
 
+- `--dry-run` / `--plan` prints a read-only plan without fetching, pushing, editing metadata, or calling forge mutation APIs; add `--json` for the versioned machine-readable schema
 - `--draft` / `--publish` / `--no-pr` / `--no-fetch` / `--no-verify` / `--open` / `--quiet` / `--verbose`
 - `--no-verify` (`-n`) skips pre-push hooks while pushing branches
 - `--reviewers alice,bob --labels bug,urgent --assignees alice`
@@ -272,6 +273,18 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 - `--yes` / `--no-prompt`
 
 Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` and `native_stack = "auto" | "off" | "link"` in `~/.config/stax/config.toml`.
+
+### `st completions`
+
+Generate a completion script without requiring an initialized repository:
+
+```bash
+st completions bash
+st completions zsh
+st completions fish
+st completions powershell
+st completions elvish
+```
 
 ### `st merge`
 
