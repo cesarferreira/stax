@@ -1,4 +1,4 @@
-use crate::{commands, config::Config, errors::ConflictStopped, git::GitRepo, tui, update};
+use crate::{commands, config::Config, git::GitRepo, tui, update};
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 
@@ -27,11 +27,14 @@ fn print_subcommand_help(name: &str) -> Result<()> {
 pub fn run() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Spawn update check immediately so it runs in parallel with command work.
-    // The handle joins the thread on drop, ensuring the cache write completes before exit.
-    let _update_handle = update::check_in_background();
-
     let cli = Cli::parse();
+
+    if matches!(&cli.command, Some(Commands::UpdateCheck)) {
+        update::run_background_check();
+        return Ok(());
+    }
+
+    update::spawn_background_check();
 
     if let Some(Commands::Setup {
         print,
@@ -544,7 +547,8 @@ pub fn run() -> Result<()> {
             stack,
             fail_fast,
         } => commands::stack_cmd::run_test(cmd, all, stack, fail_fast),
-        Commands::Demo => unreachable!(), // Handled above
+        Commands::Demo => unreachable!(),        // Handled above
+        Commands::UpdateCheck => unreachable!(), // Handled before setup/config work
         Commands::Standup {
             json,
             all,
@@ -911,11 +915,7 @@ pub fn run() -> Result<()> {
     // Show update notification from cache (instant — no network request here)
     update::show_update_notification();
 
-    match result {
-        Ok(()) => Ok(()),
-        Err(e) if e.is::<ConflictStopped>() => std::process::exit(1),
-        Err(e) => Err(e),
-    }
+    result
 }
 
 fn print_worktree_help() -> Result<()> {

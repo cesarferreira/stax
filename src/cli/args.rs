@@ -218,6 +218,10 @@ pub(crate) struct AiLaneArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
+    /// Internal worker that refreshes the cached release check.
+    #[command(name = "__update-check", hide = true)]
+    UpdateCheck,
+
     /// Show all stacks (simple tree view)
     #[command(visible_alias = "ls")]
     Status {

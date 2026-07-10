@@ -92,9 +92,9 @@ pub type StaxResult<T> = Result<T, StaxError>;
 /// Sentinel error returned when a rebase stops on conflict.
 ///
 /// This is not a "real" error — the conflict information has already been
-/// printed. The sentinel propagates through `anyhow::Result` so that
-/// `cli::run()` can intercept it and exit with code 1 without printing
-/// an additional `Error: …` line.
+/// printed. The sentinel propagates through `anyhow::Result` so the executable
+/// entrypoint can return the conflict exit code without printing an additional
+/// `Error: …` line.
 #[derive(Debug)]
 pub struct ConflictStopped;
 
@@ -105,3 +105,18 @@ impl std::fmt::Display for ConflictStopped {
 }
 
 impl std::error::Error for ConflictStopped {}
+
+/// Exit with a specific status without printing an additional error message.
+///
+/// Commands use this after they have already rendered a complete diagnostic or
+/// summary, keeping process termination in the executable entrypoint.
+#[derive(Debug)]
+pub struct SilentExit(pub i32);
+
+impl std::fmt::Display for SilentExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "command exited with status {}", self.0)
+    }
+}
+
+impl std::error::Error for SilentExit {}
