@@ -65,6 +65,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st top` | | Stack tip |
 | `st bottom` | | Stack base |
 | `st prev` | `p` | Toggle to previous branch |
+| `st next` | `n` | Move to the first unmerged branch upstack (deterministic on forks) |
 
 ## Branch management
 
@@ -145,7 +146,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st draft [branch]` | Mark the current or named branch's PR as a draft |
 | `st undraft [branch]` | Mark the current or named branch's PR as ready for review |
 | `st issue list` | List open issues |
-| `st comments` | Show PR comments |
+| `st comments` / `st reviews` | Show current PR comments; `--stack` or `--all` creates a review inbox, GitHub review comments include inline file/line locations, and `--json` emits a versioned machine-readable view |
 | `st copy` · `st copy --pr` | Copy branch name · PR URL |
 | `st standup` | Recent activity (`--ai` for AI spoken version; `--jit` for Jira context) |
 | `st changelog [from] [to]` | Generate changelog (auto-resolves last tag when `from` omitted) |
