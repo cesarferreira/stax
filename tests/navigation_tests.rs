@@ -6,6 +6,27 @@ use crate::common;
 
 use common::{OutputAssertions, TestRepo};
 
+#[test]
+fn test_next_advances_to_the_next_stack_branch() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["next-one", "next-two"]);
+    repo.run_stax(&["checkout", &branches[0]]).assert_success();
+
+    repo.run_stax(&["next"]).assert_success();
+    assert_eq!(repo.current_branch(), branches[1]);
+}
+
+#[test]
+fn test_next_at_top_is_a_safe_noop() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["only-next"]);
+
+    let output = repo.run_stax(&["next"]);
+    output.assert_success();
+    output.assert_stdout_contains("No unmerged branch");
+    assert_eq!(repo.current_branch(), branches[0]);
+}
+
 // =============================================================================
 // Top Command Tests
 // =============================================================================

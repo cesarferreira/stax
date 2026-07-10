@@ -70,6 +70,8 @@ stax ready --all               # Explicit all tracked branch PRs (default)
 stax issue list                # List open issues
 stax open                      # Open repo in browser
 stax comments                  # Show current PR comments
+stax reviews --stack           # Review/comment inbox for the current stack
+stax reviews --all --json      # Machine-readable inbox for every tracked PR
 stax copy [--pr]               # Copy branch name or PR URL
 stax ci [--oneline|-1]         # CI status (per-check table; --oneline / multi-branch = one line per branch)
 stax standup                   # Recent activity summary
@@ -371,6 +373,7 @@ stax pr list --ready               # Same readiness view under PR list
 stax issue list --limit 50 --json  # List open issues with optional limit and JSON output
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output
+stax next / stax n                  # Next unmerged branch; deterministic on forks
 
 stax ci                            # CI for current branch, full per-check table (elapsed/ETA + avg from recent successful runs of the same checks)
 stax ci --stack                    # CI for current stack (defaults to the one-line-per-branch roll-up)
