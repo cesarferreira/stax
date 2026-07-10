@@ -4,7 +4,7 @@ use crate::cache::{
 };
 use crate::ci::{CheckRunInfo, history};
 use crate::config::Config;
-use crate::engine::{Stack, build_parent_candidates};
+use crate::engine::{Stack, StackSnapshot, build_parent_candidates};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
@@ -501,8 +501,7 @@ impl App {
         preferred_selection: Option<String>,
     ) -> Result<Self> {
         let repo = GitRepo::open()?;
-        let stack = Stack::load(&repo)?;
-        let current_branch = repo.current_branch()?;
+        let snapshot = StackSnapshot::load(&repo)?;
         let git_dir = repo.git_dir()?;
         let cache = CiCache::load(git_dir);
         let diff_cache_dir = repo.common_git_dir()?;
@@ -514,12 +513,12 @@ impl App {
         let status_set_at = initial_status.as_ref().map(|_| Instant::now());
 
         let mut app = Self {
-            stack,
+            stack: snapshot.stack,
             cache,
             repo,
             git_dir,
             diff_cache_dir,
-            current_branch,
+            current_branch: snapshot.current_branch,
             selected_index: 0,
             branches: Vec::new(),
             mode: Mode::Normal,
@@ -554,7 +553,9 @@ impl App {
             diff_queued: None,
         };
 
-        app.refresh_branches()?;
+        app.branches = app.build_branch_list()?;
+        app.needs_refresh = false;
+        app.branch_details_queued = true;
         if let Some(branch) = preferred_selection {
             app.select_branch(&branch);
         } else {
@@ -568,8 +569,9 @@ impl App {
 
     /// Refresh the branch list from the repository
     pub fn refresh_branches(&mut self) -> Result<()> {
-        self.stack = Stack::load(&self.repo)?;
-        self.current_branch = self.repo.current_branch()?;
+        let snapshot = StackSnapshot::load(&self.repo)?;
+        self.stack = snapshot.stack;
+        self.current_branch = snapshot.current_branch;
         self.branches = self.build_branch_list()?;
         self.diff_cache.clear();
         self.needs_refresh = false;

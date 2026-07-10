@@ -62,6 +62,8 @@ mod edit_tests;
 mod fix_tests;
 #[path = "fold_tests.rs"]
 mod fold_tests;
+#[path = "freeze_tests.rs"]
+mod freeze_tests;
 #[path = "get_tests.rs"]
 mod get_tests;
 #[path = "gh_stack_tests.rs"]
@@ -72,6 +74,8 @@ mod github_list_tests;
 mod integration_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
+#[path = "performance_tests.rs"]
+mod performance_tests;
 #[path = "pr_body_tests.rs"]
 mod pr_body_tests;
 #[path = "pr_template_tests.rs"]
@@ -84,6 +88,8 @@ mod rerequest_review_tests;
 mod resolve_tests;
 #[path = "restack_provenance_tests.rs"]
 mod restack_provenance_tests;
+#[path = "runtime_safety_tests.rs"]
+mod runtime_safety_tests;
 #[path = "scoped_submit_tests.rs"]
 mod scoped_submit_tests;
 #[path = "split_hunk_tests.rs"]
@@ -100,6 +106,8 @@ mod status_tests;
 mod submit_fetch_failure_tests;
 #[path = "submit_no_verify_tests.rs"]
 mod submit_no_verify_tests;
+#[path = "submit_plan_completions_tests.rs"]
+mod submit_plan_completions_tests;
 #[path = "submit_pr_base_tests.rs"]
 mod submit_pr_base_tests;
 #[path = "sweep_tests.rs"]

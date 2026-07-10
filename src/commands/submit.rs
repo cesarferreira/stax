@@ -35,7 +35,7 @@ pub enum SubmitScope {
 }
 
 impl SubmitScope {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             SubmitScope::Branch => "branch",
             SubmitScope::Downstack => "downstack",
@@ -47,6 +47,8 @@ impl SubmitScope {
 
 #[derive(Debug, Default)]
 pub struct SubmitOptions {
+    pub dry_run: bool,
+    pub json: bool,
     pub draft: bool,
     pub publish: bool,
     pub no_pr: bool,
@@ -347,7 +349,13 @@ fn resolve_is_draft_without_prompt(
 }
 
 pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
+    if options.dry_run {
+        return super::submit_plan::run(scope, &options);
+    }
+
     let SubmitOptions {
+        dry_run: _,
+        json: _,
         draft,
         publish,
         no_pr,
@@ -2375,7 +2383,11 @@ fn push_failure_details(stdout: &str, stderr: &str) -> String {
     }
 }
 
-fn resolve_branches_for_scope(stack: &Stack, current: &str, scope: SubmitScope) -> Vec<String> {
+pub(crate) fn resolve_branches_for_scope(
+    stack: &Stack,
+    current: &str,
+    scope: SubmitScope,
+) -> Vec<String> {
     let branches = match scope {
         SubmitScope::Stack => stack.current_stack(current),
         SubmitScope::Downstack => {
@@ -2756,7 +2768,12 @@ fn default_publish_source(workdir: Option<&Path>, branch: &str, parent: &str) ->
     }
 }
 
-fn ref_needs_push(workdir: &Path, remote: &str, remote_branch: &str, source_ref: &str) -> bool {
+pub(crate) fn ref_needs_push(
+    workdir: &Path,
+    remote: &str,
+    remote_branch: &str,
+    source_ref: &str,
+) -> bool {
     // Get local commit
     let local = rev_parse_ref(Some(workdir), source_ref);
 

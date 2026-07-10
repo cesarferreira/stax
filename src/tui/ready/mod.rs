@@ -16,9 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::commands::open::open_url_in_browser;
-use crate::commands::ready::{
-    READY_FETCH_CONCURRENCY, ReadyScope, ReadyScopeMode, fetch_row_for_branch, load_ready_scope,
-};
+use crate::commands::ready::{ReadyScope, ReadyScopeMode, fetch_row_for_branch, load_ready_scope};
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
@@ -191,7 +189,7 @@ fn spawn_loader(scope: ReadyScope) -> Receiver<ReadyTuiUpdate> {
                         )
                     }
                 }))
-                .buffer_unordered(READY_FETCH_CONCURRENCY);
+                .buffer_unordered(crate::parallel::IO_CONCURRENCY_LIMIT);
 
             while let Some((index, branch, result)) = pending.next().await {
                 match result {

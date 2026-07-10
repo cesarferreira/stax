@@ -19,6 +19,27 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
     upstack.extend(stack.descendants(&current));
     upstack.retain(|b| b != &stack.trunk);
 
+    let mut frozen_branches = Vec::new();
+    upstack.retain(|branch| {
+        let frozen = BranchMetadata::is_frozen(repo.inner(), branch).unwrap_or(false);
+        if frozen {
+            frozen_branches.push(branch.clone());
+        }
+        !frozen
+    });
+    if !frozen_branches.is_empty() {
+        println!(
+            "  {} Skipping frozen {}: {}",
+            "▸".dimmed(),
+            if frozen_branches.len() == 1 {
+                "branch"
+            } else {
+                "branches"
+            },
+            frozen_branches.join(", ").cyan()
+        );
+    }
+
     let branches_to_restack = branches_needing_restack(&stack, &upstack);
 
     if branches_to_restack.is_empty() {
@@ -119,12 +140,16 @@ pub fn run(auto_stash_pop: bool) -> Result<()> {
         )? {
             RebaseResult::Success => {
                 let new_parent_rev = repo.branch_commit(&parent_branch_name)?;
-                let source_remote =
-                    BranchMetadata::read(repo.inner(), branch)?.and_then(|meta| meta.source_remote);
+                let existing_metadata = BranchMetadata::read(repo.inner(), branch)?;
+                let source_remote = existing_metadata
+                    .as_ref()
+                    .and_then(|meta| meta.source_remote.clone());
+                let frozen = existing_metadata.is_some_and(|meta| meta.frozen);
                 let updated_meta = BranchMetadata {
                     parent_branch_name: parent_branch_name.clone(),
                     parent_branch_revision: new_parent_rev.clone(),
                     source_remote,
+                    frozen,
                     pr_info: live_stack.branches.get(branch).and_then(|br| {
                         br.pr_number.map(|n| crate::engine::PrInfo {
                             number: n,

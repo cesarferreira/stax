@@ -161,6 +161,35 @@ fn test_full_command_reference_mentions_visible_top_level_commands() {
     );
 }
 
+#[test]
+fn docs_clarify_stack_unlink_requires_gh_stack_local_tracking() {
+    let docs = [
+        ("README.md", include_str!("../README.md")),
+        (
+            "docs/commands/core.md",
+            include_str!("../docs/commands/core.md"),
+        ),
+        (
+            "docs/commands/reference.md",
+            include_str!("../docs/commands/reference.md"),
+        ),
+        ("skills.md", include_str!("../skills.md")),
+    ];
+
+    for (path, content) in docs {
+        assert!(
+            !content.contains("Remove native GitHub Stack object")
+                && !content.contains("remove the native GitHub Stack object")
+                && !content.contains("Remove the native GitHub Stack object"),
+            "{path} should not imply `st stack unlink` directly removes every native GitHub Stack object"
+        );
+        assert!(
+            content.contains("gh stack checkout <pr>") || content.contains("locally tracked"),
+            "{path} should mention gh-stack local tracking or `gh stack checkout <pr>` for `st stack unlink`"
+        );
+    }
+}
+
 // =============================================================================
 // Sync Command Tests
 // =============================================================================

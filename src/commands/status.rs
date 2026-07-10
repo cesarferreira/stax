@@ -1,16 +1,14 @@
 use crate::cache::CiCache;
 use crate::commands::stack_palette;
 use crate::config::Config;
-use crate::engine::{BranchMetadata, Stack};
-use crate::git::GitRepo;
+use crate::engine::{BranchMetadata, Stack, StackSnapshot};
+use crate::git::{GitRepo, command};
 use crate::remote::{self, RemoteInfo};
 use anyhow::Result;
 use colored::Colorize;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::process::Command;
-use std::thread;
 
 const LINKED_WORKTREE_GLYPH: &str = "↳";
 
@@ -91,8 +89,9 @@ pub fn run(
     verbose: bool,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
-    let current = repo.current_branch()?;
-    let stack = Stack::load(&repo)?;
+    let snapshot = StackSnapshot::load(&repo)?;
+    let current = snapshot.current_branch;
+    let stack = snapshot.stack;
     let config = Config::load()?;
     let workdir = repo.workdir()?;
     let has_tracked = stack.branches.len() > 1;
@@ -803,34 +802,16 @@ fn get_line_diff_stats_many(
     workdir: &Path,
     branch_pairs: &[Option<(String, String)>],
 ) -> Vec<(usize, usize)> {
-    thread::scope(|scope| {
-        let handles = branch_pairs
-            .iter()
-            .map(|pair| {
-                pair.as_ref().map(|(parent, branch)| {
-                    scope.spawn(move || {
-                        get_line_diff_stats(workdir, parent, branch).unwrap_or((0, 0))
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
-
-        handles
-            .into_iter()
-            .map(|handle| match handle {
-                Some(handle) => handle.join().unwrap_or((0, 0)),
-                None => (0, 0),
-            })
-            .collect()
+    crate::parallel::map_ordered(branch_pairs, |pair| {
+        pair.as_ref()
+            .and_then(|(parent, branch)| get_line_diff_stats(workdir, parent, branch))
+            .unwrap_or((0, 0))
     })
 }
 
 fn get_line_diff_stats(workdir: &Path, parent: &str, branch: &str) -> Option<(usize, usize)> {
-    let output = Command::new("git")
-        .args(["diff", "--numstat", &format!("{}...{}", parent, branch)])
-        .current_dir(workdir)
-        .output()
-        .ok()?;
+    let range = format!("{}...{}", parent, branch);
+    let output = command::output(workdir, &["diff", "--numstat", &range]).ok()?;
 
     if !output.status.success() {
         return None;

@@ -2,6 +2,16 @@
 
 The complete command surface. For day-to-day commands only, see [Core commands](core.md). For navigation specifically, see [Navigation](navigation.md).
 
+## Global diagnostics
+
+Add `--trace` before or after any subcommand to print instrumented Git
+subprocess timings, the summed Git time, and command wall time. URL- and
+token-shaped arguments are redacted.
+
+```bash
+st --trace status --json >/dev/null
+```
+
 ## Stack operations
 
 | Command | Alias | Description |
@@ -11,7 +21,7 @@ The complete command surface. For day-to-day commands only, see [Core commands](
 | `st log` | `l` | Show stack with commits and PR info |
 | `st submit` | `ss` | Submit full current stack |
 | `st stack link` | | Register the current PR stack as a native GitHub Stack via `gh stack link` |
-| `st stack unlink` | | Remove the native GitHub Stack object via `gh stack unstack` |
+| `st stack unlink` | | Unstack a locally tracked native GitHub Stack via `gh stack unstack`; stax-linked stacks may require `gh stack checkout <pr>` first |
 | `st merge` | | Cascade-merge from bottom to current (see flags below) |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
 | `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
@@ -55,6 +65,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st top` | | Stack tip |
 | `st bottom` | | Stack base |
 | `st prev` | `p` | Toggle to previous branch |
+| `st next` | `n` | Move to the first unmerged branch upstack (deterministic on forks) |
 
 ## Branch management
 
@@ -115,7 +126,8 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 |---|---|
 | `st validate` | Check stack metadata for orphans, cycles, and staleness |
 | `st fix` | Auto-repair broken metadata (`--dry-run` previews) |
-| `st run <cmd>` | Run a command on each branch (alias: `st test`); `--stack[=<branch>]`, `--all`, `--fail-fast` |
+| `st run <cmd>` | Run a command on each branch (alias: `st test`); `--stack[=<branch>]`, `--all`, `--fail-fast`, or `--parallel --jobs <N>` |
+| `st freeze [branch]` / `st unfreeze [branch]` | Protect/unprotect a tracked branch from direct/upstack/get restacks and sync history rewrites, including imported refreshes and squash-merge cleanup rebases |
 
 ## CI, PRs, and reporting
 
@@ -135,7 +147,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st draft [branch]` | Mark the current or named branch's PR as a draft |
 | `st undraft [branch]` | Mark the current or named branch's PR as ready for review |
 | `st issue list` | List open issues |
-| `st comments` | Show PR comments |
+| `st comments` / `st reviews` | Show current PR comments; `--stack` or `--all` creates a review inbox, GitHub review comments include inline file/line locations, and `--json` emits a versioned machine-readable view |
 | `st copy` · `st copy --pr` | Copy branch name · PR URL |
 | `st standup` | Recent activity (`--ai` for AI spoken version; `--jit` for Jira context) |
 | `st changelog [from] [to]` | Generate changelog (auto-resolves last tag when `from` omitted) |
@@ -251,6 +263,12 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 
 ### `st submit`
 
+- `--dry-run` / `--plan` prints a read-only plan without fetching, pushing, editing metadata, or calling forge mutation APIs; add `--json` for the versioned machine-readable schema (currently version 2; action strings are extensible)
+- Plans query live remote head IDs with `git ls-remote` without updating local tracking refs; `--no-fetch` deliberately plans from cached tracking refs instead
+- A stale branch, and each submitted descendant that must follow its temporary publish head, reports `evaluate_after_temporary_restack` because the final push decision depends on the rewritten commit ID
+- Stack-link plans report `update_unless_native_link_succeeds` when native-stack success would suppress Stax-managed links
+- Stack-link and native-stack plans report `evaluate_after_pr_discovery` when PRs missing from local metadata could change link or fork eligibility at runtime
+- Native-stack plans otherwise report `skip` for known exclusions or `attempt` when the prerequisites are known
 - `--draft` / `--publish` / `--no-pr` / `--no-fetch` / `--no-verify` / `--open` / `--quiet` / `--verbose`
 - `--no-verify` (`-n`) skips pre-push hooks while pushing branches
 - `--reviewers alice,bob --labels bug,urgent --assignees alice`
@@ -262,6 +280,18 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 - `--yes` / `--no-prompt`
 
 Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` and `native_stack = "auto" | "off" | "link"` in `~/.config/stax/config.toml`.
+
+### `st completions`
+
+Generate a completion script without requiring an initialized repository:
+
+```bash
+st completions bash
+st completions zsh
+st completions fish
+st completions powershell
+st completions elvish
+```
 
 ### `st merge`
 
@@ -312,12 +342,21 @@ If the excluded parent has local-only commits, scoped submit still refuses and a
 - `--downstack` skips local upstack branches when the target already exists locally.
 - `--remote-upstack` includes remote-only upstack PR branches discovered from open PR base/head metadata. This is best-effort without Graphite's central backend.
 - `--no-restack` skips the default restack after checkout.
-- `--unfrozen` is accepted for Graphite CLI compatibility; Stax does not currently freeze branches.
+- `--unfrozen` unfreezes the requested branch before syncing it; frozen targets are otherwise skipped.
 - Existing local branches fast-forward when possible, or rebase local-only commits onto the fetched remote tip when branch histories diverge.
 - `--force` resets an existing local branch to the remote tip instead of preserving local commits.
 - Branches checked out in another linked worktree are skipped instead of being moved from the current worktree.
 - New remote-only branches imported by `st get` are read-only support branches: submit uses them as stack bases but does not push them or update their PRs. Existing Stax-managed branches keep their ownership metadata when synced with `st get`.
 - `st sync --restack` refreshes imported branches from their remote tips before restacking descendants; if an imported branch is checked out in a dirty worktree, sync skips it unless `--force` is used.
+
+### `st run`
+
+- `--parallel` uses detached temporary worktrees, so the main worktree never changes branch.
+- `--jobs <N>` sets the positive concurrency cap (default 8) and requires `--parallel`.
+- Each parallel command receives `STAX_RUN_BRANCH` with the original logical branch name; Git itself remains on a detached HEAD inside the temporary worktree.
+- Output is captured concurrently and printed in deterministic branch order.
+- Clean temporary worktrees are removed after success or failure. If a command leaves tracked changes, that worktree is preserved and its recovery path is printed; the branch is counted as failed.
+- `--parallel` conflicts with `--fail-fast`, because commands may already be running concurrently.
 
 ### `st ci`
 

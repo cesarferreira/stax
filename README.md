@@ -200,10 +200,10 @@ That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR
 ```bash
 st ss                    # auto-links native stack when available
 st stack link            # manually re-link the current stack
-st stack unlink          # remove the native GitHub Stack object
+st stack unlink          # unstack a locally tracked native GitHub Stack
 ```
 
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. stax also strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before talking to `gh stack`, since GitHub's private-preview native-stack API rejects Personal Access Tokens and only accepts an OAuth-authenticated `gh` login (`gh auth login`). `st doctor` recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics, and reports whether the extension is missing, outdated, or up to date.
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. stax also strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before talking to `gh stack`, since GitHub's private-preview native-stack API rejects Personal Access Tokens and only accepts an OAuth-authenticated `gh` login (`gh auth login`). `st doctor` recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics, and reports whether the extension is missing, outdated, or up to date. `st stack unlink` delegates to `gh stack unstack`, so stacks that stax registered with `gh stack link` may need `gh stack checkout <pr>` first to create gh-stack's local tracking; otherwise remove the native stack in the GitHub UI.
 
 → [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 
@@ -297,8 +297,11 @@ st config --set-ai
 | `st create <name> --below` | Insert a new branch below current, carrying tracked/untracked prepared changes with it |
 | `st get [branch|PR]` | Sync the current stack, or fetch a branch/PR stack from remote without overwriting local commits |
 | `st ss` | Submit the full stack, open/update linked PRs; temporary-publishes branches that need restack |
+| `st submit --plan [--json]` | Preview fetch, push, PR, retarget, metadata, and stack-link actions without changing local or remote state |
 | `st branch submit` | Submit only the current branch; can publish a temporary rebased head when needed |
 | `st upstack submit` | Submit current branch and descendants, chaining temporary publish heads when needed |
+| `st reviews --stack [--json]` | Stack-wide review/comment inbox, including inline file/line locations on GitHub (`st comments` remains the current-PR view) |
+| `st next` | Move to the next unmerged branch upstack; fork choices are deterministic |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
 | `st ready` | Interactive PR readiness dashboard for all tracked PRs, newest changed PR first: merge, ping, fix, wait, or draft (`--current`/`--stack` for current stack, `--plain` for table output) |
 | `st ci` / `st ci --oneline` | CI status — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |
@@ -323,6 +326,9 @@ st config --set-ai
 | `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |
+| `st run --parallel --jobs 4 <cmd>` | Run checks concurrently in isolated temporary worktrees without switching the main worktree; each command receives `STAX_RUN_BRANCH` |
+| `st freeze` / `st unfreeze` | Protect/unprotect a tracked branch from restacks, imported-branch refreshes, and squash-merge cleanup rebases |
+| `st completions <shell>` | Generate completions for Bash, Zsh, Fish, PowerShell, or Elvish |
 | `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
 | `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |
 | `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · PR readiness · list issues |
@@ -332,6 +338,10 @@ Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands
 ## Performance
 
 Benchmarked with `hyperfine` on this repo. Absolute times vary by repo and machine; the ratios do not.
+
+Run `make benchmark-status` for deterministic cold 10/50/100-branch scaling
+fixtures, or add global `--trace` to a command to see instrumented Git
+subprocess and wall-clock timings.
 
 | Benchmark      | stax     | vs [Freephite](https://github.com/bradymadden97/freephite) | vs [Graphite](https://github.com/withgraphite/graphite-cli) |
 |----------------|----------|-----------------|----------------|

@@ -2,6 +2,7 @@
 name = "stax"
 version = "0.94.0"
 edition = "2024"
+rust-version = "1.96"
 default-run = "stax"
 description = "Fast stacked Git branches and PRs"
 license = "MIT"
@@ -38,6 +39,7 @@ vendored-openssl = ["git2/vendored-openssl"]
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 
 # Git (no ssh — we use HTTPS + token auth exclusively)
 git2 = { version = "0.21", default-features = false, features = ["https"] }

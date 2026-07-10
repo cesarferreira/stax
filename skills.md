@@ -25,7 +25,7 @@ stax log|l                     # Stack status with commits + PR info
 
 stax submit|ss                 # Submit full stack
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
-stax stack unlink              # Remove native GitHub Stack object
+stax stack unlink              # Unstack locally tracked native stack; stax-linked stacks may need gh stack checkout <pr>
 stax merge                     # Merge PRs from stack bottom upward
 stax sync|rs                   # Sync trunk + clean merged branches
 stax sweep                     # Classify + optionally delete merged/gone/stale branches
@@ -70,6 +70,8 @@ stax ready --all               # Explicit all tracked branch PRs (default)
 stax issue list                # List open issues
 stax open                      # Open repo in browser
 stax comments                  # Show current PR comments
+stax reviews --stack           # Review/comment inbox; GitHub review comments include inline file/line locations
+stax reviews --all --json      # Machine-readable inbox for every tracked PR
 stax copy [--pr]               # Copy branch name or PR URL
 stax ci [--oneline|-1]         # CI status (per-check table; --oneline / multi-branch = one line per branch)
 stax standup                   # Recent activity summary
@@ -191,6 +193,9 @@ stax split                         # Split current branch into multiple stacked 
 ```bash
 stax submit                        # Submit full stack
 stax ss                            # Alias for submit
+stax submit --plan                 # Read-only action plan (no fetch/push/metadata writes)
+stax submit --plan --json          # Versioned v2 plan for automation (action strings are extensible)
+                                      # Live remote heads are read without fetching; chained restacks and unresolved PR/link decisions are runtime-evaluated
 stax submit --draft                # Create draft PRs
 stax submit --no-pr                # Push only (no PR create/update)
 stax submit --no-fetch             # Skip git fetch
@@ -210,6 +215,7 @@ stax submit --ai --yes             # Accept generated new-PR details
 stax submit --rerequest-review     # Re-request existing reviewers on update
 stax submit --native-stack         # Force-attempt native GitHub Stack registration for this run
 stax submit --no-native-stack      # Skip native GitHub Stack registration for this run
+stax completions zsh               # Generate completions: bash|zsh|fish|powershell|elvish
 
 # ~/.config/stax/config.toml; repo-root stax.toml overlays shared values
 [submit]
@@ -370,6 +376,10 @@ stax pr list --ready               # Same readiness view under PR list
 stax issue list --limit 50 --json  # List open issues with optional limit and JSON output
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output
+stax next / stax n                  # Next unmerged branch; deterministic on forks
+stax freeze [branch]                # Protect branch from restacks and sync history rewrites (including imported refresh/squash cleanup)
+stax unfreeze [branch]              # Remove freeze protection
+stax run --parallel --jobs 4 <cmd>  # Concurrent checks; command receives STAX_RUN_BRANCH
 
 stax ci                            # CI for current branch, full per-check table (elapsed/ETA + avg from recent successful runs of the same checks)
 stax ci --stack                    # CI for current stack (defaults to the one-line-per-branch roll-up)
@@ -464,7 +474,7 @@ stax undo --no-push                # Undo locally only
 stax redo                          # Re-apply last undone operation
 stax redo <op-id> --no-push        # Redo locally only
 
-stax validate                      # Validate stack metadata health
+stax validate                      # Validate stack metadata health (read-only; never prunes refs)
 stax fix --dry-run                 # Preview metadata repairs
 stax fix --yes                     # Apply metadata repairs non-interactively
 
@@ -639,7 +649,7 @@ Symbols:
 2. Sync often (`stax rs`).
 3. Restack after merges (`stax rs --restack`); squash-merged local parents collapse to their updated parent before descendants rebase.
 4. Prefer amend flow (`stax m`) to keep one commit per branch.
-5. Validate and repair metadata (`stax validate`, `stax fix`) before deep stack surgery.
+5. Validate and repair metadata (`stax validate`, `stax fix`) before deep stack surgery. Validation is read-only; only `fix` removes orphaned refs.
 6. Check stack shape (`stax ls` / `stax ll`) before submit or merge.
 7. Use `stax lane <name> [prompt]` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
 8. After trunk moves, run `stax wt rs` once instead of rebasing each agent worktree manually.
@@ -650,6 +660,7 @@ Symbols:
 
 - Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, unchanged branch diffs can be reused from the repo-local TUI cache on reopen, and `1`/`2`/`3` toggle the Stack/Summary/Patch panes for small terminals. Pane visibility is remembered per repo.
 - Use `stax --help` or `stax <command> --help` for exact flags.
+- Add global `--trace` to profile instrumented Git subprocesses and total command time; use `make benchmark-status` for reproducible cold status scaling fixtures.
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.
 - Use `--yes` for non-interactive scripting.
 - Use `--json` on supported commands for machine-readable output.

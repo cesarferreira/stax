@@ -10,7 +10,11 @@ use anyhow::Result;
 use colored::Colorize;
 use git2::BranchType;
 use std::collections::HashSet;
+use std::fs;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // =========================================================================
 // validate
@@ -321,7 +325,7 @@ pub fn run_validate() -> Result<()> {
             "{}",
             format!("{} issue(s) found. Run `stax fix` to repair.", issues).yellow()
         );
-        std::process::exit(1);
+        return Err(crate::errors::SilentExit(crate::errors::exit_codes::GENERAL).into());
     }
 
     Ok(())
@@ -508,6 +512,8 @@ pub fn run_test(
     all: bool,
     stack_filter: Option<Option<String>>,
     fail_fast: bool,
+    parallel: bool,
+    jobs: usize,
 ) -> Result<()> {
     let repo = GitRepo::open()?;
     let stack = Stack::load(&repo)?;
@@ -553,6 +559,10 @@ pub fn run_test(
         branches.len()
     );
     println!();
+
+    if parallel {
+        return run_test_parallel(&repo, &branches, &cmd_str, jobs);
+    }
 
     let mut succeeded = 0;
     let mut failed = 0;
@@ -614,8 +624,198 @@ pub fn run_test(
         for b in &failed_branches {
             println!("  {}", b.red());
         }
-        std::process::exit(1);
+        return Err(crate::errors::SilentExit(crate::errors::exit_codes::GENERAL).into());
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct RunWorktree {
+    branch: String,
+    path: PathBuf,
+}
+
+#[derive(Debug)]
+struct ParallelRunResult {
+    branch: String,
+    path: PathBuf,
+    success: bool,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    dirty: bool,
+}
+
+fn run_test_parallel(repo: &GitRepo, branches: &[String], cmd: &str, jobs: usize) -> Result<()> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("stax-run-{}-{timestamp}", std::process::id()));
+    fs::create_dir_all(&root)?;
+
+    let mut worktrees = Vec::with_capacity(branches.len());
+    for (index, branch) in branches.iter().enumerate() {
+        let path = root.join(format!("{index:03}-{}", safe_path_component(branch)));
+        let output = Command::new("git")
+            .args(["worktree", "add", "--detach"])
+            .arg(&path)
+            .arg(branch)
+            .current_dir(repo.workdir()?)
+            .output()?;
+        if !output.status.success() {
+            cleanup_run_worktrees(repo.workdir()?, &worktrees);
+            let _ = fs::remove_dir_all(&root);
+            anyhow::bail!(
+                "Failed to create parallel worktree for '{}': {}",
+                branch,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        worktrees.push(RunWorktree {
+            branch: branch.clone(),
+            path,
+        });
+    }
+
+    let results = crate::parallel::map_ordered_with_limit(&worktrees, jobs, |worktree| {
+        let output = platform_shell(cmd)
+            .current_dir(&worktree.path)
+            .env("STAX_RUN_BRANCH", &worktree.branch)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output();
+        let dirty = worktree_is_dirty(&worktree.path);
+        match output {
+            Ok(output) => ParallelRunResult {
+                branch: worktree.branch.clone(),
+                path: worktree.path.clone(),
+                success: output.status.success() && !dirty,
+                stdout: output.stdout,
+                stderr: output.stderr,
+                dirty,
+            },
+            Err(error) => ParallelRunResult {
+                branch: worktree.branch.clone(),
+                path: worktree.path.clone(),
+                success: false,
+                stdout: Vec::new(),
+                stderr: error.to_string().into_bytes(),
+                dirty,
+            },
+        }
+    });
+
+    let mut failed_branches = Vec::new();
+    let mut preserved_paths = Vec::new();
+    for result in &results {
+        println!(
+            "  {} (parallel worktree {}):",
+            result.branch.cyan(),
+            result.path.display()
+        );
+        print_captured(&result.stdout);
+        print_captured(&result.stderr);
+        if result.dirty {
+            println!(
+                "  {} Command left tracked changes; preserved for recovery at {}",
+                "WARNING".yellow(),
+                result.path.display()
+            );
+            preserved_paths.push(result.path.clone());
+        }
+        println!(
+            "  {} {}\n",
+            "Result:".dimmed(),
+            if result.success {
+                "SUCCESS".green()
+            } else {
+                "FAIL".red()
+            }
+        );
+        if !result.success {
+            failed_branches.push(result.branch.clone());
+        }
+    }
+
+    for worktree in &worktrees {
+        if preserved_paths.contains(&worktree.path) {
+            continue;
+        }
+        remove_run_worktree(repo.workdir()?, &worktree.path);
+    }
+    let _ = Command::new("git")
+        .args(["worktree", "prune"])
+        .current_dir(repo.workdir()?)
+        .status();
+    if preserved_paths.is_empty() {
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    let succeeded = results.len() - failed_branches.len();
+    println!(
+        "{} succeeded, {} failed",
+        succeeded.to_string().green(),
+        if failed_branches.is_empty() {
+            "0".green()
+        } else {
+            failed_branches.len().to_string().red()
+        }
+    );
+    if !failed_branches.is_empty() {
+        println!("Failed branches:");
+        for branch in failed_branches {
+            println!("  {}", branch.red());
+        }
+        return Err(crate::errors::SilentExit(crate::errors::exit_codes::GENERAL).into());
+    }
+    Ok(())
+}
+
+fn print_captured(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let text = String::from_utf8_lossy(bytes);
+    print!("{text}");
+    if !text.ends_with('\n') {
+        println!();
+    }
+}
+
+fn worktree_is_dirty(path: &Path) -> bool {
+    Command::new("git")
+        .args(["status", "--porcelain=v1"])
+        .current_dir(path)
+        .output()
+        .map(|output| output.status.success() && !output.stdout.is_empty())
+        .unwrap_or(true)
+}
+
+fn cleanup_run_worktrees(repo: &Path, worktrees: &[RunWorktree]) {
+    for worktree in worktrees {
+        remove_run_worktree(repo, &worktree.path);
+    }
+}
+
+fn remove_run_worktree(repo: &Path, path: &Path) {
+    let _ = Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(path)
+        .current_dir(repo)
+        .status();
+}
+
+fn safe_path_component(branch: &str) -> String {
+    branch
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

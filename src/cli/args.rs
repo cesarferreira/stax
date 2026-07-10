@@ -4,17 +4,35 @@ use std::path::PathBuf;
 
 pub(crate) const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
 
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "value must be greater than zero".to_string())
+}
+
 #[derive(Parser)]
 #[command(name = "stax")]
 #[command(version)]
 #[command(about = "Fast stacked Git branches and PRs", long_about = None)]
 pub(crate) struct Cli {
+    /// Show Git subprocess timings and a command summary
+    #[arg(long, global = true)]
+    pub(crate) trace: bool,
+
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }
 
 #[derive(Args, Clone)]
 pub(crate) struct SubmitOptions {
+    /// Show the submit plan without fetching, pushing, or changing metadata
+    #[arg(long = "dry-run", visible_alias = "plan")]
+    pub(crate) dry_run: bool,
+    /// Output the read-only submit plan as JSON
+    #[arg(long, requires = "dry_run")]
+    pub(crate) json: bool,
     /// Create new PRs as drafts; convert existing PRs to draft
     #[arg(short, long, conflicts_with = "publish")]
     pub(crate) draft: bool,
@@ -95,6 +113,8 @@ pub(crate) struct SubmitOptions {
 impl From<SubmitOptions> for commands::submit::SubmitOptions {
     fn from(submit: SubmitOptions) -> Self {
         Self {
+            dry_run: submit.dry_run,
+            json: submit.json,
             draft: submit.draft,
             publish: submit.publish,
             no_pr: submit.no_pr,
@@ -218,6 +238,17 @@ pub(crate) struct AiLaneArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
+    /// Internal worker that refreshes the cached release check.
+    #[command(name = "__update-check", hide = true)]
+    UpdateCheck,
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+
     /// Show all stacks (simple tree view)
     #[command(visible_alias = "ls")]
     Status {
@@ -693,6 +724,10 @@ pub(crate) enum Commands {
     #[command(visible_alias = "p")]
     Prev,
 
+    /// Switch to the next unmerged branch upstack
+    #[command(visible_alias = "n")]
+    Next,
+
     /// Branch management commands
     #[command(subcommand, visible_alias = "b")]
     Branch(BranchCommands),
@@ -789,11 +824,21 @@ pub(crate) enum Commands {
         branch: Option<String>,
     },
 
-    /// Show comments on the current branch's PR
+    /// Show PR comments as a current-branch view or stack-wide review inbox
+    #[command(visible_alias = "reviews")]
     Comments {
         /// Output raw markdown without rendering
-        #[arg(long)]
+        #[arg(long, conflicts_with = "json")]
         plain: bool,
+        /// Include every PR in the current stack
+        #[arg(long, conflicts_with = "all")]
+        stack: bool,
+        /// Include every tracked PR in the repository
+        #[arg(long, conflicts_with = "stack")]
+        all: bool,
+        /// Output the inbox as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show CI status for all branches in the stack
@@ -962,6 +1007,18 @@ pub(crate) enum Commands {
         yes: bool,
     },
 
+    /// Protect a tracked branch from history-rewriting restacks
+    Freeze {
+        /// Branch to freeze (defaults to current)
+        branch: Option<String>,
+    },
+
+    /// Remove history-rewrite protection from a tracked branch
+    Unfreeze {
+        /// Branch to unfreeze (defaults to current)
+        branch: Option<String>,
+    },
+
     /// Run a command on each branch in the stack
     Run {
         /// Command to run
@@ -976,6 +1033,12 @@ pub(crate) enum Commands {
         /// Stop after first failure
         #[arg(long)]
         fail_fast: bool,
+        /// Run branches concurrently in isolated temporary worktrees
+        #[arg(long, conflicts_with = "fail_fast")]
+        parallel: bool,
+        /// Maximum concurrent commands
+        #[arg(long, requires = "parallel", default_value = "8", value_parser = parse_positive_usize)]
+        jobs: usize,
     },
 
     /// Backward-compatible alias for `run`
@@ -993,6 +1056,12 @@ pub(crate) enum Commands {
         /// Stop after first failure
         #[arg(long)]
         fail_fast: bool,
+        /// Run branches concurrently in isolated temporary worktrees
+        #[arg(long, conflicts_with = "fail_fast")]
+        parallel: bool,
+        /// Maximum concurrent commands
+        #[arg(long, requires = "parallel", default_value = "8", value_parser = parse_positive_usize)]
+        jobs: usize,
     },
 
     /// Interactive tutorial (no auth or repo needed)
@@ -1359,7 +1428,7 @@ pub(crate) enum StackCommands {
     /// Register the current stack as a native GitHub Stack via `gh stack`
     Link,
 
-    /// Remove the native GitHub Stack object via `gh stack`
+    /// Unstack a locally tracked native GitHub Stack via `gh stack`
     Unlink,
 }
 
