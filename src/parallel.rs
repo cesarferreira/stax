@@ -10,9 +10,20 @@ where
     R: Send,
     F: Fn(&T) -> R + Sync,
 {
+    map_ordered_with_limit(items, IO_CONCURRENCY_LIMIT, operation)
+}
+
+/// Apply a function with a caller-selected positive concurrency cap.
+pub(crate) fn map_ordered_with_limit<T, R, F>(items: &[T], limit: usize, operation: F) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+    F: Fn(&T) -> R + Sync,
+{
+    let limit = limit.max(1);
     let mut results = Vec::with_capacity(items.len());
     thread::scope(|scope| {
-        for chunk in items.chunks(IO_CONCURRENCY_LIMIT) {
+        for chunk in items.chunks(limit) {
             let handles = chunk
                 .iter()
                 .map(|item| scope.spawn(|| operation(item)))

@@ -62,6 +62,8 @@ mod edit_tests;
 mod fix_tests;
 #[path = "fold_tests.rs"]
 mod fold_tests;
+#[path = "freeze_tests.rs"]
+mod freeze_tests;
 #[path = "get_tests.rs"]
 mod get_tests;
 #[path = "gh_stack_tests.rs"]

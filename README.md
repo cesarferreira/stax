@@ -326,6 +326,8 @@ st config --set-ai
 | `st tmux popup` | Open `stax watch --current` in a floating tmux panel |
 | `st undo` / `st redo` | Recover / reapply risky operations |
 | `st run <cmd>` | Run a command on each branch in the stack |
+| `st run --parallel --jobs 4 <cmd>` | Run checks concurrently in isolated temporary worktrees without switching the main worktree; each command receives `STAX_RUN_BRANCH` |
+| `st freeze` / `st unfreeze` | Protect/unprotect a tracked branch from restacks, imported-branch refreshes, and squash-merge cleanup rebases |
 | `st completions <shell>` | Generate completions for Bash, Zsh, Fish, PowerShell, or Elvish |
 | `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
 | `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |

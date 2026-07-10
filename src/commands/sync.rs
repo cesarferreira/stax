@@ -758,6 +758,18 @@ pub fn run(
                         }
 
                         for child in &children {
+                            if BranchMetadata::is_frozen(repo.inner(), child)? {
+                                if !quiet {
+                                    println!(
+                                        "      {} Skipped rebase for frozen child {}; its parent metadata will still move to {}",
+                                        "❄".cyan(),
+                                        child.cyan(),
+                                        stack.trunk.cyan()
+                                    );
+                                }
+                                continue;
+                            }
+
                             // Use existing provenance-aware rebase
                             match repo.rebase_branch_onto_with_provenance(
                                 child,
@@ -1346,6 +1358,30 @@ pub fn run(
             } else {
                 Vec::new()
             };
+        let mut frozen_branches = Vec::new();
+        let restack_scope_order = scope_order
+            .iter()
+            .filter(|branch| {
+                let frozen = BranchMetadata::is_frozen(repo.inner(), branch).unwrap_or(false);
+                if frozen {
+                    frozen_branches.push((*branch).clone());
+                }
+                !frozen
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !frozen_branches.is_empty() && !quiet {
+            println!(
+                "  {} Skipping frozen {}: {}",
+                "▸".dimmed(),
+                if frozen_branches.len() == 1 {
+                    "branch"
+                } else {
+                    "branches"
+                },
+                frozen_branches.join(", ").cyan()
+            );
+        }
         // Load stack once; orphaned parents are handled in Stack::load (parent → trunk,
         // needs_restack). Keep the stack in memory and update it after each rebase.
         let mut live_stack = Stack::load(&repo)?;
@@ -1367,7 +1403,7 @@ pub fn run(
                 }
             }
         }
-        let branches_to_restack: Vec<String> = scope_order
+        let branches_to_restack: Vec<String> = restack_scope_order
             .iter()
             .filter(|branch| {
                 live_stack
@@ -1381,12 +1417,20 @@ pub fn run(
 
         if branches_to_restack.is_empty() {
             if !quiet {
-                println!("  {}", "All branches up to date.".dimmed());
+                println!(
+                    "  {}",
+                    if frozen_branches.is_empty() {
+                        "All branches up to date."
+                    } else {
+                        "No unfrozen branches need restacking."
+                    }
+                    .dimmed()
+                );
             }
         } else {
             // Begin transaction for restack phase
             let mut tx = Transaction::begin(OpKind::SyncRestack, &repo, quiet)?;
-            tx.plan_branches(&repo, &scope_order)?;
+            tx.plan_branches(&repo, &restack_scope_order)?;
             let restack_count = branches_to_restack.len();
             let summary = PlanSummary {
                 branches_to_rebase: restack_count,
@@ -1409,7 +1453,7 @@ pub fn run(
             let mut summary: Vec<(String, String)> = Vec::new();
             let mut restacked_branches = 0usize;
 
-            for (index, branch) in scope_order.iter().enumerate() {
+            for (index, branch) in restack_scope_order.iter().enumerate() {
                 let needs_restack = live_stack
                     .branches
                     .get(branch.as_str())
@@ -1454,12 +1498,16 @@ pub fn run(
                     RebaseResult::Success => {
                         let metadata_update_started_at = Instant::now();
                         let new_parent_rev = repo.branch_commit(&parent_branch_name)?;
-                        let source_remote = BranchMetadata::read(repo.inner(), branch)?
-                            .and_then(|meta| meta.source_remote);
+                        let existing_metadata = BranchMetadata::read(repo.inner(), branch)?;
+                        let source_remote = existing_metadata
+                            .as_ref()
+                            .and_then(|meta| meta.source_remote.clone());
+                        let frozen = existing_metadata.is_some_and(|meta| meta.frozen);
                         let updated_meta = BranchMetadata {
                             parent_branch_name: parent_branch_name.clone(),
                             parent_branch_revision: new_parent_rev.clone(),
                             source_remote,
+                            frozen,
                             pr_info: live_stack.branches.get(branch.as_str()).and_then(|br| {
                                 br.pr_number.map(|n| PrInfo {
                                     number: n,
@@ -1828,6 +1876,17 @@ fn refresh_imported_branches(
 ) -> Result<Vec<String>> {
     let mut updated = Vec::new();
     for branch in imported_branches {
+        if BranchMetadata::is_frozen(repo.inner(), branch)? {
+            if !quiet {
+                println!(
+                    "  {} skipped frozen imported branch {}",
+                    "❄".cyan(),
+                    branch.cyan()
+                );
+            }
+            continue;
+        }
+
         let remote_ref = format!("{}/{}", remote_name, branch);
         let Some(remote_oid) = resolve_ref_oid(workdir, &remote_ref) else {
             if !quiet && verbose {
