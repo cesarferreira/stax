@@ -16,6 +16,8 @@ mod common;
 mod abort_tests;
 #[path = "absorb_tests.rs"]
 mod absorb_tests;
+#[path = "action_installer_tests.rs"]
+mod action_installer_tests;
 #[path = "additional_coverage_tests.rs"]
 mod additional_coverage_tests;
 #[path = "auth_tests.rs"]

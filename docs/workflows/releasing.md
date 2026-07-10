@@ -35,3 +35,5 @@ PR references like `(#123)` become links to the GitHub repo. The automated `chor
 - For a dry run, invoke `cargo release <level> --no-confirm` directly without `--execute`; cargo-release skips the version bump, tag, and push. git-cliff still rewrites `CHANGELOG.md` in place — run `git checkout CHANGELOG.md` to discard it.
 - Preview the upcoming entry without touching the file: `git-cliff --unreleased --tag v<next-version>`.
 - git-cliff must be installed locally (`cargo install git-cliff`) for `make release` to work.
+- Pull requests compile every release target in `.github/workflows/cross-platform.yml`; tag builds then package the same five targets.
+- The root `action.yml` composite action downloads those release archives. Keep its platform map, the release matrix, the artifact verification list, and `scripts/install-action.sh` aligned when adding a target.

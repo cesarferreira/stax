@@ -1,0 +1,28 @@
+name: Install stax
+description: Install the stax and st binaries from a GitHub release
+author: Cesar Ferreira
+
+inputs:
+  version:
+    description: Release version such as v0.94.0, or latest
+    required: false
+    default: latest
+
+outputs:
+  installed-version:
+    description: Installed stax version
+    value: ${{ steps.install.outputs.installed-version }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      name: Download stax
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/install-action.sh"
+
+branding:
+  icon: layers
+  color: purple

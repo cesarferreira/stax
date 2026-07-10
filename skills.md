@@ -5,6 +5,8 @@ This document teaches AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, 
 
 > Installing this skill: run `stax skills update` (or `st setup --install-skills`). Per-agent setup details live in `docs/integrations/`.
 
+GitHub Actions can install the CLI with `uses: cesarferreira/stax@<release>` and a matching `with: { version: <release> }` pin.
+
 ## What is Stax?
 
 Stax manages stacked branches: small focused branches layered on top of each other. Each branch maps to one PR targeting its parent branch.

@@ -14,6 +14,21 @@ cargo binstall stax
 
 Both `stax` and the short alias `st` are installed.
 
+## GitHub Actions
+
+Pin the action ref and downloaded binary to the same release:
+
+```yaml
+steps:
+  - uses: actions/checkout@v7
+  - uses: cesarferreira/stax@v0.95.0
+    with:
+      version: v0.95.0
+  - run: st status --json
+```
+
+Omit `version` to download the latest release. The action supports every published archive: macOS Intel/Apple Silicon, Linux x86_64/arm64, and Windows x86_64. Its `installed-version` output contains the resolved version.
+
 ## Prebuilt binaries
 
 From [GitHub Releases](https://github.com/cesarferreira/stax/releases/latest):

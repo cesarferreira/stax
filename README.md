@@ -57,6 +57,17 @@ brew install cesarferreira/tap/stax
 cargo binstall stax
 ```
 
+In GitHub Actions, the repository is also a composite installer. Pin both the action and binary version:
+
+```yaml
+- uses: cesarferreira/stax@v0.95.0
+  with:
+    version: v0.95.0
+- run: st status --json
+```
+
+The action installs both `stax` and `st` on macOS (Intel/Apple Silicon), Linux (x86_64/arm64), and Windows x86_64.
+
 ### Prebuilt binaries
 
 Download the latest binary from [GitHub Releases](https://github.com/cesarferreira/stax/releases):
