@@ -8,16 +8,8 @@ ensure_nextest() {
 	if command -v cargo-nextest >/dev/null 2>&1; then
 		return 0
 	fi
-	mkdir -p "${CARGO_HOME}/bin"
-	case "$(uname -m)" in
-	aarch64 | arm64) nextest_platform=linux-arm ;;
-	x86_64 | amd64) nextest_platform=linux ;;
-	*)
-		echo "unsupported container architecture: $(uname -m)" >&2
-		exit 1
-		;;
-	esac
-	curl -LsSf "https://get.nexte.st/latest/${nextest_platform}" | tar zxf - -C "${CARGO_HOME}/bin"
+	echo "cargo-nextest is missing from the test image; run 'make test-image'" >&2
+	exit 1
 }
 
 ensure_nextest

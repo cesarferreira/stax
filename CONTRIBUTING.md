@@ -4,7 +4,8 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ## Prerequisites
 
-- **Rust** (stable toolchain) via [rustup](https://rustup.rs/)
+- **Rust** via [rustup](https://rustup.rs/) (the repository pins the supported
+  toolchain in `rust-toolchain.toml`)
 - **cargo-nextest** for running tests: `cargo install cargo-nextest`
 - **Docker** (optional, recommended on macOS for faster full test suite)
 
@@ -65,20 +66,22 @@ Before submitting a PR, make sure these pass:
 # Format code
 cargo fmt
 
-# Lint (must pass with zero warnings)
-cargo clippy -- -D warnings
+# Check formatting and Clippy diagnostics
+make lint
 
 # Type check
 cargo check
 ```
 
-CI enforces `cargo fmt --check` and `cargo clippy -- -D warnings` on every PR.
+CI enforces `make lint` on every PR. This checks formatting and treats new
+Clippy diagnostics as errors while the explicit legacy-lint allowlist in
+`scripts/lint.sh` is paid down.
 
 ## Submitting Changes
 
 1. Fork the repository and create your branch from `main`.
 2. Make your changes and ensure tests pass.
-3. Run `cargo fmt` and `cargo clippy -- -D warnings`.
+3. Run `cargo fmt` and `make lint`.
 4. Open a pull request with a clear description of the change.
 
 ## Project Structure
