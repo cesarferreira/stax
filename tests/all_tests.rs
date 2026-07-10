@@ -72,6 +72,8 @@ mod github_list_tests;
 mod integration_tests;
 #[path = "navigation_tests.rs"]
 mod navigation_tests;
+#[path = "performance_tests.rs"]
+mod performance_tests;
 #[path = "pr_body_tests.rs"]
 mod pr_body_tests;
 #[path = "pr_template_tests.rs"]

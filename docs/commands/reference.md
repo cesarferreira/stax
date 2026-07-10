@@ -2,6 +2,16 @@
 
 The complete command surface. For day-to-day commands only, see [Core commands](core.md). For navigation specifically, see [Navigation](navigation.md).
 
+## Global diagnostics
+
+Add `--trace` before or after any subcommand to print instrumented Git
+subprocess timings, the summed Git time, and command wall time. URL- and
+token-shaped arguments are redacted.
+
+```bash
+st --trace status --json >/dev/null
+```
+
 ## Stack operations
 
 | Command | Alias | Description |

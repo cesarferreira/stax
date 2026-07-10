@@ -11,7 +11,7 @@ use crate::remote::RemoteInfo;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use futures_util::future::join_all;
+use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;
@@ -406,7 +406,7 @@ pub(crate) async fn fetch_ci_statuses_async(
         })
         .collect();
 
-    let mut statuses = join_all(prepared.iter().map(
+    let mut statuses = stream::iter(prepared.iter().map(
         |(branch, sha, sha_short, pr_number)| async move {
             let check_runs_result = client.fetch_checks(repo, sha).await;
             let (overall_status, check_runs) = match check_runs_result {
@@ -462,6 +462,8 @@ pub(crate) async fn fetch_ci_statuses_async(
             }
         },
     ))
+    .buffer_unordered(crate::parallel::IO_CONCURRENCY_LIMIT)
+    .collect::<Vec<_>>()
     .await;
 
     statuses.sort_by(|a, b| a.branch.cmp(&b.branch));

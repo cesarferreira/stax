@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff install clean test test-native test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint all
+.PHONY: build build-release release ensure-git-cliff install clean test test-native test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint benchmark-status all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -172,6 +172,10 @@ fmt:
 lint:
 	cargo fmt -- --check
 	./scripts/lint.sh
+
+# Benchmark cold JSON status across deterministic stack sizes.
+benchmark-status:
+	./scripts/benchmark-status.sh
 
 # Run with arguments (usage: make run ARGS="status")
 run:
