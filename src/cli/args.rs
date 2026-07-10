@@ -4,6 +4,14 @@ use std::path::PathBuf;
 
 pub(crate) const DEFAULT_GITHUB_LIST_LIMIT: u8 = 30;
 
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "value must be greater than zero".to_string())
+}
+
 #[derive(Parser)]
 #[command(name = "stax")]
 #[command(version)]
@@ -999,6 +1007,18 @@ pub(crate) enum Commands {
         yes: bool,
     },
 
+    /// Protect a tracked branch from history-rewriting restacks
+    Freeze {
+        /// Branch to freeze (defaults to current)
+        branch: Option<String>,
+    },
+
+    /// Remove history-rewrite protection from a tracked branch
+    Unfreeze {
+        /// Branch to unfreeze (defaults to current)
+        branch: Option<String>,
+    },
+
     /// Run a command on each branch in the stack
     Run {
         /// Command to run
@@ -1013,6 +1033,12 @@ pub(crate) enum Commands {
         /// Stop after first failure
         #[arg(long)]
         fail_fast: bool,
+        /// Run branches concurrently in isolated temporary worktrees
+        #[arg(long, conflicts_with = "fail_fast")]
+        parallel: bool,
+        /// Maximum concurrent commands
+        #[arg(long, requires = "parallel", default_value = "8", value_parser = parse_positive_usize)]
+        jobs: usize,
     },
 
     /// Backward-compatible alias for `run`
@@ -1030,6 +1056,12 @@ pub(crate) enum Commands {
         /// Stop after first failure
         #[arg(long)]
         fail_fast: bool,
+        /// Run branches concurrently in isolated temporary worktrees
+        #[arg(long, conflicts_with = "fail_fast")]
+        parallel: bool,
+        /// Maximum concurrent commands
+        #[arg(long, requires = "parallel", default_value = "8", value_parser = parse_positive_usize)]
+        jobs: usize,
     },
 
     /// Interactive tutorial (no auth or repo needed)

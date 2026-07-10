@@ -17,6 +17,7 @@ pub mod diff;
 pub mod doctor;
 pub mod draft;
 pub mod edit;
+pub mod freeze;
 pub mod generate;
 pub mod get;
 pub(crate) mod github_list;

@@ -19,6 +19,9 @@ pub struct BranchMetadata {
     /// them, but submit should not push or update their PRs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_remote: Option<String>,
+    /// Protect this branch from history-rewriting bulk operations.
+    #[serde(default)]
+    pub frozen: bool,
     /// PR information (if submitted)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_info: Option<PrInfo>,
@@ -42,6 +45,7 @@ impl BranchMetadata {
             parent_branch_name: parent_name.to_string(),
             parent_branch_revision: parent_revision.to_string(),
             source_remote: None,
+            frozen: false,
             pr_info: None,
         }
     }

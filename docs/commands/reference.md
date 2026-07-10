@@ -126,7 +126,8 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 |---|---|
 | `st validate` | Check stack metadata for orphans, cycles, and staleness |
 | `st fix` | Auto-repair broken metadata (`--dry-run` previews) |
-| `st run <cmd>` | Run a command on each branch (alias: `st test`); `--stack[=<branch>]`, `--all`, `--fail-fast` |
+| `st run <cmd>` | Run a command on each branch (alias: `st test`); `--stack[=<branch>]`, `--all`, `--fail-fast`, or `--parallel --jobs <N>` |
+| `st freeze [branch]` / `st unfreeze [branch]` | Protect/unprotect a tracked branch from history-rewriting restacks |
 
 ## CI, PRs, and reporting
 
@@ -336,12 +337,20 @@ If the excluded parent has local-only commits, scoped submit still refuses and a
 - `--downstack` skips local upstack branches when the target already exists locally.
 - `--remote-upstack` includes remote-only upstack PR branches discovered from open PR base/head metadata. This is best-effort without Graphite's central backend.
 - `--no-restack` skips the default restack after checkout.
-- `--unfrozen` is accepted for Graphite CLI compatibility; Stax does not currently freeze branches.
+- `--unfrozen` unfreezes the requested branch before syncing it; frozen targets are otherwise skipped.
 - Existing local branches fast-forward when possible, or rebase local-only commits onto the fetched remote tip when branch histories diverge.
 - `--force` resets an existing local branch to the remote tip instead of preserving local commits.
 - Branches checked out in another linked worktree are skipped instead of being moved from the current worktree.
 - New remote-only branches imported by `st get` are read-only support branches: submit uses them as stack bases but does not push them or update their PRs. Existing Stax-managed branches keep their ownership metadata when synced with `st get`.
 - `st sync --restack` refreshes imported branches from their remote tips before restacking descendants; if an imported branch is checked out in a dirty worktree, sync skips it unless `--force` is used.
+
+### `st run`
+
+- `--parallel` uses detached temporary worktrees, so the main worktree never changes branch.
+- `--jobs <N>` sets the positive concurrency cap (default 8) and requires `--parallel`.
+- Output is captured concurrently and printed in deterministic branch order.
+- Clean temporary worktrees are removed after success or failure. If a command leaves tracked changes, that worktree is preserved and its recovery path is printed; the branch is counted as failed.
+- `--parallel` conflicts with `--fail-fast`, because commands may already be running concurrently.
 
 ### `st ci`
 
