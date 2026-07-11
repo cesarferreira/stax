@@ -1123,7 +1123,7 @@ mod tests {
     fn posix_shell_snippet_resolves_real_binary_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+        if let Err(err) = Command::new("zsh").arg("-dfc").arg("exit 0").output() {
             if err.kind() == ErrorKind::NotFound {
                 return;
             }
@@ -1153,7 +1153,7 @@ mod tests {
         let path_env = format!("{}:{original_path}", bin_dir.display());
         let command = format!("source \"{}\"; st config", snippet_path.display());
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
             .env("PATH", path_env)
             .output()
@@ -1184,7 +1184,7 @@ mod tests {
     fn posix_shell_snippet_keeps_path_for_worktree_shell_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+        if let Err(err) = Command::new("zsh").arg("-dfc").arg("exit 0").output() {
             if err.kind() == ErrorKind::NotFound {
                 return;
             }
@@ -1214,7 +1214,7 @@ mod tests {
         let path_env = format!("{}:{original_path}", bin_dir.display());
         let command = format!("source \"{}\"; st wtgo demo-lane", snippet_path.display());
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
             .env("PATH", path_env)
             .output()
@@ -1245,7 +1245,7 @@ mod tests {
     fn posix_shell_snippet_wraps_lane_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+        if let Err(err) = Command::new("zsh").arg("-dfc").arg("exit 0").output() {
             if err.kind() == ErrorKind::NotFound {
                 return;
             }
@@ -1275,7 +1275,7 @@ mod tests {
         let path_env = format!("{}:{original_path}", bin_dir.display());
         let command = format!("source \"{}\"; st lane review-pass", snippet_path.display());
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
             .env("PATH", path_env)
             .output()
@@ -1306,7 +1306,7 @@ mod tests {
     fn posix_shell_snippet_wraps_checkout_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+        if let Err(err) = Command::new("zsh").arg("-dfc").arg("exit 0").output() {
             if err.kind() == ErrorKind::NotFound {
                 return;
             }
@@ -1336,7 +1336,7 @@ mod tests {
         let path_env = format!("{}:{original_path}", bin_dir.display());
         let command = format!("source \"{}\"; st bco feature", snippet_path.display());
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
             .env("PATH", path_env)
             .output()
