@@ -200,16 +200,23 @@ pub fn open_initial_window(repository: Option<PathBuf>, cx: &mut App) {
 }
 ```
 
-- [ ] **Step 5: Refresh the tracked workspace lockfile**
+- [ ] **Step 5: Extend the tracked workspace lockfile minimally**
 
-Run:
+Keep the existing tracked `Cargo.lock`; do not delete or regenerate it. Run the
+GUI check once without `--locked` so Cargo resolves only packages missing from
+the new workspace member:
 
 ```bash
-cargo generate-lockfile
+cargo check -p stax-gui
+git diff -- Cargo.lock
 ```
 
-Expected: the tracked root `Cargo.lock` contains `stax-gui`, GPUI 0.2.2, and
-the GUI's transitive dependency graph.
+Expected: Cargo preserves existing compatible package selections and adds
+`stax-gui`, GPUI 0.2.2, and the GUI's missing transitive graph. Review any
+existing-package version change individually. GPUI 0.2.2 requires
+`core-foundation =0.10.0` on macOS, so replacing the previously locked 0.10.1
+with 0.10.0 is the one expected constrained change. Step 7 then proves the
+result is complete with `--locked`.
 
 - [ ] **Step 6: Add a macOS GUI compile gate**
 
