@@ -414,7 +414,7 @@ exit 1
 }
 
 #[test]
-fn link_stack_strips_ambient_token_env_vars_before_calling_gh() {
+fn link_stack_strips_injected_token_env_vars_before_calling_gh() {
     let fake = fake_gh_dir(
         r#"#!/bin/sh
 if [ "$1 $2" = "stack link" ]; then
@@ -430,15 +430,6 @@ exit 1
     let env_dump_file = fake.path().join("env.txt");
     let path = path_with_fake_gh(fake.path());
 
-    // Simulate PAT env vars exported ambiently in the user's shell (e.g. for
-    // other tooling/CI scripts) that would otherwise shadow an existing
-    // OAuth-authenticated `gh` login. `Command` inherits these by default
-    // unless explicitly removed, so this reproduces the real-world bug.
-    unsafe {
-        std::env::set_var("GH_TOKEN", "ghp_should_be_stripped");
-        std::env::set_var("GITHUB_TOKEN", "ghp_should_also_be_stripped");
-    }
-
     let outcome = stax::github::gh_stack::link_stack_with_env(
         &[10, 20],
         "main",
@@ -446,13 +437,10 @@ exit 1
         &[
             ("PATH", path.as_str()),
             ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+            ("GH_TOKEN", "ghp_should_be_stripped"),
+            ("GITHUB_TOKEN", "ghp_should_also_be_stripped"),
         ],
     );
-
-    unsafe {
-        std::env::remove_var("GH_TOKEN");
-        std::env::remove_var("GITHUB_TOKEN");
-    }
 
     assert_eq!(outcome, stax::github::gh_stack::LinkOutcome::Linked);
     let dump = fs::read_to_string(env_dump_file).expect("env dump written");
