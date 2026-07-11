@@ -285,6 +285,8 @@ stax sync --full                   # Fetch all remote branches with --prune (slo
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
 # sync cleanup may delete merged/gone imported support branches locally, but never push-deletes their remotes.
+# The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
+# Conditional attention lines name blocked cleanup, trunk failures, and checkout changes, followed by one prioritized next command. Routine restack health stays in stax ls and the TUI.
 
 stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
 stax sweep --delete                # Delete merged/tracked-merged PRs + upstream-gone branches with no unique work after confirmation

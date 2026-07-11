@@ -3106,7 +3106,7 @@ fn test_sync_pulls_trunk_updates() {
         stdout
     );
     assert!(
-        stdout.contains("+1 -0"),
+        stdout.contains("1 file +1 -0"),
         "Expected trunk diff stats in sync footer, got: {}",
         stdout
     );
@@ -3140,8 +3140,13 @@ fn test_sync_with_feature_branch() {
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("Sync") || stdout.contains("complete") || stdout.contains("Updating"),
-        "Expected sync output, got: {}",
+        !stdout.contains("need restacking"),
+        "Ambient restack state should not appear in sync output, got: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Next: st restack"),
+        "Sync should not nag about routine restacking, got: {}",
         stdout
     );
 }
@@ -5565,6 +5570,25 @@ fn test_sync_detects_merged_branch_when_local_trunk_diverged() {
         output.status.success(),
         "Sync failed: {}",
         TestRepo::stderr(&output)
+    );
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("main did not reach origin/main"),
+        "Expected diverged trunk attention, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Next: st trunk"),
+        "Expected trunk recovery command, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains(&format!(
+            "Checked out main after cleanup (was {})",
+            branch_name
+        )),
+        "Expected checkout-change summary, got: {}",
+        stdout
     );
 
     // Branch should be deleted as merged even though local main diverged

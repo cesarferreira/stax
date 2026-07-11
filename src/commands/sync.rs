@@ -33,6 +33,40 @@ struct SyncStats {
     trunk: Option<TrunkSummary>,
     merged_branches_cleaned: usize,
     restacked_branches: usize,
+    imported_branches_updated: usize,
+    trunk_not_updated: Option<TrunkNotUpdated>,
+    cleanup_skips: Vec<CleanupSkip>,
+    checkout_change: Option<CheckoutChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TrunkNotUpdated {
+    branch: String,
+    remote_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CleanupSkip {
+    branch: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CheckoutChange {
+    from: String,
+    to: String,
+}
+
+impl SyncStats {
+    fn record_cleanup_skip(&mut self, branch: &str, reason: impl Into<String>) {
+        if self.cleanup_skips.iter().any(|skip| skip.branch == branch) {
+            return;
+        }
+        self.cleanup_skips.push(CleanupSkip {
+            branch: branch.to_string(),
+            reason: reason.into(),
+        });
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +90,7 @@ enum TrunkSummary {
     Pulled {
         branch: String,
         commits: usize,
+        files: usize,
         additions: usize,
         deletions: usize,
     },
@@ -544,6 +579,7 @@ pub fn run(
         quiet,
         verbose,
     )?;
+    stats.imported_branches_updated = updated_imported_branches.len();
     if !imported_branches.is_empty() {
         step_timings.push((
             "update imported branches".to_string(),
@@ -675,8 +711,11 @@ pub fn run(
                         blocking_worktree_cleanup,
                         confirmed_dirty_worktree_removal,
                     ));
-                } else if !quiet {
-                    println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+                } else {
+                    stats.record_cleanup_skip(branch, "not confirmed");
+                    if !quiet {
+                        println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+                    }
                 }
             }
 
@@ -716,6 +755,10 @@ pub fn run(
                 }
 
                 if !parent_exists_locally {
+                    stats.record_cleanup_skip(
+                        branch,
+                        format!("missing local parent {}", parent_branch),
+                    );
                     if !quiet {
                         println!(
                             "    {} {}",
@@ -833,6 +876,7 @@ pub fn run(
                             }
                         }
                         Err(checkout_error) => {
+                            stats.record_cleanup_skip(branch, "checkout failed");
                             if !quiet {
                                 println!(
                                     "    {} {}",
@@ -897,6 +941,7 @@ pub fn run(
                     match crate::git::refs::delete_metadata(repo.inner(), branch) {
                         Ok(()) => true,
                         Err(e) => {
+                            stats.record_cleanup_skip(branch, "metadata cleanup failed");
                             println!(
                                 "{}",
                                 format!(
@@ -914,6 +959,14 @@ pub fn run(
 
                 if metadata_deleted {
                     stats.merged_branches_cleaned += 1;
+                }
+
+                if !local_deleted && local_still_exists {
+                    let reason = blocking_worktree_cleanup
+                        .as_ref()
+                        .and_then(BlockingWorktreeCleanup::blocker_summary)
+                        .unwrap_or_else(|| "local branch kept".to_string());
+                    stats.record_cleanup_skip(branch, reason);
                 }
 
                 if !quiet {
@@ -1137,6 +1190,7 @@ pub fn run(
                     );
 
                 if !confirm {
+                    stats.record_cleanup_skip(branch, "not confirmed");
                     if !quiet {
                         println!("    {} {}", branch.bright_black(), "skipped".dimmed());
                     }
@@ -1156,6 +1210,7 @@ pub fn run(
                             }
                         }
                         Err(checkout_error) => {
+                            stats.record_cleanup_skip(branch, "checkout failed");
                             if !quiet {
                                 println!(
                                     "    {} {}",
@@ -1213,6 +1268,7 @@ pub fn run(
                     match crate::git::refs::delete_metadata(repo.inner(), branch) {
                         Ok(()) => true,
                         Err(e) => {
+                            stats.record_cleanup_skip(branch, "metadata cleanup failed");
                             println!(
                                 "{}",
                                 format!(
@@ -1227,6 +1283,14 @@ pub fn run(
                 } else {
                     false
                 };
+
+                if !local_deleted && local_still_exists {
+                    let reason = blocking_worktree_cleanup
+                        .as_ref()
+                        .and_then(BlockingWorktreeCleanup::blocker_summary)
+                        .unwrap_or_else(|| "local branch kept".to_string());
+                    stats.record_cleanup_skip(branch, reason);
+                }
 
                 if !quiet {
                     if local_deleted {
@@ -1625,6 +1689,22 @@ pub fn run(
         .is_some_and(|remote| resolve_ref_oid(&workdir, &stack.trunk).as_deref() == Some(remote));
     stats.trunk = trunk_reached_remote.then_some(trunk_summary).flatten();
 
+    if !trunk_reached_remote {
+        stats.trunk_not_updated = Some(TrunkNotUpdated {
+            branch: stack.trunk.clone(),
+            remote_ref: remote_trunk_ref.clone(),
+        });
+    }
+
+    if current_after_deletions != current {
+        stats.checkout_change = Some(CheckoutChange {
+            from: current.clone(),
+            to: current_after_deletions.clone(),
+        });
+    }
+
+    stats.cleanup_skips.sort_by(|a, b| a.branch.cmp(&b.branch));
+
     if let Some(pr_refresh_elapsed) = refresh_pr_draft_states(&repo, &config, quiet) {
         step_timings.push(("refresh PR metadata".to_string(), pr_refresh_elapsed));
     }
@@ -1651,11 +1731,14 @@ pub fn run(
             render_sync_footer(&stats, sync_started_at.elapsed())
         );
 
-        if !restack && stats.merged_branches_cleaned > 0 && config.ui.tips {
-            println!(
-                "{}",
-                "Hint: Run `st restack --all` to rebase branches onto the updated trunk.".dimmed()
-            );
+        let follow_up = render_sync_follow_up(&stats);
+        if !follow_up.is_empty() {
+            println!();
+            for line in follow_up {
+                if config.ui.tips || !line.starts_with("Next:") {
+                    println!("{}", line);
+                }
+            }
         }
     }
 
@@ -2826,6 +2909,7 @@ fn render_sync_footer(stats: &SyncStats, total_duration: Duration) -> String {
             TrunkSummary::Pulled {
                 branch,
                 commits,
+                files,
                 additions,
                 deletions,
             } => {
@@ -2840,7 +2924,8 @@ fn render_sync_footer(stats: &SyncStats, total_duration: Duration) -> String {
                     .green()
                 ));
                 parts.push(format!(
-                    "{} {}",
+                    "{} {} {}",
+                    format!("{} file{}", files, if *files == 1 { "" } else { "s" }).dimmed(),
                     format!("+{}", additions).green(),
                     format!("-{}", deletions).red()
                 ));
@@ -2868,8 +2953,51 @@ fn render_sync_footer(stats: &SyncStats, total_duration: Duration) -> String {
         ));
     }
 
+    if stats.imported_branches_updated > 0 {
+        parts.push(format!(
+            "{} {}",
+            "updated".dimmed(),
+            format!("{} imported", stats.imported_branches_updated)
+                .cyan()
+                .bold()
+        ));
+    }
+
     parts.push(format!("{}", format_duration(total_duration).cyan()));
     parts.join(&format!("{}", " | ".dimmed()))
+}
+
+fn render_sync_follow_up(stats: &SyncStats) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if let Some(trunk) = &stats.trunk_not_updated {
+        lines.push(format!(
+            "⚠ {} did not reach {}; review the warnings above",
+            trunk.branch, trunk.remote_ref
+        ));
+    }
+
+    for skip in &stats.cleanup_skips {
+        lines.push(format!(
+            "⚠ Cleanup skipped for {} ({})",
+            skip.branch, skip.reason
+        ));
+    }
+
+    if let Some(checkout) = &stats.checkout_change {
+        lines.push(format!(
+            "→ Checked out {} after cleanup (was {})",
+            checkout.to, checkout.from
+        ));
+    }
+
+    if stats.trunk_not_updated.is_some() {
+        lines.push("Next: st trunk".to_string());
+    } else if !stats.cleanup_skips.is_empty() {
+        lines.push("Next: st sweep".to_string());
+    }
+
+    lines
 }
 
 fn wait_for_trunk_summary(
@@ -2896,11 +3024,12 @@ fn summarize_trunk_transition(
 
             if is_ancestor(workdir, local_before, remote_after_fetch) {
                 let commits = count_commits_between(workdir, local_before, remote_after_fetch)?;
-                let (additions, deletions) =
+                let (files, additions, deletions) =
                     diff_line_stats_between(workdir, local_before, remote_after_fetch)?;
                 return Ok(Some(TrunkSummary::Pulled {
                     branch: branch.to_string(),
                     commits,
+                    files,
                     additions,
                     deletions,
                 }));
@@ -2959,7 +3088,11 @@ fn count_commits_between(workdir: &Path, base: &str, head: &str) -> Result<usize
         .context("Failed to parse fetched trunk commit count")
 }
 
-fn diff_line_stats_between(workdir: &Path, base: &str, head: &str) -> Result<(usize, usize)> {
+fn diff_line_stats_between(
+    workdir: &Path,
+    base: &str,
+    head: &str,
+) -> Result<(usize, usize, usize)> {
     let range = format!("{}..{}", base, head);
     let output = Command::new("git")
         .args([
@@ -2987,11 +3120,12 @@ fn diff_line_stats_between(workdir: &Path, base: &str, head: &str) -> Result<(us
         .ok_or_else(|| anyhow::anyhow!("Failed to parse git diff --shortstat output: {stdout:?}"))
 }
 
-fn parse_diff_shortstat(output: &str) -> Option<(usize, usize)> {
+fn parse_diff_shortstat(output: &str) -> Option<(usize, usize, usize)> {
     if output.trim().is_empty() {
-        return Some((0, 0));
+        return Some((0, 0, 0));
     }
 
+    let mut files = 0;
     let mut additions = 0;
     let mut deletions = 0;
     let mut recognized = false;
@@ -2999,6 +3133,7 @@ fn parse_diff_shortstat(output: &str) -> Option<(usize, usize)> {
     for part in output.trim().split(',').map(str::trim) {
         let value = part.split_whitespace().next()?.parse::<usize>().ok()?;
         if part.contains("file changed") || part.contains("files changed") {
+            files = value;
             recognized = true;
         } else if part.contains("insertion") {
             additions = value;
@@ -3009,7 +3144,7 @@ fn parse_diff_shortstat(output: &str) -> Option<(usize, usize)> {
         }
     }
 
-    recognized.then_some((additions, deletions))
+    recognized.then_some((files, additions, deletions))
 }
 
 #[cfg(test)]
@@ -3048,11 +3183,14 @@ mod tests {
                 trunk: Some(TrunkSummary::Pulled {
                     branch: "main".to_string(),
                     commits: 1,
+                    files: 12,
                     additions: 434,
                     deletions: 22,
                 }),
                 merged_branches_cleaned: 2,
                 restacked_branches: 1,
+                imported_branches_updated: 1,
+                ..SyncStats::default()
             },
             Duration::from_millis(14_022),
         );
@@ -3061,10 +3199,13 @@ mod tests {
 
         assert!(footer.contains("main"));
         assert!(footer.contains("+1 commit"));
+        assert!(footer.contains("12 files"));
         assert!(footer.contains("+434"));
         assert!(footer.contains("-22"));
         assert!(footer.contains("cleaned"));
         assert!(footer.contains("restacked"));
+        assert!(footer.contains("updated"));
+        assert!(footer.contains("1 imported"));
         assert!(footer.contains("14.022s"));
         assert!(footer.contains('\u{1b}'));
     }
@@ -3080,6 +3221,8 @@ mod tests {
                 }),
                 merged_branches_cleaned: 0,
                 restacked_branches: 0,
+                imported_branches_updated: 0,
+                ..SyncStats::default()
             },
             Duration::from_secs(2),
         );
@@ -3093,12 +3236,66 @@ mod tests {
     }
 
     #[test]
+    fn render_sync_follow_up_is_empty_when_sync_needs_no_attention() {
+        assert!(render_sync_follow_up(&SyncStats::default()).is_empty());
+    }
+
+    #[test]
+    fn render_sync_follow_up_prioritizes_trunk_recovery() {
+        let lines = render_sync_follow_up(&SyncStats {
+            trunk_not_updated: Some(TrunkNotUpdated {
+                branch: "main".to_string(),
+                remote_ref: "origin/main".to_string(),
+            }),
+            cleanup_skips: vec![CleanupSkip {
+                branch: "old-auth".to_string(),
+                reason: "dirty worktree".to_string(),
+            }],
+            checkout_change: Some(CheckoutChange {
+                from: "old-auth".to_string(),
+                to: "main".to_string(),
+            }),
+            ..SyncStats::default()
+        });
+        let output = lines.join("\n");
+
+        assert!(output.contains("main did not reach origin/main"));
+        assert!(output.contains("Cleanup skipped for old-auth (dirty worktree)"));
+        assert!(output.contains("Checked out main after cleanup (was old-auth)"));
+        assert!(output.contains("Next: st trunk"));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("Next:"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn render_sync_follow_up_suggests_sweep_for_skipped_cleanup() {
+        let lines = render_sync_follow_up(&SyncStats {
+            cleanup_skips: vec![CleanupSkip {
+                branch: "old-auth".to_string(),
+                reason: "dirty worktree".to_string(),
+            }],
+            ..SyncStats::default()
+        });
+
+        let output = lines.join("\n");
+
+        assert!(output.contains("Next: st sweep"));
+        assert!(!output.contains("Next: st restack --all"));
+    }
+
+    #[test]
     fn waits_for_slow_trunk_summary_instead_of_dropping_it() {
         let worker = std::thread::spawn(|| {
             std::thread::sleep(Duration::from_millis(1_100));
             Ok(Some(TrunkSummary::Pulled {
                 branch: "main".to_string(),
                 commits: 108,
+                files: 752,
                 additions: 30_954,
                 deletions: 5_422,
             }))
@@ -3112,6 +3309,7 @@ mod tests {
             summary,
             TrunkSummary::Pulled {
                 commits: 108,
+                files: 752,
                 additions: 30_954,
                 deletions: 5_422,
                 ..
@@ -3134,7 +3332,7 @@ mod tests {
     fn parses_diff_shortstat_line_counts() {
         assert_eq!(
             parse_diff_shortstat(" 752 files changed, 30954 insertions(+), 5422 deletions(-)\n"),
-            Some((30_954, 5_422))
+            Some((752, 30_954, 5_422))
         );
     }
 
@@ -3142,13 +3340,13 @@ mod tests {
     fn parses_diff_shortstat_with_only_insertions() {
         assert_eq!(
             parse_diff_shortstat(" 1 file changed, 7 insertions(+)\n"),
-            Some((7, 0))
+            Some((1, 7, 0))
         );
     }
 
     #[test]
     fn parses_empty_diff_shortstat_as_zero_changes() {
-        assert_eq!(parse_diff_shortstat(""), Some((0, 0)));
+        assert_eq!(parse_diff_shortstat(""), Some((0, 0, 0)));
     }
 
     #[test]
