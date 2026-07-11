@@ -14,6 +14,7 @@ fn run_copy_without_clipboard(repo: &TestRepo, args: &[&str]) -> Output {
         .env("GIT_CONFIG_SYSTEM", null_path)
         .env("STAX_DISABLE_UPDATE_CHECK", "1")
         .env("STAX_TEST_DISABLE_HEAD_SYNC", "1")
+        .env("STAX_TEST_FORCE_CLIPBOARD_UNAVAILABLE", "1")
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("XDG_SESSION_TYPE")
