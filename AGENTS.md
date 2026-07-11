@@ -8,7 +8,7 @@
 - For full-suite validation, always use `make test`.
 - On macOS, `make test` intentionally routes to the Docker fast path.
 - Use native paths only when explicitly needed:
-  - `make test-native`
+  - `make test-native` (guarded nextest path; validates the file-descriptor limit)
   - `make test-local-ramdisk`
   - `make test-local-fast`
 - Targeted single-test runs via `cargo nextest run <pattern>` are fine and encouraged for tight feedback loops; switch to `make test` once changes are ready for verification.
@@ -18,6 +18,7 @@
 ## Why
 
 - This suite is process/filesystem heavy (`git` + `stax` subprocesses), and Linux Docker is dramatically faster and more stable than native macOS for full runs.
+- Native macOS performance remains sensitive to endpoint-security tooling; do not assume a warm native timing will match Docker.
 
 ## Documentation Policy
 

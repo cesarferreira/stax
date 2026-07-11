@@ -35,6 +35,4 @@ export NEXTEST_TEST_THREADS="${threads}"
 export RUST_MIN_STACK="${RUST_MIN_STACK:-4194304}"
 
 echo "native tests: profile=${profile} threads=${threads} nofile=$(ulimit -Sn)"
-
-"${cargo_cmd}" nextest run --lib --bins --cargo-profile "${profile}"
-"${cargo_cmd}" test --profile "${profile}" --test all_tests -- --test-threads="${threads}"
+"${cargo_cmd}" nextest run --cargo-profile "${profile}"

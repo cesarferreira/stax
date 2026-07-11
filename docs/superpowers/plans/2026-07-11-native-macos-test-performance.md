@@ -2,9 +2,19 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the guarded native macOS full-suite path run every discovered test with a median warm runtime of at most 75 seconds while preserving Docker/CI nextest behavior.
+**Status:** Experiment concluded; the original performance gate was not met. The user authorized a draft PR containing only the safe partial improvements.
 
-**Architecture:** Keep nextest for the 790 fast unit/bin tests, but run the consolidated integration binary once with eight libtest threads to avoid per-test macOS security inspection. Make the integration binary safe for shared-process concurrency, then remove high-volume Git fixture subprocesses with a focused `git2` bootstrap module while continuing to execute the real `stax` binary in scenarios.
+**Outcome:** The hybrid and sharded libtest runners were rejected after unstable
+measurements ranging from 73.29 to 136.17 seconds. The retained runner uses
+nextest for the complete suite. The final retained native path passed all 1,843
+tests in 115.58 seconds; after adding the final timeout regression test, Docker
+passed all 1,844 tests in 35.861 seconds of test execution and remains
+recommended. The unchecked steps below are the historical
+execution plan, not claims that the original acceptance gate passed.
+
+**Original goal (not met):** Make the guarded native macOS full-suite path run every discovered test with a median warm runtime of at most 75 seconds while preserving Docker/CI nextest behavior.
+
+**Original architecture hypothesis (rejected):** Keep nextest for the 790 fast unit/bin tests, but run the consolidated integration binary once with eight libtest threads to avoid per-test macOS security inspection. The retained implementation instead uses guarded nextest for the full suite plus the safe fixture and isolation improvements.
 
 **Tech Stack:** Rust 1.96, cargo-nextest 0.9.114, libtest, git2 0.21, Bash, GNU Make, stax 0.94.
 
@@ -208,7 +218,11 @@ git commit -m "test: make integration environments process-local"
 
 ---
 
-### Task 3: Add the guarded hybrid native runner
+### Task 3: Experiment with a guarded hybrid native runner (rejected)
+
+The steps in this task record the tested hypothesis. The final draft reverts
+to one guarded full-suite nextest invocation because the hybrid path was slower
+and less stable under sustained endpoint inspection.
 
 **Files:**
 - Create: `scripts/native-tests.sh`
@@ -718,6 +732,10 @@ git commit -m "perf(test): commit fixture changes in process"
 
 ### Task 6: Document the supported native path
 
+**Final deviation:** Documentation describes a guarded nextest fallback and
+explicitly keeps Docker recommended; it does not claim the rejected hybrid
+runner or a passing 75-second gate.
+
 **Files:**
 - Modify: `README.md:430-440`
 - Modify: `CONTRIBUTING.md:7-60`
@@ -811,6 +829,11 @@ git commit -m "docs: document fast native macOS tests"
 ---
 
 ### Task 7: Run final quality, correctness, and performance gates
+
+**Recorded result:** Formatting/lint passed, Docker passed the final 1,844-test
+suite, and the guarded native nextest path passed the then-current 1,843 tests
+in 115.58 seconds. The performance gate failed, so submission is an explicitly
+authorized draft PR, not completion of the original goal.
 
 **Files:**
 - Modify only if verification exposes a defect in files already listed above.

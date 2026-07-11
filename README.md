@@ -436,7 +436,11 @@ Before opening a PR, run:
 make test
 ```
 
-On macOS this uses Docker when available. On Linux and other native paths it runs nextest with the optimized test profile and sanitized test environment.
+On macOS this uses Docker when available. `make test-native` is the guarded
+fallback: it checks the file-descriptor limit, sanitizes the environment, and
+runs nextest with the optimized test profile. Native macOS timings can still
+vary substantially with endpoint-security tooling, so Docker remains the
+recommended full-suite path.
 
 To cut a release, run:
 

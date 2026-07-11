@@ -94,9 +94,11 @@ fn test_split_hunk_requires_terminal() {
 /// Each round: j(down to hunk), Space(select), Enter(finish round), Enter(accept name).
 fn split_hunk_script(rounds: usize) -> String {
     let mut parts = vec![common::TUI_SCRIPT_LEAD_DELAY.to_string()];
-    for _ in 0..rounds {
+    for round in 0..rounds {
         parts.push("printf 'j \\r\\r'".to_string());
-        parts.push(common::TUI_SCRIPT_STEP_DELAY.to_string());
+        if round + 1 < rounds {
+            parts.push("sleep 1".to_string());
+        }
     }
     parts.join("; ")
 }

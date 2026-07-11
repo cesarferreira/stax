@@ -6,7 +6,7 @@
 //! - Assertion utilities for test output
 
 mod git_fixture;
-pub(crate) use git_fixture::init_test_repo;
+pub(crate) use git_fixture::{commit_all, init_test_repo};
 
 use serde_json::Value;
 use std::fs;
@@ -80,13 +80,10 @@ fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-/// Delay before the first TUI keystrokes in `script`-based integration tests.
-///
-/// Keep this conservative: the `script` PTY helper does not provide a readiness
-/// signal, so sending input too early races the TUI startup/re-render path and
-/// can make multi-round flows silently accept the wrong branch name.
+/// Conservative fallback before the first TUI keystrokes when no stable text
+/// prompt is available for readiness detection.
 pub const TUI_SCRIPT_LEAD_DELAY: &str = "sleep 1";
-/// Pause between TUI interaction rounds.
+/// Conservative fallback between TUI rounds without a stable text prompt.
 pub const TUI_SCRIPT_STEP_DELAY: &str = "sleep 2";
 
 #[allow(dead_code)]
@@ -101,18 +98,47 @@ pub fn run_stax_in_script_with_env(
     env: &[(&str, &str)],
 ) -> Output {
     let stax_bin = stax_bin();
+    let transcript_dir = test_tempdir();
+    let transcript_path = transcript_dir.path().join("tui-transcript");
+    let input_status_path = transcript_dir.path().join("input-status");
+    fs::write(&transcript_path, "").expect("create TUI transcript");
+    let quoted_transcript = sh_quote(&transcript_path.to_string_lossy());
+    let quoted_input_status = sh_quote(&input_status_path.to_string_lossy());
     let command = std::iter::once(stax_bin.to_string_lossy().into_owned())
         .chain(args.iter().map(|arg| (*arg).to_string()))
         .map(|part| sh_quote(&part))
         .collect::<Vec<_>>()
         .join(" ");
 
+    let input_with_readiness = format!(
+        r#"set -e
+STAX_TUI_TRANSCRIPT={quoted_transcript}
+wait_for_tui_text() {{
+  expected=$1
+  wait_attempts=${{STAX_TUI_WAIT_ATTEMPTS:-200}}
+  attempts=0
+  while [ "$attempts" -lt "$wait_attempts" ]; do
+    if grep -Fq "$expected" "$STAX_TUI_TRANSCRIPT" 2>/dev/null; then return 0; fi
+    attempts=$((attempts + 1))
+    sleep 0.05
+  done
+  echo "timed out waiting for TUI text: $expected" >&2
+  return 1
+}}
+{input_script}"#
+    );
+
+    let input_pipeline = format!(
+        "(set +e; ({input_with_readiness}); input_status=$?; printf '%s\\n' \"$input_status\" > {quoted_input_status}; exit \"$input_status\")"
+    );
     let shell_script = if cfg!(target_os = "macos") {
-        format!("({input_script}) | script -q /dev/null {command}")
+        format!(
+            "{input_pipeline} | script -qF /dev/null {command} > {quoted_transcript}; script_status=$?; input_status=$(cat {quoted_input_status} 2>/dev/null || printf 1); cat {quoted_transcript}; if [ \"$input_status\" -ne 0 ]; then exit \"$input_status\"; fi; exit \"$script_status\""
+        )
     } else {
         format!(
-            "({input_script}) | script -qefc {} /dev/null",
-            sh_quote(&command)
+            "{input_pipeline} | script -qefc {} /dev/null > {quoted_transcript}; script_status=$?; input_status=$(cat {quoted_input_status} 2>/dev/null || printf 1); cat {quoted_transcript}; if [ \"$input_status\" -ne 0 ]; then exit \"$input_status\"; fi; exit \"$script_status\"",
+            sh_quote(&command),
         )
     };
 
@@ -462,17 +488,7 @@ impl TestRepo {
 
     /// Create a commit with all staged changes
     pub fn commit(&self, message: &str) {
-        hermetic_git_command()
-            .args(["add", "-A"])
-            .current_dir(self.path())
-            .output()
-            .expect("Failed to stage files");
-
-        hermetic_git_command()
-            .args(["commit", "-m", message])
-            .current_dir(self.path())
-            .output()
-            .expect("Failed to commit");
+        commit_all(&self.path(), message).expect("Failed to commit fixture changes");
     }
 
     /// Get the current branch name
@@ -798,5 +814,20 @@ mod tests {
 
         let output = repo.run_stax(&["checkout", "nonexistent"]);
         output.assert_failure();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tui_readiness_timeout_fails_the_scripted_command() {
+        let repo = TestRepo::new();
+        let output = run_stax_in_script_with_env(
+            &repo.path(),
+            &["--version"],
+            "wait_for_tui_text 'prompt that will never appear'",
+            &[("STAX_TUI_WAIT_ATTEMPTS", "1")],
+        );
+
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("timed out waiting for TUI text"));
     }
 }

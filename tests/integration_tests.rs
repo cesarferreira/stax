@@ -3,7 +3,7 @@
 //! These tests create real temporary git repositories and run actual stax commands
 //! to verify end-to-end functionality.
 
-use crate::common::init_test_repo;
+use crate::common::{commit_all, init_test_repo};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -292,17 +292,7 @@ impl TestRepo {
 
     /// Create a commit with all staged changes
     fn commit(&self, message: &str) {
-        hermetic_git_command()
-            .args(["add", "-A"])
-            .current_dir(self.path())
-            .output()
-            .expect("Failed to stage files");
-
-        hermetic_git_command()
-            .args(["commit", "-m", message])
-            .current_dir(self.path())
-            .output()
-            .expect("Failed to commit");
+        commit_all(&self.path(), message).expect("Failed to commit fixture changes");
     }
 
     /// Get the current branch name

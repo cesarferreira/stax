@@ -15,7 +15,8 @@ if env | grep -Eq '^(GITHUB_TOKEN|STAX_GITHUB_TOKEN|GH_TOKEN)='; then
   exit 90
 fi
 printf '%s\n' "$*" >>"${STAX_NATIVE_TEST_LOG}"
-if [[ "${STAX_NATIVE_TEST_FAIL_PHASE:-}" == "${1:-}" ]]; then
+if [[ -n "${STAX_NATIVE_TEST_FAIL_MATCH:-}" ]] && \
+  [[ "$*" == *"${STAX_NATIVE_TEST_FAIL_MATCH}"* ]]; then
   exit 23
 fi
 exit 0
@@ -32,36 +33,20 @@ GITHUB_TOKEN=secret STAX_GITHUB_TOKEN=secret GH_TOKEN=secret \
   NATIVE_CARGO_PROFILE=test-container \
   "${runner}"
 
-expected="${tmp}/expected.log"
-printf '%s\n' \
-  'nextest run --lib --bins --cargo-profile test-container' \
-  'test --profile test-container --test all_tests -- --test-threads=8' \
-  >"${expected}"
-diff -u "${expected}" "${log}"
-
-: >"${log}"
-set +e
-STAX_NATIVE_TEST_CARGO="${fake_cargo}" \
-  STAX_NATIVE_TEST_LOG="${log}" \
-  STAX_NATIVE_TEST_FAIL_PHASE=nextest \
-  STAX_TEST_TMPDIR="${tmp}/test-tmp" \
-  "${runner}"
-status=$?
-set -e
-[[ "${status}" -eq 23 ]]
+grep -Fxq 'nextest run --cargo-profile test-container' "${log}"
 [[ "$(wc -l <"${log}" | tr -d ' ')" -eq 1 ]]
 
 : >"${log}"
 set +e
 STAX_NATIVE_TEST_CARGO="${fake_cargo}" \
   STAX_NATIVE_TEST_LOG="${log}" \
-  STAX_NATIVE_TEST_FAIL_PHASE=test \
+  STAX_NATIVE_TEST_FAIL_MATCH='nextest run' \
   STAX_TEST_TMPDIR="${tmp}/test-tmp" \
   "${runner}"
 status=$?
 set -e
 [[ "${status}" -eq 23 ]]
-[[ "$(wc -l <"${log}" | tr -d ' ')" -eq 2 ]]
+[[ "$(wc -l <"${log}" | tr -d ' ')" -eq 1 ]]
 
 set +e
 (

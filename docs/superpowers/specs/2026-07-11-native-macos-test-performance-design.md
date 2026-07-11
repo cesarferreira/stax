@@ -1,7 +1,26 @@
 # Native macOS test performance
 
 **Date:** 2026-07-11
-**Status:** Design approved, self-reviewed, pending user review
+**Status:** Experiment concluded; original performance target not met; partial improvements retained in a draft PR
+
+## Outcome
+
+The hybrid libtest runner described in the original design was implemented and
+measured, but it was slower and less stable under sustained macOS endpoint
+inspection. It was rejected and reverted. The retained native runner uses
+nextest for the complete suite, with environment sanitation and a guarded
+file-descriptor limit. The retained partial improvements are deterministic
+clipboard fallback, process-local integration environments, in-process `git2`
+fixture setup/commits, and more deterministic PTY input.
+
+The finalized native run passed the then-current 1,843 tests in 115.58 seconds.
+A final PTY timeout regression test brought the suite to 1,844 tests, all of
+which pass in Docker. A sharded
+experiment reached 73.29 seconds once but later warm runs varied up to 136.17
+seconds, so the 75-second median / 90-second maximum goal was not achieved.
+Docker remains the supported fast and stable macOS full-suite path. Sections
+describing the 75-second target below record the original experiment criteria,
+not a claim about the retained implementation.
 
 ## Problem
 
@@ -51,8 +70,8 @@ Provide a supported native macOS test path that:
 
 | Decision | Choice |
 |---|---|
-| Native runner | Hybrid: nextest for unit/bin tests, one controlled libtest process for the consolidated integration binary. |
-| Native concurrency | Eight integration test threads, matching the measured optimum. |
+| Native runner | Guarded nextest for the complete suite; the hybrid libtest experiment was rejected. |
+| Native concurrency | Eight nextest workers by default, still overridable through `NEXTEST_TEST_THREADS`. |
 | Docker and CI | Keep nextest process isolation and existing container behavior unchanged. |
 | Fixture bootstrap | Use `git2` in-process for repository initialization and the initial commit. |
 | Behavior under test | Continue launching the real `stax` binary and Git where the scenario explicitly exercises Git behavior. |
@@ -66,11 +85,9 @@ Provide a supported native macOS test path that:
 ### Native runner
 
 Add a focused native test script invoked by `make test-native` and
-`make test-local-fast` on macOS. It performs two phases:
-
-1. Run unit and bin tests with nextest and the `test-container` Cargo profile.
-2. Run the single `all_tests` integration binary through libtest with exactly
-   eight test threads.
+`make test-local-fast` on macOS. It runs the complete suite with nextest and
+the `test-container` Cargo profile. The attempted two-phase nextest/libtest
+runner did not deliver stable performance and is not retained.
 
 The script owns the sanitized environment currently assembled in the Makefile:
 GitHub token variables are removed, update checks are disabled,
@@ -131,20 +148,18 @@ existing `TestRepo` methods.
 make test-native
   -> native test script
      -> sanitize environment and validate file limit
-     -> cargo nextest run --lib --bins (8 workers)
-     -> cargo test --test all_tests (one process, 8 libtest threads)
+     -> cargo nextest run (8 workers by default)
         -> shared git2 fixture bootstrap
         -> per-test temporary repository
         -> real stax child process
         -> Git/libgit2 behavior exercised by the scenario
 ```
 
-No repository state is shared between tests. Batching changes process lifetime,
-not fixture isolation.
+No repository state is shared between tests.
 
 ## Error handling
 
-- If unit/bin tests fail, the native runner stops before integration tests.
+- If any test fails, nextest propagates the failure from the native runner.
 - If the file-descriptor limit cannot be raised to the required value, the
   runner exits with an actionable message rather than attempting a flaky run.
 - If an integration test mutates process-global environment, a dedicated
@@ -160,13 +175,13 @@ not fixture isolation.
 Changes are applied and measured in this order:
 
 1. Make clipboard and environment-sensitive integration tests hermetic.
-2. Add the guarded hybrid native runner and benchmark it.
+2. Add the guarded hybrid native runner and benchmark it (rejected after the
+   performance and stability gate failed).
 3. Replace fixture bootstrap subprocesses with the shared `git2` initializer
    and benchmark again.
-4. If the median remains above 75 seconds, profile the hybrid runner and
-   convert only additional high-volume fixture setup operations to `git2`.
-   Production command execution and scenario-defining Git subprocesses remain
-   out of scope.
+4. Profile the hybrid and sharded runners, then retain only safe fixture and
+   test-determinism improvements. Production command execution and
+   scenario-defining Git subprocesses remained out of scope.
 
 Each stage must preserve correctness before its performance result is used.
 Optimizations that regress the representative module or introduce flakes are
@@ -184,7 +199,7 @@ removed rather than accumulated.
 - Fixture bootstrap failures return contextual errors.
 - The native runner rejects an intentionally insufficient file limit with the
   expected guidance.
-- The native runner propagates failures from both unit and integration phases.
+- The native runner propagates nextest failures.
 
 ### Targeted commands
 
@@ -206,8 +221,8 @@ full-suite `cargo test` as a contributor command.
 
 Update contributor-facing documentation in the same change:
 
-- `README.md`: explain the fast native path and keep Docker as the default
-  macOS full-suite path until the native performance gate is met.
+- `README.md`: explain the guarded native fallback and keep Docker as the
+  default macOS full-suite path because the native performance gate was not met.
 - `CONTRIBUTING.md`: document `make test-native`, its requirements, and expected
   warm runtime.
 - `AGENTS.md`: permit the guarded native runner while continuing to prohibit
