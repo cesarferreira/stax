@@ -594,7 +594,7 @@ impl GitRepo {
             .map(
                 |(idx, (path, branch, is_locked, lock_reason, is_prunable, prunable_reason))| {
                     let is_main = idx == 0;
-                    let is_current = path == cwd_normalized;
+                    let is_current = cwd_normalized.starts_with(&path);
                     WorktreeInfo {
                         name: labels[idx].clone(),
                         path,

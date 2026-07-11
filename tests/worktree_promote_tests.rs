@@ -126,6 +126,19 @@ fn wt_promote_moves_current_branch_to_main_worktree() {
 }
 
 #[test]
+fn wt_promote_works_from_nested_directory() {
+    let (repo, branch, linked) = setup_promotable_worktree();
+    let nested = linked.join("nested").join("directory");
+    fs::create_dir_all(&nested).expect("create nested worktree directory");
+
+    let output = repo.run_stax_in(&nested, &["wt", "promote"]);
+
+    output.assert_success();
+    assert_eq!(current_branch(&repo, &repo.path()), branch);
+    assert!(!linked.exists());
+}
+
+#[test]
 fn wt_promote_refuses_dirty_linked_worktree() {
     let (repo, branch, linked) = setup_promotable_worktree();
     fs::write(linked.join("dirty.txt"), "dirty\n").expect("write dirty source file");
