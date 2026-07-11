@@ -317,10 +317,22 @@ pub fn run(
     let local_trunk_before_sync = resolve_ref_oid(&workdir, &stack.trunk);
     let remote_trunk_after_fetch = resolve_ref_oid(&workdir, &remote_trunk_ref);
 
-    // Channel for background trunk diff stats — spawned after trunk update completes so
-    // resolve_ref_oid sees the updated local ref. The thread then runs in parallel with
-    // merged-branch detection and optional restack, which are the expensive steps.
-    let (trunk_stats_tx, trunk_stats_rx) = std::sync::mpsc::channel::<Option<TrunkSummary>>();
+    // Compute the exact trunk transition as soon as both fixed endpoints are known. This
+    // overlaps the diff with trunk update, merged-branch detection, and optional restack.
+    let trunk_stats_worker = {
+        let workdir = workdir.clone();
+        let branch = stack.trunk.clone();
+        let local_before = local_trunk_before_sync.clone();
+        let remote_after = remote_trunk_after_fetch.clone();
+        std::thread::spawn(move || {
+            summarize_trunk_transition(
+                &workdir,
+                &branch,
+                local_before.as_deref(),
+                remote_after.as_deref(),
+            )
+        })
+    };
 
     // 2. Update trunk branch (before merged branch detection, so detection works correctly)
     // Note: If we're not on trunk, we use a refspec fetch which may fail if local trunk
@@ -537,26 +549,6 @@ pub fn run(
             "update imported branches".to_string(),
             imported_update_started_at.elapsed(),
         ));
-    }
-
-    // Kick off trunk diff stats now that trunk is updated. Runs in parallel with
-    // merged-branch detection and optional restack (the expensive steps).
-    // We join with a short timeout at the footer; if not done we skip +N/-M stats.
-    {
-        let workdir_bg = workdir.clone();
-        let trunk_branch_bg = stack.trunk.clone();
-        let local_before_bg = local_trunk_before_sync.clone();
-        let remote_after_bg = remote_trunk_after_fetch.clone();
-        let tx = trunk_stats_tx.clone();
-        std::thread::spawn(move || {
-            let result = summarize_trunk_sync(
-                &workdir_bg,
-                &trunk_branch_bg,
-                local_before_bg.as_deref(),
-                remote_after_bg.as_deref(),
-            );
-            let _ = tx.send(result);
-        });
     }
 
     // 3. Delete merged branches
@@ -1627,13 +1619,11 @@ pub fn run(
         }
     }
 
-    // Collect background trunk diff stats. Give it up to 1s to finish (it will have
-    // been running in parallel throughout the sync). If it's still not done, skip the
-    // line stats — saving 10-15s on large repos is worth omitting +N/-M from the footer.
-    stats.trunk = trunk_stats_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .ok()
-        .flatten();
+    let trunk_summary = wait_for_trunk_summary(trunk_stats_worker)?;
+    let trunk_reached_remote = remote_trunk_after_fetch
+        .as_deref()
+        .is_some_and(|remote| resolve_ref_oid(&workdir, &stack.trunk).as_deref() == Some(remote));
+    stats.trunk = trunk_reached_remote.then_some(trunk_summary).flatten();
 
     if let Some(pr_refresh_elapsed) = refresh_pr_draft_states(&repo, &config, quiet) {
         step_timings.push(("refresh PR metadata".to_string(), pr_refresh_elapsed));
@@ -2882,43 +2872,47 @@ fn render_sync_footer(stats: &SyncStats, total_duration: Duration) -> String {
     parts.join(&format!("{}", " | ".dimmed()))
 }
 
-fn summarize_trunk_sync(
+fn wait_for_trunk_summary(
+    worker: std::thread::JoinHandle<Result<Option<TrunkSummary>>>,
+) -> Result<Option<TrunkSummary>> {
+    worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("trunk summary worker panicked"))?
+}
+
+fn summarize_trunk_transition(
     workdir: &Path,
     branch: &str,
     local_before: Option<&str>,
     remote_after_fetch: Option<&str>,
-) -> Option<TrunkSummary> {
-    let local_after = resolve_ref_oid(workdir, branch)?;
-
+) -> Result<Option<TrunkSummary>> {
     if let Some(remote_after_fetch) = remote_after_fetch {
-        if local_after == remote_after_fetch {
-            if let Some(local_before) = local_before {
-                if local_before == local_after {
-                    return Some(TrunkSummary::UpToDate {
-                        branch: branch.to_string(),
-                    });
-                }
-
-                if is_ancestor(workdir, local_before, &local_after) {
-                    let commits = count_commits_between(workdir, local_before, &local_after)?;
-                    let (additions, deletions) =
-                        diff_line_stats_between(workdir, local_before, &local_after)?;
-                    return Some(TrunkSummary::Pulled {
-                        branch: branch.to_string(),
-                        commits,
-                        additions,
-                        deletions,
-                    });
-                }
+        if let Some(local_before) = local_before {
+            if local_before == remote_after_fetch {
+                return Ok(Some(TrunkSummary::UpToDate {
+                    branch: branch.to_string(),
+                }));
             }
 
-            return Some(TrunkSummary::Updated {
-                branch: branch.to_string(),
-            });
+            if is_ancestor(workdir, local_before, remote_after_fetch) {
+                let commits = count_commits_between(workdir, local_before, remote_after_fetch)?;
+                let (additions, deletions) =
+                    diff_line_stats_between(workdir, local_before, remote_after_fetch)?;
+                return Ok(Some(TrunkSummary::Pulled {
+                    branch: branch.to_string(),
+                    commits,
+                    additions,
+                    deletions,
+                }));
+            }
         }
+
+        return Ok(Some(TrunkSummary::Updated {
+            branch: branch.to_string(),
+        }));
     }
 
-    None
+    Ok(None)
 }
 
 fn resolve_ref_oid(workdir: &Path, reference: &str) -> Option<String> {
@@ -2944,48 +2938,78 @@ fn is_ancestor(workdir: &Path, ancestor: &str, descendant: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn count_commits_between(workdir: &Path, base: &str, head: &str) -> Option<usize> {
+fn count_commits_between(workdir: &Path, base: &str, head: &str) -> Result<usize> {
     let output = Command::new("git")
         .args(["rev-list", "--count", &format!("{}..{}", base, head)])
         .current_dir(workdir)
         .output()
-        .ok()?;
+        .context("Failed to count fetched trunk commits")?;
 
     if !output.status.success() {
-        return None;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "git rev-list failed while counting trunk commits: {}",
+            stderr.trim()
+        );
     }
 
-    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .context("Failed to parse fetched trunk commit count")
 }
 
-fn diff_line_stats_between(workdir: &Path, base: &str, head: &str) -> Option<(usize, usize)> {
+fn diff_line_stats_between(workdir: &Path, base: &str, head: &str) -> Result<(usize, usize)> {
+    let range = format!("{}..{}", base, head);
     let output = Command::new("git")
-        .args(["diff", "--numstat", &format!("{}..{}", base, head)])
+        .args([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--shortstat",
+            &range,
+        ])
+        .env("LC_ALL", "C")
         .current_dir(workdir)
         .output()
-        .ok()?;
+        .context("Failed to calculate fetched trunk line stats")?;
 
     if !output.status.success() {
-        return None;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "git diff failed while calculating trunk stats: {}",
+            stderr.trim()
+        );
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut additions = 0usize;
-    let mut deletions = 0usize;
+    parse_diff_shortstat(&stdout)
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse git diff --shortstat output: {stdout:?}"))
+}
 
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 2 {
-            if let Ok(add) = parts[0].parse::<usize>() {
-                additions += add;
-            }
-            if let Ok(del) = parts[1].parse::<usize>() {
-                deletions += del;
-            }
+fn parse_diff_shortstat(output: &str) -> Option<(usize, usize)> {
+    if output.trim().is_empty() {
+        return Some((0, 0));
+    }
+
+    let mut additions = 0;
+    let mut deletions = 0;
+    let mut recognized = false;
+
+    for part in output.trim().split(',').map(str::trim) {
+        let value = part.split_whitespace().next()?.parse::<usize>().ok()?;
+        if part.contains("file changed") || part.contains("files changed") {
+            recognized = true;
+        } else if part.contains("insertion") {
+            additions = value;
+            recognized = true;
+        } else if part.contains("deletion") {
+            deletions = value;
+            recognized = true;
         }
     }
 
-    Some((additions, deletions))
+    recognized.then_some((additions, deletions))
 }
 
 #[cfg(test)]
@@ -3066,6 +3090,70 @@ mod tests {
         assert!(footer.contains("up to date"));
         assert!(footer.contains("2.000s"));
         assert!(footer.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn waits_for_slow_trunk_summary_instead_of_dropping_it() {
+        let worker = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(1_100));
+            Ok(Some(TrunkSummary::Pulled {
+                branch: "main".to_string(),
+                commits: 108,
+                additions: 30_954,
+                deletions: 5_422,
+            }))
+        });
+
+        let summary = wait_for_trunk_summary(worker)
+            .expect("trunk summary worker should finish")
+            .expect("trunk summary should be retained");
+
+        assert!(matches!(
+            summary,
+            TrunkSummary::Pulled {
+                commits: 108,
+                additions: 30_954,
+                deletions: 5_422,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn reports_trunk_summary_worker_failure() {
+        let worker = std::thread::spawn(|| -> Result<Option<TrunkSummary>> {
+            panic!("simulated worker failure")
+        });
+
+        let error = wait_for_trunk_summary(worker).expect_err("worker failure should be reported");
+
+        assert!(error.to_string().contains("trunk summary worker panicked"));
+    }
+
+    #[test]
+    fn parses_diff_shortstat_line_counts() {
+        assert_eq!(
+            parse_diff_shortstat(" 752 files changed, 30954 insertions(+), 5422 deletions(-)\n"),
+            Some((30_954, 5_422))
+        );
+    }
+
+    #[test]
+    fn parses_diff_shortstat_with_only_insertions() {
+        assert_eq!(
+            parse_diff_shortstat(" 1 file changed, 7 insertions(+)\n"),
+            Some((7, 0))
+        );
+    }
+
+    #[test]
+    fn parses_empty_diff_shortstat_as_zero_changes() {
+        assert_eq!(parse_diff_shortstat(""), Some((0, 0)));
+    }
+
+    #[test]
+    fn rejects_malformed_diff_shortstat() {
+        assert_eq!(parse_diff_shortstat("not git diff output"), None);
     }
 
     #[test]
