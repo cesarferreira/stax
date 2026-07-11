@@ -501,15 +501,9 @@ impl GitHubClient {
                 .await;
 
             if let Ok(pr) = pr {
-                let Some(number) = pr.number else {
-                    continue;
-                };
-                let Some(head) = pr.head.as_deref() else {
-                    continue;
-                };
-                let Some(base) = pr.base.as_deref() else {
-                    continue;
-                };
+                let number = pr.number;
+                let head = &*pr.head;
+                let base = &*pr.base;
 
                 results.push(OpenPrInfo {
                     number,

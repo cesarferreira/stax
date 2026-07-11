@@ -121,19 +121,15 @@ pub struct PrInfoWithHead {
 }
 
 fn octocrab_pr_number(pr: &PullRequest) -> Result<u64> {
-    pr.number.context("GitHub PR response missing number")
+    Ok(pr.number)
 }
 
 fn octocrab_pr_head(pr: &PullRequest) -> Result<&Head> {
-    pr.head
-        .as_deref()
-        .context("GitHub PR response missing head")
+    Ok(&pr.head)
 }
 
 fn octocrab_pr_base(pr: &PullRequest) -> Result<&Base> {
-    pr.base
-        .as_deref()
-        .context("GitHub PR response missing base")
+    Ok(&pr.base)
 }
 
 fn octocrab_pr_state(pr: &PullRequest) -> String {
