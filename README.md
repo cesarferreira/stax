@@ -177,6 +177,7 @@ Each lane is a real Git worktree with normal stax metadata — it appears in `st
 ```bash
 st wt         # open the worktree dashboard
 st wt rs      # restack every lane at once when trunk moves
+st wt promote # move the current lane branch back to the main worktree
 st ss         # submit PRs for the ones that are ready
 ```
 
@@ -317,6 +318,7 @@ st config --set-ai
 | `st split` | Split a branch into stacked branches (by commit or `--hunk`) |
 | `st lane <name> "<task>"` | Spawn an AI agent on a new lane |
 | `st wt` | Open the worktree dashboard |
+| `st wt promote` | Retire the current lane and check its branch out in the main worktree |
 | `st resolve` | AI-resolve an in-progress rebase conflict |
 | `st create --ai` | Generate a branch name from local changes |
 | `st gen` / `st generate` | AI: interactive picker, or `--pr-body` / `--pr-title` / `--commit-msg` |
@@ -416,10 +418,10 @@ Use `--path` to scope either mode to a subdirectory.
 stax runs on Windows (x86_64) with prebuilt binaries on [Releases](https://github.com/cesarferreira/stax/releases). Most commands work identically, with these limitations:
 
 - **Shell integration is not available.** `st setup` supports bash/zsh/fish only. On Windows:
-  - `st wt c` / `st wt go` create and navigate worktrees but cannot auto-`cd` the parent shell. Manually `cd` to the printed path.
+  - `st wt c` / `st wt go` create and navigate worktrees but cannot auto-`cd` the parent shell. `st wt promote` performs the handoff but likewise requires the printed `cd` command.
   - The `sw` quick alias is not available.
   - `st wt rm` (bare) cannot relocate the shell. Specify: `st wt rm <name>`.
-- **Worktree commands still work.** `st wt c/go/ls/ll/cleanup/rm/prune/restack` all function — only the shell-level `cd` is missing.
+- **Worktree commands still work.** `st wt c/go/ls/ll/promote/cleanup/rm/prune/restack` all function — only the shell-level `cd` is missing.
 - **tmux integration requires WSL** or a Unix-like environment. The [stax.tmux](https://github.com/cesarferreira/stax.tmux) plugin is Unix-only.
 
 Everything else — stacked branches, PRs, restack, sync, undo/redo, TUI, AI generation — works on Windows without limitation.
