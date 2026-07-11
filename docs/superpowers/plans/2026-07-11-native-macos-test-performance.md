@@ -8,7 +8,7 @@
 measurements ranging from 73.29 to 136.17 seconds. The retained runner uses
 nextest for the complete suite. The final retained native path passed all 1,843
 tests in 115.58 seconds; after adding the final timeout regression test, Docker
-passed all 1,844 tests in 35.861 seconds of test execution and remains
+passed all 1,858 tests in 36.093 seconds of test execution and remains
 recommended. The unchecked steps below are the historical
 execution plan, not claims that the original acceptance gate passed.
 
@@ -830,7 +830,7 @@ git commit -m "docs: document fast native macOS tests"
 
 ### Task 7: Run final quality, correctness, and performance gates
 
-**Recorded result:** Formatting/lint passed, Docker passed the final 1,844-test
+**Recorded result:** Formatting/lint passed, Docker passed the final 1,858-test
 suite, and the guarded native nextest path passed the then-current 1,843 tests
 in 115.58 seconds. The performance gate failed, so submission is an explicitly
 authorized draft PR, not completion of the original goal.
