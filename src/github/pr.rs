@@ -120,16 +120,16 @@ pub struct PrInfoWithHead {
     pub title: String,
 }
 
-fn octocrab_pr_number(pr: &PullRequest) -> Result<u64> {
-    Ok(pr.number)
+fn octocrab_pr_number(pr: &PullRequest) -> u64 {
+    pr.number
 }
 
-fn octocrab_pr_head(pr: &PullRequest) -> Result<&Head> {
-    Ok(&pr.head)
+fn octocrab_pr_head(pr: &PullRequest) -> &Head {
+    &pr.head
 }
 
-fn octocrab_pr_base(pr: &PullRequest) -> Result<&Base> {
-    Ok(&pr.base)
+fn octocrab_pr_base(pr: &PullRequest) -> &Base {
+    &pr.base
 }
 
 fn octocrab_pr_state(pr: &PullRequest) -> String {
@@ -141,10 +141,10 @@ fn octocrab_pr_state(pr: &PullRequest) -> String {
 
 fn octocrab_pr_info_with_state(pr: &PullRequest, state: String) -> Result<PrInfo> {
     Ok(PrInfo {
-        number: octocrab_pr_number(pr)?,
+        number: octocrab_pr_number(pr),
         state,
         is_draft: pr.draft.unwrap_or(false),
-        base: octocrab_pr_base(pr)?.ref_field.clone(),
+        base: octocrab_pr_base(pr).ref_field.clone(),
     })
 }
 
@@ -153,7 +153,7 @@ fn octocrab_pr_info(pr: &PullRequest) -> Result<PrInfo> {
 }
 
 fn octocrab_pr_info_with_head(pr: &PullRequest) -> Result<PrInfoWithHead> {
-    let head = octocrab_pr_head(pr)?;
+    let head = octocrab_pr_head(pr);
 
     Ok(PrInfoWithHead {
         head_label: head.label.clone(),
@@ -646,7 +646,7 @@ impl GitHubClient {
         };
 
         for pr in &prs.items {
-            let head = octocrab_pr_head(pr)?;
+            let head = octocrab_pr_head(pr);
             if head.ref_field != branch {
                 continue;
             }
@@ -707,7 +707,7 @@ impl GitHubClient {
             };
 
             for pr in &prs.items {
-                let head = octocrab_pr_head(pr)?.ref_field.clone();
+                let head = octocrab_pr_head(pr).ref_field.clone();
                 if prs_by_head.contains_key(&head) {
                     continue;
                 }
@@ -1329,7 +1329,7 @@ impl GitHubClient {
             .get(pr_number)
             .await
             .context("Failed to get PR")?;
-        Ok(octocrab_pr_head(&pr)?.sha.clone())
+        Ok(octocrab_pr_head(&pr).sha.clone())
     }
 
     /// List all issue comments (conversation comments) on a PR
