@@ -476,8 +476,12 @@ fn sync_keeps_metadata_when_branch_delete_blocked_by_worktree() {
     repo.git(&["push", "origin", "--delete", &a])
         .assert_success();
 
-    let output = repo.run_stax_in(&wt_a, &["sync", "--force", "--safe", "--quiet"]);
-    output.assert_success();
+    let output = repo.run_stax_in(&wt_a, &["sync", "--force", "--safe"]);
+    output
+        .assert_success()
+        .assert_stdout_contains(&format!("Cleanup skipped for {}", a))
+        .assert_stdout_contains("checkout failed")
+        .assert_stdout_contains("Next: st sweep");
 
     let branch_ref = format!("refs/heads/{}", a);
     repo.git(&["show-ref", "--verify", "--quiet", &branch_ref])
