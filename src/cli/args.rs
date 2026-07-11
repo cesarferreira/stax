@@ -1716,6 +1716,12 @@ pub(crate) enum WorktreeCommands {
         delete_branch: bool,
     },
 
+    /// Move the current linked-worktree branch to the main worktree
+    Promote {
+        #[arg(long, hide = true)]
+        shell_output: bool,
+    },
+
     /// Remove stale git worktree bookkeeping
     Prune,
 

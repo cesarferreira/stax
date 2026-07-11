@@ -195,6 +195,7 @@ Full guide: [Worktrees](../worktrees/index.md) · [AI lanes](../workflows/agent-
 | `st worktree go [name]` | `wt go`, `wtgo` | Navigate to a worktree (shell integration required for `cd`) |
 | `st worktree path <name>` | | Print absolute path (scripting) |
 | `st worktree remove [name]` | `wt rm`, `wtrm` | Remove a worktree (`wt rm` removes the current lane) |
+| `st worktree promote` | `wt promote` | Retire the current lane and check its branch out in the main worktree |
 | `st worktree prune` | `wt prune`, `wtprune` | Clean stale git worktree bookkeeping |
 | `st worktree cleanup` | `wt cleanup`, `wt clean` | Prune + remove safe detached/merged lanes (`--dry-run` previews) |
 | `st worktree restack` | `wt rs`, `wtrs` | Restack all stax-managed worktrees |

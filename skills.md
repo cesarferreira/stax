@@ -111,6 +111,7 @@ stax worktree ll               # Richer worktree status (managed/prunable/confli
 stax worktree go <name>        # Navigate to a worktree (requires shell integration)
 stax worktree path <name>      # Print absolute path of a worktree (for scripting)
 stax worktree remove <name>    # Remove a worktree
+stax worktree promote          # Retire current lane + check its branch out in main worktree
 stax worktree cleanup          # Prune stale bookkeeping + bulk-remove merged/detached worktrees
 stax worktree restack          # Restack all stax-managed worktrees
 stax setup                     # Install shell integration, then optionally offer AI agent skills + auth onboarding
@@ -442,6 +443,7 @@ stax wt ll                                        # Rich status of all lanes
 stax wt rs                                        # Restack ALL stax-managed worktrees after trunk moves
 stax wt rm add-dark-mode --delete-branch          # Remove worktree + delete branch + metadata
 stax wt rm add-dark-mode --force                  # Force remove dirty worktree
+stax wt promote                                    # Continue current lane branch in main worktree
 stax wt cleanup --dry-run                         # Preview bulk prune/remove decisions
 stax wt cleanup                                   # Prune stale entries + remove merged/detached lanes
 
@@ -588,6 +590,9 @@ sw payments-api
 stax restack --all
 stax ss
 
+# Hand this branch back to the main worktree (both checkouts must be clean)
+stax worktree promote
+
 # Clean up
 stax worktree remove payments-api
 ```
@@ -654,7 +659,8 @@ Symbols:
 7. Use `stax lane <name> [prompt]` to give each AI agent its own isolated worktree — prevents agents from conflicting on the same files.
 8. After trunk moves, run `stax wt rs` once instead of rebasing each agent worktree manually.
 9. Use `stax worktree create` when you want a worktree for an existing local branch, fetched remote branch, or human parallel development — `st lane` is the higher-level AI shortcut.
-10. Run `stax setup` once per machine to enable `stax worktree go` and the `sw` alias without executing `stax` on every shell startup.
+10. Use `stax worktree promote` inside a clean lane to retire it and continue its branch in the main worktree without losing stax or PR metadata.
+11. Run `stax setup` once per machine to enable `stax worktree go`, `stax worktree promote`, and the `sw` alias to move the parent shell automatically.
 
 ## Tips
 
@@ -666,4 +672,5 @@ Symbols:
 - Use `--json` on supported commands for machine-readable output.
 - Use `stax lane` with no arguments for an interactive picker over all stax-managed lanes — useful when you forget where a session lives.
 - Use `stax worktree go` (or `sw`) + shell integration to switch between stacks without `cd` gymnastics.
+- Use `stax worktree promote` when a lane should become the main-worktree checkout; it refuses dirty or conflicted checkouts instead of stashing automatically.
 - `stax worktree list` shows ALL worktrees including those created externally via `git worktree add`.

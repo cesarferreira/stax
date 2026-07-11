@@ -28,6 +28,9 @@ st wt c payments-api --from main
 # Jump back into a lane
 st wt go payments-api
 
+# Make this lane the branch checked out in the main worktree
+st wt promote
+
 # Inventory
 st wt ls
 st wt ll
@@ -83,6 +86,7 @@ Selectors accepted by `go`, `path`, `rm`, and reuse paths in `create`:
 | `st wt ll` | `st worktree ll`, `st wtll` | Rich status view with managed/dirty/rebase/conflict/marker/prunable state (`--json`) |
 | `st wt path <name>` | `st worktree path <name>` | Print absolute path |
 | `st wt rm [name]` | `st worktree remove`, `st wtrm` | Remove one worktree (`wt rm` removes current); supports `-f/--force`, `--delete-branch` |
+| `st wt promote` | `st worktree promote` | Retire the current linked worktree and check its branch out in the main worktree |
 | `st wt prune` | `st worktree prune`, `st wtprune` | Remove stale `git worktree` bookkeeping only |
 | `st wt cleanup` | `st worktree cleanup`, `st wt clean` | Prune + bulk-remove safe detached/merged lanes (`--dry-run`, `--yes`, `-f`) |
 | `st wt restack` | `st worktree restack`, `st wtrs`, `st wt rs` | Restack all stax-managed worktrees |
@@ -150,6 +154,7 @@ After installation:
 
 - `st wt c ...` moves the parent shell into the new lane
 - `st wt go ...` moves the parent shell into the selected lane
+- `st wt promote` moves the parent shell to the main worktree after a successful handoff
 - `st lane ...` moves the parent shell into the selected lane
 - `st wt rm` (no arg) can relocate the shell before removing the current worktree
 - `sw <name>` becomes a quick alias for `st wt go <name>`
@@ -157,7 +162,24 @@ After installation:
 Supports `bash`, `zsh`, and `fish`.
 
 !!! note "Windows"
-    On Windows, worktree commands work but the parent shell cannot auto-`cd`, `sw` is unavailable, and tmux integration is not supported. Manually `cd` to the printed path after `st wt c` / `st wt go`. See [Windows notes](../reference/windows.md).
+    On Windows, worktree commands work but the parent shell cannot auto-`cd`, `sw` is unavailable, and tmux integration is not supported. Manually `cd` to the printed path after `st wt c`, `st wt go`, or `st wt promote`. See [Windows notes](../reference/windows.md).
+
+## Promote a lane to the main worktree
+
+Run `st wt promote` inside a linked worktree when you want to continue that
+branch in the repository's main worktree. Stax detaches the linked checkout,
+checks the same branch out in the main worktree, then removes or parks the old
+lane according to the existing warm-slot configuration.
+
+Promotion preserves the branch, commits, upstream, PR linkage, and stax
+metadata. It does not merge, delete, untrack, or automatically stash anything.
+Both the current lane and main worktree must be clean, unlocked, and free of an
+in-progress merge, rebase, or conflicts. If switching or retirement fails,
+Stax restores the original checkouts and reports any rollback problem.
+
+With shell integration, the current shell moves to the main worktree only after
+the handoff succeeds. Without it, Stax prints the main worktree path and a
+copyable `cd` command.
 
 ## Cleanup and safety
 
@@ -165,6 +187,7 @@ Supports `bash`, `zsh`, and `fish`.
 |---|---|
 | `st wt rm [name]` | Remove one live worktree (no name = current) |
 | `st wt rm --delete-branch` | Also delete the branch and its stax metadata |
+| `st wt promote` | Keep the branch and make it the main-worktree checkout |
 | `st wt prune` | Clear stale `git worktree` bookkeeping only — never removes a live directory |
 | `st wt cleanup` | Prune bookkeeping, then bulk-remove safe candidates |
 | `st wt rs` | Restack all stax-managed lanes |
