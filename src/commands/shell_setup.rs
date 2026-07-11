@@ -202,7 +202,7 @@ __stax_dispatch() {
       fi ;;
     worktree|wt)
       case "$2" in
-        go|create|c)
+        go|create|c|promote)
           __stax_run_worktree_shell "$@" ;;
         remove|rm)
           if [[ -z "$3" || "$3" == -* ]]; then
@@ -356,7 +356,7 @@ function __stax_dispatch
             end
         case worktree wt
             switch "$argv[2]"
-                case go create c
+                case go create c promote
                     __stax_run_worktree_shell $argv
                 case remove rm
                     if test (count $argv) -lt 3; or string match -qr '^-' -- "$argv[3]"
@@ -983,6 +983,139 @@ mod tests {
         assert!(snippet.contains("whence -p"));
         assert!(snippet.contains("type -P"));
         assert!(snippet.contains("__stax_exec()"));
+    }
+
+    #[test]
+    fn fish_shell_snippet_routes_worktree_promote_through_shell_output() {
+        let snippet = shell_snippet(ShellKind::Fish);
+
+        assert!(snippet.contains("case go create c promote"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_shell_snippet_wraps_worktree_promote_in_zsh() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+            if err.kind() == ErrorKind::NotFound {
+                return;
+            }
+            panic!("failed to probe zsh: {err}");
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+
+        let fake_stax = bin_dir.join("stax");
+        fs::write(&fake_stax, "#!/bin/sh\nprintf 'args:%s\\n' \"$*\"\n").expect("write fake stax");
+        let mut perms = fs::metadata(&fake_stax)
+            .expect("fake stax metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_stax, perms).expect("chmod fake stax");
+
+        let snippet_path = dir.path().join("shell-setup.sh");
+        fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
+
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let path_env = format!("{}:{original_path}", bin_dir.display());
+        let command = format!("source \"{}\"; st wt promote", snippet_path.display());
+        let output = Command::new("zsh")
+            .arg("-lc")
+            .arg(&command)
+            .env("PATH", path_env)
+            .output()
+            .expect("run zsh shell snippet");
+
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("args:wt promote --shell-output"),
+            "expected promote to inject --shell-output, got:\n{stdout}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_shell_snippet_relocates_after_successful_promote_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
+            if err.kind() == ErrorKind::NotFound {
+                return;
+            }
+            panic!("failed to probe zsh: {err}");
+        }
+
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        let source = dir.path().join("source");
+        let target = dir.path().join("main");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&source).expect("create source dir");
+        fs::create_dir_all(&target).expect("create target dir");
+
+        let fake_stax = bin_dir.join("stax");
+        fs::write(
+            &fake_stax,
+            "#!/bin/sh\nprintf 'STAX_SHELL_PATH=%s\\n' \"$PROMOTE_TARGET\"\nprintf 'STAX_SHELL_MESSAGE=promoted\\n'\n",
+        )
+        .expect("write fake stax");
+        let mut perms = fs::metadata(&fake_stax)
+            .expect("fake stax metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_stax, perms).expect("chmod fake stax");
+
+        let snippet_path = dir.path().join("shell-setup.sh");
+        fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
+        let original_path = std::env::var("PATH").unwrap_or_default();
+        let path_env = format!("{}:{original_path}", bin_dir.display());
+        let command = format!(
+            "source \"{}\"; cd \"{}\"; st wt promote; printf 'cwd:%s\\n' \"$PWD\"",
+            snippet_path.display(),
+            source.display()
+        );
+        let output = Command::new("zsh")
+            .arg("-lc")
+            .arg(&command)
+            .env("PATH", &path_env)
+            .env("PROMOTE_TARGET", &target)
+            .output()
+            .expect("run successful promote wrapper");
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&format!("cwd:{}", target.display()))
+        );
+
+        fs::write(
+            &fake_stax,
+            "#!/bin/sh\nprintf 'STAX_SHELL_PATH=%s\\n' \"$PROMOTE_TARGET\"\nexit 1\n",
+        )
+        .expect("write failing fake stax");
+        let command = format!(
+            "source \"{}\"; cd \"{}\"; st wt promote || true; printf 'cwd:%s\\n' \"$PWD\"",
+            snippet_path.display(),
+            source.display()
+        );
+        let output = Command::new("zsh")
+            .arg("-lc")
+            .arg(&command)
+            .env("PATH", path_env)
+            .env("PROMOTE_TARGET", &target)
+            .output()
+            .expect("run failing promote wrapper");
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&format!("cwd:{}", source.display()))
+        );
     }
 
     #[cfg(unix)]

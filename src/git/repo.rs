@@ -349,6 +349,36 @@ impl GitRepo {
         Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
     }
 
+    pub(crate) fn head_oid_in(&self, cwd: &Path) -> Result<String> {
+        let output = self.run_git(cwd, &["rev-parse", "HEAD"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git rev-parse HEAD failed in '{}': {}",
+                cwd.display(),
+                stderr
+            );
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    pub(crate) fn switch_detached_in(&self, cwd: &Path, target: Option<&str>) -> Result<()> {
+        let mut args = vec!["switch", "--detach"];
+        if let Some(target) = target {
+            args.push(target);
+        }
+        let output = self.run_git(cwd, &args)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git switch --detach failed in '{}': {}",
+                cwd.display(),
+                stderr
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn stash_push_at(&self, cwd: &Path) -> Result<bool> {
         let output = self.run_git(cwd, &["stash", "push", "-u", "-m", "stax auto-stash"])?;
         if !output.status.success() {

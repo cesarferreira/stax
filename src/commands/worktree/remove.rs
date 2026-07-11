@@ -29,6 +29,31 @@ pub(crate) fn remove_worktree_with_hooks(
     force: bool,
     mode: RemovalMode,
 ) -> Result<String> {
+    let main_workdir = repo.main_repo_workdir()?;
+    run_blocking_hook(
+        config.worktree.hooks.pre_remove.as_deref(),
+        &main_workdir,
+        "pre_remove",
+    )?;
+
+    let display_name = retire_worktree(repo, config, worktree, force, mode)?;
+
+    spawn_background_hook(
+        config.worktree.hooks.post_remove.as_deref(),
+        &main_workdir,
+        "post_remove",
+    )?;
+
+    Ok(display_name)
+}
+
+pub(crate) fn retire_worktree(
+    repo: &GitRepo,
+    config: &Config,
+    worktree: &WorktreeInfo,
+    force: bool,
+    mode: RemovalMode,
+) -> Result<String> {
     if worktree.is_main {
         bail!("Cannot remove the main worktree.");
     }
@@ -39,13 +64,6 @@ pub(crate) fn remove_worktree_with_hooks(
             worktree.path.display()
         );
     }
-
-    let main_workdir = repo.main_repo_workdir()?;
-    run_blocking_hook(
-        config.worktree.hooks.pre_remove.as_deref(),
-        &main_workdir,
-        "pre_remove",
-    )?;
 
     let display_name = worktree
         .branch
@@ -64,11 +82,6 @@ pub(crate) fn remove_worktree_with_hooks(
     if mode == RemovalMode::AllowParking && config.worktree.reuse_slots && !force {
         if let Some(worktrees_dir) = pool_dir.as_deref() {
             if try_park_slot(repo, config, worktree, worktrees_dir)? {
-                spawn_background_hook(
-                    config.worktree.hooks.post_remove.as_deref(),
-                    &main_workdir,
-                    "post_remove",
-                )?;
                 return Ok(display_name);
             }
         }
@@ -86,12 +99,6 @@ pub(crate) fn remove_worktree_with_hooks(
             });
         }
     }
-
-    spawn_background_hook(
-        config.worktree.hooks.post_remove.as_deref(),
-        &main_workdir,
-        "post_remove",
-    )?;
 
     Ok(display_name)
 }

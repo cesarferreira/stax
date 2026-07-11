@@ -842,6 +842,9 @@ pub fn run() -> Result<()> {
                 force,
                 delete_branch,
             }) => commands::worktree::remove::run(name, force, delete_branch),
+            Some(WorktreeCommands::Promote { shell_output }) => {
+                commands::worktree::promote::run(shell_output)
+            }
             Some(WorktreeCommands::Prune) => commands::worktree::prune::run(),
             Some(WorktreeCommands::Cleanup {
                 force,

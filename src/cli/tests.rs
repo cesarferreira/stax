@@ -121,6 +121,17 @@ fn worktree_cleanup_subcommand_parses() {
 }
 
 #[test]
+fn worktree_promote_subcommand_parses_shell_output() {
+    let cli = parse_cli(&["stax", "wt", "promote", "--shell-output"]);
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Worktree {
+            command: Some(WorktreeCommands::Promote { shell_output: true })
+        })
+    ));
+}
+
+#[test]
 fn lane_command_parses_without_name_for_picker() {
     let cli = parse_cli(&["stax", "lane"]);
     assert!(matches!(

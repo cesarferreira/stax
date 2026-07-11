@@ -126,5 +126,7 @@ mod validate_tests;
 mod worktree_cli_tests;
 #[path = "worktree_pool_tests.rs"]
 mod worktree_pool_tests;
+#[path = "worktree_promote_tests.rs"]
+mod worktree_promote_tests;
 #[path = "worktree_tests.rs"]
 mod worktree_tests;
