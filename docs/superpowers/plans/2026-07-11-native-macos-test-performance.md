@@ -9,8 +9,12 @@ measurements ranging from 73.29 to 136.17 seconds. The retained runner uses
 nextest for the complete suite. The final retained native path passed all 1,843
 tests in 115.58 seconds; after adding the final timeout regression test, Docker
 passed all 1,858 tests in 36.093 seconds of test execution and remains
-recommended. The unchecked steps below are the historical
-execution plan, not claims that the original acceptance gate passed.
+recommended. A subsequent native run exposed five leaking zsh
+process-substitution tests that remained alive past 376 seconds. After making
+the POSIX shell wrapper build its argument array synchronously,
+`make test-native` passed all 1,862 tests in 157.945 seconds. The unchecked
+steps below are the historical execution plan, not claims that the original
+acceptance gate passed.
 
 **Original goal (not met):** Make the guarded native macOS full-suite path run every discovered test with a median warm runtime of at most 75 seconds while preserving Docker/CI nextest behavior.
 
@@ -833,7 +837,9 @@ git commit -m "docs: document fast native macOS tests"
 **Recorded result:** Formatting/lint passed, Docker passed the final 1,858-test
 suite, and the guarded native nextest path passed the then-current 1,843 tests
 in 115.58 seconds. The performance gate failed, so submission is an explicitly
-authorized draft PR, not completion of the original goal.
+authorized draft PR, not completion of the original goal. After fixing an
+intermittent zsh process-substitution leak, the latest native verification
+passed all 1,862 tests in 157.945 seconds.
 
 **Files:**
 - Modify only if verification exposes a defect in files already listed above.

@@ -15,7 +15,11 @@ fixture setup/commits, and more deterministic PTY input.
 
 The finalized native run passed the then-current 1,843 tests in 115.58 seconds.
 A final PTY timeout regression test plus the latest `main` brought the suite to
-1,858 tests, all of which pass in Docker. A sharded
+1,858 tests, all of which pass in Docker. A later 1,861-test native run exposed
+an intermittent zsh process-substitution leak: five shell-integration tests
+were still running after 376 seconds. Building the shell-output argument array
+synchronously removed those child processes; the following `make test-native`
+run passed all 1,862 tests in 157.945 seconds. A sharded
 experiment reached 73.29 seconds once but later warm runs varied up to 136.17
 seconds, so the 75-second median / 90-second maximum goal was not achieved.
 Docker remains the supported fast and stable macOS full-suite path. Sections

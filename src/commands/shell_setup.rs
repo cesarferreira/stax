@@ -101,26 +101,6 @@ __stax_exec() {
   "$bin" "$@"
 }
 
-__stax_insert_shell_output() {
-  local out=()
-  local inserted=0
-  local arg
-
-  for arg in "$@"; do
-    if [[ $inserted -eq 0 && "$arg" == "--" ]]; then
-      out+=("--shell-output")
-      inserted=1
-    fi
-    out+=("$arg")
-  done
-
-  if [[ $inserted -eq 0 ]]; then
-    out+=("--shell-output")
-  fi
-
-  printf '%s\0' "${out[@]}"
-}
-
 __stax_run_worktree_shell() {
   local raw
   local target_path=""
@@ -128,11 +108,20 @@ __stax_run_worktree_shell() {
   local message=""
   local passthrough=()
   local cmd=()
+  local inserted=0
   local item
 
-  while IFS= read -r -d '' item; do
+  for item in "$@"; do
+    if [[ $inserted -eq 0 && "$item" == "--" ]]; then
+      cmd+=("--shell-output")
+      inserted=1
+    fi
     cmd+=("$item")
-  done < <(__stax_insert_shell_output "$@")
+  done
+
+  if [[ $inserted -eq 0 ]]; then
+    cmd+=("--shell-output")
+  fi
 
   raw=$(__stax_exec "${cmd[@]}") || return $?
 
@@ -983,6 +972,16 @@ mod tests {
         assert!(snippet.contains("whence -p"));
         assert!(snippet.contains("type -P"));
         assert!(snippet.contains("__stax_exec()"));
+    }
+
+    #[test]
+    fn posix_shell_snippet_builds_shell_output_args_without_process_substitution() {
+        let snippet = shell_snippet(ShellKind::Posix);
+
+        assert!(
+            !snippet.contains("< <(__stax_insert_shell_output"),
+            "shell-output argument handling must not leave asynchronous process-substitution children"
+        );
     }
 
     #[test]
