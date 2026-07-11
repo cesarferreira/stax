@@ -3,6 +3,7 @@
 //! These tests create real temporary git repositories and run actual stax commands
 //! to verify end-to-end functionality.
 
+use crate::common::{commit_all, init_test_repo};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -62,43 +63,7 @@ impl TestRepo {
     /// Create a new test repository with git init and an initial commit on main
     fn new() -> Self {
         let dir = test_tempdir();
-        let path = dir.path();
-
-        // Initialize git repo
-        hermetic_git_command()
-            .args(["init", "-b", "main"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to init git repo");
-
-        // Configure git user for commits
-        hermetic_git_command()
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to set git email");
-
-        hermetic_git_command()
-            .args(["config", "user.name", "Test User"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to set git name");
-
-        // Create initial commit
-        let readme = path.join("README.md");
-        fs::write(&readme, "# Test Repo\n").expect("Failed to write README");
-
-        hermetic_git_command()
-            .args(["add", "-A"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to stage files");
-
-        hermetic_git_command()
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to create initial commit");
+        init_test_repo(dir.path()).expect("Failed to initialize test repository");
 
         Self {
             dir,
@@ -327,17 +292,7 @@ impl TestRepo {
 
     /// Create a commit with all staged changes
     fn commit(&self, message: &str) {
-        hermetic_git_command()
-            .args(["add", "-A"])
-            .current_dir(self.path())
-            .output()
-            .expect("Failed to stage files");
-
-        hermetic_git_command()
-            .args(["commit", "-m", message])
-            .current_dir(self.path())
-            .output()
-            .expect("Failed to commit");
+        commit_all(&self.path(), message).expect("Failed to commit fixture changes");
     }
 
     /// Get the current branch name
@@ -7481,9 +7436,6 @@ mod forge_mock_tests {
         ensure_crypto_provider();
         let mock_server = MockServer::start().await;
         let repo = TestRepo::new_with_remote();
-
-        // Set environment variables for the mock
-        unsafe { std::env::set_var("STAX_GITHUB_TOKEN", "mock-token") };
 
         (repo, mock_server)
     }

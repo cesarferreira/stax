@@ -342,11 +342,11 @@ const AUTH_OVERRIDE_ENV_VARS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN"];
 
 fn gh_command(env: &[(&str, &str)]) -> Command {
     let mut command = Command::new("gh");
-    for var in AUTH_OVERRIDE_ENV_VARS {
-        command.env_remove(var);
-    }
     for (key, value) in env {
         command.env(key, value);
+    }
+    for var in AUTH_OVERRIDE_ENV_VARS {
+        command.env_remove(var);
     }
     command
 }

@@ -43,10 +43,6 @@ fn test_track_all_prs_conflicts_with_parent() {
 fn test_track_all_prs_no_token() {
     let repo = TestRepo::new_with_remote();
 
-    // Ensure no token is set
-    unsafe { std::env::remove_var("GITHUB_TOKEN") };
-    unsafe { std::env::remove_var("STAX_GITHUB_TOKEN") };
-
     let output = repo.run_stax(&["branch", "track", "--all-prs"]);
 
     // Should fail - the command requires GitHub integration

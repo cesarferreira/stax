@@ -15,15 +15,16 @@ use common::{OutputAssertions, TestRepo};
 
 fn select_menu_option(index: usize) -> String {
     let downs = "\\033[B".repeat(index);
-    format!("{}; printf '{}\\r'", common::TUI_SCRIPT_LEAD_DELAY, downs)
+    format!(
+        "wait_for_tui_text 'No files staged'; printf '{}\\r'; sleep 0.2",
+        downs
+    )
 }
 
 fn select_patch_and_stage_first_hunk() -> String {
     let downs = "\\033[B";
     format!(
-        "{lead}; printf '{downs}\\r'; {step}; printf 'y\\n'",
-        lead = common::TUI_SCRIPT_LEAD_DELAY,
-        step = common::TUI_SCRIPT_STEP_DELAY,
+        "wait_for_tui_text 'No files staged'; printf '{downs}\\r'; wait_for_tui_text 'Stage this hunk'; printf 'y\\n'; sleep 0.2",
         downs = downs
     )
 }

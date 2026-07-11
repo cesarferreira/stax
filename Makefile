@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff install clean test test-native test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint benchmark-status all
+.PHONY: build build-release release ensure-git-cliff install clean test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint benchmark-status all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -55,20 +55,26 @@ test:
 	fi
 
 # Run all tests natively on host
-test-native:
+test-native: test-native-script
 	$(MAKE) test-local-fast
+
+# Verify the native test runner's guards and phase selection.
+test-native-script:
+	./scripts/native-tests-tests.sh
 
 # Run tests with automation-friendly native defaults (custom temp root, token-free env, optimized profile)
 test-local-fast:
 	mkdir -p .test-tmp
-	@threads="$${NEXTEST_TEST_THREADS:-}"; \
-	if [ -z "$$threads" ] && [ "$$(uname)" = "Darwin" ]; then \
-		threads="$(MAC_LOCAL_TEST_THREADS)"; \
-	fi; \
-	if [ -z "$$threads" ]; then \
-		threads="num-cpus"; \
-	fi; \
-	env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" RUST_MIN_STACK=4194304 cargo nextest run --cargo-profile "$(NATIVE_CARGO_PROFILE)"
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		NEXTEST_TEST_THREADS="$${NEXTEST_TEST_THREADS:-$(MAC_LOCAL_TEST_THREADS)}" \
+		NATIVE_CARGO_PROFILE="$(NATIVE_CARGO_PROFILE)" \
+		STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" \
+		TMPDIR="$$(pwd)/.test-tmp" \
+		./scripts/native-tests.sh; \
+	else \
+		threads="$${NEXTEST_TEST_THREADS:-num-cpus}"; \
+		env -u GITHUB_TOKEN -u STAX_GITHUB_TOKEN -u GH_TOKEN STAX_DISABLE_UPDATE_CHECK=1 STAX_TEST_TMPDIR="$$(pwd)/.test-tmp" TMPDIR="$$(pwd)/.test-tmp" NEXTEST_TEST_THREADS="$$threads" RUST_MIN_STACK=4194304 cargo nextest run --cargo-profile "$(NATIVE_CARGO_PROFILE)"; \
+	fi
 
 # Create a RAM disk for fast local test temp dirs (macOS only)
 ramdisk-up:

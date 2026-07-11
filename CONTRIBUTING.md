@@ -28,13 +28,19 @@ cargo run -- <command>
 
 ## Running Tests
 
-The test suite is process/filesystem heavy (spawns `git` and `stax` subprocesses). `make test` uses Docker on macOS when available; otherwise it runs native nextest with the optimized test profile, sanitized token env, disabled update checks, and a repo-local temp directory.
+The test suite is process/filesystem heavy (spawns `git` and `stax`
+subprocesses). `make test` uses Docker on macOS when available; otherwise it
+runs native nextest with the optimized test profile, sanitized token env,
+disabled update checks, and a repo-local temp directory. On macOS,
+`make test-native` additionally checks and raises the file-descriptor limit
+before starting. Endpoint-security tooling can make native macOS runs much
+slower and more variable than Docker.
 
 ```bash
 # Full test suite (preferred — uses Docker on macOS when available)
 make test
 
-# Full suite natively through the same optimized local path
+# Guarded native fallback (timings vary on macOS)
 make test-native
 
 # Explicit optimized local nextest path used by native full-suite runs
