@@ -5,6 +5,9 @@
 //! - Helper methods for common test scenarios
 //! - Assertion utilities for test output
 
+mod git_fixture;
+pub(crate) use git_fixture::init_test_repo;
+
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -144,43 +147,7 @@ impl TestRepo {
     /// Create a new test repository with git init and an initial commit on main
     pub fn new() -> Self {
         let dir = test_tempdir();
-        let path = dir.path();
-
-        // Initialize git repo
-        hermetic_git_command()
-            .args(["init", "-b", "main"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to init git repo");
-
-        // Configure git user for commits
-        hermetic_git_command()
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to set git email");
-
-        hermetic_git_command()
-            .args(["config", "user.name", "Test User"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to set git name");
-
-        // Create initial commit
-        let readme = path.join("README.md");
-        fs::write(&readme, "# Test Repo\n").expect("Failed to write README");
-
-        hermetic_git_command()
-            .args(["add", "-A"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to stage files");
-
-        hermetic_git_command()
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(path)
-            .output()
-            .expect("Failed to create initial commit");
+        init_test_repo(dir.path()).expect("Failed to initialize test repository");
 
         Self {
             dir,
