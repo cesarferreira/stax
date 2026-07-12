@@ -163,6 +163,39 @@ fn checkout_rejects_an_existing_rebase_before_changing_head() {
     assert_eq!(repo.current_branch(), before);
 }
 
+#[test]
+fn create_empty_branch_uses_explicit_parent_without_creating_a_commit() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let feature = repo.create_stack(&["feature"]).remove(0);
+    let parent_oid = repo.get_commit_sha(&feature);
+    repo.git(&["checkout", "main"]).assert_success();
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .create_empty_branch("child", &feature, &mut NoopOperationReporter)
+        .unwrap();
+    assert_eq!(repo.get_commit_sha("child"), parent_oid);
+    assert_eq!(repo.get_current_parent().as_deref(), Some(feature.as_str()));
+    assert_eq!(repo.current_branch(), "child");
+    assert_eq!(
+        receipt.side_effects,
+        OperationSideEffects::RepositoryChanged
+    );
+}
+
+#[test]
+fn create_rejects_rebase_in_progress_before_creating_a_ref() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    std::fs::create_dir_all(repo.path().join(".git/rebase-merge")).unwrap();
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .create_empty_branch("child", "main", &mut NoopOperationReporter)
+        .unwrap_err();
+    assert_eq!(error.kind, OperationErrorKind::RebaseInProgress);
+    assert!(!repo.list_branches().contains(&"child".to_string()));
+}
+
 #[tokio::test]
 async fn pull_request_network_fallback_returns_runtime_error_inside_tokio() {
     let repo = TestRepo::new();

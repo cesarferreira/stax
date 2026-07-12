@@ -1,10 +1,15 @@
+mod branch_name;
 mod checkout;
 mod ci;
+mod create;
 mod model;
 mod operation;
 mod pull_request;
 mod repository;
 
+pub(crate) use branch_name::{
+    BranchNameContext, BranchNameError, BranchNameResult, format_branch_name,
+};
 pub use model::{
     BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, DiffLine,
     DiffLineKind, DiffStatLine, RepositorySnapshot,

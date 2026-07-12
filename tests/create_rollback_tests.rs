@@ -18,6 +18,9 @@ use crate::common;
 #[cfg(unix)]
 use common::stax_bin;
 use common::{OutputAssertions, TestRepo};
+use stax::application::{
+    NoopOperationReporter, OperationErrorKind, OperationSideEffects, RepositorySession,
+};
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
@@ -361,6 +364,22 @@ fn create_without_message_unaffected_by_hook() {
         "Branch should be created. Current: {}",
         repo.current_branch()
     );
+}
+
+#[test]
+fn create_rolls_back_its_new_ref_when_metadata_write_fails() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    repo.git(&["update-ref", "refs/branch-metadata/child/blocker", "HEAD"])
+        .assert_success();
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .create_empty_branch("child", "main", &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::LocalGit);
+    assert!(!repo.list_branches().contains(&"child".to_string()));
+    assert_eq!(error.side_effects, OperationSideEffects::None);
 }
 
 #[test]
