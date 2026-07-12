@@ -4,6 +4,7 @@
 //! The main binary is in main.rs.
 
 // Internal modules used by the CLI and tests
+pub mod application;
 mod cache;
 mod ci;
 pub mod cli;
