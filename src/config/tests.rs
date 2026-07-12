@@ -36,6 +36,84 @@ fn restore_env_var(name: &str, value: Option<String>) {
     }
 }
 
+#[test]
+fn config_load_for_repo_uses_selected_root_outside_process_cwd() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let original_dir = env::current_dir().unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("selected-repo");
+    let elsewhere = temp_dir.path().join("elsewhere");
+    let home_dir = temp_dir.path().join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        "[ui]\ntips = true\n[remote]\nname = \"global\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        "[ui]\ntips = false\n[remote]\nname = \"selected\"\n",
+    )
+    .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+    env::set_current_dir(&elsewhere).unwrap();
+
+    let config = Config::load_for_repo(&repo_dir).unwrap();
+
+    assert!(!config.ui.tips);
+    assert_eq!(config.remote_name(), "selected");
+
+    env::set_current_dir(original_dir).unwrap();
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
+#[test]
+fn config_load_for_repo_preserves_stax_config_dir_isolation() {
+    let _guard = env_lock();
+
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let original_dir = env::current_dir().unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("selected-repo");
+    let elsewhere = temp_dir.path().join("elsewhere");
+    let override_dir = temp_dir.path().join("isolated-config");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::create_dir_all(&override_dir).unwrap();
+    fs::write(
+        override_dir.join("config.toml"),
+        "[ui]\ntips = true\n[remote]\nname = \"isolated\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        "[ui]\ntips = false\n[remote]\nname = \"repo-overlay\"\n",
+    )
+    .unwrap();
+
+    unsafe { env::set_var("STAX_CONFIG_DIR", &override_dir) };
+    env::set_current_dir(&elsewhere).unwrap();
+
+    let config = Config::load_for_repo(&repo_dir).unwrap();
+
+    assert!(config.ui.tips);
+    assert_eq!(config.remote_name(), "isolated");
+
+    env::set_current_dir(original_dir).unwrap();
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
 #[cfg(unix)]
 fn write_mock_gh(home: &Path, script_body: &str) -> String {
     use std::os::unix::fs::PermissionsExt;

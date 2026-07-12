@@ -111,6 +111,19 @@ impl ForgeClient {
         }
     }
 
+    pub(crate) fn new_with_config(remote: &RemoteInfo, config: &Config) -> Result<Self> {
+        match remote.forge {
+            ForgeType::GitHub => Ok(Self::GitHub(GitHubClient::new_with_config(
+                remote.owner(),
+                &remote.repo,
+                remote.api_base_url.clone(),
+                config,
+            )?)),
+            ForgeType::GitLab => Ok(Self::GitLab(GitLabClient::new(remote)?)),
+            ForgeType::Gitea => Ok(Self::Gitea(GiteaClient::new(remote)?)),
+        }
+    }
+
     pub fn api_call_stats(&self) -> Option<crate::github::client::ApiCallStats> {
         match self {
             Self::GitHub(client) => Some(client.api_call_stats()),

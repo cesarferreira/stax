@@ -335,6 +335,7 @@ mod tests {
             ci_state: None,
             commits: Vec::new(),
             details_loaded: true,
+            details_error: None,
         }
     }
 
@@ -356,6 +357,7 @@ mod tests {
             ci_state: None,
             commits: Vec::new(),
             details_loaded: true,
+            details_error: None,
         }
     }
 

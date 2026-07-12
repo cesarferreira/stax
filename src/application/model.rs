@@ -116,7 +116,6 @@ pub struct CiSummary {
 }
 
 impl CiSummary {
-    #[allow(dead_code)]
     pub(crate) fn from_checks(
         overall_status: Option<String>,
         checks: &[CheckRunInfo],
@@ -245,7 +244,6 @@ impl CiSummary {
     }
 }
 
-#[allow(dead_code)]
 fn parse_ci_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
     value.and_then(|timestamp| timestamp.parse::<DateTime<Utc>>().ok())
 }

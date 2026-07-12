@@ -1910,9 +1910,14 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
     }
 
-    /// Check if a branch has a remote tracking branch (origin/<branch>)
+    /// Check if a branch has an origin remote-tracking branch.
     pub fn has_remote(&self, branch: &str) -> bool {
-        let remote_name = format!("origin/{}", branch);
+        self.has_remote_named("origin", branch)
+    }
+
+    /// Check if a branch has a remote-tracking branch for the named remote.
+    pub fn has_remote_named(&self, remote: &str, branch: &str) -> bool {
+        let remote_name = format!("{remote}/{branch}");
         self.repo
             .find_branch(&remote_name, BranchType::Remote)
             .is_ok()
@@ -1937,10 +1942,16 @@ Use --auto-stash-pop or stash/commit changes first.",
         Ok(names)
     }
 
-    /// Get commits ahead/behind compared to remote tracking branch (origin/branch)
+    /// Get commits ahead/behind compared to the origin remote-tracking branch.
     /// Returns (unpushed, unpulled) or None if no remote tracking branch exists
     pub fn commits_vs_remote(&self, branch: &str) -> Option<(usize, usize)> {
-        let remote_name = format!("origin/{}", branch);
+        self.commits_vs_remote_named("origin", branch)
+    }
+
+    /// Get commits ahead/behind compared to a named remote-tracking branch.
+    /// Returns (unpushed, unpulled) or None if no remote tracking branch exists.
+    pub fn commits_vs_remote_named(&self, remote: &str, branch: &str) -> Option<(usize, usize)> {
+        let remote_name = format!("{remote}/{branch}");
         if self
             .repo
             .find_branch(&remote_name, BranchType::Remote)
@@ -2562,6 +2573,41 @@ mod tests {
                 .expect("canonical workdir"),
             std::fs::canonicalize(path).expect("canonical temp repo path")
         );
+    }
+
+    #[test]
+    fn configured_remote_helpers_use_the_named_tracking_ref() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(path, &["switch", "-c", "feature"]);
+        fs::write(path.join("feature.txt"), "feature\n").expect("write feature");
+        run_git(path, &["add", "feature.txt"]);
+        run_git(path, &["commit", "-m", "Feature commit"]);
+        run_git(
+            path,
+            &["update-ref", "refs/remotes/upstream/feature", "main"],
+        );
+        run_git(
+            path,
+            &["update-ref", "refs/remotes/origin/feature", "feature"],
+        );
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+
+        assert!(repo.has_remote_named("upstream", "feature"));
+        assert_eq!(
+            repo.commits_vs_remote_named("upstream", "feature"),
+            Some((1, 0))
+        );
+        assert!(!repo.has_remote_named("missing", "feature"));
+        assert_eq!(repo.commits_vs_remote_named("missing", "feature"), None);
+        assert!(repo.has_remote("feature"));
+        assert_eq!(repo.commits_vs_remote("feature"), Some((0, 0)));
     }
 
     #[test]

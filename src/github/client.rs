@@ -176,9 +176,31 @@ impl GitHubClient {
             "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, \
              `gh auth login`, or set `STAX_GITHUB_TOKEN`.",
         )?;
+        Self::new_with_auth(owner, repo, api_base_url, auth_source, token)
+    }
 
+    pub(crate) fn new_with_config(
+        owner: &str,
+        repo: &str,
+        api_base_url: Option<String>,
+        config: &Config,
+    ) -> Result<Self> {
+        let (auth_source, token) = config.github_token_with_source_for_config().context(
+            "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, \
+             `gh auth login`, or set `STAX_GITHUB_TOKEN`.",
+        )?;
+        Self::new_with_auth(owner, repo, api_base_url, auth_source, token)
+    }
+
+    fn new_with_auth(
+        owner: &str,
+        repo: &str,
+        api_base_url: Option<String>,
+        auth_source: GitHubAuthSource,
+        token: String,
+    ) -> Result<Self> {
         let mut builder = Octocrab::builder()
-            .personal_token(token.to_string())
+            .personal_token(token)
             .add_retry_config(RetryConfig::Simple(GITHUB_API_RETRY_COUNT))
             .set_connect_timeout(Some(GITHUB_API_CONNECT_TIMEOUT))
             .set_read_timeout(Some(GITHUB_API_READ_TIMEOUT))

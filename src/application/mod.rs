@@ -1,3 +1,4 @@
+mod ci;
 mod model;
 mod repository;
 

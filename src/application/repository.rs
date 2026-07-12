@@ -3,9 +3,10 @@ use super::{
     RepositorySnapshot,
 };
 use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
+use crate::config::Config;
 use crate::engine::{Stack, StackSnapshot};
 use crate::git::GitRepo;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -103,13 +104,23 @@ impl RepositorySession {
     /// still an error because no trustworthy details can be produced.
     pub fn branch_details(&self, branch: &BranchSummary) -> Result<BranchDetails> {
         let repo = self.open_repo()?;
+        let config = Config::load_for_repo(self.repository_root()).map_err(|_| {
+            anyhow!(
+                "Failed to load stax config for branch details in repository '{}'; \
+                 check the global config and repository stax.toml",
+                self.repository_root().display()
+            )
+        })?;
+        let remote_name = config.remote_name();
         let (ahead, behind) = branch
             .parent
             .as_deref()
             .and_then(|parent| repo.commits_ahead_behind(parent, &branch.name).ok())
             .unwrap_or((0, 0));
-        let has_remote = repo.has_remote(&branch.name);
-        let (unpushed, unpulled) = repo.commits_vs_remote(&branch.name).unwrap_or((0, 0));
+        let has_remote = repo.has_remote_named(remote_name, &branch.name);
+        let (unpushed, unpulled) = repo
+            .commits_vs_remote_named(remote_name, &branch.name)
+            .unwrap_or((0, 0));
         let commits = branch
             .parent
             .as_deref()
@@ -193,7 +204,27 @@ impl RepositorySession {
         Ok(diff)
     }
 
-    fn open_repo(&self) -> Result<GitRepo> {
+    /// Returns a cached branch diff without calculating diffstat or patch data.
+    pub fn cached_diff(&self, branch: &str, parent: &str) -> Result<Option<BranchDiff>> {
+        let repo = self.open_repo()?;
+        let target = repo.resolve_diff_target(branch, parent).with_context(|| {
+            format!(
+                "Failed to prepare cached diff lookup for branch '{}' against parent '{}'",
+                branch, parent
+            )
+        })?;
+        let key = TuiDiffCache::key(
+            parent,
+            branch,
+            &target.parent_oid,
+            &target.branch_oid,
+            &target.merge_base_oid,
+        );
+        let cache = TuiDiffCache::load(&self.common_git_dir);
+        Ok(cache.get(&key).map(branch_diff_from_disk))
+    }
+
+    pub(super) fn open_repo(&self) -> Result<GitRepo> {
         GitRepo::open_from_path(&self.git_dir).with_context(|| {
             format!(
                 "Failed to reopen git repository '{}' for root '{}'",

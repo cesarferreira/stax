@@ -1,5 +1,28 @@
 use crate::common::TestRepo;
 use stax::application::{BranchSummary, DiffLineKind, RepositorySession};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+fn cwd_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+}
+
+struct CurrentDirGuard(PathBuf);
+
+impl CurrentDirGuard {
+    fn change_to(path: &Path) -> Self {
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(path).unwrap();
+        Self(original)
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.0).unwrap();
+    }
+}
 
 fn branch(snapshot: &[BranchSummary], name: &str) -> BranchSummary {
     snapshot
@@ -236,6 +259,92 @@ fn branch_details_for_trunk_have_no_parent_commits() {
 }
 
 #[test]
+fn branch_details_use_configured_remote_outside_process_cwd() {
+    let _cwd_lock = cwd_lock();
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    std::fs::write(
+        repo.path().join("stax.toml"),
+        "[remote]\nname = \"upstream\"\n",
+    )
+    .unwrap();
+    let add_remote = repo.git(&["remote", "add", "upstream", repo.path().to_str().unwrap()]);
+    assert!(
+        add_remote.status.success(),
+        "add upstream failed: {}",
+        TestRepo::stderr(&add_remote)
+    );
+    let update_ref = repo.git(&["update-ref", "refs/remotes/upstream/feature", "main"]);
+    assert!(
+        update_ref.status.success(),
+        "create upstream tracking ref failed: {}",
+        TestRepo::stderr(&update_ref)
+    );
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let _cwd = CurrentDirGuard::change_to(elsewhere.path());
+
+    let details = session
+        .branch_details(&branch(&snapshot.branches, "feature"))
+        .unwrap();
+
+    assert!(details.has_remote);
+    assert_eq!(details.unpushed, 1);
+    assert_eq!(details.unpulled, 0);
+}
+
+#[test]
+fn branch_details_do_not_fall_back_to_origin_for_unknown_configured_remote() {
+    let _cwd_lock = cwd_lock();
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    std::fs::write(
+        repo.path().join("stax.toml"),
+        "[remote]\nname = \"missing\"\n",
+    )
+    .unwrap();
+    let origin_ref = repo.git(&["update-ref", "refs/remotes/origin/feature", "main"]);
+    assert!(
+        origin_ref.status.success(),
+        "create origin tracking ref failed: {}",
+        TestRepo::stderr(&origin_ref)
+    );
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let _cwd = CurrentDirGuard::change_to(elsewhere.path());
+
+    let details = session
+        .branch_details(&branch(&snapshot.branches, "feature"))
+        .unwrap();
+
+    assert!(!details.has_remote);
+    assert_eq!(details.unpushed, 0);
+    assert_eq!(details.unpulled, 0);
+}
+
+#[test]
+fn branch_details_report_repository_config_errors() {
+    let _cwd_lock = cwd_lock();
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    std::fs::write(repo.path().join("stax.toml"), "[remote\nname = broken\n").unwrap();
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let _cwd = CurrentDirGuard::change_to(elsewhere.path());
+
+    let error = session
+        .branch_details(&branch(&snapshot.branches, "feature"))
+        .unwrap_err();
+    let message = format!("{error:#}");
+
+    assert!(message.contains("Failed to load stax config"));
+    assert!(message.contains(&repo.path().display().to_string()));
+}
+
+#[test]
 fn diff_returns_typed_stat_and_addition_lines() {
     let repo = TestRepo::new();
     repo.create_stack(&["feature"]);
@@ -274,6 +383,46 @@ fn second_diff_round_trips_through_the_tui_cache() {
         .unwrap();
 
     assert_eq!(second, first);
+}
+
+#[test]
+fn cached_diff_returns_the_same_entry_without_recalculating() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let loaded = session.diff("feature", "main").unwrap();
+
+    let cached = RepositorySession::open(repo.path())
+        .unwrap()
+        .cached_diff("feature", "main")
+        .unwrap();
+
+    assert_eq!(cached, Some(loaded));
+}
+
+#[test]
+fn cached_diff_miss_does_not_calculate_a_patch() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    let blob_oid = repo.get_commit_sha("feature:feature.txt");
+    let object_path = repo
+        .path()
+        .join(".git")
+        .join("objects")
+        .join(&blob_oid[..2])
+        .join(&blob_oid[2..]);
+    std::fs::remove_file(object_path).unwrap();
+    let cache_path = repo
+        .path()
+        .join(".git")
+        .join("stax")
+        .join("tui-diff-cache.json");
+    let session = RepositorySession::open(repo.path()).unwrap();
+
+    let cached = session.cached_diff("feature", "main").unwrap();
+
+    assert_eq!(cached, None);
+    assert!(!cache_path.exists());
 }
 
 #[test]

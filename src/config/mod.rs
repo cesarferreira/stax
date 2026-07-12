@@ -518,6 +518,25 @@ impl Config {
         }
     }
 
+    /// Load global config with the selected repository's `stax.toml` overlay.
+    ///
+    /// `STAX_CONFIG_DIR` intentionally keeps its existing test-isolation
+    /// behavior and disables repository overlays.
+    pub(crate) fn load_for_repo(root: &Path) -> Result<Self> {
+        let path = Self::path()?;
+        let config = Self::load_path_or_default(&path)?;
+        if std::env::var("STAX_CONFIG_DIR").is_ok() {
+            return Ok(config);
+        }
+
+        let repo_path = root.join("stax.toml");
+        if repo_path.exists() {
+            Self::load_with_overlay(config, &repo_path)
+        } else {
+            Ok(config)
+        }
+    }
+
     fn load_path_or_default(path: &Path) -> Result<Self> {
         if path.exists() {
             let content = fs::read_to_string(path)?;
@@ -581,6 +600,10 @@ impl Config {
     pub fn github_token_with_source() -> Option<(GitHubAuthSource, String)> {
         let auth_config = Self::load().map(|c| c.auth).unwrap_or_default();
         Self::resolve_github_auth_with_config(&auth_config)
+    }
+
+    pub(crate) fn github_token_with_source_for_config(&self) -> Option<(GitHubAuthSource, String)> {
+        Self::resolve_github_auth_with_config(&self.auth)
     }
 
     /// Get the saved credentials-file token written by `stax auth`.
