@@ -31,6 +31,8 @@ assert_rejected() {
   printf '%s\n' "$source" > "$fixture/src/application/checkout.rs"
   if run_lint >"$temp_root/output" 2>&1; then
     record_failure "expected boundary lint rejection for: $source"
+  elif rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected '$expected', not a scanner error, for: $source"
   elif ! rg -F "$expected" "$temp_root/output" >/dev/null; then
     record_failure "expected '$expected' for rejected source: $source"
   fi
@@ -41,6 +43,16 @@ assert_accepted() {
   printf '%s\n' "$source" > "$fixture/src/application/checkout.rs"
   if ! run_lint >"$temp_root/output" 2>&1; then
     record_failure "expected boundary lint acceptance for: $source"
+  fi
+}
+
+assert_scanner_error() {
+  local source="$1"
+  printf '%s\n' "$source" > "$fixture/src/application/checkout.rs"
+  if run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected scanner failure for malformed source: $source"
+  elif ! rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected scanner error label for malformed source: $source"
   fi
 }
 
@@ -76,6 +88,12 @@ assert_rejected 'use std :: io :: { stderr as terminal_stderr, IsTerminal };' 't
 assert_rejected 'use std::io::stdin;' 'terminal I/O'
 assert_rejected 'use std::io::stderr as terminal_stderr;' 'terminal I/O'
 assert_rejected 'fn bad() { std::io::stdout(); }' 'terminal I/O'
+assert_rejected 'use std::io as io; fn bad() { io::stdout(); }' 'terminal I/O'
+assert_rejected 'use std::{io as terminal_io}; fn bad() { terminal_io::stderr(); }' 'terminal I/O'
+assert_rejected 'use std::{io::{self as io}}; fn bad() { io::stdin(); }' 'terminal I/O'
+assert_rejected 'use std::io as r#io; fn bad() { r#io::stdout(); }' 'terminal I/O'
+assert_rejected 'use std::io::*;' 'terminal I/O'
+assert_rejected 'use std::{io::*};' 'terminal I/O'
 
 assert_rejected 'print!("hidden terminal output");' 'terminal output macros'
 assert_rejected 'println!("hidden terminal output");' 'terminal output macros'
@@ -86,6 +104,12 @@ assert_rejected 'std::eprintln!("hidden terminal error");' 'terminal output macr
 assert_rejected ':: std :: eprintln ! ("hidden qualified terminal error");' 'terminal output macros'
 assert_rejected 'dbg!("hidden terminal debug");' 'terminal output macros'
 
+assert_rejected 'extern crate gpui as ui;' 'presentation frameworks'
+assert_rejected 'extern crate r#console as r#ui;' 'presentation frameworks'
+assert_rejected 'extern crate commands as cli_commands;' 'command or TUI modules'
+assert_rejected 'extern crate tui;' 'command or TUI modules'
+assert_rejected 'extern crate progress as terminal_progress;' 'terminal progress'
+
 assert_accepted 'pub fn commandster_progress(stdout_buffer: usize) -> usize { stdout_buffer }'
 assert_accepted '// use crate::commands::submit; println!("not code");'
 assert_accepted '/* use gpui::App; /* std::io::stdout(); */ crate::progress::LiveTimer */ pub fn clean() {}'
@@ -95,6 +119,13 @@ assert_accepted 'const BYTES: &[u8] = b"use crate::tui; eprintln!(hidden)";'
 assert_accepted 'const RAW_BYTES: &[u8] = br##"use dialoguer::Select; dbg!(hidden)"##;'
 assert_accepted "const CHARACTER: char = 'p'; const BYTE: u8 = b'p';"
 assert_accepted "fn lifetime<'progress>(value: &'progress str) -> &'progress str { value }"
+assert_accepted 'use crate::model as r#type; fn clean(value: r#type::RepositorySnapshot) { drop(value); }'
+assert_accepted 'use std::io as io; fn clean<T: io::Read>() {}'
+assert_accepted 'use std::{io as r#type}; fn clean<T: r#type::Write>() {}'
+assert_accepted '// extern crate gpui as ui; use std::io as io; io::stdout();'
+assert_accepted 'const TEXT: &str = "extern crate tui; use std::io::*;";'
+assert_scanner_error 'use std::io as #;'
+assert_scanner_error 'extern crate safe_dependency as ;'
 
 printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/checkout.rs"
 mkdir -p "$fixture/src/application/nested/future"

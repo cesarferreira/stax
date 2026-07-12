@@ -39,6 +39,12 @@ class Violation:
     token: Token
 
 
+@dataclass(frozen=True)
+class ImportPath:
+    path: list[Token]
+    alias: Token | None
+
+
 def blank_range(characters: list[str], start: int, end: int) -> None:
     for index in range(start, end):
         if characters[index] != "\n":
@@ -201,6 +207,18 @@ def tokenize(source: str) -> list[Token]:
             cursor += 1
             column += 1
             continue
+        if (
+            source.startswith("r#", cursor)
+            and cursor + 2 < len(source)
+            and is_identifier_start(source[cursor + 2])
+        ):
+            end = cursor + 3
+            while end < len(source) and is_identifier_continue(source[end]):
+                end += 1
+            tokens.append(Token(source[cursor + 2 : end], line, column))
+            column += end - cursor
+            cursor = end
+            continue
         if is_identifier_start(character):
             end = cursor + 1
             while end < len(source) and is_identifier_continue(source[end]):
@@ -239,13 +257,13 @@ class UseParser:
         self.position += 1
         return token
 
-    def parse(self) -> list[list[Token]]:
+    def parse(self) -> list[ImportPath]:
         paths = self.parse_tree([])
         if self.position != len(self.tokens):
             raise ScanError("unsupported tokens in use statement")
         return paths
 
-    def parse_tree(self, prefix: list[Token]) -> list[list[Token]]:
+    def parse_tree(self, prefix: list[Token]) -> list[ImportPath]:
         if self.peek() == "::":
             self.consume("::")
         if self.peek() == "{":
@@ -258,22 +276,23 @@ class UseParser:
 
         if self.peek() == "::":
             self.consume("::")
-            paths = (
+            return (
                 self.parse_group(path)
                 if self.peek() == "{"
                 else self.parse_tree(path)
             )
-        else:
-            paths = [path]
 
+        alias = None
         if self.peek() == "as":
             self.consume("as")
-            self.consume()
-        return paths
+            alias = self.consume()
+            if not is_identifier_start(alias.value[0]):
+                raise ScanError("invalid alias in use statement")
+        return [ImportPath(path, alias)]
 
-    def parse_group(self, prefix: list[Token]) -> list[list[Token]]:
+    def parse_group(self, prefix: list[Token]) -> list[ImportPath]:
         self.consume("{")
-        paths: list[list[Token]] = []
+        paths: list[ImportPath] = []
         while self.peek() != "}":
             if self.peek() is None:
                 raise ScanError("unterminated use group")
@@ -307,6 +326,13 @@ def violation_for_import_path(path: list[Token]) -> Violation | None:
     violation = violation_for_path(path)
     if violation is not None:
         return violation
+    values = [token.value for token in path]
+    for index in range(len(values) - 1):
+        imports_io_glob = (
+            len(values) == index + 3 and values[index + 2] == "*"
+        )
+        if values[index : index + 2] == ["std", "io"] and imports_io_glob:
+            return Violation("terminal I/O", path[index + 1])
     for token in path:
         if token.value in OUTPUT_MACROS:
             return Violation("terminal output macros", token)
@@ -315,6 +341,7 @@ def violation_for_import_path(path: list[Token]) -> Violation | None:
 
 def scan_tokens(tokens: list[Token]) -> Violation | None:
     use_indices: set[int] = set()
+    path_aliases: dict[str, list[Token]] = {}
     for index, token in enumerate(tokens):
         if token.value != "use":
             continue
@@ -324,10 +351,34 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
         if end >= len(tokens):
             raise ScanError("unterminated use statement")
         use_indices.update(range(index, end + 1))
-        for path in UseParser(tokens[index + 1 : end]).parse():
-            violation = violation_for_import_path(path)
+        for imported in UseParser(tokens[index + 1 : end]).parse():
+            violation = violation_for_import_path(imported.path)
             if violation is not None:
                 return violation
+            values = [path_token.value for path_token in imported.path]
+            if values == ["std", "io"]:
+                alias = imported.alias or imported.path[-1]
+                path_aliases[alias.value] = imported.path
+
+    for index, token in enumerate(tokens):
+        if token.value != "extern":
+            continue
+        if index + 1 >= len(tokens) or tokens[index + 1].value != "crate":
+            continue
+        if index + 2 >= len(tokens) or not is_identifier_start(tokens[index + 2].value[0]):
+            raise ScanError("incomplete extern crate statement")
+        crate_name = tokens[index + 2]
+        end = index + 3
+        if end < len(tokens) and tokens[end].value == "as":
+            end += 1
+            if end >= len(tokens) or not is_identifier_start(tokens[end].value[0]):
+                raise ScanError("invalid extern crate alias")
+            end += 1
+        if end >= len(tokens) or tokens[end].value != ";":
+            raise ScanError("unterminated extern crate statement")
+        violation = violation_for_path([crate_name])
+        if violation is not None:
+            return violation
 
     for index, token in enumerate(tokens):
         if token.value in OUTPUT_MACROS and index + 1 < len(tokens):
@@ -357,7 +408,9 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             path.append(tokens[end + 2])
             end += 2
         if len(path) > 1:
-            violation = violation_for_path(path)
+            alias_prefix = path_aliases.get(path[0].value)
+            expanded_path = [*alias_prefix, *path[1:]] if alias_prefix else path
+            violation = violation_for_path(expanded_path)
             if violation is not None:
                 return violation
         index = max(index + 1, end + 1)
