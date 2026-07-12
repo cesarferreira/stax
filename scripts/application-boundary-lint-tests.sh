@@ -167,6 +167,14 @@ assert_rejected 'eprint!("hidden terminal error");' 'terminal output macros'
 assert_rejected 'std::eprintln!("hidden terminal error");' 'terminal output macros'
 assert_rejected ':: std :: eprintln ! ("hidden qualified terminal error");' 'terminal output macros'
 assert_rejected 'dbg!("hidden terminal debug");' 'terminal output macros'
+assert_rejected 'include!("generated.rs");' 'source injection macros'
+assert_rejected 'include_str!("payload.txt");' 'source injection macros'
+assert_rejected 'include_bytes!("payload.bin");' 'source injection macros'
+assert_rejected 'std::include!("generated.rs");' 'source injection macros'
+assert_rejected '::std::include_bytes!("payload.bin");' 'source injection macros'
+assert_rejected 'r#include_str!("payload.txt");' 'source injection macros'
+assert_rejected 'use std::include as inject;' 'source injection macros'
+assert_rejected 'use std as standard; use standard::include_bytes as inject;' 'source injection macros'
 
 assert_rejected 'extern crate gpui as ui;' 'presentation frameworks'
 assert_rejected 'extern crate r#console as r#ui;' 'presentation frameworks'
@@ -205,6 +213,7 @@ assert_accepted $'use std::io as io;\nstruct Clean<io> where io::stdout: Sized {
 assert_accepted 'use super::RepositorySnapshot;'
 assert_accepted '// extern crate gpui as ui; use std::io as io; io::stdout();'
 assert_accepted 'const TEXT: &str = "extern crate tui; use std::io::*;";'
+assert_accepted 'const INCLUDE_TEXT: &str = "include!(generated.rs)"; // include_bytes!("ignored")'
 assert_scanner_error 'use std::io as #;'
 assert_scanner_error 'extern crate safe_dependency as ;'
 
@@ -243,6 +252,39 @@ mkdir -p "$fixture/src/application/custom"
 printf '%s\n' 'use std as standard; #[path = "custom/child_impl.rs"] mod child;' > "$fixture/src/application/mod.rs"
 printf '%s\n' 'fn bad() { super::standard::io::stdout(); }' > "$fixture/src/application/custom/child_impl.rs"
 assert_fixture_rejected 'terminal I/O' 'path-attributed child module'
+
+reset_application_fixture
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'use std as standard; #[path = "foo_child.rs"] mod child;' > "$fixture/src/application/foo.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdout(); }' > "$fixture/src/application/foo_child.rs"
+assert_fixture_rejected 'terminal I/O' 'direct path module from foo.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/foo/inline"
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'use std as standard; mod inline { #[path = "nested_child.rs"] mod child; }' > "$fixture/src/application/foo.rs"
+printf '%s\n' 'fn bad() { super::super::standard::io::stderr(); }' > "$fixture/src/application/foo/inline/nested_child.rs"
+assert_fixture_rejected 'terminal I/O' 'nested path module from foo.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/foo"
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'use std as standard; #[path = "direct_child.rs"] mod child;' > "$fixture/src/application/foo/mod.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdin(); }' > "$fixture/src/application/foo/direct_child.rs"
+assert_fixture_rejected 'terminal I/O' 'direct path module from foo/mod.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/foo/inline"
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'use std as standard; mod inline { #[path = "nested_child.rs"] mod child; }' > "$fixture/src/application/foo/mod.rs"
+printf '%s\n' 'fn clean() { self::standard::io::stdout(); } mod standard { pub mod io { pub fn stdout() {} } }' > "$fixture/src/application/foo/inline/nested_child.rs"
+assert_fixture_accepted 'nested path module shadow from foo/mod.rs'
+
+reset_application_fixture
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' '#[path = "renamed_child.rs"] mod child;' > "$fixture/src/application/foo.rs"
+printf '%s\n' 'use std as standard; fn clean() { crate::application::renamed_child::standard::io::stdout(); }' > "$fixture/src/application/renamed_child.rs"
+assert_fixture_accepted 'path target is not independently inferred'
 
 reset_application_fixture
 printf '%s\n' 'use std as standard; mod left; mod right;' > "$fixture/src/application/mod.rs"

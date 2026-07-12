@@ -21,6 +21,7 @@ PRESENTATION_FRAMEWORKS = {
 }
 TERMINAL_IO = {"stdin", "stdout", "stderr", "IsTerminal"}
 OUTPUT_MACROS = {"print", "println", "eprint", "eprintln", "dbg"}
+SOURCE_INJECTION_MACROS = {"include", "include_str", "include_bytes"}
 
 
 class ScanError(Exception):
@@ -391,6 +392,9 @@ def violation_for_import_path(path: list[Token]) -> Violation | None:
     for token in path:
         if token.value in OUTPUT_MACROS:
             return Violation("terminal output macros", token)
+    for token in path:
+        if token.value in SOURCE_INJECTION_MACROS:
+            return Violation("source injection macros", token)
     return None
 
 
@@ -754,6 +758,9 @@ def scan_tokens(
         if token.value in OUTPUT_MACROS and index + 1 < len(tokens):
             if tokens[index + 1].value == "!":
                 return Violation("terminal output macros", token)
+        if token.value in SOURCE_INJECTION_MACROS and index + 1 < len(tokens):
+            if tokens[index + 1].value == "!":
+                return Violation("source injection macros", token)
 
     if root_scope is None:
         (
@@ -967,13 +974,12 @@ def build_repository_modules(
         parent_suffix: tuple[str, ...],
         declaration: ModuleDeclaration,
     ) -> Path:
-        if source.path.name == "mod.rs":
-            module_directory = source.path.parent
-        else:
-            module_directory = source.path.parent / source.path.stem
-        module_directory = module_directory.joinpath(*parent_suffix)
-
         if declaration.path_override is not None:
+            module_directory = source.path.parent
+            if parent_suffix:
+                if source.path.name != "mod.rs":
+                    module_directory /= source.path.stem
+                module_directory = module_directory.joinpath(*parent_suffix)
             candidate = (
                 module_directory / declaration.path_override
             ).resolve()
@@ -991,6 +997,11 @@ def build_repository_modules(
                 raise ScanError(f"module source was not scanned: {candidate}")
             return candidate
 
+        if source.path.name == "mod.rs":
+            module_directory = source.path.parent
+        else:
+            module_directory = source.path.parent / source.path.stem
+        module_directory = module_directory.joinpath(*parent_suffix)
         candidates = [
             (module_directory / f"{declaration.name.value}.rs").resolve(),
             (
