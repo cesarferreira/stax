@@ -949,7 +949,9 @@ git commit -m "fix: harden GUI state persistence"
 
 **Files:**
 - Create: `crates/stax-gui/src/theme.rs`
-- Create: `crates/stax-gui/src/views/mod.rs`
+- Create: `crates/stax-gui/src/views/mod.rs` (focused module exports and window entry)
+- Create: `crates/stax-gui/src/views/app.rs` (root mode, services, generations, and async coordination)
+- Create: `crates/stax-gui/src/views/tests.rs` (GPUI root behavior and hardening tests)
 - Create: `crates/stax-gui/src/views/welcome.rs`
 - Create: `crates/stax-gui/src/views/workspace.rs`
 - Create: `crates/stax-gui/src/views/stack_pane.rs`
@@ -976,6 +978,13 @@ fn workspace_window_renders_all_three_panes(mut cx: &mut gpui::TestAppContext) {
 ```
 
 Also expose test-only pane markers from `WorkspaceView` and assert stack, changes, and inspector are all present.
+
+Cover the hardened coordination seams as well: independent root-load, recent-load, and
+recent-write generations; delayed recent-write completion after refresh; stale/new recent-write
+ordering; repeated refresh gating; long-stack scroll requests; bounded large diffstats; background
+recent-load success/failure; numerical WCAG AA contrast on normal and selected row surfaces; a
+deterministic blocking-store FIFO persistence case; initial current-branch visibility in a
+100-branch stack; and refresh-error precedence over older storage notices.
 
 - [ ] **Step 2: Run and verify failure**
 
@@ -1019,6 +1028,8 @@ Provide `Theme::light()` and `Theme::dark()`. Views consume only semantic fields
 - `WelcomeView` with a visible actionable error when path validation fails.
 
 Use `WindowOptions` with 1100×720 centered bounds and a minimum size of 820×520.
+Return the GPUI window-open error instead of panicking. The application bootstrap logs startup
+failure and asks GPUI to quit through its normal platform routine.
 
 - [ ] **Step 5: Implement the welcome view**
 
@@ -1034,6 +1045,14 @@ let receiver = cx.prompt_for_paths(PathPromptOptions {
 ```
 
 Await the receiver in a detached GPUI task, record a successful selection, and replace the welcome window root with `WorkspaceView`. Cancellation leaves the welcome view unchanged; picker errors render inline.
+
+Load and canonicalize recent repositories on GPUI's background executor so the welcome window can
+paint a stable loading state first. Apply results on the foreground entity with a dedicated recent
+load generation. Persist successful opens with a separate recent-write generation: root refreshes
+must not suppress write completion, while newer writes may supersede older error presentation.
+Queue accepted recent writes per `AppView` and run only one background `record` at a time so lock
+acquisition cannot invert acceptance order. Completing A starts queued B, leaving the newer B first
+on disk without blocking the UI thread.
 
 - [ ] **Step 6: Implement the cockpit**
 
@@ -1060,13 +1079,22 @@ Use `uniform_list` for branches and patch lines. The stack pane shows topology i
 
 Clicking a branch selects it without checkout.
 
+Retain a `UniformListScrollHandle` in `WorkspaceView` and request scrolling after click or keyboard
+selection changes, including construction so the initial/current branch is visible in long stacks.
+Gate `refresh_repository` itself while a refresh is loading so toolbar, Cmd-R, and repeated callers
+share the same concurrency rule. An active refresh failure takes precedence over older storage
+notices in the toolbar. Render diffstat files in a bounded
+`uniform_list` (six visible rows) so the patch keeps its flex space even for hundreds of files.
+Status colors for small text must meet WCAG AA 4.5:1 against both normal and selected semantic
+surfaces in light and dark appearances.
+
 - [ ] **Step 7: Run GPUI tests and compile the app**
 
 Run:
 
 ```bash
 cargo nextest run -p stax-gui views::
-cargo check -p stax-gui
+cargo check -p stax-gui --locked
 ```
 
 Expected: tests and check pass.

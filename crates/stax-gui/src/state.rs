@@ -26,6 +26,12 @@ impl<T> LoadState<T> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionDirection {
+    Previous,
+    Next,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceState {
     snapshot: RepositorySnapshot,
@@ -95,6 +101,63 @@ impl WorkspaceState {
         self.diff = LoadState::Idle;
         self.ci = LoadState::Idle;
         Some(self.current_token(name))
+    }
+
+    pub fn move_selection(&mut self, direction: SelectionDirection) -> bool {
+        let Some(selected) = self.selected_branch.as_deref() else {
+            return false;
+        };
+        let Some(index) = self
+            .snapshot
+            .branches
+            .iter()
+            .position(|branch| branch.name == selected)
+        else {
+            return false;
+        };
+        let next_index = match direction {
+            SelectionDirection::Previous => index.checked_sub(1),
+            SelectionDirection::Next => index
+                .checked_add(1)
+                .filter(|next| *next < self.snapshot.branches.len()),
+        };
+        let Some(next_name) = next_index
+            .and_then(|next| self.snapshot.branches.get(next))
+            .map(|branch| branch.name.clone())
+        else {
+            return false;
+        };
+
+        self.select_branch(&next_name).is_some()
+    }
+
+    pub fn replace_snapshot(&mut self, snapshot: RepositorySnapshot) {
+        let previous_selection = self.selected_branch.clone();
+        self.snapshot = snapshot;
+        self.selected_branch = previous_selection
+            .filter(|selected| {
+                self.snapshot
+                    .branches
+                    .iter()
+                    .any(|branch| branch.name == *selected)
+            })
+            .or_else(|| {
+                self.snapshot
+                    .branches
+                    .iter()
+                    .find(|branch| branch.name == self.snapshot.current_branch)
+                    .map(|branch| branch.name.clone())
+            })
+            .or_else(|| {
+                self.snapshot
+                    .branches
+                    .first()
+                    .map(|branch| branch.name.clone())
+            });
+        self.advance_generation();
+        self.details = LoadState::Idle;
+        self.diff = LoadState::Idle;
+        self.ci = LoadState::Idle;
     }
 
     pub fn begin_hydration(&mut self) -> Option<(DetailRequestToken, BranchSummary)> {
@@ -174,7 +237,7 @@ impl WorkspaceState {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadState, WorkspaceState};
+    use super::{LoadState, SelectionDirection, WorkspaceState};
     use stax::application::{
         BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, RepositorySnapshot,
     };
@@ -440,5 +503,70 @@ mod tests {
         assert_eq!(state.details().ready(), Some(&details(2)));
         assert_eq!(state.diff().ready(), Some(&diff("retry")));
         assert_eq!(state.ci().ready(), Some(&ci("success")));
+    }
+
+    #[test]
+    fn arrow_navigation_stops_at_boundaries_without_changing_current_branch() {
+        let mut state = WorkspaceState::new(snapshot(
+            "/repo",
+            "feature-b",
+            &[("feature-a", false), ("feature-b", true), ("main", false)],
+        ));
+
+        assert!(state.move_selection(SelectionDirection::Previous));
+        assert_eq!(state.selected_branch(), Some("feature-a"));
+        assert_eq!(state.snapshot().current_branch, "feature-b");
+        let generation = state.generation();
+
+        assert!(!state.move_selection(SelectionDirection::Previous));
+        assert_eq!(state.selected_branch(), Some("feature-a"));
+        assert_eq!(state.generation(), generation);
+
+        assert!(state.move_selection(SelectionDirection::Next));
+        assert!(state.move_selection(SelectionDirection::Next));
+        assert_eq!(state.selected_branch(), Some("main"));
+        let generation = state.generation();
+
+        assert!(!state.move_selection(SelectionDirection::Next));
+        assert_eq!(state.selected_branch(), Some("main"));
+        assert_eq!(state.generation(), generation);
+        assert_eq!(state.snapshot().current_branch, "feature-b");
+    }
+
+    #[test]
+    fn refresh_preserves_selection_then_falls_back_to_current_or_first_branch() {
+        let mut state = WorkspaceState::new(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-a", true), ("feature-b", false)],
+        ));
+        state.select_branch("feature-b").unwrap();
+
+        state.replace_snapshot(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-b", false), ("feature-a", true)],
+        ));
+        assert_eq!(state.selected_branch(), Some("feature-b"));
+
+        state.replace_snapshot(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-a", true), ("feature-c", false)],
+        ));
+        assert_eq!(state.selected_branch(), Some("feature-a"));
+
+        state.replace_snapshot(snapshot(
+            "/repo",
+            "detached",
+            &[("feature-c", false), ("feature-d", false)],
+        ));
+        assert_eq!(state.selected_branch(), Some("feature-c"));
+
+        state.replace_snapshot(snapshot("/repo", "detached", &[]));
+        assert_eq!(state.selected_branch(), None);
+        assert_eq!(state.details(), &LoadState::Idle);
+        assert_eq!(state.diff(), &LoadState::Idle);
+        assert_eq!(state.ci(), &LoadState::Idle);
     }
 }
