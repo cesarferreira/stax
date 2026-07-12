@@ -114,6 +114,75 @@ fn config_load_for_repo_preserves_stax_config_dir_isolation() {
     restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
 }
 
+#[test]
+fn automatic_network_config_only_accepts_repo_local_remote_name() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("selected-repo");
+    let home_dir = temp_dir.path().join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        r#"
+[remote]
+name = "global"
+base_url = "https://git.trusted.example"
+api_base_url = "https://api.trusted.example/v1"
+forge = "gitea"
+
+[auth]
+use_gh_cli = false
+allow_github_token_env = false
+gh_hostname = "git.trusted.example"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        r#"
+[remote]
+name = "selected"
+base_url = "http://attacker.invalid"
+api_base_url = "http://attacker.invalid/api"
+forge = "github"
+
+[auth]
+use_gh_cli = true
+allow_github_token_env = true
+gh_hostname = "attacker.invalid"
+"#,
+    )
+    .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+
+    let config = Config::load_for_automatic_network(&repo_dir).unwrap();
+
+    assert_eq!(config.remote_name(), "selected");
+    assert_eq!(config.remote.base_url, "https://git.trusted.example");
+    assert_eq!(
+        config.remote.api_base_url.as_deref(),
+        Some("https://api.trusted.example/v1")
+    );
+    assert_eq!(config.remote.forge, Some(ForgeType::Gitea));
+    assert!(!config.auth.use_gh_cli);
+    assert!(!config.auth.allow_github_token_env);
+    assert_eq!(
+        config.auth.gh_hostname.as_deref(),
+        Some("git.trusted.example")
+    );
+
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
 #[cfg(unix)]
 fn write_mock_gh(home: &Path, script_body: &str) -> String {
     use std::os::unix::fs::PermissionsExt;
@@ -1303,6 +1372,63 @@ fn test_github_token_passes_gh_hostname() {
 
     let token = Config::github_token();
     assert_eq!(token, Some("gh-host-token".to_string()));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+    match orig_home {
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
+    }
+    match orig_path {
+        Some(v) => unsafe { env::set_var("PATH", v) },
+        None => unsafe { env::remove_var("PATH") },
+    }
+    match orig_stax {
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
+    }
+    match orig_github {
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn automatic_github_auth_rejects_configured_hostname_mismatch_before_gh_lookup() {
+    let _guard = env_lock();
+
+    let orig_home = env::var("HOME").ok();
+    let orig_path = env::var("PATH").ok();
+    let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
+    let orig_github = env::var("GITHUB_TOKEN").ok();
+    let temp_dir =
+        std::env::temp_dir().join(format!("stax-test-gh-host-mismatch-{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+    write_auth_config(&temp_dir, true, false, Some("github.corp.example"));
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::remove_var("GITHUB_TOKEN") };
+
+    let marker = temp_dir.join("gh-was-called");
+    let mock_path = write_mock_gh(
+        &temp_dir,
+        &format!(
+            "#!/bin/sh\ntouch \"{}\"\necho \"must-not-be-read\"\n",
+            marker.display()
+        ),
+    );
+    unsafe { env::set_var("PATH", mock_path) };
+    let config = Config::load().unwrap();
+
+    let error = config
+        .github_token_with_source_for_host("github.other.example")
+        .unwrap_err();
+
+    assert!(error.to_string().contains("hostname"));
+    assert!(!marker.exists(), "gh token lookup must not run on mismatch");
+    assert!(!error.to_string().contains("must-not-be-read"));
 
     let _ = fs::remove_dir_all(&temp_dir);
     unsafe { env::remove_var("STAX_CONFIG_DIR") };

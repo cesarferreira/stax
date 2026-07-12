@@ -1,6 +1,10 @@
 #[cfg(test)]
 use super::{changes_pane, inspector_pane, stack_pane};
 use super::{welcome::WelcomeView, workspace::WorkspaceView};
+use crate::hydration::{
+    BranchHydrationService, CiHydrationRequest, DetailsHydrationRequest, DiffHydrationRequest,
+    HydrationCoordinator, NativeBranchHydrationService,
+};
 use crate::preferences::RecentRepositories;
 use crate::state::SelectionDirection;
 use crate::theme::{SYSTEM_UI_FONT, Theme};
@@ -9,7 +13,7 @@ use gpui::{
     KeyBinding, ParentElement as _, PathPromptOptions, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, Window, actions, div, px,
 };
-use stax::application::{RepositorySession, RepositorySnapshot};
+use stax::application::{BranchDiff, DetailRequestToken, RepositorySession, RepositorySnapshot};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -47,6 +51,7 @@ pub struct AppServices {
     loader: Arc<dyn SnapshotLoader>,
     picker: Rc<dyn RepositoryPicker>,
     recents: Arc<dyn RecentRepositoryStore>,
+    hydration: Arc<dyn BranchHydrationService>,
 }
 
 impl AppServices {
@@ -55,10 +60,25 @@ impl AppServices {
         picker: Rc<dyn RepositoryPicker>,
         recents: Arc<dyn RecentRepositoryStore>,
     ) -> Self {
+        Self::with_hydration(
+            loader,
+            picker,
+            recents,
+            Arc::new(NativeBranchHydrationService),
+        )
+    }
+
+    pub(super) fn with_hydration(
+        loader: Arc<dyn SnapshotLoader>,
+        picker: Rc<dyn RepositoryPicker>,
+        recents: Arc<dyn RecentRepositoryStore>,
+        hydration: Arc<dyn BranchHydrationService>,
+    ) -> Self {
         Self {
             loader,
             picker,
             recents,
+            hydration,
         }
     }
 
@@ -191,6 +211,7 @@ pub struct AppView {
     recent_write_queue: VecDeque<RecentWriteToken>,
     recent_write_in_flight: bool,
     load_generation: u64,
+    hydration_coordinator: HydrationCoordinator,
 }
 
 impl AppView {
@@ -218,6 +239,7 @@ impl AppView {
             recent_write_queue: VecDeque::new(),
             recent_write_in_flight: false,
             load_generation: 0,
+            hydration_coordinator: HydrationCoordinator::default(),
         };
         view.mode = AppMode::Welcome(view.welcome(None, None));
         view.load_recent_repositories(window, cx);
@@ -313,13 +335,200 @@ impl AppView {
         self.start_load(path, RootLoadKind::Refresh, window, cx);
     }
 
-    pub fn select_branch(&mut self, name: &str, cx: &mut Context<Self>) {
+    pub fn select_branch(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self
             .workspace_mut()
             .is_some_and(|workspace| workspace.select_branch(name))
         {
+            self.hydrate_selection(window, cx);
             cx.notify();
         }
+    }
+
+    pub(super) fn hydrate_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((token, branch)) = self
+            .workspace_mut()
+            .and_then(WorkspaceView::begin_hydration)
+        else {
+            return;
+        };
+        self.hydration_coordinator.clear_queued_ci();
+        let details_request = self
+            .hydration_coordinator
+            .enqueue_details(token.clone(), branch.clone());
+        let diff_request = self
+            .hydration_coordinator
+            .enqueue_diff(token.clone(), branch.parent.clone());
+        if branch.parent.is_none()
+            && let Some(workspace) = self.workspace_mut()
+        {
+            workspace.apply_diff(
+                token.clone(),
+                Ok(BranchDiff {
+                    stat: Vec::new(),
+                    lines: Vec::new(),
+                }),
+            );
+        }
+        if let Some(request) = details_request {
+            self.start_details_hydration(request, window, cx);
+        }
+        if let Some(request) = diff_request {
+            self.start_diff_hydration(request, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn start_details_hydration(
+        &mut self,
+        request: DetailsHydrationRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let hydration = Arc::clone(&self.services.hydration);
+        let background = cx.background_executor().clone();
+        let token = request.token;
+        let future = hydration.load_details(token.repository.clone(), request.branch);
+        cx.spawn_in(window, async move |this, cx| {
+            let result = background.spawn(future).await;
+            let _ = this.update_in(cx, |view, window, cx| {
+                let follow_up = match &result {
+                    Ok(details) if details.has_remote => Ok(true),
+                    Ok(_) => Ok(false),
+                    Err(error) => Err(format!(
+                        "CI requires branch details: {error}. Fix the repository configuration, then refresh."
+                    )),
+                };
+                let accepted = view.workspace_mut().is_some_and(|workspace| {
+                    workspace.apply_details(token.clone(), result)
+                });
+                if accepted {
+                    match follow_up {
+                        Ok(true) => view.queue_ci_hydration(token, window, cx),
+                        Ok(false) => {
+                            if let Some(workspace) = view.workspace_mut() {
+                                workspace.apply_ci(
+                                    token,
+                                    Err(
+                                        "Push branch to see remote checks. Push the branch, then refresh."
+                                            .to_string(),
+                                    ),
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(workspace) = view.workspace_mut() {
+                                workspace.apply_ci(token, Err(error));
+                            }
+                        }
+                    }
+                }
+                if let Some(next) = view.hydration_coordinator.finish_details() {
+                    view.start_details_hydration(next, window, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn start_diff_hydration(
+        &mut self,
+        request: DiffHydrationRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(parent) = request.parent else {
+            if let Some(next) = self.hydration_coordinator.finish_diff() {
+                self.start_diff_hydration(next, window, cx);
+            }
+            return;
+        };
+        let hydration = Arc::clone(&self.services.hydration);
+        let background = cx.background_executor().clone();
+        let token = request.token;
+        let repository = token.repository.clone();
+        let branch = token.branch.clone();
+        let cache_future =
+            hydration.load_cached_diff(repository.clone(), branch.clone(), parent.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            let cached = background.spawn(cache_future).await;
+            let continue_fresh = this
+                .update_in(cx, |view, window, cx| {
+                    let applied = cached.ok().flatten().is_some_and(|diff| {
+                        view.workspace_mut().is_some_and(|workspace| {
+                            workspace.apply_cached_diff(token.clone(), diff)
+                        })
+                    });
+                    let superseded = view.hydration_coordinator.diff_has_queued();
+                    if superseded && let Some(next) = view.hydration_coordinator.finish_diff() {
+                        view.start_diff_hydration(next, window, cx);
+                    }
+                    if applied || superseded {
+                        cx.notify();
+                    }
+                    !superseded
+                })
+                .unwrap_or(false);
+            if !continue_fresh {
+                return;
+            }
+
+            let fresh_future = hydration.load_diff(repository, branch, parent);
+            let result = background.spawn(fresh_future).await;
+            let _ = this.update_in(cx, |view, window, cx| {
+                let applied = view
+                    .workspace_mut()
+                    .is_some_and(|workspace| workspace.apply_diff(token, result));
+                if let Some(next) = view.hydration_coordinator.finish_diff() {
+                    view.start_diff_hydration(next, window, cx);
+                }
+                if applied {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn queue_ci_hydration(
+        &mut self,
+        token: DetailRequestToken,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(request) = self.hydration_coordinator.enqueue_ci(token) {
+            self.start_ci_hydration(request, window, cx);
+        }
+    }
+
+    fn start_ci_hydration(
+        &mut self,
+        request: CiHydrationRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let hydration = Arc::clone(&self.services.hydration);
+        let background = cx.background_executor().clone();
+        let token = request.token;
+        let repository = token.repository.clone();
+        let branch = token.branch.clone();
+        let future = hydration.load_ci(repository, branch);
+        cx.spawn_in(window, async move |this, cx| {
+            let result = background.spawn(future).await;
+            let _ = this.update_in(cx, |view, window, cx| {
+                let applied = view
+                    .workspace_mut()
+                    .is_some_and(|workspace| workspace.apply_ci(token, result));
+                if let Some(next) = view.hydration_coordinator.finish_ci() {
+                    view.start_ci_hydration(next, window, cx);
+                }
+                if applied {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn begin_load(&mut self, path: PathBuf, kind: RootLoadKind) -> RootLoadToken {
@@ -400,6 +609,7 @@ impl AppView {
 
         cx.spawn_in(window, async move |this, cx| {
             let result = background.spawn(async move { loader.load(&path) }).await;
+            let should_hydrate = result.is_ok();
             let recent_path = result
                 .as_ref()
                 .ok()
@@ -411,6 +621,9 @@ impl AppView {
                     && let Some(path) = recent_path
                 {
                     view.enqueue_recent_write(path, window, cx);
+                }
+                if accepted && should_hydrate {
+                    view.hydrate_selection(window, cx);
                 }
             });
         })
@@ -614,22 +827,24 @@ impl AppView {
     fn select_previous(
         &mut self,
         _: &SelectPreviousBranch,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self
             .workspace_mut()
             .is_some_and(|workspace| workspace.move_selection(SelectionDirection::Previous))
         {
+            self.hydrate_selection(window, cx);
             cx.notify();
         }
     }
 
-    fn select_next(&mut self, _: &SelectNextBranch, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_next(&mut self, _: &SelectNextBranch, window: &mut Window, cx: &mut Context<Self>) {
         if self
             .workspace_mut()
             .is_some_and(|workspace| workspace.move_selection(SelectionDirection::Next))
         {
+            self.hydrate_selection(window, cx);
             cx.notify();
         }
     }

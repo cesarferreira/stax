@@ -30,7 +30,7 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
         // Reload stack each iteration to pick up local branch changes
         let stack = Stack::load(&repo)?;
         let current = repo.current_branch()?;
-        let git_dir = repo.git_dir()?;
+        let cache_dir = repo.common_git_dir()?;
         let workdir = repo.workdir()?;
 
         let branches_to_watch: Vec<String> = if current_only {
@@ -59,7 +59,7 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
                 }
                 Err(_) => {
                     // Fall back to cached data on network errors
-                    load_ci_from_cache(git_dir, &branches_to_watch)
+                    load_ci_from_cache(&repo, &cache_dir, &branches_to_watch)
                 }
             }
         } else {
@@ -223,29 +223,36 @@ fn render_watch_table(
     println!("  {}  {} {}", trunk_marker, trunk_cloud, trunk.dimmed());
 }
 
-fn load_ci_from_cache(git_dir: &std::path::Path, branches: &[String]) -> Vec<BranchCiStatus> {
-    let cache = CiCache::load(git_dir);
+fn load_ci_from_cache(
+    repo: &GitRepo,
+    cache_dir: &std::path::Path,
+    branches: &[String],
+) -> Vec<BranchCiStatus> {
+    let cache = CiCache::load(cache_dir);
     branches
         .iter()
-        .filter_map(|b| {
-            cache.get_ci_state(b).map(|_| {
-                let pr_is_draft = cache
-                    .branches
-                    .get(b.as_str())
-                    .and_then(|e| e.pr_state.as_deref())
-                    .map(|s| s.eq_ignore_ascii_case("draft"));
-                BranchCiStatus {
-                    branch: b.clone(),
-                    sha: String::new(),
-                    sha_short: String::new(),
-                    overall_status: cache.get_ci_state(b),
-                    check_runs: vec![],
-                    pr_number: None,
-                    pr_is_draft,
-                    pr_title: None,
-                    pr_review_decision: None,
-                }
-            })
+        .filter_map(|branch| {
+            let revision = repo.branch_commit(branch).ok()?;
+            cache
+                .get_ci_state_for_revision(branch, &revision)
+                .map(|overall_status| {
+                    let pr_is_draft = cache
+                        .branches
+                        .get(branch.as_str())
+                        .and_then(|e| e.pr_state.as_deref())
+                        .map(|s| s.eq_ignore_ascii_case("draft"));
+                    BranchCiStatus {
+                        branch: branch.clone(),
+                        sha_short: revision.chars().take(7).collect(),
+                        sha: revision,
+                        overall_status: Some(overall_status),
+                        check_runs: vec![],
+                        pr_number: None,
+                        pr_is_draft,
+                        pr_title: None,
+                        pr_review_decision: None,
+                    }
+                })
         })
         .collect()
 }

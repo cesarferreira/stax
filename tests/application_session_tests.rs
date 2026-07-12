@@ -401,6 +401,66 @@ fn cached_diff_returns_the_same_entry_without_recalculating() {
 }
 
 #[test]
+fn refresh_diff_bypasses_matching_stale_cache_and_replaces_it() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let actual = session.diff("feature", "main").unwrap();
+    let cache_path = repo
+        .path()
+        .join(".git")
+        .join("stax")
+        .join("tui-diff-cache.json");
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+    let entry = stored["entries"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap();
+    entry["diff"]["stat"] = serde_json::json!([]);
+    entry["diff"]["lines"] = serde_json::json!([
+        {"content": "deliberately incorrect cached patch", "line_type": "context"}
+    ]);
+    std::fs::write(&cache_path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
+
+    let cached = session.cached_diff("feature", "main").unwrap().unwrap();
+    assert_eq!(
+        cached.lines[0].content,
+        "deliberately incorrect cached patch"
+    );
+
+    let refreshed = session.refresh_diff("feature", "main").unwrap();
+
+    assert_eq!(refreshed, actual);
+    assert_eq!(
+        session.cached_diff("feature", "main").unwrap(),
+        Some(actual)
+    );
+}
+
+#[test]
+fn refresh_diff_returns_live_result_without_clobbering_malformed_cache() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let expected = session.diff("feature", "main").unwrap();
+    let cache_path = repo
+        .path()
+        .join(".git")
+        .join("stax")
+        .join("tui-diff-cache.json");
+    let malformed = b"{\"entries\":";
+    std::fs::write(&cache_path, malformed).unwrap();
+
+    let refreshed = session.refresh_diff("feature", "main").unwrap();
+
+    assert_eq!(refreshed, expected);
+    assert_eq!(std::fs::read(cache_path).unwrap(), malformed);
+}
+
+#[test]
 fn cached_diff_miss_does_not_calculate_a_patch() {
     let repo = TestRepo::new();
     repo.create_stack(&["feature"]);

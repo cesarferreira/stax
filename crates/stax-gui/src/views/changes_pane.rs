@@ -35,11 +35,31 @@ pub fn render(workspace: &WorkspaceView, theme: Theme, cx: &mut Context<AppView>
         .selected_branch()
         .unwrap_or("No branch selected");
     let state = diff_display_state(workspace.state().diff());
+    let mut heading_status = div().min_w_0().flex().items_center().justify_end().gap_2();
+    if workspace.state().diff_is_refreshing() {
+        heading_status = heading_status.child(
+            div()
+                .debug_selector(|| "changes-refreshing".into())
+                .flex_none()
+                .text_xs()
+                .text_color(theme.text_muted)
+                .child("Refreshing…"),
+        );
+    }
+    heading_status = heading_status.child(
+        div()
+            .min_w_0()
+            .truncate()
+            .font_family(MONOSPACE_FONT)
+            .text_xs()
+            .text_color(theme.text_muted)
+            .child(selected.to_string()),
+    );
 
     let body = match (state, workspace.state().diff()) {
         (DiffDisplayState::Idle, _) => state_message(
             "Changes are not loaded",
-            "Select a branch now; details and patches are hydrated in Task 7.",
+            "Select a branch or refresh the repository to load its patch.",
             theme,
         ),
         (DiffDisplayState::Loading, _) => state_message(
@@ -87,15 +107,7 @@ pub fn render(workspace: &WorkspaceView, theme: Theme, cx: &mut Context<AppView>
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(PANE_HEADING),
                 )
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .font_family(MONOSPACE_FONT)
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(selected.to_string()),
-                ),
+                .child(heading_status),
         )
         .child(body)
 }

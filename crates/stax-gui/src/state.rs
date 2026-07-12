@@ -38,6 +38,7 @@ pub struct WorkspaceState {
     selected_branch: Option<String>,
     details: LoadState<BranchDetails>,
     diff: LoadState<BranchDiff>,
+    diff_refreshing: bool,
     ci: LoadState<CiSummary>,
     generation: u64,
 }
@@ -56,6 +57,7 @@ impl WorkspaceState {
             selected_branch,
             details: LoadState::Idle,
             diff: LoadState::Idle,
+            diff_refreshing: false,
             ci: LoadState::Idle,
             generation: 0,
         }
@@ -77,6 +79,10 @@ impl WorkspaceState {
         &self.diff
     }
 
+    pub fn diff_is_refreshing(&self) -> bool {
+        self.diff_refreshing
+    }
+
     pub fn ci(&self) -> &LoadState<CiSummary> {
         &self.ci
     }
@@ -95,10 +101,14 @@ impl WorkspaceState {
             return None;
         }
 
+        let same_branch = self.selected_branch.as_deref() == Some(name);
         self.selected_branch = Some(name.to_owned());
         self.advance_generation();
         self.details = LoadState::Idle;
-        self.diff = LoadState::Idle;
+        if !same_branch || !matches!(self.diff, LoadState::Ready(_)) {
+            self.diff = LoadState::Idle;
+        }
+        self.diff_refreshing = false;
         self.ci = LoadState::Idle;
         Some(self.current_token(name))
     }
@@ -132,9 +142,15 @@ impl WorkspaceState {
     }
 
     pub fn replace_snapshot(&mut self, snapshot: RepositorySnapshot) {
+        let previous_repository = self.snapshot.repository_root.clone();
         let previous_selection = self.selected_branch.clone();
+        let previous_diff = match &self.diff {
+            LoadState::Ready(diff) => Some(diff.clone()),
+            LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => None,
+        };
         self.snapshot = snapshot;
         self.selected_branch = previous_selection
+            .clone()
             .filter(|selected| {
                 self.snapshot
                     .branches
@@ -156,7 +172,14 @@ impl WorkspaceState {
             });
         self.advance_generation();
         self.details = LoadState::Idle;
-        self.diff = LoadState::Idle;
+        self.diff = if previous_repository == self.snapshot.repository_root
+            && previous_selection == self.selected_branch
+        {
+            previous_diff.map_or(LoadState::Idle, LoadState::Ready)
+        } else {
+            LoadState::Idle
+        };
+        self.diff_refreshing = false;
         self.ci = LoadState::Idle;
     }
 
@@ -175,7 +198,10 @@ impl WorkspaceState {
         let token = self.current_token(&summary.name);
 
         self.details = LoadState::Loading;
-        self.diff = LoadState::Loading;
+        if !matches!(self.diff, LoadState::Ready(_)) {
+            self.diff = LoadState::Loading;
+        }
+        self.diff_refreshing = true;
         self.ci = LoadState::Loading;
         Some((token, summary))
     }
@@ -192,6 +218,17 @@ impl WorkspaceState {
         true
     }
 
+    pub fn apply_cached_diff(&mut self, token: DetailRequestToken, diff: BranchDiff) -> bool {
+        if !self.matches(&token)
+            || !self.diff_refreshing
+            || !matches!(self.diff, LoadState::Loading)
+        {
+            return false;
+        }
+        self.diff = LoadState::Ready(diff);
+        true
+    }
+
     pub fn apply_diff(
         &mut self,
         token: DetailRequestToken,
@@ -201,6 +238,7 @@ impl WorkspaceState {
             return false;
         }
         self.diff = result.map_or_else(LoadState::Failed, LoadState::Ready);
+        self.diff_refreshing = false;
         true
     }
 
@@ -212,7 +250,21 @@ impl WorkspaceState {
         if !self.matches(&token) {
             return false;
         }
-        self.ci = result.map_or_else(LoadState::Failed, LoadState::Ready);
+        self.ci = match result {
+            Ok(summary) => {
+                if let Some(selected) = self.selected_branch.as_deref()
+                    && let Some(branch) = self
+                        .snapshot
+                        .branches
+                        .iter_mut()
+                        .find(|branch| branch.name == selected)
+                {
+                    branch.ci_state = summary.overall_status.clone();
+                }
+                LoadState::Ready(summary)
+            }
+            Err(error) => LoadState::Failed(error),
+        };
         true
     }
 
@@ -363,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_selection_increments_generation_and_resets_hydration() {
+    fn valid_selection_retains_only_a_same_branch_ready_diff() {
         let mut state = WorkspaceState::new(snapshot(
             "/repo",
             "feature-a",
@@ -378,13 +430,15 @@ mod tests {
         assert_eq!(first, DetailRequestToken::new("/repo", "feature-a", 2));
         assert_eq!(state.generation(), 2);
         assert_eq!(state.details(), &LoadState::Idle);
-        assert_eq!(state.diff(), &LoadState::Idle);
+        assert_eq!(state.diff().ready(), Some(&diff("old")));
+        assert!(!state.diff_is_refreshing());
         assert_eq!(state.ci(), &LoadState::Idle);
 
         let second = state.select_branch("feature-b").unwrap();
         assert_eq!(second, DetailRequestToken::new("/repo", "feature-b", 3));
         assert_eq!(state.generation(), 3);
         assert_eq!(state.selected_branch(), Some("feature-b"));
+        assert_eq!(state.diff(), &LoadState::Idle);
     }
 
     #[test]
@@ -427,6 +481,55 @@ mod tests {
         assert_eq!(state.diff().error(), Some("diff failed"));
         assert_eq!(state.ci().error(), Some("ci failed"));
         assert_eq!(state.details().ready(), None);
+    }
+
+    #[test]
+    fn accepted_live_ci_success_replaces_cached_stack_row_status() {
+        let mut snapshot = snapshot("/repo", "feature-a", &[("feature-a", true)]);
+        snapshot.branches[0].ci_state = Some("failure".into());
+        let mut state = WorkspaceState::new(snapshot);
+        let (token, _) = state.begin_hydration().unwrap();
+
+        assert!(state.apply_ci(token, Ok(ci("success"))));
+
+        assert_eq!(state.ci().ready(), Some(&ci("success")));
+        assert_eq!(
+            state.snapshot().branches[0].ci_state.as_deref(),
+            Some("success")
+        );
+    }
+
+    #[test]
+    fn stale_live_ci_result_cannot_replace_cached_stack_row_status() {
+        let mut snapshot = snapshot("/repo", "feature-a", &[("feature-a", true)]);
+        snapshot.branches[0].ci_state = Some("failure".into());
+        let mut state = WorkspaceState::new(snapshot);
+        let (stale, _) = state.begin_hydration().unwrap();
+        let (_, _) = state.begin_hydration().unwrap();
+
+        assert!(!state.apply_ci(stale, Ok(ci("success"))));
+
+        assert_eq!(state.ci(), &LoadState::Loading);
+        assert_eq!(
+            state.snapshot().branches[0].ci_state.as_deref(),
+            Some("failure")
+        );
+    }
+
+    #[test]
+    fn live_ci_failure_retains_cached_stack_row_status() {
+        let mut snapshot = snapshot("/repo", "feature-a", &[("feature-a", true)]);
+        snapshot.branches[0].ci_state = Some("failure".into());
+        let mut state = WorkspaceState::new(snapshot);
+        let (token, _) = state.begin_hydration().unwrap();
+
+        assert!(state.apply_ci(token, Err("provider unavailable".into())));
+
+        assert_eq!(state.ci().error(), Some("provider unavailable"));
+        assert_eq!(
+            state.snapshot().branches[0].ci_state.as_deref(),
+            Some("failure")
+        );
     }
 
     #[test]
@@ -503,6 +606,88 @@ mod tests {
         assert_eq!(state.details().ready(), Some(&details(2)));
         assert_eq!(state.diff().ready(), Some(&diff("retry")));
         assert_eq!(state.ci().ready(), Some(&ci("success")));
+    }
+
+    #[test]
+    fn retrying_same_branch_retains_ready_diff_until_refresh_finishes() {
+        let mut state = WorkspaceState::new(snapshot("/repo", "feature-a", &[("feature-a", true)]));
+        let (first, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(first, Ok(diff("existing patch"))));
+
+        let (retry, _) = state.begin_hydration().unwrap();
+
+        assert_eq!(state.diff().ready(), Some(&diff("existing patch")));
+        assert!(state.diff_is_refreshing());
+        assert!(state.apply_diff(retry, Ok(diff("replacement patch"))));
+        assert_eq!(state.diff().ready(), Some(&diff("replacement patch")));
+        assert!(!state.diff_is_refreshing());
+    }
+
+    #[test]
+    fn cached_diff_is_visible_during_refresh_and_final_failure_replaces_it() {
+        let mut state = WorkspaceState::new(snapshot("/repo", "feature-a", &[("feature-a", true)]));
+        let (token, _) = state.begin_hydration().unwrap();
+
+        assert!(state.apply_cached_diff(token.clone(), diff("cached patch")));
+        assert_eq!(state.diff().ready(), Some(&diff("cached patch")));
+        assert!(state.diff_is_refreshing());
+
+        assert!(state.apply_diff(token, Err("fresh diff failed".into())));
+        assert_eq!(state.diff().error(), Some("fresh diff failed"));
+        assert!(!state.diff_is_refreshing());
+    }
+
+    #[test]
+    fn cached_diff_does_not_replace_a_ready_patch_retained_for_retry() {
+        let mut state = WorkspaceState::new(snapshot("/repo", "feature-a", &[("feature-a", true)]));
+        let (first, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(first, Ok(diff("visible patch"))));
+        let (retry, _) = state.begin_hydration().unwrap();
+
+        assert!(!state.apply_cached_diff(retry, diff("older cached patch")));
+
+        assert_eq!(state.diff().ready(), Some(&diff("visible patch")));
+        assert!(state.diff_is_refreshing());
+    }
+
+    #[test]
+    fn selecting_a_different_branch_never_retains_the_prior_patch() {
+        let mut state = WorkspaceState::new(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-a", true), ("feature-b", false)],
+        ));
+        let (first, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(first, Ok(diff("feature-a patch"))));
+
+        state.select_branch("feature-b").unwrap();
+        let (_, _) = state.begin_hydration().unwrap();
+
+        assert_eq!(state.diff(), &LoadState::Loading);
+        assert!(state.diff_is_refreshing());
+    }
+
+    #[test]
+    fn snapshot_refresh_preserves_selected_branch_patch_while_rehydrating() {
+        let mut state = WorkspaceState::new(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-a", true), ("feature-b", false)],
+        ));
+        state.select_branch("feature-b").unwrap();
+        let (first, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(first, Ok(diff("feature-b patch"))));
+
+        state.replace_snapshot(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-b", false), ("feature-a", true)],
+        ));
+        let (_, _) = state.begin_hydration().unwrap();
+
+        assert_eq!(state.selected_branch(), Some("feature-b"));
+        assert_eq!(state.diff().ready(), Some(&diff("feature-b patch")));
+        assert!(state.diff_is_refreshing());
     }
 
     #[test]

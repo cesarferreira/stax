@@ -24,9 +24,14 @@
 - Create `src/application/model.rs` — UI-neutral snapshots, details, diff, CI, and request tokens.
 - Create `src/application/repository.rs` — path validation, local snapshots, branch details, and diff loading/cache.
 - Create `src/application/ci.rs` — provider-neutral CI loading and summary calculation.
+- Modify `src/config/mod.rs` — add the network-safe automatic hydration config path.
+- Modify `src/remote.rs` — validate Git host, forge, and API trust before credential lookup.
+- Modify `src/forge/mod.rs` and `src/github/client.rs` — build automatic clients only from validated remotes and host-bound auth.
+- Modify `src/cache.rs` — tag persistent CI states with their exact commit revision.
 - Modify `src/tui/app.rs` — consume the shared model/loaders instead of owning duplicate read logic.
 - Create `tests/application_session_tests.rs` — public API integration coverage.
 - Modify `tests/all_tests.rs` — register the consolidated integration-test module.
+- Modify `docs/configuration/index.md` — document automatic hydration's global trust boundary.
 
 ### GPUI application
 
@@ -1109,8 +1114,33 @@ git commit -m "feat: render the native stack cockpit"
 ### Task 7: Hydrate branch details, diffs, and CI asynchronously
 
 **Files:**
+- Create: `crates/stax-gui/src/hydration.rs`
+- Modify: `crates/stax-gui/src/lib.rs`
+- Modify: `crates/stax-gui/src/views/app.rs`
+- Modify: `crates/stax-gui/src/views/changes_pane.rs`
+- Modify: `crates/stax-gui/src/views/inspector_pane.rs`
+- Modify: `crates/stax-gui/src/views/stack_pane.rs`
+- Modify: `crates/stax-gui/src/views/tests.rs`
+- Create: `crates/stax-gui/src/views/hydration_tests.rs`
 - Modify: `crates/stax-gui/src/views/workspace.rs`
 - Modify: `crates/stax-gui/src/state.rs`
+- Modify: `src/application/ci.rs`
+- Modify: `src/application/repository.rs`
+- Modify: `src/cache.rs`
+- Modify: `src/config/mod.rs`
+- Modify: `src/config/tests.rs`
+- Modify: `src/forge/mod.rs`
+- Modify: `src/github/client.rs`
+- Modify: `src/remote.rs`
+- Modify: `src/commands/ci.rs`
+- Modify: `src/commands/log.rs`
+- Modify: `src/commands/ready.rs`
+- Modify: `src/commands/status.rs`
+- Modify: `src/commands/sync.rs`
+- Modify: `src/commands/tmux.rs`
+- Modify: `src/commands/watch.rs`
+- Modify: `src/tui/app.rs`
+- Modify: `tests/application_session_tests.rs`
 
 - [ ] **Step 1: Add stale async-result tests**
 
@@ -1128,67 +1158,78 @@ Expected: failure because `WorkspaceView::hydrate_selection` does not exist.
 
 - [ ] **Step 3: Implement one generation-scoped hydration path**
 
-Use the GPUI background executor for blocking Git/network work and apply results on the entity:
+Use an injectable branch-hydration service whose production implementation opens
+`RepositorySession` only inside futures dispatched to GPUI's background executor.
+Capture only owned repository paths, branch summaries/names, parents, and the
+`Send + Sync` service across those tasks; no `GitRepo`, window, or GPUI context
+crosses the background boundary.
 
-```rust
-fn hydrate_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some((token, branch)) = self.state.begin_hydration() else {
-        return;
-    };
-    let path = token.repository.clone();
-    let parent = branch.parent.clone();
-    let background = cx.background_executor().clone();
+Call `WorkspaceState::begin_hydration` exactly once per selection request.
+Details and diff use independent coordinator streams so blocked details cannot
+delay the patch. Each expensive stream owns at most one active request plus one
+latest queued request; repeated selections replace the queued request. The diff
+stream performs its bounded cache lookup before its fresh calculation and skips
+a superseded fresh stage when possible. CI is separately bounded and starts only
+after the matching details result succeeds with `has_remote = true`. A no-parent
+branch applies an immediate empty diff without invoking either diff service
+method. Details failures and local-only branches produce independent actionable
+CI failures without suppressing a successful diff.
 
-    cx.spawn_in(window, async move |this, cx| {
-        let result = background
-            .spawn(async move {
-                let session = RepositorySession::open(&path)?;
-                let details = session.branch_details(&branch)?;
-                let diff = match parent {
-                    Some(parent) => Some(session.diff(&branch.name, &parent)?),
-                    None => None,
-                };
-                let ci = if details.has_remote {
-                    session.load_ci(&branch.name).map_err(|error| error.to_string())
-                } else {
-                    Err("Push branch to see remote checks".to_string())
-                };
-                anyhow::Ok((details, diff, ci))
-            })
-            .await;
+Apply every completion through the repository/branch/generation-gated state
+methods and notify only accepted results. `WorkspaceState` keeps a private
+`diff_refreshing` flag: retrying the same branch or refreshing a snapshot that
+preserves the selection retains an existing ready diff while showing a subtle
+refresh indicator. A new selection clears prior-branch content, a matching
+cached diff may fill an otherwise-loading pane, and the final fresh result
+replaces the retained/cached content or surfaces its failure.
 
-        this.update_in(cx, |view, _window, cx| {
-            match result {
-                Ok((details, diff, ci)) => {
-                    view.state
-                        .apply_details(token.clone(), Ok(details));
-                    view.state.apply_diff(
-                        token.clone(),
-                        Ok(diff.unwrap_or(BranchDiff {
-                            stat: Vec::new(),
-                            lines: Vec::new(),
-                        })),
-                    );
-                    view.state.apply_ci(token, ci);
-                }
-                Err(error) => {
-                    let message = error.to_string();
-                    view.state
-                        .apply_details(token.clone(), Err(message.clone()));
-                    view.state
-                        .apply_diff(token.clone(), Err(message.clone()));
-                    view.state.apply_ci(token, Err(message));
-                }
-            }
-            cx.notify();
-        })?;
-        anyhow::Ok(())
-    })
-    .detach();
-}
-```
+The production fresh stage calls `RepositorySession::refresh_diff`, which
+captures one immutable `DiffTarget`, bypasses any matching disk entry, computes
+the live stat and patch, and persists the result best-effort. `cached_diff`
+remains the early presentation path and `diff` remains cache-first for existing
+callers. Production tests seed a deliberately incorrect matching entry and
+assert cache-first presentation followed by the recomputed Git result.
 
-Adapt captures to the final shared types so no `GitRepo` or GPUI context crosses threads. Call hydration after initial snapshot load and every selection change. Preserve cached diff content while refreshing.
+Call hydration after initial open, every click/arrow selection, and each
+successful snapshot refresh. Successful `RepositorySession::load_ci` calls also
+update the shared repository-local `CiCache` best-effort in the application
+layer; persistence failure does not discard the live summary, and the TUI must
+not write the same result a second time. An accepted live `CiSummary` also
+updates the selected `BranchSummary::ci_state` through `WorkspaceState`; stale
+or failed results retain the prior cached row status.
+
+Automatic TUI/GUI CI hydration uses a separate network-safe config loader.
+Repository `stax.toml` may choose only the Git remote name; auth settings,
+forge overrides, web/API base URLs, and credential lookup behavior come from
+global config. Before any token lookup or client construction, hydration checks
+the actual Git remote host against the resolved forge and API endpoint.
+GitHub.com, GitLab.com, and Gitea.com use their built-in provider/API
+relationships. Custom or enterprise hosts require a matching global
+`remote.base_url`; cross-host API endpoints require an explicit global
+`remote.api_base_url`. GitHub auth lookup is bound to the validated Git host,
+and a mismatched global `auth.gh_hostname` is rejected before invoking `gh`.
+Authenticated clients either stop redirects that leave the original
+scheme/host/port or strip credentials before following them. Trust errors are
+sanitized and never include credentials or repository URL paths.
+
+`CiCache` and `TuiDiffCache` use shared-lock strict reads and exclusive
+load/update/persist transactions on dedicated `fs4` lock files. Writers reject
+malformed JSON without replacing it, write a flushed and synced same-directory
+temporary file, atomically replace on Unix/macOS, and rely on the same lock for
+reader/writer exclusion on platforms whose replacement operation differs.
+All CLI (`ci`, `log`, `ready`, `status`, `sync`, `tmux`, and `watch`),
+application/GUI, and TUI consumers resolve `GitRepo::common_git_dir()` so linked
+worktrees share one CI cache. Production writers use lock-scoped,
+field-specific transactions for CI-only, PR/draft-only, combined branch
+refresh, and bulk refresh/cleanup/timestamp updates; whole-snapshot `save`
+remains test-only. Every CI update stores the exact fetched commit SHA in the
+serde-default optional `ci_revision` field. Snapshot, CLI, TUI, and GUI readers
+show cached CI only when that revision matches the branch's current commit;
+legacy entries with no revision and mismatched/stale results are ignored.
+PR-only transactions preserve both CI state and revision. A stale writer may
+still finish after a branch moves, but its old SHA tag prevents the result from
+being presented as current. The optional field keeps existing cache JSON
+readable without a migration.
 
 - [ ] **Step 4: Run GUI state and view tests**
 

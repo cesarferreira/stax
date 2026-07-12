@@ -137,7 +137,7 @@ fn render_details(details: &LoadState<BranchDetails>, theme: Theme) -> Div {
                 div()
                     .text_xs()
                     .text_color(theme.text_muted)
-                    .child("Details hydration is wired in Task 7."),
+                    .child("Select a branch or refresh the repository to load details."),
             ),
         LoadState::Loading => div()
             .text_sm()
@@ -240,7 +240,7 @@ fn render_ci(ci: &LoadState<CiSummary>, branch: &BranchSummary, theme: Theme) ->
                 div()
                     .text_xs()
                     .text_color(theme.text_muted)
-                    .child("Live CI hydration is wired in Task 7."),
+                    .child("Select a published branch or refresh to load live checks."),
             ),
         LoadState::Loading => div()
             .text_sm()
@@ -254,7 +254,7 @@ fn render_ci(ci: &LoadState<CiSummary>, branch: &BranchSummary, theme: Theme) ->
             .text_color(theme.danger)
             .child("CI checks are unavailable.")
             .child(error.clone())
-            .child("Check authentication or network access, then refresh."),
+            .child("Resolve the message above, then refresh the repository."),
         LoadState::Ready(summary) => div()
             .flex()
             .flex_col()

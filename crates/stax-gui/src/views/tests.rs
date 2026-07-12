@@ -2,17 +2,26 @@ use super::{
     AppModeKind, AppServices, AppView, PaneMarkers, PickerFuture, RecentRepositoryStore,
     RepositoryPicker, RootLoadKind, SnapshotLoader,
 };
+use crate::hydration::{BranchHydrationService, HydrationFuture};
+use crate::state::LoadState;
 use gpui::{App, TestAppContext};
-use stax::application::{BranchSummary, RepositorySnapshot};
+use stax::application::{
+    BranchDetails, BranchDiff, BranchSummary, CiSummary, DiffLine, DiffLineKind, RepositorySnapshot,
+};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    Arc, Condvar, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc,
 };
+use std::task::{Context as TaskContext, Poll, Waker};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+#[path = "hydration_tests.rs"]
+mod hydration_tests;
 
 #[derive(Clone)]
 struct FixtureLoader {
@@ -62,6 +71,252 @@ impl RecentRepositoryStore for FixtureRecents {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HydrationCall {
+    Details { repository: PathBuf, branch: String },
+    CachedDiff { branch: String, parent: String },
+    Diff { branch: String, parent: String },
+    Ci { repository: PathBuf, branch: String },
+}
+
+type DetailsHandler =
+    dyn Fn(PathBuf, BranchSummary) -> HydrationFuture<BranchDetails> + Send + Sync;
+type CachedDiffHandler =
+    dyn Fn(PathBuf, String, String) -> HydrationFuture<Option<BranchDiff>> + Send + Sync;
+type DiffHandler = dyn Fn(PathBuf, String, String) -> HydrationFuture<BranchDiff> + Send + Sync;
+type CiHandler = dyn Fn(PathBuf, String) -> HydrationFuture<CiSummary> + Send + Sync;
+
+struct FixtureHydration {
+    calls: Mutex<Vec<HydrationCall>>,
+    details: Arc<DetailsHandler>,
+    cached_diff: Arc<CachedDiffHandler>,
+    diff: Arc<DiffHandler>,
+    ci: Arc<CiHandler>,
+}
+
+impl FixtureHydration {
+    fn new(
+        details: impl Fn(&Path, &BranchSummary) -> Result<BranchDetails, String> + Send + Sync + 'static,
+        cached_diff: impl Fn(&Path, &str, &str) -> Result<Option<BranchDiff>, String>
+        + Send
+        + Sync
+        + 'static,
+        diff: impl Fn(&Path, &str, &str) -> Result<BranchDiff, String> + Send + Sync + 'static,
+        ci: impl Fn(&Path, &str) -> Result<CiSummary, String> + Send + Sync + 'static,
+    ) -> Self {
+        let details = Arc::new(details);
+        let cached_diff = Arc::new(cached_diff);
+        let diff = Arc::new(diff);
+        let ci = Arc::new(ci);
+        Self::new_async(
+            move |repository, branch| {
+                let details = Arc::clone(&details);
+                Box::pin(async move { details(&repository, &branch) })
+            },
+            move |repository, branch, parent| {
+                let cached_diff = Arc::clone(&cached_diff);
+                Box::pin(async move { cached_diff(&repository, &branch, &parent) })
+            },
+            move |repository, branch, parent| {
+                let diff = Arc::clone(&diff);
+                Box::pin(async move { diff(&repository, &branch, &parent) })
+            },
+            move |repository, branch| {
+                let ci = Arc::clone(&ci);
+                Box::pin(async move { ci(&repository, &branch) })
+            },
+        )
+    }
+
+    fn new_async(
+        details: impl Fn(PathBuf, BranchSummary) -> HydrationFuture<BranchDetails>
+        + Send
+        + Sync
+        + 'static,
+        cached_diff: impl Fn(PathBuf, String, String) -> HydrationFuture<Option<BranchDiff>>
+        + Send
+        + Sync
+        + 'static,
+        diff: impl Fn(PathBuf, String, String) -> HydrationFuture<BranchDiff> + Send + Sync + 'static,
+        ci: impl Fn(PathBuf, String) -> HydrationFuture<CiSummary> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            details: Arc::new(details),
+            cached_diff: Arc::new(cached_diff),
+            diff: Arc::new(diff),
+            ci: Arc::new(ci),
+        }
+    }
+
+    fn immediate_no_remote() -> Self {
+        Self::new(
+            |_, _| Ok(details(1, false)),
+            |_, _, _| Ok(None),
+            |_, branch, _| Ok(diff(&format!("{branch} patch"))),
+            |_, _| Ok(ci("success")),
+        )
+    }
+
+    fn calls(&self) -> Vec<HydrationCall> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl BranchHydrationService for FixtureHydration {
+    fn load_details(
+        &self,
+        repository: PathBuf,
+        branch: BranchSummary,
+    ) -> HydrationFuture<BranchDetails> {
+        self.calls.lock().unwrap().push(HydrationCall::Details {
+            repository: repository.clone(),
+            branch: branch.name.clone(),
+        });
+        (self.details)(repository, branch)
+    }
+
+    fn load_cached_diff(
+        &self,
+        repository: PathBuf,
+        branch: String,
+        parent: String,
+    ) -> HydrationFuture<Option<BranchDiff>> {
+        self.calls.lock().unwrap().push(HydrationCall::CachedDiff {
+            branch: branch.clone(),
+            parent: parent.clone(),
+        });
+        (self.cached_diff)(repository, branch, parent)
+    }
+
+    fn load_diff(
+        &self,
+        repository: PathBuf,
+        branch: String,
+        parent: String,
+    ) -> HydrationFuture<BranchDiff> {
+        self.calls.lock().unwrap().push(HydrationCall::Diff {
+            branch: branch.clone(),
+            parent: parent.clone(),
+        });
+        (self.diff)(repository, branch, parent)
+    }
+
+    fn load_ci(&self, repository: PathBuf, branch: String) -> HydrationFuture<CiSummary> {
+        self.calls.lock().unwrap().push(HydrationCall::Ci {
+            repository: repository.clone(),
+            branch: branch.clone(),
+        });
+        (self.ci)(repository, branch)
+    }
+}
+
+#[derive(Default)]
+struct GateState {
+    started: bool,
+    released: bool,
+    waker: Option<Waker>,
+}
+
+#[derive(Default)]
+struct Gate {
+    state: Mutex<GateState>,
+    changed: Condvar,
+}
+
+impl Gate {
+    fn wait(self: &Arc<Self>) -> GateWait {
+        GateWait {
+            gate: Arc::clone(self),
+        }
+    }
+
+    fn wait_until_started(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.state.lock().unwrap();
+        while !state.started {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next, timed_out) = self.changed.wait_timeout(state, remaining).unwrap();
+            state = next;
+            if timed_out.timed_out() && !state.started {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn release(&self) {
+        let waker = {
+            let mut state = self.state.lock().unwrap();
+            state.released = true;
+            self.changed.notify_all();
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+struct GateWait {
+    gate: Arc<Gate>,
+}
+
+impl std::future::Future for GateWait {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Self::Output> {
+        let mut state = self.gate.state.lock().unwrap();
+        state.started = true;
+        self.gate.changed.notify_all();
+        if state.released {
+            Poll::Ready(())
+        } else {
+            state.waker = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+fn details(ahead: usize, has_remote: bool) -> BranchDetails {
+    BranchDetails {
+        ahead,
+        behind: 0,
+        has_remote,
+        unpushed: usize::from(has_remote),
+        unpulled: 0,
+        commits: vec![format!("commit-{ahead}")],
+    }
+}
+
+fn diff(content: &str) -> BranchDiff {
+    BranchDiff {
+        stat: Vec::new(),
+        lines: vec![DiffLine {
+            content: content.to_string(),
+            kind: DiffLineKind::Context,
+        }],
+    }
+}
+
+fn ci(status: &str) -> CiSummary {
+    CiSummary {
+        overall_status: Some(status.to_string()),
+        total: 1,
+        passed: usize::from(status == "success"),
+        failed: usize::from(status == "failure"),
+        running: 0,
+        queued: 0,
+        skipped: 0,
+        started_at: None,
+        completed_at: None,
+        average_secs: None,
+    }
+}
+
 fn branch(name: &str, parent: Option<&str>, current: bool, trunk: bool) -> BranchSummary {
     BranchSummary {
         name: name.into(),
@@ -94,10 +349,25 @@ fn services(
     picker: Result<Option<PathBuf>, String>,
     recents: Arc<FixtureRecents>,
 ) -> AppServices {
-    AppServices::new(
+    services_with_hydration(
+        loader,
+        picker,
+        recents,
+        Arc::new(FixtureHydration::immediate_no_remote()),
+    )
+}
+
+fn services_with_hydration(
+    loader: Result<RepositorySnapshot, String>,
+    picker: Result<Option<PathBuf>, String>,
+    recents: Arc<FixtureRecents>,
+    hydration: Arc<dyn BranchHydrationService>,
+) -> AppServices {
+    AppServices::with_hydration(
         Arc::new(FixtureLoader { result: loader }),
         Rc::new(FixturePicker { result: picker }),
         recents,
+        hydration,
     )
 }
 
@@ -270,6 +540,30 @@ fn picker_errors_are_inline_and_nonfatal(cx: &mut TestAppContext) {
     assert_eq!(
         cx.update(|_, app| view.read(app).inline_error().map(str::to_string)),
         Some("folder picker unavailable".to_string())
+    );
+}
+
+#[gpui::test]
+fn latest_picker_error_takes_precedence_over_an_older_refresh_failure(cx: &mut TestAppContext) {
+    let services = services(
+        Ok(snapshot("/repo")),
+        Err("latest folder picker failure".into()),
+        Arc::new(FixtureRecents::default()),
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+
+    view.update_in(cx, |view, window, cx| {
+        let refresh = view.begin_load(PathBuf::from("/repo"), RootLoadKind::Refresh);
+        assert!(view.apply_load_result(refresh, Err("older refresh failure".into()), cx));
+        view.pick_repository(window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.update(|_, app| view.read(app).inline_error().map(str::to_string)),
+        Some("latest folder picker failure".to_string())
     );
 }
 
@@ -542,12 +836,13 @@ fn repeated_refresh_requests_spawn_only_one_snapshot_read(cx: &mut TestAppContex
     }
 
     let calls = Arc::new(AtomicUsize::new(0));
-    let services = AppServices::new(
+    let services = AppServices::with_hydration(
         Arc::new(CountingLoader {
             calls: Arc::clone(&calls),
         }),
         Rc::new(FixturePicker { result: Ok(None) }),
         Arc::new(FixtureRecents::default()),
+        Arc::new(FixtureHydration::immediate_no_remote()),
     );
     let (view, cx) = cx.add_window_view(|window, cx| {
         AppView::new(Some(PathBuf::from("/repo")), services, window, cx)

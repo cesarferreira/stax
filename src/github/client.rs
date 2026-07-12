@@ -179,16 +179,19 @@ impl GitHubClient {
         Self::new_with_auth(owner, repo, api_base_url, auth_source, token)
     }
 
-    pub(crate) fn new_with_config(
+    pub(crate) fn new_for_automatic(
         owner: &str,
         repo: &str,
         api_base_url: Option<String>,
         config: &Config,
+        validated_remote_host: &str,
     ) -> Result<Self> {
-        let (auth_source, token) = config.github_token_with_source_for_config().context(
-            "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, \
-             `gh auth login`, or set `STAX_GITHUB_TOKEN`.",
-        )?;
+        let (auth_source, token) = config
+            .github_token_with_source_for_host(validated_remote_host)?
+            .context(
+                "GitHub auth not configured. Use one of: `stax auth`, `stax auth --from-gh`, \
+                 `gh auth login`, or set `STAX_GITHUB_TOKEN`.",
+            )?;
         Self::new_with_auth(owner, repo, api_base_url, auth_source, token)
     }
 

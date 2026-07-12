@@ -235,6 +235,21 @@ Accepted values: `"github"`, `"gitlab"`, `"gitea"`, `"forgejo"` (Forgejo is trea
 
 Auto-detection fallback: hostnames containing `gitlab` → GitLab, `gitea`/`forgejo` → Gitea, otherwise → GitHub.
 
+### Automatic CI hydration trust
+
+The TUI and desktop app may refresh CI automatically after opening a repository.
+For those credential-bearing requests, repository-local `stax.toml` may select
+only `remote.name`. The following values are accepted only from global
+`~/.config/stax/config.toml`: `remote.base_url`, `remote.api_base_url`,
+`remote.forge`, and all `[auth]` settings.
+
+GitHub.com, GitLab.com, and Gitea.com use built-in trusted API mappings.
+Self-hosted or enterprise remotes must set a matching global
+`remote.base_url`; if the API uses a different hostname, set the relationship
+explicitly with global `remote.api_base_url`. For GitHub Enterprise,
+`auth.gh_hostname` must match the Git remote hostname. Automatic hydration
+rejects mismatches before looking up a token or making a request.
+
 ## Auth tokens by forge
 
 | Forge | Auth sources (checked in order) |

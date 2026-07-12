@@ -7,7 +7,9 @@ use gpui::{
     Context, Div, InteractiveElement as _, ParentElement as _, ScrollStrategy,
     StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, div, px, relative,
 };
-use stax::application::RepositorySnapshot;
+use stax::application::{
+    BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, RepositorySnapshot,
+};
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +68,42 @@ impl WorkspaceView {
         moved
     }
 
+    pub(super) fn begin_hydration(&mut self) -> Option<(DetailRequestToken, BranchSummary)> {
+        self.state.begin_hydration()
+    }
+
+    pub(super) fn apply_details(
+        &mut self,
+        token: DetailRequestToken,
+        result: Result<BranchDetails, String>,
+    ) -> bool {
+        self.state.apply_details(token, result)
+    }
+
+    pub(super) fn apply_cached_diff(
+        &mut self,
+        token: DetailRequestToken,
+        diff: BranchDiff,
+    ) -> bool {
+        self.state.apply_cached_diff(token, diff)
+    }
+
+    pub(super) fn apply_diff(
+        &mut self,
+        token: DetailRequestToken,
+        result: Result<BranchDiff, String>,
+    ) -> bool {
+        self.state.apply_diff(token, result)
+    }
+
+    pub(super) fn apply_ci(
+        &mut self,
+        token: DetailRequestToken,
+        result: Result<CiSummary, String>,
+    ) -> bool {
+        self.state.apply_ci(token, result)
+    }
+
     pub fn begin_refresh(&mut self) {
         self.refresh = RefreshState::Loading;
         self.notice = None;
@@ -108,8 +146,9 @@ impl WorkspaceView {
             RefreshState::Failed(error) => Some(error.as_str()),
             RefreshState::Idle | RefreshState::Loading => None,
         };
-        refresh_error
-            .or(self.notice.as_deref())
+        self.notice
+            .as_deref()
+            .or(refresh_error)
             .or(self.storage_notice.as_deref())
     }
 
@@ -408,5 +447,26 @@ mod tests {
             workspace.inline_error(),
             Some("latest refresh could not read the repository")
         );
+    }
+
+    #[test]
+    fn latest_action_notice_takes_precedence_over_an_older_refresh_failure() {
+        let mut workspace = WorkspaceView::from_snapshot(empty_snapshot());
+        workspace.begin_refresh();
+        workspace.fail_refresh("older refresh failure".into());
+
+        workspace.set_notice("latest picker failure".into());
+
+        assert_eq!(workspace.inline_error(), Some("latest picker failure"));
+    }
+
+    #[test]
+    fn beginning_a_refresh_clears_the_previous_action_notice() {
+        let mut workspace = WorkspaceView::from_snapshot(empty_snapshot());
+        workspace.set_notice("old picker failure".into());
+
+        workspace.begin_refresh();
+
+        assert_eq!(workspace.inline_error(), None);
     }
 }

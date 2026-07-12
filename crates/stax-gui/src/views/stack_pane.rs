@@ -172,8 +172,8 @@ fn render_branch_row(
                         })),
                 ),
         )
-        .on_click(cx.listener(move |app, _, _window, cx| {
-            app.select_branch(&branch_name, cx);
+        .on_click(cx.listener(move |app, _, window, cx| {
+            app.select_branch(&branch_name, window, cx);
         }))
 }
 

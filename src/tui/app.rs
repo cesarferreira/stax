@@ -1,7 +1,7 @@
 use crate::application::{
     BranchDetails, BranchDiff, BranchSummary, CiSummary, DiffLine, DiffStatLine, RepositorySession,
 };
-use crate::cache::{CiCache, TuiPaneVisibilityState, TuiStateCache};
+use crate::cache::{TuiPaneVisibilityState, TuiStateCache};
 use crate::engine::{Stack, StackSnapshot, build_parent_candidates};
 use crate::git::GitRepo;
 use anyhow::Result;
@@ -306,10 +306,8 @@ pub struct PendingCommand {
 /// Main application state
 pub struct App {
     pub stack: Stack,
-    pub cache: CiCache,
     pub repo: GitRepo,
     session: RepositorySession,
-    git_dir: PathBuf,
     diff_cache_dir: PathBuf,
     pub current_branch: String,
     pub selected_index: usize,
@@ -361,14 +359,11 @@ impl App {
         let session = RepositorySession::open(repo.workdir()?)?;
         let repository_snapshot = session.snapshot()?;
         let snapshot = StackSnapshot::load(&repo)?;
-        let git_dir = repo.git_dir()?;
-        let cache = CiCache::load(git_dir);
         let diff_cache_dir = repo.common_git_dir()?;
         let pane_visibility = TuiStateCache::load(&diff_cache_dir)
             .panes
             .map(PaneVisibility::from_persisted)
             .unwrap_or_default();
-        let git_dir = git_dir.to_path_buf();
         let status_set_at = initial_status.as_ref().map(|_| Instant::now());
         let branches = repository_snapshot
             .branches
@@ -378,10 +373,8 @@ impl App {
 
         let mut app = Self {
             stack: snapshot.stack,
-            cache,
             repo,
             session,
-            git_dir,
             diff_cache_dir,
             current_branch: repository_snapshot.current_branch,
             selected_index: 0,
@@ -1077,8 +1070,6 @@ impl App {
                 {
                     branch_display.ci_state = ci_state.clone();
                 }
-                self.cache.update(&branch, ci_state, None);
-                let _ = self.cache.save(&self.git_dir);
             }
             CiUpdate::Unavailable { branch, message } => {
                 self.ci_states.insert(
@@ -1497,9 +1488,7 @@ mod tests {
     use crate::application::{
         BranchDetails, BranchSummary, CiSummary, DiffLineKind, RepositorySession,
     };
-    use crate::cache::{
-        CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache, TuiStateCache,
-    };
+    use crate::cache::{DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache, TuiStateCache};
     use crate::engine::{BranchMetadata, Stack};
     use crate::git::GitRepo;
     use std::process::Command;
@@ -1568,15 +1557,12 @@ mod tests {
     fn minimal_app(repo: GitRepo, branches: Vec<BranchDisplay>) -> App {
         let session = RepositorySession::open(repo.workdir().expect("workdir"))
             .expect("open repository session");
-        let git_dir = repo.git_dir().expect("git dir").to_path_buf();
         let diff_cache_dir = repo.common_git_dir().expect("common git dir");
         let stack = Stack::load(&repo).expect("load stack");
         App {
             stack,
-            cache: CiCache::load(&git_dir),
             repo,
             session,
-            git_dir,
             diff_cache_dir,
             current_branch: "main".to_string(),
             selected_index: 0,
@@ -1648,6 +1634,37 @@ mod tests {
         assert!(app.branches[0].details_loaded);
         assert!(app.branches[0].has_remote);
         assert_eq!(app.ci_queued_branch.as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn applying_ci_update_does_not_duplicate_the_session_cache_write() {
+        let (_tempdir, repo) = test_repo();
+        let cache_path = repo
+            .git_dir()
+            .expect("git dir")
+            .join("stax")
+            .join("ci-cache.json");
+        let mut app = minimal_app(repo, vec![skeleton_branch("feature", Some("main"), true)]);
+        let summary = CiSummary {
+            overall_status: Some("success".to_string()),
+            total: 1,
+            passed: 1,
+            failed: 0,
+            running: 0,
+            queued: 0,
+            skipped: 0,
+            started_at: None,
+            completed_at: None,
+            average_secs: None,
+        };
+
+        app.apply_ci_update(CiUpdate::Loaded {
+            branch: "feature".to_string(),
+            summary,
+        });
+
+        assert_eq!(app.branches[0].ci_state.as_deref(), Some("success"));
+        assert!(!cache_path.exists());
     }
 
     #[test]

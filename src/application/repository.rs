@@ -6,6 +6,7 @@ use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffC
 use crate::config::Config;
 use crate::engine::{Stack, StackSnapshot};
 use crate::git::GitRepo;
+use crate::git::repo::DiffTarget;
 use anyhow::{Context, Result, anyhow};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -77,6 +78,10 @@ impl RepositorySession {
         &self.repository_root
     }
 
+    pub(super) fn cache_dir(&self) -> &Path {
+        &self.common_git_dir
+    }
+
     /// Loads the current stack, branch metadata, and cached CI states.
     pub fn snapshot(&self) -> Result<RepositorySnapshot> {
         let repo = self.open_repo()?;
@@ -86,8 +91,23 @@ impl RepositorySession {
                 self.repository_root.display()
             )
         })?;
-        let ci_cache = CiCache::load(&self.git_dir);
-        let branches = ordered_branches(&snapshot.stack, &snapshot.current_branch, &ci_cache)?;
+        let ci_cache = CiCache::load(&self.common_git_dir);
+        let branch_revisions = snapshot
+            .stack
+            .branches
+            .keys()
+            .filter_map(|branch| {
+                repo.branch_commit(branch)
+                    .ok()
+                    .map(|revision| (branch.clone(), revision))
+            })
+            .collect::<HashMap<_, _>>();
+        let branches = ordered_branches(
+            &snapshot.stack,
+            &snapshot.current_branch,
+            &ci_cache,
+            &branch_revisions,
+        )?;
 
         Ok(RepositorySnapshot {
             repository_root: self.repository_root.clone(),
@@ -161,46 +181,40 @@ impl RepositorySession {
             &target.branch_oid,
             &target.merge_base_oid,
         );
-        let cache = TuiDiffCache::load(&self.common_git_dir);
-        if let Some(diff) = cache.get(&key) {
-            return Ok(branch_diff_from_disk(diff));
+        if let Ok(Some(diff)) = TuiDiffCache::read_persisted(&self.common_git_dir, &key) {
+            return Ok(branch_diff_from_disk(&diff));
         }
 
-        let stat = repo
-            .diff_stat_at_target(branch, parent, &target)
-            .with_context(|| {
-                format!(
-                    "Failed to calculate diff stat for branch '{}' against parent '{}'",
-                    branch, parent
-                )
-            })?
-            .into_iter()
-            .map(|(file, additions, deletions)| DiffStatLine {
-                file,
-                additions,
-                deletions,
-            })
-            .collect();
-        let lines = repo
-            .diff_against_target(branch, parent, &target)
-            .with_context(|| {
-                format!(
-                    "Failed to calculate patch for branch '{}' against parent '{}'",
-                    branch, parent
-                )
-            })?
-            .into_iter()
-            .map(|content| DiffLine {
-                kind: classify_diff_line(&content),
-                content,
-            })
-            .collect();
-        let diff = BranchDiff { stat, lines };
+        let diff = calculate_diff_at_target(&repo, branch, parent, &target)?;
+        let _ =
+            TuiDiffCache::insert_persisted(&self.common_git_dir, key, branch_diff_to_disk(&diff));
 
-        let mut cache = cache;
-        cache.insert(key, branch_diff_to_disk(&diff));
-        let _ = cache.save(&self.common_git_dir);
+        Ok(diff)
+    }
 
+    /// Recalculates a branch diff even when a matching disk cache entry exists.
+    ///
+    /// The immutable object IDs are captured once before calculation. Cache
+    /// persistence remains best-effort so a live diff is never discarded when
+    /// the cache is unavailable or malformed.
+    pub fn refresh_diff(&self, branch: &str, parent: &str) -> Result<BranchDiff> {
+        let repo = self.open_repo()?;
+        let target = repo.resolve_diff_target(branch, parent).with_context(|| {
+            format!(
+                "Failed to prepare refreshed diff for branch '{}' against parent '{}'",
+                branch, parent
+            )
+        })?;
+        let key = TuiDiffCache::key(
+            parent,
+            branch,
+            &target.parent_oid,
+            &target.branch_oid,
+            &target.merge_base_oid,
+        );
+        let diff = calculate_diff_at_target(&repo, branch, parent, &target)?;
+        let _ =
+            TuiDiffCache::insert_persisted(&self.common_git_dir, key, branch_diff_to_disk(&diff));
         Ok(diff)
     }
 
@@ -220,8 +234,8 @@ impl RepositorySession {
             &target.branch_oid,
             &target.merge_base_oid,
         );
-        let cache = TuiDiffCache::load(&self.common_git_dir);
-        Ok(cache.get(&key).map(branch_diff_from_disk))
+        TuiDiffCache::read_persisted(&self.common_git_dir, &key)
+            .map(|diff| diff.as_ref().map(branch_diff_from_disk))
     }
 
     pub(super) fn open_repo(&self) -> Result<GitRepo> {
@@ -233,6 +247,44 @@ impl RepositorySession {
             )
         })
     }
+}
+
+fn calculate_diff_at_target(
+    repo: &GitRepo,
+    branch: &str,
+    parent: &str,
+    target: &DiffTarget,
+) -> Result<BranchDiff> {
+    let stat = repo
+        .diff_stat_at_target(branch, parent, target)
+        .with_context(|| {
+            format!(
+                "Failed to calculate diff stat for branch '{}' against parent '{}'",
+                branch, parent
+            )
+        })?
+        .into_iter()
+        .map(|(file, additions, deletions)| DiffStatLine {
+            file,
+            additions,
+            deletions,
+        })
+        .collect();
+    let lines = repo
+        .diff_against_target(branch, parent, target)
+        .with_context(|| {
+            format!(
+                "Failed to calculate patch for branch '{}' against parent '{}'",
+                branch, parent
+            )
+        })?
+        .into_iter()
+        .map(|content| DiffLine {
+            kind: classify_diff_line(&content),
+            content,
+        })
+        .collect();
+    Ok(BranchDiff { stat, lines })
 }
 
 fn canonicalize_repository_path(path: &Path, label: &str, supplied_path: &Path) -> Result<PathBuf> {
@@ -249,6 +301,7 @@ fn ordered_branches(
     stack: &Stack,
     current_branch: &str,
     ci_cache: &CiCache,
+    branch_revisions: &HashMap<String, String>,
 ) -> Result<Vec<BranchSummary>> {
     let trunk = &stack.trunk;
     let mut branches = Vec::new();
@@ -261,13 +314,22 @@ fn ordered_branches(
     if !trunk_children.is_empty() {
         trunk_children.sort();
         for (column, root) in trunk_children.iter().enumerate() {
-            collect_branches(&mut branches, stack, current_branch, ci_cache, root, column);
+            collect_branches(
+                &mut branches,
+                stack,
+                current_branch,
+                ci_cache,
+                branch_revisions,
+                root,
+                column,
+            );
         }
     }
     branches.push(branch_summary(
         stack,
         current_branch,
         ci_cache,
+        branch_revisions,
         trunk,
         0,
         true,
@@ -281,6 +343,7 @@ fn collect_branches(
     stack: &Stack,
     current_branch: &str,
     ci_cache: &CiCache,
+    branch_revisions: &HashMap<String, String>,
     branch: &str,
     base_column: usize,
 ) {
@@ -307,6 +370,7 @@ fn collect_branches(
                     stack,
                     current_branch,
                     ci_cache,
+                    branch_revisions,
                     &frame.branch,
                     frame.column,
                     false,
@@ -369,6 +433,7 @@ fn branch_summary(
     stack: &Stack,
     current_branch: &str,
     ci_cache: &CiCache,
+    branch_revisions: &HashMap<String, String>,
     branch: &str,
     column: usize,
     is_trunk: bool,
@@ -383,7 +448,9 @@ fn branch_summary(
         needs_restack: info.map(|branch| branch.needs_restack).unwrap_or(false),
         pr_number: info.and_then(|branch| branch.pr_number),
         pr_state: info.and_then(|branch| branch.pr_state.clone()),
-        ci_state: ci_cache.get_ci_state(branch),
+        ci_state: branch_revisions
+            .get(branch)
+            .and_then(|revision| ci_cache.get_ci_state_for_revision(branch, revision)),
     }
 }
 
