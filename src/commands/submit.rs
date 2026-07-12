@@ -2067,6 +2067,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
 
 fn uses_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> bool {
     matches!(scope, SubmitScope::Stack)
+        && options.no_pr
         && !options.dry_run
         && !options.json
         && !options.ai
