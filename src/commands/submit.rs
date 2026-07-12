@@ -2081,6 +2081,12 @@ fn uses_application_default_submit(scope: SubmitScope, options: &SubmitOptions) 
 }
 
 fn run_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> Result<()> {
+    if options.force && !options.quiet {
+        eprintln!(
+            "  {} --force is deprecated and has no effect (see issue #222)",
+            "warning:".yellow()
+        );
+    }
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     if !options.quiet {
