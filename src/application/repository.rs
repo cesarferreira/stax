@@ -24,7 +24,6 @@ pub struct RepositorySession {
     repository_root: PathBuf,
     git_dir: PathBuf,
     common_git_dir: PathBuf,
-    #[allow(dead_code)]
     mutation_gate: Arc<Mutex<bool>>,
 }
 
@@ -262,7 +261,6 @@ impl RepositorySession {
         })
     }
 
-    #[allow(dead_code)]
     #[allow(clippy::result_large_err)]
     pub(super) fn try_begin_mutation(
         &self,
@@ -299,7 +297,6 @@ impl RepositorySession {
         })
     }
 
-    #[allow(dead_code)]
     #[allow(clippy::result_large_err)]
     pub(super) fn with_mutation<T>(
         &self,
@@ -348,7 +345,6 @@ impl RepositorySession {
         run()
     }
 
-    #[allow(dead_code)]
     fn affected_worktrees(
         &self,
         repo: &GitRepo,
@@ -391,7 +387,6 @@ impl RepositorySession {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(super) struct MutationLease {
     gate: Arc<Mutex<bool>>,
 }
@@ -405,7 +400,6 @@ impl Drop for MutationLease {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(super) struct MutationTargets {
     include_current: bool,
     branches: HashSet<String>,
@@ -420,7 +414,6 @@ impl MutationTargets {
         }
     }
 
-    #[allow(dead_code)]
     pub(super) fn branches(names: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
             include_current: true,
@@ -444,14 +437,12 @@ impl MutationTargets {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 struct AffectedWorktree {
     path: PathBuf,
     branch: Option<String>,
     git_dir: PathBuf,
 }
 
-#[allow(dead_code)]
 #[allow(clippy::result_large_err)]
 pub(super) fn require_blocking_network_context(
     request: &OperationRequest,
@@ -470,7 +461,6 @@ pub(super) fn require_blocking_network_context(
     Ok(())
 }
 
-#[allow(dead_code)]
 #[allow(clippy::result_large_err)]
 fn preflight_rebase_state(
     request: &OperationRequest,
@@ -498,7 +488,6 @@ fn preflight_rebase_state(
     Ok(())
 }
 
-#[allow(dead_code)]
 fn operation_error(
     request: &OperationRequest,
     kind: OperationErrorKind,

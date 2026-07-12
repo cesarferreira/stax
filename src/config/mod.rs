@@ -32,13 +32,13 @@ pub struct Config {
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct AutomaticRepoConfig {
+struct TrustedNetworkRepoConfig {
     #[serde(default)]
-    remote: AutomaticRepoRemoteConfig,
+    remote: TrustedNetworkRepoRemoteConfig,
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct AutomaticRepoRemoteConfig {
+struct TrustedNetworkRepoRemoteConfig {
     #[serde(default)]
     name: Option<String>,
 }
@@ -549,18 +549,14 @@ impl Config {
         }
     }
 
-    /// Load config for automatic credential-bearing repository hydration.
+    /// Load config for noninteractive credential-bearing repository network access.
     ///
     /// Repository-local config may select the non-secret Git remote name, but
     /// network destinations, provider selection, and auth settings are loaded
     /// only from the trusted global config.
-    pub(crate) fn load_for_automatic_network(root: &Path) -> Result<Self> {
+    pub(crate) fn load_for_trusted_network(root: &Path) -> Result<Self> {
         let path = Self::path()?;
         let mut config = Self::load_path_or_default(&path)?;
-        if std::env::var("STAX_CONFIG_DIR").is_ok() {
-            return Ok(config);
-        }
-
         let repo_path = root.join("stax.toml");
         if !repo_path.exists() {
             return Ok(config);
@@ -568,7 +564,7 @@ impl Config {
 
         let repo_content = fs::read_to_string(&repo_path)
             .with_context(|| format!("Failed to read repo config {}", repo_path.display()))?;
-        let repo_config: AutomaticRepoConfig = toml::from_str(&repo_content)
+        let repo_config: TrustedNetworkRepoConfig = toml::from_str(&repo_content)
             .with_context(|| format!("Failed to parse repo config {}", repo_path.display()))?;
         if let Some(remote_name) = repo_config
             .remote
@@ -646,7 +642,7 @@ impl Config {
         Self::resolve_github_auth_with_config(&auth_config)
     }
 
-    /// Resolve GitHub auth for a validated automatic network destination.
+    /// Resolve GitHub auth for a validated trusted network destination.
     ///
     /// The gh CLI lookup is always scoped to the validated Git remote host. An
     /// explicitly configured global hostname must match before gh is executed.
@@ -663,7 +659,7 @@ impl Config {
         {
             anyhow::bail!(
                 "Configured GitHub auth hostname does not match the validated Git remote \
-                 hostname; update global auth.gh_hostname before automatic CI hydration"
+                 hostname; update global auth.gh_hostname before noninteractive repository network access"
             );
         }
 

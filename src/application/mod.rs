@@ -1,6 +1,8 @@
+mod checkout;
 mod ci;
 mod model;
 mod operation;
+mod pull_request;
 mod repository;
 
 pub use model::{

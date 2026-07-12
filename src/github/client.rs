@@ -179,7 +179,7 @@ impl GitHubClient {
         Self::new_with_auth(owner, repo, api_base_url, auth_source, token)
     }
 
-    pub(crate) fn new_for_automatic(
+    pub(crate) fn new_for_trusted_remote(
         owner: &str,
         repo: &str,
         api_base_url: Option<String>,
