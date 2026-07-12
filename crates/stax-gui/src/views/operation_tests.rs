@@ -1,3 +1,5 @@
+use super::operation_overlay::OperationOverlay;
+use super::text_input::BranchNameInput;
 use super::{
     AppServices, AppView, PickerFuture, RecentRepositoryStore, RepositoryPicker, SnapshotLoader,
 };
@@ -7,7 +9,11 @@ use crate::operation::{
     RecordingBrowserService,
 };
 use crate::state::WorkspaceState;
-use gpui::{App, TestAppContext, VisualTestContext};
+use gpui::{
+    App, AppContext as _, Context, Entity, EntityInputHandler, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, TestAppContext,
+    VisualTestContext, Window, actions, div,
+};
 use stax::application::{
     BranchDetails, BranchDiff, BranchSummary, CheckoutOutcome, CiSummary, DiffLine, DiffLineKind,
     OperationError, OperationErrorDetails, OperationErrorKind, OperationEvent, OperationOutcome,
@@ -18,6 +24,85 @@ use stax::application::{
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+
+actions!(
+    input_only_action_probe,
+    [
+        ProbeCreateBranch,
+        ProbeRestackSelected,
+        ProbeRestackAll,
+        ProbeSubmitStack,
+        ProbeOpenPullRequest,
+    ]
+);
+
+struct InputOnlyActionProbe {
+    focus_handle: FocusHandle,
+    input: Entity<BranchNameInput>,
+    parent_action_count: usize,
+}
+
+impl InputOnlyActionProbe {
+    fn new(input: Entity<BranchNameInput>, cx: &mut Context<Self>) -> Self {
+        Self {
+            focus_handle: cx.focus_handle(),
+            input,
+            parent_action_count: 0,
+        }
+    }
+
+    fn input(&self) -> Entity<BranchNameInput> {
+        self.input.clone()
+    }
+
+    fn overlay_guard_enabled(&self) -> bool {
+        false
+    }
+
+    fn parent_action_count(&self) -> usize {
+        self.parent_action_count
+    }
+
+    fn record_create(&mut self, _: &ProbeCreateBranch, _: &mut Window, _: &mut Context<Self>) {
+        self.parent_action_count += 1;
+    }
+
+    fn record_restack(&mut self, _: &ProbeRestackSelected, _: &mut Window, _: &mut Context<Self>) {
+        self.parent_action_count += 1;
+    }
+
+    fn record_restack_all(&mut self, _: &ProbeRestackAll, _: &mut Window, _: &mut Context<Self>) {
+        self.parent_action_count += 1;
+    }
+
+    fn record_submit(&mut self, _: &ProbeSubmitStack, _: &mut Window, _: &mut Context<Self>) {
+        self.parent_action_count += 1;
+    }
+
+    fn record_open_pr(&mut self, _: &ProbeOpenPullRequest, _: &mut Window, _: &mut Context<Self>) {
+        self.parent_action_count += 1;
+    }
+}
+
+impl Focusable for InputOnlyActionProbe {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for InputOnlyActionProbe {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .key_context("StaxApp")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::record_create))
+            .on_action(cx.listener(Self::record_restack))
+            .on_action(cx.listener(Self::record_restack_all))
+            .on_action(cx.listener(Self::record_submit))
+            .on_action(cx.listener(Self::record_open_pr))
+            .child(self.input.clone())
+    }
+}
 
 struct TestSnapshotLoader {
     snapshots: Mutex<Vec<RepositorySnapshot>>,
@@ -207,6 +292,19 @@ fn dirty_error(side_effects: OperationSideEffects) -> OperationError {
     }
 }
 
+fn local_git_error() -> OperationError {
+    OperationError {
+        request: checkout_request(),
+        kind: OperationErrorKind::LocalGit,
+        details: OperationErrorDetails::None,
+        primary: "Git failed while checking out parent".into(),
+        action: "Inspect the repository and retry.".into(),
+        diagnostic_chain: "git checkout failed".into(),
+        receipt: None,
+        side_effects: OperationSideEffects::None,
+    }
+}
+
 fn partial_submit_error(side_effects: OperationSideEffects) -> OperationError {
     let mut receipt = submit_receipt();
     receipt.summary = "Submit partially updated remote state".into();
@@ -259,6 +357,28 @@ fn run_service_to_completion(
     (events, result)
 }
 
+fn install_branch_input_key_bindings(cx: &mut TestAppContext) {
+    cx.update(|gpui| {
+        gpui.bind_keys([
+            gpui::KeyBinding::new(
+                "backspace",
+                super::text_input::Backspace,
+                Some("BranchNameInput"),
+            ),
+            gpui::KeyBinding::new("delete", super::text_input::Delete, Some("BranchNameInput")),
+            gpui::KeyBinding::new("left", super::text_input::Left, Some("BranchNameInput")),
+            gpui::KeyBinding::new("right", super::text_input::Right, Some("BranchNameInput")),
+            gpui::KeyBinding::new("home", super::text_input::Home, Some("BranchNameInput")),
+            gpui::KeyBinding::new("end", super::text_input::End, Some("BranchNameInput")),
+            gpui::KeyBinding::new("n", gpui::NoAction, Some("BranchNameInput")),
+            gpui::KeyBinding::new("r", gpui::NoAction, Some("BranchNameInput")),
+            gpui::KeyBinding::new("shift-r", gpui::NoAction, Some("BranchNameInput")),
+            gpui::KeyBinding::new("s", gpui::NoAction, Some("BranchNameInput")),
+            gpui::KeyBinding::new("p", gpui::NoAction, Some("BranchNameInput")),
+        ]);
+    });
+}
+
 fn open_loaded_app(
     cx: &mut TestAppContext,
 ) -> (
@@ -286,6 +406,26 @@ fn open_loaded_app_with_refresh_snapshot(
     (app, cx, service)
 }
 
+fn open_loaded_app_with_dirty_restack(
+    cx: &mut TestAppContext,
+) -> (
+    gpui::Entity<AppView>,
+    &mut VisualTestContext,
+    Arc<FakeOperationService>,
+) {
+    open_loaded_app(cx)
+}
+
+fn open_loaded_app_with_focused_stack_row(
+    cx: &mut TestAppContext,
+) -> (
+    gpui::Entity<AppView>,
+    &mut VisualTestContext,
+    Arc<FakeOperationService>,
+) {
+    open_loaded_app(cx)
+}
+
 fn open_loaded_app_with_browser(
     cx: &mut TestAppContext,
 ) -> (
@@ -297,6 +437,7 @@ fn open_loaded_app_with_browser(
     let service = Arc::new(FakeOperationService::default());
     let browser = Arc::new(RecordingBrowserService::default());
     let loader = Arc::new(TestSnapshotLoader::new(snapshot("/repo", Some("child"))));
+    cx.update(super::init);
     let services = AppServices::with_operation_services(
         loader,
         Rc::new(NoopPicker),
@@ -312,6 +453,63 @@ fn open_loaded_app_with_browser(
     (app, cx, service, browser)
 }
 
+fn open_focused_branch_input<'a>(
+    cx: &'a mut TestAppContext,
+) -> (gpui::Entity<BranchNameInput>, &'a mut VisualTestContext) {
+    open_focused_branch_input_with_text(cx, "")
+}
+
+fn open_focused_branch_input_with_text<'a>(
+    cx: &'a mut TestAppContext,
+    text: &str,
+) -> (gpui::Entity<BranchNameInput>, &'a mut VisualTestContext) {
+    install_branch_input_key_bindings(cx);
+    let initial_text = text.to_string();
+    let (input, cx) =
+        cx.add_window_view(|window, cx| BranchNameInput::new(initial_text.clone(), window, cx));
+    cx.run_until_parked();
+    (input, cx)
+}
+
+fn open_input_only_action_probe(
+    cx: &mut TestAppContext,
+) -> (
+    gpui::Entity<InputOnlyActionProbe>,
+    gpui::Entity<BranchNameInput>,
+    &mut VisualTestContext,
+) {
+    cx.update(|gpui| {
+        gpui.bind_keys([
+            gpui::KeyBinding::new("n", ProbeCreateBranch, Some("StaxApp")),
+            gpui::KeyBinding::new("r", ProbeRestackSelected, Some("StaxApp")),
+            gpui::KeyBinding::new("shift-r", ProbeRestackAll, Some("StaxApp")),
+            gpui::KeyBinding::new("s", ProbeSubmitStack, Some("StaxApp")),
+            gpui::KeyBinding::new("p", ProbeOpenPullRequest, Some("StaxApp")),
+        ]);
+    });
+    install_branch_input_key_bindings(cx);
+    let (probe, cx) = cx.add_window_view(|window, cx| {
+        let input = cx.new(|cx| BranchNameInput::new(String::new(), window, cx));
+        input.update(cx, |input, _cx| input.focus_handle().focus(window));
+        InputOnlyActionProbe::new(input, cx)
+    });
+    let input = cx.update(|_, gpui| probe.read(gpui).input());
+    cx.run_until_parked();
+    (probe, input, cx)
+}
+
+fn open_create_overlay_with_focused_input(
+    cx: &mut TestAppContext,
+) -> (
+    gpui::Entity<AppView>,
+    &mut VisualTestContext,
+    Arc<FakeOperationService>,
+) {
+    let (app, cx, service) = open_loaded_app(cx);
+    cx.simulate_keystrokes("n");
+    (app, cx, service)
+}
+
 fn open_test_app(
     cx: &mut TestAppContext,
     loader: Arc<TestSnapshotLoader>,
@@ -321,6 +519,7 @@ fn open_test_app(
     &mut VisualTestContext,
     Arc<FakeOperationService>,
 ) {
+    cx.update(super::init);
     let services = AppServices::with_operation_services(
         loader,
         Rc::new(NoopPicker),
@@ -605,4 +804,194 @@ fn browser_service_records_only_http_urls(cx: &mut TestAppContext) {
             .is_err()
     );
     assert_eq!(browser.urls(), vec!["https://example.com/pr/1"]);
+}
+
+#[gpui::test]
+fn branch_input_inserts_platform_text_and_backspaces_one_grapheme(cx: &mut TestAppContext) {
+    let (input, cx) = open_focused_branch_input(cx);
+
+    cx.simulate_input("feature-🦀");
+    cx.simulate_keystrokes("backspace");
+
+    assert_eq!(
+        cx.update(|_, app| input.read(app).text().to_string()),
+        "feature-"
+    );
+}
+
+#[gpui::test]
+fn branch_input_maps_utf16_replacement_ranges(cx: &mut TestAppContext) {
+    let (input, cx) = open_focused_branch_input_with_text(cx, "a🦀b");
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            EntityInputHandler::replace_text_in_range(input, Some(1..3), "x", window, cx);
+        });
+    });
+
+    assert_eq!(
+        cx.update(|_, app| input.read(app).text().to_string()),
+        "axb"
+    );
+}
+
+#[gpui::test]
+fn branch_input_tracks_and_commits_ime_marked_text(cx: &mut TestAppContext) {
+    let (input, cx) = open_focused_branch_input(cx);
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            EntityInputHandler::replace_and_mark_text_in_range(
+                input,
+                None,
+                "に",
+                Some(1..1),
+                window,
+                cx,
+            );
+            assert_eq!(
+                EntityInputHandler::marked_text_range(input, window, cx),
+                Some(0..1)
+            );
+            EntityInputHandler::replace_text_in_range(input, None, "日本", window, cx);
+        });
+    });
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            assert_eq!(input.text(), "日本");
+            assert_eq!(
+                EntityInputHandler::marked_text_range(input, window, cx),
+                None
+            );
+            assert_eq!(
+                EntityInputHandler::selected_text_range(input, false, window, cx)
+                    .unwrap()
+                    .range,
+                2..2
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn input_key_context_suppresses_parent_actions_without_overlay_guard(cx: &mut TestAppContext) {
+    let (probe, input, cx) = open_input_only_action_probe(cx);
+
+    assert!(cx.update(|window, app| input.read(app).focus_handle().is_focused(window)));
+    assert!(!cx.update(|_, app| probe.read(app).overlay_guard_enabled()));
+    cx.simulate_keystrokes("n r shift-r s p");
+
+    assert_eq!(cx.update(|_, app| probe.read(app).parent_action_count()), 0);
+}
+
+#[gpui::test]
+fn text_insertion_is_independent_from_shortcut_suppression(cx: &mut TestAppContext) {
+    let (app, cx, _service) = open_create_overlay_with_focused_input(cx);
+
+    cx.simulate_input("nrsp");
+
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).branch_input_text()),
+        "nrsp"
+    );
+}
+
+#[gpui::test]
+fn s_opens_submit_confirmation_before_request(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("s");
+
+    assert!(service.requests().is_empty());
+    let overlay = cx.update(|_, gpui| app.read(gpui).operation_overlay().cloned());
+    assert!(matches!(
+        overlay,
+        Some(OperationOverlay::ConfirmSubmit {
+            affected_branches,
+            mode: PullRequestMode::Draft,
+            ..
+        }) if affected_branches == vec!["parent", "child"]
+    ));
+}
+
+#[gpui::test]
+fn submit_enter_confirms_and_escape_cancels(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("s escape");
+    assert!(service.requests().is_empty());
+    cx.simulate_keystrokes("s enter");
+
+    assert_eq!(service.requests(), vec![submit_request()]);
+    assert!(cx.update(|_, gpui| app.read(gpui).operation_overlay().is_none()));
+    service.complete_next_success(submit_receipt());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn dirty_restack_uses_explicit_stash_confirmation(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app_with_dirty_restack(cx);
+
+    cx.simulate_keystrokes("r enter");
+    service.complete_next_error(dirty_error(OperationSideEffects::None));
+    cx.run_until_parked();
+
+    assert!(matches!(
+        cx.update(|_, gpui| app.read(gpui).operation_overlay().cloned()),
+        Some(OperationOverlay::ConfirmStashAndRestack { .. })
+    ));
+    cx.simulate_keystrokes("enter");
+    assert!(matches!(
+        service.requests().last(),
+        Some(OperationRequest::Restack {
+            auto_stash: true,
+            ..
+        })
+    ));
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn modal_cancel_and_completion_restore_prior_focus(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app_with_focused_stack_row(cx);
+    let prior = cx.update(|window, gpui| window.focused(gpui));
+
+    cx.simulate_keystrokes("n escape");
+    assert_eq!(cx.update(|window, gpui| window.focused(gpui)), prior);
+    cx.simulate_keystrokes("s enter");
+    service.complete_next_success(submit_receipt());
+    cx.run_until_parked();
+
+    assert_eq!(cx.update(|window, gpui| window.focused(gpui)), prior);
+    assert!(cx.update(|_, gpui| app.read(gpui).operation_overlay().is_none()));
+}
+
+#[gpui::test]
+fn escape_during_restack_or_submit_does_not_cancel_active_mutation(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("r enter escape");
+    assert!(cx.update(|_, gpui| app.read(gpui).active_operation().is_some()));
+    assert_eq!(service.requests().len(), 1);
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("s enter escape");
+    assert!(cx.update(|_, gpui| app.read(gpui).active_operation().is_some()));
+    assert_eq!(service.requests().len(), 2);
+    service.complete_next_success(submit_receipt());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn terminal_error_restores_prior_focus(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app_with_focused_stack_row(cx);
+    let prior = cx.update(|window, gpui| window.focused(gpui));
+
+    cx.simulate_keystrokes("enter");
+    service.complete_next_error(local_git_error());
+    cx.run_until_parked();
+
+    assert_eq!(cx.update(|window, gpui| window.focused(gpui)), prior);
+    assert!(cx.update(|_, gpui| app.read(gpui).operation_error().is_some()));
 }

@@ -1,5 +1,6 @@
 #[cfg(test)]
 use super::{changes_pane, inspector_pane, stack_pane};
+use super::{operation_overlay, text_input::BranchNameInput};
 use super::{welcome::WelcomeView, workspace::WorkspaceView};
 use crate::hydration::{
     BranchHydrationService, CiHydrationRequest, DetailsHydrationRequest, DiffHydrationRequest,
@@ -12,13 +13,15 @@ use crate::preferences::RecentRepositories;
 use crate::state::SelectionDirection;
 use crate::theme::{SYSTEM_UI_FONT, Theme};
 use gpui::{
-    App, ClickEvent, Context, Div, ElementId, FocusHandle, Focusable, InteractiveElement as _,
-    IntoElement, KeyBinding, ParentElement as _, PathPromptOptions, Render, SharedString, Stateful,
-    StatefulInteractiveElement as _, StyleRefinement, Styled as _, Window, actions, div, px,
+    App, AppContext as _, ClickEvent, Context, Div, ElementId, Entity, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, PathPromptOptions,
+    Render, SharedString, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled as _,
+    Subscription, Window, actions, div, px,
 };
 use stax::application::{
-    BranchDiff, DetailRequestToken, OperationEvent, OperationRequest, OperationResult,
-    RepositorySession, RepositorySnapshot,
+    BranchDiff, DetailRequestToken, OperationErrorDetails, OperationErrorKind, OperationEvent,
+    OperationRequest, OperationResult, PullRequestMode, RepositorySession, RepositorySnapshot,
+    RestackScope,
 };
 use std::collections::VecDeque;
 use std::future::Future;
@@ -33,7 +36,14 @@ actions!(
         SelectPreviousBranch,
         SelectNextBranch,
         OpenRepository,
-        RefreshRepository
+        RefreshRepository,
+        CheckoutSelected,
+        CreateBranch,
+        RestackSelected,
+        RestackAll,
+        SubmitStack,
+        ConfirmOverlay,
+        DismissOverlay
     ]
 );
 
@@ -242,6 +252,11 @@ pub struct AppView {
     recent_write_in_flight: bool,
     load_generation: u64,
     hydration_coordinator: HydrationCoordinator,
+    operation_overlay: Option<operation_overlay::OperationOverlay>,
+    branch_input: Option<Entity<BranchNameInput>>,
+    branch_input_text: String,
+    branch_input_observation: Option<Subscription>,
+    overlay_return_focus: Option<FocusHandle>,
 }
 
 impl AppView {
@@ -270,6 +285,11 @@ impl AppView {
             recent_write_in_flight: false,
             load_generation: 0,
             hydration_coordinator: HydrationCoordinator::default(),
+            operation_overlay: None,
+            branch_input: None,
+            branch_input_text: String::new(),
+            branch_input_observation: None,
+            overlay_return_focus: None,
         };
         view.mode = AppMode::Welcome(view.welcome(None, None));
         view.load_recent_repositories(window, cx);
@@ -355,6 +375,28 @@ impl AppView {
             .and_then(|workspace| workspace.state().last_receipt().cloned())
     }
 
+    #[cfg(test)]
+    pub fn branch_input_text(&self) -> String {
+        self.branch_input_text.clone()
+    }
+
+    #[cfg(test)]
+    pub fn operation_overlay(&self) -> Option<&operation_overlay::OperationOverlay> {
+        self.operation_overlay.as_ref()
+    }
+
+    #[cfg(test)]
+    pub fn active_operation(&self) -> Option<&crate::state::ActiveOperation> {
+        self.workspace()
+            .and_then(|workspace| workspace.state().active_operation())
+    }
+
+    #[cfg(test)]
+    pub fn operation_error(&self) -> Option<&stax::application::OperationError> {
+        self.workspace()
+            .and_then(|workspace| workspace.state().operation_error())
+    }
+
     pub fn pick_repository(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let picker = Rc::clone(&self.services.picker);
         let future = picker.pick(cx);
@@ -390,6 +432,198 @@ impl AppView {
             return;
         };
         self.start_load(path, RootLoadKind::Refresh, window, cx);
+    }
+
+    fn selected_branch_name(&self) -> Option<String> {
+        self.workspace()
+            .and_then(|workspace| workspace.state().selected_branch())
+            .map(str::to_string)
+    }
+
+    fn non_trunk_branches(&self) -> Vec<String> {
+        self.workspace()
+            .map(|workspace| {
+                workspace
+                    .state()
+                    .snapshot()
+                    .branches
+                    .iter()
+                    .filter(|branch| !branch.is_trunk)
+                    .map(|branch| branch.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn open_overlay(
+        &mut self,
+        overlay: operation_overlay::OperationOverlay,
+        branch_input: Option<Entity<BranchNameInput>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.overlay_return_focus.is_none() {
+            self.overlay_return_focus = Some(self.focus_handle.clone());
+        }
+        self.operation_overlay = Some(overlay);
+        self.branch_input = branch_input.clone();
+        self.branch_input_observation = branch_input.as_ref().map(|input| {
+            self.branch_input_text = input.read(cx).text().to_string();
+            cx.observe(input, |app, input, cx| {
+                app.branch_input_text = input.read(cx).text().to_string();
+            })
+        });
+        cx.notify();
+    }
+
+    fn clear_overlay(&mut self) {
+        self.operation_overlay = None;
+        self.branch_input = None;
+        self.branch_input_text.clear();
+        self.branch_input_observation = None;
+    }
+
+    fn restore_overlay_focus(&mut self, window: &mut Window) {
+        if let Some(focus) = self.overlay_return_focus.take() {
+            focus.focus(window);
+        }
+    }
+
+    fn open_create_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.operation_overlay.is_some()
+            || self
+                .workspace()
+                .and_then(|workspace| workspace.state().active_operation())
+                .is_some()
+        {
+            return;
+        }
+        let Some(parent) = self.selected_branch_name() else {
+            return;
+        };
+        let input = cx.new(|cx| BranchNameInput::new(String::new(), window, cx));
+        self.open_overlay(
+            operation_overlay::OperationOverlay::CreateBranch {
+                parent,
+                validation_error: None,
+            },
+            Some(input),
+            cx,
+        );
+    }
+
+    fn open_restack_overlay(
+        &mut self,
+        scope: RestackScope,
+        affected_branches: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.operation_overlay.is_some()
+            || self
+                .workspace()
+                .and_then(|workspace| workspace.state().active_operation())
+                .is_some()
+        {
+            return;
+        }
+        self.open_overlay(
+            operation_overlay::OperationOverlay::ConfirmRestack {
+                scope,
+                affected_branches,
+                auto_stash: false,
+            },
+            None,
+            cx,
+        );
+    }
+
+    fn open_submit_overlay(&mut self, cx: &mut Context<Self>) {
+        if self.operation_overlay.is_some()
+            || self
+                .workspace()
+                .and_then(|workspace| workspace.state().active_operation())
+                .is_some()
+        {
+            return;
+        }
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        self.open_overlay(
+            operation_overlay::OperationOverlay::ConfirmSubmit {
+                current_branch: workspace.state().snapshot().current_branch.clone(),
+                affected_branches: self.non_trunk_branches(),
+                mode: PullRequestMode::Draft,
+            },
+            None,
+            cx,
+        );
+    }
+
+    pub(super) fn dismiss_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .workspace()
+            .and_then(|workspace| workspace.state().active_operation())
+            .is_some()
+        {
+            return;
+        }
+        self.clear_overlay();
+        self.restore_overlay_focus(window);
+        cx.notify();
+    }
+
+    pub(super) fn confirm_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(overlay) = self.operation_overlay.clone() else {
+            return;
+        };
+        match overlay {
+            operation_overlay::OperationOverlay::CreateBranch { parent, .. } => {
+                let name = self.branch_input_text.trim().to_string();
+                if name.is_empty() {
+                    self.operation_overlay =
+                        Some(operation_overlay::OperationOverlay::CreateBranch {
+                            parent,
+                            validation_error: Some("Enter a branch name.".into()),
+                        });
+                    cx.notify();
+                    return;
+                }
+                self.clear_overlay();
+                self.start_operation(OperationRequest::CreateBranch { name, parent }, window, cx);
+            }
+            operation_overlay::OperationOverlay::ConfirmRestack { scope, .. } => {
+                self.clear_overlay();
+                self.start_operation(
+                    OperationRequest::Restack {
+                        scope,
+                        auto_stash: false,
+                    },
+                    window,
+                    cx,
+                );
+            }
+            operation_overlay::OperationOverlay::ConfirmStashAndRestack { scope, .. } => {
+                self.clear_overlay();
+                self.start_operation(
+                    OperationRequest::Restack {
+                        scope,
+                        auto_stash: true,
+                    },
+                    window,
+                    cx,
+                );
+            }
+            operation_overlay::OperationOverlay::ConfirmSubmit { mode, .. } => {
+                self.clear_overlay();
+                self.start_operation(
+                    OperationRequest::SubmitStack {
+                        new_pull_requests: mode,
+                    },
+                    window,
+                    cx,
+                );
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -466,12 +700,45 @@ impl AppView {
                 (OperationEvent::Completed(_), Ok(_)) | (OperationEvent::Failed(_), Err(_))
             )
         }));
+        let stash_overlay = match &result {
+            Err(error)
+                if error.kind == OperationErrorKind::DirtyWorktree
+                    && matches!(
+                        error.request,
+                        OperationRequest::Restack {
+                            auto_stash: false,
+                            ..
+                        }
+                    ) =>
+            {
+                let scope = match &error.request {
+                    OperationRequest::Restack { scope, .. } => scope.clone(),
+                    _ => RestackScope::All,
+                };
+                let dirty_worktrees = match &error.details {
+                    OperationErrorDetails::Rebase { worktree, .. } => vec![worktree.clone()],
+                    _ => vec![repository_root.clone()],
+                };
+                Some(
+                    operation_overlay::OperationOverlay::ConfirmStashAndRestack {
+                        scope,
+                        dirty_worktrees,
+                    },
+                )
+            }
+            _ => None,
+        };
         let Some(effect) = self
             .workspace_mut()
             .and_then(|workspace| workspace.finish_operation(token, result))
         else {
             return;
         };
+        if let Some(overlay) = stash_overlay {
+            self.open_overlay(overlay, None, cx);
+            return;
+        }
+        self.restore_overlay_focus(window);
         if let Some(url) = effect.open_url
             && let Err(error) = self.services.browser.open_url(&url, cx)
         {
@@ -687,6 +954,8 @@ impl AppView {
         match kind {
             RootLoadKind::Open => {
                 self.action_error = None;
+                self.clear_overlay();
+                self.overlay_return_focus = None;
                 self.mode = AppMode::Opening(self.welcome(None, Some(path.clone())));
             }
             RootLoadKind::Refresh => {
@@ -1009,6 +1278,71 @@ impl AppView {
     ) {
         self.refresh_repository(window, cx);
     }
+
+    fn checkout_action(
+        &mut self,
+        _: &CheckoutSelected,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.operation_overlay.is_some() {
+            return;
+        }
+        let Some(branch) = self.selected_branch_name() else {
+            return;
+        };
+        self.start_operation(OperationRequest::Checkout { branch }, window, cx);
+    }
+
+    fn create_action(&mut self, _: &CreateBranch, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_create_overlay(window, cx);
+    }
+
+    fn restack_selected_action(
+        &mut self,
+        _: &RestackSelected,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(branch) = self.selected_branch_name() else {
+            return;
+        };
+        self.open_restack_overlay(
+            RestackScope::StackContaining(branch),
+            self.non_trunk_branches(),
+            cx,
+        );
+    }
+
+    fn restack_all_action(&mut self, _: &RestackAll, _window: &mut Window, cx: &mut Context<Self>) {
+        self.open_restack_overlay(RestackScope::All, self.non_trunk_branches(), cx);
+    }
+
+    fn submit_action(&mut self, _: &SubmitStack, _window: &mut Window, cx: &mut Context<Self>) {
+        self.open_submit_overlay(cx);
+    }
+
+    fn confirm_overlay_action(
+        &mut self,
+        _: &ConfirmOverlay,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.operation_overlay.is_none() {
+            self.checkout_action(&CheckoutSelected, window, cx);
+            return;
+        }
+        self.confirm_overlay(window, cx);
+    }
+
+    fn dismiss_overlay_action(
+        &mut self,
+        _: &DismissOverlay,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_overlay(window, cx);
+    }
 }
 
 impl Focusable for AppView {
@@ -1027,7 +1361,7 @@ impl Render for AppView {
             AppMode::Workspace(workspace) => workspace.render(theme, cx),
         };
 
-        div()
+        let mut root = div()
             .id("stax-app")
             .key_context("StaxApp")
             .track_focus(&self.focus_handle)
@@ -1035,7 +1369,15 @@ impl Render for AppView {
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::open_action))
             .on_action(cx.listener(Self::refresh_action))
+            .on_action(cx.listener(Self::checkout_action))
+            .on_action(cx.listener(Self::create_action))
+            .on_action(cx.listener(Self::restack_selected_action))
+            .on_action(cx.listener(Self::restack_all_action))
+            .on_action(cx.listener(Self::submit_action))
+            .on_action(cx.listener(Self::confirm_overlay_action))
+            .on_action(cx.listener(Self::dismiss_overlay_action))
             .size_full()
+            .relative()
             .border_1()
             .border_color(if self.focus_handle.is_focused(window) {
                 theme.focus
@@ -1045,7 +1387,16 @@ impl Render for AppView {
             .font_family(SYSTEM_UI_FONT)
             .bg(theme.window)
             .text_color(theme.text)
-            .child(content)
+            .child(content);
+        if let Some(overlay) = &self.operation_overlay {
+            root = root.child(operation_overlay::render(
+                overlay,
+                self.branch_input.clone(),
+                theme,
+                cx,
+            ));
+        }
+        root
     }
 }
 
@@ -1128,7 +1479,29 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("up", SelectPreviousBranch, Some("StaxApp")),
         KeyBinding::new("down", SelectNextBranch, Some("StaxApp")),
+        KeyBinding::new("enter", CheckoutSelected, Some("StaxApp")),
+        KeyBinding::new("n", CreateBranch, Some("StaxApp")),
+        KeyBinding::new("r", RestackSelected, Some("StaxApp")),
+        KeyBinding::new("shift-r", RestackAll, Some("StaxApp")),
+        KeyBinding::new("s", SubmitStack, Some("StaxApp")),
         KeyBinding::new("cmd-o", OpenRepository, Some("StaxApp")),
         KeyBinding::new("cmd-r", RefreshRepository, Some("StaxApp")),
+        KeyBinding::new("enter", ConfirmOverlay, Some("StaxApp")),
+        KeyBinding::new("escape", DismissOverlay, Some("StaxApp")),
+        KeyBinding::new(
+            "backspace",
+            super::text_input::Backspace,
+            Some("BranchNameInput"),
+        ),
+        KeyBinding::new("delete", super::text_input::Delete, Some("BranchNameInput")),
+        KeyBinding::new("left", super::text_input::Left, Some("BranchNameInput")),
+        KeyBinding::new("right", super::text_input::Right, Some("BranchNameInput")),
+        KeyBinding::new("home", super::text_input::Home, Some("BranchNameInput")),
+        KeyBinding::new("end", super::text_input::End, Some("BranchNameInput")),
+        KeyBinding::new("n", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new("r", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new("shift-r", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new("s", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new("p", gpui::NoAction, Some("BranchNameInput")),
     ]);
 }

@@ -1,7 +1,9 @@
 mod app;
 mod changes_pane;
 mod inspector_pane;
+mod operation_overlay;
 mod stack_pane;
+mod text_input;
 mod welcome;
 mod workspace;
 

@@ -25,6 +25,7 @@ pub struct Theme {
     pub diff_hunk: Hsla,
     pub disabled_surface: Hsla,
     pub disabled_text: Hsla,
+    pub overlay_scrim: Hsla,
 }
 
 impl Theme {
@@ -50,6 +51,7 @@ impl Theme {
             diff_hunk: rgb(0x6750a4).into(),
             disabled_surface: rgb(0xebebed).into(),
             disabled_text: rgb(0x85878c).into(),
+            overlay_scrim: gpui::hsla(0.0, 0.0, 0.0, 0.36),
         }
     }
 
@@ -75,6 +77,7 @@ impl Theme {
             diff_hunk: rgb(0xb8a5ed).into(),
             disabled_surface: rgb(0x34363a).into(),
             disabled_text: rgb(0x858990).into(),
+            overlay_scrim: gpui::hsla(0.0, 0.0, 0.0, 0.52),
         }
     }
 

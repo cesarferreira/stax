@@ -6904,6 +6904,7 @@ dependencies = [
  "serde_json",
  "stax",
  "tempfile",
+ "unicode-segmentation",
  "url",
 ]
 
