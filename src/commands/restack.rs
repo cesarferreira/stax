@@ -116,6 +116,9 @@ fn run_adapter(
     if dry_run {
         return run_dry_run(repo, all, stop_here, quiet, &current);
     }
+    if !all && Stack::load(repo)?.trunk == current {
+        return Ok(());
+    }
 
     if repo.is_dirty()? && !auto_stash_pop {
         if quiet {
