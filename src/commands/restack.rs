@@ -1,7 +1,9 @@
 use crate::application::{
-    NoopOperationReporter, OperationError, OperationErrorKind, OperationOutcome, OperationReceipt,
-    OperationWarning, RepositorySession, RestackExecutionOptions, RestackScope,
+    NoopOperationReporter, OperationError, OperationErrorDetails, OperationErrorKind,
+    OperationOutcome, OperationReceipt, OperationWarning, RepositorySession,
+    RestackExecutionOptions, RestackScope,
 };
+use crate::commands::restack_conflict::{RestackConflictContext, print_restack_conflict};
 use crate::engine::{BranchMetadata, Stack};
 use crate::errors::ConflictStopped;
 use crate::git::GitRepo;
@@ -146,7 +148,7 @@ fn run_adapter(
     let receipt = match session.restack_with_options(options, &mut NoopOperationReporter) {
         Ok(receipt) => receipt,
         Err(error) if error.kind == OperationErrorKind::RebaseConflict => {
-            render_restack_error(&error, quiet);
+            render_restack_error(repo, &error, false);
             return Err(ConflictStopped.into());
         }
         Err(error) => return Err(operation_error(error)),
@@ -363,9 +365,44 @@ fn restacked_branches(receipt: &OperationReceipt) -> Vec<String> {
     }
 }
 
-fn render_restack_error(error: &OperationError, quiet: bool) {
+fn render_restack_error(repo: &GitRepo, error: &OperationError, quiet: bool) {
     if quiet {
         return;
+    }
+    if let OperationErrorDetails::Rebase {
+        branch: Some(branch),
+        ..
+    } = &error.details
+    {
+        if let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), branch) {
+            if let Ok(stack) = Stack::load(repo) {
+                let completed = error
+                    .receipt
+                    .as_ref()
+                    .and_then(|receipt| match &receipt.outcome {
+                        OperationOutcome::Restacked { branches, .. } => Some(branches.as_slice()),
+                        _ => None,
+                    })
+                    .unwrap_or(&[]);
+                let stack_branches = stack.current_stack(branch);
+                let remaining = stack_branches
+                    .iter()
+                    .filter(|candidate| *candidate != &stack.trunk)
+                    .filter(|candidate| *candidate != branch)
+                    .filter(|candidate| !completed.contains(candidate))
+                    .count();
+                let context = RestackConflictContext {
+                    branch,
+                    parent_branch: &meta.parent_branch_name,
+                    completed_branches: completed,
+                    remaining_branches: remaining,
+                    continue_commands: &["st continue", "st abort"],
+                    stack_branches: &stack_branches,
+                };
+                print_restack_conflict(repo, &context);
+                return;
+            }
+        }
     }
     println!("{}", error.primary.red());
     println!("{}", error.action);
