@@ -48,6 +48,16 @@ fn worktree_list(repo: &TestRepo) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+fn assert_promotion_state_is_preserved(repo: &TestRepo, branch: &str, linked: &Path) {
+    assert_eq!(current_branch(repo, &repo.path()), "main");
+    assert_eq!(current_branch(repo, linked), branch);
+    assert!(linked.exists(), "linked worktree should remain available");
+    assert!(
+        worktree_list(repo).contains(linked.to_string_lossy().as_ref()),
+        "linked worktree should remain registered"
+    );
+}
+
 #[cfg(unix)]
 fn real_git_path() -> String {
     let output = Command::new("sh")
@@ -166,6 +176,112 @@ fn wt_promote_refuses_dirty_main_worktree() {
     assert_eq!(current_branch(&repo, &repo.path()), "main");
     assert_eq!(current_branch(&repo, &linked), branch);
     assert!(linked.exists());
+}
+
+#[test]
+fn wt_promote_refuses_locked_linked_worktree() {
+    let (repo, branch, linked) = setup_promotable_worktree();
+    repo.git(&[
+        "worktree",
+        "lock",
+        linked.to_str().expect("UTF-8 worktree path"),
+    ])
+    .assert_success();
+
+    let output = repo.run_stax_in(&linked, &["wt", "promote"]);
+
+    output
+        .assert_failure()
+        .assert_stderr_contains("current linked worktree is locked");
+    assert_promotion_state_is_preserved(&repo, &branch, &linked);
+}
+
+#[test]
+fn wt_promote_refuses_rebase_in_main_worktree() {
+    let (repo, branch, linked) = setup_promotable_worktree();
+    repo.create_file("main-rebase.txt", "main rebase\n");
+    repo.commit("Add commit to rebase");
+    repo.git(&["rebase", "--exec", "false", "HEAD~1"])
+        .assert_failure();
+
+    let output = repo.run_stax_in(&linked, &["wt", "promote"]);
+
+    output
+        .assert_failure()
+        .assert_stderr_contains("main worktree has a rebase in progress");
+    assert_eq!(current_branch(&repo, &linked), branch);
+    assert!(linked.exists());
+    assert!(worktree_list(&repo).contains(linked.to_string_lossy().as_ref()));
+    repo.git(&["rev-parse", "main"]).assert_success();
+}
+
+#[test]
+fn wt_promote_refuses_merge_in_linked_worktree() {
+    let (repo, branch, linked) = setup_promotable_worktree();
+    repo.create_file("main-merge.txt", "main merge\n");
+    repo.commit("Add main merge input");
+    repo.git(&[
+        "-C",
+        linked.to_str().expect("UTF-8 worktree path"),
+        "merge",
+        "--no-commit",
+        "main",
+    ])
+    .assert_success();
+
+    let output = repo.run_stax_in(&linked, &["wt", "promote"]);
+
+    output
+        .assert_failure()
+        .assert_stderr_contains("current linked worktree has a merge in progress");
+    assert_promotion_state_is_preserved(&repo, &branch, &linked);
+}
+
+#[test]
+fn wt_promote_refuses_unresolved_conflicts_in_linked_worktree() {
+    let (repo, branch, linked) = setup_promotable_worktree();
+    repo.create_file("conflict.txt", "main\n");
+    repo.commit("Add main conflict input");
+    fs::write(linked.join("conflict.txt"), "linked\n").expect("write linked conflict input");
+    repo.git(&[
+        "-C",
+        linked.to_str().expect("UTF-8 worktree path"),
+        "add",
+        "conflict.txt",
+    ])
+    .assert_success();
+    repo.git(&[
+        "-C",
+        linked.to_str().expect("UTF-8 worktree path"),
+        "commit",
+        "-m",
+        "Add linked conflict input",
+    ])
+    .assert_success();
+    repo.git(&[
+        "-C",
+        linked.to_str().expect("UTF-8 worktree path"),
+        "merge",
+        "main",
+    ])
+    .assert_failure();
+    let merge_head = repo.git(&[
+        "-C",
+        linked.to_str().expect("UTF-8 worktree path"),
+        "rev-parse",
+        "--git-path",
+        "MERGE_HEAD",
+    ]);
+    merge_head.assert_success();
+    fs::remove_file(String::from_utf8_lossy(&merge_head.stdout).trim())
+        .expect("clear merge state while preserving unresolved index entries");
+
+    let output = repo.run_stax_in(&linked, &["wt", "promote"]);
+
+    output
+        .assert_failure()
+        .assert_stderr_contains("current linked worktree has unresolved conflicts");
+    assert_promotion_state_is_preserved(&repo, &branch, &linked);
 }
 
 #[test]

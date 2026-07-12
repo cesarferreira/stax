@@ -104,11 +104,8 @@ fn ensure_clean_checkout(label: &str, details: &WorktreeDetails) -> Result<()> {
     if details.info.is_locked {
         bail!("Cannot promote: the {label} is locked at '{path}'.");
     }
-    if details.dirty {
-        bail!(
-            "Cannot promote: the {label} has uncommitted changes at '{path}'.\nCommit or stash those changes, then retry `st wt promote`."
-        );
-    }
+    // Rebase, merge, and unresolved-conflict states also make a checkout dirty.
+    // Report the more actionable Git operation before the generic dirty-tree guard.
     if details.rebase_in_progress {
         bail!("Cannot promote: the {label} has a rebase in progress at '{path}'.");
     }
@@ -117,6 +114,11 @@ fn ensure_clean_checkout(label: &str, details: &WorktreeDetails) -> Result<()> {
     }
     if details.has_conflicts {
         bail!("Cannot promote: the {label} has unresolved conflicts at '{path}'.");
+    }
+    if details.dirty {
+        bail!(
+            "Cannot promote: the {label} has uncommitted changes at '{path}'.\nCommit or stash those changes, then retry `st wt promote`."
+        );
     }
     Ok(())
 }
@@ -160,5 +162,67 @@ fn finish_success(shell_output: bool, main_path: &Path, branch: &str) {
             "Tip: add shell integration for automatic cd:".dimmed()
         );
         println!("  {}", "stax setup".cyan());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn worktree_details(path: PathBuf, is_prunable: bool) -> WorktreeDetails {
+        WorktreeDetails {
+            info: WorktreeInfo {
+                name: "main".to_string(),
+                path,
+                branch: Some("main".to_string()),
+                is_main: true,
+                is_current: false,
+                is_locked: false,
+                lock_reason: None,
+                is_prunable,
+                prunable_reason: None,
+            },
+            branch_label: "main".to_string(),
+            is_managed: false,
+            stack_parent: None,
+            dirty: false,
+            rebase_in_progress: false,
+            merge_in_progress: false,
+            has_conflicts: false,
+            marker: None,
+            ahead: None,
+            behind: None,
+        }
+    }
+
+    #[test]
+    fn ensure_clean_checkout_refuses_unavailable_path() {
+        let path = PathBuf::from("/definitely-not-an-existing-stax-worktree");
+        let error = ensure_clean_checkout("main worktree", &worktree_details(path.clone(), false))
+            .expect_err("unavailable worktree must not be promoted");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Cannot promote: the main worktree path is unavailable at '{}'.",
+                path.display()
+            )
+        );
+    }
+
+    #[test]
+    fn ensure_clean_checkout_refuses_prunable_path() {
+        let path = PathBuf::from("/existing-or-not-prunable-worktree");
+        let error = ensure_clean_checkout("main worktree", &worktree_details(path.clone(), true))
+            .expect_err("prunable worktree must not be promoted");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Cannot promote: the main worktree path is unavailable at '{}'.",
+                path.display()
+            )
+        );
     }
 }
