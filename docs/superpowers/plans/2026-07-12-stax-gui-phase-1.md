@@ -17,6 +17,8 @@
 ### Root library
 
 - Modify `Cargo.toml` — workspace metadata and shared package fields.
+- Modify `Cargo.lock` — lock the GUI package and GPUI dependency graph.
+- Modify `.github/workflows/rust-tests.yml` — compile and lint the GUI on macOS.
 - Modify `src/lib.rs` — expose the new application module.
 - Create `src/application/mod.rs` — public module boundary and re-exports.
 - Create `src/application/model.rs` — UI-neutral snapshots, details, diff, CI, and request tokens.
@@ -47,6 +49,8 @@
 
 **Files:**
 - Modify: `Cargo.toml`
+- Modify: `Cargo.lock`
+- Modify: `.github/workflows/rust-tests.yml`
 - Create: `crates/stax-gui/Cargo.toml`
 - Create: `crates/stax-gui/src/main.rs`
 - Create: `crates/stax-gui/src/lib.rs`
@@ -109,6 +113,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Native macOS desktop app for stax"
+publish = false
 
 [[bin]]
 name = "stax-gui"
@@ -195,22 +200,124 @@ pub fn open_initial_window(repository: Option<PathBuf>, cx: &mut App) {
 }
 ```
 
-- [ ] **Step 5: Verify workspace isolation**
+- [ ] **Step 5: Extend the tracked workspace lockfile minimally**
+
+Keep the existing tracked `Cargo.lock`; do not delete or regenerate it. Run the
+GUI check once without `--locked` so Cargo resolves only packages missing from
+the new workspace member:
+
+```bash
+cargo check -p stax-gui
+git diff -- Cargo.lock
+```
+
+Expected: Cargo preserves existing compatible package selections and adds
+`stax-gui`, GPUI 0.2.2, and the GUI's missing transitive graph. Review any
+existing-package version change individually. GPUI 0.2.2 requires
+`core-foundation =0.10.0` on macOS, so replacing the previously locked 0.10.1
+with 0.10.0 is the one expected constrained change. Step 7 then proves the
+result is complete with `--locked`.
+
+- [ ] **Step 6: Add a macOS GUI compile gate**
+
+Add a separate job to `.github/workflows/rust-tests.yml` using the repository's
+existing checkout, Rust 1.96.1, and `Swatinem/rust-cache` conventions. Override
+the Linux-only mold linker flags for this job. Because Clippy also lints the
+local `stax` path dependency, mirror the reviewed legacy allowances from
+`scripts/lint.sh` while keeping every other warning fatal:
+
+```yaml
+  gui-quality:
+    name: GPUI Compile and Clippy
+    runs-on: macos-latest
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+          components: clippy
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-latest-gui
+      - name: Check GPUI package
+        run: cargo check -p stax-gui --locked
+      - name: Lint GPUI package
+        # Clippy also lints the local stax path dependency. Mirror the reviewed
+        # legacy allowances from scripts/lint.sh while keeping other warnings fatal.
+        run: |
+          cargo clippy -p stax-gui --all-targets --locked -- \
+            -D warnings \
+            -A clippy::assertions_on_constants \
+            -A clippy::bool_assert_comparison \
+            -A clippy::clone_on_copy \
+            -A clippy::collapsible_if \
+            -A clippy::collapsible_match \
+            -A clippy::double_comparisons \
+            -A clippy::if_same_then_else \
+            -A clippy::items_after_test_module \
+            -A clippy::len_zero \
+            -A clippy::let_and_return \
+            -A clippy::manual_checked_ops \
+            -A clippy::needless_borrow \
+            -A clippy::needless_lifetimes \
+            -A clippy::too_many_arguments \
+            -A clippy::to_string_in_format_args \
+            -A clippy::type_complexity \
+            -A clippy::unnecessary_map_or \
+            -A clippy::unnecessary_sort_by \
+            -A clippy::useless_format \
+            -A clippy::useless_vec
+```
+
+Keep the existing Linux quality and test jobs unchanged.
+
+- [ ] **Step 7: Verify workspace isolation**
 
 Run:
 
 ```bash
-cargo metadata --no-deps --format-version 1
-cargo check
-cargo check -p stax-gui
+lock_before="$(git hash-object Cargo.lock)"
+cargo metadata --no-deps --format-version 1 --locked
+cargo check --locked
+cargo check -p stax-gui --locked
+cargo clippy -p stax-gui --all-targets --locked -- \
+  -D warnings \
+  -A clippy::assertions_on_constants \
+  -A clippy::bool_assert_comparison \
+  -A clippy::clone_on_copy \
+  -A clippy::collapsible_if \
+  -A clippy::collapsible_match \
+  -A clippy::double_comparisons \
+  -A clippy::if_same_then_else \
+  -A clippy::items_after_test_module \
+  -A clippy::len_zero \
+  -A clippy::let_and_return \
+  -A clippy::manual_checked_ops \
+  -A clippy::needless_borrow \
+  -A clippy::needless_lifetimes \
+  -A clippy::too_many_arguments \
+  -A clippy::to_string_in_format_args \
+  -A clippy::type_complexity \
+  -A clippy::unnecessary_map_or \
+  -A clippy::unnecessary_sort_by \
+  -A clippy::useless_format \
+  -A clippy::useless_vec
+test "$lock_before" = "$(git hash-object Cargo.lock)"
 ```
 
-Expected: metadata lists `stax` and `stax-gui`; default `cargo check` checks the root package; explicit GUI check passes.
+Expected: metadata lists `stax` and `stax-gui`; default `cargo check` checks the
+root package; explicit GUI check and clippy pass; none of the commands change
+the tracked lockfile.
 
-- [ ] **Step 6: Commit the scaffold**
+- [ ] **Step 8: Commit the scaffold**
 
 ```bash
-git add Cargo.toml crates/stax-gui
+git add Cargo.toml Cargo.lock .github/workflows/rust-tests.yml crates/stax-gui
 git commit -m "feat: scaffold the GPUI desktop app"
 ```
 
@@ -1029,8 +1136,29 @@ Run:
 ```bash
 cargo fmt --all
 cargo fmt --all -- --check
-cargo clippy -p stax-gui --all-targets -- -D warnings
-cargo clippy -p stax --lib --bins -- -D warnings
+make lint
+cargo clippy -p stax-gui --all-targets --locked -- \
+  -D warnings \
+  -A clippy::assertions_on_constants \
+  -A clippy::bool_assert_comparison \
+  -A clippy::clone_on_copy \
+  -A clippy::collapsible_if \
+  -A clippy::collapsible_match \
+  -A clippy::double_comparisons \
+  -A clippy::if_same_then_else \
+  -A clippy::items_after_test_module \
+  -A clippy::len_zero \
+  -A clippy::let_and_return \
+  -A clippy::manual_checked_ops \
+  -A clippy::needless_borrow \
+  -A clippy::needless_lifetimes \
+  -A clippy::too_many_arguments \
+  -A clippy::to_string_in_format_args \
+  -A clippy::type_complexity \
+  -A clippy::unnecessary_map_or \
+  -A clippy::unnecessary_sort_by \
+  -A clippy::useless_format \
+  -A clippy::useless_vec
 ```
 
 Expected: all commands pass.
@@ -1078,8 +1206,8 @@ Verify:
 If formatting or verification changed tracked files, commit only those fixes:
 
 ```bash
-git add Cargo.toml src/application src/tui/app.rs tests \
-  crates/stax-gui
+git add Cargo.toml Cargo.lock .github/workflows/rust-tests.yml \
+  src/application src/tui/app.rs tests crates/stax-gui
 git commit -m "fix: harden the GPUI read-only cockpit"
 ```
 

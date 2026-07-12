@@ -37,6 +37,52 @@ jobs:
       - name: Run quality gates
         run: make lint
 
+  gui-quality:
+    name: GPUI Compile and Clippy
+    runs-on: macos-latest
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+          components: clippy
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-latest-gui
+      - name: Check GPUI package
+        run: cargo check -p stax-gui --locked
+      - name: Lint GPUI package
+        # Clippy also lints the local stax path dependency. Mirror the reviewed
+        # legacy allowances from scripts/lint.sh while keeping other warnings fatal.
+        run: |
+          cargo clippy -p stax-gui --all-targets --locked -- \
+            -D warnings \
+            -A clippy::assertions_on_constants \
+            -A clippy::bool_assert_comparison \
+            -A clippy::clone_on_copy \
+            -A clippy::collapsible_if \
+            -A clippy::collapsible_match \
+            -A clippy::double_comparisons \
+            -A clippy::if_same_then_else \
+            -A clippy::items_after_test_module \
+            -A clippy::len_zero \
+            -A clippy::let_and_return \
+            -A clippy::manual_checked_ops \
+            -A clippy::needless_borrow \
+            -A clippy::needless_lifetimes \
+            -A clippy::too_many_arguments \
+            -A clippy::to_string_in_format_args \
+            -A clippy::type_complexity \
+            -A clippy::unnecessary_map_or \
+            -A clippy::unnecessary_sort_by \
+            -A clippy::useless_format \
+            -A clippy::useless_vec
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
