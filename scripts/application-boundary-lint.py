@@ -434,15 +434,51 @@ def function_scope_symbols(
     return None
 
 
-def scan_tokens(tokens: list[Token]) -> Violation | None:
-    for index, token in enumerate(tokens):
-        if token.value in OUTPUT_MACROS and index + 1 < len(tokens):
-            if tokens[index + 1].value == "!":
-                return Violation("terminal output macros", token)
+def parse_use_statement(
+    tokens: list[Token], use_index: int
+) -> tuple[list[ImportPath], int]:
+    end = use_index + 1
+    while end < len(tokens) and tokens[end].value != ";":
+        end += 1
+    if end >= len(tokens):
+        raise ScanError("unterminated use statement")
+    return UseParser(tokens[use_index + 1 : end]).parse(), end
 
-    scopes = [Scope.empty()]
+
+def parse_extern_crate(
+    tokens: list[Token], extern_index: int
+) -> tuple[Token, Token, int] | None:
+    if (
+        extern_index + 1 >= len(tokens)
+        or tokens[extern_index + 1].value != "crate"
+    ):
+        return None
+    if (
+        extern_index + 2 >= len(tokens)
+        or not is_identifier_start(tokens[extern_index + 2].value[0])
+    ):
+        raise ScanError("incomplete extern crate statement")
+    crate_name = tokens[extern_index + 2]
+    alias = crate_name
+    end = extern_index + 3
+    if end < len(tokens) and tokens[end].value == "as":
+        end += 1
+        if end >= len(tokens) or not is_identifier_start(tokens[end].value[0]):
+            raise ScanError("invalid extern crate alias")
+        alias = tokens[end]
+        end += 1
+    if end >= len(tokens) or tokens[end].value != ";":
+        raise ScanError("unterminated extern crate statement")
+    return crate_name, alias, end
+
+
+def collect_item_scopes(tokens: list[Token]) -> tuple[Scope, dict[int, Scope]]:
+    root = Scope.empty()
+    scopes = [root]
+    scopes_by_brace: dict[int, Scope] = {}
     pending_scope_symbols: dict[int, set[str]] = {}
     type_declarations = {"enum", "mod", "struct", "trait", "type", "union"}
+
     index = 0
     while index < len(tokens):
         token = tokens[index]
@@ -450,6 +486,7 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             scope = Scope.empty()
             for symbol in pending_scope_symbols.pop(index, set()):
                 scope.bind_symbol(symbol)
+            scopes_by_brace[index] = scope
             scopes.append(scope)
             index += 1
             continue
@@ -461,60 +498,21 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             continue
 
         if token.value == "use":
-            end = index + 1
-            while end < len(tokens) and tokens[end].value != ";":
-                end += 1
-            if end >= len(tokens):
-                raise ScanError("unterminated use statement")
-            for imported in UseParser(tokens[index + 1 : end]).parse():
-                expanded = expand_path(imported.path, scopes)
-                if expanded is not None:
-                    violation = violation_for_import_path(expanded)
-                    if violation is not None:
-                        return violation
-                else:
-                    violation = violation_for_boundary_name(imported.path)
-                    if violation is not None:
-                        return violation
+            imports, end = parse_use_statement(tokens, index)
+            for imported in imports:
                 local_name = imported.alias or imported.path[-1]
                 if local_name.value != "*":
-                    scopes[-1].bind_alias(
-                        local_name.value,
-                        expanded if expanded is not None else imported.path,
-                    )
+                    scopes[-1].bind_alias(local_name.value, imported.path)
             index = end + 1
             continue
 
-        if (
-            token.value == "extern"
-            and index + 1 < len(tokens)
-            and tokens[index + 1].value == "crate"
-        ):
-            if (
-                index + 2 >= len(tokens)
-                or not is_identifier_start(tokens[index + 2].value[0])
-            ):
-                raise ScanError("incomplete extern crate statement")
-            crate_name = tokens[index + 2]
-            alias = crate_name
-            end = index + 3
-            if end < len(tokens) and tokens[end].value == "as":
-                end += 1
-                if (
-                    end >= len(tokens)
-                    or not is_identifier_start(tokens[end].value[0])
-                ):
-                    raise ScanError("invalid extern crate alias")
-                alias = tokens[end]
-                end += 1
-            if end >= len(tokens) or tokens[end].value != ";":
-                raise ScanError("unterminated extern crate statement")
-            violation = violation_for_path([crate_name])
-            if violation is not None:
-                return violation
-            scopes[-1].bind_alias(alias.value, [crate_name])
-            index = end + 1
-            continue
+        if token.value == "extern":
+            external = parse_extern_crate(tokens, index)
+            if external is not None:
+                crate_name, alias, end = external
+                scopes[-1].bind_alias(alias.value, [crate_name])
+                index = end + 1
+                continue
 
         if token.value in type_declarations and index + 1 < len(tokens):
             declaration = tokens[index + 1]
@@ -526,6 +524,60 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             if function_scope is not None:
                 body, symbols = function_scope
                 pending_scope_symbols.setdefault(body, set()).update(symbols)
+
+        index += 1
+
+    if len(scopes) != 1:
+        raise ScanError("unclosed brace")
+    return root, scopes_by_brace
+
+
+def scan_tokens(tokens: list[Token]) -> Violation | None:
+    for index, token in enumerate(tokens):
+        if token.value in OUTPUT_MACROS and index + 1 < len(tokens):
+            if tokens[index + 1].value == "!":
+                return Violation("terminal output macros", token)
+
+    root_scope, scopes_by_brace = collect_item_scopes(tokens)
+    scopes = [root_scope]
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.value == "{":
+            scopes.append(scopes_by_brace[index])
+            index += 1
+            continue
+        if token.value == "}":
+            if len(scopes) == 1:
+                raise ScanError("unmatched closing brace")
+            scopes.pop()
+            index += 1
+            continue
+
+        if token.value == "use":
+            imports, end = parse_use_statement(tokens, index)
+            for imported in imports:
+                expanded = expand_path(imported.path, scopes)
+                if expanded is not None:
+                    violation = violation_for_import_path(expanded)
+                    if violation is not None:
+                        return violation
+                else:
+                    violation = violation_for_boundary_name(imported.path)
+                    if violation is not None:
+                        return violation
+            index = end + 1
+            continue
+
+        if token.value == "extern":
+            external = parse_extern_crate(tokens, index)
+            if external is not None:
+                crate_name, _alias, end = external
+                violation = violation_for_path([crate_name])
+                if violation is not None:
+                    return violation
+                index = end + 1
+                continue
 
         if not is_identifier_start(token.value[0]):
             index += 1
