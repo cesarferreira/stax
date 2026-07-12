@@ -2113,7 +2113,7 @@ fn sync_application_submit_links(
     options: &SubmitOptions,
 ) -> Result<()> {
     if options.no_pr {
-        return Ok(());
+        return refresh_application_no_pr_metadata(repo, receipt);
     }
     let pull_requests = match &receipt.outcome {
         crate::application::OperationOutcome::Submitted { pull_requests } => pull_requests,
@@ -2227,6 +2227,67 @@ fn sync_application_submit_links(
         }
         Ok::<(), anyhow::Error>(())
     })?;
+
+    Ok(())
+}
+
+fn refresh_application_no_pr_metadata(
+    repo: &GitRepo,
+    receipt: &crate::application::OperationReceipt,
+) -> Result<()> {
+    if receipt.affected_branches.is_empty() {
+        return Ok(());
+    }
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(repo, &config)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _enter = runtime.enter();
+    let client = match ForgeClient::new(&remote_info) {
+        Ok(client) => client,
+        Err(_) => return Ok(()),
+    };
+
+    for branch in &receipt.affected_branches {
+        let Some(meta) = BranchMetadata::read(repo.inner(), branch)? else {
+            continue;
+        };
+        let found_pr = runtime
+            .block_on(async { client.find_open_pr_by_head(branch).await })
+            .ok()
+            .flatten();
+        let Some(pr) = found_pr else {
+            continue;
+        };
+        let owner_matches = pr
+            .head_label
+            .as_ref()
+            .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
+            .map(|owner| owner == remote_info.owner())
+            .unwrap_or(false);
+        if !owner_matches {
+            continue;
+        }
+        let needs_meta_update = meta
+            .pr_info
+            .as_ref()
+            .map(|info| {
+                info.number != pr.info.number
+                    || info.state != pr.info.state
+                    || info.is_draft.unwrap_or(false) != pr.info.is_draft
+            })
+            .unwrap_or(true);
+        if needs_meta_update {
+            let updated_meta = BranchMetadata {
+                pr_info: Some(crate::engine::metadata::PrInfo {
+                    number: pr.info.number,
+                    state: pr.info.state.clone(),
+                    is_draft: Some(pr.info.is_draft),
+                }),
+                ..meta
+            };
+            updated_meta.write(repo.inner(), branch)?;
+        }
+    }
 
     Ok(())
 }
