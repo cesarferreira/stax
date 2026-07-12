@@ -5,6 +5,9 @@ use crate::hydration::{
     BranchHydrationService, CiHydrationRequest, DetailsHydrationRequest, DiffHydrationRequest,
     HydrationCoordinator, NativeBranchHydrationService,
 };
+use crate::operation::{
+    BrowserService, NativeBrowserService, NativeOperationService, OperationService,
+};
 use crate::preferences::RecentRepositories;
 use crate::state::SelectionDirection;
 use crate::theme::{SYSTEM_UI_FONT, Theme};
@@ -13,7 +16,10 @@ use gpui::{
     IntoElement, KeyBinding, ParentElement as _, PathPromptOptions, Render, SharedString, Stateful,
     StatefulInteractiveElement as _, StyleRefinement, Styled as _, Window, actions, div, px,
 };
-use stax::application::{BranchDiff, DetailRequestToken, RepositorySession, RepositorySnapshot};
+use stax::application::{
+    BranchDiff, DetailRequestToken, OperationEvent, OperationRequest, OperationResult,
+    RepositorySession, RepositorySnapshot,
+};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -52,6 +58,10 @@ pub struct AppServices {
     picker: Rc<dyn RepositoryPicker>,
     recents: Arc<dyn RecentRepositoryStore>,
     hydration: Arc<dyn BranchHydrationService>,
+    #[allow(dead_code)]
+    operation: Arc<dyn OperationService>,
+    #[allow(dead_code)]
+    browser: Arc<dyn BrowserService>,
 }
 
 impl AppServices {
@@ -74,11 +84,31 @@ impl AppServices {
         recents: Arc<dyn RecentRepositoryStore>,
         hydration: Arc<dyn BranchHydrationService>,
     ) -> Self {
+        Self::with_operation_services(
+            loader,
+            picker,
+            recents,
+            hydration,
+            Arc::new(NativeOperationService),
+            Arc::new(NativeBrowserService),
+        )
+    }
+
+    pub(super) fn with_operation_services(
+        loader: Arc<dyn SnapshotLoader>,
+        picker: Rc<dyn RepositoryPicker>,
+        recents: Arc<dyn RecentRepositoryStore>,
+        hydration: Arc<dyn BranchHydrationService>,
+        operation: Arc<dyn OperationService>,
+        browser: Arc<dyn BrowserService>,
+    ) -> Self {
         Self {
             loader,
             picker,
             recents,
             hydration,
+            operation,
+            browser,
         }
     }
 
@@ -286,7 +316,7 @@ impl AppView {
         }
     }
 
-    fn workspace_mut(&mut self) -> Option<&mut WorkspaceView> {
+    pub(crate) fn workspace_mut(&mut self) -> Option<&mut WorkspaceView> {
         match &mut self.mode {
             AppMode::Workspace(workspace) => Some(workspace),
             AppMode::Welcome(_) | AppMode::Opening(_) | AppMode::Error(_) => None,
@@ -296,6 +326,33 @@ impl AppView {
     #[cfg(test)]
     pub fn pane_markers(&self) -> Option<PaneMarkers> {
         self.workspace().map(WorkspaceView::pane_markers)
+    }
+
+    #[cfg(test)]
+    pub fn completion_transition_count(&self) -> usize {
+        self.workspace()
+            .map(|workspace| workspace.state().completion_transition_count())
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub fn operation_progress_log(&self) -> Vec<usize> {
+        self.workspace()
+            .map(|workspace| workspace.state().operation_progress_log())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub fn snapshot_refresh_count(&self) -> usize {
+        self.workspace()
+            .map(|workspace| workspace.state().snapshot_refresh_count())
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub fn last_receipt(&self) -> Option<stax::application::OperationReceipt> {
+        self.workspace()
+            .and_then(|workspace| workspace.state().last_receipt().cloned())
     }
 
     pub fn pick_repository(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -333,6 +390,97 @@ impl AppView {
             return;
         };
         self.start_load(path, RootLoadKind::Refresh, window, cx);
+    }
+
+    #[allow(dead_code)]
+    pub fn start_operation(
+        &mut self,
+        request: OperationRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((token, repository_root)) = self.workspace_mut().and_then(|workspace| {
+            let repository_root = workspace.state().snapshot().repository_root.clone();
+            workspace
+                .begin_operation(request.clone())
+                .map(|token| (token, repository_root))
+        }) else {
+            return;
+        };
+
+        let (sender, receiver) = async_channel::bounded(32);
+        let operation = Arc::clone(&self.services.operation);
+        let background = cx.background_executor().clone();
+        let retained_result =
+            background.spawn(operation.execute(repository_root.clone(), request, sender));
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let mut streamed_terminal = None;
+            while let Ok(event) = receiver.recv().await {
+                let accepted_terminal = this
+                    .update_in(cx, |view, _window, cx| {
+                        let accepted = view
+                            .workspace_mut()
+                            .and_then(|workspace| workspace.apply_operation_event(&token, event));
+                        if accepted.is_some() {
+                            cx.notify();
+                        }
+                        accepted
+                    })
+                    .ok()
+                    .flatten();
+                if accepted_terminal.is_some() {
+                    streamed_terminal = accepted_terminal;
+                }
+            }
+
+            let result = retained_result.await;
+            let _ = this.update_in(cx, |view, window, cx| {
+                view.finish_operation_from_retained_result(
+                    &token,
+                    repository_root,
+                    streamed_terminal,
+                    result,
+                    window,
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    #[allow(dead_code)]
+    fn finish_operation_from_retained_result(
+        &mut self,
+        token: &crate::state::OperationToken,
+        repository_root: PathBuf,
+        streamed_terminal: Option<OperationEvent>,
+        result: OperationResult,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        debug_assert!(streamed_terminal.as_ref().is_none_or(|event| {
+            matches!(
+                (event, &result),
+                (OperationEvent::Completed(_), Ok(_)) | (OperationEvent::Failed(_), Err(_))
+            )
+        }));
+        let Some(effect) = self
+            .workspace_mut()
+            .and_then(|workspace| workspace.finish_operation(token, result))
+        else {
+            return;
+        };
+        if let Some(url) = effect.open_url
+            && let Err(error) = self.services.browser.open_url(&url, cx)
+        {
+            self.set_inline_error(error);
+        }
+        if effect.refresh_snapshot {
+            self.start_load(repository_root, RootLoadKind::Refresh, window, cx);
+        }
+        cx.notify();
     }
 
     pub fn select_branch(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {

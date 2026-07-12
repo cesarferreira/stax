@@ -6,6 +6,8 @@ mod welcome;
 mod workspace;
 
 #[cfg(test)]
+mod operation_tests;
+#[cfg(test)]
 mod tests;
 
 use anyhow::Context as _;

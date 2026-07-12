@@ -1,4 +1,5 @@
 mod hydration;
+mod operation;
 pub mod preferences;
 pub mod state;
 pub mod theme;

@@ -1,6 +1,9 @@
 use stax::application::{
-    BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, RepositorySnapshot,
+    BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, OperationError,
+    OperationEvent, OperationOutcome, OperationProgress, OperationReceipt, OperationRequest,
+    OperationResult, RepositorySnapshot,
 };
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadState<T> {
@@ -41,6 +44,37 @@ pub struct WorkspaceState {
     diff_refreshing: bool,
     ci: LoadState<CiSummary>,
     generation: u64,
+    operation_sequence: u64,
+    active_operation: Option<ActiveOperation>,
+    operation_error: Option<OperationError>,
+    last_receipt: Option<OperationReceipt>,
+    #[cfg(test)]
+    completion_transition_count: usize,
+    #[cfg(test)]
+    operation_progress_log: Vec<usize>,
+    #[cfg(test)]
+    snapshot_refresh_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationToken {
+    pub id: u64,
+    pub repository_root: PathBuf,
+    pub repository_generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveOperation {
+    pub token: OperationToken,
+    pub request: OperationRequest,
+    pub progress: Option<OperationProgress>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionEffect {
+    pub refresh_snapshot: bool,
+    pub preferred_selection: Option<String>,
+    pub open_url: Option<String>,
 }
 
 impl WorkspaceState {
@@ -60,6 +94,16 @@ impl WorkspaceState {
             diff_refreshing: false,
             ci: LoadState::Idle,
             generation: 0,
+            operation_sequence: 0,
+            active_operation: None,
+            operation_error: None,
+            last_receipt: None,
+            #[cfg(test)]
+            completion_transition_count: 0,
+            #[cfg(test)]
+            operation_progress_log: Vec::new(),
+            #[cfg(test)]
+            snapshot_refresh_count: 0,
         }
     }
 
@@ -89,6 +133,33 @@ impl WorkspaceState {
 
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    pub fn active_operation(&self) -> Option<&ActiveOperation> {
+        self.active_operation.as_ref()
+    }
+
+    pub fn operation_error(&self) -> Option<&OperationError> {
+        self.operation_error.as_ref()
+    }
+
+    pub fn last_receipt(&self) -> Option<&OperationReceipt> {
+        self.last_receipt.as_ref()
+    }
+
+    #[cfg(test)]
+    pub fn completion_transition_count(&self) -> usize {
+        self.completion_transition_count
+    }
+
+    #[cfg(test)]
+    pub fn operation_progress_log(&self) -> Vec<usize> {
+        self.operation_progress_log.clone()
+    }
+
+    #[cfg(test)]
+    pub fn snapshot_refresh_count(&self) -> usize {
+        self.snapshot_refresh_count
     }
 
     pub fn select_branch(&mut self, name: &str) -> Option<DetailRequestToken> {
@@ -148,6 +219,12 @@ impl WorkspaceState {
             LoadState::Ready(diff) => Some(diff.clone()),
             LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => None,
         };
+        let same_repository = previous_repository == snapshot.repository_root;
+        if !same_repository {
+            self.operation_error = None;
+            self.last_receipt = None;
+            self.active_operation = None;
+        }
         self.snapshot = snapshot;
         self.selected_branch = previous_selection
             .clone()
@@ -172,15 +249,19 @@ impl WorkspaceState {
             });
         self.advance_generation();
         self.details = LoadState::Idle;
-        self.diff = if previous_repository == self.snapshot.repository_root
-            && previous_selection == self.selected_branch
-        {
+        self.diff = if same_repository && previous_selection == self.selected_branch {
             previous_diff.map_or(LoadState::Idle, LoadState::Ready)
         } else {
             LoadState::Idle
         };
         self.diff_refreshing = false;
         self.ci = LoadState::Idle;
+        #[cfg(test)]
+        {
+            if same_repository {
+                self.snapshot_refresh_count += 1;
+            }
+        }
     }
 
     pub fn begin_hydration(&mut self) -> Option<(DetailRequestToken, BranchSummary)> {
@@ -204,6 +285,98 @@ impl WorkspaceState {
         self.diff_refreshing = true;
         self.ci = LoadState::Loading;
         Some((token, summary))
+    }
+
+    pub fn begin_details_load(&mut self, branch: &str) -> Option<DetailRequestToken> {
+        self.select_branch(branch)?;
+        self.begin_hydration().map(|(token, _)| token)
+    }
+
+    pub fn begin_operation(&mut self, request: OperationRequest) -> Option<OperationToken> {
+        if self.active_operation.is_some() {
+            return None;
+        }
+        self.operation_sequence = self.operation_sequence.wrapping_add(1);
+        let token = OperationToken {
+            id: self.operation_sequence,
+            repository_root: self.snapshot.repository_root.clone(),
+            repository_generation: self.generation,
+        };
+        self.active_operation = Some(ActiveOperation {
+            token: token.clone(),
+            request,
+            progress: None,
+        });
+        Some(token)
+    }
+
+    pub fn apply_operation_event(
+        &mut self,
+        token: &OperationToken,
+        event: OperationEvent,
+    ) -> Option<OperationEvent> {
+        if !self.operation_matches(token) {
+            return None;
+        }
+        match event {
+            OperationEvent::Started(_) => None,
+            OperationEvent::Progress(progress) => {
+                #[cfg(test)]
+                self.operation_progress_log.push(progress.completed);
+                if let Some(active) = self.active_operation.as_mut() {
+                    active.progress = Some(progress);
+                }
+                None
+            }
+            OperationEvent::Completed(receipt) => Some(OperationEvent::Completed(receipt)),
+            OperationEvent::Failed(error) => Some(OperationEvent::Failed(error)),
+        }
+    }
+
+    pub fn finish_operation(
+        &mut self,
+        token: &OperationToken,
+        result: OperationResult,
+    ) -> Option<CompletionEffect> {
+        if !self.operation_matches(token) {
+            return None;
+        }
+        self.active_operation = None;
+
+        let mut effect = CompletionEffect {
+            refresh_snapshot: false,
+            preferred_selection: None,
+            open_url: None,
+        };
+
+        match result {
+            Ok(receipt) => {
+                effect.refresh_snapshot =
+                    receipt.request.is_mutating() || receipt.side_effects.requires_refresh();
+                effect.preferred_selection = preferred_selection(&receipt);
+                effect.open_url = resolved_url(&receipt);
+                self.operation_error = None;
+                self.last_receipt = Some(receipt);
+                #[cfg(test)]
+                {
+                    self.completion_transition_count += 1;
+                }
+            }
+            Err(error) => {
+                effect.refresh_snapshot = error.side_effects.requires_refresh();
+                self.last_receipt = error.receipt.clone();
+                self.operation_error = Some(error);
+                #[cfg(test)]
+                {
+                    self.completion_transition_count += 1;
+                }
+            }
+        }
+
+        if effect.refresh_snapshot {
+            self.invalidate_repository_generation(effect.preferred_selection.as_deref());
+        }
+        Some(effect)
     }
 
     pub fn apply_details(
@@ -272,6 +445,23 @@ impl WorkspaceState {
         self.generation = self.generation.wrapping_add(1);
     }
 
+    fn invalidate_repository_generation(&mut self, preferred_selection: Option<&str>) {
+        if let Some(preferred) = preferred_selection
+            && self
+                .snapshot
+                .branches
+                .iter()
+                .any(|branch| branch.name == preferred)
+        {
+            self.selected_branch = Some(preferred.to_string());
+        }
+        self.advance_generation();
+        self.details = LoadState::Idle;
+        self.diff = LoadState::Idle;
+        self.diff_refreshing = false;
+        self.ci = LoadState::Idle;
+    }
+
     fn current_token(&self, branch: &str) -> DetailRequestToken {
         DetailRequestToken::new(
             self.snapshot.repository_root.clone(),
@@ -284,6 +474,37 @@ impl WorkspaceState {
         self.selected_branch.as_deref().is_some_and(|branch| {
             token.matches(&self.snapshot.repository_root, branch, self.generation)
         })
+    }
+
+    fn operation_matches(&self, token: &OperationToken) -> bool {
+        self.active_operation
+            .as_ref()
+            .is_some_and(|active| active.token == *token)
+            && token.repository_root == self.snapshot.repository_root
+            && token.repository_generation == self.generation
+    }
+}
+
+fn preferred_selection(receipt: &OperationReceipt) -> Option<String> {
+    match &receipt.outcome {
+        OperationOutcome::Checkout(checked_out) => match checked_out {
+            stax::application::CheckoutOutcome::CheckedOut { branch }
+            | stax::application::CheckoutOutcome::AlreadyCurrent { branch } => Some(branch.clone()),
+        },
+        OperationOutcome::BranchCreated { branch, .. } => Some(branch.clone()),
+        OperationOutcome::Restacked { .. }
+        | OperationOutcome::Submitted { .. }
+        | OperationOutcome::PullRequestResolved { .. } => None,
+    }
+}
+
+fn resolved_url(receipt: &OperationReceipt) -> Option<String> {
+    match &receipt.outcome {
+        OperationOutcome::PullRequestResolved { url, .. } => Some(url.clone()),
+        OperationOutcome::Checkout(_)
+        | OperationOutcome::BranchCreated { .. }
+        | OperationOutcome::Restacked { .. }
+        | OperationOutcome::Submitted { .. } => None,
     }
 }
 

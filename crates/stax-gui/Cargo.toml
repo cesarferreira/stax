@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+async-channel = "2.5.0"
 dirs = "6"
 fs4 = "1.1.0"
 gpui = { version = "=0.2.2", default-features = false, features = ["font-kit"] }
@@ -22,6 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 stax = { path = "../.." }
 tempfile = "3"
+url = "2.5.8"
 
 [dev-dependencies]
 gpui = { version = "=0.2.2", default-features = false, features = ["font-kit", "test-support"] }

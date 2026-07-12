@@ -50,6 +50,11 @@ impl WorkspaceView {
         &self.state
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn state_mut(&mut self) -> &mut WorkspaceState {
+        &mut self.state
+    }
+
     #[cfg(test)]
     pub fn pane_markers(&self) -> PaneMarkers {
         PaneMarkers::all()
@@ -133,6 +138,32 @@ impl WorkspaceView {
 
     pub fn refresh_is_loading(&self) -> bool {
         self.refresh == RefreshState::Loading
+    }
+
+    #[allow(dead_code)]
+    pub fn begin_operation(
+        &mut self,
+        request: stax::application::OperationRequest,
+    ) -> Option<crate::state::OperationToken> {
+        self.state.begin_operation(request)
+    }
+
+    #[allow(dead_code)]
+    pub fn apply_operation_event(
+        &mut self,
+        token: &crate::state::OperationToken,
+        event: stax::application::OperationEvent,
+    ) -> Option<stax::application::OperationEvent> {
+        self.state.apply_operation_event(token, event)
+    }
+
+    #[allow(dead_code)]
+    pub fn finish_operation(
+        &mut self,
+        token: &crate::state::OperationToken,
+        result: stax::application::OperationResult,
+    ) -> Option<crate::state::CompletionEffect> {
+        self.state.finish_operation(token, result)
     }
 
     pub fn stack_scroll_handle(&self) -> &UniformListScrollHandle {
