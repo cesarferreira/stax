@@ -196,3 +196,34 @@ fn diff_reports_bad_branch_and_parent_names() {
         assert!(error.contains(missing));
     }
 }
+
+#[test]
+fn diff_failure_after_ref_validation_is_not_cached_as_empty() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    let blob_oid = repo.get_commit_sha("feature:feature.txt");
+    let object_path = repo
+        .path()
+        .join(".git")
+        .join("objects")
+        .join(&blob_oid[..2])
+        .join(&blob_oid[2..]);
+    std::fs::remove_file(&object_path).unwrap();
+    let cache_path = repo
+        .path()
+        .join(".git")
+        .join("stax")
+        .join("tui-diff-cache.json");
+    assert!(!cache_path.exists());
+    let session = RepositorySession::open(repo.path()).unwrap();
+
+    let error = session.diff("feature", "main").unwrap_err();
+    let message = format!("{error:#}");
+
+    assert!(message.contains("diff stat"));
+    assert!(message.contains("feature"));
+    assert!(message.contains("main"));
+    assert!(message.contains("exit status"));
+    assert!(message.contains("fatal:"));
+    assert!(!cache_path.exists());
+}

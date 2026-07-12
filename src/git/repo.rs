@@ -1953,7 +1953,18 @@ Use --auto-stash-pop or stash/commit changes first.",
             .context("Failed to get diff")?;
 
         if !output.status.success() {
-            return Ok(Vec::new());
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git diff patch for branch '{}' against parent '{}' failed with {}: {}",
+                branch,
+                parent,
+                output.status,
+                if stderr.is_empty() {
+                    "<no stderr>"
+                } else {
+                    &stderr
+                }
+            );
         }
 
         let diff = String::from_utf8_lossy(&output.stdout);
@@ -1967,7 +1978,18 @@ Use --auto-stash-pop or stash/commit changes first.",
             .context("Failed to get diff stat")?;
 
         if !output.status.success() {
-            return Ok(Vec::new());
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            anyhow::bail!(
+                "git diff --numstat for branch '{}' against parent '{}' failed with {}: {}",
+                branch,
+                parent,
+                output.status,
+                if stderr.is_empty() {
+                    "<no stderr>"
+                } else {
+                    &stderr
+                }
+            );
         }
 
         let stat = String::from_utf8_lossy(&output.stdout);
