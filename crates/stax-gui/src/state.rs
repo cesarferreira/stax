@@ -77,6 +77,41 @@ pub struct CompletionEffect {
     pub open_url: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionAvailability {
+    pub enabled: bool,
+    pub reason: Option<String>,
+}
+
+impl ActionAvailability {
+    fn enabled() -> Self {
+        Self {
+            enabled: true,
+            reason: None,
+        }
+    }
+
+    fn disabled(reason: impl Into<String>) -> Self {
+        Self {
+            enabled: false,
+            reason: Some(reason.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractionState {
+    pub checkout: ActionAvailability,
+    pub create: ActionAvailability,
+    pub restack: ActionAvailability,
+    pub restack_all: ActionAvailability,
+    pub submit: ActionAvailability,
+    pub open_pr: ActionAvailability,
+    pub open_repository: ActionAvailability,
+    pub refresh: ActionAvailability,
+    pub navigation: ActionAvailability,
+}
+
 impl WorkspaceState {
     pub fn new(snapshot: RepositorySnapshot) -> Self {
         let selected_branch = snapshot
@@ -145,6 +180,90 @@ impl WorkspaceState {
 
     pub fn last_receipt(&self) -> Option<&OperationReceipt> {
         self.last_receipt.as_ref()
+    }
+
+    pub fn interaction_state(&self) -> InteractionState {
+        if let Some(active) = &self.active_operation {
+            let operation_reason = if active.request.is_mutating() {
+                "A repository operation is running."
+            } else {
+                "A pull request operation is running."
+            };
+            let operation_disabled = ActionAvailability::disabled(operation_reason);
+            return InteractionState {
+                checkout: operation_disabled.clone(),
+                create: operation_disabled.clone(),
+                restack: operation_disabled.clone(),
+                restack_all: operation_disabled.clone(),
+                submit: operation_disabled.clone(),
+                open_pr: operation_disabled.clone(),
+                open_repository: operation_disabled.clone(),
+                refresh: operation_disabled.clone(),
+                navigation: if active.request.is_mutating() {
+                    operation_disabled
+                } else {
+                    self.navigation_availability()
+                },
+            };
+        }
+
+        let selected = self.selected_branch_summary();
+        let selected_name = selected
+            .map(|branch| branch.name.as_str())
+            .unwrap_or("the selected branch");
+        let has_non_trunk = self.snapshot.branches.iter().any(|branch| !branch.is_trunk);
+
+        InteractionState {
+            checkout: match selected {
+                Some(branch) if !branch.is_current && !branch.is_trunk => {
+                    ActionAvailability::enabled()
+                }
+                Some(branch) if branch.is_trunk => {
+                    ActionAvailability::disabled("Select a tracked branch to check out.")
+                }
+                Some(_) => {
+                    ActionAvailability::disabled(format!("{selected_name} is already current."))
+                }
+                None => ActionAvailability::disabled("Select a branch to check out."),
+            },
+            create: if selected.is_some() {
+                ActionAvailability::enabled()
+            } else {
+                ActionAvailability::disabled("Open a repository before creating a branch.")
+            },
+            restack: match selected {
+                Some(branch) if !branch.is_trunk => ActionAvailability::enabled(),
+                Some(_) => ActionAvailability::disabled("Select a tracked branch to restack."),
+                None => ActionAvailability::disabled("Select a branch to restack."),
+            },
+            restack_all: if has_non_trunk {
+                ActionAvailability::enabled()
+            } else {
+                ActionAvailability::disabled("No tracked branches are available to restack.")
+            },
+            submit: if has_non_trunk {
+                ActionAvailability::enabled()
+            } else {
+                ActionAvailability::disabled("No stack branches are available to submit.")
+            },
+            open_pr: match selected {
+                Some(branch) if !branch.is_trunk => ActionAvailability::enabled(),
+                Some(_) => ActionAvailability::disabled("Select a branch with a pull request."),
+                None => ActionAvailability::disabled("Select a branch to open its pull request."),
+            },
+            open_repository: ActionAvailability::enabled(),
+            refresh: ActionAvailability::enabled(),
+            navigation: self.navigation_availability(),
+        }
+    }
+
+    pub fn dismiss_operation_presentation(&mut self) {
+        self.operation_error = None;
+        self.last_receipt = None;
+    }
+
+    pub fn present_operation_error(&mut self, error: OperationError) {
+        self.operation_error = Some(error);
     }
 
     #[cfg(test)]
@@ -468,6 +587,23 @@ impl WorkspaceState {
             branch,
             self.generation,
         )
+    }
+
+    fn selected_branch_summary(&self) -> Option<&BranchSummary> {
+        self.selected_branch.as_deref().and_then(|selected| {
+            self.snapshot
+                .branches
+                .iter()
+                .find(|branch| branch.name == selected)
+        })
+    }
+
+    fn navigation_availability(&self) -> ActionAvailability {
+        if self.snapshot.branches.len() > 1 {
+            ActionAvailability::enabled()
+        } else {
+            ActionAvailability::disabled("No other branches are available.")
+        }
     }
 
     fn matches(&self, token: &DetailRequestToken) -> bool {

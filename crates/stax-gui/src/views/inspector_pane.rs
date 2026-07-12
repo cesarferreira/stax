@@ -1,4 +1,7 @@
-use super::{ControlKind, WorkspaceView, control_button};
+use super::{
+    ControlKind, WorkspaceView, activate_control, app::OpenPullRequest, app::RestackSelected,
+    app::mouse_control_button,
+};
 use crate::state::LoadState;
 use crate::theme::{MONOSPACE_FONT, Theme};
 use gpui::{
@@ -13,7 +16,7 @@ pub const PANE_HEADING: &str = "Inspector";
 pub fn render(
     workspace: &WorkspaceView,
     theme: Theme,
-    _cx: &mut gpui::Context<super::AppView>,
+    cx: &mut gpui::Context<super::AppView>,
 ) -> Div {
     let selected = workspace.state().selected_branch().and_then(|selected| {
         workspace
@@ -25,7 +28,7 @@ pub fn render(
     });
 
     let content = match selected {
-        Some(branch) => render_selected(workspace, branch, theme),
+        Some(branch) => render_selected(workspace, branch, theme, cx),
         None => div()
             .flex()
             .flex_1()
@@ -73,7 +76,12 @@ pub fn render(
         )
 }
 
-fn render_selected(workspace: &WorkspaceView, branch: &BranchSummary, theme: Theme) -> Div {
+fn render_selected(
+    workspace: &WorkspaceView,
+    branch: &BranchSummary,
+    theme: Theme,
+    cx: &mut gpui::Context<super::AppView>,
+) -> Div {
     div()
         .flex()
         .flex_col()
@@ -106,7 +114,7 @@ fn render_selected(workspace: &WorkspaceView, branch: &BranchSummary, theme: The
         .child(render_details(workspace.state().details(), theme))
         .child(render_pull_request(branch, theme))
         .child(render_ci(workspace.state().ci(), branch, theme))
-        .child(render_disabled_actions(theme))
+        .child(render_actions(workspace, theme, cx))
 }
 
 fn render_branch_health(branch: &BranchSummary, theme: Theme) -> Div {
@@ -272,7 +280,55 @@ fn render_ci(ci: &LoadState<CiSummary>, branch: &BranchSummary, theme: Theme) ->
     section("Continuous integration", theme, body)
 }
 
-fn render_disabled_actions(theme: Theme) -> Div {
+fn render_actions(
+    workspace: &WorkspaceView,
+    theme: Theme,
+    cx: &mut gpui::Context<super::AppView>,
+) -> Div {
+    let actions = workspace.state().interaction_state();
+    let checkout = mouse_control_button(
+        "inspector-checkout",
+        control_label("Checkout", &actions.checkout),
+        ControlKind::Secondary,
+        actions.checkout.enabled,
+        theme,
+    );
+    let checkout = if actions.checkout.enabled {
+        activate_control(checkout, cx, |app, window, cx| {
+            app.checkout_selected_branch(window, cx);
+        })
+    } else {
+        checkout
+    };
+    let restack = mouse_control_button(
+        "inspector-restack",
+        control_label("Restack", &actions.restack),
+        ControlKind::Secondary,
+        actions.restack.enabled,
+        theme,
+    );
+    let restack = if actions.restack.enabled {
+        activate_control(restack, cx, |app, window, cx| {
+            app.restack_selected_action(&RestackSelected, window, cx);
+        })
+    } else {
+        restack
+    };
+    let open_pr = mouse_control_button(
+        "inspector-open-pr",
+        control_label("Open PR", &actions.open_pr),
+        ControlKind::Secondary,
+        actions.open_pr.enabled,
+        theme,
+    );
+    let open_pr = if actions.open_pr.enabled {
+        activate_control(open_pr, cx, |app, window, cx| {
+            app.open_pull_request_action(&OpenPullRequest, window, cx);
+        })
+    } else {
+        open_pr
+    };
+
     div()
         .flex()
         .flex_col()
@@ -283,36 +339,23 @@ fn render_disabled_actions(theme: Theme) -> Div {
                 .text_xs()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(theme.text_muted)
-                .child("STACK ACTIONS · READ-ONLY"),
+                .child("STACK ACTIONS"),
         )
-        .child(control_button(
-            "inspector-checkout",
-            "Checkout — Available in phase 2",
-            ControlKind::Secondary,
-            false,
-            theme,
-        ))
-        .child(control_button(
-            "inspector-restack",
-            "Restack — Available in phase 2",
-            ControlKind::Secondary,
-            false,
-            theme,
-        ))
-        .child(control_button(
-            "inspector-submit",
-            "Submit — Available in phase 2",
-            ControlKind::Secondary,
-            false,
-            theme,
-        ))
-        .child(control_button(
-            "inspector-open-pr",
-            "Open PR — Available in phase 2",
-            ControlKind::Secondary,
-            false,
-            theme,
-        ))
+        .child(checkout)
+        .child(restack)
+        .child(open_pr)
+}
+
+fn control_label(label: &str, availability: &crate::state::ActionAvailability) -> String {
+    if availability.enabled {
+        label.to_string()
+    } else {
+        availability
+            .reason
+            .as_ref()
+            .map(|reason| format!("{label} — {reason}"))
+            .unwrap_or_else(|| label.to_string())
+    }
 }
 
 fn section(title: &str, theme: Theme, body: Div) -> Div {

@@ -2,6 +2,7 @@ use super::operation_overlay::OperationOverlay;
 use super::text_input::BranchNameInput;
 use super::{
     AppServices, AppView, PickerFuture, RecentRepositoryStore, RepositoryPicker, SnapshotLoader,
+    app::DismissOperationBanner,
 };
 use crate::hydration::{BranchHydrationService, HydrationFuture};
 use crate::operation::{
@@ -11,15 +12,15 @@ use crate::operation::{
 use crate::state::WorkspaceState;
 use gpui::{
     App, AppContext as _, Context, Entity, EntityInputHandler, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, TestAppContext,
+    InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Render, TestAppContext,
     VisualTestContext, Window, actions, div,
 };
 use stax::application::{
     BranchDetails, BranchDiff, BranchSummary, CheckoutOutcome, CiSummary, DiffLine, DiffLineKind,
     OperationError, OperationErrorDetails, OperationErrorKind, OperationEvent, OperationOutcome,
-    OperationReceipt, OperationRequest, OperationResult, OperationSideEffects, PullRequestChange,
-    PullRequestMode, PullRequestReceipt, RepositorySnapshot, RestackScope, TransactionStatus,
-    TransactionSummary,
+    OperationProgress, OperationReceipt, OperationRequest, OperationResult, OperationSideEffects,
+    OperationStage, PullRequestChange, PullRequestMode, PullRequestReceipt, RepositorySnapshot,
+    RestackScope, TransactionStatus, TransactionSummary,
 };
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -357,6 +358,13 @@ fn run_service_to_completion(
     (events, result)
 }
 
+fn click_selector(cx: &mut VisualTestContext, selector: &'static str) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} was not rendered"));
+    cx.simulate_click(bounds.center(), Modifiers::default());
+}
+
 fn install_branch_input_key_bindings(cx: &mut TestAppContext) {
     cx.update(|gpui| {
         gpui.bind_keys([
@@ -453,9 +461,9 @@ fn open_loaded_app_with_browser(
     (app, cx, service, browser)
 }
 
-fn open_focused_branch_input<'a>(
-    cx: &'a mut TestAppContext,
-) -> (gpui::Entity<BranchNameInput>, &'a mut VisualTestContext) {
+fn open_focused_branch_input(
+    cx: &mut TestAppContext,
+) -> (gpui::Entity<BranchNameInput>, &mut VisualTestContext) {
     open_focused_branch_input_with_text(cx, "")
 }
 
@@ -589,6 +597,25 @@ fn successful_mutation_invalidates_before_refresh() {
 }
 
 #[test]
+fn active_mutation_disables_operations_open_refresh_and_navigation() {
+    let mut state = loaded_workspace_state("/repo");
+    state.begin_operation(submit_request()).unwrap();
+
+    let actions = state.interaction_state();
+
+    assert!(!actions.checkout.enabled);
+    assert!(!actions.create.enabled);
+    assert!(!actions.restack.enabled);
+    assert!(!actions.restack_all.enabled);
+    assert!(!actions.submit.enabled);
+    assert!(!actions.open_pr.enabled);
+    assert!(!actions.open_repository.enabled);
+    assert!(!actions.refresh.enabled);
+    assert!(!actions.navigation.enabled);
+    assert!(actions.refresh.reason.unwrap().contains("operation"));
+}
+
+#[test]
 fn side_effecting_failure_refreshes_and_preserves_error_and_receipt() {
     let mut state = loaded_workspace_state("/repo");
     let token = state.begin_operation(restack_request()).unwrap();
@@ -669,9 +696,7 @@ fn coordinator_drains_more_than_channel_capacity_in_order(cx: &mut TestAppContex
 fn retained_result_is_the_only_completion_state_transition(cx: &mut TestAppContext) {
     let (app, cx, service) = open_loaded_app(cx);
 
-    app.update_in(cx, |app, window, cx| {
-        app.start_operation(checkout_request(), window, cx);
-    });
+    cx.simulate_keystrokes("up enter");
     service.complete_next_success(checkout_receipt());
     cx.run_until_parked();
 
@@ -715,7 +740,9 @@ fn coordinator_ignores_completion_after_opening_another_repository(cx: &mut Test
 
     app.update_in(cx, |app, window, cx| {
         app.start_operation(checkout_request(), window, cx);
-        app.open_repository(PathBuf::from("/other"), window, cx);
+        app.workspace_mut()
+            .unwrap()
+            .apply_snapshot(snapshot("/other", Some("child")));
     });
     service.complete_next_success(checkout_receipt());
     cx.run_until_parked();
@@ -804,6 +831,427 @@ fn browser_service_records_only_http_urls(cx: &mut TestAppContext) {
             .is_err()
     );
     assert_eq!(browser.urls(), vec!["https://example.com/pr/1"]);
+}
+
+#[gpui::test]
+fn dismiss_banner_clears_presentation_without_changing_snapshot(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    app.update_in(cx, |app, window, cx| {
+        app.start_operation(checkout_request(), window, cx);
+    });
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+    let snapshot = cx.update(|_, gpui| app.read(gpui).snapshot().clone());
+
+    cx.dispatch_action(DismissOperationBanner);
+
+    assert!(!cx.update(|_, gpui| app.read(gpui).banner_is_visible()));
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).snapshot().clone()),
+        snapshot
+    );
+}
+
+#[gpui::test]
+fn clicking_submit_receipt_url_uses_browser_service(cx: &mut TestAppContext) {
+    let (app, cx, service, browser) = open_loaded_app_with_browser(cx);
+
+    cx.simulate_keystrokes("s enter");
+    service.complete_submit_with_url("https://github.com/acme/repo/pull/42");
+    cx.run_until_parked();
+    click_selector(cx, "operation-receipt-url-0");
+
+    assert_eq!(browser.urls(), vec!["https://github.com/acme/repo/pull/42"]);
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).snapshot_refresh_count()),
+        1
+    );
+}
+
+#[gpui::test]
+fn browser_rejects_non_http_url_as_unsupported_capability(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("up p");
+    service.script_pr_url("parent", "file:///tmp/not-allowed");
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).operation_error().unwrap().kind),
+        OperationErrorKind::UnsupportedCapability
+    );
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).snapshot_refresh_count()),
+        0
+    );
+}
+
+#[gpui::test]
+fn p_resolves_selected_branch_without_checkout_or_refresh(cx: &mut TestAppContext) {
+    let (app, cx, service, browser) = open_loaded_app_with_browser(cx);
+
+    cx.simulate_keystrokes("up p");
+    service.script_pr_url("parent", "https://github.com/acme/repo/pull/42");
+    cx.run_until_parked();
+
+    assert_eq!(
+        service.requests(),
+        vec![OperationRequest::ResolvePullRequestUrl {
+            branch: "parent".into()
+        }]
+    );
+    assert_eq!(browser.urls(), vec!["https://github.com/acme/repo/pull/42"]);
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).current_branch()),
+        "child"
+    );
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).snapshot_refresh_count()),
+        0
+    );
+}
+
+#[gpui::test]
+fn toolbar_create_button_dispatches_create_action(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    click_selector(cx, "toolbar-create-branch");
+
+    assert!(service.requests().is_empty());
+    assert!(matches!(
+        cx.update(|_, gpui| app.read(gpui).operation_overlay().cloned()),
+        Some(OperationOverlay::CreateBranch { parent, .. }) if parent == "child"
+    ));
+}
+
+#[gpui::test]
+fn toolbar_submit_button_opens_submit_confirmation(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    click_selector(cx, "toolbar-submit-stack");
+
+    assert!(service.requests().is_empty());
+    assert!(matches!(
+        cx.update(|_, gpui| app.read(gpui).operation_overlay().cloned()),
+        Some(OperationOverlay::ConfirmSubmit {
+            affected_branches,
+            mode: PullRequestMode::Draft,
+            ..
+        }) if affected_branches == vec!["parent", "child"]
+    ));
+}
+
+#[gpui::test]
+fn toolbar_open_and_refresh_buttons_dispatch_actions(cx: &mut TestAppContext) {
+    let (app, cx, _service) = open_loaded_app(cx);
+
+    click_selector(cx, "toolbar-refresh");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).snapshot_refresh_count()),
+        1
+    );
+
+    click_selector(cx, "toolbar-open");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).snapshot_refresh_count()),
+        1
+    );
+}
+
+#[gpui::test]
+fn inspector_checkout_button_dispatches_selected_checkout(cx: &mut TestAppContext) {
+    let (_app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("up");
+    click_selector(cx, "inspector-checkout");
+
+    assert_eq!(
+        service.requests(),
+        vec![OperationRequest::Checkout {
+            branch: "parent".into()
+        }]
+    );
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn inspector_restack_button_opens_selected_confirmation(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("up");
+    click_selector(cx, "inspector-restack");
+
+    assert!(service.requests().is_empty());
+    assert!(matches!(
+        cx.update(|_, gpui| app.read(gpui).operation_overlay().cloned()),
+        Some(OperationOverlay::ConfirmRestack {
+            scope: RestackScope::StackContaining(branch),
+            auto_stash: false,
+            ..
+        }) if branch == "parent"
+    ));
+}
+
+#[gpui::test]
+fn inspector_open_pr_button_resolves_selected_without_checkout(cx: &mut TestAppContext) {
+    let (app, cx, service, browser) = open_loaded_app_with_browser(cx);
+
+    cx.simulate_keystrokes("up");
+    click_selector(cx, "inspector-open-pr");
+    service.script_pr_url("parent", "https://github.com/acme/repo/pull/42");
+    cx.run_until_parked();
+
+    assert_eq!(
+        service.requests(),
+        vec![OperationRequest::ResolvePullRequestUrl {
+            branch: "parent".into()
+        }]
+    );
+    assert_eq!(browser.urls(), vec!["https://github.com/acme/repo/pull/42"]);
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).current_branch()),
+        "child"
+    );
+}
+
+#[gpui::test]
+fn enter_n_r_shift_r_s_p_shortcuts_dispatch_exact_requests(cx: &mut TestAppContext) {
+    let (_app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("up enter");
+    assert_eq!(
+        service.requests(),
+        vec![OperationRequest::Checkout {
+            branch: "parent".into()
+        }]
+    );
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("n");
+    cx.simulate_input("daily-stack-work");
+    cx.simulate_keystrokes("enter");
+    assert!(matches!(
+        service.requests().last(),
+        Some(OperationRequest::CreateBranch { name, parent })
+            if name == "daily-stack-work" && parent == "parent"
+    ));
+    service.complete_next_success(OperationReceipt {
+        request: OperationRequest::CreateBranch {
+            name: "daily-stack-work".into(),
+            parent: "parent".into(),
+        },
+        summary: "Created daily-stack-work".into(),
+        affected_branches: vec!["daily-stack-work".into()],
+        outcome: OperationOutcome::BranchCreated {
+            branch: "daily-stack-work".into(),
+            parent: "parent".into(),
+        },
+        transaction: None,
+        warnings: Vec::new(),
+        side_effects: OperationSideEffects::RepositoryChanged,
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("r enter");
+    assert!(matches!(
+        service.requests().last(),
+        Some(OperationRequest::Restack {
+            scope: RestackScope::StackContaining(branch),
+            auto_stash: false,
+        }) if branch == "parent"
+    ));
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("shift-r enter");
+    assert!(matches!(
+        service.requests().last(),
+        Some(OperationRequest::Restack {
+            scope: RestackScope::All,
+            auto_stash: false,
+        })
+    ));
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("s enter");
+    assert!(matches!(
+        service.requests().last(),
+        Some(OperationRequest::SubmitStack {
+            new_pull_requests: PullRequestMode::Draft,
+        })
+    ));
+    service.complete_next_success(submit_receipt());
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("p");
+    service.script_pr_url("parent", "https://github.com/acme/repo/pull/42");
+    cx.run_until_parked();
+    assert!(matches!(
+        service.requests().last(),
+        Some(OperationRequest::ResolvePullRequestUrl { branch }) if branch == "parent"
+    ));
+}
+
+#[gpui::test]
+fn progress_banner_renders_stage_branch_and_completed_total(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    app.update_in(cx, |app, window, cx| {
+        app.start_operation(checkout_request(), window, cx);
+    });
+    app.update_in(cx, |app, _window, cx| {
+        let token = app
+            .workspace()
+            .unwrap()
+            .state()
+            .active_operation()
+            .unwrap()
+            .token
+            .clone();
+        app.workspace_mut().unwrap().apply_operation_event(
+            &token,
+            OperationEvent::Progress(OperationProgress {
+                stage: OperationStage::CheckingOut,
+                completed: 1,
+                total: Some(2),
+                branch: Some("parent".into()),
+                message: "checking out parent".into(),
+            }),
+        );
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("operation-banner").is_some());
+    assert!(cx.debug_bounds("operation-progress").is_some());
+
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn copy_diagnostics_button_writes_only_diagnostic_chain(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    app.update_in(cx, |app, window, cx| {
+        app.start_operation(checkout_request(), window, cx);
+    });
+    service.complete_next_error(local_git_error());
+    cx.run_until_parked();
+    click_selector(cx, "operation-copy-diagnostics");
+
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).copied_diagnostics()),
+        Some("git checkout failed".to_string())
+    );
+}
+
+#[gpui::test]
+fn create_button_stays_disabled_for_empty_or_invalid_name(cx: &mut TestAppContext) {
+    let (_app, cx, _service) = open_loaded_app(cx);
+
+    click_selector(cx, "toolbar-create-branch");
+
+    assert!(
+        cx.debug_bounds("operation-overlay-confirm-disabled")
+            .is_some()
+    );
+}
+
+#[gpui::test]
+fn create_enter_shows_validation_without_request(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    click_selector(cx, "toolbar-create-branch");
+    cx.simulate_keystrokes("enter");
+
+    assert!(service.requests().is_empty());
+    assert!(matches!(
+        cx.update(|_, gpui| app.read(gpui).operation_overlay().cloned()),
+        Some(OperationOverlay::CreateBranch {
+            validation_error: Some(_),
+            ..
+        })
+    ));
+}
+
+#[gpui::test]
+fn dismiss_button_and_action_clear_only_presentation(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    app.update_in(cx, |app, window, cx| {
+        app.start_operation(checkout_request(), window, cx);
+    });
+    service.complete_next_error(local_git_error());
+    cx.run_until_parked();
+    let snapshot = cx.update(|_, gpui| app.read(gpui).snapshot().clone());
+
+    click_selector(cx, "operation-banner-dismiss");
+    assert!(!cx.update(|_, gpui| app.read(gpui).banner_is_visible()));
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).snapshot().clone()),
+        snapshot
+    );
+}
+
+#[gpui::test]
+fn receipt_url_rendered_row_opens_recording_browser(cx: &mut TestAppContext) {
+    let (_app, cx, service, browser) = open_loaded_app_with_browser(cx);
+
+    cx.simulate_keystrokes("s enter");
+    service.complete_submit_with_url("https://github.com/acme/repo/pull/42");
+    cx.run_until_parked();
+    click_selector(cx, "operation-receipt-url-0");
+
+    assert_eq!(browser.urls(), vec!["https://github.com/acme/repo/pull/42"]);
+}
+
+#[gpui::test]
+fn every_action_is_disabled_during_active_mutation(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("s enter");
+    assert_eq!(service.requests(), vec![submit_request()]);
+    cx.simulate_keystrokes("up down enter n r shift-r s p cmd-r cmd-o");
+    for selector in [
+        "toolbar-open",
+        "toolbar-refresh",
+        "toolbar-create-branch",
+        "toolbar-submit-stack",
+        "inspector-checkout",
+        "inspector-restack",
+        "inspector-open-pr",
+    ] {
+        click_selector(cx, selector);
+    }
+
+    assert_eq!(service.requests(), vec![submit_request()]);
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).selected_branch()),
+        "child"
+    );
+    assert_eq!(
+        cx.update(|_, gpui| app.read(gpui).snapshot_refresh_count()),
+        0
+    );
+
+    service.complete_next_success(submit_receipt());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("up enter");
+    assert_eq!(
+        service.requests().last(),
+        Some(&OperationRequest::Checkout {
+            branch: "parent".into()
+        })
+    );
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
 }
 
 #[gpui::test]
@@ -988,7 +1436,9 @@ fn terminal_error_restores_prior_focus(cx: &mut TestAppContext) {
     let (app, cx, service) = open_loaded_app_with_focused_stack_row(cx);
     let prior = cx.update(|window, gpui| window.focused(gpui));
 
-    cx.simulate_keystrokes("enter");
+    app.update_in(cx, |app, window, cx| {
+        app.start_operation(checkout_request(), window, cx);
+    });
     service.complete_next_error(local_git_error());
     cx.run_until_parked();
 

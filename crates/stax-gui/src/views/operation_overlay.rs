@@ -51,6 +51,10 @@ fn card(
     theme: Theme,
     cx: &mut Context<AppView>,
 ) -> Div {
+    let create_input_is_empty = matches!(overlay, OperationOverlay::CreateBranch { .. })
+        && branch_input
+            .as_ref()
+            .is_none_or(|input| input.read(cx).text().trim().is_empty());
     let (title, body, primary) = match overlay {
         OperationOverlay::CreateBranch {
             parent,
@@ -137,17 +141,25 @@ fn card(
         cx,
         |app, window, cx| app.dismiss_overlay(window, cx),
     );
-    let confirm = activate_control(
-        control_button(
-            "operation-overlay-confirm",
-            primary,
-            ControlKind::Primary,
-            true,
-            theme,
-        ),
-        cx,
-        |app, window, cx| app.confirm_overlay(window, cx),
+    let confirm_enabled = !create_input_is_empty;
+    let confirm = control_button(
+        if confirm_enabled {
+            "operation-overlay-confirm"
+        } else {
+            "operation-overlay-confirm-disabled"
+        },
+        primary,
+        ControlKind::Primary,
+        confirm_enabled,
+        theme,
     );
+    let confirm = if confirm_enabled {
+        activate_control(confirm, cx, |app, window, cx| {
+            app.confirm_overlay(window, cx);
+        })
+    } else {
+        confirm
+    };
 
     div()
         .w(px(430.0))

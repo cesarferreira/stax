@@ -67,6 +67,9 @@ impl BrowserService for NativeBrowserService {
 }
 
 #[cfg(test)]
+pub use test_support::{FakeOperationService, RecordingBrowserService};
+
+#[cfg(test)]
 mod test_support {
     use super::{BrowserService, OperationFuture, OperationService};
     use gpui::App;
@@ -225,6 +228,3 @@ mod test_support {
         }
     }
 }
-
-#[cfg(test)]
-pub use test_support::{FakeOperationService, RecordingBrowserService};
