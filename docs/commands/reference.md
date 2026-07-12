@@ -105,6 +105,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | Command | Description |
 |---|---|
 | `st` | Launch the TUI |
+| `st gui [path]` | Launch the unsigned native macOS GUI developer preview for a repository |
 | `st split` | Split branch into stacked branches (commit-based; needs 2+ commits) |
 | `st split --hunk` | Split a single commit by selecting individual diff hunks |
 | `st split --file <pathspec>` | Split by extracting matching files into a new parent branch |
@@ -335,6 +336,19 @@ If the excluded parent has local-only commits, scoped submit still refuses and a
 ### `st checkout`
 
 - `--trunk` / `--parent` / `--child 1`
+
+### `st gui`
+
+- `st gui` launches the Phase 2 unsigned native macOS GUI developer preview for the current directory.
+- `st gui <path>` launches it for an explicit repository path.
+- The launcher canonicalizes the selected path before forwarding it to the app.
+- macOS support is required; other platforms return an actionable unsupported-platform error.
+- The installed bundle id is `dev.stax.Stax`, installed by `make install-gui-app` at `$HOME/Applications/Stax.app`.
+- Production launch uses the exact LaunchServices contract `open -n -b dev.stax.Stax --args <canonical-path>`.
+- `-n` is intentional: every invocation starts a fresh app process/window for one repository instead of reusing an existing instance.
+- If the bundle is missing or LaunchServices fails, run `make install-gui-app` and verify `$HOME/Applications/Stax.app`.
+
+The GUI can check out the selected branch, create an explicit-name empty child branch, restack selected branches or all tracked branches, confirm stash-and-restack for dirty worktrees, submit the current stack as Draft with explicit confirmation and no CLI prompts or auto-opened PR pages, and Open PR for a selected branch without checkout.
 
 ### `st get`
 
