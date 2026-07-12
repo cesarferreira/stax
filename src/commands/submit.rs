@@ -2100,7 +2100,133 @@ fn run_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -
     };
     let receipt =
         run_default_with_prompter(scope, options, &mut backend, &mut prompter, &mut reporter)?;
+    sync_application_submit_links(&repo, &current, &receipt, options)?;
     render_application_submit_receipt(&receipt, &current, options.open, options.quiet);
+    Ok(())
+}
+
+fn sync_application_submit_links(
+    repo: &GitRepo,
+    current: &str,
+    receipt: &crate::application::OperationReceipt,
+    options: &SubmitOptions,
+) -> Result<()> {
+    if options.no_pr {
+        return Ok(());
+    }
+    let pull_requests = match &receipt.outcome {
+        crate::application::OperationOutcome::Submitted { pull_requests } => pull_requests,
+        _ => return Ok(()),
+    };
+    if pull_requests.is_empty() {
+        return Ok(());
+    }
+
+    let stack = Stack::load(repo)?;
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(repo, &config)?;
+    let imported_branches = imported_branches_for_stack(repo, &stack, current)?;
+    let mut pr_infos = pull_requests
+        .iter()
+        .map(|pull_request| StackPrInfo {
+            branch: pull_request.branch.clone(),
+            pr_number: Some(pull_request.number),
+            is_imported: imported_branches.contains(&pull_request.branch),
+            depth: stack.ancestors(&pull_request.branch).len(),
+        })
+        .collect::<Vec<_>>();
+    let created_pr_numbers = pull_requests
+        .iter()
+        .filter(|pull_request| {
+            matches!(
+                pull_request.change,
+                crate::application::PullRequestChange::Created
+            )
+        })
+        .map(|pull_request| pull_request.number)
+        .collect::<HashSet<_>>();
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _enter = runtime.enter();
+    let client = ForgeClient::new(&remote_info)?;
+    runtime.block_on(async {
+        if config.submit.stack_links != StackLinksMode::Off {
+            discover_stack_link_pr_infos(
+                &client,
+                &stack,
+                current,
+                &imported_branches,
+                &mut pr_infos,
+            )
+            .await?;
+        }
+        let stack_link_contexts =
+            stack_link_contexts_for_sync(&stack, current, &pr_infos, &imported_branches);
+        let native_stack_mode = options
+            .native_stack_override
+            .unwrap_or(config.submit.native_stack);
+        let native_stack_linked = maybe_link_native_stack(
+            repo.workdir()?,
+            &remote_info,
+            &stack.trunk,
+            native_stack_mode,
+            &stack,
+            &stack_link_contexts,
+            options.quiet,
+        )?;
+
+        let native_forces_links_off = native_stack_linked
+            && config.submit.stack_links_when_native == StackLinksWhenNative::Off;
+        let single_stack_skips_links =
+            config.submit.single_stack == SingleStackMode::Off && stack_link_contexts.len() <= 1;
+        let effective_stack_links_mode = if native_forces_links_off || single_stack_skips_links {
+            StackLinksMode::Off
+        } else {
+            config.submit.stack_links
+        };
+
+        for (pr_number, _branch, stack_link_pr_infos) in &stack_link_contexts {
+            let stack_links = generate_stack_links_markdown(
+                stack_link_pr_infos,
+                *pr_number,
+                &remote_info,
+                &stack.trunk,
+            );
+
+            match effective_stack_links_mode {
+                StackLinksMode::Comment | StackLinksMode::Both => {
+                    if created_pr_numbers.contains(pr_number) {
+                        client
+                            .create_stack_comment(*pr_number, &stack_links)
+                            .await?;
+                    } else {
+                        client
+                            .update_stack_comment(*pr_number, &stack_links)
+                            .await?;
+                    }
+                }
+                StackLinksMode::Body | StackLinksMode::Off => {
+                    client.delete_stack_comment(*pr_number).await?;
+                }
+            }
+
+            let current_body = client.get_pr_body(*pr_number).await?;
+            let desired_body = match effective_stack_links_mode {
+                StackLinksMode::Body | StackLinksMode::Both => {
+                    upsert_stack_links_in_body(&current_body, &stack_links)
+                }
+                StackLinksMode::Comment | StackLinksMode::Off => {
+                    remove_stack_links_from_body(&current_body)
+                }
+            };
+
+            if desired_body != current_body {
+                client.update_pr_body(*pr_number, &desired_body).await?;
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })?;
+
     Ok(())
 }
 
