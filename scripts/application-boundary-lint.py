@@ -45,6 +45,24 @@ class ImportPath:
     alias: Token | None
 
 
+@dataclass
+class Scope:
+    aliases: dict[str, list[Token]]
+    symbols: set[str]
+
+    @classmethod
+    def empty(cls) -> Scope:
+        return cls({}, set())
+
+    def bind_alias(self, name: str, path: list[Token]) -> None:
+        self.symbols.discard(name)
+        self.aliases[name] = path
+
+    def bind_symbol(self, name: str) -> None:
+        self.aliases.pop(name, None)
+        self.symbols.add(name)
+
+
 def blank_range(characters: list[str], start: int, end: int) -> None:
     for index in range(start, end):
         if characters[index] != "\n":
@@ -305,8 +323,7 @@ class UseParser:
         return paths
 
 
-def violation_for_path(path: list[Token]) -> Violation | None:
-    values = [token.value for token in path]
+def violation_for_boundary_name(path: list[Token]) -> Violation | None:
     for token in path:
         if token.value in COMMAND_MODULES:
             return Violation("command or TUI modules", token)
@@ -316,6 +333,14 @@ def violation_for_path(path: list[Token]) -> Violation | None:
     for token in path:
         if token.value == "progress":
             return Violation("terminal progress", token)
+    return None
+
+
+def violation_for_path(path: list[Token]) -> Violation | None:
+    violation = violation_for_boundary_name(path)
+    if violation is not None:
+        return violation
+    values = [token.value for token in path]
     for index in range(len(values) - 2):
         if values[index : index + 2] == ["std", "io"] and values[index + 2] in TERMINAL_IO:
             return Violation("terminal I/O", path[index + 2])
@@ -339,55 +364,170 @@ def violation_for_import_path(path: list[Token]) -> Violation | None:
     return None
 
 
+def expand_path(path: list[Token], scopes: list[Scope]) -> list[Token] | None:
+    expanded = path
+    visited: set[tuple[int, str]] = set()
+    while expanded:
+        name = expanded[0].value
+        binding: list[Token] | None = None
+        binding_scope = -1
+        for scope_index in range(len(scopes) - 1, -1, -1):
+            scope = scopes[scope_index]
+            if name in scope.aliases:
+                binding = scope.aliases[name]
+                binding_scope = scope_index
+                break
+            if name in scope.symbols:
+                return None
+        if binding is None:
+            return expanded
+        key = (binding_scope, name)
+        if key in visited:
+            return expanded
+        visited.add(key)
+        expanded = [*binding, *expanded[1:]]
+    return expanded
+
+
+def function_scope_symbols(
+    tokens: list[Token], function_index: int
+) -> tuple[int, set[str]] | None:
+    name_index = function_index + 1
+    if (
+        name_index >= len(tokens)
+        or not is_identifier_start(tokens[name_index].value[0])
+    ):
+        return None
+
+    symbols: set[str] = set()
+    cursor = name_index + 1
+    if cursor < len(tokens) and tokens[cursor].value == "<":
+        depth = 1
+        cursor += 1
+        parameter_start = True
+        while cursor < len(tokens) and depth:
+            value = tokens[cursor].value
+            if value == "<":
+                depth += 1
+            elif value == ">":
+                depth -= 1
+            elif depth == 1 and value == ",":
+                parameter_start = True
+            elif depth == 1 and parameter_start:
+                if value == "'":
+                    parameter_start = False
+                elif value == "const":
+                    parameter_start = False
+                elif is_identifier_start(value[0]):
+                    symbols.add(value)
+                    parameter_start = False
+            cursor += 1
+        if depth:
+            raise ScanError("unterminated function generic parameters")
+
+    while cursor < len(tokens):
+        if tokens[cursor].value == ";":
+            return None
+        if tokens[cursor].value == "{":
+            return cursor, symbols
+        cursor += 1
+    return None
+
+
 def scan_tokens(tokens: list[Token]) -> Violation | None:
-    use_indices: set[int] = set()
-    path_aliases: dict[str, list[Token]] = {}
-    for index, token in enumerate(tokens):
-        if token.value != "use":
-            continue
-        end = index + 1
-        while end < len(tokens) and tokens[end].value != ";":
-            end += 1
-        if end >= len(tokens):
-            raise ScanError("unterminated use statement")
-        use_indices.update(range(index, end + 1))
-        for imported in UseParser(tokens[index + 1 : end]).parse():
-            violation = violation_for_import_path(imported.path)
-            if violation is not None:
-                return violation
-            values = [path_token.value for path_token in imported.path]
-            if values == ["std", "io"]:
-                alias = imported.alias or imported.path[-1]
-                path_aliases[alias.value] = imported.path
-
-    for index, token in enumerate(tokens):
-        if token.value != "extern":
-            continue
-        if index + 1 >= len(tokens) or tokens[index + 1].value != "crate":
-            continue
-        if index + 2 >= len(tokens) or not is_identifier_start(tokens[index + 2].value[0]):
-            raise ScanError("incomplete extern crate statement")
-        crate_name = tokens[index + 2]
-        end = index + 3
-        if end < len(tokens) and tokens[end].value == "as":
-            end += 1
-            if end >= len(tokens) or not is_identifier_start(tokens[end].value[0]):
-                raise ScanError("invalid extern crate alias")
-            end += 1
-        if end >= len(tokens) or tokens[end].value != ";":
-            raise ScanError("unterminated extern crate statement")
-        violation = violation_for_path([crate_name])
-        if violation is not None:
-            return violation
-
     for index, token in enumerate(tokens):
         if token.value in OUTPUT_MACROS and index + 1 < len(tokens):
             if tokens[index + 1].value == "!":
                 return Violation("terminal output macros", token)
 
+    scopes = [Scope.empty()]
+    pending_scope_symbols: dict[int, set[str]] = {}
+    type_declarations = {"enum", "mod", "struct", "trait", "type", "union"}
     index = 0
     while index < len(tokens):
-        if index in use_indices or not is_identifier_start(tokens[index].value[0]):
+        token = tokens[index]
+        if token.value == "{":
+            scope = Scope.empty()
+            for symbol in pending_scope_symbols.pop(index, set()):
+                scope.bind_symbol(symbol)
+            scopes.append(scope)
+            index += 1
+            continue
+        if token.value == "}":
+            if len(scopes) == 1:
+                raise ScanError("unmatched closing brace")
+            scopes.pop()
+            index += 1
+            continue
+
+        if token.value == "use":
+            end = index + 1
+            while end < len(tokens) and tokens[end].value != ";":
+                end += 1
+            if end >= len(tokens):
+                raise ScanError("unterminated use statement")
+            for imported in UseParser(tokens[index + 1 : end]).parse():
+                expanded = expand_path(imported.path, scopes)
+                if expanded is not None:
+                    violation = violation_for_import_path(expanded)
+                    if violation is not None:
+                        return violation
+                else:
+                    violation = violation_for_boundary_name(imported.path)
+                    if violation is not None:
+                        return violation
+                local_name = imported.alias or imported.path[-1]
+                if local_name.value != "*":
+                    scopes[-1].bind_alias(
+                        local_name.value,
+                        expanded if expanded is not None else imported.path,
+                    )
+            index = end + 1
+            continue
+
+        if (
+            token.value == "extern"
+            and index + 1 < len(tokens)
+            and tokens[index + 1].value == "crate"
+        ):
+            if (
+                index + 2 >= len(tokens)
+                or not is_identifier_start(tokens[index + 2].value[0])
+            ):
+                raise ScanError("incomplete extern crate statement")
+            crate_name = tokens[index + 2]
+            alias = crate_name
+            end = index + 3
+            if end < len(tokens) and tokens[end].value == "as":
+                end += 1
+                if (
+                    end >= len(tokens)
+                    or not is_identifier_start(tokens[end].value[0])
+                ):
+                    raise ScanError("invalid extern crate alias")
+                alias = tokens[end]
+                end += 1
+            if end >= len(tokens) or tokens[end].value != ";":
+                raise ScanError("unterminated extern crate statement")
+            violation = violation_for_path([crate_name])
+            if violation is not None:
+                return violation
+            scopes[-1].bind_alias(alias.value, [crate_name])
+            index = end + 1
+            continue
+
+        if token.value in type_declarations and index + 1 < len(tokens):
+            declaration = tokens[index + 1]
+            if is_identifier_start(declaration.value[0]):
+                scopes[-1].bind_symbol(declaration.value)
+
+        if token.value == "fn":
+            function_scope = function_scope_symbols(tokens, index)
+            if function_scope is not None:
+                body, symbols = function_scope
+                pending_scope_symbols.setdefault(body, set()).update(symbols)
+
+        if not is_identifier_start(token.value[0]):
             index += 1
             continue
         if (
@@ -398,7 +538,7 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             index += 1
             continue
 
-        path = [tokens[index]]
+        path = [token]
         end = index
         while (
             end + 2 < len(tokens)
@@ -408,12 +548,18 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             path.append(tokens[end + 2])
             end += 2
         if len(path) > 1:
-            alias_prefix = path_aliases.get(path[0].value)
-            expanded_path = [*alias_prefix, *path[1:]] if alias_prefix else path
-            violation = violation_for_path(expanded_path)
-            if violation is not None:
-                return violation
+            expanded = expand_path(path, scopes)
+            if expanded is not None:
+                violation = violation_for_path(expanded)
+                if violation is not None:
+                    return violation
+            else:
+                violation = violation_for_boundary_name(path)
+                if violation is not None:
+                    return violation
         index = max(index + 1, end + 1)
+    if len(scopes) != 1:
+        raise ScanError("unclosed brace")
     return None
 
 
