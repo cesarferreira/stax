@@ -56,6 +56,39 @@ assert_scanner_error() {
   fi
 }
 
+reset_application_fixture() {
+  rm -rf "$fixture/src/application"
+  mkdir -p "$fixture/src/application"
+}
+
+assert_fixture_rejected() {
+  local expected="$1"
+  local description="$2"
+  if run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected boundary lint rejection for: $description"
+  elif rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected '$expected', not a scanner error, for: $description"
+  elif ! rg -F "$expected" "$temp_root/output" >/dev/null; then
+    record_failure "expected '$expected' for rejected fixture: $description"
+  fi
+}
+
+assert_fixture_accepted() {
+  local description="$1"
+  if ! run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected boundary lint acceptance for: $description"
+  fi
+}
+
+assert_fixture_scanner_error() {
+  local description="$1"
+  if run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected scanner failure for: $description"
+  elif ! rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected scanner error label for: $description"
+  fi
+}
+
 printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/checkout.rs"
 run_lint
 git -C "$fixture" add src/application/checkout.rs
@@ -175,6 +208,65 @@ assert_accepted 'const TEXT: &str = "extern crate tui; use std::io::*;";'
 assert_scanner_error 'use std::io as #;'
 assert_scanner_error 'extern crate safe_dependency as ;'
 
+reset_application_fixture
+printf '%s\n' 'mod child; use std as standard;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdout(); }' > "$fixture/src/application/child.rs"
+assert_fixture_rejected 'terminal I/O' 'parent alias used by conventional child.rs'
+
+reset_application_fixture
+printf '%s\n' 'use std as standard; mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn bad() { crate::application::standard::io::stderr(); }' > "$fixture/src/application/child.rs"
+assert_fixture_rejected 'terminal I/O' 'crate-qualified parent alias'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/outer"
+printf '%s\n' 'mod outer;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'mod child; use std as r#standard;' > "$fixture/src/application/outer/mod.rs"
+printf '%s\n' 'fn bad() { super::r#standard::io::stdin(); }' > "$fixture/src/application/outer/child.rs"
+assert_fixture_rejected 'terminal I/O' 'raw alias through nested mod.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/feature"
+printf '%s\n' 'mod feature;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'mod child; use std as standard;' > "$fixture/src/application/feature.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdout(); }' > "$fixture/src/application/feature/child.rs"
+assert_fixture_rejected 'terminal I/O' 'nested child of sibling feature.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/outer"
+printf '%s\n' 'use std as standard; mod outer { mod child; }' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn bad() { super::super::standard::io::stderr(); }' > "$fixture/src/application/outer/child.rs"
+assert_fixture_rejected 'terminal I/O' 'external child under inline module'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/custom"
+printf '%s\n' 'use std as standard; #[path = "custom/child_impl.rs"] mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdout(); }' > "$fixture/src/application/custom/child_impl.rs"
+assert_fixture_rejected 'terminal I/O' 'path-attributed child module'
+
+reset_application_fixture
+printf '%s\n' 'use std as standard; mod left; mod right;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn clean() { self::standard::io::stdout(); } mod standard { pub mod io { pub fn stdout() {} } }' > "$fixture/src/application/left.rs"
+printf '%s\n' 'fn clean() { self::standard::io::stdout(); } mod standard { pub mod io { pub fn stdout() {} } }' > "$fixture/src/application/right.rs"
+assert_fixture_accepted 'legitimate local shadows in sibling modules'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/child"
+printf '%s\n' 'mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/child.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/child/mod.rs"
+assert_fixture_scanner_error 'ambiguous child.rs and child/mod.rs'
+
+reset_application_fixture
+printf '%s\n' '#[path = "../../outside.rs"] mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/outside.rs"
+assert_fixture_scanner_error 'path attribute escaping src/application'
+
+reset_application_fixture
+printf '%s\n' '#[path = "missing.rs"] mod child;' > "$fixture/src/application/mod.rs"
+assert_fixture_scanner_error 'missing path-attributed module'
+
+reset_application_fixture
 printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/checkout.rs"
 mkdir -p "$fixture/src/application/nested/future"
 printf '%s\n' 'use dialoguer as prompt;' > "$fixture/src/application/nested/future/module.rs"

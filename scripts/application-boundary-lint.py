@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ class Token:
     value: str
     line: int
     column: int
+    offset: int
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,33 @@ class Scope:
     def bind_symbol(self, name: str) -> None:
         self.aliases.pop(name, None)
         self.symbols.add(name)
+
+
+@dataclass(frozen=True)
+class ModuleDeclaration:
+    name: Token
+    parent_module_id: int
+    child_module_id: int | None
+    path_override: str | None
+
+
+@dataclass
+class ParsedSource:
+    path: Path
+    tokens: list[Token]
+    root_scope: Scope
+    scopes_by_brace: dict[int, Scope]
+    module_scopes: list[Scope]
+    module_parents: list[int | None]
+    generic_headers: list[tuple[int, int, set[str]]]
+    declarations: list[ModuleDeclaration]
+
+
+@dataclass
+class RepositoryModules:
+    scopes: list[Scope]
+    parents: list[int | None]
+    children: dict[tuple[int, str], int]
 
 
 def blank_range(characters: list[str], start: int, end: int) -> None:
@@ -234,7 +263,7 @@ def tokenize(source: str) -> list[Token]:
             end = cursor + 3
             while end < len(source) and is_identifier_continue(source[end]):
                 end += 1
-            tokens.append(Token(source[cursor + 2 : end], line, column))
+            tokens.append(Token(source[cursor + 2 : end], line, column, cursor))
             column += end - cursor
             cursor = end
             continue
@@ -242,16 +271,16 @@ def tokenize(source: str) -> list[Token]:
             end = cursor + 1
             while end < len(source) and is_identifier_continue(source[end]):
                 end += 1
-            tokens.append(Token(source[cursor:end], line, column))
+            tokens.append(Token(source[cursor:end], line, column, cursor))
             column += end - cursor
             cursor = end
             continue
         if source.startswith("::", cursor):
-            tokens.append(Token("::", line, column))
+            tokens.append(Token("::", line, column, cursor))
             cursor += 2
             column += 2
             continue
-        tokens.append(Token(character, line, column))
+        tokens.append(Token(character, line, column, cursor))
         cursor += 1
         column += 1
     return tokens
@@ -370,10 +399,12 @@ def expand_path(
     scopes: list[Scope],
     module_scopes: list[Scope],
     module_parents: list[int | None],
+    module_children: dict[tuple[int, str], int],
 ) -> list[Token] | None:
     expanded = path
     visited: set[tuple[int, str]] = set()
     lookup_scopes = scopes
+    source_root_scope = scopes[0]
     module_id = scopes[-1].module_id
     while expanded:
         if expanded[0].value in {"crate", "self", "super"}:
@@ -393,23 +424,42 @@ def expand_path(
                         continue
                     module_id = parent
                     expanded = expanded[1:]
-            lookup_scopes = (
-                [] if unknown_ancestor else [module_scopes[module_id]]
-            )
+            if unknown_ancestor:
+                lookup_scopes = []
+            elif qualifier == "crate" and source_root_scope is not module_scopes[0]:
+                lookup_scopes = [source_root_scope, module_scopes[0]]
+            else:
+                lookup_scopes = [module_scopes[module_id]]
             if not expanded:
                 return expanded
 
         name = expanded[0].value
         binding: list[Token] | None = None
         binding_scope = -1
+        child_module: int | None = None
         for scope_index in range(len(lookup_scopes) - 1, -1, -1):
             scope = lookup_scopes[scope_index]
             if name in scope.aliases:
                 binding = scope.aliases[name]
                 binding_scope = scope_index
                 break
+            child_module = module_children.get((scope.module_id, name))
+            if (
+                child_module is not None
+                and scope is module_scopes[scope.module_id]
+            ):
+                break
             if name in scope.symbols:
                 return None
+        if child_module is not None:
+            if violation_for_boundary_name([expanded[0]]) is not None:
+                return expanded
+            module_id = child_module
+            lookup_scopes = [module_scopes[module_id]]
+            expanded = expanded[1:]
+            if not expanded:
+                return expanded
+            continue
         if binding is None:
             return expanded
         key = (id(lookup_scopes[binding_scope]), name)
@@ -611,19 +661,116 @@ def collect_item_scopes(
     return root, scopes_by_brace, module_scopes, module_parents, generic_headers
 
 
-def scan_tokens(tokens: list[Token]) -> Violation | None:
+def module_path_override(
+    source: str, tokens: list[Token], module_index: int
+) -> str | None:
+    matches: list[tuple[int, int]] = []
+    start = max(0, module_index - 32)
+    for index in range(start, module_index - 4):
+        values = [token.value for token in tokens[index : index + 5]]
+        if values != ["#", "[", "path", "=", "]"]:
+            continue
+        if any(
+            token.value in {";", "{", "}"}
+            for token in tokens[index + 5 : module_index]
+        ):
+            continue
+        matches.append((tokens[index].offset, tokens[index + 4].offset + 1))
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise ScanError("multiple path attributes on module")
+    attribute = source[matches[0][0] : matches[0][1]]
+    path_match = re.search(r'path\s*=\s*"([^"\\]*)"', attribute, re.DOTALL)
+    if path_match is None:
+        raise ScanError("unsupported path attribute literal")
+    return path_match.group(1)
+
+
+def collect_module_declarations(
+    source: str,
+    tokens: list[Token],
+    root_scope: Scope,
+    scopes_by_brace: dict[int, Scope],
+) -> list[ModuleDeclaration]:
+    declarations: list[ModuleDeclaration] = []
+    scopes = [root_scope]
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.value == "{":
+            scopes.append(scopes_by_brace[index])
+            index += 1
+            continue
+        if token.value == "}":
+            scopes.pop()
+            index += 1
+            continue
+        if token.value == "use":
+            _imports, end = parse_use_statement(tokens, index)
+            index = end + 1
+            continue
+        if token.value != "mod":
+            index += 1
+            continue
+        if (
+            index + 2 >= len(tokens)
+            or not is_identifier_start(tokens[index + 1].value[0])
+        ):
+            index += 1
+            continue
+        terminator = tokens[index + 2].value
+        if terminator not in {"{", ";"}:
+            raise ScanError("malformed module declaration")
+        override = module_path_override(source, tokens, index)
+        if override is not None and terminator == "{":
+            raise ScanError("path attribute on inline module")
+        declarations.append(
+            ModuleDeclaration(
+                name=tokens[index + 1],
+                parent_module_id=scopes[-1].module_id,
+                child_module_id=(
+                    scopes_by_brace[index + 2].module_id
+                    if terminator == "{"
+                    else None
+                ),
+                path_override=override,
+            )
+        )
+        index += 1
+    return declarations
+
+
+def scan_tokens(
+    tokens: list[Token],
+    root_scope: Scope | None = None,
+    scopes_by_brace: dict[int, Scope] | None = None,
+    module_scopes: list[Scope] | None = None,
+    module_parents: list[int | None] | None = None,
+    generic_headers: list[tuple[int, int, set[str]]] | None = None,
+    module_children: dict[tuple[int, str], int] | None = None,
+) -> Violation | None:
     for index, token in enumerate(tokens):
         if token.value in OUTPUT_MACROS and index + 1 < len(tokens):
             if tokens[index + 1].value == "!":
                 return Violation("terminal output macros", token)
 
-    (
-        root_scope,
-        scopes_by_brace,
-        module_scopes,
-        module_parents,
-        generic_headers,
-    ) = collect_item_scopes(tokens)
+    if root_scope is None:
+        (
+            root_scope,
+            scopes_by_brace,
+            module_scopes,
+            module_parents,
+            generic_headers,
+        ) = collect_item_scopes(tokens)
+    if (
+        scopes_by_brace is None
+        or module_scopes is None
+        or module_parents is None
+        or generic_headers is None
+    ):
+        raise ScanError("incomplete scanner scope configuration")
+    module_children = module_children or {}
     scopes = [root_scope]
     index = 0
     while index < len(tokens):
@@ -643,7 +790,11 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             imports, end = parse_use_statement(tokens, index)
             for imported in imports:
                 expanded = expand_path(
-                    imported.path, scopes, module_scopes, module_parents
+                    imported.path,
+                    scopes,
+                    module_scopes,
+                    module_parents,
+                    module_children,
                 )
                 if expanded is not None:
                     violation = violation_for_import_path(expanded)
@@ -702,7 +853,11 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             end += 2
         if len(path) > 1:
             expanded = expand_path(
-                path, path_scopes, module_scopes, module_parents
+                path,
+                path_scopes,
+                module_scopes,
+                module_parents,
+                module_children,
             )
             if expanded is not None:
                 violation = violation_for_path(expanded)
@@ -745,16 +900,251 @@ def application_sources(root: Path) -> list[Path]:
     return sorted(set(sources))
 
 
-def scan_file(root: Path, path: Path) -> Violation | None:
+def parse_source(root: Path, path: Path) -> ParsedSource:
     try:
         source = path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError) as error:
         raise ScanError(f"could not read {path.relative_to(root)}: {error}") from error
     try:
         code = code_without_literals(source)
-        return scan_tokens(tokenize(code))
+        tokens = tokenize(code)
+        (
+            root_scope,
+            scopes_by_brace,
+            module_scopes,
+            module_parents,
+            generic_headers,
+        ) = collect_item_scopes(tokens)
+        declarations = collect_module_declarations(
+            source, tokens, root_scope, scopes_by_brace
+        )
+        return ParsedSource(
+            path=path.resolve(),
+            tokens=tokens,
+            root_scope=root_scope,
+            scopes_by_brace=scopes_by_brace,
+            module_scopes=module_scopes,
+            module_parents=module_parents,
+            generic_headers=generic_headers,
+            declarations=declarations,
+        )
     except ScanError as error:
         raise ScanError(f"could not scan {path.relative_to(root)}: {error}") from error
+
+
+def inferred_module_path(application_root: Path, path: Path) -> tuple[str, ...]:
+    relative = path.relative_to(application_root)
+    if relative.name == "mod.rs":
+        components = relative.parent.parts
+    else:
+        components = (*relative.parent.parts, relative.stem)
+    return ("application", *components)
+
+
+def build_repository_modules(
+    root: Path, parsed_sources: list[ParsedSource]
+) -> RepositoryModules:
+    application_root = (root / "src" / "application").resolve()
+    sources_by_path = {source.path: source for source in parsed_sources}
+    module_owners: dict[tuple[str, ...], tuple[Path, int]] = {}
+    file_roots: dict[Path, tuple[str, ...]] = {}
+    local_paths_by_file: dict[Path, dict[int, tuple[str, ...]]] = {}
+    declarations_seen: set[tuple[tuple[str, ...], str]] = set()
+    processing: set[Path] = set()
+    processed: set[Path] = set()
+
+    def claim_module(
+        module_path: tuple[str, ...], owner: tuple[Path, int]
+    ) -> None:
+        previous = module_owners.get(module_path)
+        if previous is not None and previous != owner:
+            rendered = "::".join(module_path)
+            raise ScanError(f"duplicate module path: {rendered}")
+        module_owners[module_path] = owner
+
+    def module_source(
+        source: ParsedSource,
+        parent_suffix: tuple[str, ...],
+        declaration: ModuleDeclaration,
+    ) -> Path:
+        if source.path.name == "mod.rs":
+            module_directory = source.path.parent
+        else:
+            module_directory = source.path.parent / source.path.stem
+        module_directory = module_directory.joinpath(*parent_suffix)
+
+        if declaration.path_override is not None:
+            candidate = (
+                module_directory / declaration.path_override
+            ).resolve()
+            try:
+                candidate.relative_to(application_root)
+            except ValueError as error:
+                raise ScanError(
+                    f"module path escapes src/application: {declaration.path_override}"
+                ) from error
+            if not candidate.exists() or not candidate.is_file():
+                raise ScanError(
+                    f"module source is unreadable or missing: {candidate}"
+                )
+            if candidate not in sources_by_path:
+                raise ScanError(f"module source was not scanned: {candidate}")
+            return candidate
+
+        candidates = [
+            (module_directory / f"{declaration.name.value}.rs").resolve(),
+            (
+                module_directory
+                / declaration.name.value
+                / "mod.rs"
+            ).resolve(),
+        ]
+        existing = [candidate for candidate in candidates if candidate.exists()]
+        if len(existing) > 1:
+            raise ScanError(
+                f"ambiguous module source for {declaration.name.value}"
+            )
+        if not existing or not existing[0].is_file():
+            raise ScanError(
+                f"module source is unreadable or missing: {declaration.name.value}"
+            )
+        if existing[0] not in sources_by_path:
+            raise ScanError(f"module source was not scanned: {existing[0]}")
+        return existing[0]
+
+    def assign_file(path: Path, root_module: tuple[str, ...]) -> None:
+        previous_root = file_roots.get(path)
+        if previous_root is not None:
+            if previous_root != root_module:
+                raise ScanError(
+                    f"module file has multiple paths: {path}"
+                )
+            return
+        if path in processing:
+            raise ScanError(f"cyclic module source mapping: {path}")
+        processing.add(path)
+        file_roots[path] = root_module
+        source = sources_by_path[path]
+
+        local_paths: dict[int, tuple[str, ...]] = {0: root_module}
+        local_suffixes: dict[int, tuple[str, ...]] = {0: ()}
+        inline = [
+            declaration
+            for declaration in source.declarations
+            if declaration.child_module_id is not None
+        ]
+        while inline:
+            remaining: list[ModuleDeclaration] = []
+            progress = False
+            for declaration in inline:
+                parent = local_paths.get(declaration.parent_module_id)
+                suffix = local_suffixes.get(declaration.parent_module_id)
+                if parent is None or suffix is None:
+                    remaining.append(declaration)
+                    continue
+                child = (*parent, declaration.name.value)
+                child_id = declaration.child_module_id
+                if child_id is None:
+                    raise ScanError("inline module is missing its scope")
+                previous = local_paths.get(child_id)
+                if previous is not None and previous != child:
+                    raise ScanError("ambiguous inline module path")
+                local_paths[child_id] = child
+                local_suffixes[child_id] = (*suffix, declaration.name.value)
+                claim_module(child, (path, child_id))
+                progress = True
+            if not progress and remaining:
+                raise ScanError("could not resolve inline module parent")
+            inline = remaining
+
+        claim_module(root_module, (path, 0))
+        local_paths_by_file[path] = local_paths
+
+        for declaration in source.declarations:
+            parent = local_paths.get(declaration.parent_module_id)
+            if parent is None:
+                raise ScanError("could not resolve module declaration parent")
+            edge = (parent, declaration.name.value)
+            if edge in declarations_seen:
+                rendered = "::".join((*parent, declaration.name.value))
+                raise ScanError(f"duplicate module declaration: {rendered}")
+            declarations_seen.add(edge)
+            if declaration.child_module_id is not None:
+                continue
+            parent_suffix = local_suffixes[declaration.parent_module_id]
+            child_source = module_source(source, parent_suffix, declaration)
+            assign_file(child_source, (*parent, declaration.name.value))
+
+        processing.remove(path)
+        processed.add(path)
+
+    application_mod = (application_root / "mod.rs").resolve()
+    if application_mod in sources_by_path:
+        assign_file(application_mod, ("application",))
+
+    for path in sorted(sources_by_path):
+        if path not in processed and path not in file_roots:
+            assign_file(path, inferred_module_path(application_root, path))
+
+    all_paths: set[tuple[str, ...]] = {(), ("application",)}
+    for module_path in module_owners:
+        for length in range(len(module_path) + 1):
+            all_paths.add(module_path[:length])
+    ordered_paths = sorted(all_paths, key=lambda value: (len(value), value))
+    path_ids = {
+        module_path: module_id
+        for module_id, module_path in enumerate(ordered_paths)
+    }
+
+    global_scopes: list[Scope] = []
+    for module_id, module_path in enumerate(ordered_paths):
+        owner = module_owners.get(module_path)
+        if owner is None:
+            global_scopes.append(Scope.empty(module_id))
+            continue
+        owner_path, local_id = owner
+        global_scopes.append(
+            sources_by_path[owner_path].module_scopes[local_id]
+        )
+
+    for path, source in sources_by_path.items():
+        local_paths = local_paths_by_file[path]
+        local_ids = {
+            local_id: path_ids[module_path]
+            for local_id, module_path in local_paths.items()
+        }
+        scopes = {id(source.root_scope): source.root_scope}
+        scopes.update(
+            {id(scope): scope for scope in source.scopes_by_brace.values()}
+        )
+        for scope in scopes.values():
+            scope.module_id = local_ids[scope.module_id]
+
+    parents: list[int | None] = []
+    children: dict[tuple[int, str], int] = {}
+    for module_path in ordered_paths:
+        if not module_path:
+            parents.append(None)
+            continue
+        parent_id = path_ids[module_path[:-1]]
+        module_id = path_ids[module_path]
+        parents.append(parent_id)
+        children[(parent_id, module_path[-1])] = module_id
+    return RepositoryModules(global_scopes, parents, children)
+
+
+def scan_parsed_source(
+    source: ParsedSource, modules: RepositoryModules
+) -> Violation | None:
+    return scan_tokens(
+        source.tokens,
+        root_scope=source.root_scope,
+        scopes_by_brace=source.scopes_by_brace,
+        module_scopes=modules.scopes,
+        module_parents=modules.parents,
+        generic_headers=source.generic_headers,
+        module_children=modules.children,
+    )
 
 
 def main(arguments: list[str]) -> int:
@@ -766,10 +1156,14 @@ def main(arguments: list[str]) -> int:
         root = Path(arguments[0]).expanduser().resolve(strict=True)
         if not root.is_dir():
             raise ScanError(f"repository root is not a directory: {root}")
-        for path in application_sources(root):
-            violation = scan_file(root, path)
+        parsed_sources = [
+            parse_source(root, path) for path in application_sources(root)
+        ]
+        modules = build_repository_modules(root, parsed_sources)
+        for source in parsed_sources:
+            violation = scan_parsed_source(source, modules)
             if violation is not None:
-                relative = path.relative_to(root)
+                relative = source.path.relative_to(root)
                 token = violation.token
                 print(
                     f"{relative}:{token.line}:{token.column}: forbidden application dependency",
