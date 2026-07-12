@@ -821,6 +821,20 @@ def scan_tokens(
     scanned_modules: set[int] | None = None,
 ) -> Violation | None:
     for index, token in enumerate(tokens):
+        defines_macro_rules = (
+            token.value == "macro_rules"
+            and index + 1 < len(tokens)
+            and tokens[index + 1].value == "!"
+        )
+        defines_macro_item = (
+            token.value == "macro"
+            and index + 1 < len(tokens)
+            and is_identifier_start(tokens[index + 1].value[0])
+        )
+        if defines_macro_rules or defines_macro_item:
+            return Violation("local declarative macros", token)
+
+    for index, token in enumerate(tokens):
         if token.value in OUTPUT_MACROS and index + 1 < len(tokens):
             if tokens[index + 1].value == "!":
                 return Violation("terminal output macros", token)

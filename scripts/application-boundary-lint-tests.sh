@@ -194,6 +194,12 @@ assert_rejected 'use std as standard; use standard::include_bytes as inject;' 's
 assert_rejected 'use crate::outside::inject; inject!();' 'unknown source macro imports'
 assert_rejected 'use self::outside::inject as r#run; r#run!();' 'unknown source macro imports'
 assert_rejected 'use crate::outside as external; external::inject!();' 'unknown source macro imports'
+assert_rejected 'macro_rules! dispatch { ($name:ident) => { $name!() }; } dispatch!(println);' 'local declarative macros'
+assert_rejected 'fn nested() { macro_rules! hidden { () => { println!() }; } hidden!(); }' 'local declarative macros'
+assert_rejected 'macro_rules! r#benign { () => { 1 }; }' 'local declarative macros'
+assert_rejected 'macro_rules! harmless { () => { 42 }; } harmless!();' 'local declarative macros'
+assert_rejected 'macro modern($value:ident) { $value }' 'local declarative macros'
+assert_rejected 'mod nested { pub macro r#modern() {} }' 'local declarative macros'
 
 assert_rejected 'extern crate gpui as ui;' 'presentation frameworks'
 assert_rejected 'extern crate r#console as r#ui;' 'presentation frameworks'
@@ -233,7 +239,7 @@ assert_accepted 'use super::RepositorySnapshot;'
 assert_accepted '// extern crate gpui as ui; use std::io as io; io::stdout();'
 assert_accepted 'const TEXT: &str = "extern crate tui; use std::io::*;";'
 assert_accepted 'const INCLUDE_TEXT: &str = "include!(generated.rs)"; // include_bytes!("ignored")'
-assert_accepted 'macro_rules! local_macro { () => {} } local_macro!(); serde_json::json!({});'
+assert_accepted 'serde_json::json!({}); tracing::debug!("audited direct macro");'
 assert_scanner_error 'use std::io as #;'
 assert_scanner_error 'extern crate safe_dependency as ;'
 
@@ -310,7 +316,7 @@ reset_application_fixture
 printf '%s\n' 'mod macros; mod child;' > "$fixture/src/application/mod.rs"
 printf '%s\n' 'macro_rules! local_macro { () => {} } pub(crate) use local_macro;' > "$fixture/src/application/macros.rs"
 printf '%s\n' 'use super::macros::local_macro; local_macro!();' > "$fixture/src/application/child.rs"
-assert_fixture_accepted 'known application macro import'
+assert_fixture_rejected 'local declarative macros' 'known application macro definition'
 
 reset_application_fixture
 printf '%s\n' '#[cfg_attr(feature = "alternate", path = "alternate.rs")] mod child;' > "$fixture/src/application/mod.rs"
