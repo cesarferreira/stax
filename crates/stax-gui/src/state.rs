@@ -28,11 +28,11 @@ impl<T> LoadState<T> {
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceState {
-    pub snapshot: RepositorySnapshot,
-    pub selected_branch: Option<String>,
-    pub details: LoadState<BranchDetails>,
-    pub diff: LoadState<BranchDiff>,
-    pub ci: LoadState<CiSummary>,
+    snapshot: RepositorySnapshot,
+    selected_branch: Option<String>,
+    details: LoadState<BranchDetails>,
+    diff: LoadState<BranchDiff>,
+    ci: LoadState<CiSummary>,
     generation: u64,
 }
 
@@ -55,6 +55,26 @@ impl WorkspaceState {
         }
     }
 
+    pub fn snapshot(&self) -> &RepositorySnapshot {
+        &self.snapshot
+    }
+
+    pub fn selected_branch(&self) -> Option<&str> {
+        self.selected_branch.as_deref()
+    }
+
+    pub fn details(&self) -> &LoadState<BranchDetails> {
+        &self.details
+    }
+
+    pub fn diff(&self) -> &LoadState<BranchDiff> {
+        &self.diff
+    }
+
+    pub fn ci(&self) -> &LoadState<CiSummary> {
+        &self.ci
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -70,7 +90,7 @@ impl WorkspaceState {
         }
 
         self.selected_branch = Some(name.to_owned());
-        self.generation = self.generation.wrapping_add(1);
+        self.advance_generation();
         self.details = LoadState::Idle;
         self.diff = LoadState::Idle;
         self.ci = LoadState::Idle;
@@ -78,14 +98,18 @@ impl WorkspaceState {
     }
 
     pub fn begin_hydration(&mut self) -> Option<(DetailRequestToken, BranchSummary)> {
-        let selected = self.selected_branch.as_deref()?;
         let summary = self
-            .snapshot
-            .branches
-            .iter()
-            .find(|branch| branch.name == selected)?
+            .selected_branch
+            .as_deref()
+            .and_then(|selected| {
+                self.snapshot
+                    .branches
+                    .iter()
+                    .find(|branch| branch.name == selected)
+            })?
             .clone();
-        let token = self.current_token(selected);
+        self.advance_generation();
+        let token = self.current_token(&summary.name);
 
         self.details = LoadState::Loading;
         self.diff = LoadState::Loading;
@@ -127,6 +151,10 @@ impl WorkspaceState {
         }
         self.ci = result.map_or_else(LoadState::Failed, LoadState::Ready);
         true
+    }
+
+    fn advance_generation(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
     }
 
     fn current_token(&self, branch: &str) -> DetailRequestToken {
@@ -222,11 +250,12 @@ mod tests {
             &[("feature-a", false), ("feature-b", true)],
         ));
 
-        assert_eq!(state.selected_branch.as_deref(), Some("feature-b"));
+        assert_eq!(state.snapshot().repository_root, PathBuf::from("/repo"));
+        assert_eq!(state.selected_branch(), Some("feature-b"));
         assert_eq!(state.generation(), 0);
-        assert_eq!(state.details, LoadState::Idle);
-        assert_eq!(state.diff, LoadState::Idle);
-        assert_eq!(state.ci, LoadState::Idle);
+        assert_eq!(state.details(), &LoadState::Idle);
+        assert_eq!(state.diff(), &LoadState::Idle);
+        assert_eq!(state.ci(), &LoadState::Idle);
     }
 
     #[test]
@@ -237,34 +266,37 @@ mod tests {
             &[("feature-a", false), ("feature-b", false)],
         ));
 
-        assert_eq!(state.selected_branch.as_deref(), Some("feature-a"));
+        assert_eq!(state.selected_branch(), Some("feature-a"));
     }
 
     #[test]
     fn empty_snapshot_has_no_selection_or_hydration_request() {
         let mut state = WorkspaceState::new(snapshot("/repo", "main", &[]));
 
-        assert_eq!(state.selected_branch, None);
+        assert_eq!(state.selected_branch(), None);
         assert_eq!(state.generation(), 0);
         assert_eq!(state.begin_hydration(), None);
-        assert_eq!(state.details, LoadState::Idle);
-        assert_eq!(state.diff, LoadState::Idle);
-        assert_eq!(state.ci, LoadState::Idle);
+        assert_eq!(state.generation(), 0);
+        assert_eq!(state.details(), &LoadState::Idle);
+        assert_eq!(state.diff(), &LoadState::Idle);
+        assert_eq!(state.ci(), &LoadState::Idle);
     }
 
     #[test]
     fn invalid_selection_does_not_mutate_state() {
         let mut state = WorkspaceState::new(snapshot("/repo", "feature-a", &[("feature-a", true)]));
-        state.details = LoadState::Failed("keep details".into());
-        state.diff = LoadState::Failed("keep diff".into());
-        state.ci = LoadState::Failed("keep ci".into());
+        let (token, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_details(token.clone(), Err("keep details".into())));
+        assert!(state.apply_diff(token.clone(), Err("keep diff".into())));
+        assert!(state.apply_ci(token, Err("keep ci".into())));
+        let generation = state.generation();
 
         assert_eq!(state.select_branch("missing"), None);
-        assert_eq!(state.selected_branch.as_deref(), Some("feature-a"));
-        assert_eq!(state.generation(), 0);
-        assert_eq!(state.details.error(), Some("keep details"));
-        assert_eq!(state.diff.error(), Some("keep diff"));
-        assert_eq!(state.ci.error(), Some("keep ci"));
+        assert_eq!(state.selected_branch(), Some("feature-a"));
+        assert_eq!(state.generation(), generation);
+        assert_eq!(state.details().error(), Some("keep details"));
+        assert_eq!(state.diff().error(), Some("keep diff"));
+        assert_eq!(state.ci().error(), Some("keep ci"));
     }
 
     #[test]
@@ -274,21 +306,22 @@ mod tests {
             "feature-a",
             &[("feature-a", true), ("feature-b", false)],
         ));
-        state.details = LoadState::Ready(details(1));
-        state.diff = LoadState::Ready(diff("old"));
-        state.ci = LoadState::Ready(ci("success"));
+        let (initial, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_details(initial.clone(), Ok(details(1))));
+        assert!(state.apply_diff(initial.clone(), Ok(diff("old"))));
+        assert!(state.apply_ci(initial, Ok(ci("success"))));
 
         let first = state.select_branch("feature-a").unwrap();
-        assert_eq!(first, DetailRequestToken::new("/repo", "feature-a", 1));
-        assert_eq!(state.generation(), 1);
-        assert_eq!(state.details, LoadState::Idle);
-        assert_eq!(state.diff, LoadState::Idle);
-        assert_eq!(state.ci, LoadState::Idle);
+        assert_eq!(first, DetailRequestToken::new("/repo", "feature-a", 2));
+        assert_eq!(state.generation(), 2);
+        assert_eq!(state.details(), &LoadState::Idle);
+        assert_eq!(state.diff(), &LoadState::Idle);
+        assert_eq!(state.ci(), &LoadState::Idle);
 
         let second = state.select_branch("feature-b").unwrap();
-        assert_eq!(second, DetailRequestToken::new("/repo", "feature-b", 2));
-        assert_eq!(state.generation(), 2);
-        assert_eq!(state.selected_branch.as_deref(), Some("feature-b"));
+        assert_eq!(second, DetailRequestToken::new("/repo", "feature-b", 3));
+        assert_eq!(state.generation(), 3);
+        assert_eq!(state.selected_branch(), Some("feature-b"));
     }
 
     #[test]
@@ -301,11 +334,12 @@ mod tests {
 
         let (token, summary) = state.begin_hydration().unwrap();
 
-        assert_eq!(token, DetailRequestToken::new("/repo", "feature-b", 0));
+        assert_eq!(token, DetailRequestToken::new("/repo", "feature-b", 1));
         assert_eq!(summary, branch("feature-b", true));
-        assert_eq!(state.details, LoadState::Loading);
-        assert_eq!(state.diff, LoadState::Loading);
-        assert_eq!(state.ci, LoadState::Loading);
+        assert_eq!(state.generation(), 1);
+        assert_eq!(state.details(), &LoadState::Loading);
+        assert_eq!(state.diff(), &LoadState::Loading);
+        assert_eq!(state.ci(), &LoadState::Loading);
     }
 
     #[test]
@@ -316,20 +350,20 @@ mod tests {
         assert!(state.apply_details(token.clone(), Ok(details(2))));
         assert!(state.apply_diff(token.clone(), Ok(diff("ready"))));
         assert!(state.apply_ci(token, Ok(ci("success"))));
-        assert_eq!(state.details.ready(), Some(&details(2)));
-        assert_eq!(state.diff.ready(), Some(&diff("ready")));
-        assert_eq!(state.ci.ready(), Some(&ci("success")));
-        assert_eq!(state.details.error(), None);
+        assert_eq!(state.details().ready(), Some(&details(2)));
+        assert_eq!(state.diff().ready(), Some(&diff("ready")));
+        assert_eq!(state.ci().ready(), Some(&ci("success")));
+        assert_eq!(state.details().error(), None);
 
-        let retry = state.select_branch("feature-a").unwrap();
-        state.begin_hydration().unwrap();
+        state.select_branch("feature-a").unwrap();
+        let (retry, _) = state.begin_hydration().unwrap();
         assert!(state.apply_details(retry.clone(), Err("details failed".into())));
         assert!(state.apply_diff(retry.clone(), Err("diff failed".into())));
         assert!(state.apply_ci(retry, Err("ci failed".into())));
-        assert_eq!(state.details.error(), Some("details failed"));
-        assert_eq!(state.diff.error(), Some("diff failed"));
-        assert_eq!(state.ci.error(), Some("ci failed"));
-        assert_eq!(state.details.ready(), None);
+        assert_eq!(state.details().error(), Some("details failed"));
+        assert_eq!(state.diff().error(), Some("diff failed"));
+        assert_eq!(state.ci().error(), Some("ci failed"));
+        assert_eq!(state.details().ready(), None);
     }
 
     #[test]
@@ -339,8 +373,8 @@ mod tests {
             "feature-a",
             &[("feature-a", true), ("feature-b", false)],
         ));
-        let current = state.select_branch("feature-a").unwrap();
-        state.begin_hydration().unwrap();
+        state.select_branch("feature-a").unwrap();
+        let (current, _) = state.begin_hydration().unwrap();
 
         let mismatches = [
             DetailRequestToken::new("/other-repo", "feature-a", current.generation),
@@ -354,9 +388,9 @@ mod tests {
             assert!(!state.apply_ci(token, Ok(ci("failure"))));
         }
 
-        assert_eq!(state.details, LoadState::Loading);
-        assert_eq!(state.diff, LoadState::Loading);
-        assert_eq!(state.ci, LoadState::Loading);
+        assert_eq!(state.details(), &LoadState::Loading);
+        assert_eq!(state.diff(), &LoadState::Loading);
+        assert_eq!(state.ci(), &LoadState::Loading);
     }
 
     #[test]
@@ -366,23 +400,45 @@ mod tests {
             "feature-a",
             &[("feature-a", true), ("feature-b", false)],
         ));
-        let old = state.select_branch("feature-a").unwrap();
-        state.begin_hydration().unwrap();
-        let current = state.select_branch("feature-b").unwrap();
-        state.begin_hydration().unwrap();
+        let (old, _) = state.begin_hydration().unwrap();
+        state.select_branch("feature-b").unwrap();
+        let (current, _) = state.begin_hydration().unwrap();
 
         assert!(!state.apply_details(old.clone(), Ok(details(99))));
         assert!(!state.apply_diff(old.clone(), Ok(diff("old"))));
         assert!(!state.apply_ci(old, Ok(ci("failure"))));
-        assert_eq!(state.details, LoadState::Loading);
-        assert_eq!(state.diff, LoadState::Loading);
-        assert_eq!(state.ci, LoadState::Loading);
+        assert_eq!(state.details(), &LoadState::Loading);
+        assert_eq!(state.diff(), &LoadState::Loading);
+        assert_eq!(state.ci(), &LoadState::Loading);
         assert!(state.apply_details(current.clone(), Ok(details(3))));
         assert!(state.apply_diff(current.clone(), Ok(diff("new"))));
         assert!(state.apply_ci(current, Ok(ci("success"))));
-        assert_eq!(state.details.ready(), Some(&details(3)));
-        assert_eq!(state.diff.ready(), Some(&diff("new")));
-        assert_eq!(state.ci.ready(), Some(&ci("success")));
-        assert_eq!(state.selected_branch.as_deref(), Some("feature-b"));
+        assert_eq!(state.details().ready(), Some(&details(3)));
+        assert_eq!(state.diff().ready(), Some(&diff("new")));
+        assert_eq!(state.ci().ready(), Some(&ci("success")));
+        assert_eq!(state.selected_branch(), Some("feature-b"));
+    }
+
+    #[test]
+    fn retrying_same_branch_hydration_rejects_the_older_request() {
+        let mut state = WorkspaceState::new(snapshot("/repo", "feature-a", &[("feature-a", true)]));
+        let (old, _) = state.begin_hydration().unwrap();
+        let (retry, _) = state.begin_hydration().unwrap();
+
+        assert_eq!(old.generation, 1);
+        assert_eq!(retry.generation, 2);
+        assert!(!state.apply_details(old.clone(), Ok(details(99))));
+        assert!(!state.apply_diff(old.clone(), Ok(diff("old"))));
+        assert!(!state.apply_ci(old, Ok(ci("failure"))));
+        assert_eq!(state.details(), &LoadState::Loading);
+        assert_eq!(state.diff(), &LoadState::Loading);
+        assert_eq!(state.ci(), &LoadState::Loading);
+
+        assert!(state.apply_details(retry.clone(), Ok(details(2))));
+        assert!(state.apply_diff(retry.clone(), Ok(diff("retry"))));
+        assert!(state.apply_ci(retry, Ok(ci("success"))));
+        assert_eq!(state.details().ready(), Some(&details(2)));
+        assert_eq!(state.diff().ready(), Some(&diff("retry")));
+        assert_eq!(state.ci().ready(), Some(&ci("success")));
     }
 }

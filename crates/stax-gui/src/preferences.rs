@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, ensure};
+use fs4::FileExt;
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
@@ -10,6 +11,16 @@ const MAX_RECENT_REPOSITORIES: usize = 10;
 #[derive(Debug, Clone)]
 pub struct RecentRepositories {
     path: PathBuf,
+}
+
+struct ExclusiveLock {
+    file: File,
+}
+
+impl Drop for ExclusiveLock {
+    fn drop(&mut self) {
+        let _ = <File as FileExt>::unlock(&self.file);
+    }
 }
 
 impl RecentRepositories {
@@ -24,6 +35,10 @@ impl RecentRepositories {
     }
 
     pub fn load(&self) -> Result<Vec<PathBuf>> {
+        self.load_unlocked()
+    }
+
+    fn load_unlocked(&self) -> Result<Vec<PathBuf>> {
         let contents = match fs::read(&self.path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -44,12 +59,42 @@ impl RecentRepositories {
         })?;
 
         let mut seen = HashSet::new();
-        Ok(stored
-            .into_iter()
-            .filter_map(|path| path.canonicalize().ok())
-            .filter(|path| seen.insert(path.clone()))
-            .take(MAX_RECENT_REPOSITORIES)
-            .collect())
+        let mut repositories = Vec::new();
+        for stored_path in stored {
+            let canonical = match stored_path.canonicalize() {
+                Ok(canonical) => canonical,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to canonicalize recent repository {} listed in {}",
+                            stored_path.display(),
+                            self.path.display()
+                        )
+                    });
+                }
+            };
+            let metadata = match fs::metadata(&canonical) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to inspect recent repository {} listed in {}",
+                            canonical.display(),
+                            self.path.display()
+                        )
+                    });
+                }
+            };
+            if metadata.is_dir() && seen.insert(canonical.clone()) {
+                repositories.push(canonical);
+                if repositories.len() == MAX_RECENT_REPOSITORIES {
+                    break;
+                }
+            }
+        }
+        Ok(repositories)
     }
 
     pub fn record(&self, path: impl AsRef<Path>) -> Result<()> {
@@ -65,25 +110,59 @@ impl RecentRepositories {
             format!("failed to canonicalize repository path {}", path.display())
         })?;
 
-        let mut repositories = self.load()?;
+        let _lock = self.acquire_lock()?;
+        let mut repositories = self.load_unlocked()?;
         repositories.retain(|existing| existing != &canonical);
         repositories.insert(0, canonical);
         repositories.truncate(MAX_RECENT_REPOSITORIES);
         self.save(&repositories)
     }
 
-    fn save(&self, repositories: &[PathBuf]) -> Result<()> {
-        let parent = self
-            .path
+    fn preferences_directory(&self) -> &Path {
+        self.path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
+            .unwrap_or_else(|| Path::new("."))
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        self.preferences_directory()
+            .join(".recent-repositories.lock")
+    }
+
+    fn ensure_private_directory(&self) -> Result<&Path> {
+        let parent = self.preferences_directory();
         fs::create_dir_all(parent).with_context(|| {
             format!(
                 "failed to create recent repositories directory {}",
                 parent.display()
             )
         })?;
+        restrict_directory_permissions(parent)?;
+        Ok(parent)
+    }
+
+    fn acquire_lock(&self) -> Result<ExclusiveLock> {
+        self.ensure_private_directory()?;
+        let lock_path = self.lock_path();
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options
+            .open(&lock_path)
+            .with_context(|| format!("failed to open preferences lock {}", lock_path.display()))?;
+        restrict_file_permissions(&file, &lock_path)?;
+        <File as FileExt>::lock(&file)
+            .with_context(|| format!("failed to lock preferences {}", lock_path.display()))?;
+        Ok(ExclusiveLock { file })
+    }
+
+    fn save(&self, repositories: &[PathBuf]) -> Result<()> {
+        let parent = self.ensure_private_directory()?;
 
         let mut temporary = NamedTempFile::new_in(parent).with_context(|| {
             format!(
@@ -91,6 +170,7 @@ impl RecentRepositories {
                 parent.display()
             )
         })?;
+        restrict_file_permissions(temporary.as_file(), temporary.path())?;
         serde_json::to_writer_pretty(temporary.as_file_mut(), repositories).with_context(|| {
             format!(
                 "failed to serialize recent repositories for {}",
@@ -109,7 +189,7 @@ impl RecentRepositories {
             .as_file()
             .sync_all()
             .with_context(|| format!("failed to sync {}", self.path.display()))?;
-        temporary
+        let persisted = temporary
             .persist(&self.path)
             .map_err(|error| error.error)
             .with_context(|| {
@@ -118,6 +198,8 @@ impl RecentRepositories {
                     self.path.display()
                 )
             })?;
+        drop(persisted);
+        sync_parent_directory(parent)?;
         Ok(())
     }
 }
@@ -128,12 +210,79 @@ impl Default for RecentRepositories {
     }
 }
 
+fn restrict_directory_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).with_context(|| {
+            format!(
+                "failed to restrict recent repositories directory {}",
+                path.display()
+            )
+        })?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+fn restrict_file_permissions(file: &File, path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to restrict preferences file {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = file;
+        let _ = path;
+    }
+    Ok(())
+}
+
+fn sync_parent_directory(parent: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let directory = File::open(parent).with_context(|| {
+            format!(
+                "failed to open recent repositories directory {} for sync",
+                parent.display()
+            )
+        })?;
+        match directory.sync_all() {
+            Ok(()) => {}
+            #[cfg(target_os = "macos")]
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to sync recent repositories directory {}",
+                        parent.display()
+                    )
+                });
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = parent;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::RecentRepositories;
+    use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::{Child, Command};
+    use std::thread;
+    use std::time::{Duration, Instant};
     use tempfile::TempDir;
+
+    const WRITER_STORE_ENV: &str = "STAX_TEST_RECENT_WRITER_STORE";
+    const WRITER_REPOSITORY_ENV: &str = "STAX_TEST_RECENT_WRITER_REPOSITORY";
+    const WRITER_READY_ENV: &str = "STAX_TEST_RECENT_WRITER_READY";
 
     fn store(temp: &TempDir) -> RecentRepositories {
         RecentRepositories::at(temp.path().join("preferences/recent-repositories.json"))
@@ -143,6 +292,35 @@ mod tests {
         let path = parent.join(name);
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn write_stored_paths(path: &Path, repositories: &[PathBuf]) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, serde_json::to_vec(repositories).unwrap()).unwrap();
+    }
+
+    fn spawn_writer(store: &Path, repository: &Path, ready: &Path) -> Child {
+        Command::new(std::env::current_exe().unwrap())
+            .arg("preferences::tests::concurrent_record_worker")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(WRITER_STORE_ENV, store)
+            .env(WRITER_REPOSITORY_ENV, repository)
+            .env(WRITER_READY_ENV, ready)
+            .spawn()
+            .unwrap()
+    }
+
+    fn wait_for_path(path: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {}",
+                path.display()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
@@ -222,9 +400,9 @@ mod tests {
         let existing = create_repository(temp.path(), "existing");
         let missing = temp.path().join("missing");
         let preferences_path = temp.path().join("preferences/recent-repositories.json");
-        fs::create_dir_all(preferences_path.parent().unwrap()).unwrap();
-        let stored = serde_json::to_vec(&vec![missing, existing.clone()]).unwrap();
-        fs::write(&preferences_path, &stored).unwrap();
+        let stored_paths = vec![missing, existing.clone()];
+        let stored = serde_json::to_vec(&stored_paths).unwrap();
+        write_stored_paths(&preferences_path, &stored_paths);
         let recent = RecentRepositories::at(&preferences_path);
 
         assert_eq!(
@@ -232,6 +410,64 @@ mod tests {
             vec![existing.canonicalize().unwrap()]
         );
         assert_eq!(fs::read(&preferences_path).unwrap(), stored);
+    }
+
+    #[test]
+    fn load_filters_persisted_regular_files() {
+        let temp = TempDir::new().unwrap();
+        let repository = create_repository(temp.path(), "repository");
+        let regular_file = temp.path().join("not-a-repository");
+        fs::write(&regular_file, b"file").unwrap();
+        let preferences_path = temp.path().join("preferences/recent-repositories.json");
+        write_stored_paths(&preferences_path, &[regular_file, repository.clone()]);
+
+        assert_eq!(
+            RecentRepositories::at(preferences_path).load().unwrap(),
+            vec![repository.canonicalize().unwrap()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_deduplicates_raw_symlink_aliases_without_rewriting() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let repository = create_repository(temp.path(), "repository");
+        let alias = temp.path().join("alias");
+        symlink(&repository, &alias).unwrap();
+        let preferences_path = temp.path().join("preferences/recent-repositories.json");
+        let stored_paths = vec![alias.clone(), repository.clone(), alias];
+        write_stored_paths(&preferences_path, &stored_paths);
+        let original = fs::read(&preferences_path).unwrap();
+
+        assert_eq!(
+            RecentRepositories::at(&preferences_path).load().unwrap(),
+            vec![repository.canonicalize().unwrap()]
+        );
+        assert_eq!(fs::read(&preferences_path).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_reports_non_not_found_canonicalization_failures() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let first = temp.path().join("loop-a");
+        let second = temp.path().join("loop-b");
+        symlink(&second, &first).unwrap();
+        symlink(&first, &second).unwrap();
+        let preferences_path = temp.path().join("preferences/recent-repositories.json");
+        write_stored_paths(&preferences_path, std::slice::from_ref(&first));
+
+        let error = RecentRepositories::at(preferences_path)
+            .load()
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("canonicalize recent repository"));
+        assert!(error.contains(&first.display().to_string()));
     }
 
     #[test]
@@ -279,6 +515,92 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
-        assert_eq!(entries, vec![preferences_path.file_name().unwrap()]);
+        let names: HashSet<_> = entries.into_iter().collect();
+        assert_eq!(
+            names,
+            HashSet::from([
+                preferences_path.file_name().unwrap().to_owned(),
+                recent.lock_path().file_name().unwrap().to_owned(),
+            ])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preferences_directory_and_files_are_user_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let repository = create_repository(temp.path(), "repository");
+        let preferences_dir = temp.path().join("preferences");
+        fs::create_dir_all(&preferences_dir).unwrap();
+        fs::set_permissions(&preferences_dir, fs::Permissions::from_mode(0o777)).unwrap();
+        let recent = RecentRepositories::at(preferences_dir.join("recent-repositories.json"));
+
+        recent.record(&repository).unwrap();
+
+        assert_eq!(
+            fs::metadata(&preferences_dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&recent.path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(recent.lock_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn concurrent_record_worker() {
+        let Some(store) = std::env::var_os(WRITER_STORE_ENV) else {
+            return;
+        };
+        let repository = std::env::var_os(WRITER_REPOSITORY_ENV).unwrap();
+        let ready = std::env::var_os(WRITER_READY_ENV).unwrap();
+
+        fs::write(ready, b"ready").unwrap();
+        RecentRepositories::at(store).record(repository).unwrap();
+    }
+
+    #[test]
+    fn concurrent_process_writers_preserve_both_repositories() {
+        let temp = TempDir::new().unwrap();
+        let first_repository = create_repository(temp.path(), "repository-a");
+        let second_repository = create_repository(temp.path(), "repository-b");
+        let recent = store(&temp);
+        let lock = recent.acquire_lock().unwrap();
+        let first_ready = temp.path().join("first-ready");
+        let second_ready = temp.path().join("second-ready");
+        let mut first = spawn_writer(&recent.path, &first_repository, &first_ready);
+        let mut second = spawn_writer(&recent.path, &second_repository, &second_ready);
+
+        wait_for_path(&first_ready);
+        wait_for_path(&second_ready);
+        thread::sleep(Duration::from_millis(250));
+        let first_was_blocked = first.try_wait().unwrap().is_none();
+        let second_was_blocked = second.try_wait().unwrap().is_none();
+        drop(lock);
+        let first_status = first.wait().unwrap();
+        let second_status = second.wait().unwrap();
+
+        assert!(first_was_blocked);
+        assert!(second_was_blocked);
+        assert!(first_status.success());
+        assert!(second_status.success());
+        let loaded: HashSet<_> = recent.load().unwrap().into_iter().collect();
+        assert_eq!(
+            loaded,
+            HashSet::from([
+                first_repository.canonicalize().unwrap(),
+                second_repository.canonicalize().unwrap(),
+            ])
+        );
     }
 }
