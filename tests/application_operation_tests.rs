@@ -265,6 +265,16 @@ fn linked_restack_target(repo: &TestRepo, name: &str) -> (String, tempfile::Temp
     (branch, linked_parent, linked)
 }
 
+fn linked_submit_target(repo: &TestRepo, name: &str) -> (String, tempfile::TempDir, PathBuf) {
+    let branch = repo.create_stack(&[name]).remove(0);
+    let linked_parent = tempfile::tempdir().unwrap();
+    let linked = linked_parent.path().join("submit-linked");
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.git(&["worktree", "add", linked.to_str().unwrap(), &branch])
+        .assert_success();
+    (branch, linked_parent, linked)
+}
+
 #[test]
 fn restack_active_rebase_in_linked_target_reports_canonical_path() {
     let repo = TestRepo::new();
@@ -384,6 +394,72 @@ fn restack_auto_stash_restores_exact_linked_worktree() {
         receipt.side_effects,
         OperationSideEffects::RepositoryChanged
     );
+}
+
+#[tokio::test]
+async fn submit_inside_tokio_returns_runtime_without_remote_change() {
+    let repo = TestRepo::new_with_remote();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["app-submit-runtime"]).remove(0);
+    let remote_branches_before = repo.list_remote_branches();
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .submit_stack(PullRequestMode::Draft, &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::Runtime);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert!(error.receipt.is_none());
+    assert_eq!(repo.list_remote_branches(), remote_branches_before);
+    assert_eq!(repo.get_commit_sha(&branch), repo.get_commit_sha(&branch));
+}
+
+#[test]
+fn submit_active_rebase_in_linked_branch_reports_canonical_path() {
+    let repo = TestRepo::new_with_remote();
+    repo.set_trunk("main");
+    let (branch, _linked_parent, linked) = linked_submit_target(&repo, "app-submit-linked-rebase");
+    std::fs::create_dir_all(linked_git_dir(&repo, &linked).join("rebase-merge")).unwrap();
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .submit_stack(PullRequestMode::Draft, &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::RebaseInProgress);
+    assert_eq!(
+        error.details,
+        OperationErrorDetails::Rebase {
+            branch: Some(branch),
+            worktree: linked.canonicalize().unwrap(),
+        }
+    );
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert!(error.receipt.is_none());
+}
+
+#[test]
+fn submit_linked_rebase_aborts_before_fetch_discovery_or_temp_refs() {
+    let repo = TestRepo::new_with_remote();
+    repo.set_trunk("main");
+    let (branch, _linked_parent, linked) =
+        linked_submit_target(&repo, "app-submit-linked-rebase-order");
+    let branch_before = repo.get_commit_sha(&branch);
+    let remote_branches_before = repo.list_remote_branches();
+    let receipts_before = receipt_count(&repo);
+    std::fs::create_dir_all(linked_git_dir(&repo, &linked).join("rebase-merge")).unwrap();
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .submit_stack(PullRequestMode::Draft, &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::RebaseInProgress);
+    assert_eq!(repo.get_commit_sha(&branch), branch_before);
+    assert_eq!(repo.list_remote_branches(), remote_branches_before);
+    assert_eq!(receipt_count(&repo), receipts_before);
+    assert!(TestRepo::stdout(&repo.git(&["for-each-ref", "refs/stax/submit"])).is_empty());
 }
 
 #[cfg(unix)]

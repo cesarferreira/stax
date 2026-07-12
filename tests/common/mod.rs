@@ -880,4 +880,30 @@ mod tests {
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("timed out waiting for TUI text"));
     }
+
+    #[test]
+    fn isolated_process_env_removes_all_forge_token_sources() {
+        let repo = TestRepo::new();
+        let env = IsolatedProcessEnv::with_config("");
+        let command = env.command(&repo.path());
+        let removed = command.get_envs().collect::<Vec<_>>();
+
+        for token in [
+            "STAX_GITHUB_TOKEN",
+            "STAX_GITLAB_TOKEN",
+            "STAX_GITEA_TOKEN",
+            "STAX_FORGE_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GITLAB_TOKEN",
+            "GITEA_TOKEN",
+        ] {
+            assert!(
+                removed
+                    .iter()
+                    .any(|(key, value)| key.to_string_lossy() == token && value.is_none()),
+                "expected {token} to be explicitly removed"
+            );
+        }
+    }
 }
