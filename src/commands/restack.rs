@@ -396,7 +396,7 @@ fn render_restack_error(repo: &GitRepo, error: &OperationError, quiet: bool) {
                     parent_branch: &meta.parent_branch_name,
                     completed_branches: completed,
                     remaining_branches: remaining,
-                    continue_commands: &["st continue", "st abort"],
+                    continue_commands: &["stax restack --continue", "git rebase --abort"],
                     stack_branches: &stack_branches,
                 };
                 print_restack_conflict(repo, &context);
