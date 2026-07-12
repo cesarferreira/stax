@@ -193,7 +193,27 @@ impl RepositorySession {
         Ok(diff)
     }
 
-    fn open_repo(&self) -> Result<GitRepo> {
+    /// Returns a cached branch diff without calculating diffstat or patch data.
+    pub fn cached_diff(&self, branch: &str, parent: &str) -> Result<Option<BranchDiff>> {
+        let repo = self.open_repo()?;
+        let target = repo.resolve_diff_target(branch, parent).with_context(|| {
+            format!(
+                "Failed to prepare cached diff lookup for branch '{}' against parent '{}'",
+                branch, parent
+            )
+        })?;
+        let key = TuiDiffCache::key(
+            parent,
+            branch,
+            &target.parent_oid,
+            &target.branch_oid,
+            &target.merge_base_oid,
+        );
+        let cache = TuiDiffCache::load(&self.common_git_dir);
+        Ok(cache.get(&key).map(branch_diff_from_disk))
+    }
+
+    pub(super) fn open_repo(&self) -> Result<GitRepo> {
         GitRepo::open_from_path(&self.git_dir).with_context(|| {
             format!(
                 "Failed to reopen git repository '{}' for root '{}'",

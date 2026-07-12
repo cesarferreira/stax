@@ -277,6 +277,46 @@ fn second_diff_round_trips_through_the_tui_cache() {
 }
 
 #[test]
+fn cached_diff_returns_the_same_entry_without_recalculating() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let loaded = session.diff("feature", "main").unwrap();
+
+    let cached = RepositorySession::open(repo.path())
+        .unwrap()
+        .cached_diff("feature", "main")
+        .unwrap();
+
+    assert_eq!(cached, Some(loaded));
+}
+
+#[test]
+fn cached_diff_miss_does_not_calculate_a_patch() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    let blob_oid = repo.get_commit_sha("feature:feature.txt");
+    let object_path = repo
+        .path()
+        .join(".git")
+        .join("objects")
+        .join(&blob_oid[..2])
+        .join(&blob_oid[2..]);
+    std::fs::remove_file(object_path).unwrap();
+    let cache_path = repo
+        .path()
+        .join(".git")
+        .join("stax")
+        .join("tui-diff-cache.json");
+    let session = RepositorySession::open(repo.path()).unwrap();
+
+    let cached = session.cached_diff("feature", "main").unwrap();
+
+    assert_eq!(cached, None);
+    assert!(!cache_path.exists());
+}
+
+#[test]
 fn diff_reports_bad_branch_and_parent_names() {
     let repo = TestRepo::new();
     repo.create_stack(&["feature"]);
