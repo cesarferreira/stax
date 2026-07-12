@@ -4,7 +4,7 @@ use super::{
 };
 use crate::hydration::{BranchHydrationService, HydrationFuture};
 use crate::state::LoadState;
-use gpui::{App, TestAppContext};
+use gpui::{App, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, TestAppContext};
 use stax::application::{
     BranchDetails, BranchDiff, BranchSummary, CiSummary, DiffLine, DiffLineKind, RepositorySnapshot,
 };
@@ -36,10 +36,25 @@ impl SnapshotLoader for FixtureLoader {
 
 struct FixturePicker {
     result: Result<Option<PathBuf>, String>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl FixturePicker {
+    fn new(result: Result<Option<PathBuf>, String>) -> Self {
+        Self {
+            result,
+            calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn with_calls(result: Result<Option<PathBuf>, String>, calls: Arc<AtomicUsize>) -> Self {
+        Self { result, calls }
+    }
 }
 
 impl RepositoryPicker for FixturePicker {
     fn pick(&self, _cx: &mut App) -> PickerFuture {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         let result = self.result.clone();
         Box::pin(async move { result })
     }
@@ -365,7 +380,7 @@ fn services_with_hydration(
 ) -> AppServices {
     AppServices::with_hydration(
         Arc::new(FixtureLoader { result: loader }),
-        Rc::new(FixturePicker { result: picker }),
+        Rc::new(FixturePicker::new(picker)),
         recents,
         hydration,
     )
@@ -386,6 +401,171 @@ fn no_path_renders_the_welcome_mode_without_panicking(cx: &mut TestAppContext) {
     assert_eq!(
         cx.update(|_, app| view.read(app).inline_error().map(str::to_string)),
         None
+    );
+}
+
+#[gpui::test]
+fn keyboard_welcome_open_activates_once_for_enter_and_space(cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let picker_calls = Arc::new(AtomicUsize::new(0));
+    let services = AppServices::with_hydration(
+        Arc::new(FixtureLoader {
+            result: Ok(snapshot("/repo")),
+        }),
+        Rc::new(FixturePicker::with_calls(
+            Ok(None),
+            Arc::clone(&picker_calls),
+        )),
+        Arc::new(FixtureRecents::default()),
+        Arc::new(FixtureHydration::immediate_no_remote()),
+    );
+    let (_view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("enter space");
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 0);
+
+    cx.update(|window, _| window.focus_next());
+    cx.simulate_keystrokes("enter");
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 0);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+        is_held: true,
+    });
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+        is_held: true,
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 0);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+
+    cx.simulate_keystrokes("space");
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+        is_held: true,
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 2);
+}
+
+#[gpui::test]
+fn mouse_welcome_open_activates_on_release_and_retains_keyboard_focus(cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let picker_calls = Arc::new(AtomicUsize::new(0));
+    let services = AppServices::with_hydration(
+        Arc::new(FixtureLoader {
+            result: Ok(snapshot("/repo")),
+        }),
+        Rc::new(FixturePicker::with_calls(
+            Ok(None),
+            Arc::clone(&picker_calls),
+        )),
+        Arc::new(FixtureRecents::default()),
+        Arc::new(FixtureHydration::immediate_no_remote()),
+    );
+    let (_view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
+    cx.run_until_parked();
+    let position = cx
+        .debug_bounds("welcome-open-repository-control")
+        .expect("welcome Open Repository control was not rendered")
+        .center();
+
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 0);
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::default());
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+
+    cx.simulate_keystrokes("enter");
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 2);
+}
+
+#[gpui::test]
+fn keyboard_recent_repository_row_enter_activates_once(cx: &mut TestAppContext) {
+    assert_recent_repository_row_key_activates_once("enter", cx);
+}
+
+#[gpui::test]
+fn keyboard_recent_repository_row_space_activates_once(cx: &mut TestAppContext) {
+    assert_recent_repository_row_key_activates_once("space", cx);
+}
+
+fn assert_recent_repository_row_key_activates_once(key: &str, cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let recents = Arc::new(FixtureRecents {
+        paths: Mutex::new(vec![PathBuf::from("/recent/repo")]),
+        ..Default::default()
+    });
+    let services = services(Ok(snapshot("/recent/repo")), Ok(None), Arc::clone(&recents));
+    let (view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
+    cx.run_until_parked();
+
+    cx.update(|window, _| {
+        window.focus_next();
+        window.focus_next();
+    });
+    cx.simulate_keystrokes(key);
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 0);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse(key).unwrap(),
+        is_held: true,
+    });
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 0);
+
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse(key).unwrap(),
+    });
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        cx.update(|_, app| view.read(app).mode_kind()),
+        AppModeKind::Workspace
+    );
+}
+
+#[gpui::test]
+fn mouse_recent_repository_row_activates_once_on_release(cx: &mut TestAppContext) {
+    let recents = Arc::new(FixtureRecents {
+        paths: Mutex::new(vec![PathBuf::from("/recent/repo")]),
+        ..Default::default()
+    });
+    let services = services(Ok(snapshot("/recent/repo")), Ok(None), Arc::clone(&recents));
+    let (view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
+    cx.run_until_parked();
+    let position = cx
+        .debug_bounds("recent-repository-control-0")
+        .expect("first recent repository control was not rendered")
+        .center();
+
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        cx.update(|_, app| view.read(app).mode_kind()),
+        AppModeKind::Welcome
+    );
+
+    cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::default());
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        cx.update(|_, app| view.read(app).mode_kind()),
+        AppModeKind::Workspace
     );
 }
 
@@ -721,7 +901,7 @@ fn accepted_recent_writes_are_serialized_in_fifo_order(cx: &mut TestAppContext) 
         Arc::new(FixtureLoader {
             result: Ok(snapshot("/repo")),
         }),
-        Rc::new(FixturePicker { result: Ok(None) }),
+        Rc::new(FixturePicker::new(Ok(None))),
         recents.clone(),
     );
     let (view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
@@ -789,6 +969,202 @@ fn arrow_keys_move_selection_without_changing_the_checked_out_branch(cx: &mut Te
 }
 
 #[gpui::test]
+fn keyboard_workspace_controls_activate_once_and_skip_disabled_controls(cx: &mut TestAppContext) {
+    struct CountingLoader {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl SnapshotLoader for CountingLoader {
+        fn load(&self, _path: &Path) -> Result<RepositorySnapshot, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(snapshot("/repo"))
+        }
+    }
+
+    cx.update(super::init);
+    let load_calls = Arc::new(AtomicUsize::new(0));
+    let picker_calls = Arc::new(AtomicUsize::new(0));
+    let services = AppServices::with_hydration(
+        Arc::new(CountingLoader {
+            calls: Arc::clone(&load_calls),
+        }),
+        Rc::new(FixturePicker::with_calls(
+            Ok(None),
+            Arc::clone(&picker_calls),
+        )),
+        Arc::new(FixtureRecents::default()),
+        Arc::new(FixtureHydration::immediate_no_remote()),
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(load_calls.load(Ordering::SeqCst), 1);
+
+    view.update_in(cx, |view, _window, cx| {
+        let _ = view.begin_load(PathBuf::from("/repo"), RootLoadKind::Refresh);
+        cx.notify();
+    });
+    cx.update(|window, _| window.focus_next());
+    cx.simulate_keystrokes("enter");
+    assert_eq!(load_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 0);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+        is_held: true,
+    });
+    assert_eq!(load_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 0);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
+    assert_eq!(load_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+}
+
+#[gpui::test]
+fn keyboard_refresh_activates_once_for_enter_and_space(cx: &mut TestAppContext) {
+    struct CountingLoader {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl SnapshotLoader for CountingLoader {
+        fn load(&self, _path: &Path) -> Result<RepositorySnapshot, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(snapshot("/repo"))
+        }
+    }
+
+    cx.update(super::init);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let picker_calls = Arc::new(AtomicUsize::new(0));
+    let services = AppServices::with_hydration(
+        Arc::new(CountingLoader {
+            calls: Arc::clone(&calls),
+        }),
+        Rc::new(FixturePicker::with_calls(
+            Ok(None),
+            Arc::clone(&picker_calls),
+        )),
+        Arc::new(FixtureRecents::default()),
+        Arc::new(FixtureHydration::immediate_no_remote()),
+    );
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    cx.update(|window, _| window.focus_next());
+    cx.simulate_keystrokes("enter");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+        is_held: true,
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    cx.simulate_keystrokes("space");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+        is_held: true,
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+
+    cx.update(|window, _| window.focus_next());
+    cx.simulate_keystrokes("enter");
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 0);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+        is_held: true,
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 0);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+
+    cx.simulate_keystrokes("space");
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+        is_held: true,
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+    });
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 2);
+}
+
+#[gpui::test]
+fn keyboard_stack_row_activates_once_for_enter_and_space(cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let services = services(
+        Ok(snapshot("/repo")),
+        Ok(None),
+        Arc::new(FixtureRecents::default()),
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+    cx.run_until_parked();
+    let initial_generation =
+        cx.update(|_, app| view.read(app).workspace().unwrap().state().generation());
+
+    cx.update(|window, _| {
+        window.focus_next();
+        window.focus_next();
+        window.focus_next();
+    });
+    cx.simulate_keystrokes("enter");
+    let generation = cx.update(|_, app| view.read(app).workspace().unwrap().state().generation());
+    assert_eq!(generation, initial_generation);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+        is_held: true,
+    });
+    let generation = cx.update(|_, app| view.read(app).workspace().unwrap().state().generation());
+    assert_eq!(generation, initial_generation);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("enter").unwrap(),
+    });
+    let (selection, generation) = cx.update(|_, app| {
+        let state = view.read(app).workspace().unwrap().state();
+        (
+            state.selected_branch().map(str::to_string),
+            state.generation(),
+        )
+    });
+    assert_eq!(selection.as_deref(), Some("feature-b"));
+    assert_eq!(generation, initial_generation + 2);
+
+    cx.simulate_keystrokes("space");
+    let generation = cx.update(|_, app| view.read(app).workspace().unwrap().state().generation());
+    assert_eq!(generation, initial_generation + 2);
+    cx.simulate_event(KeyDownEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+        is_held: true,
+    });
+    let generation = cx.update(|_, app| view.read(app).workspace().unwrap().state().generation());
+    assert_eq!(generation, initial_generation + 2);
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+    });
+    let generation = cx.update(|_, app| view.read(app).workspace().unwrap().state().generation());
+    assert_eq!(generation, initial_generation + 4);
+}
+
+#[gpui::test]
 fn stale_root_repository_results_are_rejected(cx: &mut TestAppContext) {
     let recents = Arc::new(FixtureRecents::default());
     let services = services(Ok(snapshot("/repo")), Ok(None), recents);
@@ -840,7 +1216,7 @@ fn repeated_refresh_requests_spawn_only_one_snapshot_read(cx: &mut TestAppContex
         Arc::new(CountingLoader {
             calls: Arc::clone(&calls),
         }),
-        Rc::new(FixturePicker { result: Ok(None) }),
+        Rc::new(FixturePicker::new(Ok(None))),
         Arc::new(FixtureRecents::default()),
         Arc::new(FixtureHydration::immediate_no_remote()),
     );

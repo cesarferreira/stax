@@ -1,11 +1,14 @@
 #[cfg(test)]
 use super::PaneMarkers;
-use super::{AppView, ControlKind, changes_pane, control_button, inspector_pane, stack_pane};
+use super::{
+    AppView, ControlKind, activate_control, changes_pane, control_button, inspector_pane,
+    stack_pane,
+};
 use crate::state::{SelectionDirection, WorkspaceState};
 use crate::theme::{SYSTEM_UI_FONT, Theme};
 use gpui::{
-    Context, Div, InteractiveElement as _, ParentElement as _, ScrollStrategy,
-    StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, div, px, relative,
+    Context, Div, InteractiveElement as _, ParentElement as _, ScrollStrategy, Styled as _,
+    UniformListScrollHandle, div, px, relative,
 };
 use stax::application::{
     BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, RepositorySnapshot,
@@ -205,23 +208,24 @@ impl WorkspaceView {
             theme,
         );
         let refresh = if refresh_enabled {
-            refresh.on_click(cx.listener(|app, _, window, cx| {
+            activate_control(refresh, cx, |app, window, cx| {
                 app.refresh_repository(window, cx);
-            }))
+            })
         } else {
             refresh
         };
 
-        let open = control_button(
-            "toolbar-open",
-            "Open Repository",
-            ControlKind::Secondary,
-            true,
-            theme,
-        )
-        .on_click(cx.listener(|app, _, window, cx| {
-            app.pick_repository(window, cx);
-        }));
+        let open = activate_control(
+            control_button(
+                "toolbar-open",
+                "Open Repository",
+                ControlKind::Secondary,
+                true,
+                theme,
+            ),
+            cx,
+            |app, window, cx| app.pick_repository(window, cx),
+        );
 
         let disabled_action = control_button(
             "toolbar-submit-stack",

@@ -16,6 +16,7 @@ pub struct Theme {
     pub accent: Hsla,
     pub accent_text: Hsla,
     pub focus: Hsla,
+    pub focus_on_accent: Hsla,
     pub success: Hsla,
     pub warning: Hsla,
     pub danger: Hsla,
@@ -40,6 +41,7 @@ impl Theme {
             accent: rgb(0x2b67ae).into(),
             accent_text: rgb(0xffffff).into(),
             focus: rgb(0x1f72cf).into(),
+            focus_on_accent: rgb(0xffffff).into(),
             success: rgb(0x287a45).into(),
             warning: rgb(0x915d10).into(),
             danger: rgb(0xb13a36).into(),
@@ -64,6 +66,7 @@ impl Theme {
             accent: rgb(0x7aadea).into(),
             accent_text: rgb(0x142338).into(),
             focus: rgb(0x83b7f2).into(),
+            focus_on_accent: rgb(0x142338).into(),
             success: rgb(0x70c78a).into(),
             warning: rgb(0xe0b25d).into(),
             danger: rgb(0xf58a83).into(),
@@ -140,6 +143,29 @@ mod tests {
             assert_ne!(theme.warning, theme.danger);
             assert_ne!(theme.diff_addition, theme.diff_deletion);
             assert_ne!(theme.focus, theme.surface_selected);
+            assert_ne!(theme.focus_on_accent, theme.accent);
+        }
+    }
+
+    #[test]
+    fn keyboard_focus_treatment_meets_non_text_contrast() {
+        for (appearance, theme) in [("light", Theme::light()), ("dark", Theme::dark())] {
+            for (surface, background) in [
+                ("normal", theme.surface),
+                ("raised", theme.surface_raised),
+                ("selected", theme.surface_selected),
+            ] {
+                let ratio = contrast_ratio(theme.focus, background);
+                assert!(
+                    ratio >= 3.0,
+                    "{appearance} focus treatment on {surface} surface has contrast {ratio:.2}:1; required 3.0:1"
+                );
+            }
+            let primary_ratio = contrast_ratio(theme.focus_on_accent, theme.accent);
+            assert!(
+                primary_ratio >= 3.0,
+                "{appearance} focus treatment on primary surface has contrast {primary_ratio:.2}:1; required 3.0:1"
+            );
         }
     }
 

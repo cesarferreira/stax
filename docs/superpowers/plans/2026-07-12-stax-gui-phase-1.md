@@ -18,7 +18,7 @@
 
 - Modify `Cargo.toml` — workspace metadata and shared package fields.
 - Modify `Cargo.lock` — lock the GUI package and GPUI dependency graph.
-- Modify `.github/workflows/rust-tests.yml` — compile and lint the GUI on macOS.
+- Modify `.github/workflows/rust-tests.yml` — compile, test, and lint the GUI on macOS.
 - Modify `src/lib.rs` — expose the new application module.
 - Create `src/application/mod.rs` — public module boundary and re-exports.
 - Create `src/application/model.rs` — UI-neutral snapshots, details, diff, CI, and request tokens.
@@ -223,13 +223,15 @@ existing-package version change individually. GPUI 0.2.2 requires
 with 0.10.0 is the one expected constrained change. Step 7 then proves the
 result is complete with `--locked`.
 
-- [ ] **Step 6: Add a macOS GUI compile gate**
+- [ ] **Step 6: Add a macOS GUI compile, test, and lint gate**
 
 Add a separate job to `.github/workflows/rust-tests.yml` using the repository's
 existing checkout, Rust 1.96.1, and `Swatinem/rust-cache` conventions. Override
-the Linux-only mold linker flags for this job. Because Clippy also lints the
-local `stax` path dependency, mirror the reviewed legacy allowances from
-`scripts/lint.sh` while keeping every other warning fatal:
+the Linux-only mold linker flags for this job. Install the repository's pinned
+`cargo-nextest` 0.9.114 release and make the complete `stax-gui` test package a
+required macOS gate. Because Clippy also lints the local `stax` path dependency,
+mirror the reviewed legacy allowances from `scripts/lint.sh` while keeping
+every other warning fatal:
 
 ```yaml
   gui-quality:
@@ -245,12 +247,18 @@ local `stax` path dependency, mirror the reviewed legacy allowances from
         with:
           toolchain: 1.96.1
           components: clippy
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.114
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
           key: macos-latest-gui
       - name: Check GPUI package
         run: cargo check -p stax-gui --locked
+      - name: Test GPUI package
+        run: cargo nextest run -p stax-gui --locked
       - name: Lint GPUI package
         # Clippy also lints the local stax path dependency. Mirror the reviewed
         # legacy allowances from scripts/lint.sh while keeping other warnings fatal.
@@ -989,7 +997,15 @@ recent-write generations; delayed recent-write completion after refresh; stale/n
 ordering; repeated refresh gating; long-stack scroll requests; bounded large diffstats; background
 recent-load success/failure; numerical WCAG AA contrast on normal and selected row surfaces; a
 deterministic blocking-store FIFO persistence case; initial current-branch visibility in a
-100-branch stack; and refresh-error precedence over older storage notices.
+100-branch stack; refresh-error precedence over older storage notices; and focused Enter/Space
+activation for welcome, recent-repository, toolbar, and stack-row controls. Keyboard tests must
+assert that key-down and held repeats do not activate, the matching key-up produces exactly one
+underlying action through GPUI's semantic `ClickEvent::Keyboard`, focus elsewhere remains inert,
+and disabled controls are skipped. Mouse regression tests must resolve control hitboxes through
+debug bounds and simulate move/down/up events, proving mouse-down is inert, mouse-up in the same
+hitbox activates exactly once, and mouse focus preserves keyboard parity. Theme tests must enforce
+at least 3:1 contrast for the two-pixel focus treatment on normal, selected, and primary control
+surfaces.
 
 - [ ] **Step 2: Run and verify failure**
 
@@ -1082,7 +1098,15 @@ div()
 
 Use `uniform_list` for branches and patch lines. The stack pane shows topology indentation plus current, restack, PR, and CI status. The changes pane shows diffstat and line-kind colors. The inspector shows parent, remote divergence, commits, PR, CI counts, loading/error states, and read-only disabled action buttons labelled for phase 2.
 
-Clicking a branch selects it without checkout.
+Clicking a branch selects it without checkout. Every enabled Phase 1 control is a tab stop and uses
+the shared activation helper's single `on_click` handler for mouse clicks and both Enter and Space.
+GPUI synthesizes `ClickEvent::Keyboard` for the focused clickable element on an unmodified matching
+key-up, so key-down and held repeats remain inert and one semantic release invokes one action.
+Mouse activation likewise requires down and up in the same hitbox and reaches the same handler.
+Disabled Phase 2 controls remain outside the focus order and have no activation handler. Buttons
+and rows use a two-pixel theme focus border; primary controls use the contrasting
+`focus_on_accent` token. Arrow-key branch selection and Cmd-R/Cmd-O remain bound at the `StaxApp`
+context.
 
 Retain a `UniformListScrollHandle` in `WorkspaceView` and request scrolling after click or keyboard
 selection changes, including construction so the initial/current branch is visible in long stacks.
@@ -1098,11 +1122,12 @@ surfaces in light and dark appearances.
 Run:
 
 ```bash
-cargo nextest run -p stax-gui views::
+cargo nextest run -p stax-gui keyboard --locked
+cargo nextest run -p stax-gui --locked
 cargo check -p stax-gui --locked
 ```
 
-Expected: tests and check pass.
+Expected: keyboard integration tests, the complete GUI package, and the check pass.
 
 - [ ] **Step 8: Commit the visual shell**
 
@@ -1236,8 +1261,8 @@ readable without a migration.
 Run:
 
 ```bash
-cargo nextest run -p stax-gui
-cargo check -p stax-gui
+cargo nextest run -p stax-gui --locked
+cargo check -p stax-gui --locked
 ```
 
 Expected: all GUI tests pass and no stale result mutates current selection.

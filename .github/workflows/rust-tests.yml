@@ -50,12 +50,18 @@ jobs:
         with:
           toolchain: 1.96.1
           components: clippy
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.114
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
           key: macos-latest-gui
       - name: Check GPUI package
         run: cargo check -p stax-gui --locked
+      - name: Test GPUI package
+        run: cargo nextest run -p stax-gui --locked
       - name: Lint GPUI package
         # Clippy also lints the local stax path dependency. Mirror the reviewed
         # legacy allowances from scripts/lint.sh while keeping other warnings fatal.

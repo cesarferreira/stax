@@ -1,4 +1,4 @@
-use super::{AppView, WorkspaceView};
+use super::{AppView, WorkspaceView, activate_control, control_focus_style};
 use crate::theme::{MONOSPACE_FONT, Theme};
 use gpui::{
     Context, Div, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
@@ -101,11 +101,11 @@ fn render_branch_row(
     let statuses = branch_status_parts(&branch);
     let indentation = px(10.0 + branch.column.min(8) as f32 * 14.0);
 
-    div()
+    let row = div()
         .id(SharedString::from(format!("stack-branch-{}", branch.name)))
         .focusable()
         .tab_index(branch_index as isize + 20)
-        .focus(move |style| style.border_color(theme.focus))
+        .focus(move |style| control_focus_style(style, theme))
         .h(px(54.0))
         .w_full()
         .min_w_0()
@@ -171,10 +171,11 @@ fn render_branch_row(
                                 .child(label)
                         })),
                 ),
-        )
-        .on_click(cx.listener(move |app, _, window, cx| {
-            app.select_branch(&branch_name, window, cx);
-        }))
+        );
+
+    activate_control(row, cx, move |app, window, cx| {
+        app.select_branch(&branch_name, window, cx);
+    })
 }
 
 fn topology_label(branch: &BranchSummary) -> String {

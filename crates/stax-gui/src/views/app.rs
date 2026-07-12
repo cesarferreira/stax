@@ -9,9 +9,9 @@ use crate::preferences::RecentRepositories;
 use crate::state::SelectionDirection;
 use crate::theme::{SYSTEM_UI_FONT, Theme};
 use gpui::{
-    App, Context, Div, ElementId, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    KeyBinding, ParentElement as _, PathPromptOptions, Render, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, Window, actions, div, px,
+    App, ClickEvent, Context, Div, ElementId, FocusHandle, Focusable, InteractiveElement as _,
+    IntoElement, KeyBinding, ParentElement as _, PathPromptOptions, Render, SharedString, Stateful,
+    StatefulInteractiveElement as _, StyleRefinement, Styled as _, Window, actions, div, px,
 };
 use stax::application::{BranchDiff, DetailRequestToken, RepositorySession, RepositorySnapshot};
 use std::collections::VecDeque;
@@ -915,6 +915,10 @@ pub fn control_button(
     theme: Theme,
 ) -> Stateful<Div> {
     let label = label.into();
+    let focus_color = match kind {
+        ControlKind::Primary => theme.focus_on_accent,
+        ControlKind::Secondary => theme.focus,
+    };
     let base = div()
         .id(id)
         .h(px(28.0))
@@ -939,7 +943,7 @@ pub fn control_button(
         .focusable()
         .tab_index(0)
         .cursor_pointer()
-        .focus(move |style| style.border_color(theme.focus))
+        .focus(move |style| style.border_2().border_color(focus_color))
         .active(|style| style.opacity(0.82));
     match kind {
         ControlKind::Primary => base
@@ -953,6 +957,23 @@ pub fn control_button(
             .text_color(theme.text)
             .hover(move |style| style.bg(theme.surface_selected)),
     }
+}
+
+pub fn activate_control(
+    control: Stateful<Div>,
+    cx: &Context<AppView>,
+    handler: impl Fn(&mut AppView, &mut Window, &mut Context<AppView>) + 'static,
+) -> Stateful<Div> {
+    control.on_click(
+        cx.listener(move |app: &mut AppView, _: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            handler(app, window, cx);
+        }),
+    )
+}
+
+pub fn control_focus_style(style: StyleRefinement, theme: Theme) -> StyleRefinement {
+    style.border_2().border_color(theme.focus)
 }
 
 pub fn init(cx: &mut App) {

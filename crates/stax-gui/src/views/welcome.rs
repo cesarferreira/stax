@@ -1,4 +1,4 @@
-use super::{AppView, ControlKind, control_button};
+use super::{AppView, ControlKind, activate_control, control_button, control_focus_style};
 use crate::theme::{SYSTEM_UI_FONT, Theme};
 use gpui::{
     Context, Div, InteractiveElement as _, ParentElement as _, Stateful,
@@ -43,16 +43,18 @@ impl WelcomeView {
     }
 
     pub fn render(&self, theme: Theme, cx: &mut Context<AppView>) -> Div {
-        let open_button = control_button(
-            "welcome-open-repository",
-            "Open Repository",
-            ControlKind::Primary,
-            true,
-            theme,
-        )
-        .on_click(cx.listener(|app, _, window, cx| {
-            app.pick_repository(window, cx);
-        }));
+        let open_button = activate_control(
+            control_button(
+                "welcome-open-repository",
+                "Open Repository",
+                ControlKind::Primary,
+                true,
+                theme,
+            )
+            .debug_selector(|| "welcome-open-repository-control".into()),
+            cx,
+            |app, window, cx| app.pick_repository(window, cx),
+        );
 
         let mut content = div()
             .w(px(620.0))
@@ -200,11 +202,12 @@ fn recent_repository_row(
     let display_path = path.display().to_string();
     let open_path = path.clone();
 
-    div()
+    let row = div()
         .id(("recent-repository", index))
+        .debug_selector(move || format!("recent-repository-control-{index}"))
         .focusable()
         .tab_index(index as isize + 1)
-        .focus(move |style| style.border_color(theme.focus).bg(theme.surface_selected))
+        .focus(move |style| control_focus_style(style, theme).bg(theme.surface_selected))
         .w_full()
         .flex()
         .items_center()
@@ -245,10 +248,11 @@ fn recent_repository_row(
                 .text_xs()
                 .text_color(theme.accent)
                 .child("Open"),
-        )
-        .on_click(cx.listener(move |app, _, window, cx| {
-            app.open_repository(open_path.clone(), window, cx);
-        }))
+        );
+
+    activate_control(row, cx, move |app, window, cx| {
+        app.open_repository(open_path.clone(), window, cx);
+    })
 }
 
 fn repository_name(path: &Path) -> String {

@@ -13,7 +13,7 @@ use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
 use std::path::PathBuf;
 
 use app::AppServices;
-pub use app::{AppView, ControlKind, control_button, init};
+pub use app::{AppView, ControlKind, activate_control, control_button, control_focus_style, init};
 pub use workspace::WorkspaceView;
 
 #[cfg(test)]
