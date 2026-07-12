@@ -18,6 +18,8 @@ mod abort_tests;
 mod absorb_tests;
 #[path = "additional_coverage_tests.rs"]
 mod additional_coverage_tests;
+#[path = "application_session_tests.rs"]
+mod application_session_tests;
 #[path = "auth_tests.rs"]
 mod auth_tests;
 #[path = "changelog_tests.rs"]

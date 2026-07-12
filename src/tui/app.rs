@@ -1828,7 +1828,14 @@ fn spawn_diff_loader(
             }
         };
 
-        let stat = match repo.diff_stat(&request.branch, &request.parent) {
+        let target = match repo.resolve_diff_target(&request.branch, &request.parent) {
+            Ok(target) => target,
+            Err(_) => {
+                let _ = sender.send(DiffUpdate::Unavailable { request });
+                return;
+            }
+        };
+        let stat = match repo.diff_stat_at_target(&request.branch, &request.parent, &target) {
             Ok(stats) => stats
                 .into_iter()
                 .map(|(file, additions, deletions)| DiffStatLine {
@@ -1837,10 +1844,13 @@ fn spawn_diff_loader(
                     deletions,
                 })
                 .collect(),
-            Err(_) => Vec::new(),
+            Err(_) => {
+                let _ = sender.send(DiffUpdate::Unavailable { request });
+                return;
+            }
         };
 
-        let lines = match repo.diff_against_parent(&request.branch, &request.parent) {
+        let lines = match repo.diff_against_target(&request.branch, &request.parent, &target) {
             Ok(lines) => lines
                 .into_iter()
                 .map(|line| DiffLine {
@@ -1848,15 +1858,23 @@ fn spawn_diff_loader(
                     content: line,
                 })
                 .collect(),
-            Err(_) => Vec::new(),
+            Err(_) => {
+                let _ = sender.send(DiffUpdate::Unavailable { request });
+                return;
+            }
         };
 
         let diff = CachedDiff { stat, lines };
-        if let Some(key) = persistent_diff_cache_key(&repo, &request) {
-            let mut cache = TuiDiffCache::load(&diff_cache_dir);
-            cache.insert(key, cached_diff_to_disk(&diff));
-            let _ = cache.save(&diff_cache_dir);
-        }
+        let key = TuiDiffCache::key(
+            &request.parent,
+            &request.branch,
+            &target.parent_oid,
+            &target.branch_oid,
+            &target.merge_base_oid,
+        );
+        let mut cache = TuiDiffCache::load(&diff_cache_dir);
+        cache.insert(key, cached_diff_to_disk(&diff));
+        let _ = cache.save(&diff_cache_dir);
 
         let _ = sender.send(DiffUpdate::Loaded { request, diff });
     });
@@ -1955,6 +1973,7 @@ mod tests {
         Mode, PaneVisibility, TuiPane, TuiPaneVisibilityState, live_ci_summary_text,
         run_in_tokio_runtime, spawn_diff_loader, substring_filter_indices,
     };
+    use crate::application::RepositorySession;
     use crate::cache::{
         CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache, TuiStateCache,
     };
@@ -2318,6 +2337,50 @@ mod tests {
         let cached = cache.get(&key).expect("persisted diff");
         assert_eq!(cached.stat.len(), 1);
         assert!(cached.lines.iter().any(|line| line.content == "+feature"));
+    }
+
+    #[test]
+    fn diff_loader_does_not_cache_git_failures_as_empty_success() {
+        let (_tempdir, repo) = test_repo();
+        let workdir = repo.workdir().expect("workdir").to_path_buf();
+        run_git(&workdir, &["switch", "-c", "feature"]);
+        std::fs::write(workdir.join("README.md"), "hello\nfeature\n").expect("write README");
+        run_git(&workdir, &["add", "README.md"]);
+        run_git(&workdir, &["commit", "-m", "feature"]);
+
+        let parent_oid = repo.rev_parse("main").expect("main oid");
+        let branch_oid = repo.rev_parse("feature").expect("feature oid");
+        let merge_base_oid = repo.merge_base_refs("main", "feature").expect("merge base");
+        let blob_oid = repo
+            .rev_parse("feature:README.md")
+            .expect("feature README blob");
+        let repo_path = repo.git_dir().expect("git dir").to_path_buf();
+        let cache_dir = repo.common_git_dir().expect("common git dir");
+        let object_path = cache_dir
+            .join("objects")
+            .join(&blob_oid[..2])
+            .join(&blob_oid[2..]);
+        std::fs::remove_file(object_path).expect("remove feature blob");
+        let request = DiffRequest::new("feature".to_string(), "main".to_string());
+
+        let update = spawn_diff_loader(repo_path, cache_dir.clone(), request.clone())
+            .recv_timeout(Duration::from_secs(15))
+            .expect("diff update");
+
+        match update {
+            DiffUpdate::Unavailable { request: failed } => assert_eq!(failed, request),
+            DiffUpdate::Loaded { .. } => panic!("failed diff must remain unavailable"),
+        }
+        let key = TuiDiffCache::key("main", "feature", &parent_oid, &branch_oid, &merge_base_oid);
+        assert!(TuiDiffCache::load(&cache_dir).get(&key).is_none());
+        assert!(!cache_dir.join("stax").join("tui-diff-cache.json").exists());
+
+        let error = RepositorySession::open(&workdir)
+            .expect("open session")
+            .diff("feature", "main")
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("exit status"));
+        assert!(TuiDiffCache::load(&cache_dir).get(&key).is_none());
     }
 
     #[test]
