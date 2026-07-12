@@ -708,9 +708,13 @@ git commit -m "refactor: share desktop data loaders with the TUI"
 **Files:**
 - Create: `crates/stax-gui/src/state.rs`
 - Create: `crates/stax-gui/src/preferences.rs`
+- Modify: `crates/stax-gui/Cargo.toml`
+- Modify: `Cargo.toml`
+- Modify: `Cargo.lock`
+- Modify: `src/commands/worktree/pool.rs`
 - Modify: `crates/stax-gui/src/lib.rs`
 
-- [ ] **Step 1: Write pure state tests**
+- [ ] **Step 1: Write pure state and persistence tests**
 
 Add:
 
@@ -765,7 +769,18 @@ fn selecting_a_branch_invalidates_older_detail_results() {
 
     assert!(!state.apply_diff(first, Ok(diff("old"))));
     assert!(state.apply_diff(second, Ok(diff("new"))));
-    assert_eq!(state.diff.ready().unwrap().lines[0].content, "new");
+    assert_eq!(state.diff().ready().unwrap().lines[0].content, "new");
+}
+
+#[test]
+fn retrying_hydration_invalidates_the_first_same_branch_request() {
+    let mut state = WorkspaceState::new(snapshot());
+    let (first, _) = state.begin_hydration().unwrap();
+    let (retry, _) = state.begin_hydration().unwrap();
+
+    assert!(!state.apply_diff(first, Ok(diff("old"))));
+    assert!(state.apply_diff(retry, Ok(diff("retry"))));
+    assert_eq!(state.diff().ready().unwrap().lines[0].content, "retry");
 }
 
 #[test]
@@ -783,6 +798,14 @@ fn recent_repositories_are_canonical_deduplicated_and_bounded() {
 }
 ```
 
+Access state only through read-only accessors. Cover empty snapshots and invalid
+selection, stale repository/branch/generation tokens for every result type, and
+success and failure load states. Persistence tests must also cover missing and
+malformed files, canonical aliases stored directly in JSON, persisted regular
+files, a deterministic non-`NotFound` canonicalization error, Unix permissions,
+temporary-file cleanup, and synchronized concurrent processes that both record
+repositories without losing either entry.
+
 - [ ] **Step 2: Run GUI tests and verify failure**
 
 Run:
@@ -791,7 +814,8 @@ Run:
 cargo nextest run -p stax-gui
 ```
 
-Expected: compilation fails because state and preference types are absent.
+Expected: compilation fails because the private-state accessors, per-hydration
+invalidation, strict persistence behavior, and locking support are absent.
 
 - [ ] **Step 3: Implement deterministic workspace state**
 
@@ -812,14 +836,16 @@ impl<T> LoadState<T> {
             Self::Idle | Self::Loading | Self::Failed(_) => None,
         }
     }
+
+    pub fn error(&self) -> Option<&str>;
 }
 
 pub struct WorkspaceState {
-    pub snapshot: RepositorySnapshot,
-    pub selected_branch: String,
-    pub details: LoadState<BranchDetails>,
-    pub diff: LoadState<BranchDiff>,
-    pub ci: LoadState<CiSummary>,
+    snapshot: RepositorySnapshot,
+    selected_branch: Option<String>,
+    details: LoadState<BranchDetails>,
+    diff: LoadState<BranchDiff>,
+    ci: LoadState<CiSummary>,
     generation: u64,
 }
 ```
@@ -828,6 +854,12 @@ Implement these methods:
 
 ```rust
 impl WorkspaceState {
+    pub fn snapshot(&self) -> &RepositorySnapshot;
+    pub fn selected_branch(&self) -> Option<&str>;
+    pub fn details(&self) -> &LoadState<BranchDetails>;
+    pub fn diff(&self) -> &LoadState<BranchDiff>;
+    pub fn ci(&self) -> &LoadState<CiSummary>;
+    pub fn generation(&self) -> u64;
     pub fn select_branch(&mut self, name: &str) -> Option<DetailRequestToken>;
     pub fn begin_hydration(&mut self) -> Option<(DetailRequestToken, BranchSummary)>;
     pub fn apply_details(
@@ -849,12 +881,26 @@ impl WorkspaceState {
 ```
 
 `select_branch` validates the branch, increments `generation`, resets the three
-load states, and returns a token. `begin_hydration` marks the three fields
-loading and returns the current token plus a cloned branch. Each `apply_*`
-method returns `false` without mutation unless repository, branch, and
-generation all match; a matching `Err` becomes `LoadState::Failed`.
+load states, and returns a token. `begin_hydration` also increments the
+generation before marking the three fields loading and returning a new token
+plus a cloned branch, so a same-branch retry invalidates the earlier request.
+No mutable fields are exposed: callers can only observe state through accessors
+and mutate it through controlled transitions. Each `apply_*` method returns
+`false` without mutation unless repository, branch, and generation all match;
+a matching `Err` becomes `LoadState::Failed`.
 
-- [ ] **Step 4: Implement recent repositories**
+- [ ] **Step 4: Implement locked, durable recent repositories**
+
+Add the latest `fs4` release through Cargo and migrate the existing root
+consumer to the same version so the lockfile contains only one `fs4`:
+
+```bash
+cargo add fs4 --package stax-gui
+cargo add fs4@1.1.0 --package stax
+```
+
+Update the warm-worktree pool's lock calls to the `fs4` 1.1 API without
+changing its transaction semantics.
 
 `RecentRepositories::default_path` uses:
 
@@ -866,7 +912,19 @@ dirs::data_dir()
     .join("recent-repositories.json")
 ```
 
-Persist a JSON array using write-to-temporary-file then rename. Canonicalize existing paths, remove duplicates, put the newest first, cap at ten, and ignore missing paths when loading.
+Persist a JSON array using a same-directory temporary file and atomic rename.
+Use a dedicated lock file in the private preferences directory and hold an
+exclusive cross-process lock through the complete load/update/save transaction;
+the lock guard releases through RAII. Canonicalize existing paths, ignore only
+`NotFound`, return contextual errors for all other filesystem failures, include
+directories only, remove canonical duplicates, put the newest first, and cap at
+ten. Malformed JSON remains an actionable `Result` error for Task 6 to present
+nonfatally; loading never silently repairs or rewrites it.
+
+Create or restrict the preferences directory to mode `0700` on Unix, keep lock
+and temporary/data files at `0600`, flush and sync the temporary file before
+rename, and sync the parent directory after rename where supported. A
+successful save must leave only the data and dedicated lock files.
 
 - [ ] **Step 5: Run GUI state tests**
 
@@ -881,8 +939,8 @@ Expected: all tests pass.
 - [ ] **Step 6: Commit state and preferences**
 
 ```bash
-git add crates/stax-gui/src
-git commit -m "feat: add deterministic GUI workspace state"
+git add Cargo.toml Cargo.lock src/commands/worktree/pool.rs crates/stax-gui docs/superpowers/plans/2026-07-12-stax-gui-phase-1.md
+git commit -m "fix: harden GUI state persistence"
 ```
 
 ## 4. Native graphite cockpit

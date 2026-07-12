@@ -1,3 +1,5 @@
+pub mod preferences;
+pub mod state;
 mod views;
 
 use gpui::{App, Application};
