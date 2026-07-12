@@ -347,6 +347,7 @@ mod tests {
             ci_state: None,
             commits: vec!["add thing".to_string()],
             details_loaded: true,
+            details_error: None,
         }
     }
 

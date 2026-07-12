@@ -53,6 +53,7 @@ enum BranchDetailsUpdate {
     },
     Unavailable {
         branch: String,
+        message: String,
     },
     Done,
 }
@@ -95,6 +96,7 @@ pub struct BranchDisplay {
     pub ci_state: Option<String>,
     pub commits: Vec<String>,
     pub details_loaded: bool,
+    pub details_error: Option<String>,
 }
 
 impl BranchDisplay {
@@ -116,6 +118,7 @@ impl BranchDisplay {
             ci_state: summary.ci_state,
             commits: Vec::new(),
             details_loaded: summary.is_trunk,
+            details_error: None,
         }
     }
 
@@ -141,6 +144,7 @@ impl BranchDisplay {
         self.unpulled = details.unpulled;
         self.commits = details.commits;
         self.details_loaded = true;
+        self.details_error = None;
     }
 }
 
@@ -431,12 +435,26 @@ impl App {
     pub fn refresh_branches(&mut self) -> Result<()> {
         let snapshot = StackSnapshot::load(&self.repo)?;
         let repository_snapshot = self.session.snapshot()?;
+        let details_errors = self
+            .branches
+            .iter()
+            .filter_map(|branch| {
+                branch
+                    .details_error
+                    .as_ref()
+                    .map(|message| (branch.name.clone(), message.clone()))
+            })
+            .collect::<HashMap<_, _>>();
         self.stack = snapshot.stack;
         self.current_branch = repository_snapshot.current_branch;
         self.branches = repository_snapshot
             .branches
             .into_iter()
-            .map(BranchDisplay::from_summary)
+            .map(|summary| {
+                let mut branch = BranchDisplay::from_summary(summary);
+                branch.details_error = details_errors.get(&branch.name).cloned();
+                branch
+            })
             .collect();
         self.diff_cache.clear();
         self.needs_refresh = false;
@@ -777,6 +795,10 @@ impl App {
     }
 
     pub fn ci_summary_line(&self, branch: &BranchDisplay) -> (String, bool) {
+        if let Some(message) = branch.details_error.as_ref() {
+            return (format!("Live CI: {message}"), true);
+        }
+
         match self.ci_states.get(&branch.name) {
             Some(BranchCiState::Loading) => ("Live CI: fetching latest checks…".to_string(), false),
             Some(BranchCiState::Unavailable { message, .. }) => {
@@ -807,6 +829,20 @@ impl App {
         };
 
         if !selected.details_loaded {
+            return;
+        }
+
+        if let Some(message) = selected.details_error.clone() {
+            if self.ci_queued_branch.as_deref() == Some(branch.as_str()) {
+                self.ci_queued_branch = None;
+            }
+            self.ci_states.insert(
+                branch,
+                BranchCiState::Unavailable {
+                    message,
+                    fetched_at: Instant::now(),
+                },
+            );
             return;
         }
 
@@ -886,17 +922,38 @@ impl App {
     fn apply_branch_details_update(&mut self, update: BranchDetailsUpdate) {
         match update {
             BranchDetailsUpdate::Loaded { branch, details } => {
+                let mut recovered_from_error = false;
                 if let Some(branch_display) =
                     self.branches.iter_mut().find(|item| item.name == branch)
                 {
+                    recovered_from_error = branch_display.details_error.is_some();
                     branch_display.apply_details(details);
                 }
+                if recovered_from_error
+                    && matches!(
+                        self.ci_states.get(&branch),
+                        Some(BranchCiState::Unavailable { .. })
+                    )
+                {
+                    self.ci_states.remove(&branch);
+                }
             }
-            BranchDetailsUpdate::Unavailable { branch } => {
+            BranchDetailsUpdate::Unavailable { branch, message } => {
                 if let Some(branch_display) =
                     self.branches.iter_mut().find(|item| item.name == branch)
                 {
                     branch_display.details_loaded = true;
+                    branch_display.details_error = Some(message.clone());
+                    self.ci_states.insert(
+                        branch.clone(),
+                        BranchCiState::Unavailable {
+                            message,
+                            fetched_at: Instant::now(),
+                        },
+                    );
+                    if self.ci_queued_branch.as_deref() == Some(branch.as_str()) {
+                        self.ci_queued_branch = None;
+                    }
                 }
             }
             BranchDetailsUpdate::Done => {
@@ -1385,7 +1442,10 @@ fn spawn_branch_details_loader(
             let branch = request.name.clone();
             let update = match session.branch_details(&request) {
                 Ok(details) => BranchDetailsUpdate::Loaded { branch, details },
-                Err(_) => BranchDetailsUpdate::Unavailable { branch },
+                Err(error) => BranchDetailsUpdate::Unavailable {
+                    branch,
+                    message: format!("{error:#}"),
+                },
             };
             let _ = sender.send(update);
         }
@@ -1430,18 +1490,20 @@ fn spawn_ci_loader(session: RepositorySession, branch: String) -> Receiver<CiUpd
 #[cfg(test)]
 mod tests {
     use super::{
-        App, BranchDetailsUpdate, BranchDisplay, CiUpdate, DiffRequest, DiffUpdate, FocusedPane,
-        Mode, PaneVisibility, TuiPane, TuiPaneVisibilityState, live_ci_summary_text,
-        spawn_ci_loader, spawn_diff_loader, substring_filter_indices,
+        App, BranchCiState, BranchDetailsUpdate, BranchDisplay, CiUpdate, DiffRequest, DiffUpdate,
+        FocusedPane, Mode, PaneVisibility, TuiPane, TuiPaneVisibilityState, live_ci_summary_text,
+        spawn_branch_details_loader, spawn_ci_loader, spawn_diff_loader, substring_filter_indices,
     };
-    use crate::application::{BranchDetails, CiSummary, DiffLineKind, RepositorySession};
+    use crate::application::{
+        BranchDetails, BranchSummary, CiSummary, DiffLineKind, RepositorySession,
+    };
     use crate::cache::{
         CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache, TuiStateCache,
     };
-    use crate::engine::Stack;
+    use crate::engine::{BranchMetadata, Stack};
     use crate::git::GitRepo;
     use std::process::Command;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tempfile::TempDir;
 
     fn names(values: &[&str]) -> Vec<String> {
@@ -1499,6 +1561,7 @@ mod tests {
             ci_state: None,
             commits: Vec::new(),
             details_loaded: parent.is_none(),
+            details_error: None,
         }
     }
 
@@ -1585,6 +1648,109 @@ mod tests {
         assert!(app.branches[0].details_loaded);
         assert!(app.branches[0].has_remote);
         assert_eq!(app.ci_queued_branch.as_deref(), Some("feature"));
+    }
+
+    #[test]
+    fn hydration_config_error_precedes_no_remote_ci_guidance_and_recovers() {
+        let (_tempdir, repo) = test_repo();
+        let workdir = repo.workdir().expect("workdir").to_path_buf();
+        run_git(&workdir, &["switch", "-c", "feature"]);
+        let main_oid = repo.rev_parse("main").expect("main oid");
+        BranchMetadata::new("main", &main_oid)
+            .write(repo.inner(), "feature")
+            .expect("write feature metadata");
+        std::fs::write(
+            workdir.join("stax.toml"),
+            "[remote\nname = \"origin\"\ntoken = \"super-secret-credential\"\n",
+        )
+        .expect("write malformed config");
+        let request = BranchSummary {
+            name: "feature".to_string(),
+            parent: Some("main".to_string()),
+            column: 0,
+            is_current: true,
+            is_trunk: false,
+            needs_restack: false,
+            pr_number: None,
+            pr_state: None,
+            ci_state: None,
+        };
+        let session = RepositorySession::open(&workdir).expect("open session");
+        let repository_root = session.repository_root().display().to_string();
+
+        let update = spawn_branch_details_loader(session, vec![request])
+            .recv_timeout(Duration::from_secs(15))
+            .expect("details update");
+        match &update {
+            BranchDetailsUpdate::Unavailable { branch, message } => {
+                assert_eq!(branch, "feature");
+                assert!(message.contains("Failed to load stax config"));
+                assert!(message.contains(&repository_root));
+                assert!(!message.contains("super-secret-credential"));
+            }
+            BranchDetailsUpdate::Loaded { .. } | BranchDetailsUpdate::Done => {
+                panic!("malformed config must make details unavailable")
+            }
+        }
+
+        let mut app = minimal_app(repo, vec![skeleton_branch("feature", Some("main"), true)]);
+        app.apply_branch_details_update(update);
+        app.queue_ci_refresh_for_selected();
+
+        assert!(app.branches[0].details_loaded);
+        assert!(app.branches[0].details_error.is_some());
+        assert!(app.ci_queued_branch.is_none());
+        match app.ci_states.get("feature") {
+            Some(BranchCiState::Unavailable { message, .. }) => {
+                assert!(message.contains("stax config"));
+                assert!(!message.contains("super-secret-credential"));
+            }
+            Some(BranchCiState::Loading | BranchCiState::Ready { .. }) | None => {
+                panic!("hydration failure must populate unavailable CI state")
+            }
+        }
+        let (summary, _) = app.ci_summary_line(&app.branches[0]);
+        assert!(summary.contains("stax config"));
+        assert!(!summary.contains("push branch"));
+        assert!(!summary.contains("super-secret-credential"));
+
+        std::fs::write(workdir.join("stax.toml"), "[remote]\nname = \"origin\"\n")
+            .expect("fix config");
+        app.refresh_branches().expect("refresh branches");
+        assert!(app.branch_details_queued);
+        let refreshing = app
+            .branches
+            .iter()
+            .find(|branch| branch.name == "feature")
+            .expect("refreshed feature");
+        assert!(!refreshing.details_loaded);
+        assert!(refreshing.details_error.is_some());
+
+        let started = Instant::now();
+        loop {
+            app.refresh_background();
+            let recovered = app
+                .branches
+                .iter()
+                .find(|branch| branch.name == "feature")
+                .is_some_and(|branch| branch.details_loaded && branch.details_error.is_none());
+            if recovered {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "details refresh did not recover"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.select_branch("feature");
+        app.queue_ci_refresh_for_selected();
+
+        let recovered = app.selected_branch().expect("selected feature");
+        assert!(recovered.details_error.is_none());
+        let (summary, _) = app.ci_summary_line(recovered);
+        assert!(summary.contains("push branch"));
+        assert!(!summary.contains("stax config"));
     }
 
     #[test]
