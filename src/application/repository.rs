@@ -6,7 +6,7 @@ use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffC
 use crate::engine::{Stack, StackSnapshot};
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// A reusable, thread-friendly handle to repository-backed application data.
@@ -86,7 +86,7 @@ impl RepositorySession {
             )
         })?;
         let ci_cache = CiCache::load(&self.git_dir);
-        let branches = ordered_branches(&snapshot.stack, &snapshot.current_branch, &ci_cache);
+        let branches = ordered_branches(&snapshot.stack, &snapshot.current_branch, &ci_cache)?;
 
         Ok(RepositorySnapshot {
             repository_root: self.repository_root.clone(),
@@ -137,19 +137,26 @@ impl RepositorySession {
     /// diff.
     pub fn diff(&self, branch: &str, parent: &str) -> Result<BranchDiff> {
         let repo = self.open_repo()?;
-        let key = persistent_diff_cache_key(&repo, branch, parent).with_context(|| {
+        let target = repo.resolve_diff_target(branch, parent).with_context(|| {
             format!(
                 "Failed to prepare diff for branch '{}' against parent '{}'",
                 branch, parent
             )
         })?;
+        let key = TuiDiffCache::key(
+            parent,
+            branch,
+            &target.parent_oid,
+            &target.branch_oid,
+            &target.merge_base_oid,
+        );
         let cache = TuiDiffCache::load(&self.common_git_dir);
         if let Some(diff) = cache.get(&key) {
             return Ok(branch_diff_from_disk(diff));
         }
 
         let stat = repo
-            .diff_stat(branch, parent)
+            .diff_stat_at_target(branch, parent, &target)
             .with_context(|| {
                 format!(
                     "Failed to calculate diff stat for branch '{}' against parent '{}'",
@@ -164,7 +171,7 @@ impl RepositorySession {
             })
             .collect();
         let lines = repo
-            .diff_against_parent(branch, parent)
+            .diff_against_target(branch, parent, &target)
             .with_context(|| {
                 format!(
                     "Failed to calculate patch for branch '{}' against parent '{}'",
@@ -207,7 +214,11 @@ fn canonicalize_repository_path(path: &Path, label: &str, supplied_path: &Path) 
     })
 }
 
-fn ordered_branches(stack: &Stack, current_branch: &str, ci_cache: &CiCache) -> Vec<BranchSummary> {
+fn ordered_branches(
+    stack: &Stack,
+    current_branch: &str,
+    ci_cache: &CiCache,
+) -> Result<Vec<BranchSummary>> {
     let trunk = &stack.trunk;
     let mut branches = Vec::new();
     let mut trunk_children = stack
@@ -216,21 +227,11 @@ fn ordered_branches(stack: &Stack, current_branch: &str, ci_cache: &CiCache) -> 
         .map(|branch| branch.children.clone())
         .unwrap_or_default();
 
-    if trunk_children.is_empty() {
-        branches.push(branch_summary(
-            stack,
-            current_branch,
-            ci_cache,
-            trunk,
-            0,
-            true,
-        ));
-        return branches;
-    }
-
-    trunk_children.sort();
-    for (column, root) in trunk_children.iter().enumerate() {
-        collect_branches(&mut branches, stack, current_branch, ci_cache, root, column);
+    if !trunk_children.is_empty() {
+        trunk_children.sort();
+        for (column, root) in trunk_children.iter().enumerate() {
+            collect_branches(&mut branches, stack, current_branch, ci_cache, root, column);
+        }
     }
     branches.push(branch_summary(
         stack,
@@ -240,7 +241,8 @@ fn ordered_branches(stack: &Stack, current_branch: &str, ci_cache: &CiCache) -> 
         0,
         true,
     ));
-    branches
+    validate_emitted_topology(stack, &branches)?;
+    Ok(branches)
 }
 
 fn collect_branches(
@@ -309,6 +311,29 @@ fn collect_branches(
     }
 }
 
+fn validate_emitted_topology(stack: &Stack, branches: &[BranchSummary]) -> Result<()> {
+    let mut emitted_counts = HashMap::new();
+    for branch in branches {
+        *emitted_counts.entry(branch.name.as_str()).or_insert(0usize) += 1;
+    }
+
+    let mut affected = stack
+        .branches
+        .keys()
+        .filter(|name| emitted_counts.get(name.as_str()).copied() != Some(1))
+        .cloned()
+        .collect::<Vec<_>>();
+    affected.sort();
+    if !affected.is_empty() {
+        anyhow::bail!(
+            "Invalid stack topology: every branch must be reachable from trunk '{}' and emitted exactly once; affected branches: {}",
+            stack.trunk,
+            affected.join(", ")
+        );
+    }
+    Ok(())
+}
+
 fn branch_summary(
     stack: &Stack,
     current_branch: &str,
@@ -329,26 +354,6 @@ fn branch_summary(
         pr_state: info.and_then(|branch| branch.pr_state.clone()),
         ci_state: ci_cache.get_ci_state(branch),
     }
-}
-
-fn persistent_diff_cache_key(repo: &GitRepo, branch: &str, parent: &str) -> Result<String> {
-    let parent_oid = repo
-        .rev_parse(parent)
-        .with_context(|| format!("Failed to resolve parent '{parent}'"))?;
-    let branch_oid = repo
-        .rev_parse(branch)
-        .with_context(|| format!("Failed to resolve branch '{branch}'"))?;
-    let merge_base_oid = repo
-        .merge_base_refs(parent, branch)
-        .with_context(|| format!("Failed to find merge base for '{parent}' and '{branch}'"))?;
-
-    Ok(TuiDiffCache::key(
-        parent,
-        branch,
-        &parent_oid,
-        &branch_oid,
-        &merge_base_oid,
-    ))
 }
 
 fn classify_diff_line(line: &str) -> DiffLineKind {

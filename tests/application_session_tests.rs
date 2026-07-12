@@ -9,6 +9,30 @@ fn branch(snapshot: &[BranchSummary], name: &str) -> BranchSummary {
         .clone()
 }
 
+fn write_stack_parent(repo: &TestRepo, branch: &str, parent: &str) {
+    let metadata_file = format!(".metadata-{branch}.json");
+    let metadata = format!(
+        r#"{{"parentBranchName":"{parent}","parentBranchRevision":"{}"}}"#,
+        repo.get_commit_sha(parent)
+    );
+    repo.create_file(&metadata_file, &metadata);
+    let hash = repo.git(&["hash-object", "-w", &metadata_file]);
+    assert!(
+        hash.status.success(),
+        "hash metadata failed: {}",
+        TestRepo::stderr(&hash)
+    );
+    let oid = TestRepo::stdout(&hash).trim().to_string();
+    let refname = format!("refs/branch-metadata/{branch}");
+    let update = repo.git(&["update-ref", &refname, &oid]);
+    assert!(
+        update.status.success(),
+        "update metadata failed: {}",
+        TestRepo::stderr(&update)
+    );
+    std::fs::remove_file(repo.path().join(metadata_file)).unwrap();
+}
+
 #[test]
 fn snapshot_orders_tracked_stacks_before_trunk() {
     let repo = TestRepo::new();
@@ -64,6 +88,79 @@ fn snapshot_includes_a_trunk_only_repository() {
     assert_eq!(snapshot.branches[0].name, "main");
     assert!(snapshot.branches[0].is_current);
     assert!(snapshot.branches[0].is_trunk);
+}
+
+#[test]
+fn snapshot_sorts_forked_siblings_and_assigns_deterministic_columns() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["zeta"]);
+    let checkout = repo.run_stax(&["checkout", "main"]);
+    assert!(
+        checkout.status.success(),
+        "checkout main failed: {}",
+        TestRepo::stderr(&checkout)
+    );
+    repo.create_stack(&["alpha"]);
+
+    let snapshot = RepositorySession::open(repo.path())
+        .unwrap()
+        .snapshot()
+        .unwrap();
+
+    assert_eq!(
+        snapshot
+            .branches
+            .iter()
+            .map(|branch| (branch.name.as_str(), branch.column))
+            .collect::<Vec<_>>(),
+        vec![("alpha", 0), ("zeta", 1), ("main", 0)]
+    );
+}
+
+#[test]
+fn snapshot_rejects_unreachable_parent_cycles() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["first", "second"]);
+    write_stack_parent(&repo, "first", "second");
+    write_stack_parent(&repo, "second", "first");
+    let session = RepositorySession::open(repo.path()).unwrap();
+
+    let error = session.snapshot().unwrap_err().to_string();
+
+    assert!(error.contains("Invalid stack topology"));
+    assert!(error.contains("first"));
+    assert!(error.contains("second"));
+    assert!(error.contains("exactly once"));
+}
+
+#[test]
+fn opening_a_linked_worktree_uses_its_canonical_root_and_branch() {
+    let repo = TestRepo::new();
+    let create_branch = repo.git(&["branch", "linked"]);
+    assert!(
+        create_branch.status.success(),
+        "create linked branch failed: {}",
+        TestRepo::stderr(&create_branch)
+    );
+    let linked_parent = tempfile::tempdir().unwrap();
+    let linked_root = linked_parent.path().join("linked-worktree");
+    let linked_root_text = linked_root.to_string_lossy().into_owned();
+    let add_worktree = repo.git(&["worktree", "add", &linked_root_text, "linked"]);
+    assert!(
+        add_worktree.status.success(),
+        "add linked worktree failed: {}",
+        TestRepo::stderr(&add_worktree)
+    );
+
+    let session = RepositorySession::open(&linked_root).unwrap();
+    let snapshot = session.snapshot().unwrap();
+
+    assert_eq!(
+        session.repository_root(),
+        std::fs::canonicalize(&linked_root).unwrap()
+    );
+    assert_eq!(snapshot.repository_root, session.repository_root());
+    assert_eq!(snapshot.current_branch, "linked");
 }
 
 #[test]

@@ -13,6 +13,14 @@ pub struct GitRepo {
     repo: Repository,
 }
 
+/// Immutable object IDs for one merge-base branch diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiffTarget {
+    pub(crate) parent_oid: String,
+    pub(crate) branch_oid: String,
+    pub(crate) merge_base_oid: String,
+}
+
 fn normalize_local_branch_name(branch: &str) -> &str {
     branch.strip_prefix("refs/heads/").unwrap_or(branch)
 }
@@ -1944,13 +1952,51 @@ Use --auto-stash-pop or stash/commit changes first.",
         }
     }
 
+    /// Resolve the refs for a diff once so subsequent work cannot observe ref movement.
+    pub(crate) fn resolve_diff_target(&self, branch: &str, parent: &str) -> Result<DiffTarget> {
+        let parent_oid = self.resolve_to_oid(parent).with_context(|| {
+            format!("Failed to resolve parent '{parent}' for branch '{branch}'")
+        })?;
+        let branch_oid = self
+            .resolve_to_oid(branch)
+            .with_context(|| format!("Failed to resolve branch '{branch}' against '{parent}'"))?;
+        let merge_base_oid = self
+            .repo
+            .merge_base(parent_oid, branch_oid)
+            .with_context(|| {
+                format!("Failed to find merge base for parent '{parent}' and branch '{branch}'")
+            })?;
+
+        Ok(DiffTarget {
+            parent_oid: parent_oid.to_string(),
+            branch_oid: branch_oid.to_string(),
+            merge_base_oid: merge_base_oid.to_string(),
+        })
+    }
+
     /// Get diff between a branch and its parent
     pub fn diff_against_parent(&self, branch: &str, parent: &str) -> Result<Vec<String>> {
-        // Use merge-base diff (A...B) to match PR semantics and avoid showing unrelated
-        // parent-side changes when the parent branch has advanced.
-        let range = format!("{}...{}", parent, branch);
-        let output = command::output(self.workdir()?, &["diff", "--color=never", &range])
-            .context("Failed to get diff")?;
+        let target = self.resolve_diff_target(branch, parent)?;
+        self.diff_against_target(branch, parent, &target)
+    }
+
+    /// Get a patch from a previously captured merge base and branch tip.
+    pub(crate) fn diff_against_target(
+        &self,
+        branch: &str,
+        parent: &str,
+        target: &DiffTarget,
+    ) -> Result<Vec<String>> {
+        let output = command::output(
+            self.workdir()?,
+            &[
+                "diff",
+                "--color=never",
+                &target.merge_base_oid,
+                &target.branch_oid,
+            ],
+        )
+        .context("Failed to get diff")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1973,9 +2019,27 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Get diff stat (numstat) between a branch and its parent
     pub fn diff_stat(&self, branch: &str, parent: &str) -> Result<Vec<(String, usize, usize)>> {
-        let range = format!("{}...{}", parent, branch);
-        let output = command::output(self.workdir()?, &["diff", "--numstat", &range])
-            .context("Failed to get diff stat")?;
+        let target = self.resolve_diff_target(branch, parent)?;
+        self.diff_stat_at_target(branch, parent, &target)
+    }
+
+    /// Get a diffstat from a previously captured merge base and branch tip.
+    pub(crate) fn diff_stat_at_target(
+        &self,
+        branch: &str,
+        parent: &str,
+        target: &DiffTarget,
+    ) -> Result<Vec<(String, usize, usize)>> {
+        let output = command::output(
+            self.workdir()?,
+            &[
+                "diff",
+                "--numstat",
+                &target.merge_base_oid,
+                &target.branch_oid,
+            ],
+        )
+        .context("Failed to get diff stat")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -2498,6 +2562,46 @@ mod tests {
                 .expect("canonical workdir"),
             std::fs::canonicalize(path).expect("canonical temp repo path")
         );
+    }
+
+    #[test]
+    fn resolved_diff_target_remains_stable_after_branch_moves() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(path, &["switch", "-c", "feature"]);
+        fs::write(path.join("captured.txt"), "captured\n").expect("write captured");
+        run_git(path, &["add", "captured.txt"]);
+        run_git(path, &["commit", "-m", "Captured feature"]);
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        let target = repo
+            .resolve_diff_target("feature", "main")
+            .expect("resolve immutable target");
+
+        fs::write(path.join("moved.txt"), "moved\n").expect("write moved");
+        run_git(path, &["add", "moved.txt"]);
+        run_git(path, &["commit", "-m", "Move feature"]);
+        assert_ne!(
+            target.branch_oid,
+            repo.rev_parse("feature").expect("moved feature oid")
+        );
+
+        let stat = repo
+            .diff_stat_at_target("feature", "main", &target)
+            .expect("diff stat at captured target");
+        assert_eq!(stat, vec![("captured.txt".to_string(), 1, 0)]);
+
+        let patch = repo
+            .diff_against_target("feature", "main", &target)
+            .expect("patch at captured target");
+        assert!(patch.iter().any(|line| line == "+captured"));
+        assert!(!patch.iter().any(|line| line == "+moved"));
     }
 
     #[test]
