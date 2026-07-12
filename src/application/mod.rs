@@ -6,6 +6,7 @@ mod model;
 mod operation;
 mod pull_request;
 mod repository;
+mod restack;
 
 pub(crate) use branch_name::{
     BranchNameContext, BranchNameError, BranchNameResult, format_branch_name,
@@ -22,3 +23,4 @@ pub use operation::{
     RestackScope, TransactionStatus, TransactionSummary,
 };
 pub use repository::RepositorySession;
+pub(crate) use restack::RestackExecutionOptions;

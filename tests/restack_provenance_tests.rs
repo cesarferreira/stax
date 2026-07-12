@@ -14,7 +14,12 @@
 use crate::common;
 
 use common::{OutputAssertions, TestRepo};
+use stax::application::{
+    NoopOperationReporter, OperationErrorDetails, OperationErrorKind, OperationOutcome,
+    OperationSideEffects, RepositorySession, RestackScope,
+};
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 // ---------------------------------------------------------------------------
@@ -69,6 +74,62 @@ fn write_branch_metadata_raw(
         .status()
         .expect("Failed to spawn git update-ref");
     assert!(status.success(), "git update-ref exited non-zero");
+}
+
+fn write_branch_metadata_with_pr(
+    repo: &TestRepo,
+    branch: &str,
+    parent_name: &str,
+    parent_revision: &str,
+    pr_state: &str,
+) {
+    let json = format!(
+        r#"{{"parentBranchName":"{}","parentBranchRevision":"{}","prInfo":{{"number":42,"state":"{}","isDraft":false}}}}"#,
+        parent_name, parent_revision, pr_state
+    );
+
+    let mut child = Command::new("git")
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repo.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .spawn()
+        .expect("Failed to spawn git hash-object");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin missing")
+        .write_all(json.as_bytes())
+        .expect("Failed to write metadata JSON to stdin");
+
+    let out = child.wait_with_output().expect("git hash-object failed");
+    assert!(out.status.success(), "git hash-object exited non-zero");
+    let hash = String::from_utf8(out.stdout)
+        .expect("non-utf8 hash output")
+        .trim()
+        .to_string();
+    assert_git_success(
+        repo,
+        &[
+            "update-ref",
+            &format!("refs/branch-metadata/{branch}"),
+            &hash,
+        ],
+        "write metadata with PR",
+    );
+}
+
+fn application_restack(
+    repo: &TestRepo,
+    scope: RestackScope,
+) -> stax::application::OperationReceipt {
+    RepositorySession::open(repo.path())
+        .unwrap()
+        .restack(scope, false, &mut NoopOperationReporter)
+        .unwrap()
 }
 
 fn rev_list_count(repo: &TestRepo, range: &str) -> usize {
@@ -715,4 +776,153 @@ fn test_genuine_conflict_still_fails_after_fix() {
     );
 
     repo.abort_rebase();
+}
+
+#[test]
+fn application_restack_recomputes_child_after_parent_rebase() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["app-parent", "app-child"]);
+    let parent_before = repo.get_commit_sha(&branches[0]);
+    let child_before = repo.get_commit_sha(&branches[1]);
+
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("app-main-advance.txt", "main moved\n");
+    repo.commit("Advance main for application restack");
+    repo.git(&["checkout", &branches[1]]).assert_success();
+
+    let receipt = application_restack(
+        &repo,
+        RestackScope::StackContaining(branches[1].to_string()),
+    );
+
+    assert_ne!(repo.get_commit_sha(&branches[0]), parent_before);
+    assert_ne!(repo.get_commit_sha(&branches[1]), child_before);
+    assert_eq!(
+        receipt.side_effects,
+        OperationSideEffects::RepositoryChanged
+    );
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::Restacked { ref branches, .. }
+            if branches == &vec![branches[0].clone(), branches[1].clone()]
+    ));
+}
+
+#[test]
+fn application_restack_preserves_open_pr_fast_path() {
+    let repo = TestRepo::new();
+    let branch = repo.create_stack(&["app-open-pr"]).remove(0);
+    let original_parent = repo.get_commit_sha("main");
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("app-open-pr-main.txt", "main moved\n");
+    repo.commit("Advance main below open PR");
+    write_branch_metadata_with_pr(&repo, &branch, "main", &original_parent, "OPEN");
+    repo.git(&["checkout", &branch]).assert_success();
+
+    let receipt = application_restack(&repo, RestackScope::Branch(branch.clone()));
+
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::Restacked { ref branches, .. } if branches == &vec![branch]
+    ));
+}
+
+#[test]
+fn application_restack_skips_frozen_and_reports_it() {
+    let repo = TestRepo::new();
+    let branch = repo.create_stack(&["app-frozen"]).remove(0);
+    let branch_before = repo.get_commit_sha(&branch);
+    repo.run_stax(&["freeze", &branch]).assert_success();
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("app-frozen-main.txt", "main moved\n");
+    repo.commit("Advance main below frozen branch");
+    repo.git(&["checkout", &branch]).assert_success();
+
+    let receipt = application_restack(&repo, RestackScope::Branch(branch.clone()));
+
+    assert_eq!(repo.get_commit_sha(&branch), branch_before);
+    assert_eq!(receipt.side_effects, OperationSideEffects::None);
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::Restacked {
+            ref branches,
+            ref skipped_frozen,
+        } if branches.is_empty() && skipped_frozen == &vec![branch]
+    ));
+}
+
+#[test]
+fn application_stack_containing_excludes_unrelated_sibling_subtree() {
+    let repo = TestRepo::new();
+    let base = repo.create_stack(&["app-fork-base"]).remove(0);
+    let selected = repo.create_stack(&["app-selected"]).remove(0);
+    repo.run_stax(&["checkout", &base]).assert_success();
+    let sibling = repo.create_stack(&["app-sibling"]).remove(0);
+    let selected_before = repo.get_commit_sha(&selected);
+    let sibling_before = repo.get_commit_sha(&sibling);
+    repo.run_stax(&["checkout", &base]).assert_success();
+    repo.create_file("app-fork-base-v2.txt", "base moved\n");
+    repo.commit("Advance fork base");
+    repo.run_stax(&["checkout", &selected]).assert_success();
+
+    application_restack(&repo, RestackScope::StackContaining(selected.clone()));
+
+    assert_ne!(repo.get_commit_sha(&selected), selected_before);
+    assert_eq!(repo.get_commit_sha(&sibling), sibling_before);
+}
+
+#[test]
+fn application_restack_noop_has_no_transaction() {
+    let repo = TestRepo::new();
+    let branch = repo.create_stack(&["app-noop"]).remove(0);
+
+    let receipt = application_restack(&repo, RestackScope::Branch(branch.clone()));
+
+    assert_eq!(receipt.transaction, None);
+    assert_eq!(receipt.side_effects, OperationSideEffects::None);
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::Restacked { ref branches, .. } if branches.is_empty()
+    ));
+}
+
+#[test]
+fn application_restack_preflights_linked_target_before_stash() {
+    let repo = TestRepo::new();
+    let branch = repo.create_stack(&["app-linked-preflight"]).remove(0);
+    let linked_parent = tempfile::tempdir().unwrap();
+    let linked = linked_parent.path().join("linked");
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.git(&["worktree", "add", linked.to_str().unwrap(), &branch])
+        .assert_success();
+    std::fs::write(linked.join("dirty.txt"), "dirty\n").unwrap();
+    let linked_git_dir = PathBuf::from(
+        String::from_utf8_lossy(&repo.git_in(&linked, &["rev-parse", "--git-dir"]).stdout)
+            .trim()
+            .to_string(),
+    );
+    let linked_git_dir = if linked_git_dir.is_absolute() {
+        linked_git_dir
+    } else {
+        linked.join(linked_git_dir)
+    };
+    std::fs::create_dir_all(linked_git_dir.join("rebase-merge")).unwrap();
+
+    let mut reporter = NoopOperationReporter;
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .restack(RestackScope::Branch(branch.clone()), true, &mut reporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::RebaseInProgress);
+    assert_eq!(
+        error.details,
+        OperationErrorDetails::Rebase {
+            branch: Some(branch),
+            worktree: linked.canonicalize().unwrap(),
+        }
+    );
+    let stash_list = repo.git_in(&linked, &["stash", "list"]);
+    assert!(String::from_utf8_lossy(&stash_list.stdout).is_empty());
+    assert!(linked.join("dirty.txt").exists());
 }
