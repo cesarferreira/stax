@@ -21,6 +21,7 @@ pub mod freeze;
 pub mod generate;
 pub mod get;
 pub(crate) mod github_list;
+pub mod gui;
 pub mod init;
 pub mod issue;
 pub mod log;

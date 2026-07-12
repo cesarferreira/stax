@@ -88,6 +88,10 @@ jobs:
             -A clippy::unnecessary_sort_by \
             -A clippy::useless_format \
             -A clippy::useless_vec
+      - name: Test developer app bundle
+        run: make gui-app-test
+      - name: Build developer app bundle
+        run: make gui-app
 
   unit-tests:
     name: Unit Tests
