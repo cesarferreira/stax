@@ -248,21 +248,37 @@ impl Transaction {
     }
 
     pub(crate) fn finish_err_with_receipt(
-        mut self,
+        self,
         message: &str,
         failed_step: Option<&str>,
         failed_branch: Option<&str>,
     ) -> Result<OpReceipt> {
+        let finalized = self.finish_err_preserving_receipt(message, failed_step, failed_branch);
+        match finalized.persistence_error {
+            Some(error) => Err(error),
+            None => Ok(finalized.receipt),
+        }
+    }
+
+    pub(crate) fn finish_err_preserving_receipt(
+        mut self,
+        message: &str,
+        failed_step: Option<&str>,
+        failed_branch: Option<&str>,
+    ) -> ReceiptFinalization {
         self.receipt
             .mark_failed(message, failed_step, failed_branch);
-        self.receipt.save(&self.git_dir)?;
+        let persistence_error = self.receipt.save(&self.git_dir).err();
         self.finished = true;
 
         if !self.quiet {
             self.print_recovery_hint();
         }
 
-        Ok(self.receipt.clone())
+        ReceiptFinalization {
+            receipt: self.receipt.clone(),
+            persistence_error,
+        }
     }
 
     /// Print the recovery hint after a failure

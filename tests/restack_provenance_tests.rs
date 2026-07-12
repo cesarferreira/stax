@@ -16,7 +16,7 @@ use crate::common;
 use common::{OutputAssertions, TestRepo};
 use stax::application::{
     NoopOperationReporter, OperationErrorDetails, OperationErrorKind, OperationOutcome,
-    OperationSideEffects, RepositorySession, RestackScope,
+    OperationSideEffects, RepositorySession, RestackScope, TransactionStatus,
 };
 use std::io::Write;
 use std::path::PathBuf;
@@ -156,6 +156,38 @@ fn assert_git_success(repo: &TestRepo, args: &[&str], context: &str) {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+fn output_text(output: std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn repository_git_dir(repo: &TestRepo) -> PathBuf {
+    let path = PathBuf::from(output_text(repo.git(&["rev-parse", "--git-common-dir"])));
+    if path.is_absolute() {
+        path
+    } else {
+        repo.path().join(path)
+    }
+}
+
+#[cfg(unix)]
+fn install_post_rewrite_hook(repo: &TestRepo, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let hook = repository_git_dir(repo).join("hooks").join("post-rewrite");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, script).unwrap();
+    let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&hook, permissions).unwrap();
+}
+
+fn local_ref_lock_path(repo: &TestRepo, branch: &str) -> PathBuf {
+    repository_git_dir(repo)
+        .join("refs")
+        .join("heads")
+        .join(format!("{branch}.lock"))
 }
 
 fn create_empty_commit(repo: &TestRepo, message: &str) {
@@ -883,6 +915,102 @@ fn application_restack_noop_has_no_transaction() {
     assert!(matches!(
         receipt.outcome,
         OperationOutcome::Restacked { ref branches, .. } if branches.is_empty()
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn restack_ref_lock_failure_after_first_branch_uses_failed_finalizer() {
+    let repo = TestRepo::new();
+    let branches =
+        repo.create_stack(&["app-failed-finalizer-first", "app-failed-finalizer-second"]);
+    let first = branches[0].clone();
+    let second = branches[1].clone();
+    let first_before = repo.get_commit_sha(&first);
+    let second_before = repo.get_commit_sha(&second);
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("app-failed-finalizer-main.txt", "main moved\n");
+    repo.commit("Advance main before ref lock failure");
+    let lock_path = local_ref_lock_path(&repo, &second);
+    install_post_rewrite_hook(
+        &repo,
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"rebase\" ]; then : > '{}'; fi\n",
+            lock_path.display()
+        ),
+    );
+    repo.git(&["checkout", &second]).assert_success();
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .restack(
+            RestackScope::StackContaining(second.clone()),
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::LocalGit);
+    assert_eq!(error.side_effects, OperationSideEffects::RepositoryChanged);
+    assert_ne!(repo.get_commit_sha(&first), first_before);
+    assert_eq!(repo.get_commit_sha(&second), second_before);
+    let receipt = error.receipt.expect("failed in-memory receipt");
+    let transaction = receipt.transaction.expect("transaction summary");
+    assert_eq!(transaction.status, TransactionStatus::Failed);
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::Restacked { ref branches, .. } if branches == &vec![first]
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn restack_receipt_persistence_failure_retains_in_memory_failed_receipt() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&[
+        "app-failed-receipt-persist-first",
+        "app-failed-receipt-persist-second",
+    ]);
+    let first = branches[0].clone();
+    let second = branches[1].clone();
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("app-failed-receipt-persist-main.txt", "main moved\n");
+    repo.commit("Advance main before failed receipt persistence");
+    let ops_dir = repository_git_dir(&repo).join("stax").join("ops");
+    std::fs::create_dir_all(&ops_dir).unwrap();
+    let lock_path = local_ref_lock_path(&repo, &second);
+    install_post_rewrite_hook(
+        &repo,
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"rebase\" ]; then for receipt in '{}'/*.json; do rm -f \"$receipt\"; mkdir \"$receipt\"; done; : > '{}'; fi\n",
+            ops_dir.display(),
+            lock_path.display()
+        ),
+    );
+    repo.git(&["checkout", &second]).assert_success();
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .restack(
+            RestackScope::StackContaining(second.clone()),
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::LocalGit);
+    assert!(error.primary.contains(&second));
+    assert!(
+        error.diagnostic_chain.contains("Failed to write receipt"),
+        "diagnostics should retain receipt persistence failure: {}",
+        error.diagnostic_chain
+    );
+    let receipt = error.receipt.expect("failed in-memory receipt");
+    let transaction = receipt.transaction.expect("transaction summary");
+    assert_eq!(transaction.status, TransactionStatus::Failed);
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::Restacked { ref branches, .. } if branches == &vec![first]
     ));
 }
 

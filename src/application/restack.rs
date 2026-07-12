@@ -9,7 +9,7 @@ use super::{
 };
 use crate::application::repository::MutationTargets;
 use crate::config::Config;
-use crate::engine::restack_preflight::RestackPreflight;
+use crate::engine::restack_preflight::choose_rebase_upstream;
 use crate::engine::{BranchMetadata, PrInfo, Stack};
 use crate::git::{GitRepo, RebaseResult};
 use crate::ops::receipt::{OpKind, PlanSummary};
@@ -23,6 +23,19 @@ pub(crate) struct RestackExecutionOptions {
     pub auto_stash: bool,
     pub restore_branch: Option<String>,
     pub completed_from_receipt: HashSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OwnedStash {
+    worktree: PathBuf,
+    restored: bool,
+}
+
+struct RestackFailureState {
+    transaction: Option<Transaction>,
+    completed_branches: Vec<String>,
+    stashes: Vec<OwnedStash>,
+    side_effects: OperationSideEffects,
 }
 
 impl RepositorySession {
@@ -241,7 +254,7 @@ fn restack_inner(
         )
     })?;
 
-    let mut stashed_worktrees = Vec::new();
+    let mut stashes = Vec::new();
     let mut stashed_worktree_set = HashSet::new();
     if repo.is_dirty().map_err(|error| {
         local_git_error(
@@ -273,7 +286,10 @@ fn restack_inner(
             )
         })? {
             stashed_worktree_set.insert(current_workdir.clone());
-            stashed_worktrees.push(current_workdir.clone());
+            stashes.push(OwnedStash {
+                worktree: current_workdir.clone(),
+                restored: false,
+            });
         }
     }
 
@@ -298,7 +314,7 @@ fn restack_inner(
     let mut warnings = Vec::new();
 
     if branches_to_restack.is_empty() {
-        warnings.extend(restore_stashed_worktrees(&repo, &stashed_worktrees));
+        warnings.extend(restore_stashed_worktrees(&repo, &mut stashes));
         return Ok(restack_receipt(
             request,
             Vec::new(),
@@ -307,6 +323,42 @@ fn restack_inner(
             warnings,
             OperationSideEffects::None,
         ));
+    }
+
+    if !options.auto_stash {
+        for branch in &branches_to_restack {
+            let target_workdir = repo.branch_rebase_target_workdir(branch).map_err(|error| {
+                local_git_error(
+                    request,
+                    format!("Could not find the rebase worktree for '{branch}'"),
+                    "Resolve the Git worktree error and retry",
+                    error,
+                    Some(branch),
+                )
+            })?;
+            if repo.is_dirty_at(&target_workdir).map_err(|error| {
+                local_git_error(
+                    request,
+                    format!("Could not inspect worktree '{}'", target_workdir.display()),
+                    "Resolve the Git status error and retry",
+                    error,
+                    Some(branch),
+                )
+            })? {
+                return Err(operation_error(
+                    request,
+                    OperationErrorKind::DirtyWorktree,
+                    OperationErrorDetails::Rebase {
+                        branch: Some(branch.clone()),
+                        worktree: target_workdir,
+                    },
+                    format!("Worktree for '{branch}' has uncommitted changes"),
+                    "Commit, stash, or enable auto-stash before retrying",
+                    "target worktree is dirty before restack",
+                    OperationSideEffects::None,
+                ));
+            }
+        }
     }
 
     reporter.report(OperationEvent::Progress(OperationProgress {
@@ -350,19 +402,23 @@ fn restack_inner(
             None,
         )
     })?;
+    let mut tx = Some(tx);
 
     let config = Config::load().unwrap_or_default();
+    let mut completed = Vec::new();
     let mut live_stack = Stack::load(&repo).map_err(|error| {
         finish_transaction_error(
             request,
+            &repo,
             &mut tx,
+            &completed,
+            &stashes,
             "Could not reload the stack",
             "Resolve the stack metadata error and retry",
             error,
             None,
         )
     })?;
-    let mut completed = Vec::new();
 
     for (index, branch) in scope_branches.iter().enumerate() {
         if options.completed_from_receipt.contains(branch) {
@@ -385,7 +441,10 @@ fn restack_inner(
             _ => match BranchMetadata::read(repo.inner(), branch).map_err(|error| {
                 finish_transaction_error(
                     request,
+                    &repo,
                     &mut tx,
+                    &completed,
+                    &stashes,
                     format!("Could not read metadata for '{branch}'"),
                     "Resolve the metadata error and retry",
                     error,
@@ -417,7 +476,10 @@ fn restack_inner(
         let target_workdir = repo.branch_rebase_target_workdir(branch).map_err(|error| {
             finish_transaction_error(
                 request,
+                &repo,
                 &mut tx,
+                &completed,
+                &stashes,
                 format!("Could not find the rebase worktree for '{branch}'"),
                 "Resolve the Git worktree error and retry",
                 error,
@@ -429,7 +491,10 @@ fn restack_inner(
             && repo.is_dirty_at(&target_workdir).map_err(|error| {
                 finish_transaction_error(
                     request,
+                    &repo,
                     &mut tx,
+                    &completed,
+                    &stashes,
                     format!("Could not inspect worktree '{}'", target_workdir.display()),
                     "Resolve the Git status error and retry",
                     error,
@@ -439,7 +504,10 @@ fn restack_inner(
             && repo.stash_push_at(&target_workdir).map_err(|error| {
                 finish_transaction_error(
                     request,
+                    &repo,
                     &mut tx,
+                    &completed,
+                    &stashes,
                     format!("Could not stash worktree '{}'", target_workdir.display()),
                     "Resolve the stash error and retry",
                     error,
@@ -448,7 +516,10 @@ fn restack_inner(
             })?
         {
             stashed_worktree_set.insert(target_workdir.clone());
-            stashed_worktrees.push(target_workdir.clone());
+            stashes.push(OwnedStash {
+                worktree: target_workdir.clone(),
+                restored: false,
+            });
         }
 
         let pr_state = live_stack
@@ -475,7 +546,10 @@ fn restack_inner(
         .map_err(|error| {
             finish_transaction_error(
                 request,
+                &repo,
                 &mut tx,
+                &completed,
+                &stashes,
                 format!("Could not rebase '{branch}'"),
                 "Resolve the Git rebase error and retry",
                 error,
@@ -488,7 +562,10 @@ fn restack_inner(
                 let new_parent_rev = repo.branch_commit(&parent_branch_name).map_err(|error| {
                     finish_transaction_error(
                         request,
+                        &repo,
                         &mut tx,
+                        &completed,
+                        &stashes,
                         format!("Could not resolve parent '{parent_branch_name}'"),
                         "Resolve the Git ref error and retry",
                         error,
@@ -499,7 +576,10 @@ fn restack_inner(
                     BranchMetadata::read(repo.inner(), branch).map_err(|error| {
                         finish_transaction_error(
                             request,
+                            &repo,
                             &mut tx,
+                            &completed,
+                            &stashes,
                             format!("Could not read metadata for '{branch}'"),
                             "Resolve the metadata error and retry",
                             error,
@@ -528,7 +608,10 @@ fn restack_inner(
                     .map_err(|error| {
                         finish_transaction_error(
                             request,
+                            &repo,
                             &mut tx,
+                            &completed,
+                            &stashes,
                             format!("Could not update metadata for '{branch}'"),
                             "Resolve the metadata error and retry",
                             error,
@@ -555,43 +638,69 @@ fn restack_inner(
                     }
                 }
 
-                tx.record_after(&repo, branch).map_err(|error| {
-                    finish_transaction_error(
-                        request,
-                        &mut tx,
-                        format!("Could not record the new tip for '{branch}'"),
-                        "Resolve the transaction error and retry",
-                        error,
-                        Some(branch),
-                    )
-                })?;
-                tx.push_completed_branch(branch);
+                transaction_mut(&mut tx)
+                    .record_after(&repo, branch)
+                    .map_err(|error| {
+                        finish_transaction_error(
+                            request,
+                            &repo,
+                            &mut tx,
+                            &completed,
+                            &stashes,
+                            format!("Could not record the new tip for '{branch}'"),
+                            "Resolve the transaction error and retry",
+                            error,
+                            Some(branch),
+                        )
+                    })?;
+                transaction_mut(&mut tx).push_completed_branch(branch);
                 completed.push(branch.clone());
             }
             RebaseResult::Conflict => {
-                let receipt = finish_failed_receipt(tx, "Rebase conflict", Some(branch));
-                return Err(OperationError {
-                    request: request.clone(),
-                    kind: OperationErrorKind::RebaseConflict,
-                    details: OperationErrorDetails::Rebase {
+                if !repo.has_conflicts_in(&target_workdir).unwrap_or(true) {
+                    return Err(finalize_restack_failure(
+                        request,
+                        RestackFailureState {
+                            transaction: tx.take(),
+                            completed_branches: completed,
+                            stashes,
+                            side_effects: OperationSideEffects::RepositoryChanged,
+                        },
+                        OperationErrorKind::LocalGit,
+                        OperationErrorDetails::Branch {
+                            branch: branch.clone(),
+                        },
+                        format!("Could not finish rebasing '{branch}'"),
+                        "Inspect the rebase state, then run `st continue` or `st abort`"
+                            .to_string(),
+                        anyhow::anyhow!(
+                            "git rebase stopped for '{branch}' without unresolved file conflicts"
+                        ),
+                        "rebase",
+                        Some(branch),
+                    ));
+                }
+                return Err(finalize_restack_failure(
+                    request,
+                    RestackFailureState {
+                        transaction: tx.take(),
+                        completed_branches: completed,
+                        stashes,
+                        side_effects: OperationSideEffects::RepositoryChanged,
+                    },
+                    OperationErrorKind::RebaseConflict,
+                    OperationErrorDetails::Rebase {
                         branch: Some(branch.clone()),
                         worktree: target_workdir,
                     },
-                    primary: format!("Restack stopped on a conflict in '{branch}'"),
-                    action: "Resolve the conflicts and run `st continue`, or run `st abort`".into(),
-                    diagnostic_chain: format!(
+                    format!("Restack stopped on a conflict in '{branch}'"),
+                    "Resolve the conflicts and run `st continue`, or run `st abort`".into(),
+                    anyhow::anyhow!(
                         "rebase conflict while rebasing '{branch}' onto '{parent_branch_name}'"
                     ),
-                    receipt: Some(restack_receipt(
-                        request,
-                        completed,
-                        skipped_frozen,
-                        Some(TransactionSummary::from(&receipt)),
-                        warnings,
-                        OperationSideEffects::RepositoryChanged,
-                    )),
-                    side_effects: OperationSideEffects::RepositoryChanged,
-                });
+                    "rebase",
+                    Some(branch),
+                ));
             }
         }
     }
@@ -599,15 +708,52 @@ fn restack_inner(
     repo.checkout(&restore_branch).map_err(|error| {
         finish_transaction_error(
             request,
+            &repo,
             &mut tx,
+            &completed,
+            &stashes,
             format!("Could not restore checkout to '{restore_branch}'"),
             "Inspect the repository checkout state and retry",
             error,
             None,
         )
     })?;
-    warnings.extend(restore_stashed_worktrees(&repo, &stashed_worktrees));
-    let finalized = tx.finish_ok_preserving_receipt();
+    let stash_warnings = restore_stashed_worktrees(&repo, &mut stashes);
+    if !stash_warnings.is_empty() {
+        let diagnostic = stash_warnings
+            .iter()
+            .map(|warning| match warning {
+                OperationWarning::StashRestoreFailed {
+                    worktree,
+                    diagnostic,
+                } => format!("{}: {diagnostic}", worktree.display()),
+                _ => String::new(),
+            })
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(finalize_restack_failure(
+            request,
+            RestackFailureState {
+                transaction: tx.take(),
+                completed_branches: completed,
+                stashes,
+                side_effects: OperationSideEffects::RepositoryChanged,
+            },
+            OperationErrorKind::LocalGit,
+            OperationErrorDetails::None,
+            "Could not restore stashed worktree changes".to_string(),
+            "Inspect the listed worktrees and restore their stashes manually".to_string(),
+            anyhow::anyhow!(diagnostic),
+            "stash",
+            None,
+        ));
+    }
+    warnings.extend(stash_warnings);
+    let finalized = tx
+        .take()
+        .expect("restack transaction should be present for successful finalization")
+        .finish_ok_preserving_receipt();
     let transaction = TransactionSummary::from(&finalized.receipt);
     let receipt = restack_receipt(
         request,
@@ -639,50 +785,56 @@ fn choose_rebase_upstream_data(
     parent: &str,
     stored_revision: &str,
 ) -> (String, Option<OperationWarning>) {
-    if !config.restack.preflight_auto_repair {
-        return (stored_revision.to_string(), None);
-    }
-    let Ok(report) = RestackPreflight::analyze(repo, branch, parent, stored_revision) else {
-        return (stored_revision.to_string(), None);
-    };
-    let Some(upstream) = report.corrected_upstream() else {
-        return (stored_revision.to_string(), None);
-    };
-    let warning = config
-        .restack
-        .preflight_warn
-        .then(|| OperationWarning::RestackBoundaryAdjusted {
+    let decision = choose_rebase_upstream(repo, config, branch, parent, stored_revision, true);
+    let warning = (decision.adjusted && config.restack.preflight_warn).then(|| {
+        OperationWarning::RestackBoundaryAdjusted {
             branch: branch.to_string(),
-            reason: format!(
-                "stored boundary would replay {} commit(s); using merge-base boundary ({} commit(s))",
-                report
-                    .stored_to_branch
-                    .map(|count| count.to_string())
-                    .unwrap_or_else(|| "?".into()),
-                report
-                    .merge_base_to_branch
-                    .map(|count| count.to_string())
-                    .unwrap_or_else(|| "?".into())
-            ),
-        });
-    (upstream.to_string(), warning)
+            reason: decision.reason.clone().unwrap_or_default(),
+        }
+    });
+    (decision.upstream, warning)
 }
 
 fn normalized_workdir(repo: &GitRepo) -> anyhow::Result<PathBuf> {
     Ok(GitRepo::normalize_path(repo.workdir()?))
 }
 
-fn restore_stashed_worktrees(repo: &GitRepo, worktrees: &[PathBuf]) -> Vec<OperationWarning> {
+fn transaction_mut(transaction: &mut Option<Transaction>) -> &mut Transaction {
+    transaction
+        .as_mut()
+        .expect("restack transaction should be present before finalization")
+}
+
+fn restore_stashed_worktrees(repo: &GitRepo, stashes: &mut [OwnedStash]) -> Vec<OperationWarning> {
     let mut warnings = Vec::new();
-    for worktree in worktrees.iter().rev() {
-        if let Err(error) = repo.stash_pop_at(worktree) {
+    for stash in stashes.iter_mut().rev() {
+        if stash.restored {
+            continue;
+        }
+        if let Err(error) = repo.stash_pop_at(&stash.worktree) {
             warnings.push(OperationWarning::StashRestoreFailed {
-                worktree: worktree.clone(),
+                worktree: stash.worktree.clone(),
                 diagnostic: format!("{error:#}"),
             });
+        } else {
+            stash.restored = true;
         }
     }
     warnings
+}
+
+fn restore_failure_stashes(repo: &GitRepo, stashes: &mut [OwnedStash]) {
+    for stash in stashes.iter_mut().rev() {
+        if stash.restored {
+            continue;
+        }
+        if repo.rebase_in_progress_in(&stash.worktree).unwrap_or(false) {
+            continue;
+        }
+        if repo.stash_pop_at(&stash.worktree).is_ok() {
+            stash.restored = true;
+        }
+    }
 }
 
 fn branches_needing_restack(stack: &Stack, scope: &[String]) -> Vec<String> {
@@ -752,14 +904,27 @@ fn open_operation_repo(
 
 fn finish_transaction_error(
     request: &OperationRequest,
-    _transaction: &mut Transaction,
+    repo: &GitRepo,
+    transaction: &mut Option<Transaction>,
+    completed_branches: &[String],
+    stashes: &[OwnedStash],
     primary: impl Into<String>,
     action: impl Into<String>,
     source: anyhow::Error,
     branch: Option<&str>,
 ) -> OperationError {
-    OperationError::from_source(
-        request.clone(),
+    let mut stashes = stashes.to_vec();
+    restore_failure_stashes(repo, &mut stashes);
+    let primary = primary.into();
+    let action = action.into();
+    finalize_restack_failure(
+        request,
+        RestackFailureState {
+            transaction: transaction.take(),
+            completed_branches: completed_branches.to_vec(),
+            stashes,
+            side_effects: OperationSideEffects::RepositoryChanged,
+        },
         OperationErrorKind::LocalGit,
         branch
             .map(|branch| OperationErrorDetails::Branch {
@@ -768,30 +933,68 @@ fn finish_transaction_error(
             .unwrap_or(OperationErrorDetails::None),
         primary,
         action,
-        &source,
-        None,
-        OperationSideEffects::RepositoryChanged,
+        source,
+        "rebase",
+        branch,
     )
 }
 
-fn finish_failed_receipt(
-    transaction: Transaction,
-    message: &str,
-    branch: Option<&str>,
-) -> crate::ops::receipt::OpReceipt {
-    transaction
-        .finish_err_with_receipt(message, Some("rebase"), branch)
-        .unwrap_or_else(|_| {
-            let mut fallback = crate::ops::receipt::OpReceipt::new(
-                "restack-finalization-failed".into(),
-                OpKind::Restack,
-                String::new(),
-                String::new(),
-                String::new(),
-            );
-            fallback.mark_failed(message, Some("rebase"), branch);
-            fallback
-        })
+fn finalize_restack_failure(
+    request: &OperationRequest,
+    state: RestackFailureState,
+    kind: OperationErrorKind,
+    details: OperationErrorDetails,
+    primary: String,
+    action: String,
+    source: anyhow::Error,
+    failed_step: &'static str,
+    failed_branch: Option<&str>,
+) -> OperationError {
+    let mut diagnostic_chain = format!("{source:#}");
+    let transaction = state.transaction.map(|transaction| {
+        let finalized =
+            transaction.finish_err_preserving_receipt(&primary, Some(failed_step), failed_branch);
+        if let Some(error) = finalized.persistence_error {
+            diagnostic_chain.push_str("\nreceipt persistence failure: ");
+            diagnostic_chain.push_str(&format!("{error:#}"));
+        }
+        TransactionSummary::from(&finalized.receipt)
+    });
+    let receipt = transaction.map(|transaction| {
+        restack_receipt(
+            request,
+            state.completed_branches,
+            Vec::new(),
+            Some(transaction),
+            Vec::new(),
+            state.side_effects,
+        )
+    });
+    let pending_stashes = state
+        .stashes
+        .iter()
+        .filter(|stash| !stash.restored)
+        .map(|stash| stash.worktree.display().to_string())
+        .collect::<Vec<_>>();
+    let action = if pending_stashes.is_empty() {
+        action
+    } else {
+        format!(
+            "{action}. Operation-owned stashes remain in: {}",
+            pending_stashes.join(", ")
+        )
+    };
+
+    OperationError {
+        request: request.clone(),
+        kind,
+        details,
+        primary,
+        action,
+        diagnostic_chain,
+        receipt,
+        side_effects: state.side_effects,
+    }
 }
 
 fn local_git_error(
