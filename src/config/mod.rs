@@ -117,7 +117,7 @@ pub struct RemoteConfig {
     pub forge: Option<ForgeType>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SubmitConfig {
     /// Where stax-managed stack links should be synced on submit.
     #[serde(default)]
@@ -574,6 +574,34 @@ impl Config {
         {
             config.remote.name = remote_name;
         }
+        Ok(config)
+    }
+
+    /// Load global config plus repository-local submit preferences only.
+    ///
+    /// Unlike the general repository overlay, this method ignores repository
+    /// `remote.*`, `auth.*`, and provider/API settings so submit preferences
+    /// cannot redirect trusted network endpoints.
+    #[allow(dead_code)]
+    pub(crate) fn load_repository_submit_preferences(root: &Path) -> Result<Self> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        let repo_path = root.join("stax.toml");
+        if !repo_path.exists() {
+            return Ok(config);
+        }
+
+        let repo_content = fs::read_to_string(&repo_path)
+            .with_context(|| format!("Failed to read repo config {}", repo_path.display()))?;
+        let repo_overlay: toml::Value = toml::from_str(&repo_content)
+            .with_context(|| format!("Failed to parse repo config {}", repo_path.display()))?;
+        let Some(submit_overlay) = repo_overlay.get("submit").cloned() else {
+            return Ok(config);
+        };
+
+        let mut submit = toml::Value::try_from(config.submit.clone())?;
+        merge_toml_values(&mut submit, submit_overlay);
+        config.submit = submit.try_into()?;
         Ok(config)
     }
 

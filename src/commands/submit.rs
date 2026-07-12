@@ -1,3 +1,7 @@
+pub(crate) use crate::application::SubmitScope;
+use crate::application::submit::{
+    PushSpec, TemporaryPublishRefs, TemporarySubmitWorktree, push_branches,
+};
 use crate::commands::open::open_url_in_browser;
 use crate::config::{
     Config, NativeStackMode, SingleStackMode, StackLinksMode, StackLinksWhenNative,
@@ -22,28 +26,9 @@ use futures_util::future::join_all;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubmitScope {
-    Branch,
-    Downstack,
-    Upstack,
-    Stack,
-}
-
-impl SubmitScope {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            SubmitScope::Branch => "branch",
-            SubmitScope::Downstack => "downstack",
-            SubmitScope::Upstack => "upstack",
-            SubmitScope::Stack => "stack",
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct SubmitOptions {
@@ -84,6 +69,7 @@ struct PrPlan {
     publish_ref: String,
     publish_oid: Option<String>,
     uses_temporary_publish_ref: bool,
+    remote_oid_after_fetch: Option<String>,
     existing_pr: Option<u64>,
     existing_pr_is_draft: Option<bool>,
     /// Tip commit subject line (for auto-updating PR title)
@@ -125,85 +111,6 @@ struct PublishSource {
     commit_range_base: String,
     oid: Option<String>,
     is_temporary: bool,
-}
-
-#[derive(Debug, Clone)]
-struct PushSpec {
-    branch: String,
-    source_ref: String,
-    oid: Option<String>,
-}
-
-struct TemporaryPublishRefs {
-    workdir: PathBuf,
-    refs: Vec<String>,
-}
-
-impl TemporaryPublishRefs {
-    fn empty(workdir: &Path) -> Self {
-        Self {
-            workdir: workdir.to_path_buf(),
-            refs: Vec::new(),
-        }
-    }
-}
-
-impl Drop for TemporaryPublishRefs {
-    fn drop(&mut self) {
-        for refname in &self.refs {
-            let _ = Command::new("git")
-                .args(["update-ref", "-d", refname])
-                .current_dir(&self.workdir)
-                .output();
-        }
-    }
-}
-
-struct TemporarySubmitWorktree {
-    workdir: PathBuf,
-    path: PathBuf,
-    active: bool,
-}
-
-impl TemporarySubmitWorktree {
-    fn new(workdir: &Path, path: &Path) -> Self {
-        Self {
-            workdir: workdir.to_path_buf(),
-            path: path.to_path_buf(),
-            active: true,
-        }
-    }
-
-    fn remove(&mut self) -> Result<()> {
-        if !self.active {
-            return Ok(());
-        }
-
-        let remove = Command::new("git")
-            .args(["worktree", "remove", "--force"])
-            .arg(&self.path)
-            .current_dir(&self.workdir)
-            .output()
-            .context("Failed to remove temporary submit worktree")?;
-        if !remove.status.success() {
-            anyhow::bail!("{}", command_output_details("git worktree remove", &remove));
-        }
-
-        self.active = false;
-        Ok(())
-    }
-}
-
-impl Drop for TemporarySubmitWorktree {
-    fn drop(&mut self) {
-        if self.active {
-            let _ = Command::new("git")
-                .args(["worktree", "remove", "--force"])
-                .arg(&self.path)
-                .current_dir(&self.workdir)
-                .output();
-        }
-    }
 }
 
 #[derive(Default, Clone)]
@@ -770,6 +677,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 publish_ref: publish_source.source_ref,
                 publish_oid: publish_source.oid,
                 uses_temporary_publish_ref: publish_source.is_temporary,
+                remote_oid_after_fetch: rev_parse_ref(
+                    repo.workdir().ok(),
+                    &format!("{}/{}", remote_info.name, branch),
+                ),
                 existing_pr,
                 existing_pr_is_draft: None,
                 tip_commit_subject: None,
@@ -982,6 +893,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 publish_ref: publish_source.source_ref,
                 publish_oid: publish_source.oid,
                 uses_temporary_publish_ref: publish_source.is_temporary,
+                remote_oid_after_fetch: rev_parse_ref(
+                    repo.workdir().ok(),
+                    &format!("{}/{}", remote_info.name, branch),
+                ),
                 existing_pr: pr_number,
                 existing_pr_is_draft: existing_pr.as_ref().map(|pr| pr.info.is_draft),
                 tip_commit_subject,
@@ -1410,6 +1325,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     .publish_oid
                     .clone()
                     .or_else(|| rev_parse_ref(repo.workdir().ok(), &plan.publish_ref)),
+                expected_remote_oid: plan.remote_oid_after_fetch.clone(),
             });
         }
 
@@ -2034,58 +1950,6 @@ fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()>
     Ok(())
 }
 
-fn push_branches(
-    workdir: &std::path::Path,
-    remote: &str,
-    specs: &[PushSpec],
-    no_verify: bool,
-) -> Result<()> {
-    let mut args = vec!["push", "--porcelain", "--force-with-lease"];
-    if no_verify {
-        args.push("--no-verify");
-    }
-    args.extend(["-u", remote]);
-    let refspecs = specs
-        .iter()
-        .map(|spec| format!("{}:refs/heads/{}", spec.source_ref, spec.branch))
-        .collect::<Vec<_>>();
-    args.extend(refspecs.iter().map(String::as_str));
-
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(workdir)
-        .output()
-        .context("Failed to push branches")?;
-
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let rejected = rejected_push_branches(&stdout, specs);
-        let details = push_failure_details(&stdout, &stderr);
-        let branch_list = specs
-            .iter()
-            .map(|spec| spec.branch.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        if !rejected.is_empty() {
-            let mut message = format!(
-                "Failed to push branches {branch_list}: rejected {}",
-                rejected.join(", ")
-            );
-            if !details.is_empty() {
-                message.push('\n');
-                message.push_str(&details);
-            }
-            anyhow::bail!("{message}");
-        }
-        if details.is_empty() {
-            anyhow::bail!("Failed to push branches: {branch_list}");
-        }
-        anyhow::bail!("Failed to push branches {branch_list}:\n{details}");
-    }
-    Ok(())
-}
-
 fn stack_pr_infos_for_links(
     stack: &Stack,
     current: &str,
@@ -2355,6 +2219,7 @@ fn print_native_stack_unavailable_note(status: ExtensionStatus) {
     println!("  {} {}", "note:".dimmed(), note.dimmed());
 }
 
+#[cfg(test)]
 fn rejected_push_branches(porcelain: &str, specs: &[PushSpec]) -> Vec<String> {
     porcelain
         .lines()
@@ -3398,6 +3263,7 @@ mod tests {
             branch: branch.to_string(),
             source_ref: source_ref.to_string(),
             oid: None,
+            expected_remote_oid: None,
         }
     }
 

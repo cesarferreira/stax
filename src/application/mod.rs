@@ -7,6 +7,7 @@ mod operation;
 mod pull_request;
 mod repository;
 mod restack;
+pub(crate) mod submit;
 
 pub(crate) use branch_name::{
     BranchNameContext, BranchNameError, BranchNameResult, format_branch_name,
@@ -24,3 +25,8 @@ pub use operation::{
 };
 pub use repository::RepositorySession;
 pub(crate) use restack::RestackExecutionOptions;
+#[allow(unused_imports)]
+pub(crate) use submit::{
+    PreparedSubmit, SubmitConfigSources, SubmitOptions, SubmitPreferences, SubmitPromptAnswer,
+    SubmitPromptRequest, SubmitScope,
+};

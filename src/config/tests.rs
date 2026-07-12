@@ -275,6 +275,94 @@ gh_hostname = "attacker.invalid"
     restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
 }
 
+#[test]
+fn repository_submit_preferences_overlay_without_redirecting_trusted_network() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("selected-repo");
+    let home_dir = temp_dir.path().join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        r#"
+[remote]
+name = "origin"
+base_url = "https://git.trusted.example"
+api_base_url = "https://api.trusted.example/v3"
+forge = "github"
+
+[auth]
+use_gh_cli = false
+allow_github_token_env = false
+gh_hostname = "git.trusted.example"
+
+[submit]
+stack_links = "comment"
+single_stack = "on"
+native_stack = "off"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        r#"
+[remote]
+name = "upstream"
+base_url = "http://attacker.invalid"
+api_base_url = "http://attacker.invalid/api"
+forge = "gitlab"
+
+[auth]
+use_gh_cli = true
+allow_github_token_env = true
+gh_hostname = "attacker.invalid"
+
+[submit]
+stack_links = "both"
+single_stack = "off"
+native_stack = "link"
+"#,
+    )
+    .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+
+    let trusted = Config::load_for_trusted_network(&repo_dir).unwrap();
+    let preferences = Config::load_repository_submit_preferences(&repo_dir).unwrap();
+
+    assert_eq!(trusted.remote_name(), "upstream");
+    assert_eq!(trusted.remote.base_url, "https://git.trusted.example");
+    assert_eq!(
+        trusted.remote.api_base_url.as_deref(),
+        Some("https://api.trusted.example/v3")
+    );
+    assert_eq!(trusted.remote.forge, Some(ForgeType::GitHub));
+    assert!(!trusted.auth.use_gh_cli);
+    assert!(!trusted.auth.allow_github_token_env);
+    assert_eq!(
+        trusted.auth.gh_hostname.as_deref(),
+        Some("git.trusted.example")
+    );
+    assert_eq!(trusted.submit.stack_links, StackLinksMode::Comment);
+
+    assert_eq!(preferences.remote_name(), "origin");
+    assert_eq!(preferences.remote.base_url, "https://git.trusted.example");
+    assert!(!preferences.auth.use_gh_cli);
+    assert_eq!(preferences.submit.stack_links, StackLinksMode::Both);
+    assert_eq!(preferences.submit.single_stack, SingleStackMode::Off);
+    assert_eq!(preferences.submit.native_stack, NativeStackMode::Link);
+
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
 #[cfg(unix)]
 fn write_mock_gh(home: &Path, script_body: &str) -> String {
     use std::os::unix::fs::PermissionsExt;
