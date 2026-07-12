@@ -49,10 +49,11 @@ class ImportPath:
 class Scope:
     aliases: dict[str, list[Token]]
     symbols: set[str]
+    module_id: int
 
     @classmethod
-    def empty(cls) -> Scope:
-        return cls({}, set())
+    def empty(cls, module_id: int) -> Scope:
+        return cls({}, set(), module_id)
 
     def bind_alias(self, name: str, path: list[Token]) -> None:
         self.symbols.discard(name)
@@ -364,15 +365,45 @@ def violation_for_import_path(path: list[Token]) -> Violation | None:
     return None
 
 
-def expand_path(path: list[Token], scopes: list[Scope]) -> list[Token] | None:
+def expand_path(
+    path: list[Token],
+    scopes: list[Scope],
+    module_scopes: list[Scope],
+    module_parents: list[int | None],
+) -> list[Token] | None:
     expanded = path
     visited: set[tuple[int, str]] = set()
+    lookup_scopes = scopes
+    module_id = scopes[-1].module_id
     while expanded:
+        if expanded[0].value in {"crate", "self", "super"}:
+            qualifier = expanded[0].value
+            unknown_ancestor = False
+            if qualifier == "crate":
+                module_id = 0
+                expanded = expanded[1:]
+            elif qualifier == "self":
+                expanded = expanded[1:]
+            else:
+                while expanded and expanded[0].value == "super":
+                    parent = module_parents[module_id]
+                    if parent is None:
+                        unknown_ancestor = True
+                        expanded = expanded[1:]
+                        continue
+                    module_id = parent
+                    expanded = expanded[1:]
+            lookup_scopes = (
+                [] if unknown_ancestor else [module_scopes[module_id]]
+            )
+            if not expanded:
+                return expanded
+
         name = expanded[0].value
         binding: list[Token] | None = None
         binding_scope = -1
-        for scope_index in range(len(scopes) - 1, -1, -1):
-            scope = scopes[scope_index]
+        for scope_index in range(len(lookup_scopes) - 1, -1, -1):
+            scope = lookup_scopes[scope_index]
             if name in scope.aliases:
                 binding = scope.aliases[name]
                 binding_scope = scope_index
@@ -381,57 +412,80 @@ def expand_path(path: list[Token], scopes: list[Scope]) -> list[Token] | None:
                 return None
         if binding is None:
             return expanded
-        key = (binding_scope, name)
+        key = (id(lookup_scopes[binding_scope]), name)
         if key in visited:
             return expanded
         visited.add(key)
+        module_id = lookup_scopes[binding_scope].module_id
+        lookup_scopes = lookup_scopes[: binding_scope + 1]
         expanded = [*binding, *expanded[1:]]
     return expanded
 
 
-def function_scope_symbols(
-    tokens: list[Token], function_index: int
-) -> tuple[int, set[str]] | None:
-    name_index = function_index + 1
-    if (
-        name_index >= len(tokens)
-        or not is_identifier_start(tokens[name_index].value[0])
-    ):
+def generic_declaration_scope(
+    tokens: list[Token], declaration_index: int
+) -> tuple[int, int, set[str], int | None] | None:
+    declaration = tokens[declaration_index].value
+    if declaration not in {"enum", "fn", "impl", "struct", "trait", "type", "union"}:
+        return None
+
+    generic_open = declaration_index + 1
+    if declaration != "impl":
+        if (
+            generic_open >= len(tokens)
+            or not is_identifier_start(tokens[generic_open].value[0])
+        ):
+            return None
+        generic_open += 1
+    if generic_open >= len(tokens) or tokens[generic_open].value != "<":
         return None
 
     symbols: set[str] = set()
-    cursor = name_index + 1
-    if cursor < len(tokens) and tokens[cursor].value == "<":
-        depth = 1
+    depth = 1
+    cursor = generic_open + 1
+    parameter_start = True
+    while cursor < len(tokens) and depth:
+        value = tokens[cursor].value
+        if value == "<":
+            depth += 1
+        elif value == ">":
+            depth -= 1
+        elif depth == 1 and value == ",":
+            parameter_start = True
+        elif depth == 1 and parameter_start:
+            if value in {"'", "const"}:
+                parameter_start = False
+            elif is_identifier_start(value[0]):
+                symbols.add(value)
+                parameter_start = False
         cursor += 1
-        parameter_start = True
-        while cursor < len(tokens) and depth:
-            value = tokens[cursor].value
-            if value == "<":
-                depth += 1
-            elif value == ">":
-                depth -= 1
-            elif depth == 1 and value == ",":
-                parameter_start = True
-            elif depth == 1 and parameter_start:
-                if value == "'":
-                    parameter_start = False
-                elif value == "const":
-                    parameter_start = False
-                elif is_identifier_start(value[0]):
-                    symbols.add(value)
-                    parameter_start = False
-            cursor += 1
-        if depth:
-            raise ScanError("unterminated function generic parameters")
+    if depth:
+        raise ScanError("unterminated generic parameters")
 
+    parentheses = 0
+    brackets = 0
+    angles = 0
     while cursor < len(tokens):
-        if tokens[cursor].value == ";":
-            return None
-        if tokens[cursor].value == "{":
-            return cursor, symbols
+        value = tokens[cursor].value
+        if value == "(":
+            parentheses += 1
+        elif value == ")":
+            parentheses = max(0, parentheses - 1)
+        elif value == "[":
+            brackets += 1
+        elif value == "]":
+            brackets = max(0, brackets - 1)
+        elif value == "<":
+            angles += 1
+        elif value == ">":
+            angles = max(0, angles - 1)
+        elif not (parentheses or brackets or angles):
+            if value == "{":
+                return generic_open + 1, cursor, symbols, cursor
+            if value == ";":
+                return generic_open + 1, cursor, symbols, None
         cursor += 1
-    return None
+    raise ScanError("unterminated generic declaration")
 
 
 def parse_use_statement(
@@ -472,18 +526,36 @@ def parse_extern_crate(
     return crate_name, alias, end
 
 
-def collect_item_scopes(tokens: list[Token]) -> tuple[Scope, dict[int, Scope]]:
-    root = Scope.empty()
+def collect_item_scopes(
+    tokens: list[Token],
+) -> tuple[
+    Scope,
+    dict[int, Scope],
+    list[Scope],
+    list[int | None],
+    list[tuple[int, int, set[str]]],
+]:
+    root = Scope.empty(0)
     scopes = [root]
     scopes_by_brace: dict[int, Scope] = {}
+    module_scopes = [root]
+    module_parents: list[int | None] = [None]
+    module_braces: set[int] = set()
     pending_scope_symbols: dict[int, set[str]] = {}
+    generic_headers: list[tuple[int, int, set[str]]] = []
     type_declarations = {"enum", "mod", "struct", "trait", "type", "union"}
 
     index = 0
     while index < len(tokens):
         token = tokens[index]
         if token.value == "{":
-            scope = Scope.empty()
+            if index in module_braces:
+                module_id = len(module_scopes)
+                module_parents.append(scopes[-1].module_id)
+                scope = Scope.empty(module_id)
+                module_scopes.append(scope)
+            else:
+                scope = Scope.empty(scopes[-1].module_id)
             for symbol in pending_scope_symbols.pop(index, set()):
                 scope.bind_symbol(symbol)
             scopes_by_brace[index] = scope
@@ -518,18 +590,25 @@ def collect_item_scopes(tokens: list[Token]) -> tuple[Scope, dict[int, Scope]]:
             declaration = tokens[index + 1]
             if is_identifier_start(declaration.value[0]):
                 scopes[-1].bind_symbol(declaration.value)
+                if (
+                    token.value == "mod"
+                    and index + 2 < len(tokens)
+                    and tokens[index + 2].value == "{"
+                ):
+                    module_braces.add(index + 2)
 
-        if token.value == "fn":
-            function_scope = function_scope_symbols(tokens, index)
-            if function_scope is not None:
-                body, symbols = function_scope
+        generic_scope = generic_declaration_scope(tokens, index)
+        if generic_scope is not None:
+            start, end, symbols, body = generic_scope
+            generic_headers.append((start, end, symbols))
+            if body is not None:
                 pending_scope_symbols.setdefault(body, set()).update(symbols)
 
         index += 1
 
     if len(scopes) != 1:
         raise ScanError("unclosed brace")
-    return root, scopes_by_brace
+    return root, scopes_by_brace, module_scopes, module_parents, generic_headers
 
 
 def scan_tokens(tokens: list[Token]) -> Violation | None:
@@ -538,7 +617,13 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             if tokens[index + 1].value == "!":
                 return Violation("terminal output macros", token)
 
-    root_scope, scopes_by_brace = collect_item_scopes(tokens)
+    (
+        root_scope,
+        scopes_by_brace,
+        module_scopes,
+        module_parents,
+        generic_headers,
+    ) = collect_item_scopes(tokens)
     scopes = [root_scope]
     index = 0
     while index < len(tokens):
@@ -557,7 +642,9 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
         if token.value == "use":
             imports, end = parse_use_statement(tokens, index)
             for imported in imports:
-                expanded = expand_path(imported.path, scopes)
+                expanded = expand_path(
+                    imported.path, scopes, module_scopes, module_parents
+                )
                 if expanded is not None:
                     violation = violation_for_import_path(expanded)
                     if violation is not None:
@@ -590,6 +677,20 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             index += 1
             continue
 
+        path_scopes = scopes
+        generic_symbols = [
+            symbols
+            for start, end, symbols in generic_headers
+            if start <= index < end
+        ]
+        if generic_symbols:
+            path_scopes = [*scopes]
+            for symbols in generic_symbols:
+                generic_scope = Scope.empty(scopes[-1].module_id)
+                for symbol in symbols:
+                    generic_scope.bind_symbol(symbol)
+                path_scopes.append(generic_scope)
+
         path = [token]
         end = index
         while (
@@ -600,7 +701,9 @@ def scan_tokens(tokens: list[Token]) -> Violation | None:
             path.append(tokens[end + 2])
             end += 2
         if len(path) > 1:
-            expanded = expand_path(path, scopes)
+            expanded = expand_path(
+                path, path_scopes, module_scopes, module_parents
+            )
             if expanded is not None:
                 violation = violation_for_path(expanded)
                 if violation is not None:
