@@ -301,10 +301,17 @@ impl OpReceipt {
     pub(crate) fn summary_branch_names(&self) -> Vec<String> {
         let mut branches = Vec::new();
         for entry in &self.local_refs {
-            let branch = entry
-                .branch
-                .strip_suffix(super::tx::METADATA_REF_LABEL_SUFFIX)
-                .unwrap_or(&entry.branch);
+            let branch = if entry
+                .refname
+                .starts_with(crate::git::refs::METADATA_REF_PREFIX)
+            {
+                entry
+                    .branch
+                    .strip_suffix(super::tx::METADATA_REF_LABEL_SUFFIX)
+                    .unwrap_or(&entry.branch)
+            } else {
+                &entry.branch
+            };
             if !branches.iter().any(|existing| existing == branch) {
                 branches.push(branch.to_string());
             }
@@ -342,6 +349,27 @@ impl OpReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_branch_names_preserve_legal_metadata_suffixes_and_deduplicate() {
+        let mut receipt = OpReceipt::new(
+            "test".to_string(),
+            OpKind::Restack,
+            "/tmp".to_string(),
+            "main".to_string(),
+            "feature@meta".to_string(),
+        );
+        receipt.add_local_ref("feature@meta", Some("branch-before"));
+        receipt.add_metadata_ref("feature@meta", Some("metadata-before"));
+        receipt.add_local_ref("feature@meta", Some("branch-before"));
+        receipt.add_local_ref("other", Some("other-before"));
+        receipt.add_metadata_ref("other", Some("other-metadata-before"));
+
+        assert_eq!(
+            receipt.summary_branch_names(),
+            vec!["feature@meta".to_string(), "other".to_string()]
+        );
+    }
 
     #[test]
     fn test_receipt_roundtrip() {

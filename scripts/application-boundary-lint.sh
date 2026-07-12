@@ -1,28 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="${1:-.}"
-files=()
-while IFS= read -r file; do
-  test -z "$file" || files+=("$root/$file")
-done < <(
-  cd "$root"
-  git ls-files --cached --others --exclude-standard \
-    'src/application/*.rs' 'src/application/**/*.rs' |
-    LC_ALL=C sort -u
-)
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+root="${1:-$repo_root}"
 
-check() {
-  local label="$1"
-  local pattern="$2"
-  if ((${#files[@]})) && rg -n "$pattern" "${files[@]}"; then
-    echo "application boundary violation: $label" >&2
-    exit 1
-  fi
-}
+if (($# > 1)); then
+  echo "usage: application-boundary-lint.sh [repository-root]" >&2
+  exit 2
+fi
 
-check "command or TUI modules" '(^|[^[:alnum:]_])((crate|super|self)::)?(\{[^}]*[,{][[:space:]]*)?(commands|tui)(::|[[:space:]};,]|$)'
-check "presentation frameworks" '(^|[^[:alnum:]_])(gpui|ratatui|crossterm|dialoguer|colored|console)(::|[[:space:]};,]|$)'
-check "terminal progress" '(^|[^[:alnum:]_])((crate|super|self)::)?(\{[^}]*[,{][[:space:]]*)?progress(::|[[:space:]};,]|$)'
-check "terminal I/O" 'std::io::(\{[^}]*(stdin|stdout|stderr|IsTerminal)|stdin|stdout|stderr|IsTerminal)'
-check "terminal output macros" '(^|[^[:alnum:]_])(std::)?(print|println|eprint|eprintln|dbg)![[:space:]]*\('
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "application boundary lint requires python3" >&2
+  exit 2
+fi
+
+exec python3 "$script_dir/application-boundary-lint.py" "$root"

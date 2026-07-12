@@ -336,54 +336,24 @@ pub fn print_plan(_kind: &OpKind, summary: &PlanSummary, quiet: bool) {
 mod tests {
     use super::*;
     use crate::ops::receipt::OpStatus;
-    use std::os::unix::fs::PermissionsExt;
-
-    struct PermissionGuard {
-        temp: tempfile::TempDir,
-        path: PathBuf,
-        original_mode: u32,
-    }
-
-    impl PermissionGuard {
-        fn restore(&mut self) {
-            if self.path.exists() {
-                std::fs::set_permissions(
-                    &self.path,
-                    std::fs::Permissions::from_mode(self.original_mode),
-                )
-                .unwrap();
-            }
-        }
-    }
-
-    impl Drop for PermissionGuard {
-        fn drop(&mut self) {
-            self.restore();
-        }
-    }
 
     #[test]
     fn successful_finalization_preserves_receipt_when_persistence_fails() {
         let temp = tempfile::tempdir().unwrap();
         let ops_dir = super::super::ops_dir(temp.path());
         std::fs::create_dir_all(&ops_dir).unwrap();
-        let original_mode = std::fs::metadata(&ops_dir).unwrap().permissions().mode();
-        std::fs::set_permissions(&ops_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
-        let mut guard = PermissionGuard {
-            temp,
-            path: ops_dir,
-            original_mode,
-        };
+        let receipt_path = OpReceipt::file_path(temp.path(), "success-save-failure");
+        std::fs::create_dir(&receipt_path).unwrap();
         let transaction = Transaction {
             receipt: OpReceipt::new(
                 "success-save-failure".into(),
                 OpKind::Restack,
-                guard.temp.path().display().to_string(),
+                temp.path().display().to_string(),
                 "main".into(),
                 "feature".into(),
             ),
-            git_dir: guard.temp.path().to_path_buf(),
-            workdir: guard.temp.path().to_path_buf(),
+            git_dir: temp.path().to_path_buf(),
+            workdir: temp.path().to_path_buf(),
             snapshotted: true,
             finished: false,
             quiet: true,
@@ -392,8 +362,9 @@ mod tests {
         let finalized = transaction.finish_ok_preserving_receipt();
 
         assert_eq!(finalized.receipt.summary_status(), &OpStatus::Success);
-        assert!(finalized.persistence_error.is_some());
-        guard.restore();
+        let persistence_error = finalized.persistence_error.unwrap();
+        let io_error = persistence_error.downcast_ref::<std::io::Error>().unwrap();
+        assert_eq!(io_error.kind(), std::io::ErrorKind::IsADirectory);
     }
 
     #[test]
