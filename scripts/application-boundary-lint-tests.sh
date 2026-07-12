@@ -89,6 +89,18 @@ assert_fixture_scanner_error() {
   fi
 }
 
+assert_fixture_scanner_error_label() {
+  local expected="$1"
+  local description="$2"
+  if run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected scanner failure for: $description"
+  elif ! rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected scanner error label for: $description"
+  elif ! rg -F "$expected" "$temp_root/output" >/dev/null; then
+    record_failure "expected '$expected' for scanner failure: $description"
+  fi
+}
+
 printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/checkout.rs"
 run_lint
 git -C "$fixture" add src/application/checkout.rs
@@ -131,6 +143,10 @@ assert_rejected 'use std::{io::{self as io}}; fn bad() { io::stdin(); }' 'termin
 assert_rejected 'use std::io as r#io; fn bad() { r#io::stdout(); }' 'terminal I/O'
 assert_rejected 'use std::io::*;' 'terminal I/O'
 assert_rejected 'use std::{io::*};' 'terminal I/O'
+assert_rejected 'use crate::model::*;' 'glob imports'
+assert_rejected 'use crate::{model::*, git};' 'glob imports'
+assert_rejected 'use super::*;' 'glob imports'
+assert_rejected 'pub use crate::model::*;' 'glob imports'
 assert_rejected 'use std as standard; fn bad() { standard::io::stdout(); }' 'terminal I/O'
 assert_rejected 'use {std as r#standard}; fn bad() { r#standard::io::stdin(); }' 'terminal I/O'
 assert_rejected 'use std::{self as standard}; fn bad() { standard::io::stderr(); }' 'terminal I/O'
@@ -175,6 +191,9 @@ assert_rejected '::std::include_bytes!("payload.bin");' 'source injection macros
 assert_rejected 'r#include_str!("payload.txt");' 'source injection macros'
 assert_rejected 'use std::include as inject;' 'source injection macros'
 assert_rejected 'use std as standard; use standard::include_bytes as inject;' 'source injection macros'
+assert_rejected 'use crate::outside::inject; inject!();' 'unknown source macro imports'
+assert_rejected 'use self::outside::inject as r#run; r#run!();' 'unknown source macro imports'
+assert_rejected 'use crate::outside as external; external::inject!();' 'unknown source macro imports'
 
 assert_rejected 'extern crate gpui as ui;' 'presentation frameworks'
 assert_rejected 'extern crate r#console as r#ui;' 'presentation frameworks'
@@ -214,6 +233,7 @@ assert_accepted 'use super::RepositorySnapshot;'
 assert_accepted '// extern crate gpui as ui; use std::io as io; io::stdout();'
 assert_accepted 'const TEXT: &str = "extern crate tui; use std::io::*;";'
 assert_accepted 'const INCLUDE_TEXT: &str = "include!(generated.rs)"; // include_bytes!("ignored")'
+assert_accepted 'macro_rules! local_macro { () => {} } local_macro!(); serde_json::json!({});'
 assert_scanner_error 'use std::io as #;'
 assert_scanner_error 'extern crate safe_dependency as ;'
 
@@ -285,6 +305,30 @@ printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
 printf '%s\n' '#[path = "renamed_child.rs"] mod child;' > "$fixture/src/application/foo.rs"
 printf '%s\n' 'use std as standard; fn clean() { crate::application::renamed_child::standard::io::stdout(); }' > "$fixture/src/application/renamed_child.rs"
 assert_fixture_accepted 'path target is not independently inferred'
+
+reset_application_fixture
+printf '%s\n' 'mod macros; mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'macro_rules! local_macro { () => {} } pub(crate) use local_macro;' > "$fixture/src/application/macros.rs"
+printf '%s\n' 'use super::macros::local_macro; local_macro!();' > "$fixture/src/application/child.rs"
+assert_fixture_accepted 'known application macro import'
+
+reset_application_fixture
+printf '%s\n' '#[cfg_attr(feature = "alternate", path = "alternate.rs")] mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/child.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/alternate.rs"
+assert_fixture_scanner_error_label 'conditional module source attribute' 'cfg_attr path module'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/outer"
+printf '%s\n' 'mod outer { #[cfg_attr(all(unix, feature = "alternate"), cfg_attr(any(), path = "alternate.rs"))] mod child; }' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/outer/child.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/outer/alternate.rs"
+assert_fixture_scanner_error_label 'conditional module source attribute' 'nested cfg_attr path module'
+
+reset_application_fixture
+printf '%s\n' '#[path = concat!("child", ".rs")] mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/child.rs"
+assert_fixture_scanner_error_label 'dynamic module source attribute' 'dynamic path attribute'
 
 reset_application_fixture
 printf '%s\n' 'use std as standard; mod left; mod right;' > "$fixture/src/application/mod.rs"

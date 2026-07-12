@@ -511,7 +511,11 @@ pub(crate) fn report_operation(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        CheckoutOutcome, OperationError, OperationErrorDetails, OperationErrorKind, OperationEvent,
+        OperationOutcome, OperationReceipt, OperationRequest, OperationSideEffects,
+        TransactionStatus, TransactionSummary, report_operation,
+    };
     use crate::ops::receipt::{OpKind, OpReceipt, OpStatus};
     use anyhow::{Context, anyhow};
 

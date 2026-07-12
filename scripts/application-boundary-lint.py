@@ -92,6 +92,7 @@ class RepositoryModules:
     scopes: list[Scope]
     parents: list[int | None]
     children: dict[tuple[int, str], int]
+    scanned: set[int]
 
 
 def blank_range(characters: list[str], start: int, end: int) -> None:
@@ -389,6 +390,9 @@ def violation_for_import_path(path: list[Token]) -> Violation | None:
         )
         if values[index : index + 2] == ["std", "io"] and imports_io_glob:
             return Violation("terminal I/O", path[index + 1])
+    for token in path:
+        if token.value == "*":
+            return Violation("glob imports", token)
     for token in path:
         if token.value in OUTPUT_MACROS:
             return Violation("terminal output macros", token)
@@ -745,6 +749,67 @@ def collect_module_declarations(
     return declarations
 
 
+def explicit_macro_import_path(
+    path: list[Token], scopes: list[Scope]
+) -> tuple[list[Token], int] | None:
+    expanded = path
+    lookup_scopes = scopes
+    module_id = scopes[-1].module_id
+    visited: set[tuple[int, str]] = set()
+    while expanded:
+        if expanded[0].value in {"crate", "self", "super"}:
+            return expanded, module_id
+        name = expanded[0].value
+        binding: list[Token] | None = None
+        binding_scope = -1
+        for scope_index in range(len(lookup_scopes) - 1, -1, -1):
+            scope = lookup_scopes[scope_index]
+            if name in scope.aliases:
+                binding = scope.aliases[name]
+                binding_scope = scope_index
+                break
+            if name in scope.symbols:
+                return None
+        if binding is None:
+            return None
+        key = (id(lookup_scopes[binding_scope]), name)
+        if key in visited:
+            return None
+        visited.add(key)
+        module_id = lookup_scopes[binding_scope].module_id
+        lookup_scopes = lookup_scopes[: binding_scope + 1]
+        expanded = [*binding, *expanded[1:]]
+    return None
+
+
+def explicit_macro_source_is_unknown(
+    path: list[Token],
+    origin_module_id: int,
+    module_parents: list[int | None],
+    module_children: dict[tuple[int, str], int],
+    scanned_modules: set[int],
+) -> bool:
+    module_id = origin_module_id
+    if path[0].value == "crate":
+        module_id = 0
+        path = path[1:]
+    elif path[0].value == "self":
+        path = path[1:]
+    else:
+        while path and path[0].value == "super":
+            parent = module_parents[module_id]
+            if parent is None:
+                return True
+            module_id = parent
+            path = path[1:]
+    for segment in path[:-1]:
+        child = module_children.get((module_id, segment.value))
+        if child is None:
+            return True
+        module_id = child
+    return module_id not in scanned_modules
+
+
 def scan_tokens(
     tokens: list[Token],
     root_scope: Scope | None = None,
@@ -753,6 +818,7 @@ def scan_tokens(
     module_parents: list[int | None] | None = None,
     generic_headers: list[tuple[int, int, set[str]]] | None = None,
     module_children: dict[tuple[int, str], int] | None = None,
+    scanned_modules: set[int] | None = None,
 ) -> Violation | None:
     for index, token in enumerate(tokens):
         if token.value in OUTPUT_MACROS and index + 1 < len(tokens):
@@ -778,6 +844,7 @@ def scan_tokens(
     ):
         raise ScanError("incomplete scanner scope configuration")
     module_children = module_children or {}
+    scanned_modules = scanned_modules or set(range(len(module_scopes)))
     scopes = [root_scope]
     index = 0
     while index < len(tokens):
@@ -858,6 +925,18 @@ def scan_tokens(
         ):
             path.append(tokens[end + 2])
             end += 2
+        if end + 1 < len(tokens) and tokens[end + 1].value == "!":
+            explicit_import = explicit_macro_import_path(path, path_scopes)
+            if explicit_import is not None:
+                imported_path, origin_module_id = explicit_import
+                if explicit_macro_source_is_unknown(
+                    imported_path,
+                    origin_module_id,
+                    module_parents,
+                    module_children,
+                    scanned_modules,
+                ):
+                    return Violation("unknown source macro imports", path[0])
         if len(path) > 1:
             expanded = expand_path(
                 path,
@@ -907,6 +986,36 @@ def application_sources(root: Path) -> list[Path]:
     return sorted(set(sources))
 
 
+def reject_dynamic_module_source_attributes(tokens: list[Token]) -> None:
+    index = 0
+    while index + 1 < len(tokens):
+        if tokens[index].value != "#" or tokens[index + 1].value != "[":
+            index += 1
+            continue
+        depth = 1
+        end = index + 2
+        while end < len(tokens) and depth:
+            if tokens[end].value == "[":
+                depth += 1
+            elif tokens[end].value == "]":
+                depth -= 1
+            end += 1
+        if depth:
+            raise ScanError("unterminated attribute")
+        values = [token.value for token in tokens[index + 2 : end - 1]]
+        has_path_assignment = any(
+            values[position : position + 2] == ["path", "="]
+            for position in range(len(values) - 1)
+        )
+        if has_path_assignment and values and values[0] == "cfg_attr":
+            raise ScanError("conditional module source attribute is unsupported")
+        if has_path_assignment and values[:2] != ["path", "="]:
+            raise ScanError("dynamic module source attribute is unsupported")
+        if values[:2] == ["path", "="] and len(values) != 2:
+            raise ScanError("dynamic module source attribute is unsupported")
+        index = end
+
+
 def parse_source(root: Path, path: Path) -> ParsedSource:
     try:
         source = path.read_bytes().decode("utf-8")
@@ -915,6 +1024,7 @@ def parse_source(root: Path, path: Path) -> ParsedSource:
     try:
         code = code_without_literals(source)
         tokens = tokenize(code)
+        reject_dynamic_module_source_attributes(tokens)
         (
             root_scope,
             scopes_by_brace,
@@ -1141,7 +1251,11 @@ def build_repository_modules(
         module_id = path_ids[module_path]
         parents.append(parent_id)
         children[(parent_id, module_path[-1])] = module_id
-    return RepositoryModules(global_scopes, parents, children)
+    scanned = {
+        path_ids[module_path]
+        for module_path in module_owners
+    }
+    return RepositoryModules(global_scopes, parents, children, scanned)
 
 
 def scan_parsed_source(
@@ -1155,6 +1269,7 @@ def scan_parsed_source(
         module_parents=modules.parents,
         generic_headers=source.generic_headers,
         module_children=modules.children,
+        scanned_modules=modules.scanned,
     )
 
 
