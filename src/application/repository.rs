@@ -1,15 +1,19 @@
 use super::{
-    BranchDetails, BranchDiff, BranchSummary, DiffLine, DiffLineKind, DiffStatLine,
+    BranchDetails, BranchDiff, BranchSummary, DiffLine, DiffLineKind, DiffStatLine, OperationError,
+    OperationErrorDetails, OperationErrorKind, OperationRequest, OperationSideEffects,
     RepositorySnapshot,
 };
 use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
 use crate::config::Config;
 use crate::engine::{Stack, StackSnapshot};
 use crate::git::GitRepo;
-use crate::git::repo::DiffTarget;
+use crate::git::repo::{DiffTarget, WorktreeInfo};
 use anyhow::{Context, Result, anyhow};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+static MUTATION_GATES: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<bool>>>>> = OnceLock::new();
 
 /// A reusable, thread-friendly handle to repository-backed application data.
 ///
@@ -20,6 +24,8 @@ pub struct RepositorySession {
     repository_root: PathBuf,
     git_dir: PathBuf,
     common_git_dir: PathBuf,
+    #[allow(dead_code)]
+    mutation_gate: Arc<Mutex<bool>>,
 }
 
 impl RepositorySession {
@@ -66,10 +72,13 @@ impl RepositorySession {
             supplied_path,
         )?;
 
+        let mutation_gate = mutation_gate_for(&common_git_dir);
+
         Ok(Self {
             repository_root,
             git_dir,
             common_git_dir,
+            mutation_gate,
         })
     }
 
@@ -79,6 +88,11 @@ impl RepositorySession {
     }
 
     pub(super) fn cache_dir(&self) -> &Path {
+        &self.common_git_dir
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn common_git_dir(&self) -> &Path {
         &self.common_git_dir
     }
 
@@ -247,6 +261,297 @@ impl RepositorySession {
             )
         })
     }
+
+    #[allow(dead_code)]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn try_begin_mutation(
+        &self,
+        request: &OperationRequest,
+    ) -> Result<MutationLease, OperationError> {
+        {
+            let mut active = self.mutation_gate.lock().map_err(|_| {
+                operation_error(
+                    request,
+                    OperationErrorKind::Internal,
+                    OperationErrorDetails::None,
+                    "Repository operation state is unavailable",
+                    "Retry the operation",
+                    "mutation gate mutex was poisoned",
+                    OperationSideEffects::None,
+                )
+            })?;
+            if *active {
+                return Err(operation_error(
+                    request,
+                    OperationErrorKind::Busy,
+                    OperationErrorDetails::None,
+                    "Another repository operation is already running",
+                    "Wait for the current operation to finish, then retry",
+                    "common repository mutation gate is active",
+                    OperationSideEffects::None,
+                ));
+            }
+            *active = true;
+        }
+
+        Ok(MutationLease {
+            gate: Arc::clone(&self.mutation_gate),
+        })
+    }
+
+    #[allow(dead_code)]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn with_mutation<T>(
+        &self,
+        request: &OperationRequest,
+        targets: MutationTargets,
+        run: impl FnOnce() -> Result<T, OperationError>,
+    ) -> Result<T, OperationError> {
+        let _lease = self.try_begin_mutation(request)?;
+        let repo = self.open_repo().map_err(|error| {
+            OperationError::from_source(
+                request.clone(),
+                OperationErrorKind::RepositoryUnavailable,
+                OperationErrorDetails::None,
+                "Could not open the repository",
+                "Check the repository path and retry",
+                &error,
+                None,
+                OperationSideEffects::None,
+            )
+        })?;
+        if !repo.is_initialized() {
+            return Err(operation_error(
+                request,
+                OperationErrorKind::InitializationRequired,
+                OperationErrorDetails::None,
+                "This repository has not been initialized for stax",
+                "Run `st init` in the repository, then retry",
+                "stax metadata refs are not initialized",
+                OperationSideEffects::None,
+            ));
+        }
+        for worktree in self.affected_worktrees(&repo, &targets).map_err(|error| {
+            OperationError::from_source(
+                request.clone(),
+                OperationErrorKind::LocalGit,
+                OperationErrorDetails::None,
+                "Could not inspect repository worktrees",
+                "Resolve the Git worktree error and retry",
+                &error,
+                None,
+                OperationSideEffects::None,
+            )
+        })? {
+            preflight_rebase_state(request, &worktree)?;
+        }
+        run()
+    }
+
+    #[allow(dead_code)]
+    fn affected_worktrees(
+        &self,
+        repo: &GitRepo,
+        targets: &MutationTargets,
+    ) -> Result<Vec<AffectedWorktree>> {
+        let mut affected = Vec::new();
+        let mut seen_paths = HashSet::new();
+        for worktree in repo.list_worktrees()? {
+            if !targets.matches(&worktree, &self.repository_root) {
+                continue;
+            }
+            let path = std::fs::canonicalize(&worktree.path).with_context(|| {
+                format!(
+                    "Failed to canonicalize worktree '{}'",
+                    worktree.path.display()
+                )
+            })?;
+            if !seen_paths.insert(path.clone()) {
+                continue;
+            }
+            let worktree_repo = GitRepo::open_from_path(&path)?;
+            let common_git_dir = canonicalize_repository_path(
+                &worktree_repo.common_git_dir()?,
+                "common git directory",
+                &path,
+            )?;
+            if common_git_dir != self.common_git_dir {
+                continue;
+            }
+            let git_dir =
+                canonicalize_repository_path(worktree_repo.git_dir()?, "git directory", &path)?;
+            affected.push(AffectedWorktree {
+                path,
+                branch: worktree.branch,
+                git_dir,
+            });
+        }
+        Ok(affected)
+    }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(super) struct MutationLease {
+    gate: Arc<Mutex<bool>>,
+}
+
+impl Drop for MutationLease {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.gate.lock() {
+            *active = false;
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(super) struct MutationTargets {
+    include_current: bool,
+    branches: HashSet<String>,
+}
+
+impl MutationTargets {
+    #[allow(dead_code)]
+    pub(super) fn current() -> Self {
+        Self {
+            include_current: true,
+            branches: HashSet::new(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn branches(names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            include_current: true,
+            branches: names.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    fn matches(&self, worktree: &WorktreeInfo, current_root: &Path) -> bool {
+        let is_current = worktree
+            .path
+            .canonicalize()
+            .map(|path| path == current_root)
+            .unwrap_or(false);
+        let branch_matches = worktree
+            .branch
+            .as_ref()
+            .map(|branch| self.branches.contains(branch))
+            .unwrap_or(false);
+        (self.include_current && is_current) || branch_matches
+    }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+struct AffectedWorktree {
+    path: PathBuf,
+    branch: Option<String>,
+    git_dir: PathBuf,
+}
+
+#[allow(dead_code)]
+#[allow(clippy::result_large_err)]
+pub(super) fn require_blocking_network_context(
+    request: &OperationRequest,
+) -> Result<(), OperationError> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(operation_error(
+            request,
+            OperationErrorKind::Runtime,
+            OperationErrorDetails::None,
+            "This blocking network operation cannot run on a Tokio runtime thread",
+            "Run it on a blocking/background executor and retry",
+            "tokio::runtime::Handle::try_current returned an active handle",
+            OperationSideEffects::None,
+        ));
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+#[allow(clippy::result_large_err)]
+fn preflight_rebase_state(
+    request: &OperationRequest,
+    worktree: &AffectedWorktree,
+) -> Result<(), OperationError> {
+    if worktree.git_dir.join("rebase-merge").exists()
+        || worktree.git_dir.join("rebase-apply").exists()
+    {
+        return Err(operation_error(
+            request,
+            OperationErrorKind::RebaseInProgress,
+            OperationErrorDetails::Rebase {
+                branch: worktree.branch.clone(),
+                worktree: worktree.path.clone(),
+            },
+            format!(
+                "A rebase is already in progress in {}",
+                worktree.path.display()
+            ),
+            "Resolve conflicts and run `st continue`, or run `st abort`, then retry",
+            "repository contains rebase-merge or rebase-apply state",
+            OperationSideEffects::None,
+        ));
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn operation_error(
+    request: &OperationRequest,
+    kind: OperationErrorKind,
+    details: OperationErrorDetails,
+    primary: impl Into<String>,
+    action: impl Into<String>,
+    diagnostic_chain: impl Into<String>,
+    side_effects: OperationSideEffects,
+) -> OperationError {
+    OperationError {
+        request: request.clone(),
+        kind,
+        details,
+        primary: primary.into(),
+        action: action.into(),
+        diagnostic_chain: diagnostic_chain.into(),
+        receipt: None,
+        side_effects,
+    }
+}
+
+fn mutation_gate_for(common_git_dir: &Path) -> Arc<Mutex<bool>> {
+    let registry = MUTATION_GATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut gates = registry
+        .lock()
+        .expect("mutation gate registry mutex should not be poisoned");
+    gates.retain(|_, gate| gate.strong_count() > 0);
+    if let Some(gate) = gates.get(common_git_dir).and_then(Weak::upgrade) {
+        return gate;
+    }
+    let gate = Arc::new(Mutex::new(false));
+    gates.insert(common_git_dir.to_path_buf(), Arc::downgrade(&gate));
+    gate
+}
+
+#[cfg(test)]
+fn registry_contains_key(common_git_dir: &Path) -> bool {
+    MUTATION_GATES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("mutation gate registry mutex should not be poisoned")
+        .contains_key(common_git_dir)
+}
+
+#[cfg(test)]
+fn registry_contains_live_key(common_git_dir: &Path) -> bool {
+    MUTATION_GATES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("mutation gate registry mutex should not be poisoned")
+        .get(common_git_dir)
+        .map(|gate| gate.strong_count() > 0)
+        .unwrap_or(false)
 }
 
 fn calculate_diff_at_target(
@@ -532,5 +837,150 @@ fn branch_diff_from_disk(diff: &DiskCachedDiff) -> BranchDiff {
                 kind: diff_line_kind_from_name(&line.line_type, &line.content),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::application::repository::{
+        MutationTargets, RepositorySession, registry_contains_key, registry_contains_live_key,
+        require_blocking_network_context,
+    };
+    use crate::application::{
+        OperationError, OperationErrorDetails, OperationErrorKind, OperationRequest,
+        OperationSideEffects, PullRequestMode,
+    };
+    use crate::git::GitRepo;
+    use std::cell::Cell;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    fn git(cwd: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env(
+                "GIT_CONFIG_SYSTEM",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn initialized_repository_with_linked_worktree() -> (tempfile::TempDir, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        git(root.path(), &["init", "-b", "main"]);
+        git(root.path(), &["config", "user.name", "Test User"]);
+        git(root.path(), &["config", "user.email", "test@example.com"]);
+        std::fs::write(root.path().join("README.md"), "initial\n").unwrap();
+        git(root.path(), &["add", "README.md"]);
+        git(root.path(), &["commit", "-m", "initial"]);
+        GitRepo::open_from_path(root.path())
+            .unwrap()
+            .set_trunk("main")
+            .unwrap();
+        let linked = root.path().with_file_name(format!(
+            "{}-linked",
+            root.path().file_name().unwrap().to_string_lossy()
+        ));
+        git(
+            root.path(),
+            &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
+        );
+        (root, linked)
+    }
+
+    #[test]
+    fn sessions_for_main_and_linked_worktrees_share_a_private_gate() {
+        let (root, linked_path) = initialized_repository_with_linked_worktree();
+        let main = RepositorySession::open(root.path()).unwrap();
+        let linked = RepositorySession::open(&linked_path).unwrap();
+        let request = OperationRequest::Checkout {
+            branch: "feature".into(),
+        };
+
+        let lease = main.try_begin_mutation(&request).unwrap();
+        let error = linked.try_begin_mutation(&request).unwrap_err();
+        assert_eq!(error.kind, OperationErrorKind::Busy);
+        drop(lease);
+        assert!(linked.try_begin_mutation(&request).is_ok());
+    }
+
+    #[test]
+    fn dead_gate_entries_are_pruned_when_another_session_opens() {
+        let (root, _linked) = initialized_repository_with_linked_worktree();
+        let key = RepositorySession::open(root.path())
+            .unwrap()
+            .common_git_dir()
+            .to_path_buf();
+        {
+            let session = RepositorySession::open(root.path()).unwrap();
+            assert!(registry_contains_live_key(&key));
+            drop(session);
+        }
+        let (other, _other_linked) = initialized_repository_with_linked_worktree();
+        let _session = RepositorySession::open(other.path()).unwrap();
+        assert!(!registry_contains_key(&key));
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn mutation_preflight_reports_linked_rebase_path_before_running_work() {
+        let (root, linked_path) = initialized_repository_with_linked_worktree();
+        let linked_git_dir = PathBuf::from(git(&linked_path, &["rev-parse", "--git-dir"]));
+        let linked_git_dir = if linked_git_dir.is_absolute() {
+            linked_git_dir
+        } else {
+            linked_path.join(linked_git_dir)
+        };
+        std::fs::create_dir_all(linked_git_dir.join("rebase-merge")).unwrap();
+        let session = RepositorySession::open(root.path()).unwrap();
+        let request = OperationRequest::CreateBranch {
+            name: "child".into(),
+            parent: "main".into(),
+        };
+        let ran = Cell::new(false);
+
+        let error = session
+            .with_mutation(
+                &request,
+                MutationTargets::branches(["linked"]),
+                || -> std::result::Result<(), OperationError> {
+                    ran.set(true);
+                    unreachable!()
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.kind, OperationErrorKind::RebaseInProgress);
+        assert_eq!(
+            error.details,
+            OperationErrorDetails::Rebase {
+                branch: Some("linked".into()),
+                worktree: linked_path.canonicalize().unwrap(),
+            }
+        );
+        assert!(!ran.get());
+    }
+
+    #[tokio::test]
+    async fn blocking_network_guard_returns_runtime_error_without_panicking() {
+        let request = OperationRequest::SubmitStack {
+            new_pull_requests: PullRequestMode::Draft,
+        };
+        let error = require_blocking_network_context(&request).unwrap_err();
+        assert_eq!(error.kind, OperationErrorKind::Runtime);
+        assert_eq!(error.side_effects, OperationSideEffects::None);
     }
 }
