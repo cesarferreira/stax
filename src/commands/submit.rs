@@ -342,6 +342,37 @@ impl SubmitPrompter for TerminalSubmitPrompter {
     }
 }
 
+struct CliOperationReporter {
+    quiet: bool,
+}
+
+impl crate::application::OperationReporter for CliOperationReporter {
+    fn report(&mut self, event: crate::application::OperationEvent) {
+        if self.quiet {
+            return;
+        }
+        match event {
+            crate::application::OperationEvent::Started(_) => {
+                eprintln!("  {}", "Validating repository...".dimmed());
+            }
+            crate::application::OperationEvent::Progress(progress) => {
+                let count = match progress.total {
+                    Some(total) => format!(" ({}/{total})", progress.completed),
+                    None => String::new(),
+                };
+                let branch = progress
+                    .branch
+                    .as_ref()
+                    .map(|branch| format!(" {}", branch.cyan()))
+                    .unwrap_or_default();
+                eprintln!("  {}{}{}", progress.message, branch, count);
+            }
+            crate::application::OperationEvent::Completed(_)
+            | crate::application::OperationEvent::Failed(_) => {}
+        }
+    }
+}
+
 #[allow(dead_code)]
 fn run_default_with_prompter<B, P>(
     scope: SubmitScope,
@@ -426,6 +457,10 @@ fn prepared_prompt_requests<P: PreparedPromptRequests>(
 pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     if options.dry_run {
         return super::submit_plan::run(scope, &options);
+    }
+
+    if uses_application_default_submit(scope, &options) {
+        return run_application_default_submit(scope, &options);
     }
 
     let SubmitOptions {
@@ -2028,6 +2063,76 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn uses_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> bool {
+    matches!(scope, SubmitScope::Stack)
+        && !options.dry_run
+        && !options.json
+        && !options.ai
+        && !options.title
+        && !options.body
+        && !options.squash
+        && !options.edit
+        && !options.prefetched
+        && !options.no_template
+        && options.template.is_none()
+        && !options.update_title
+}
+
+fn run_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> Result<()> {
+    let repo = GitRepo::open()?;
+    let current = repo.current_branch()?;
+    if !options.quiet {
+        println!("{} {}...", "Submitting".bold(), scope.label().bold());
+    }
+    let session = crate::application::RepositorySession::open(repo.workdir()?)?;
+    let mut backend = RepositorySubmitBackend { session: &session };
+    let mut prompter = TerminalSubmitPrompter;
+    let mut reporter = CliOperationReporter {
+        quiet: options.quiet,
+    };
+    let receipt =
+        run_default_with_prompter(scope, options, &mut backend, &mut prompter, &mut reporter)?;
+    render_application_submit_receipt(&receipt, &current, options.open, options.quiet);
+    Ok(())
+}
+
+fn render_application_submit_receipt(
+    receipt: &crate::application::OperationReceipt,
+    current: &str,
+    open: bool,
+    quiet: bool,
+) {
+    let pull_requests = match &receipt.outcome {
+        crate::application::OperationOutcome::Submitted { pull_requests } => pull_requests,
+        _ => return,
+    };
+    if !quiet {
+        println!();
+        println!("{}", "✓ Stack submitted!".green().bold());
+        for pull_request in pull_requests {
+            println!("  {} {}", "✓".green(), pull_request.url);
+        }
+    }
+    if open {
+        if let Some(url) = pull_requests
+            .iter()
+            .find(|pull_request| pull_request.branch == current)
+            .map(|pull_request| pull_request.url.as_str())
+        {
+            if !quiet {
+                println!("Opening {} in browser...", url.cyan());
+            }
+            open_url_in_browser(url);
+        } else if !quiet {
+            eprintln!(
+                "  {} No PR found for current branch {}; nothing to open.",
+                "!".yellow(),
+                current.cyan()
+            );
+        }
+    }
 }
 
 /// Squash all commits on a branch down to one commit above the base.

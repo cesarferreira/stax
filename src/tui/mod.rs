@@ -7,9 +7,16 @@ pub(crate) mod ui;
 mod widgets;
 pub mod worktree;
 
-use app::{App, ConfirmAction, FocusedPane, InputAction, Mode, PendingCommand, TuiPane};
+use app::{
+    App, ConfirmAction, FocusedPane, InputAction, Mode, PendingAction, PendingCommand, TuiPane,
+};
 use event::{KeyAction, KeyContext, poll_event};
 
+use crate::application::{
+    OperationEvent, OperationOutcome, OperationReporter, OperationRequest, OperationStage,
+    PullRequestMode, RestackScope, execute_repository_operation,
+};
+use crate::commands::open::open_url_in_browser;
 use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
 use crate::git::RebaseResult;
@@ -26,6 +33,43 @@ use std::io;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TuiOperationStatus {
+    pub request: Option<OperationRequest>,
+    pub stage: Option<OperationStage>,
+    pub completed: usize,
+    pub total: Option<usize>,
+    pub branch: Option<String>,
+    pub message: String,
+}
+
+pub struct TuiOperationReporter<'a> {
+    status: &'a mut TuiOperationStatus,
+}
+
+impl OperationReporter for TuiOperationReporter<'_> {
+    fn report(&mut self, event: OperationEvent) {
+        match event {
+            OperationEvent::Started(request) => {
+                self.status.request = Some(request);
+                self.status.stage = Some(OperationStage::Validating);
+                self.status.completed = 0;
+                self.status.total = None;
+                self.status.branch = None;
+                self.status.message = "Validating repository".into();
+            }
+            OperationEvent::Progress(progress) => {
+                self.status.stage = Some(progress.stage);
+                self.status.completed = progress.completed;
+                self.status.total = progress.total;
+                self.status.branch = progress.branch;
+                self.status.message = progress.message;
+            }
+            OperationEvent::Completed(_) | OperationEvent::Failed(_) => {}
+        }
+    }
+}
 
 /// Run the TUI
 pub fn run() -> Result<()> {
@@ -206,7 +250,12 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
             if let Some(branch) = app.selected_branch() {
                 if !branch.is_current {
                     let name = branch.name.clone();
-                    queue_checkout_command(app, &name);
+                    queue_operation(
+                        app,
+                        OperationRequest::Checkout {
+                            branch: name.clone(),
+                        },
+                    );
                 }
             }
         }
@@ -233,25 +282,23 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
             app.mode = Mode::Confirm(ConfirmAction::RestackAll);
         }
         KeyAction::Submit => {
-            queue_command(
+            queue_operation(
                 app,
-                vec![vec!["submit".to_string(), "--no-prompt".to_string()]],
-                "Submitted current branch",
-                Some(app.current_branch.clone()),
+                OperationRequest::SubmitStack {
+                    new_pull_requests: PullRequestMode::Draft,
+                },
             );
         }
         KeyAction::OpenPr => {
             if let Some(branch) = app.selected_branch() {
-                if branch.pr_number.is_some() {
+                if !branch.is_trunk {
                     let name = branch.name.clone();
-                    let mut commands = Vec::new();
-                    if !branch.is_current {
-                        commands.push(vec!["checkout".to_string(), name.clone()]);
-                    }
-                    commands.push(vec!["pr".to_string()]);
-                    queue_command(app, commands, "Opened PR", Some(name));
+                    queue_operation(
+                        app,
+                        OperationRequest::ResolvePullRequestUrl { branch: name },
+                    );
                 } else {
-                    app.set_status("No PR for this branch");
+                    app.set_status("No PR for trunk branch");
                 }
             }
         }
@@ -314,7 +361,7 @@ fn handle_search_action(app: &mut App, action: KeyAction) -> Result<()> {
                 if !branch.is_current {
                     let name = branch.name.clone();
                     app.mode = Mode::Normal;
-                    queue_checkout_command(app, &name);
+                    queue_operation(app, OperationRequest::Checkout { branch: name });
                 } else {
                     app.mode = Mode::Normal;
                 }
@@ -410,7 +457,7 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 if !branch.is_current {
                     let name = branch.name.clone();
                     app.mode = Mode::Normal;
-                    queue_checkout_command(app, &name);
+                    queue_operation(app, OperationRequest::Checkout { branch: name });
                 } else {
                     app.mode = Mode::Normal;
                 }
@@ -498,28 +545,21 @@ fn handle_confirm_action(
                     );
                 }
                 ConfirmAction::Restack(branch) => {
-                    let mut commands = Vec::new();
-                    if app.current_branch != *branch {
-                        commands.push(vec!["checkout".to_string(), branch.clone()]);
-                    }
-                    commands.push(vec!["restack".to_string(), "--quiet".to_string()]);
-                    queue_command(
+                    queue_operation(
                         app,
-                        commands,
-                        format!("Restacked '{}'", branch),
-                        Some(branch.clone()),
+                        OperationRequest::Restack {
+                            scope: RestackScope::StackContaining(branch.clone()),
+                            auto_stash: false,
+                        },
                     );
                 }
                 ConfirmAction::RestackAll => {
-                    queue_command(
+                    queue_operation(
                         app,
-                        vec![vec![
-                            "restack".to_string(),
-                            "--all".to_string(),
-                            "--quiet".to_string(),
-                        ]],
-                        "Restacked all managed branches",
-                        Some(app.current_branch.clone()),
+                        OperationRequest::Restack {
+                            scope: RestackScope::All,
+                            auto_stash: false,
+                        },
                     );
                 }
                 ConfirmAction::ApplyReorder => {
@@ -569,11 +609,12 @@ fn handle_input_action(app: &mut App, action: KeyAction, input_action: &InputAct
                         );
                     }
                     InputAction::NewBranch => {
-                        queue_command(
+                        queue_operation(
                             app,
-                            vec![vec!["create".to_string(), input.clone()]],
-                            format!("Created '{}'", input),
-                            Some(input.clone()),
+                            OperationRequest::CreateBranch {
+                                name: input.clone(),
+                                parent: app.current_branch.clone(),
+                            },
                         );
                     }
                 }
@@ -644,11 +685,12 @@ fn handle_input_key(app: &mut App, key: KeyEvent, input_action: &InputAction) ->
                         );
                     }
                     InputAction::NewBranch => {
-                        queue_command(
+                        queue_operation(
                             app,
-                            vec![vec!["create".to_string(), input.clone()]],
-                            format!("Created '{}'", input),
-                            Some(input.clone()),
+                            OperationRequest::CreateBranch {
+                                name: input.clone(),
+                                parent: app.current_branch.clone(),
+                            },
                         );
                     }
                 }
@@ -722,13 +764,8 @@ fn log_key_event(app: &App, key: &KeyEvent) {
     );
 }
 
-fn queue_checkout_command(app: &mut App, branch: &str) {
-    queue_command(
-        app,
-        vec![vec!["checkout".to_string(), branch.to_string()]],
-        format!("Switched to '{}'", branch),
-        Some(branch.to_string()),
-    );
+fn queue_operation(app: &mut App, request: OperationRequest) {
+    app.queue_operation(request);
 }
 
 fn queue_command(
@@ -745,12 +782,56 @@ fn execute_pending_command(command: &PendingCommand) -> Result<Option<String>> {
     let workdir = repo.workdir()?.to_path_buf();
     drop(repo);
 
+    match &command.action {
+        PendingAction::Operation(request) => execute_pending_operation(&workdir, request.clone()),
+        PendingAction::LegacyCommands(commands) => {
+            execute_legacy_commands(commands, &workdir, command)
+        }
+    }
+}
+
+fn execute_pending_operation(
+    workdir: &std::path::Path,
+    request: OperationRequest,
+) -> Result<Option<String>> {
+    let mut status = TuiOperationStatus::default();
+    let mut reporter = TuiOperationReporter {
+        status: &mut status,
+    };
+    let request_for_error = request.clone();
+    let result = execute_repository_operation(workdir, request, &mut reporter);
+    match result {
+        Ok(receipt) => {
+            if let OperationOutcome::PullRequestResolved { url, .. } = &receipt.outcome {
+                open_url_in_browser(url);
+            }
+            Ok(Some(receipt.summary))
+        }
+        Err(error) => {
+            if matches!(
+                request_for_error,
+                OperationRequest::ResolvePullRequestUrl { .. }
+            ) {
+                return Ok(Some(
+                    "No PR for this branch; run stax submit to create one".into(),
+                ));
+            }
+            Ok(Some(format!("{}; {}", error.primary, error.action)))
+        }
+    }
+}
+
+fn execute_legacy_commands(
+    commands: &[Vec<String>],
+    workdir: &std::path::Path,
+    command: &PendingCommand,
+) -> Result<Option<String>> {
     let exe = std::env::current_exe().context("Failed to locate current executable")?;
 
-    for args in &command.commands {
+    for args in commands {
         let status = Command::new(&exe)
             .args(args)
-            .current_dir(&workdir)
+            .current_dir(workdir)
             .stdin(Stdio::null())
             .status()
             .with_context(|| format!("Failed to run '{}'", args.join(" ")))?;
@@ -910,4 +991,106 @@ fn apply_reorder_changes(app: &mut App) -> Result<()> {
     ));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TuiOperationReporter, TuiOperationStatus, app::PendingAction};
+    use crate::application::{
+        OperationEvent, OperationProgress, OperationReporter, OperationRequest, OperationStage,
+        PullRequestMode, RestackScope,
+    };
+
+    #[test]
+    fn migrated_tui_actions_never_use_legacy_commands() {
+        for request in [
+            OperationRequest::Checkout {
+                branch: "feature".into(),
+            },
+            OperationRequest::CreateBranch {
+                name: "child".into(),
+                parent: "feature".into(),
+            },
+            OperationRequest::Restack {
+                scope: RestackScope::StackContaining("feature".into()),
+                auto_stash: false,
+            },
+            OperationRequest::Restack {
+                scope: RestackScope::All,
+                auto_stash: false,
+            },
+            OperationRequest::SubmitStack {
+                new_pull_requests: PullRequestMode::Draft,
+            },
+            OperationRequest::ResolvePullRequestUrl {
+                branch: "feature".into(),
+            },
+        ] {
+            assert!(matches!(
+                PendingAction::Operation(request),
+                PendingAction::Operation(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn tui_reporter_preserves_submit_stage_order_and_counts() {
+        let request = OperationRequest::SubmitStack {
+            new_pull_requests: PullRequestMode::Draft,
+        };
+        let progress = [
+            (OperationStage::Preparing, 0, Some(3), None),
+            (OperationStage::Pushing, 1, Some(3), Some("base")),
+            (OperationStage::Pushing, 2, Some(3), Some("child")),
+            (
+                OperationStage::UpdatingPullRequests,
+                3,
+                Some(3),
+                Some("tip"),
+            ),
+        ];
+        let mut status = TuiOperationStatus::default();
+        let mut reporter = TuiOperationReporter {
+            status: &mut status,
+        };
+        reporter.report(OperationEvent::Started(request.clone()));
+        let mut observed = Vec::new();
+        for (stage, completed, total, branch) in progress {
+            reporter.report(OperationEvent::Progress(OperationProgress {
+                stage,
+                completed,
+                total,
+                branch: branch.map(str::to_string),
+                message: format!("{stage:?}"),
+            }));
+            observed.push((
+                reporter.status.stage,
+                reporter.status.completed,
+                reporter.status.total,
+            ));
+        }
+        let before_terminal = reporter.status.clone();
+
+        reporter.report(OperationEvent::Failed(crate::application::OperationError {
+            request,
+            kind: crate::application::OperationErrorKind::Runtime,
+            details: crate::application::OperationErrorDetails::None,
+            primary: "failed".into(),
+            action: "retry".into(),
+            diagnostic_chain: "diagnostic".into(),
+            receipt: None,
+            side_effects: crate::application::OperationSideEffects::None,
+        }));
+
+        assert_eq!(
+            observed,
+            vec![
+                (Some(OperationStage::Preparing), 0, Some(3)),
+                (Some(OperationStage::Pushing), 1, Some(3)),
+                (Some(OperationStage::Pushing), 2, Some(3)),
+                (Some(OperationStage::UpdatingPullRequests), 3, Some(3)),
+            ],
+        );
+        assert_eq!(reporter.status, &before_terminal);
+    }
 }

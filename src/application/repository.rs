@@ -1,7 +1,8 @@
+use super::operation::report_operation;
 use super::{
     BranchDetails, BranchDiff, BranchSummary, DiffLine, DiffLineKind, DiffStatLine, OperationError,
-    OperationErrorDetails, OperationErrorKind, OperationRequest, OperationSideEffects,
-    RepositorySnapshot,
+    OperationErrorDetails, OperationErrorKind, OperationReporter, OperationRequest,
+    OperationResult, OperationSideEffects, RepositorySnapshot,
 };
 use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
 use crate::config::Config;
@@ -262,6 +263,31 @@ impl RepositorySession {
     }
 
     #[allow(clippy::result_large_err)]
+    pub(super) fn execute_unframed(
+        &self,
+        request: OperationRequest,
+        reporter: &mut dyn OperationReporter,
+    ) -> OperationResult {
+        match &request {
+            OperationRequest::Checkout { branch } => {
+                self.checkout_unframed(&request, branch, reporter)
+            }
+            OperationRequest::CreateBranch { name, parent } => {
+                self.create_empty_branch_unframed(&request, name, parent, reporter)
+            }
+            OperationRequest::Restack { scope, auto_stash } => {
+                self.restack_unframed(&request, scope.clone(), *auto_stash, reporter)
+            }
+            OperationRequest::SubmitStack { new_pull_requests } => {
+                self.submit_stack_unframed(&request, *new_pull_requests, reporter)
+            }
+            OperationRequest::ResolvePullRequestUrl { branch } => {
+                self.resolve_pull_request_url_unframed(&request, branch, reporter)
+            }
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
     pub(super) fn try_begin_mutation(
         &self,
         request: &OperationRequest,
@@ -386,6 +412,25 @@ impl RepositorySession {
     }
 }
 
+/// Execute one typed operation against an explicit repository path.
+///
+/// This is the shared adapter entry point for UI clients that only know a path.
+/// It frames repository-open failures the same way as operation-body failures:
+/// `Started` first, then one terminal `Completed` or `Failed` event.
+#[allow(clippy::result_large_err)]
+pub fn execute_repository_operation(
+    repository_root: impl AsRef<Path>,
+    request: OperationRequest,
+    reporter: &mut dyn OperationReporter,
+) -> OperationResult {
+    let repository_root = repository_root.as_ref().to_path_buf();
+    report_operation(request.clone(), reporter, |reporter| {
+        let session = RepositorySession::open(&repository_root)
+            .map_err(|source| map_repository_open_error(&request, &repository_root, source))?;
+        session.execute_unframed(request, reporter)
+    })
+}
+
 #[derive(Debug)]
 pub(super) struct MutationLease {
     gate: Arc<Mutex<bool>>,
@@ -507,6 +552,23 @@ fn operation_error(
         receipt: None,
         side_effects,
     }
+}
+
+fn map_repository_open_error(
+    request: &OperationRequest,
+    repository_root: &Path,
+    source: anyhow::Error,
+) -> OperationError {
+    OperationError::from_source(
+        request.clone(),
+        OperationErrorKind::RepositoryUnavailable,
+        OperationErrorDetails::None,
+        format!("Could not open repository '{}'", repository_root.display()),
+        "Check the repository path and retry",
+        &source,
+        None,
+        OperationSideEffects::None,
+    )
 }
 
 fn mutation_gate_for(common_git_dir: &Path) -> Arc<Mutex<bool>> {

@@ -47,7 +47,7 @@ impl RepositorySession {
         })
     }
 
-    fn resolve_pull_request_url_unframed(
+    pub(super) fn resolve_pull_request_url_unframed(
         &self,
         request: &OperationRequest,
         branch: &str,

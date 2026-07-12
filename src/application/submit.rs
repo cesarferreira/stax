@@ -308,7 +308,7 @@ impl RepositorySession {
         })
     }
 
-    fn submit_stack_unframed(
+    pub(super) fn submit_stack_unframed(
         &self,
         request: &OperationRequest,
         mode: PullRequestMode,

@@ -1,8 +1,8 @@
 use crate::common::{OutputAssertions, TestRepo};
 use stax::application::{
     CheckoutOutcome, NoopOperationReporter, OperationErrorDetails, OperationErrorKind,
-    OperationOutcome, OperationRequest, OperationSideEffects, PullRequestMode, RepositorySession,
-    RestackScope, TransactionStatus,
+    OperationEvent, OperationOutcome, OperationRequest, OperationSideEffects, PullRequestMode,
+    RepositorySession, RestackScope, TransactionStatus, execute_repository_operation,
 };
 use std::path::{Path, PathBuf};
 
@@ -209,6 +209,48 @@ async fn pull_request_network_fallback_returns_runtime_error_inside_tokio() {
         .unwrap_err();
 
     assert_eq!(error.kind, OperationErrorKind::Runtime);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+}
+
+#[test]
+fn repository_open_error_emits_started_then_exactly_one_failed_event() {
+    let request = OperationRequest::Checkout {
+        branch: "feature".into(),
+    };
+    let mut events = Vec::new();
+
+    let error = execute_repository_operation(
+        "/definitely/missing/stax-repository",
+        request.clone(),
+        &mut |event| events.push(event),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::RepositoryUnavailable);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0], OperationEvent::Started(request));
+    assert!(matches!(events[1], OperationEvent::Failed(_)));
+}
+
+#[test]
+fn uninitialized_repository_maps_to_initialization_required() {
+    let repository = tempfile::tempdir().unwrap();
+    crate::common::init_test_repo(repository.path()).unwrap();
+
+    let error = execute_repository_operation(
+        repository.path(),
+        OperationRequest::Restack {
+            scope: RestackScope::All,
+            auto_stash: false,
+        },
+        &mut NoopOperationReporter,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::InitializationRequired);
+    assert!(!error.primary.is_empty());
+    assert!(!error.action.is_empty());
+    assert!(!error.diagnostic_chain.is_empty());
     assert_eq!(error.side_effects, OperationSideEffects::None);
 }
 

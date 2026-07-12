@@ -1,5 +1,6 @@
 use crate::application::{
-    BranchDetails, BranchDiff, BranchSummary, CiSummary, DiffLine, DiffStatLine, RepositorySession,
+    BranchDetails, BranchDiff, BranchSummary, CiSummary, DiffLine, DiffStatLine, OperationRequest,
+    RepositorySession,
 };
 use crate::cache::{TuiPaneVisibilityState, TuiStateCache};
 use crate::engine::{Stack, StackSnapshot, build_parent_candidates};
@@ -298,9 +299,15 @@ pub struct ReorderState {
 
 #[derive(Debug, Clone)]
 pub struct PendingCommand {
-    pub commands: Vec<Vec<String>>,
+    pub action: PendingAction,
     pub success_message: String,
     pub preferred_selection: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingAction {
+    Operation(OperationRequest),
+    LegacyCommands(Vec<Vec<String>>),
 }
 
 /// Main application state
@@ -751,9 +758,18 @@ impl App {
         preferred_selection: Option<String>,
     ) {
         self.pending_command = Some(PendingCommand {
-            commands,
+            action: PendingAction::LegacyCommands(commands),
             success_message: success_message.into(),
             preferred_selection,
+        });
+        self.should_quit = true;
+    }
+
+    pub fn queue_operation(&mut self, request: OperationRequest) {
+        self.pending_command = Some(PendingCommand {
+            action: PendingAction::Operation(request),
+            success_message: String::new(),
+            preferred_selection: None,
         });
         self.should_quit = true;
     }

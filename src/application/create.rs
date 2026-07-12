@@ -20,14 +20,13 @@ impl RepositorySession {
         parent: &str,
         reporter: &mut dyn OperationReporter,
     ) -> OperationResult {
-        let result = format_branch_name(name, &BranchNameContext::literal()).map_err(|error| {
-            let request = OperationRequest::CreateBranch {
-                name: name.to_owned(),
-                parent: parent.to_owned(),
-            };
-            map_branch_name_error(&request, error)
-        })?;
-        self.create_empty_branch_with_formatted_name(result, parent, reporter)
+        let request = OperationRequest::CreateBranch {
+            name: name.to_owned(),
+            parent: parent.to_owned(),
+        };
+        report_operation(request.clone(), reporter, |reporter| {
+            self.create_empty_branch_unframed(&request, name, parent, reporter)
+        })
     }
 
     pub(crate) fn create_empty_branch_with_formatted_name(
@@ -47,6 +46,22 @@ impl RepositorySession {
                 || create_empty_branch_inner(self, &request, result, parent, reporter),
             )
         })
+    }
+
+    pub(super) fn create_empty_branch_unframed(
+        &self,
+        request: &OperationRequest,
+        name: &str,
+        parent: &str,
+        reporter: &mut dyn OperationReporter,
+    ) -> OperationResult {
+        let result = format_branch_name(name, &BranchNameContext::literal())
+            .map_err(|error| map_branch_name_error(request, error))?;
+        self.with_mutation(
+            request,
+            MutationTargets::branches([parent.to_string()]),
+            || create_empty_branch_inner(self, request, result, parent, reporter),
+        )
     }
 }
 

@@ -23,7 +23,7 @@ pub use operation::{
     OperationStage, OperationWarning, PullRequestChange, PullRequestMode, PullRequestReceipt,
     RestackScope, TransactionStatus, TransactionSummary,
 };
-pub use repository::RepositorySession;
+pub use repository::{RepositorySession, execute_repository_operation};
 pub(crate) use restack::RestackExecutionOptions;
 #[allow(unused_imports)]
 pub(crate) use submit::{
