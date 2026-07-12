@@ -15,7 +15,7 @@ use crate::config::{
 use crate::engine::Stack;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::Transaction;
-use crate::remote::TrustedRemoteInfo;
+use crate::remote::{RemoteInfo, TrustedRemoteInfo};
 use anyhow::Context;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -116,12 +116,13 @@ pub(crate) struct PreparedSubmit {
     repository_root: PathBuf,
     common_git_dir: PathBuf,
     scope: SubmitScope,
-    remote: TrustedRemoteInfo,
+    remote: RemoteInfo,
     stack: Stack,
     current_branch: String,
     plans: Vec<PrPlan>,
     prompt_requests: Vec<SubmitPromptRequest>,
     preferences: SubmitPreferences,
+    verify_hooks: bool,
     guards: PreparedSubmitGuards,
 }
 
@@ -216,27 +217,70 @@ impl RepositorySession {
                     None,
                 )
             })?;
-        let remote = TrustedRemoteInfo::from_repo(&repo, &trusted_network).map_err(|error| {
-            submit_source_error(
-                &request,
-                OperationErrorKind::Authentication,
-                "Could not validate the submit remote",
-                "Configure a trusted remote and retry",
-                error,
-                OperationSideEffects::None,
-                None,
-            )
-        })?;
+        let remote = submit_remote_info(&repo, &trusted_network, options.create_pull_requests)
+            .map_err(|error| {
+                submit_source_error(
+                    &request,
+                    OperationErrorKind::Authentication,
+                    "Could not validate the submit remote",
+                    "Configure a trusted remote and retry",
+                    error,
+                    OperationSideEffects::None,
+                    None,
+                )
+            })?;
         let preferences = SubmitPreferences::from_config(
             &Config::load_repository_submit_preferences(self.repository_root()).unwrap_or_default(),
         );
+        let remote_name = remote.name.clone();
+        if options.fetch && !options.prefetched {
+            reporter.report(OperationEvent::Progress(OperationProgress {
+                stage: OperationStage::Preparing,
+                completed: 0,
+                total: None,
+                branch: None,
+                message: format!("Fetching {remote_name}"),
+            }));
+            let fetched = repo.fetch_remote(&remote_name).map_err(|error| {
+                submit_source_error(
+                    &request,
+                    OperationErrorKind::Network,
+                    "Could not fetch the submit remote; retry with `--no-fetch` to use existing remote-tracking refs",
+                    "Check the remote, or retry with `--no-fetch` to use existing remote-tracking refs",
+                    error,
+                    OperationSideEffects::None,
+                    None,
+                )
+            })?;
+            if !fetched {
+                return Err(submit_error(
+                    &request,
+                    OperationErrorKind::Network,
+                    format!(
+                        "git fetch {remote_name} failed; retry with `--no-fetch` to use existing remote-tracking refs"
+                    ),
+                    "Check the remote, or retry with `--no-fetch` to use existing remote-tracking refs",
+                    format!("git fetch {remote_name} returned a non-zero status"),
+                    OperationSideEffects::None,
+                    None,
+                ));
+            }
+        } else if !options.fetch {
+            reporter.report(OperationEvent::Progress(OperationProgress {
+                stage: OperationStage::Preparing,
+                completed: 0,
+                total: None,
+                branch: None,
+                message: "Skipping fetch (--no-fetch)".into(),
+            }));
+        }
         let lease = self.try_begin_mutation(&request)?;
         let plans = plans_for_branches(
             &repo,
             &stack,
             &branches,
-            remote.remote().name.as_str(),
-            remote.remote(),
+            remote_name.as_str(),
+            &remote,
             options.new_pull_requests,
         )
         .map_err(|error| {
@@ -262,6 +306,7 @@ impl RepositorySession {
             plans,
             prompt_requests: Vec::new(),
             preferences,
+            verify_hooks: options.verify_hooks,
             guards: PreparedSubmitGuards {
                 resources: SubmitResources {
                     temporary_publish_refs: TemporaryPublishRefs::empty(self.repository_root()),
@@ -609,6 +654,17 @@ pub(crate) fn push_branches(
     Ok(())
 }
 
+fn submit_remote_info(
+    repo: &crate::git::GitRepo,
+    config: &Config,
+    create_pull_requests: bool,
+) -> anyhow::Result<RemoteInfo> {
+    if create_pull_requests {
+        return TrustedRemoteInfo::from_repo(repo, config).map(|remote| remote.remote().clone());
+    }
+    RemoteInfo::from_repo(repo, config)
+}
+
 pub(crate) fn rejected_push_branches(porcelain: &str, specs: &[PushSpec]) -> Vec<String> {
     porcelain
         .lines()
@@ -716,29 +772,30 @@ fn execute_submit_stack(
                 None,
             )
         })?;
-    let remote = TrustedRemoteInfo::from_repo(&repo, &trusted_network).map_err(|error| {
-        submit_source_error(
-            request,
-            OperationErrorKind::Authentication,
-            "Could not validate the submit remote",
-            "Configure a trusted remote and retry",
-            error,
-            OperationSideEffects::None,
-            None,
-        )
-    })?;
+    let remote = submit_remote_info(&repo, &trusted_network, options.create_pull_requests)
+        .map_err(|error| {
+            submit_source_error(
+                request,
+                OperationErrorKind::Authentication,
+                "Could not validate the submit remote",
+                "Configure a trusted remote and retry",
+                error,
+                OperationSideEffects::None,
+                None,
+            )
+        })?;
     let preferences = SubmitPreferences::from_config(
         &Config::load_repository_submit_preferences(session.repository_root()).unwrap_or_default(),
     );
-    let remote_name = remote.remote().name.clone();
+    let remote_name = remote.name.clone();
 
     if options.fetch && !options.prefetched {
         let fetched = repo.fetch_remote(&remote_name).map_err(|error| {
             submit_source_error(
                 request,
                 OperationErrorKind::Network,
-                "Could not fetch the submit remote",
-                "Check the remote and retry",
+                "Could not fetch the submit remote; retry with `--no-fetch` to use existing remote-tracking refs",
+                "Check the remote, or retry with `--no-fetch` to use existing remote-tracking refs",
                 error,
                 OperationSideEffects::None,
                 None,
@@ -748,9 +805,11 @@ fn execute_submit_stack(
             return Err(submit_error(
                 request,
                 OperationErrorKind::Network,
-                "Could not fetch the submit remote",
-                "Check the remote and retry",
-                "git fetch returned a non-zero status",
+                format!(
+                    "git fetch {remote_name} failed; retry with `--no-fetch` to use existing remote-tracking refs"
+                ),
+                "Check the remote, or retry with `--no-fetch` to use existing remote-tracking refs",
+                format!("git fetch {remote_name} returned a non-zero status"),
                 OperationSideEffects::None,
                 None,
             ));
@@ -763,7 +822,7 @@ fn execute_submit_stack(
         &stack,
         &branches,
         &remote_name,
-        remote.remote(),
+        &remote,
         options.new_pull_requests,
     )
     .map_err(|error| {
@@ -789,6 +848,7 @@ fn execute_submit_stack(
         plans,
         prompt_requests: Vec::new(),
         preferences,
+        verify_hooks: options.verify_hooks,
         guards: PreparedSubmitGuards {
             resources: SubmitResources {
                 temporary_publish_refs: TemporaryPublishRefs::empty(session.repository_root()),
@@ -820,7 +880,7 @@ fn execute_submit_plans(
         )
     })?;
     let branches = prepared.branches();
-    let remote_name = prepared.remote.remote().name.clone();
+    let remote_name = prepared.remote.name.clone();
     let mut push_specs = Vec::new();
     for plan in &prepared.plans {
         if plan.needs_push {
@@ -912,7 +972,7 @@ fn execute_submit_plans(
         return Err(submit_source_error(
             request,
             OperationErrorKind::PartialRemoteUpdate,
-            "Submit failed after remote state may have changed",
+            format!("Submit failed after remote state may have changed\n{error}"),
             "Refresh the repository and retry after inspecting the remote",
             error,
             OperationSideEffects::RemoteMayHaveChanged,
@@ -965,8 +1025,8 @@ fn execute_submit_plans(
     }
 }
 
-fn prepared_request_verify_hooks(_prepared: &PreparedSubmit) -> bool {
-    true
+fn prepared_request_verify_hooks(prepared: &PreparedSubmit) -> bool {
+    prepared.verify_hooks
 }
 
 fn branches_for_submit_scope(
