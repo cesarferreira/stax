@@ -8,7 +8,19 @@ use std::future::Future;
 
 impl RepositorySession {
     /// Loads provider-neutral CI state for a branch in this repository.
+    ///
+    /// # Blocking
+    ///
+    /// This creates and blocks a Tokio runtime, so callers must run it on a
+    /// dedicated background thread outside any existing Tokio runtime.
     pub fn load_ci(&self, branch: &str) -> Result<CiSummary> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return Err(anyhow!(
+                "RepositorySession::load_ci is a blocking API and cannot run inside an existing \
+                 Tokio runtime; call it from a dedicated background thread"
+            ));
+        }
+
         let repo = self.open_repo()?;
         let config = Config::load_for_repo(self.repository_root()).map_err(|_| {
             anyhow!(
@@ -182,6 +194,22 @@ mod tests {
 
         assert!(message.contains("missing-branch"));
         assert!(message.contains("resolve"));
+    }
+
+    #[test]
+    fn load_ci_inside_existing_runtime_returns_actionable_error_without_panicking() {
+        let (_dir, session, _config) = test_session(None);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(async { session.load_ci("main") })
+        }));
+
+        assert!(outcome.is_ok(), "load_ci must not panic inside Tokio");
+        let error = outcome.unwrap().unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("blocking"));
+        assert!(message.contains("background thread"));
     }
 
     #[test]

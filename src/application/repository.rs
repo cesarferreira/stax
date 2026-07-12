@@ -3,9 +3,10 @@ use super::{
     RepositorySnapshot,
 };
 use crate::cache::{CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache};
+use crate::config::Config;
 use crate::engine::{Stack, StackSnapshot};
 use crate::git::GitRepo;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -103,13 +104,23 @@ impl RepositorySession {
     /// still an error because no trustworthy details can be produced.
     pub fn branch_details(&self, branch: &BranchSummary) -> Result<BranchDetails> {
         let repo = self.open_repo()?;
+        let config = Config::load_for_repo(self.repository_root()).map_err(|_| {
+            anyhow!(
+                "Failed to load stax config for branch details in repository '{}'; \
+                 check the global config and repository stax.toml",
+                self.repository_root().display()
+            )
+        })?;
+        let remote_name = config.remote_name();
         let (ahead, behind) = branch
             .parent
             .as_deref()
             .and_then(|parent| repo.commits_ahead_behind(parent, &branch.name).ok())
             .unwrap_or((0, 0));
-        let has_remote = repo.has_remote(&branch.name);
-        let (unpushed, unpulled) = repo.commits_vs_remote(&branch.name).unwrap_or((0, 0));
+        let has_remote = repo.has_remote_named(remote_name, &branch.name);
+        let (unpushed, unpulled) = repo
+            .commits_vs_remote_named(remote_name, &branch.name)
+            .unwrap_or((0, 0));
         let commits = branch
             .parent
             .as_deref()

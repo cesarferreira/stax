@@ -1,5 +1,28 @@
 use crate::common::TestRepo;
 use stax::application::{BranchSummary, DiffLineKind, RepositorySession};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+fn cwd_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+}
+
+struct CurrentDirGuard(PathBuf);
+
+impl CurrentDirGuard {
+    fn change_to(path: &Path) -> Self {
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(path).unwrap();
+        Self(original)
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.0).unwrap();
+    }
+}
 
 fn branch(snapshot: &[BranchSummary], name: &str) -> BranchSummary {
     snapshot
@@ -233,6 +256,92 @@ fn branch_details_for_trunk_have_no_parent_commits() {
     assert_eq!(details.ahead, 0);
     assert_eq!(details.behind, 0);
     assert!(details.commits.is_empty());
+}
+
+#[test]
+fn branch_details_use_configured_remote_outside_process_cwd() {
+    let _cwd_lock = cwd_lock();
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    std::fs::write(
+        repo.path().join("stax.toml"),
+        "[remote]\nname = \"upstream\"\n",
+    )
+    .unwrap();
+    let add_remote = repo.git(&["remote", "add", "upstream", repo.path().to_str().unwrap()]);
+    assert!(
+        add_remote.status.success(),
+        "add upstream failed: {}",
+        TestRepo::stderr(&add_remote)
+    );
+    let update_ref = repo.git(&["update-ref", "refs/remotes/upstream/feature", "main"]);
+    assert!(
+        update_ref.status.success(),
+        "create upstream tracking ref failed: {}",
+        TestRepo::stderr(&update_ref)
+    );
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let _cwd = CurrentDirGuard::change_to(elsewhere.path());
+
+    let details = session
+        .branch_details(&branch(&snapshot.branches, "feature"))
+        .unwrap();
+
+    assert!(details.has_remote);
+    assert_eq!(details.unpushed, 1);
+    assert_eq!(details.unpulled, 0);
+}
+
+#[test]
+fn branch_details_do_not_fall_back_to_origin_for_unknown_configured_remote() {
+    let _cwd_lock = cwd_lock();
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    std::fs::write(
+        repo.path().join("stax.toml"),
+        "[remote]\nname = \"missing\"\n",
+    )
+    .unwrap();
+    let origin_ref = repo.git(&["update-ref", "refs/remotes/origin/feature", "main"]);
+    assert!(
+        origin_ref.status.success(),
+        "create origin tracking ref failed: {}",
+        TestRepo::stderr(&origin_ref)
+    );
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let _cwd = CurrentDirGuard::change_to(elsewhere.path());
+
+    let details = session
+        .branch_details(&branch(&snapshot.branches, "feature"))
+        .unwrap();
+
+    assert!(!details.has_remote);
+    assert_eq!(details.unpushed, 0);
+    assert_eq!(details.unpulled, 0);
+}
+
+#[test]
+fn branch_details_report_repository_config_errors() {
+    let _cwd_lock = cwd_lock();
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    std::fs::write(repo.path().join("stax.toml"), "[remote\nname = broken\n").unwrap();
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let _cwd = CurrentDirGuard::change_to(elsewhere.path());
+
+    let error = session
+        .branch_details(&branch(&snapshot.branches, "feature"))
+        .unwrap_err();
+    let message = format!("{error:#}");
+
+    assert!(message.contains("Failed to load stax config"));
+    assert!(message.contains(&repo.path().display().to_string()));
 }
 
 #[test]

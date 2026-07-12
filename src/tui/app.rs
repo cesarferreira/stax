@@ -1430,11 +1430,11 @@ fn spawn_ci_loader(session: RepositorySession, branch: String) -> Receiver<CiUpd
 #[cfg(test)]
 mod tests {
     use super::{
-        App, BranchDisplay, CiUpdate, DiffRequest, DiffUpdate, FocusedPane, Mode, PaneVisibility,
-        TuiPane, TuiPaneVisibilityState, live_ci_summary_text, spawn_ci_loader, spawn_diff_loader,
-        substring_filter_indices,
+        App, BranchDetailsUpdate, BranchDisplay, CiUpdate, DiffRequest, DiffUpdate, FocusedPane,
+        Mode, PaneVisibility, TuiPane, TuiPaneVisibilityState, live_ci_summary_text,
+        spawn_ci_loader, spawn_diff_loader, substring_filter_indices,
     };
-    use crate::application::{CiSummary, DiffLineKind, RepositorySession};
+    use crate::application::{BranchDetails, CiSummary, DiffLineKind, RepositorySession};
     use crate::cache::{
         CiCache, DiskCachedDiff, DiskDiffLine, DiskDiffStat, TuiDiffCache, TuiStateCache,
     };
@@ -1562,6 +1562,29 @@ mod tests {
         assert_eq!(branch.unpushed, 0);
         assert_eq!(branch.unpulled, 0);
         assert!(branch.commits.is_empty());
+    }
+
+    #[test]
+    fn custom_remote_details_make_selected_branch_eligible_for_ci_queueing() {
+        let (_tempdir, repo) = test_repo();
+        let mut app = minimal_app(repo, vec![skeleton_branch("feature", Some("main"), true)]);
+
+        app.apply_branch_details_update(BranchDetailsUpdate::Loaded {
+            branch: "feature".to_string(),
+            details: BranchDetails {
+                ahead: 1,
+                behind: 0,
+                has_remote: true,
+                unpushed: 1,
+                unpulled: 0,
+                commits: vec!["feature commit".to_string()],
+            },
+        });
+        app.queue_ci_refresh_for_selected();
+
+        assert!(app.branches[0].details_loaded);
+        assert!(app.branches[0].has_remote);
+        assert_eq!(app.ci_queued_branch.as_deref(), Some("feature"));
     }
 
     #[test]
