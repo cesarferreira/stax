@@ -352,6 +352,8 @@ class UseParser:
             elif self.peek() != "}":
                 raise ScanError("expected ',' or '}' in use group")
         self.consume("}")
+        if not paths and prefix:
+            return [ImportPath(prefix, None)]
         return paths
 
 
@@ -584,6 +586,17 @@ def parse_extern_crate(
     return crate_name, alias, end
 
 
+def has_conditional_attribute(tokens: list[Token], item_index: int) -> bool:
+    start = item_index
+    while start > 0 and tokens[start - 1].value not in {";", "{", "}"}:
+        start -= 1
+    values = [token.value for token in tokens[start:item_index]]
+    return any(
+        values[index : index + 3] in (["#", "[", "cfg"], ["#", "[", "cfg_attr"])
+        for index in range(len(values) - 2)
+    )
+
+
 def collect_item_scopes(
     tokens: list[Token],
 ) -> tuple[
@@ -601,7 +614,7 @@ def collect_item_scopes(
     module_braces: set[int] = set()
     pending_scope_symbols: dict[int, set[str]] = {}
     generic_headers: list[tuple[int, int, set[str]]] = []
-    type_declarations = {"enum", "mod", "struct", "trait", "type", "union"}
+    type_declarations = {"enum", "mod", "struct", "trait", "union"}
 
     index = 0
     while index < len(tokens):
@@ -644,7 +657,11 @@ def collect_item_scopes(
                 index = end + 1
                 continue
 
-        if token.value in type_declarations and index + 1 < len(tokens):
+        if (
+            token.value in type_declarations
+            and index + 1 < len(tokens)
+            and not has_conditional_attribute(tokens, index)
+        ):
             declaration = tokens[index + 1]
             if is_identifier_start(declaration.value[0]):
                 scopes[-1].bind_symbol(declaration.value)
@@ -719,6 +736,9 @@ def collect_module_declarations(
             index = end + 1
             continue
         if token.value != "mod":
+            index += 1
+            continue
+        if has_conditional_attribute(tokens, index):
             index += 1
             continue
         if (

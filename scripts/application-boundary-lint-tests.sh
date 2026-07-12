@@ -108,6 +108,7 @@ git -C "$fixture" add src/application/checkout.rs
 assert_rejected 'use crate::commands::submit;' 'command or TUI modules'
 assert_rejected 'use crate::{commands::submit, git::GitRepo};' 'command or TUI modules'
 assert_rejected 'use crate::commands as cli_commands;' 'command or TUI modules'
+assert_rejected 'use crate::commands::{};' 'command or TUI modules'
 assert_rejected 'fn bad() { crate::commands::submit::run(); }' 'command or TUI modules'
 assert_rejected 'fn bad() { crate::r#commands::submit::run(); }' 'command or TUI modules'
 assert_rejected 'fn bad() { r#extern::commands::run(); }' 'command or TUI modules'
@@ -151,6 +152,8 @@ assert_rejected 'use std as standard; fn bad() { standard::io::stdout(); }' 'ter
 assert_rejected 'use {std as r#standard}; fn bad() { r#standard::io::stdin(); }' 'terminal I/O'
 assert_rejected 'use std::{self as standard}; fn bad() { standard::io::stderr(); }' 'terminal I/O'
 assert_rejected 'use std as standard; use standard::io as io; fn bad() { io::stdout(); }' 'terminal I/O'
+assert_rejected '#[cfg(any())] mod std {} fn bad() { std::io::stdout(); }' 'terminal I/O'
+assert_rejected $'use std::io as r#io;\n#[cfg(any())]\nmod r#io { pub fn stdout() {} }\nfn bad() { r#io::stdout(); }' 'terminal I/O'
 assert_rejected 'extern crate std as standard; fn bad() { standard::io::stderr(); }' 'terminal I/O'
 assert_rejected 'extern crate std as r#standard; fn bad() { r#standard::io::stdout(); }' 'terminal I/O'
 assert_rejected 'fn bad() { io::stdout(); } use std::io as io;' 'terminal I/O'
@@ -174,6 +177,9 @@ assert_rejected $'use std::io as io;\nmod nested {\n    mod io { pub fn stdout()
 assert_rejected $'use std::io as io;\nfn clean() {\n    use crate::model as io;\n    let _: Option<io::RepositorySnapshot> = None;\n}\nfn bad() { io::stdout(); }' 'terminal I/O'
 assert_rejected 'use std::io as io; fn bad(io: usize) { let io = io; io::stdout(); }' 'terminal I/O'
 assert_rejected $'use std::io as io;\ntrait Output { fn stdout(); }\nfn clean<io: Output>() { io::stdout(); }\nfn bad() { io::stdout(); }' 'terminal I/O'
+assert_rejected $'use std::io as Output;\ntrait T { type Output; }\nfn bad() { Output::stdout(); }' 'terminal I/O'
+assert_rejected $'use std::io as Output;\ntrait T { type Output; fn f() { Output::stdout(); } }' 'terminal I/O'
+assert_rejected $'use std::io as Output;\ntrait T { type Output; fn f(); }\nstruct S;\nimpl T for S { type Output = (); fn f() { Output::stdout(); } }' 'terminal I/O'
 
 assert_rejected 'print!("hidden terminal output");' 'terminal output macros'
 assert_rejected 'println!("hidden terminal output");' 'terminal output macros'
@@ -382,6 +388,10 @@ if (
   bash "$wrapper" "$non_git"
 ) >"$temp_root/output" 2>&1; then
   record_failure "expected git discovery failure"
+fi
+
+if ! rg -F 'bash scripts/application-boundary-lint-tests.sh' "$repo_root/scripts/lint.sh" >/dev/null; then
+  record_failure "expected scripts/lint.sh to run the application boundary lint fixtures"
 fi
 
 if ! rg -F 'bash scripts/application-boundary-lint.sh' "$repo_root/scripts/lint.sh" >/dev/null; then
