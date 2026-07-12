@@ -353,7 +353,7 @@ fn restack_inner(
                         worktree: target_workdir,
                     },
                     format!("Worktree for '{branch}' has uncommitted changes"),
-                    "Commit, stash, or enable auto-stash before retrying",
+                    "Commit or stash changes in that worktree, or retry with --auto-stash-pop",
                     "target worktree is dirty before restack",
                     OperationSideEffects::None,
                 ));
