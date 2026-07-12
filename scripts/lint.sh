@@ -13,6 +13,8 @@ if [[ -n "${global_env_mutations}" ]]; then
   exit 1
 fi
 
+bash scripts/application-boundary-lint.sh
+
 # Keep new Clippy warnings fatal while the explicitly listed legacy lint debt is
 # paid down. Removing an allowance is always safe; adding one requires review.
 cargo clippy --all-targets --all-features --no-deps -- \

@@ -286,6 +286,38 @@ impl OpReceipt {
         self.local_refs.iter().any(|r| r.oid_before.is_some())
     }
 
+    pub(crate) fn summary_id(&self) -> &str {
+        &self.op_id
+    }
+
+    pub(crate) fn summary_kind(&self) -> &'static str {
+        self.kind.display_name()
+    }
+
+    pub(crate) fn summary_status(&self) -> &OpStatus {
+        &self.status
+    }
+
+    pub(crate) fn summary_branch_names(&self) -> Vec<String> {
+        let mut branches = Vec::new();
+        for entry in &self.local_refs {
+            let branch = entry
+                .branch
+                .strip_suffix(super::tx::METADATA_REF_LABEL_SUFFIX)
+                .unwrap_or(&entry.branch);
+            if !branches.iter().any(|existing| existing == branch) {
+                branches.push(branch.to_string());
+            }
+        }
+        branches
+    }
+
+    pub(crate) fn changed_remote_refs(&self) -> bool {
+        self.remote_refs
+            .iter()
+            .any(|entry| entry.oid_after.is_some())
+    }
+
     /// Check if this receipt can be redone
     pub fn can_redo(&self) -> bool {
         // Can redo if we have local refs with after-OIDs
