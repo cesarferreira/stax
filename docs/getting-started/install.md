@@ -42,6 +42,30 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
 
 Download `stax-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/cesarferreira/stax/releases/latest), extract `stax.exe` and `st.exe`, and place them on your `PATH`. See [Windows notes](../reference/windows.md) for shell and tmux limitations.
 
+## Native macOS app
+
+The native GUI is published as a separate artifact on the same GitHub Release as the CLI. It is not a new crates.io package, and installing it does not change or enlarge the `stax` and `st` CLI binaries.
+
+Apple Silicon:
+
+```bash
+curl -fLO https://github.com/cesarferreira/stax/releases/latest/download/Stax-aarch64-apple-darwin.zip
+ditto -x -k Stax-aarch64-apple-darwin.zip .
+mv Stax.app /Applications/
+```
+
+Intel:
+
+```bash
+curl -fLO https://github.com/cesarferreira/stax/releases/latest/download/Stax-x86_64-apple-darwin.zip
+ditto -x -k Stax-x86_64-apple-darwin.zip .
+mv Stax.app /Applications/
+```
+
+Download only from the project [GitHub Releases page](https://github.com/cesarferreira/stax/releases/latest). For an unsigned release, Control-click `/Applications/Stax.app`, choose **Open**, then choose **Open** again. If Gatekeeper still blocks the first launch, open **System Settings → Privacy & Security** and choose **Open Anyway** for Stax. Do not disable Gatekeeper globally. Signed and notarized releases open normally.
+
+Launch the welcome window from Finder or Spotlight, or open a repository directly with `st gui [path]`. The app bundle id is `com.cesarferreira.stax`.
+
 ## Build from source
 
 Requires Rust and system OpenSSL (Debian/Ubuntu: `libssl-dev pkg-config` · Fedora/RHEL: `openssl-devel` · Arch: `openssl pkg-config`).

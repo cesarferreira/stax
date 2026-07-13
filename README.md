@@ -109,17 +109,29 @@ Verify the install:
 st --version
 ```
 
-### Native macOS GUI developer preview
+### Native macOS GUI
 
-Phase 3 includes an unsigned local developer preview of the native macOS app. Build the bundle without installing it, or install it into your user Applications folder:
+Download the architecture-specific app from the same [GitHub Release](https://github.com/cesarferreira/stax/releases/latest) as the CLI. For Apple Silicon:
 
 ```bash
-make gui-app           # Build the unsigned local developer preview
+curl -fLO https://github.com/cesarferreira/stax/releases/latest/download/Stax-aarch64-apple-darwin.zip
+ditto -x -k Stax-aarch64-apple-darwin.zip .
+mv Stax.app /Applications/
+```
+
+On an Intel Mac, use `Stax-x86_64-apple-darwin.zip` instead. The app is a separate release artifact, not a new crates.io package, and installing it does not enlarge the `stax` or `st` CLI binaries.
+
+Unsigned releases are supported. Download only from the project Releases page, move the app to `/Applications`, then Control-click `Stax.app`, choose **Open**, and choose **Open** again. If macOS still blocks the first launch, use **System Settings → Privacy & Security → Open Anyway** for Stax. Do not disable Gatekeeper globally. Releases open normally when the optional signing and notarization credentials are configured.
+
+Contributors can also build or install the app locally:
+
+```bash
+make gui-app           # Build target/gui-app/Stax.app
 make install-gui-app   # Build and install $HOME/Applications/Stax.app
 st gui [path]          # Launch a fresh Stax.app instance for one repository
 ```
 
-The preview bundle uses bundle id `dev.stax.Stax`. `st gui [path]` is macOS-only; it canonicalizes the supplied path, defaults to the current directory when omitted, and launches LaunchServices as `open -n -b dev.stax.Stax --args <canonical-path>`. The `-n` flag is intentional: every invocation starts a fresh app process/window for exactly one repository.
+The bundle id is `com.cesarferreira.stax`. `st gui [path]` is macOS-only; it canonicalizes the supplied path, defaults to the current directory when omitted, and launches LaunchServices as `open -n -b com.cesarferreira.stax --args <canonical-path>`. The `-n` flag is intentional: every invocation starts a fresh app process/window for exactly one repository.
 
 <a id="quickstart"></a>
 ## Quickstart
@@ -277,7 +289,7 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 
 ### Native macOS GUI
 
-The developer-preview GUI opens a repository-scoped workspace with searchable Stack, Changes, and Inspector panes. It can check out, create, rename, delete, move, and reorder local branches; restack the selected branch or all tracked branches; submit the current stack as Draft; open the selected PR; and safely undo or redo fully local recorded operations. Destructive and history-rewriting actions show exact previews and confirmations, including explicit auto-stash follow-ups for dirty move/reorder/restack flows.
+The native GUI opens a repository-scoped workspace with searchable Stack, Changes, and Inspector panes. It can check out, create, rename, delete, move, and reorder local branches; restack the selected branch or all tracked branches; submit the current stack as Draft; open the selected PR; and safely undo or redo fully local recorded operations. Destructive and history-rewriting actions show exact previews and confirmations, including explicit auto-stash follow-ups for dirty move/reorder/restack flows.
 
 Use `/` to search, `1`/`2`/`3` to toggle panes, and drag dividers to resize them; visibility and widths persist per canonical repository. Native menus and keyboard shortcuts dispatch the same typed actions as the buttons. Submit is always confirmed first, pushes the current stack as Draft, and does not show CLI prompts or auto-open PR pages. `st gui [path]` only launches the app.
 
@@ -310,7 +322,7 @@ st config --set-ai
 | Command | What it does |
 |---|---|
 | `st` | Launch interactive TUI |
-| `st gui [path]` | Launch the unsigned macOS GUI developer preview for a repository |
+| `st gui [path]` | Launch the installed native macOS GUI for a repository |
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
 | `st watch --current` | Watch only the current stack |

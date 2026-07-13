@@ -1,22 +1,29 @@
 # GUI
 
-The native Stax GUI is a Phase 3 developer preview for macOS. It shares the same typed repository operations and receipts as the CLI/TUI adapters, but it is currently distributed only as an unsigned local app bundle for contributors.
+The native Stax GUI for macOS shares the same typed repository operations and receipts as the CLI/TUI adapters. GitHub Releases publishes separate Apple Silicon and Intel app archives alongside the CLI artifacts.
 
-## Developer preview install
+## Install
 
-Build the unsigned local bundle:
+For Apple Silicon:
+
+```bash
+curl -fLO https://github.com/cesarferreira/stax/releases/latest/download/Stax-aarch64-apple-darwin.zip
+ditto -x -k Stax-aarch64-apple-darwin.zip .
+mv Stax.app /Applications/
+```
+
+Use `Stax-x86_64-apple-darwin.zip` on Intel. The app is a separate artifact on the same release, not a new package, and it does not enlarge the CLI binaries.
+
+Unsigned builds are usable without weakening system security: download only from the project GitHub Releases page, Control-click `Stax.app`, choose **Open**, then choose **Open** again. If Gatekeeper blocks the first launch, use **System Settings → Privacy & Security → Open Anyway**. Never disable Gatekeeper globally. When maintainers configure signing and notarization, the same artifact names open through the normal macOS flow.
+
+Contributors can build and register a local bundle instead:
 
 ```bash
 make gui-app
-```
-
-Install and register the developer preview for the current user:
-
-```bash
 make install-gui-app
 ```
 
-The install target writes `$HOME/Applications/Stax.app`. The provisional bundle id is `dev.stax.Stax`. Because this is unsigned, macOS may show normal local-app security prompts; final signing, notarization, release metadata, and packaged distribution are intentionally deferred.
+The install target writes `$HOME/Applications/Stax.app`. Public and local bundles use `com.cesarferreira.stax`.
 
 ## Launch and windows
 
@@ -35,10 +42,10 @@ st gui /path/to/repo
 When `[path]` is omitted, Stax uses the current directory. The launcher canonicalizes the chosen path, then invokes LaunchServices with:
 
 ```bash
-open -n -b dev.stax.Stax --args <canonical-path>
+open -n -b com.cesarferreira.stax --args <canonical-path>
 ```
 
-The `-n` flag is part of the contract. Every `st gui [path]` invocation opens a fresh app process/window and forwards exactly one canonical repository path after `--args`. If LaunchServices cannot find or start the bundle, run `make install-gui-app` and confirm `$HOME/Applications/Stax.app` exists.
+The `-n` flag is part of the contract. Every `st gui [path]` invocation opens a fresh app process/window and forwards exactly one canonical repository path after `--args`. If LaunchServices cannot find or start the bundle, install `Stax.app` in `/Applications` or run `make install-gui-app` and confirm `$HOME/Applications/Stax.app` exists.
 
 ## Workspace
 
@@ -93,6 +100,8 @@ Overlay shortcuts are Enter to confirm and Escape to dismiss. Text input and pic
 
 The native Stax, File, Edit, View, Branch, and Stack menus dispatch these same actions. Their enabled state comes from the same interaction model as the visible controls, so unsafe menu commands are disabled while a mutation is running.
 
+All visible actions have textual labels, participate in Tab traversal when enabled, and show a contrast-tested focus border. Enter and Space activate the focused control. Disabled actions are skipped and keep their reason in the visible label. GPUI 0.2.2 does not yet expose the stable macOS accessibility-node integration needed to claim complete VoiceOver support.
+
 ## Progress and receipts
 
 Operations report structured progress with stage, branch, completed count, and total when available. Warnings are data, not terminal text, and remain visible in the operation banner.
@@ -107,10 +116,10 @@ On success, and on failures that may have changed local or remote state, the GUI
 
 ## Current limits
 
-The Phase 3 GUI intentionally leaves advanced workflows in the CLI:
+The GUI intentionally leaves advanced workflows in the CLI:
 
 - AI-generated branch names and PR details.
 - Staging, commit creation, `--below`, `--insert`, custom branch prefixes, and other advanced create modes.
 - Advanced submit options such as reviewers, labels, templates, AI prompting, ready-for-review mode, and auto-open behavior.
 
-Icon work, final metadata, optional signing/notarization, architecture-specific release artifacts, and packaged distribution are Phase 4 work. The current app remains an unsigned developer preview installed locally with `make install-gui-app`.
+The first public release has no automatic updater, Homebrew cask, universal binary, Windows GUI, or Linux GUI. Install updates from GitHub Releases; the existing Homebrew formula remains CLI-only.

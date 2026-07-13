@@ -148,18 +148,22 @@ cargo release patch --no-confirm # Dry-run cargo release only (no bump/tag/push)
 
 Release prep regenerates `CHANGELOG.md` with [git-cliff](https://git-cliff.org/) (config in `cliff.toml`) inside `cargo release`'s pre-release hook, grouping the commits since the latest `v*` tag under the new version. Conventional prefixes map to grouped sections (`feat` → Features, `fix` → Bug Fixes, `docs` → Documentation, etc.); non-conventional subjects land in `Other` rather than being dropped. git-cliff must be installed locally (`cargo install git-cliff`).
 
-### Native macOS GUI Developer Preview
+### Native macOS GUI
 
 ```bash
-make gui-app                     # Build the unsigned local developer preview
+make gui-app                     # Build target/gui-app/Stax.app
 make install-gui-app             # Install $HOME/Applications/Stax.app
+make gui-release                 # Package the native architecture release zip
+make gui-release-test            # Validate unsigned/signed/notarized configuration + package
 stax gui                         # Launch GUI for the current directory
 stax gui /path/to/repo           # Launch GUI for an explicit repository
 ```
 
-`stax gui [path]` is macOS-only and expects the unsigned developer-preview app bundle installed at `$HOME/Applications/Stax.app` with bundle id `dev.stax.Stax`. It canonicalizes the supplied path, defaults to the current directory, and launches exactly `open -n -b dev.stax.Stax --args <canonical-path>`. The `-n` fresh-instance behavior is intentional: every invocation opens a new app process/window for one repository.
+Public GitHub Releases include `Stax-aarch64-apple-darwin.zip` and `Stax-x86_64-apple-darwin.zip`; extract the matching archive and move `Stax.app` to `/Applications`. The app is a separate artifact, not a new package, so it does not enlarge the CLI binaries. Unsigned builds use the safe Gatekeeper Control-click → Open flow or **Privacy & Security → Open Anyway**; never disable Gatekeeper globally. The final bundle id is `com.cesarferreira.stax`.
 
-The Phase 3 GUI operations are typed and repository-scoped. It can search branches; checkout, create, rename, delete, move, and reorder eligible local branches; restack selected/all; submit the current stack as Draft; Open PR without checkout; and undo/redo receipts whose transaction is fully local. Rename does not push. Delete shows descendants. Move/reorder/restack dirty-worktree recovery requires an explicit auto-stash confirmation. `/` focuses search, `1`/`2`/`3` toggle panes, draggable widths and visibility persist per canonical repository, and native menus dispatch the same guarded actions as shortcuts and buttons. GUI submit has no CLI prompts and does not auto-open PR pages. Keep AI naming, staging/commit creation, `--below`, `--insert`, custom prefixes, advanced submit options, and remote-effect recovery in CLI workflows. Final packaged distribution is Phase 4 work.
+`stax gui [path]` is macOS-only. It canonicalizes the supplied path, defaults to the current directory, and launches exactly `open -n -b com.cesarferreira.stax --args <canonical-path>`. The `-n` fresh-instance behavior is intentional: every invocation opens a new app process/window for one repository.
+
+GUI operations are typed and repository-scoped. It can search branches; checkout, create, rename, delete, move, and reorder eligible local branches; restack selected/all; submit the current stack as Draft; Open PR without checkout; and undo/redo receipts whose transaction is fully local. Rename does not push. Delete shows descendants. Move/reorder/restack dirty-worktree recovery requires an explicit auto-stash confirmation. `/` focuses search, `1`/`2`/`3` toggle panes, draggable widths and visibility persist per canonical repository, and all enabled visible actions are keyboard-operable with visible focus and textual labels. GUI submit has no CLI prompts and does not auto-open PR pages. Keep AI naming, staging/commit creation, `--below`, `--insert`, custom prefixes, advanced submit options, and remote-effect recovery in CLI workflows.
 
 ### Create and Edit Branches
 
@@ -681,7 +685,7 @@ Symbols:
 ## Tips
 
 - Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, unchanged branch diffs can be reused from the repo-local TUI cache on reopen, and `1`/`2`/`3` toggle the Stack/Summary/Patch panes for small terminals. Pane visibility is remembered per repo.
-- Run `stax gui [path]` on macOS to launch a fresh unsigned Phase 3 GUI preview window for one repository after `make install-gui-app`; use `/` for search, `1`/`2`/`3` for persistent pane toggles, and the guarded menus or shortcuts for structural operations and local-only undo/redo. Packaged distribution remains Phase 4 work.
+- Run `stax gui [path]` on macOS to launch a fresh installed GUI window for one repository; use `/` for search, `1`/`2`/`3` for persistent pane toggles, and the guarded controls, menus, or shortcuts for structural operations and local-only undo/redo.
 - Use `stax --help` or `stax <command> --help` for exact flags.
 - Add global `--trace` to profile instrumented Git subprocesses and total command time; use `make benchmark-status` for reproducible cold status scaling fixtures.
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.
