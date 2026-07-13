@@ -1,7 +1,8 @@
+use super::text_input::BranchNameInput;
 use super::{AppView, WorkspaceView, activate_control, control_focus_style};
 use crate::theme::{MONOSPACE_FONT, Theme};
 use gpui::{
-    Context, Div, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
+    Context, Div, Entity, InteractiveElement as _, ParentElement as _, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled as _, div, px, uniform_list,
 };
 use stax::application::BranchSummary;
@@ -19,10 +20,15 @@ enum StatusTone {
     Danger,
 }
 
-pub fn render(workspace: &WorkspaceView, theme: Theme, cx: &mut Context<AppView>) -> Div {
-    let branch_count = workspace.state().snapshot().branches.len();
+pub fn render(
+    workspace: &WorkspaceView,
+    search_input: Option<Entity<BranchNameInput>>,
+    theme: Theme,
+    cx: &mut Context<AppView>,
+) -> Div {
+    let branch_count = workspace.state().filtered_branches().len();
 
-    div()
+    let mut pane = div()
         .debug_selector(|| PANE_MARKER.into())
         .size_full()
         .min_w_0()
@@ -53,8 +59,47 @@ pub fn render(workspace: &WorkspaceView, theme: Theme, cx: &mut Context<AppView>
                         .text_color(theme.text_muted)
                         .child(format!("{branch_count} branches")),
                 ),
+        );
+    if let Some(search_input) = search_input {
+        pane = pane.child(
+            div()
+                .debug_selector(|| "stack-search".into())
+                .h(px(42.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .border_b_1()
+                .border_color(theme.border)
+                .bg(theme.surface_raised)
+                .font_family(MONOSPACE_FONT)
+                .text_sm()
+                .text_color(theme.text_muted)
+                .child("/")
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .text_color(theme.text)
+                        .child(search_input),
+                ),
+        );
+    }
+    if branch_count == 0 {
+        pane.child(
+            div()
+                .debug_selector(|| "stack-search-no-results".into())
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .text_color(theme.text_muted)
+                .child("No branches match this search"),
         )
-        .child(
+    } else {
+        pane.child(
             uniform_list(
                 "stack-branch-list",
                 branch_count,
@@ -67,9 +112,9 @@ pub fn render(workspace: &WorkspaceView, theme: Theme, cx: &mut Context<AppView>
                         .filter_map(|index| {
                             workspace
                                 .state()
-                                .snapshot()
-                                .branches
+                                .filtered_branches()
                                 .get(index)
+                                .cloned()
                                 .cloned()
                                 .map(|branch| (index, branch))
                         })
@@ -86,6 +131,7 @@ pub fn render(workspace: &WorkspaceView, theme: Theme, cx: &mut Context<AppView>
             .flex_1()
             .min_h_0(),
         )
+    }
 }
 
 fn render_branch_row(
@@ -103,6 +149,7 @@ fn render_branch_row(
 
     let row = div()
         .id(SharedString::from(format!("stack-branch-{}", branch.name)))
+        .debug_selector(|| format!("stack-branch-{}", branch.name))
         .focusable()
         .tab_index(branch_index as isize + 20)
         .focus(move |style| control_focus_style(style, theme))

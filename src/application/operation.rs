@@ -20,6 +20,52 @@ pub enum OperationRequest {
         /// Parent branch for the new branch.
         parent: String,
     },
+    /// Rename the current local branch.
+    RenameBranch {
+        /// Current branch name.
+        branch: String,
+        /// New literal branch name.
+        new_name: String,
+    },
+    /// Delete a local branch.
+    DeleteBranch {
+        /// Branch to delete.
+        branch: String,
+        /// Whether an unmerged branch may be deleted.
+        force: bool,
+    },
+    /// Move a branch and its descendant subtree onto a new parent.
+    MoveSubtree {
+        /// Root of the subtree to move.
+        source: String,
+        /// New parent branch.
+        new_parent: String,
+        /// Whether dirty affected worktrees may be stashed automatically.
+        auto_stash: bool,
+    },
+    /// Apply a previously previewed linear stack order.
+    ReorderStack {
+        /// Exact live order used to create the preview.
+        original_order: Vec<String>,
+        /// Proposed bottom-to-top order.
+        proposed_order: Vec<String>,
+        /// Whether dirty affected worktrees may be stashed automatically.
+        auto_stash: bool,
+    },
+    /// Restore a persisted transaction's before-state.
+    UndoTransaction {
+        /// Specific operation id, or latest when absent.
+        operation_id: Option<String>,
+        /// Whether remote refs may also be updated.
+        update_remote: bool,
+    },
+    /// Restore a persisted transaction's after-state.
+    RedoTransaction {
+        /// Specific operation id, or latest when absent.
+        operation_id: Option<String>,
+        /// Whether remote refs may also be updated.
+        update_remote: bool,
+    },
     /// Restack branches selected by a deterministic scope.
     Restack {
         /// Branch scope to restack.
@@ -79,6 +125,18 @@ pub enum OperationStage {
     CheckingOut,
     /// Create a branch.
     CreatingBranch,
+    /// Rename a local branch and update its stack metadata.
+    RenamingBranch,
+    /// Delete a local branch and its metadata.
+    DeletingBranch,
+    /// Prepare and apply a subtree move.
+    MovingSubtree,
+    /// Apply a linear stack reorder.
+    ReorderingStack,
+    /// Restore transaction before-state.
+    UndoingTransaction,
+    /// Restore transaction after-state.
+    RedoingTransaction,
     /// Rebase branches onto their updated parents.
     Restacking,
     /// Push local refs to a remote.
@@ -169,6 +227,50 @@ pub enum OperationOutcome {
         /// Parent assigned to the created branch.
         parent: String,
     },
+    /// A local branch was renamed.
+    BranchRenamed {
+        /// Branch name before the rename.
+        old_name: String,
+        /// Branch name after the rename.
+        new_name: String,
+    },
+    /// A local branch was deleted.
+    BranchDeleted {
+        /// Deleted branch name.
+        branch: String,
+        /// Descendants deliberately retained with their existing metadata.
+        retained_descendants: Vec<String>,
+    },
+    /// A branch and its descendants were moved onto a new parent.
+    SubtreeMoved {
+        /// Root branch that moved.
+        source: String,
+        /// New parent of the root branch.
+        new_parent: String,
+        /// Root and descendants restacked by the operation.
+        moved_branches: Vec<String>,
+    },
+    /// A linear stack order was applied.
+    StackReordered {
+        /// Order validated before mutation.
+        original_order: Vec<String>,
+        /// Order applied by the operation.
+        applied_order: Vec<String>,
+    },
+    /// A transaction's before-state was restored.
+    TransactionUndone {
+        /// Restored operation id.
+        operation_id: String,
+        /// Local refs changed.
+        changed_refs: Vec<String>,
+    },
+    /// A transaction's after-state was restored.
+    TransactionRedone {
+        /// Restored operation id.
+        operation_id: String,
+        /// Local refs changed.
+        changed_refs: Vec<String>,
+    },
     /// One or more branches were restacked.
     Restacked {
         /// Branches successfully restacked.
@@ -253,6 +355,8 @@ pub struct TransactionSummary {
     pub branches: Vec<String>,
     /// Whether canonical receipt semantics permit undo.
     pub can_undo: bool,
+    /// Whether canonical receipt semantics permit redo.
+    pub can_redo: bool,
     /// Whether at least one remote ref was changed.
     pub changed_remote_refs: bool,
 }
@@ -271,6 +375,7 @@ impl From<&crate::ops::receipt::OpReceipt> for TransactionSummary {
             },
             branches: receipt.summary_branch_names(),
             can_undo: receipt.can_undo(),
+            can_redo: receipt.can_redo(),
             changed_remote_refs: receipt.changed_remote_refs(),
         }
     }
@@ -285,6 +390,13 @@ pub enum OperationWarning {
         original: String,
         /// Normalized branch name used by the operation.
         normalized: String,
+    },
+    /// Deleting a branch retained descendants that still reference it as an ancestor.
+    DescendantsRetained {
+        /// Deleted branch name.
+        deleted_branch: String,
+        /// Descendants left unchanged.
+        descendants: Vec<String>,
     },
     /// A requested restack boundary was adjusted to preserve stack semantics.
     RestackBoundaryAdjusted {
@@ -644,7 +756,9 @@ mod tests {
 
         assert_eq!(summary.status, TransactionStatus::Succeeded);
         assert_eq!(summary.can_undo, receipt.can_undo());
+        assert_eq!(summary.can_redo, receipt.can_redo());
         assert!(summary.can_undo);
+        assert!(summary.can_redo);
     }
 
     #[test]
@@ -655,7 +769,9 @@ mod tests {
 
         assert_eq!(summary.status, TransactionStatus::Failed);
         assert_eq!(summary.can_undo, receipt.can_undo());
-        assert!(!summary.can_undo);
+        assert_eq!(summary.can_redo, receipt.can_redo());
+        assert!(summary.can_undo);
+        assert!(!summary.can_redo);
     }
 
     #[test]

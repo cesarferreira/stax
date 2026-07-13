@@ -1,4 +1,4 @@
-use crate::engine::BranchMetadata;
+use crate::application::{NoopOperationReporter, RepositorySession};
 use crate::git::GitRepo;
 use anyhow::Result;
 use colored::Colorize;
@@ -52,11 +52,9 @@ pub fn run(branch: Option<String>, force: bool) -> Result<()> {
         }
     }
 
-    // Delete git branch
-    repo.delete_branch(&target, force)?;
-
-    // Delete metadata
-    BranchMetadata::delete(repo.inner(), &target)?;
+    RepositorySession::open(repo.workdir()?)?
+        .delete_branch(&target, force, &mut NoopOperationReporter)
+        .map_err(|error| anyhow::anyhow!("{}\n{}", error.primary, error.action))?;
 
     println!("Deleted branch '{}'", target.red());
 

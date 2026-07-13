@@ -18,6 +18,12 @@ use std::path::PathBuf;
 
 use app::AppServices;
 pub use app::{AppView, ControlKind, activate_control, control_button, control_focus_style, init};
+pub(crate) use app::{
+    CheckoutSelected, CreateBranch, DeleteSelected, FocusStackSearch, MoveSelected,
+    OpenPullRequest, OpenRepository, RedoLatest, RefreshRepository, RenameSelected,
+    ReorderSelectedStack, RestackAll, RestackSelected, SubmitStack, ToggleChangesPane,
+    ToggleInspectorPane, ToggleStackPane, UndoLatest,
+};
 pub use workspace::WorkspaceView;
 
 #[cfg(test)]

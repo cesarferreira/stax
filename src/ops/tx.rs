@@ -173,8 +173,26 @@ impl Transaction {
     /// Record the after-OID for a branch
     pub fn record_after(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
         let oid = repo.branch_commit(branch)?;
-        self.receipt.update_local_ref_after(branch, &oid);
+        self.receipt
+            .update_local_ref_after_optional(branch, Some(&oid));
         Ok(())
+    }
+
+    /// Record the current after-state for a branch, including an absent ref.
+    pub fn record_optional_after(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
+        let oid = match repo.inner().find_branch(branch, git2::BranchType::Local) {
+            Ok(reference) => Some(reference.get().peel_to_commit()?.id().to_string()),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        self.receipt
+            .update_local_ref_after_optional(branch, oid.as_deref());
+        Ok(())
+    }
+
+    /// Record the branch that should be checked out after redoing the operation.
+    pub fn set_head_branch_after(&mut self, branch: &str) {
+        self.receipt.head_branch_after = Some(branch.to_string());
     }
 
     /// Record the after-OID for a branch-metadata ref. Pass `branch` (not the
@@ -352,6 +370,72 @@ pub fn print_plan(_kind: &OpKind, summary: &PlanSummary, quiet: bool) {
 mod tests {
     use super::*;
     use crate::ops::receipt::OpStatus;
+
+    fn transaction_for_receipt(
+        receipt: OpReceipt,
+        git_dir: PathBuf,
+        workdir: PathBuf,
+    ) -> Transaction {
+        Transaction {
+            receipt,
+            git_dir,
+            workdir,
+            snapshotted: false,
+            finished: false,
+            quiet: true,
+        }
+    }
+
+    #[test]
+    fn optional_after_records_an_absent_branch() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = git2::Repository::init(temp.path()).unwrap();
+        let repo = GitRepo::open_from_path(temp.path()).unwrap();
+        let mut receipt = OpReceipt::new(
+            "delete-ref".into(),
+            OpKind::Delete,
+            temp.path().display().to_string(),
+            "main".into(),
+            "main".into(),
+        );
+        receipt.add_local_ref("deleted", Some("before"));
+        let mut transaction = transaction_for_receipt(
+            receipt,
+            repository.path().to_path_buf(),
+            temp.path().to_path_buf(),
+        );
+
+        transaction.record_optional_after(&repo, "deleted").unwrap();
+        let finalized = transaction.finish_ok_preserving_receipt();
+
+        let entry = &finalized.receipt.local_refs[0];
+        assert!(entry.after_recorded);
+        assert_eq!(entry.oid_after, None);
+        assert!(finalized.receipt.can_redo());
+    }
+
+    #[test]
+    fn transaction_records_the_post_operation_checkout_branch() {
+        let temp = tempfile::tempdir().unwrap();
+        let receipt = OpReceipt::new(
+            "rename-head".into(),
+            OpKind::Rename,
+            temp.path().display().to_string(),
+            "main".into(),
+            "old".into(),
+        );
+        let mut transaction = transaction_for_receipt(
+            receipt,
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+        );
+
+        transaction.set_head_branch_after("new");
+        let finalized = transaction.finish_ok_preserving_receipt();
+
+        assert_eq!(finalized.receipt.undo_head_branch(), "old");
+        assert_eq!(finalized.receipt.redo_head_branch(), "new");
+    }
 
     #[test]
     fn successful_finalization_preserves_receipt_when_persistence_fails() {

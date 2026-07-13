@@ -352,6 +352,7 @@ fn render_warnings(warnings: &[OperationWarning]) {
                 println!("  {}: {}", worktree.display(), diagnostic);
             }
             OperationWarning::BranchNameNormalized { .. }
+            | OperationWarning::DescendantsRetained { .. }
             | OperationWarning::SubmitReviewersUnsupported { .. }
             | OperationWarning::SubmitNativeStackAdvisory { .. } => {}
         }

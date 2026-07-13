@@ -275,6 +275,46 @@ impl RepositorySession {
             OperationRequest::CreateBranch { name, parent } => {
                 self.create_empty_branch_unframed(&request, name, parent, reporter)
             }
+            OperationRequest::RenameBranch { branch, new_name } => {
+                self.rename_branch_unframed(&request, branch, new_name, reporter)
+            }
+            OperationRequest::DeleteBranch { branch, force } => {
+                self.delete_branch_unframed(&request, branch, *force, reporter)
+            }
+            OperationRequest::MoveSubtree {
+                source,
+                new_parent,
+                auto_stash,
+            } => self.move_subtree_unframed(&request, source, new_parent, *auto_stash, reporter),
+            OperationRequest::ReorderStack {
+                original_order,
+                proposed_order,
+                auto_stash,
+            } => self.reorder_stack_unframed(
+                &request,
+                original_order,
+                proposed_order,
+                *auto_stash,
+                reporter,
+            ),
+            OperationRequest::UndoTransaction {
+                operation_id,
+                update_remote,
+            } => self.undo_transaction_unframed(
+                &request,
+                operation_id.as_deref(),
+                *update_remote,
+                reporter,
+            ),
+            OperationRequest::RedoTransaction {
+                operation_id,
+                update_remote,
+            } => self.redo_transaction_unframed(
+                &request,
+                operation_id.as_deref(),
+                *update_remote,
+                reporter,
+            ),
             OperationRequest::Restack { scope, auto_stash } => {
                 self.restack_unframed(&request, scope.clone(), *auto_stash, reporter)
             }

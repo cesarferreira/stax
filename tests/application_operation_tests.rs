@@ -198,6 +198,502 @@ fn create_rejects_rebase_in_progress_before_creating_a_ref() {
     assert!(!repo.list_branches().contains(&"child".to_string()));
 }
 
+#[test]
+fn rename_updates_ref_metadata_children_and_returns_undoable_receipt() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["parent", "child"]);
+    repo.git(&["checkout", &branches[0]]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .rename_branch(&branches[0], "renamed", &mut NoopOperationReporter)
+        .unwrap();
+
+    assert_eq!(repo.current_branch(), "renamed");
+    assert!(!repo.list_branches().contains(&branches[0]));
+    assert!(repo.get_children("renamed").contains(&branches[1]));
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::BranchRenamed {
+            ref old_name,
+            ref new_name,
+        } if old_name == &branches[0] && new_name == "renamed"
+    ));
+    assert!(receipt.transaction.as_ref().is_some_and(|tx| {
+        tx.status == TransactionStatus::Succeeded && tx.can_undo && tx.can_redo
+    }));
+}
+
+#[test]
+fn rename_rejects_the_trunk_branch_without_changing_refs() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .rename_branch("main", "renamed", &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::PreconditionFailed);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert_eq!(repo.current_branch(), "main");
+    assert_eq!(receipt_count(&repo), 0);
+}
+
+#[test]
+fn rename_rejects_a_non_current_branch_without_changing_refs() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["parent", "child"]);
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .rename_branch(&branches[0], "renamed", &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::PreconditionFailed);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert!(repo.list_branches().contains(&branches[0]));
+    assert!(!repo.list_branches().contains(&"renamed".to_string()));
+    assert_eq!(receipt_count(&repo), 0);
+}
+
+#[test]
+fn rename_rejects_invalid_and_colliding_names_before_writing_a_receipt() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["parent", "child"]);
+
+    for new_name in ["///", branches[0].as_str()] {
+        let error = RepositorySession::open(repo.path())
+            .unwrap()
+            .rename_branch(&branches[1], new_name, &mut NoopOperationReporter)
+            .unwrap_err();
+        assert_eq!(error.kind, OperationErrorKind::InvalidInput);
+        assert_eq!(error.side_effects, OperationSideEffects::None);
+    }
+
+    assert_eq!(repo.current_branch(), branches[1]);
+    assert_eq!(receipt_count(&repo), 0);
+}
+
+#[test]
+fn delete_removes_the_branch_and_returns_an_undoable_receipt() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["feature"]).remove(0);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .delete_branch(&branch, true, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert!(!repo.list_branches().contains(&branch));
+    assert!(
+        !repo
+            .git(&["show-ref", "--verify", "refs/branch-metadata/feature"])
+            .status
+            .success()
+    );
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::BranchDeleted {
+            ref branch,
+            ref retained_descendants,
+        } if branch == "feature" && retained_descendants.is_empty()
+    ));
+    assert!(receipt.transaction.as_ref().is_some_and(|tx| {
+        tx.status == TransactionStatus::Succeeded && tx.can_undo && tx.can_redo
+    }));
+}
+
+#[test]
+fn delete_rejects_trunk_current_and_missing_branches_without_a_receipt() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["feature"]).remove(0);
+
+    for target in ["main", branch.as_str(), "missing"] {
+        let error = RepositorySession::open(repo.path())
+            .unwrap()
+            .delete_branch(target, true, &mut NoopOperationReporter)
+            .unwrap_err();
+        assert!(matches!(
+            error.kind,
+            OperationErrorKind::InvalidInput | OperationErrorKind::PreconditionFailed
+        ));
+        assert_eq!(error.side_effects, OperationSideEffects::None);
+    }
+
+    assert!(repo.list_branches().contains(&branch));
+    assert_eq!(receipt_count(&repo), 0);
+}
+
+#[test]
+fn delete_without_force_rejects_an_unmerged_branch() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["feature"]).remove(0);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .delete_branch(&branch, false, &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::PreconditionFailed);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert!(repo.list_branches().contains(&branch));
+}
+
+#[test]
+fn delete_succeeds_when_the_target_has_no_stack_metadata() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    repo.git(&["branch", "untracked"]).assert_success();
+
+    RepositorySession::open(repo.path())
+        .unwrap()
+        .delete_branch("untracked", true, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert!(!repo.list_branches().contains(&"untracked".to_string()));
+}
+
+#[test]
+fn delete_retains_descendants_and_their_existing_parent_metadata() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["parent", "child"]);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .delete_branch(&branches[0], true, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert!(!repo.list_branches().contains(&branches[0]));
+    assert!(repo.list_branches().contains(&branches[1]));
+    let metadata =
+        TestRepo::stdout(&repo.git(&["show", &format!("refs/branch-metadata/{}", branches[1])]));
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(
+        metadata["parentBranchName"].as_str(),
+        Some(branches[0].as_str())
+    );
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::BranchDeleted {
+            ref retained_descendants,
+            ..
+        } if retained_descendants == &vec![branches[1].clone()]
+    ));
+    assert!(matches!(
+        receipt.warnings.as_slice(),
+        [stax::application::OperationWarning::DescendantsRetained {
+            deleted_branch,
+            descendants,
+        }] if deleted_branch == &branches[0] && descendants == &vec![branches[1].clone()]
+    ));
+}
+
+#[test]
+fn move_subtree_preserves_the_original_checkout() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["a", "b"]);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .move_subtree(&branches[1], "main", false, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert_eq!(repo.current_branch(), "main");
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::SubtreeMoved {
+            ref source,
+            ref new_parent,
+            ..
+        } if source == &branches[1] && new_parent == "main"
+    ));
+    assert!(receipt.transaction.as_ref().is_some_and(|tx| {
+        tx.status == TransactionStatus::Succeeded && tx.can_undo && tx.can_redo
+    }));
+    let metadata =
+        TestRepo::stdout(&repo.git(&["show", &format!("refs/branch-metadata/{}", branches[1])]));
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(metadata["parentBranchName"].as_str(), Some("main"));
+}
+
+#[test]
+fn move_subtree_to_the_existing_parent_is_a_noop() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["a", "b"]);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .move_subtree(
+            &branches[1],
+            &branches[0],
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap();
+
+    assert_eq!(receipt.side_effects, OperationSideEffects::None);
+    assert!(receipt.transaction.is_none());
+    assert_eq!(receipt_count(&repo), 0);
+}
+
+#[test]
+fn move_subtree_rejects_trunk_missing_metadata_parent_and_cycles() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["a", "b"]);
+    repo.git(&["branch", "untracked"]).assert_success();
+
+    for (source, parent) in [
+        ("main", branches[0].as_str()),
+        ("untracked", "main"),
+        (branches[1].as_str(), "missing"),
+        (branches[0].as_str(), branches[1].as_str()),
+    ] {
+        let error = RepositorySession::open(repo.path())
+            .unwrap()
+            .move_subtree(source, parent, false, &mut NoopOperationReporter)
+            .unwrap_err();
+        assert!(matches!(
+            error.kind,
+            OperationErrorKind::InvalidInput | OperationErrorKind::PreconditionFailed
+        ));
+        assert_eq!(error.side_effects, OperationSideEffects::None);
+    }
+}
+
+#[test]
+fn move_subtree_reports_dirty_worktree_and_supports_auto_stash_retry() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["a", "b"]);
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("dirty.txt", "keep me");
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .move_subtree(&branches[1], "main", false, &mut NoopOperationReporter)
+        .unwrap_err();
+    assert_eq!(error.kind, OperationErrorKind::DirtyWorktree);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+
+    RepositorySession::open(repo.path())
+        .unwrap()
+        .move_subtree(&branches[1], "main", true, &mut NoopOperationReporter)
+        .unwrap();
+    assert_eq!(repo.current_branch(), "main");
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("dirty.txt")).unwrap(),
+        "keep me"
+    );
+}
+
+#[test]
+fn reorder_stack_applies_a_three_branch_order_and_restores_checkout() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let original = repo.create_stack(&["a", "b", "c"]);
+    let proposed = vec![
+        original[2].clone(),
+        original[0].clone(),
+        original[1].clone(),
+    ];
+    let checkout = repo.current_branch();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .reorder_stack(&original, &proposed, false, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert_eq!(repo.current_branch(), checkout);
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::StackReordered {
+            ref original_order,
+            ref applied_order,
+        } if original_order == &original && applied_order == &proposed
+    ));
+    assert!(
+        receipt
+            .transaction
+            .as_ref()
+            .is_some_and(|tx| tx.can_undo && tx.can_redo)
+    );
+}
+
+#[test]
+fn reorder_stack_unchanged_order_is_a_noop() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let order = repo.create_stack(&["a", "b"]);
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .reorder_stack(&order, &order, false, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert_eq!(receipt.side_effects, OperationSideEffects::None);
+    assert!(receipt.transaction.is_none());
+}
+
+#[test]
+fn reorder_stack_rejects_invalid_stale_and_forked_previews() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let order = repo.create_stack(&["a", "b"]);
+
+    let invalid = vec![order[0].clone(), order[0].clone()];
+    let stale = vec![order[1].clone(), order[0].clone()];
+    for original in [&invalid, &stale] {
+        let error = RepositorySession::open(repo.path())
+            .unwrap()
+            .reorder_stack(original, &order, false, &mut NoopOperationReporter)
+            .unwrap_err();
+        assert!(matches!(
+            error.kind,
+            OperationErrorKind::InvalidInput | OperationErrorKind::PreconditionFailed
+        ));
+        assert_eq!(error.side_effects, OperationSideEffects::None);
+    }
+
+    repo.git(&["checkout", &order[0]]).assert_success();
+    let sibling = repo.create_stack(&["sibling"]).remove(0);
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .reorder_stack(
+            &order,
+            &[order[1].clone(), order[0].clone()],
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+    assert_eq!(error.kind, OperationErrorKind::PreconditionFailed);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert!(repo.list_branches().contains(&sibling));
+}
+
+#[test]
+fn reorder_stack_reports_dirty_worktree_before_mutation() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let order = repo.create_stack(&["a", "b"]);
+    repo.create_file("dirty.txt", "keep");
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .reorder_stack(
+            &order,
+            &[order[1].clone(), order[0].clone()],
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::DirtyWorktree);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+}
+
+#[test]
+fn undo_and_redo_round_trip_a_local_rename() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["old"]).remove(0);
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let renamed = session
+        .rename_branch(&branch, "new", &mut NoopOperationReporter)
+        .unwrap();
+    let operation_id = renamed.transaction.unwrap().id;
+
+    session
+        .undo_transaction(Some(&operation_id), false, &mut NoopOperationReporter)
+        .unwrap();
+    assert_eq!(repo.current_branch(), branch);
+    assert!(repo.list_branches().contains(&"old".to_string()));
+    assert!(!repo.list_branches().contains(&"new".to_string()));
+
+    session
+        .redo_transaction(Some(&operation_id), false, &mut NoopOperationReporter)
+        .unwrap();
+    assert_eq!(repo.current_branch(), "new");
+    assert!(!repo.list_branches().contains(&"old".to_string()));
+    assert!(repo.list_branches().contains(&"new".to_string()));
+}
+
+#[test]
+fn undo_and_redo_round_trip_a_local_delete() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["deleted"]).remove(0);
+    repo.git(&["checkout", "main"]).assert_success();
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let deleted = session
+        .delete_branch(&branch, true, &mut NoopOperationReporter)
+        .unwrap();
+    let operation_id = deleted.transaction.unwrap().id;
+
+    session
+        .undo_transaction(Some(&operation_id), false, &mut NoopOperationReporter)
+        .unwrap();
+    assert!(repo.list_branches().contains(&branch));
+
+    session
+        .redo_transaction(Some(&operation_id), false, &mut NoopOperationReporter)
+        .unwrap();
+    assert!(!repo.list_branches().contains(&branch));
+    assert_eq!(repo.current_branch(), "main");
+}
+
+#[test]
+fn undo_reports_a_missing_operation_without_side_effects() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .undo_transaction(Some("missing-operation"), false, &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::InvalidInput);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+}
+
+#[test]
+fn undo_rejects_a_dirty_worktree_without_changing_refs() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["old"]).remove(0);
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let renamed = session
+        .rename_branch(&branch, "new", &mut NoopOperationReporter)
+        .unwrap();
+    repo.create_file("dirty.txt", "keep");
+
+    let error = session
+        .undo_transaction(
+            renamed.transaction.as_ref().map(|tx| tx.id.as_str()),
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::DirtyWorktree);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert_eq!(repo.current_branch(), "new");
+}
+
 #[tokio::test]
 async fn pull_request_network_fallback_returns_runtime_error_inside_tokio() {
     let repo = TestRepo::new();

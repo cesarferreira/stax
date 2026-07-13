@@ -339,7 +339,7 @@ If the excluded parent has local-only commits, scoped submit still refuses and a
 
 ### `st gui`
 
-- `st gui` launches the Phase 2 unsigned native macOS GUI developer preview for the current directory.
+- `st gui` launches the Phase 3 unsigned native macOS GUI developer preview for the current directory.
 - `st gui <path>` launches it for an explicit repository path.
 - The launcher canonicalizes the selected path before forwarding it to the app.
 - macOS support is required; other platforms return an actionable unsupported-platform error.
@@ -348,7 +348,7 @@ If the excluded parent has local-only commits, scoped submit still refuses and a
 - `-n` is intentional: every invocation starts a fresh app process/window for one repository instead of reusing an existing instance.
 - If the bundle is missing or LaunchServices fails, run `make install-gui-app` and verify `$HOME/Applications/Stax.app`.
 
-The GUI can check out the selected branch, create an explicit-name empty child branch, restack selected branches or all tracked branches, confirm stash-and-restack for dirty worktrees, submit the current stack as Draft with explicit confirmation and no CLI prompts or auto-opened PR pages, and Open PR for a selected branch without checkout.
+The GUI can search branches; check out, create, rename, delete, move, and reorder eligible local branches; restack selected branches or all tracked branches; submit the current stack as Draft; Open PR without checkout; and undo/redo receipts whose transaction is fully local. Rename remains local-only. Delete shows affected descendants. Move and reorder preview their exact plans and require a second explicit auto-stash confirmation after a dirty-worktree rejection. `/` focuses search, `1`/`2`/`3` toggle panes, draggable widths and visibility persist per canonical repository, and native menus dispatch the same guarded actions as buttons and shortcuts. Remote-effect receipts keep CLI recovery guidance. Final packaging, identity, release artifacts, signing, and notarization remain Phase 4 work.
 
 ### `st get`
 

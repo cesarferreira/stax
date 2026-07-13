@@ -111,7 +111,7 @@ st --version
 
 ### Native macOS GUI developer preview
 
-Phase 2 includes an unsigned local developer preview of the native macOS app. Build the bundle without installing it, or install it into your user Applications folder:
+Phase 3 includes an unsigned local developer preview of the native macOS app. Build the bundle without installing it, or install it into your user Applications folder:
 
 ```bash
 make gui-app           # Build the unsigned local developer preview
@@ -277,9 +277,9 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 
 ### Native macOS GUI
 
-The developer-preview GUI opens a repository-scoped workspace with stack, changes, and inspector panes. It can check out the selected branch, create an explicit-name empty child branch, restack the selected branch or all tracked branches, stash-and-restack after an explicit dirty-worktree confirmation, submit the current stack as Draft, and open the selected PR without checking it out.
+The developer-preview GUI opens a repository-scoped workspace with searchable Stack, Changes, and Inspector panes. It can check out, create, rename, delete, move, and reorder local branches; restack the selected branch or all tracked branches; submit the current stack as Draft; open the selected PR; and safely undo or redo fully local recorded operations. Destructive and history-rewriting actions show exact previews and confirmations, including explicit auto-stash follow-ups for dirty move/reorder/restack flows.
 
-Submit is always confirmed first, pushes the current stack as Draft, and does not show CLI prompts or auto-open PR pages. The GUI uses typed repository operations rather than shelling out to `st`, so `st gui [path]` only launches the app.
+Use `/` to search, `1`/`2`/`3` to toggle panes, and drag dividers to resize them; visibility and widths persist per canonical repository. Native menus and keyboard shortcuts dispatch the same typed actions as the buttons. Submit is always confirmed first, pushes the current stack as Draft, and does not show CLI prompts or auto-open PR pages. `st gui [path]` only launches the app.
 
 → [GUI guide](docs/interface/gui.md)
 

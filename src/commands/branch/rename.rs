@@ -1,5 +1,5 @@
+use crate::application::{NoopOperationReporter, RepositorySession};
 use crate::config::Config;
-use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -50,28 +50,11 @@ pub fn run(
         return Ok(());
     }
 
-    // Check if new name already exists
-    if repo.branch_commit(&new_name).is_ok() {
-        anyhow::bail!("Branch '{}' already exists", new_name);
-    }
-
-    // Load stack to find children that reference this branch
-    let stack = Stack::load(&repo)?;
-
-    // 1. Rename the local branch
-    let status = Command::new("git")
-        .args(["branch", "-m", &old_name, &new_name])
-        .current_dir(workdir)
-        .status()
-        .context("Failed to rename branch")?;
-
-    if !status.success() {
-        anyhow::bail!(
-            "Failed to rename branch from '{}' to '{}'",
-            old_name,
-            new_name
-        );
-    }
+    RepositorySession::open(workdir)?.rename_branch(
+        &old_name,
+        &new_name,
+        &mut NoopOperationReporter,
+    )?;
 
     println!(
         "✓ Renamed branch '{}' → '{}'",
@@ -79,27 +62,7 @@ pub fn run(
         new_name.green()
     );
 
-    // 2. Update metadata - copy old metadata to new branch name
-    if let Some(meta) = BranchMetadata::read(repo.inner(), &old_name)? {
-        meta.write(repo.inner(), &new_name)?;
-        crate::git::refs::delete_metadata(repo.inner(), &old_name)?;
-    }
-
-    // 3. Update any children that have this branch as parent
-    for (child_name, child_info) in &stack.branches {
-        if child_info.parent.as_deref() == Some(&old_name) {
-            if let Some(mut meta) = BranchMetadata::read(repo.inner(), child_name)? {
-                meta.parent_branch_name = new_name.clone();
-                meta.write(repo.inner(), child_name)?;
-                println!(
-                    "  Updated child '{}' to reference new parent",
-                    child_name.cyan()
-                );
-            }
-        }
-    }
-
-    // 4. Handle remote branch
+    // Handle remote branch
     let remote_name = config.remote_name();
     let remote_branches =
         crate::remote::get_remote_branches(workdir, remote_name).unwrap_or_default();
@@ -154,7 +117,7 @@ pub fn run(
         }
     }
 
-    // 5. Optionally edit commit message
+    // Optionally edit commit message
     let should_edit = if edit_message {
         true
     } else if is_interactive {

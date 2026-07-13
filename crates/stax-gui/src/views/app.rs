@@ -1,7 +1,10 @@
 #[cfg(test)]
 use super::{changes_pane, inspector_pane, stack_pane};
 use super::{operation_overlay, text_input::BranchNameInput};
-use super::{welcome::WelcomeView, workspace::WorkspaceView};
+use super::{
+    welcome::WelcomeView,
+    workspace::{PaneDivider, PaneKind, WorkspaceView},
+};
 use crate::hydration::{
     BranchHydrationService, CiHydrationRequest, DetailsHydrationRequest, DiffHydrationRequest,
     HydrationCoordinator, NativeBranchHydrationService,
@@ -9,14 +12,18 @@ use crate::hydration::{
 use crate::operation::{
     BrowserService, NativeBrowserService, NativeOperationService, OperationService,
 };
-use crate::preferences::RecentRepositories;
+#[cfg(test)]
+use crate::preferences::TransientWorkspacePreferences;
+use crate::preferences::{RecentRepositories, WorkspacePreferenceStore, WorkspacePreferencesFile};
 use crate::state::{InteractionState, SelectionDirection};
 use crate::theme::{SYSTEM_UI_FONT, Theme};
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, PathPromptOptions,
-    Render, SharedString, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled as _,
-    Subscription, Window, actions, div, px,
+    InteractiveElement as _, IntoElement, KeyBinding, MouseMoveEvent, MouseUpEvent,
+    ParentElement as _, PathPromptOptions, Pixels, Render, SharedString, Stateful,
+    StatefulInteractiveElement as _, StyleRefinement, Styled as _, Subscription, Window, actions,
+    div, px,
 };
 use stax::application::{
     BranchDiff, DetailRequestToken, OperationError, OperationErrorDetails, OperationErrorKind,
@@ -39,6 +46,12 @@ actions!(
         RefreshRepository,
         CheckoutSelected,
         CreateBranch,
+        RenameSelected,
+        DeleteSelected,
+        MoveSelected,
+        ReorderSelectedStack,
+        UndoLatest,
+        RedoLatest,
         RestackSelected,
         RestackAll,
         SubmitStack,
@@ -47,6 +60,11 @@ actions!(
         DismissOverlay,
         DismissOperationBanner,
         OpenReceiptUrl,
+        ToggleStackPane,
+        ToggleChangesPane,
+        ToggleInspectorPane,
+        FocusStackSearch,
+        ClearStackSearch,
     ]
 );
 
@@ -75,6 +93,7 @@ pub struct AppServices {
     operation: Arc<dyn OperationService>,
     #[allow(dead_code)]
     browser: Arc<dyn BrowserService>,
+    workspace_preferences: Arc<dyn WorkspacePreferenceStore>,
 }
 
 impl AppServices {
@@ -83,14 +102,18 @@ impl AppServices {
         picker: Rc<dyn RepositoryPicker>,
         recents: Arc<dyn RecentRepositoryStore>,
     ) -> Self {
-        Self::with_hydration(
+        Self::with_all_services(
             loader,
             picker,
             recents,
             Arc::new(NativeBranchHydrationService),
+            Arc::new(NativeOperationService),
+            Arc::new(NativeBrowserService),
+            Arc::new(WorkspacePreferencesFile::default()),
         )
     }
 
+    #[cfg(test)]
     pub(super) fn with_hydration(
         loader: Arc<dyn SnapshotLoader>,
         picker: Rc<dyn RepositoryPicker>,
@@ -107,6 +130,7 @@ impl AppServices {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn with_operation_services(
         loader: Arc<dyn SnapshotLoader>,
         picker: Rc<dyn RepositoryPicker>,
@@ -115,6 +139,45 @@ impl AppServices {
         operation: Arc<dyn OperationService>,
         browser: Arc<dyn BrowserService>,
     ) -> Self {
+        Self::with_all_services(
+            loader,
+            picker,
+            recents,
+            hydration,
+            operation,
+            browser,
+            Arc::new(TransientWorkspacePreferences::default()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_workspace_preferences(
+        loader: Arc<dyn SnapshotLoader>,
+        picker: Rc<dyn RepositoryPicker>,
+        recents: Arc<dyn RecentRepositoryStore>,
+        hydration: Arc<dyn BranchHydrationService>,
+        workspace_preferences: Arc<dyn WorkspacePreferenceStore>,
+    ) -> Self {
+        Self::with_all_services(
+            loader,
+            picker,
+            recents,
+            hydration,
+            Arc::new(NativeOperationService),
+            Arc::new(NativeBrowserService),
+            workspace_preferences,
+        )
+    }
+
+    fn with_all_services(
+        loader: Arc<dyn SnapshotLoader>,
+        picker: Rc<dyn RepositoryPicker>,
+        recents: Arc<dyn RecentRepositoryStore>,
+        hydration: Arc<dyn BranchHydrationService>,
+        operation: Arc<dyn OperationService>,
+        browser: Arc<dyn BrowserService>,
+        workspace_preferences: Arc<dyn WorkspacePreferenceStore>,
+    ) -> Self {
         Self {
             loader,
             picker,
@@ -122,6 +185,7 @@ impl AppServices {
             hydration,
             operation,
             browser,
+            workspace_preferences,
         }
     }
 
@@ -259,9 +323,19 @@ pub struct AppView {
     branch_input: Option<Entity<BranchNameInput>>,
     branch_input_text: String,
     branch_input_observation: Option<Subscription>,
+    search_input: Option<Entity<BranchNameInput>>,
+    search_input_observation: Option<Subscription>,
     overlay_return_focus: Option<FocusHandle>,
+    pane_drag: Option<PaneDrag>,
     #[cfg(test)]
     copied_diagnostics: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaneDrag {
+    divider: PaneDivider,
+    last_x: Pixels,
+    changed: bool,
 }
 
 impl AppView {
@@ -294,7 +368,10 @@ impl AppView {
             branch_input: None,
             branch_input_text: String::new(),
             branch_input_observation: None,
+            search_input: None,
+            search_input_observation: None,
             overlay_return_focus: None,
+            pane_drag: None,
             #[cfg(test)]
             copied_diagnostics: None,
         };
@@ -347,6 +424,133 @@ impl AppView {
         match &mut self.mode {
             AppMode::Workspace(workspace) => Some(workspace),
             AppMode::Welcome(_) | AppMode::Opening(_) | AppMode::Error(_) => None,
+        }
+    }
+
+    fn persist_workspace_preferences(&mut self) {
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        let repository = workspace.state().snapshot().repository_root.clone();
+        let preferences = workspace.preferences().clone();
+        if let Err(error) = self
+            .services
+            .workspace_preferences
+            .save(&repository, &preferences)
+        {
+            self.set_inline_error(format!("Could not save workspace layout: {error}"));
+        }
+    }
+
+    fn toggle_pane(&mut self, pane: PaneKind, cx: &mut Context<Self>) {
+        if self
+            .workspace_mut()
+            .is_some_and(|workspace| workspace.toggle_pane(pane))
+        {
+            self.persist_workspace_preferences();
+            cx.notify();
+        }
+    }
+
+    fn install_search_input(&mut self, cx: &mut Context<Self>) {
+        let input = cx.new(BranchNameInput::new_search);
+        let observation = cx.observe(&input, |app, input, cx| {
+            let query = input.read(cx).text().to_string();
+            if let Some(workspace) = app.workspace_mut()
+                && workspace.state().search_query() != query
+            {
+                workspace.set_search_query(query);
+            }
+            cx.notify();
+        });
+        self.search_input = Some(input);
+        self.search_input_observation = Some(observation);
+    }
+
+    fn focus_stack_search_action(
+        &mut self,
+        _: &FocusStackSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace().is_none() {
+            return;
+        }
+        if self
+            .workspace()
+            .is_some_and(|workspace| !workspace.preferences().visibility.stack)
+        {
+            self.toggle_pane(PaneKind::Stack, cx);
+        }
+        if let Some(input) = &self.search_input {
+            input.read(cx).focus_handle().focus(window);
+        }
+    }
+
+    fn clear_stack_search_action(
+        &mut self,
+        _: &ClearStackSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(input) = &self.search_input {
+            input.update(cx, |input, cx| input.set_text(String::new(), cx));
+        } else if let Some(workspace) = self.workspace_mut() {
+            workspace.set_search_query(String::new());
+        }
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    pub(super) fn resize_panes(
+        &mut self,
+        divider: PaneDivider,
+        delta: f32,
+        persist: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let changed = self
+            .workspace_mut()
+            .is_some_and(|workspace| workspace.resize_panes(divider, delta));
+        if changed {
+            if persist {
+                self.persist_workspace_preferences();
+            }
+            cx.notify();
+        }
+        changed
+    }
+
+    pub(super) fn begin_pane_drag(&mut self, divider: PaneDivider, x: Pixels) {
+        self.pane_drag = Some(PaneDrag {
+            divider,
+            last_x: x,
+            changed: false,
+        });
+    }
+
+    fn pane_drag_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut drag) = self.pane_drag else {
+            return;
+        };
+        let width = window.viewport_size().width;
+        if width <= px(0.0) {
+            return;
+        }
+        let delta = (event.position.x - drag.last_x) / width;
+        drag.last_x = event.position.x;
+        drag.changed |= self.resize_panes(drag.divider, delta, false, cx);
+        self.pane_drag = Some(drag);
+    }
+
+    fn pane_drag_end(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        if self.pane_drag.take().is_some_and(|drag| drag.changed) {
+            self.persist_workspace_preferences();
         }
     }
 
@@ -542,6 +746,44 @@ impl AppView {
         self.branch_input_observation = None;
     }
 
+    fn move_overlay_selection(&mut self, direction: SelectionDirection) -> bool {
+        let Some(overlay) = self.operation_overlay.as_mut() else {
+            return false;
+        };
+        match overlay {
+            operation_overlay::OperationOverlay::PickMoveParent {
+                candidates,
+                selected,
+                ..
+            } => match direction {
+                SelectionDirection::Previous => {
+                    *selected = selected.saturating_sub(1);
+                }
+                SelectionDirection::Next => {
+                    *selected = selected
+                        .saturating_add(1)
+                        .min(candidates.len().saturating_sub(1));
+                }
+            },
+            operation_overlay::OperationOverlay::ReorderStack {
+                proposed, moving, ..
+            } => {
+                let target = match direction {
+                    SelectionDirection::Previous => moving.checked_sub(1),
+                    SelectionDirection::Next => moving
+                        .checked_add(1)
+                        .filter(|target| *target < proposed.len()),
+                };
+                if let Some(target) = target {
+                    proposed.swap(*moving, target);
+                    *moving = target;
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
     fn restore_overlay_focus(&mut self, window: &mut Window) {
         if let Some(focus) = self.overlay_return_focus.take() {
             focus.focus(window);
@@ -568,6 +810,140 @@ impl AppView {
             Some(input),
             cx,
         );
+    }
+
+    fn open_rename_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.operation_overlay.is_some()
+            || self
+                .interaction_state()
+                .is_none_or(|actions| !actions.rename.enabled)
+        {
+            return;
+        }
+        let Some(branch) = self.selected_branch_name() else {
+            return;
+        };
+        let input = cx.new(|cx| BranchNameInput::new(String::new(), window, cx));
+        self.open_overlay(
+            operation_overlay::OperationOverlay::RenameBranch {
+                branch,
+                validation_error: None,
+            },
+            Some(input),
+            cx,
+        );
+    }
+
+    fn open_delete_overlay(&mut self, cx: &mut Context<Self>) {
+        if self.operation_overlay.is_some()
+            || self
+                .interaction_state()
+                .is_none_or(|actions| !actions.delete.enabled)
+        {
+            return;
+        }
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        let Some(branch) = workspace.state().selected_branch().map(str::to_string) else {
+            return;
+        };
+        let descendants = workspace.state().descendants_of(&branch);
+        self.open_overlay(
+            operation_overlay::OperationOverlay::ConfirmDelete {
+                branch,
+                descendants,
+            },
+            None,
+            cx,
+        );
+    }
+
+    fn open_move_overlay(&mut self, cx: &mut Context<Self>) {
+        if self.operation_overlay.is_some()
+            || self
+                .interaction_state()
+                .is_none_or(|actions| !actions.move_subtree.enabled)
+        {
+            return;
+        }
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        let Some(source) = workspace.state().selected_branch().map(str::to_string) else {
+            return;
+        };
+        let candidates = workspace.state().move_parent_candidates(&source);
+        self.open_overlay(
+            operation_overlay::OperationOverlay::PickMoveParent {
+                source,
+                candidates,
+                query: String::new(),
+                selected: 0,
+            },
+            None,
+            cx,
+        );
+    }
+
+    fn open_reorder_overlay(&mut self, cx: &mut Context<Self>) {
+        if self.operation_overlay.is_some()
+            || self
+                .interaction_state()
+                .is_none_or(|actions| !actions.reorder.enabled)
+        {
+            return;
+        }
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        let Some(branch) = workspace.state().selected_branch() else {
+            return;
+        };
+        let Some(original) = workspace.state().linear_stack_order(branch) else {
+            return;
+        };
+        self.open_overlay(
+            operation_overlay::OperationOverlay::ReorderStack {
+                proposed: original.clone(),
+                original,
+                moving: 0,
+            },
+            None,
+            cx,
+        );
+    }
+
+    fn open_history_overlay(&mut self, redo: bool, cx: &mut Context<Self>) {
+        if self.operation_overlay.is_some() {
+            return;
+        }
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        let actions = workspace.state().interaction_state();
+        if (redo && !actions.redo.enabled) || (!redo && !actions.undo.enabled) {
+            return;
+        }
+        let Some(transaction) = workspace
+            .state()
+            .last_receipt()
+            .and_then(|receipt| receipt.transaction.as_ref())
+        else {
+            return;
+        };
+        let overlay = if redo {
+            operation_overlay::OperationOverlay::ConfirmRedo {
+                operation_id: transaction.id.clone(),
+                branches: transaction.branches.clone(),
+            }
+        } else {
+            operation_overlay::OperationOverlay::ConfirmUndo {
+                operation_id: transaction.id.clone(),
+                branches: transaction.branches.clone(),
+            }
+        };
+        self.open_overlay(overlay, None, cx);
     }
 
     fn open_restack_overlay(
@@ -647,6 +1023,122 @@ impl AppView {
                 }
                 self.clear_overlay();
                 self.start_operation(OperationRequest::CreateBranch { name, parent }, window, cx);
+            }
+            operation_overlay::OperationOverlay::RenameBranch { branch, .. } => {
+                let new_name = self.branch_input_text.trim().to_string();
+                if new_name.is_empty() {
+                    self.operation_overlay =
+                        Some(operation_overlay::OperationOverlay::RenameBranch {
+                            branch,
+                            validation_error: Some("Enter a branch name.".into()),
+                        });
+                    cx.notify();
+                    return;
+                }
+                self.clear_overlay();
+                self.start_operation(
+                    OperationRequest::RenameBranch { branch, new_name },
+                    window,
+                    cx,
+                );
+            }
+            operation_overlay::OperationOverlay::ConfirmDelete { branch, .. } => {
+                self.clear_overlay();
+                self.start_operation(
+                    OperationRequest::DeleteBranch {
+                        branch,
+                        force: true,
+                    },
+                    window,
+                    cx,
+                );
+            }
+            operation_overlay::OperationOverlay::PickMoveParent {
+                source,
+                candidates,
+                selected,
+                ..
+            } => {
+                let Some(new_parent) = candidates.get(selected).cloned() else {
+                    return;
+                };
+                let mut branches = vec![source.clone()];
+                if let Some(workspace) = self.workspace() {
+                    branches.extend(workspace.state().descendants_of(&source));
+                }
+                self.operation_overlay = Some(operation_overlay::OperationOverlay::ConfirmMove {
+                    source,
+                    new_parent,
+                    branches,
+                    auto_stash: false,
+                });
+                cx.notify();
+            }
+            operation_overlay::OperationOverlay::ConfirmMove {
+                source,
+                new_parent,
+                auto_stash,
+                ..
+            } => {
+                self.clear_overlay();
+                self.start_operation(
+                    OperationRequest::MoveSubtree {
+                        source,
+                        new_parent,
+                        auto_stash,
+                    },
+                    window,
+                    cx,
+                );
+            }
+            operation_overlay::OperationOverlay::ReorderStack {
+                original, proposed, ..
+            } => {
+                self.operation_overlay =
+                    Some(operation_overlay::OperationOverlay::ConfirmReorder {
+                        original,
+                        proposed,
+                        auto_stash: false,
+                    });
+                cx.notify();
+            }
+            operation_overlay::OperationOverlay::ConfirmReorder {
+                original,
+                proposed,
+                auto_stash,
+            } => {
+                self.clear_overlay();
+                self.start_operation(
+                    OperationRequest::ReorderStack {
+                        original_order: original,
+                        proposed_order: proposed,
+                        auto_stash,
+                    },
+                    window,
+                    cx,
+                );
+            }
+            operation_overlay::OperationOverlay::ConfirmUndo { operation_id, .. } => {
+                self.clear_overlay();
+                self.start_operation(
+                    OperationRequest::UndoTransaction {
+                        operation_id: Some(operation_id),
+                        update_remote: false,
+                    },
+                    window,
+                    cx,
+                );
+            }
+            operation_overlay::OperationOverlay::ConfirmRedo { operation_id, .. } => {
+                self.clear_overlay();
+                self.start_operation(
+                    OperationRequest::RedoTransaction {
+                        operation_id: Some(operation_id),
+                        update_remote: false,
+                    },
+                    window,
+                    cx,
+                );
             }
             operation_overlay::OperationOverlay::ConfirmRestack { scope, .. } => {
                 self.clear_overlay();
@@ -782,6 +1274,57 @@ impl AppView {
                         dirty_worktrees,
                     },
                 )
+            }
+            Err(error)
+                if error.kind == OperationErrorKind::DirtyWorktree
+                    && matches!(
+                        error.request,
+                        OperationRequest::MoveSubtree {
+                            auto_stash: false,
+                            ..
+                        }
+                    ) =>
+            {
+                let OperationRequest::MoveSubtree {
+                    source, new_parent, ..
+                } = &error.request
+                else {
+                    unreachable!()
+                };
+                let mut branches = vec![source.clone()];
+                if let Some(workspace) = self.workspace() {
+                    branches.extend(workspace.state().descendants_of(source));
+                }
+                Some(operation_overlay::OperationOverlay::ConfirmMove {
+                    source: source.clone(),
+                    new_parent: new_parent.clone(),
+                    branches,
+                    auto_stash: true,
+                })
+            }
+            Err(error)
+                if error.kind == OperationErrorKind::DirtyWorktree
+                    && matches!(
+                        error.request,
+                        OperationRequest::ReorderStack {
+                            auto_stash: false,
+                            ..
+                        }
+                    ) =>
+            {
+                let OperationRequest::ReorderStack {
+                    original_order,
+                    proposed_order,
+                    ..
+                } = &error.request
+                else {
+                    unreachable!()
+                };
+                Some(operation_overlay::OperationOverlay::ConfirmReorder {
+                    original: original_order.clone(),
+                    proposed: proposed_order.clone(),
+                    auto_stash: true,
+                })
             }
             _ => None,
         };
@@ -1018,6 +1561,8 @@ impl AppView {
             RootLoadKind::Open => {
                 self.action_error = None;
                 self.clear_overlay();
+                self.search_input = None;
+                self.search_input_observation = None;
                 self.overlay_return_focus = None;
                 self.mode = AppMode::Opening(self.welcome(None, Some(path.clone())));
             }
@@ -1048,9 +1593,15 @@ impl AppView {
             RootLoadKind::Open => match result {
                 Ok(snapshot) => {
                     self.remember_recent(&snapshot.repository_root);
+                    let preferences = self
+                        .services
+                        .workspace_preferences
+                        .load(&snapshot.repository_root);
                     self.action_error = None;
-                    self.mode =
-                        AppMode::Workspace(Box::new(WorkspaceView::from_snapshot(snapshot)));
+                    self.mode = AppMode::Workspace(Box::new(
+                        WorkspaceView::from_snapshot_with_preferences(snapshot, preferences),
+                    ));
+                    self.install_search_input(cx);
                     self.sync_storage_notice();
                 }
                 Err(error) => {
@@ -1310,6 +1861,10 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.move_overlay_selection(SelectionDirection::Previous) {
+            cx.notify();
+            return;
+        }
         if self
             .interaction_state()
             .is_some_and(|actions| !actions.navigation.enabled)
@@ -1326,6 +1881,10 @@ impl AppView {
     }
 
     fn select_next(&mut self, _: &SelectNextBranch, window: &mut Window, cx: &mut Context<Self>) {
+        if self.move_overlay_selection(SelectionDirection::Next) {
+            cx.notify();
+            return;
+        }
         if self
             .interaction_state()
             .is_some_and(|actions| !actions.navigation.enabled)
@@ -1339,6 +1898,33 @@ impl AppView {
             self.hydrate_selection(window, cx);
             cx.notify();
         }
+    }
+
+    fn toggle_stack_pane_action(
+        &mut self,
+        _: &ToggleStackPane,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_pane(PaneKind::Stack, cx);
+    }
+
+    fn toggle_changes_pane_action(
+        &mut self,
+        _: &ToggleChangesPane,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_pane(PaneKind::Changes, cx);
+    }
+
+    fn toggle_inspector_pane_action(
+        &mut self,
+        _: &ToggleInspectorPane,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_pane(PaneKind::Inspector, cx);
     }
 
     fn open_action(&mut self, _: &OpenRepository, window: &mut Window, cx: &mut Context<Self>) {
@@ -1401,6 +1987,60 @@ impl AppView {
         cx: &mut Context<Self>,
     ) {
         self.open_create_overlay(window, cx);
+    }
+
+    pub(super) fn rename_action(
+        &mut self,
+        _: &RenameSelected,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_rename_overlay(window, cx);
+    }
+
+    pub(super) fn delete_action(
+        &mut self,
+        _: &DeleteSelected,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_delete_overlay(cx);
+    }
+
+    pub(super) fn move_action(
+        &mut self,
+        _: &MoveSelected,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_move_overlay(cx);
+    }
+
+    pub(super) fn reorder_action(
+        &mut self,
+        _: &ReorderSelectedStack,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_reorder_overlay(cx);
+    }
+
+    pub(super) fn undo_action(
+        &mut self,
+        _: &UndoLatest,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_history_overlay(false, cx);
+    }
+
+    pub(super) fn redo_action(
+        &mut self,
+        _: &RedoLatest,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_history_overlay(true, cx);
     }
 
     pub(super) fn restack_selected_action(
@@ -1568,30 +2208,124 @@ impl Focusable for AppView {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
+        let search_input = self.search_input.clone();
+        let actions = self.interaction_state();
+        let has_workspace = actions.is_some();
+        let can_open = actions
+            .as_ref()
+            .is_none_or(|actions| actions.open_repository.enabled);
+        let has_overlay = self.operation_overlay.is_some();
         let content = match &self.mode {
             AppMode::Welcome(welcome) | AppMode::Opening(welcome) | AppMode::Error(welcome) => {
                 welcome.render(theme, cx)
             }
-            AppMode::Workspace(workspace) => workspace.render(theme, cx),
+            AppMode::Workspace(workspace) => workspace.render(search_input, theme, cx),
         };
 
         let mut root = div()
             .id("stax-app")
             .key_context("StaxApp")
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::select_previous))
-            .on_action(cx.listener(Self::select_next))
-            .on_action(cx.listener(Self::open_action))
-            .on_action(cx.listener(Self::refresh_action))
-            .on_action(cx.listener(Self::checkout_action))
-            .on_action(cx.listener(Self::create_action))
-            .on_action(cx.listener(Self::restack_selected_action))
-            .on_action(cx.listener(Self::restack_all_action))
-            .on_action(cx.listener(Self::submit_action))
-            .on_action(cx.listener(Self::open_pull_request_action))
-            .on_action(cx.listener(Self::confirm_overlay_action))
-            .on_action(cx.listener(Self::dismiss_overlay_action))
             .on_action(cx.listener(Self::dismiss_operation_banner_action))
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.navigation.enabled),
+                |root| {
+                    root.on_action(cx.listener(Self::select_previous))
+                        .on_action(cx.listener(Self::select_next))
+                },
+            )
+            .when(can_open, |root| {
+                root.on_action(cx.listener(Self::open_action))
+            })
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.refresh.enabled),
+                |root| root.on_action(cx.listener(Self::refresh_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.checkout.enabled),
+                |root| root.on_action(cx.listener(Self::checkout_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.create.enabled),
+                |root| root.on_action(cx.listener(Self::create_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.rename.enabled),
+                |root| root.on_action(cx.listener(Self::rename_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.delete.enabled),
+                |root| root.on_action(cx.listener(Self::delete_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.move_subtree.enabled),
+                |root| root.on_action(cx.listener(Self::move_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.reorder.enabled),
+                |root| root.on_action(cx.listener(Self::reorder_action)),
+            )
+            .when(
+                actions.as_ref().is_some_and(|actions| actions.undo.enabled),
+                |root| root.on_action(cx.listener(Self::undo_action)),
+            )
+            .when(
+                actions.as_ref().is_some_and(|actions| actions.redo.enabled),
+                |root| root.on_action(cx.listener(Self::redo_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.restack.enabled),
+                |root| root.on_action(cx.listener(Self::restack_selected_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.restack_all.enabled),
+                |root| root.on_action(cx.listener(Self::restack_all_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.submit.enabled),
+                |root| root.on_action(cx.listener(Self::submit_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.open_pr.enabled),
+                |root| root.on_action(cx.listener(Self::open_pull_request_action)),
+            )
+            .when(has_overlay, |root| {
+                root.on_action(cx.listener(Self::confirm_overlay_action))
+                    .on_action(cx.listener(Self::dismiss_overlay_action))
+            })
+            .when(has_workspace, |root| {
+                root.on_action(cx.listener(Self::toggle_stack_pane_action))
+                    .on_action(cx.listener(Self::toggle_changes_pane_action))
+                    .on_action(cx.listener(Self::toggle_inspector_pane_action))
+                    .on_action(cx.listener(Self::focus_stack_search_action))
+                    .on_action(cx.listener(Self::clear_stack_search_action))
+            })
+            .on_mouse_move(cx.listener(Self::pane_drag_move))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::pane_drag_end))
             .size_full()
             .relative()
             .border_1()
@@ -1742,12 +2476,22 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("down", SelectNextBranch, Some("StaxApp")),
         KeyBinding::new("enter", CheckoutSelected, Some("StaxApp")),
         KeyBinding::new("n", CreateBranch, Some("StaxApp")),
+        KeyBinding::new("e", RenameSelected, Some("StaxApp")),
+        KeyBinding::new("d", DeleteSelected, Some("StaxApp")),
+        KeyBinding::new("m", MoveSelected, Some("StaxApp")),
+        KeyBinding::new("o", ReorderSelectedStack, Some("StaxApp")),
+        KeyBinding::new("cmd-z", UndoLatest, Some("StaxApp")),
+        KeyBinding::new("cmd-shift-z", RedoLatest, Some("StaxApp")),
         KeyBinding::new("r", RestackSelected, Some("StaxApp")),
         KeyBinding::new("shift-r", RestackAll, Some("StaxApp")),
         KeyBinding::new("s", SubmitStack, Some("StaxApp")),
         KeyBinding::new("p", OpenPullRequest, Some("StaxApp")),
         KeyBinding::new("cmd-o", OpenRepository, Some("StaxApp")),
         KeyBinding::new("cmd-r", RefreshRepository, Some("StaxApp")),
+        KeyBinding::new("1", ToggleStackPane, Some("StaxApp")),
+        KeyBinding::new("2", ToggleChangesPane, Some("StaxApp")),
+        KeyBinding::new("3", ToggleInspectorPane, Some("StaxApp")),
+        KeyBinding::new("/", FocusStackSearch, Some("StaxApp")),
         KeyBinding::new("enter", ConfirmOverlay, Some("StaxApp")),
         KeyBinding::new("escape", DismissOverlay, Some("StaxApp")),
         KeyBinding::new(
@@ -1761,9 +2505,41 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("home", super::text_input::Home, Some("BranchNameInput")),
         KeyBinding::new("end", super::text_input::End, Some("BranchNameInput")),
         KeyBinding::new("n", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new("e", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new("d", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new("m", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new("o", gpui::NoAction, Some("BranchNameInput")),
         KeyBinding::new("r", gpui::NoAction, Some("BranchNameInput")),
         KeyBinding::new("shift-r", gpui::NoAction, Some("BranchNameInput")),
         KeyBinding::new("s", gpui::NoAction, Some("BranchNameInput")),
         KeyBinding::new("p", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new(
+            "backspace",
+            super::text_input::Backspace,
+            Some("StackSearchInput"),
+        ),
+        KeyBinding::new(
+            "delete",
+            super::text_input::Delete,
+            Some("StackSearchInput"),
+        ),
+        KeyBinding::new("left", super::text_input::Left, Some("StackSearchInput")),
+        KeyBinding::new("right", super::text_input::Right, Some("StackSearchInput")),
+        KeyBinding::new("home", super::text_input::Home, Some("StackSearchInput")),
+        KeyBinding::new("end", super::text_input::End, Some("StackSearchInput")),
+        KeyBinding::new("escape", ClearStackSearch, Some("StackSearchInput")),
+        KeyBinding::new("n", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("e", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("d", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("m", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("o", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("r", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("shift-r", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("s", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("p", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("1", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("2", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("3", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("/", gpui::NoAction, Some("StackSearchInput")),
     ]);
 }

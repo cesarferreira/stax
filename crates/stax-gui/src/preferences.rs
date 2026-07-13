@@ -1,9 +1,12 @@
 use anyhow::{Context, Result, ensure};
 use fs4::FileExt;
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::Mutex;
 use tempfile::NamedTempFile;
 
 const MAX_RECENT_REPOSITORIES: usize = 10;
@@ -11,6 +14,255 @@ const MAX_RECENT_REPOSITORIES: usize = 10;
 #[derive(Debug, Clone)]
 pub struct RecentRepositories {
     path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneVisibility {
+    pub stack: bool,
+    pub changes: bool,
+    pub inspector: bool,
+}
+
+impl Default for PaneVisibility {
+    fn default() -> Self {
+        Self {
+            stack: true,
+            changes: true,
+            inspector: true,
+        }
+    }
+}
+
+impl PaneVisibility {
+    pub fn visible_count(self) -> usize {
+        usize::from(self.stack) + usize::from(self.changes) + usize::from(self.inspector)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PaneWidths {
+    pub stack: f32,
+    pub changes: f32,
+    pub inspector: f32,
+}
+
+impl Default for PaneWidths {
+    fn default() -> Self {
+        Self {
+            stack: 0.29,
+            changes: 0.43,
+            inspector: 0.28,
+        }
+    }
+}
+
+impl PaneWidths {
+    fn normalized(self) -> Option<Self> {
+        let values = [self.stack, self.changes, self.inspector];
+        if values
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return None;
+        }
+        let mut normalized = Self {
+            stack: self.stack.clamp(0.15, 0.70),
+            changes: self.changes.clamp(0.15, 0.70),
+            inspector: self.inspector.clamp(0.15, 0.70),
+        };
+        let total = normalized.stack + normalized.changes + normalized.inspector;
+        normalized.stack /= total;
+        normalized.changes /= total;
+        normalized.inspector /= total;
+        Some(normalized)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct WorkspacePreferences {
+    pub visibility: PaneVisibility,
+    pub widths: PaneWidths,
+}
+
+impl WorkspacePreferences {
+    pub(crate) fn normalized(self) -> Option<Self> {
+        if self.visibility.visible_count() == 0 {
+            return None;
+        }
+        Some(Self {
+            visibility: self.visibility,
+            widths: self.widths.normalized()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspacePreferencesFile {
+    path: PathBuf,
+}
+
+impl WorkspacePreferencesFile {
+    pub fn at(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn default_path() -> PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("stax/gui/workspaces.json")
+    }
+
+    pub fn load(&self, repository: &Path) -> WorkspacePreferences {
+        let Ok(repository) = repository.canonicalize() else {
+            return WorkspacePreferences::default();
+        };
+        let Ok(contents) = fs::read(&self.path) else {
+            return WorkspacePreferences::default();
+        };
+        let Ok(document) =
+            serde_json::from_slice::<HashMap<String, WorkspacePreferences>>(&contents)
+        else {
+            return WorkspacePreferences::default();
+        };
+        document
+            .get(&repository.to_string_lossy().to_string())
+            .cloned()
+            .and_then(WorkspacePreferences::normalized)
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, repository: &Path, preferences: &WorkspacePreferences) -> Result<()> {
+        let repository = repository.canonicalize().with_context(|| {
+            format!(
+                "failed to canonicalize workspace repository {}",
+                repository.display()
+            )
+        })?;
+        let preferences = preferences.clone().normalized().unwrap_or_default();
+        let parent = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create workspace preferences directory {}",
+                parent.display()
+            )
+        })?;
+        restrict_directory_permissions(parent)?;
+        let lock_path = parent.join(".workspaces.lock");
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let lock = options.open(&lock_path).with_context(|| {
+            format!(
+                "failed to open workspace preferences lock {}",
+                lock_path.display()
+            )
+        })?;
+        restrict_file_permissions(&lock, &lock_path)?;
+        <File as FileExt>::lock(&lock).with_context(|| {
+            format!(
+                "failed to lock workspace preferences {}",
+                lock_path.display()
+            )
+        })?;
+        let _lock = ExclusiveLock { file: lock };
+
+        let mut document: HashMap<String, WorkspacePreferences> = fs::read(&self.path)
+            .ok()
+            .and_then(|contents| serde_json::from_slice(&contents).ok())
+            .unwrap_or_default();
+        document.insert(repository.to_string_lossy().to_string(), preferences);
+        let mut temporary = NamedTempFile::new_in(parent).with_context(|| {
+            format!(
+                "failed to create temporary workspace preferences in {}",
+                parent.display()
+            )
+        })?;
+        restrict_file_permissions(temporary.as_file(), temporary.path())?;
+        serde_json::to_writer_pretty(temporary.as_file_mut(), &document)
+            .context("failed to serialize workspace preferences")?;
+        temporary.as_file_mut().write_all(b"\n")?;
+        temporary.as_file_mut().flush()?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(&self.path)
+            .map_err(|error| error.error)
+            .with_context(|| {
+                format!(
+                    "failed to atomically replace workspace preferences {}",
+                    self.path.display()
+                )
+            })?;
+        sync_parent_directory(parent)?;
+        Ok(())
+    }
+}
+
+impl Default for WorkspacePreferencesFile {
+    fn default() -> Self {
+        Self::at(Self::default_path())
+    }
+}
+
+pub trait WorkspacePreferenceStore: Send + Sync {
+    fn load(&self, repository: &Path) -> WorkspacePreferences;
+    fn save(
+        &self,
+        repository: &Path,
+        preferences: &WorkspacePreferences,
+    ) -> std::result::Result<(), String>;
+}
+
+impl WorkspacePreferenceStore for WorkspacePreferencesFile {
+    fn load(&self, repository: &Path) -> WorkspacePreferences {
+        WorkspacePreferencesFile::load(self, repository)
+    }
+
+    fn save(
+        &self,
+        repository: &Path,
+        preferences: &WorkspacePreferences,
+    ) -> std::result::Result<(), String> {
+        WorkspacePreferencesFile::save(self, repository, preferences)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct TransientWorkspacePreferences {
+    values: Mutex<HashMap<PathBuf, WorkspacePreferences>>,
+}
+
+#[cfg(test)]
+impl WorkspacePreferenceStore for TransientWorkspacePreferences {
+    fn load(&self, repository: &Path) -> WorkspacePreferences {
+        self.values
+            .lock()
+            .expect("transient workspace preferences poisoned")
+            .get(repository)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn save(
+        &self,
+        repository: &Path,
+        preferences: &WorkspacePreferences,
+    ) -> std::result::Result<(), String> {
+        self.values
+            .lock()
+            .map_err(|_| "transient workspace preferences poisoned".to_string())?
+            .insert(repository.to_path_buf(), preferences.clone());
+        Ok(())
+    }
 }
 
 struct ExclusiveLock {
@@ -271,7 +523,10 @@ fn sync_parent_directory(parent: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::RecentRepositories;
+    use super::{
+        PaneVisibility, PaneWidths, RecentRepositories, WorkspacePreferences,
+        WorkspacePreferencesFile,
+    };
     use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -283,6 +538,54 @@ mod tests {
     const WRITER_STORE_ENV: &str = "STAX_TEST_RECENT_WRITER_STORE";
     const WRITER_REPOSITORY_ENV: &str = "STAX_TEST_RECENT_WRITER_REPOSITORY";
     const WRITER_READY_ENV: &str = "STAX_TEST_RECENT_WRITER_READY";
+
+    #[test]
+    fn workspace_preferences_round_trip_independently_per_repository() {
+        let temp = TempDir::new().unwrap();
+        let first = create_repository(temp.path(), "first-workspace");
+        let second = create_repository(temp.path(), "second-workspace");
+        let store = WorkspacePreferencesFile::at(temp.path().join("preferences/workspaces.json"));
+        let first_preferences = WorkspacePreferences {
+            visibility: PaneVisibility {
+                stack: true,
+                changes: false,
+                inspector: true,
+            },
+            widths: PaneWidths {
+                stack: 0.2,
+                changes: 0.5,
+                inspector: 0.3,
+            },
+        };
+
+        store.save(&first, &first_preferences).unwrap();
+
+        assert_eq!(store.load(&first), first_preferences);
+        assert_eq!(store.load(&second), WorkspacePreferences::default());
+    }
+
+    #[test]
+    fn workspace_preferences_fall_back_for_corrupt_or_invalid_documents() {
+        let temp = TempDir::new().unwrap();
+        let repository = create_repository(temp.path(), "workspace");
+        let path = temp.path().join("preferences/workspaces.json");
+        let store = WorkspacePreferencesFile::at(&path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{not json").unwrap();
+        assert_eq!(store.load(&repository), WorkspacePreferences::default());
+
+        let canonical = repository.canonicalize().unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{"{}":{{"visibility":{{"stack":false,"changes":false,"inspector":false}},"widths":{{"stack":-1.0,"changes":4.0,"inspector":0.0}}}}}}"#,
+                canonical.display()
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(store.load(&repository), WorkspacePreferences::default());
+    }
 
     fn store(temp: &TempDir) -> RecentRepositories {
         RecentRepositories::at(temp.path().join("preferences/recent-repositories.json"))

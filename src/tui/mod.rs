@@ -17,12 +17,8 @@ use crate::application::{
     PullRequestMode, RestackScope, execute_repository_operation,
 };
 use crate::commands::open::open_url_in_browser;
-use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
-use crate::git::RebaseResult;
-use crate::ops::receipt::{OpKind, PlanSummary};
-use crate::ops::tx::{self, Transaction};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::{
     event::{Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
@@ -31,7 +27,6 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::io::Write;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -404,24 +399,13 @@ fn handle_move_picker_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let source = app.move_picker_source.clone();
             app.clear_move_picker();
             app.mode = Mode::Normal;
-            // Run `checkout <source> && upstack onto <target>` so the
-            // reparent operates on the picker's source branch regardless
-            // of where HEAD is — `upstack onto` always reparents the
-            // *current* branch.
-            let mut commands = Vec::new();
-            if app.current_branch != source {
-                commands.push(vec!["checkout".to_string(), source.clone()]);
-            }
-            commands.push(vec![
-                "upstack".to_string(),
-                "onto".to_string(),
-                target.clone(),
-            ]);
-            queue_command(
+            queue_operation(
                 app,
-                commands,
-                format!("Moved '{}' onto '{}'", source, target),
-                Some(source),
+                OperationRequest::MoveSubtree {
+                    source,
+                    new_parent: target,
+                    auto_stash: false,
+                },
             );
         }
         KeyCode::Up => app.move_picker_select_previous(),
@@ -532,16 +516,12 @@ fn handle_confirm_action(
         KeyAction::Char('y') | KeyAction::Char('Y') => {
             match confirm_action {
                 ConfirmAction::Delete(branch) => {
-                    queue_command(
+                    queue_operation(
                         app,
-                        vec![vec![
-                            "branch".to_string(),
-                            "delete".to_string(),
-                            branch.clone(),
-                            "--force".to_string(),
-                        ]],
-                        format!("Deleted '{}'", branch),
-                        Some(app.current_branch.clone()),
+                        OperationRequest::DeleteBranch {
+                            branch: branch.clone(),
+                            force: true,
+                        },
                     );
                 }
                 ConfirmAction::Restack(branch) => {
@@ -597,15 +577,12 @@ fn handle_input_action(app: &mut App, action: KeyAction, input_action: &InputAct
             } else {
                 match input_action {
                     InputAction::Rename => {
-                        queue_command(
+                        queue_operation(
                             app,
-                            vec![vec![
-                                "rename".to_string(),
-                                "--literal".to_string(),
-                                input.clone(),
-                            ]],
-                            format!("Renamed branch to '{}'", input),
-                            Some(input.clone()),
+                            OperationRequest::RenameBranch {
+                                branch: app.current_branch.clone(),
+                                new_name: input.clone(),
+                            },
                         );
                     }
                     InputAction::NewBranch => {
@@ -673,15 +650,12 @@ fn handle_input_key(app: &mut App, key: KeyEvent, input_action: &InputAction) ->
             } else {
                 match input_action {
                     InputAction::Rename => {
-                        queue_command(
+                        queue_operation(
                             app,
-                            vec![vec![
-                                "rename".to_string(),
-                                "--literal".to_string(),
-                                input.clone(),
-                            ]],
-                            format!("Renamed branch to '{}'", input),
-                            Some(input.clone()),
+                            OperationRequest::RenameBranch {
+                                branch: app.current_branch.clone(),
+                                new_name: input.clone(),
+                            },
                         );
                     }
                     InputAction::NewBranch => {
@@ -768,26 +742,13 @@ fn queue_operation(app: &mut App, request: OperationRequest) {
     app.queue_operation(request);
 }
 
-fn queue_command(
-    app: &mut App,
-    commands: Vec<Vec<String>>,
-    success_message: impl Into<String>,
-    preferred_selection: Option<String>,
-) {
-    app.queue_command(commands, success_message, preferred_selection);
-}
-
 fn execute_pending_command(command: &PendingCommand) -> Result<Option<String>> {
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?.to_path_buf();
     drop(repo);
 
-    match &command.action {
-        PendingAction::Operation(request) => execute_pending_operation(&workdir, request.clone()),
-        PendingAction::LegacyCommands(commands) => {
-            execute_legacy_commands(commands, &workdir, command)
-        }
-    }
+    let PendingAction::Operation(request) = &command.action;
+    execute_pending_operation(&workdir, request.clone())
 }
 
 fn execute_pending_operation(
@@ -821,34 +782,8 @@ fn execute_pending_operation(
     }
 }
 
-fn execute_legacy_commands(
-    commands: &[Vec<String>],
-    workdir: &std::path::Path,
-    command: &PendingCommand,
-) -> Result<Option<String>> {
-    let exe = std::env::current_exe().context("Failed to locate current executable")?;
-
-    for args in commands {
-        let status = Command::new(&exe)
-            .args(args)
-            .current_dir(workdir)
-            .stdin(Stdio::null())
-            .status()
-            .with_context(|| format!("Failed to run '{}'", args.join(" ")))?;
-
-        if !status.success() {
-            return Ok(Some(format!("Command failed: {}", args.join(" "))));
-        }
-    }
-
-    Ok(Some(command.success_message.clone()))
-}
-
 /// Apply reorder changes - reparent branches and trigger restack (as single transaction)
 fn apply_reorder_changes(app: &mut App) -> Result<()> {
-    // Get the reparent operations before clearing state
-    let reparent_ops = app.get_reparent_operations();
-
     let state = match app.reorder_state.take() {
         Some(s) => s,
         None => {
@@ -863,11 +798,30 @@ fn apply_reorder_changes(app: &mut App) -> Result<()> {
         return Ok(());
     }
 
-    if reparent_ops.is_empty() {
-        app.set_status("No reparenting needed");
-        return Ok(());
-    }
+    let original_order = state
+        .original_chain
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    let proposed_order = state
+        .pending_chain
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    queue_operation(
+        app,
+        OperationRequest::ReorderStack {
+            original_order,
+            proposed_order,
+            auto_stash: false,
+        },
+    );
+    Ok(())
+}
 
+#[cfg(any())]
+fn legacy_apply_reorder_changes(app: &mut App) -> Result<()> {
+    let reparent_ops = app.get_reparent_operations();
     let branch_word = if reparent_ops.len() == 1 {
         "branch"
     } else {
@@ -1010,6 +964,24 @@ mod tests {
             OperationRequest::CreateBranch {
                 name: "child".into(),
                 parent: "feature".into(),
+            },
+            OperationRequest::RenameBranch {
+                branch: "feature".into(),
+                new_name: "renamed".into(),
+            },
+            OperationRequest::DeleteBranch {
+                branch: "feature".into(),
+                force: true,
+            },
+            OperationRequest::MoveSubtree {
+                source: "feature".into(),
+                new_parent: "main".into(),
+                auto_stash: false,
+            },
+            OperationRequest::ReorderStack {
+                original_order: vec!["a".into(), "b".into()],
+                proposed_order: vec!["b".into(), "a".into()],
+                auto_stash: false,
             },
             OperationRequest::Restack {
                 scope: RestackScope::StackContaining("feature".into()),

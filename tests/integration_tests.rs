@@ -4346,6 +4346,36 @@ fn test_redo_after_undo() {
 }
 
 #[test]
+fn test_cli_undo_and_redo_round_trip_a_rename() {
+    let repo = TestRepo::new();
+    assert!(repo.run_stax(&["bc", "before-rename"]).status.success());
+    let before = repo.current_branch();
+
+    assert!(
+        repo.run_stax(&["rename", "--literal", "after-rename"])
+            .status
+            .success()
+    );
+    assert_eq!(repo.current_branch(), "after-rename");
+
+    assert!(
+        repo.run_stax(&["undo", "--yes", "--no-push"])
+            .status
+            .success()
+    );
+    assert_eq!(repo.current_branch(), before);
+    assert!(!repo.list_branches().contains(&"after-rename".to_string()));
+
+    assert!(
+        repo.run_stax(&["redo", "--yes", "--no-push"])
+            .status
+            .success()
+    );
+    assert_eq!(repo.current_branch(), "after-rename");
+    assert!(!repo.list_branches().contains(&before));
+}
+
+#[test]
 fn test_multiple_restacks_multiple_undos() {
     let repo = TestRepo::new();
 
