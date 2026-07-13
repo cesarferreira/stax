@@ -7,7 +7,7 @@ use crate::hydration::{BranchHydrationService, HydrationFuture};
 use crate::preferences::{
     PaneVisibility, PaneWidths, WorkspacePreferenceStore, WorkspacePreferences,
 };
-use crate::state::LoadState;
+use crate::state::{ActionAvailability, LoadState};
 use gpui::{
     App, KeyDownEvent, KeyUpEvent, Keystroke, MenuItem, Modifiers, MouseButton, TestAppContext,
     point, px,
@@ -1070,7 +1070,11 @@ fn keyboard_workspace_controls_activate_once_and_skip_disabled_controls(cx: &mut
         let _ = view.begin_load(PathBuf::from("/repo"), RootLoadKind::Refresh);
         cx.notify();
     });
-    cx.update(|window, _| window.focus_next());
+    cx.update(|window, _| {
+        window.focus_next();
+        window.focus_next();
+        window.focus_next();
+    });
     cx.simulate_keystrokes("enter");
     assert_eq!(load_calls.load(Ordering::SeqCst), 1);
     assert_eq!(picker_calls.load(Ordering::SeqCst), 0);
@@ -1085,6 +1089,19 @@ fn keyboard_workspace_controls_activate_once_and_skip_disabled_controls(cx: &mut
     });
     assert_eq!(load_calls.load(Ordering::SeqCst), 1);
     assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn disabled_inspector_control_label_keeps_the_reason_visible() {
+    let availability = ActionAvailability {
+        enabled: false,
+        reason: Some("Already checked out".into()),
+    };
+
+    assert_eq!(
+        inspector_pane::control_label("Checkout", &availability),
+        "Checkout — Already checked out"
+    );
 }
 
 #[gpui::test]
@@ -1120,7 +1137,11 @@ fn keyboard_refresh_activates_once_for_enter_and_space(cx: &mut TestAppContext) 
     cx.run_until_parked();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-    cx.update(|window, _| window.focus_next());
+    cx.update(|window, _| {
+        window.focus_next();
+        window.focus_next();
+        window.focus_next();
+    });
     cx.simulate_keystrokes("enter");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     cx.simulate_event(KeyDownEvent {
@@ -1187,6 +1208,12 @@ fn keyboard_stack_row_activates_once_for_enter_and_space(cx: &mut TestAppContext
         cx.update(|_, app| view.read(app).workspace().unwrap().state().generation());
 
     cx.update(|window, _| {
+        window.focus_next();
+        window.focus_next();
+        window.focus_next();
+        window.focus_next();
+        window.focus_next();
+        window.focus_next();
         window.focus_next();
         window.focus_next();
         window.focus_next();

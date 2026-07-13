@@ -2409,50 +2409,6 @@ pub fn control_button(
     }
 }
 
-pub fn mouse_control_button(
-    id: &'static str,
-    label: impl Into<SharedString>,
-    kind: ControlKind,
-    enabled: bool,
-    theme: Theme,
-) -> Stateful<Div> {
-    let label = label.into();
-    let base = div()
-        .id(id)
-        .debug_selector(move || id.into())
-        .h(px(28.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .px_3()
-        .rounded_md()
-        .border_1()
-        .text_xs()
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .child(label);
-
-    if !enabled {
-        return base
-            .border_color(theme.border)
-            .bg(theme.disabled_surface)
-            .text_color(theme.disabled_text);
-    }
-
-    let base = base.cursor_pointer().active(|style| style.opacity(0.82));
-    match kind {
-        ControlKind::Primary => base
-            .border_color(theme.accent)
-            .bg(theme.accent)
-            .text_color(theme.accent_text)
-            .hover(move |style| style.bg(theme.accent.alpha(0.88))),
-        ControlKind::Secondary => base
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
-            .text_color(theme.text)
-            .hover(move |style| style.bg(theme.surface_selected)),
-    }
-}
-
 pub fn activate_control(
     control: Stateful<Div>,
     cx: &Context<AppView>,

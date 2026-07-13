@@ -2,8 +2,9 @@ use super::{
     ControlKind, WorkspaceView, activate_control,
     app::{
         DeleteSelected, MoveSelected, OpenPullRequest, RenameSelected, ReorderSelectedStack,
-        RestackSelected, mouse_control_button,
+        RestackSelected,
     },
+    control_button,
 };
 use crate::state::LoadState;
 use crate::theme::{MONOSPACE_FONT, Theme};
@@ -289,7 +290,7 @@ fn render_actions(
     cx: &mut gpui::Context<super::AppView>,
 ) -> Div {
     let actions = workspace.state().interaction_state();
-    let checkout = mouse_control_button(
+    let checkout = control_button(
         "inspector-checkout",
         control_label("Checkout", &actions.checkout),
         ControlKind::Secondary,
@@ -303,7 +304,7 @@ fn render_actions(
     } else {
         checkout
     };
-    let restack = mouse_control_button(
+    let restack = control_button(
         "inspector-restack",
         control_label("Restack", &actions.restack),
         ControlKind::Secondary,
@@ -317,7 +318,7 @@ fn render_actions(
     } else {
         restack
     };
-    let rename = mouse_control_button(
+    let rename = control_button(
         "inspector-rename",
         control_label("Rename", &actions.rename),
         ControlKind::Secondary,
@@ -331,7 +332,7 @@ fn render_actions(
     } else {
         rename
     };
-    let delete = mouse_control_button(
+    let delete = control_button(
         "inspector-delete",
         control_label("Delete", &actions.delete),
         ControlKind::Secondary,
@@ -345,7 +346,7 @@ fn render_actions(
     } else {
         delete
     };
-    let move_subtree = mouse_control_button(
+    let move_subtree = control_button(
         "inspector-move",
         control_label("Move", &actions.move_subtree),
         ControlKind::Secondary,
@@ -359,7 +360,7 @@ fn render_actions(
     } else {
         move_subtree
     };
-    let reorder = mouse_control_button(
+    let reorder = control_button(
         "inspector-reorder",
         control_label("Reorder stack", &actions.reorder),
         ControlKind::Secondary,
@@ -373,7 +374,7 @@ fn render_actions(
     } else {
         reorder
     };
-    let open_pr = mouse_control_button(
+    let open_pr = control_button(
         "inspector-open-pr",
         control_label("Open PR", &actions.open_pr),
         ControlKind::Secondary,
@@ -409,7 +410,10 @@ fn render_actions(
         .child(open_pr)
 }
 
-fn control_label(label: &str, availability: &crate::state::ActionAvailability) -> String {
+pub(super) fn control_label(
+    label: &str,
+    availability: &crate::state::ActionAvailability,
+) -> String {
     if availability.enabled {
         label.to_string()
     } else {
