@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::Mutex;
 use tempfile::NamedTempFile;
 
 const MAX_RECENT_REPOSITORIES: usize = 10;
@@ -83,7 +85,7 @@ pub struct WorkspacePreferences {
 }
 
 impl WorkspacePreferences {
-    fn normalized(self) -> Option<Self> {
+    pub(crate) fn normalized(self) -> Option<Self> {
         if self.visibility.visible_count() == 0 {
             return None;
         }
@@ -206,6 +208,60 @@ impl WorkspacePreferencesFile {
 impl Default for WorkspacePreferencesFile {
     fn default() -> Self {
         Self::at(Self::default_path())
+    }
+}
+
+pub trait WorkspacePreferenceStore: Send + Sync {
+    fn load(&self, repository: &Path) -> WorkspacePreferences;
+    fn save(
+        &self,
+        repository: &Path,
+        preferences: &WorkspacePreferences,
+    ) -> std::result::Result<(), String>;
+}
+
+impl WorkspacePreferenceStore for WorkspacePreferencesFile {
+    fn load(&self, repository: &Path) -> WorkspacePreferences {
+        WorkspacePreferencesFile::load(self, repository)
+    }
+
+    fn save(
+        &self,
+        repository: &Path,
+        preferences: &WorkspacePreferences,
+    ) -> std::result::Result<(), String> {
+        WorkspacePreferencesFile::save(self, repository, preferences)
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct TransientWorkspacePreferences {
+    values: Mutex<HashMap<PathBuf, WorkspacePreferences>>,
+}
+
+#[cfg(test)]
+impl WorkspacePreferenceStore for TransientWorkspacePreferences {
+    fn load(&self, repository: &Path) -> WorkspacePreferences {
+        self.values
+            .lock()
+            .expect("transient workspace preferences poisoned")
+            .get(repository)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn save(
+        &self,
+        repository: &Path,
+        preferences: &WorkspacePreferences,
+    ) -> std::result::Result<(), String> {
+        self.values
+            .lock()
+            .map_err(|_| "transient workspace preferences poisoned".to_string())?
+            .insert(repository.to_path_buf(), preferences.clone());
+        Ok(())
     }
 }
 

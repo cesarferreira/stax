@@ -2,9 +2,15 @@ use super::{
     AppModeKind, AppServices, AppView, PaneMarkers, PickerFuture, RecentRepositoryStore,
     RepositoryPicker, RootLoadKind, SnapshotLoader,
 };
+use super::{changes_pane, inspector_pane, stack_pane};
 use crate::hydration::{BranchHydrationService, HydrationFuture};
+use crate::preferences::{
+    PaneVisibility, PaneWidths, WorkspacePreferenceStore, WorkspacePreferences,
+};
 use crate::state::LoadState;
-use gpui::{App, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, TestAppContext};
+use gpui::{
+    App, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, TestAppContext, point, px,
+};
 use stax::application::{
     BranchDetails, BranchDiff, BranchSummary, CiSummary, DiffLine, DiffLineKind, RepositorySnapshot,
 };
@@ -66,6 +72,51 @@ struct FixtureRecents {
     load_error: Option<String>,
     record_error: Option<String>,
     record_attempts: AtomicUsize,
+}
+
+#[derive(Default)]
+struct FixtureWorkspacePreferences {
+    values: Mutex<std::collections::HashMap<PathBuf, WorkspacePreferences>>,
+    saves: Mutex<Vec<(PathBuf, WorkspacePreferences)>>,
+}
+
+impl FixtureWorkspacePreferences {
+    fn with(repository: impl Into<PathBuf>, preferences: WorkspacePreferences) -> Self {
+        Self {
+            values: Mutex::new(std::collections::HashMap::from([(
+                repository.into(),
+                preferences,
+            )])),
+            saves: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn saved(&self) -> Vec<(PathBuf, WorkspacePreferences)> {
+        self.saves.lock().unwrap().clone()
+    }
+}
+
+impl WorkspacePreferenceStore for FixtureWorkspacePreferences {
+    fn load(&self, repository: &Path) -> WorkspacePreferences {
+        self.values
+            .lock()
+            .unwrap()
+            .get(repository)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn save(&self, repository: &Path, preferences: &WorkspacePreferences) -> Result<(), String> {
+        self.values
+            .lock()
+            .unwrap()
+            .insert(repository.to_path_buf(), preferences.clone());
+        self.saves
+            .lock()
+            .unwrap()
+            .push((repository.to_path_buf(), preferences.clone()));
+        Ok(())
+    }
 }
 
 impl RecentRepositoryStore for FixtureRecents {
@@ -383,6 +434,19 @@ fn services_with_hydration(
         Rc::new(FixturePicker::new(picker)),
         recents,
         hydration,
+    )
+}
+
+fn services_with_workspace_preferences(
+    loader: Result<RepositorySnapshot, String>,
+    preferences: Arc<dyn WorkspacePreferenceStore>,
+) -> AppServices {
+    AppServices::with_workspace_preferences(
+        Arc::new(FixtureLoader { result: loader }),
+        Rc::new(FixturePicker::new(Ok(None))),
+        Arc::new(FixtureRecents::default()),
+        Arc::new(FixtureHydration::immediate_no_remote()),
+        preferences,
     )
 }
 
@@ -1125,6 +1189,7 @@ fn keyboard_stack_row_activates_once_for_enter_and_space(cx: &mut TestAppContext
         window.focus_next();
         window.focus_next();
         window.focus_next();
+        window.focus_next();
     });
     cx.simulate_keystrokes("enter");
     let generation = cx.update(|_, app| view.read(app).workspace().unwrap().state().generation());
@@ -1235,4 +1300,251 @@ fn repeated_refresh_requests_spawn_only_one_snapshot_read(cx: &mut TestAppContex
 
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert!(!cx.update(|_, app| { view.read(app).workspace().unwrap().refresh_is_loading() }));
+}
+
+#[gpui::test]
+fn pane_preferences_are_loaded_for_the_opened_repository(cx: &mut TestAppContext) {
+    let preferences = Arc::new(FixtureWorkspacePreferences::with(
+        "/repo",
+        WorkspacePreferences {
+            visibility: PaneVisibility {
+                stack: true,
+                changes: false,
+                inspector: true,
+            },
+            widths: PaneWidths {
+                stack: 0.4,
+                changes: 0.2,
+                inspector: 0.4,
+            },
+        },
+    ));
+    let services = services_with_workspace_preferences(
+        Ok(snapshot("/repo")),
+        preferences as Arc<dyn WorkspacePreferenceStore>,
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+
+    cx.run_until_parked();
+
+    let loaded = cx.update(|_, app| view.read(app).workspace().unwrap().preferences().clone());
+    assert!(!loaded.visibility.changes);
+    assert!(cx.debug_bounds(stack_pane::PANE_MARKER).is_some());
+    assert!(cx.debug_bounds(changes_pane::PANE_MARKER).is_none());
+    assert!(cx.debug_bounds(inspector_pane::PANE_MARKER).is_some());
+}
+
+#[gpui::test]
+fn pane_invalid_loaded_preferences_fall_back_without_blocking_open(cx: &mut TestAppContext) {
+    let preferences = Arc::new(FixtureWorkspacePreferences::with(
+        "/repo",
+        WorkspacePreferences {
+            visibility: PaneVisibility {
+                stack: false,
+                changes: false,
+                inspector: false,
+            },
+            widths: PaneWidths {
+                stack: f32::NAN,
+                changes: 0.0,
+                inspector: 5.0,
+            },
+        },
+    ));
+    let services = services_with_workspace_preferences(
+        Ok(snapshot("/repo")),
+        preferences as Arc<dyn WorkspacePreferenceStore>,
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.update(|_, app| view.read(app).workspace().unwrap().preferences().clone()),
+        WorkspacePreferences::default()
+    );
+}
+
+#[gpui::test]
+fn pane_toggle_persists_and_refuses_to_hide_the_last_pane(cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let preferences = Arc::new(FixtureWorkspacePreferences::with(
+        "/repo",
+        WorkspacePreferences {
+            visibility: PaneVisibility {
+                stack: true,
+                changes: false,
+                inspector: false,
+            },
+            ..WorkspacePreferences::default()
+        },
+    ));
+    let services = services_with_workspace_preferences(
+        Ok(snapshot("/repo")),
+        Arc::clone(&preferences) as Arc<dyn WorkspacePreferenceStore>,
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("1");
+    assert!(cx.update(|_, app| {
+        view.read(app)
+            .workspace()
+            .unwrap()
+            .preferences()
+            .visibility
+            .stack
+    }));
+    assert!(preferences.saved().is_empty());
+
+    cx.simulate_keystrokes("2");
+    assert!(cx.update(|_, app| {
+        view.read(app)
+            .workspace()
+            .unwrap()
+            .preferences()
+            .visibility
+            .changes
+    }));
+    assert_eq!(preferences.saved().len(), 1);
+    assert!(cx.debug_bounds(changes_pane::PANE_MARKER).is_some());
+}
+
+#[gpui::test]
+fn pane_divider_resize_clamps_and_persists(cx: &mut TestAppContext) {
+    use super::workspace::PaneDivider;
+
+    let preferences = Arc::new(FixtureWorkspacePreferences::default());
+    let services = services_with_workspace_preferences(
+        Ok(snapshot("/repo")),
+        Arc::clone(&preferences) as Arc<dyn WorkspacePreferenceStore>,
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+    cx.run_until_parked();
+
+    view.update_in(cx, |view, _window, cx| {
+        assert!(view.resize_panes(PaneDivider::StackChanges, 1.0, true, cx));
+    });
+
+    let widths = cx.update(|_, app| view.read(app).workspace().unwrap().preferences().widths);
+    assert!((widths.stack - 0.57).abs() < 0.001);
+    assert!((widths.changes - 0.15).abs() < 0.001);
+    assert_eq!(preferences.saved().len(), 1);
+}
+
+#[gpui::test]
+fn pane_divider_drag_persists_on_pointer_release(cx: &mut TestAppContext) {
+    let preferences = Arc::new(FixtureWorkspacePreferences::default());
+    let services = services_with_workspace_preferences(
+        Ok(snapshot("/repo")),
+        Arc::clone(&preferences) as Arc<dyn WorkspacePreferenceStore>,
+    );
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+    cx.run_until_parked();
+
+    let divider = cx
+        .debug_bounds("pane-divider-stack-changes")
+        .expect("stack/changes divider was not rendered")
+        .center();
+    let moved = point(divider.x + px(180.0), divider.y);
+    cx.simulate_mouse_move(divider, None, Modifiers::default());
+    cx.simulate_mouse_down(divider, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(moved, Some(MouseButton::Left), Modifiers::default());
+    assert!(preferences.saved().is_empty());
+    cx.simulate_mouse_up(moved, MouseButton::Left, Modifiers::default());
+    assert_eq!(preferences.saved().len(), 1);
+}
+
+#[gpui::test]
+fn pane_search_filters_rows_and_escape_restores_selection(cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let services = services_with_workspace_preferences(
+        Ok(snapshot("/repo")),
+        Arc::new(FixtureWorkspacePreferences::default()),
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+    cx.run_until_parked();
+
+    view.update_in(cx, |view, _window, _cx| {
+        assert!(view.workspace_mut().unwrap().select_branch("feature-b"));
+    });
+
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("FEATURE-B");
+    assert_eq!(
+        cx.update(|_, app| {
+            view.read(app)
+                .workspace()
+                .unwrap()
+                .state()
+                .search_query()
+                .to_string()
+        }),
+        "FEATURE-B"
+    );
+    assert_eq!(
+        cx.update(|_, app| {
+            view.read(app)
+                .workspace()
+                .unwrap()
+                .state()
+                .filtered_branches()
+                .iter()
+                .map(|branch| branch.name.clone())
+                .collect::<Vec<_>>()
+        }),
+        vec!["feature-b".to_string()]
+    );
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        cx.update(|_, app| {
+            let state = view.read(app).workspace().unwrap().state();
+            (
+                state.search_query().to_string(),
+                state.selected_branch().map(str::to_string),
+            )
+        }),
+        (String::new(), Some("feature-b".to_string()))
+    );
+}
+
+#[gpui::test]
+fn pane_search_no_match_and_text_editing_take_priority_over_shortcuts(cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let services = services_with_workspace_preferences(
+        Ok(snapshot("/repo")),
+        Arc::new(FixtureWorkspacePreferences::default()),
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("/");
+    cx.simulate_input("nobody");
+
+    assert!(cx.debug_bounds("stack-search-no-results").is_some());
+    assert_eq!(
+        cx.update(|_, app| {
+            let app = view.read(app);
+            (
+                app.workspace().unwrap().state().search_query().to_string(),
+                app.operation_overlay().is_some(),
+            )
+        }),
+        ("nobody".to_string(), false)
+    );
 }

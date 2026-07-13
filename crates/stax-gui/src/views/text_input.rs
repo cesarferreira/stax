@@ -14,12 +14,28 @@ actions!(
 );
 
 pub struct BranchNameInput {
+    kind: TextInputKind,
     focus_handle: FocusHandle,
     text: SharedString,
     selected_range: Range<usize>,
     marked_range: Option<Range<usize>>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextInputKind {
+    BranchName,
+    StackSearch,
+}
+
+impl TextInputKind {
+    fn key_context(self) -> &'static str {
+        match self {
+            Self::BranchName => "BranchNameInput",
+            Self::StackSearch => "StackSearchInput",
+        }
+    }
 }
 
 impl BranchNameInput {
@@ -29,9 +45,22 @@ impl BranchNameInput {
         focus_handle.focus(window);
         let cursor = text.len();
         Self {
+            kind: TextInputKind::BranchName,
             focus_handle,
             text,
             selected_range: cursor..cursor,
+            marked_range: None,
+            last_layout: None,
+            last_bounds: None,
+        }
+    }
+
+    pub fn new_search(cx: &mut Context<Self>) -> Self {
+        Self {
+            kind: TextInputKind::StackSearch,
+            focus_handle: cx.focus_handle().tab_index(10).tab_stop(true),
+            text: SharedString::default(),
+            selected_range: 0..0,
             marked_range: None,
             last_layout: None,
             last_bounds: None,
@@ -42,9 +71,16 @@ impl BranchNameInput {
         &self.text
     }
 
-    #[cfg(test)]
     pub fn focus_handle(&self) -> FocusHandle {
         self.focus_handle.clone()
+    }
+
+    pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.text = text.into();
+        let cursor = self.text.len();
+        self.selected_range = cursor..cursor;
+        self.marked_range = None;
+        cx.notify();
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -256,7 +292,7 @@ impl Focusable for BranchNameInput {
 impl Render for BranchNameInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .key_context("BranchNameInput")
+            .key_context(self.kind.key_context())
             .track_focus(&self.focus_handle)
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))

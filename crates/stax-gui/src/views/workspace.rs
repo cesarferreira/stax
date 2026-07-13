@@ -1,15 +1,18 @@
 #[cfg(test)]
 use super::PaneMarkers;
+use super::text_input::BranchNameInput;
 use super::{
     AppView, ControlKind, activate_control,
     app::{CreateBranch, RedoLatest, SubmitStack, UndoLatest, mouse_control_button},
     changes_pane, control_button, inspector_pane, stack_pane,
 };
+use crate::preferences::WorkspacePreferences;
 use crate::state::{ActionAvailability, SelectionDirection, WorkspaceState};
 use crate::theme::{SYSTEM_UI_FONT, Theme};
 use gpui::{
-    Context, Div, InteractiveElement as _, ParentElement as _, ScrollStrategy,
-    StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, div, px, relative,
+    Context, CursorStyle, Div, Entity, InteractiveElement as _, MouseButton, ParentElement as _,
+    ScrollStrategy, StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, div, px,
+    relative,
 };
 use stax::application::{
     BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, OperationError,
@@ -25,28 +28,150 @@ pub enum RefreshState {
     Failed(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PaneKind {
+    Stack,
+    Changes,
+    Inspector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PaneDivider {
+    StackChanges,
+    StackInspector,
+    ChangesInspector,
+}
+
+impl PaneDivider {
+    fn panes(self) -> (PaneKind, PaneKind) {
+        match self {
+            Self::StackChanges => (PaneKind::Stack, PaneKind::Changes),
+            Self::StackInspector => (PaneKind::Stack, PaneKind::Inspector),
+            Self::ChangesInspector => (PaneKind::Changes, PaneKind::Inspector),
+        }
+    }
+
+    fn between(left: PaneKind, right: PaneKind) -> Self {
+        match (left, right) {
+            (PaneKind::Stack, PaneKind::Changes) => Self::StackChanges,
+            (PaneKind::Stack, PaneKind::Inspector) => Self::StackInspector,
+            (PaneKind::Changes, PaneKind::Inspector) => Self::ChangesInspector,
+            _ => unreachable!("pane order is fixed"),
+        }
+    }
+
+    fn marker(self) -> &'static str {
+        match self {
+            Self::StackChanges => "pane-divider-stack-changes",
+            Self::StackInspector => "pane-divider-stack-inspector",
+            Self::ChangesInspector => "pane-divider-changes-inspector",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspaceView {
     state: WorkspaceState,
     refresh: RefreshState,
     notice: Option<String>,
     storage_notice: Option<String>,
+    preferences: WorkspacePreferences,
     stack_scroll_handle: UniformListScrollHandle,
     stack_scroll_target: Option<usize>,
 }
 
 impl WorkspaceView {
+    #[cfg(test)]
     pub fn from_snapshot(snapshot: RepositorySnapshot) -> Self {
+        Self::from_snapshot_with_preferences(snapshot, WorkspacePreferences::default())
+    }
+
+    pub fn from_snapshot_with_preferences(
+        snapshot: RepositorySnapshot,
+        preferences: WorkspacePreferences,
+    ) -> Self {
+        let preferences = preferences.normalized().unwrap_or_default();
         let mut workspace = Self {
             state: WorkspaceState::new(snapshot),
             refresh: RefreshState::Idle,
             notice: None,
             storage_notice: None,
+            preferences,
             stack_scroll_handle: UniformListScrollHandle::new(),
             stack_scroll_target: None,
         };
         workspace.scroll_selection_into_view();
         workspace
+    }
+
+    pub fn preferences(&self) -> &WorkspacePreferences {
+        &self.preferences
+    }
+
+    pub(super) fn toggle_pane(&mut self, pane: PaneKind) -> bool {
+        let currently_visible = self.pane_visible(pane);
+        if currently_visible && self.preferences.visibility.visible_count() == 1 {
+            return false;
+        }
+        match pane {
+            PaneKind::Stack => self.preferences.visibility.stack = !currently_visible,
+            PaneKind::Changes => self.preferences.visibility.changes = !currently_visible,
+            PaneKind::Inspector => self.preferences.visibility.inspector = !currently_visible,
+        }
+        true
+    }
+
+    pub(super) fn resize_panes(&mut self, divider: PaneDivider, delta: f32) -> bool {
+        if !delta.is_finite() {
+            return false;
+        }
+        let (left, right) = divider.panes();
+        if !self.pane_visible(left) || !self.pane_visible(right) {
+            return false;
+        }
+        let left_width = self.pane_width(left);
+        let right_width = self.pane_width(right);
+        let total = left_width + right_width;
+        let lower = 0.15_f32.max(total - 0.70);
+        let upper = 0.70_f32.min(total - 0.15);
+        let next_left = (left_width + delta).clamp(lower, upper);
+        if (next_left - left_width).abs() < f32::EPSILON {
+            return false;
+        }
+        self.set_pane_width(left, next_left);
+        self.set_pane_width(right, total - next_left);
+        true
+    }
+
+    fn pane_visible(&self, pane: PaneKind) -> bool {
+        match pane {
+            PaneKind::Stack => self.preferences.visibility.stack,
+            PaneKind::Changes => self.preferences.visibility.changes,
+            PaneKind::Inspector => self.preferences.visibility.inspector,
+        }
+    }
+
+    fn pane_width(&self, pane: PaneKind) -> f32 {
+        match pane {
+            PaneKind::Stack => self.preferences.widths.stack,
+            PaneKind::Changes => self.preferences.widths.changes,
+            PaneKind::Inspector => self.preferences.widths.inspector,
+        }
+    }
+
+    fn set_pane_width(&mut self, pane: PaneKind, width: f32) {
+        match pane {
+            PaneKind::Stack => self.preferences.widths.stack = width,
+            PaneKind::Changes => self.preferences.widths.changes = width,
+            PaneKind::Inspector => self.preferences.widths.inspector = width,
+        }
+    }
+
+    fn visible_panes(&self) -> Vec<PaneKind> {
+        [PaneKind::Stack, PaneKind::Changes, PaneKind::Inspector]
+            .into_iter()
+            .filter(|pane| self.pane_visible(*pane))
+            .collect()
     }
 
     pub fn state(&self) -> &WorkspaceState {
@@ -77,6 +202,11 @@ impl WorkspaceView {
             self.scroll_selection_into_view();
         }
         moved
+    }
+
+    pub(super) fn set_search_query(&mut self, query: impl Into<String>) {
+        self.state.set_search_query(query);
+        self.scroll_selection_into_view();
     }
 
     pub(super) fn begin_hydration(&mut self) -> Option<(DetailRequestToken, BranchSummary)> {
@@ -189,7 +319,12 @@ impl WorkspaceView {
             .or(self.storage_notice.as_deref())
     }
 
-    pub fn render(&self, theme: Theme, cx: &mut Context<AppView>) -> Div {
+    pub fn render(
+        &self,
+        search_input: Option<Entity<BranchNameInput>>,
+        theme: Theme,
+        cx: &mut Context<AppView>,
+    ) -> Div {
         let mut root = div()
             .debug_selector(|| "stax-workspace".into())
             .size_full()
@@ -203,28 +338,23 @@ impl WorkspaceView {
         if let Some(banner) = self.render_operation_banner(theme, cx) {
             root = root.child(banner);
         }
-        root.child(
-            div()
-                .flex()
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .child(
-                    stack_pane::render(self, theme, cx)
-                        .w(relative(0.29))
-                        .flex_none(),
-                )
-                .child(
-                    changes_pane::render(self, theme, cx)
-                        .w(relative(0.43))
-                        .flex_none(),
-                )
-                .child(
-                    inspector_pane::render(self, theme, cx)
-                        .w(relative(0.28))
-                        .flex_none(),
-                ),
-        )
+        let panes = self.visible_panes();
+        let visible_total: f32 = panes.iter().map(|pane| self.pane_width(*pane)).sum();
+        let mut pane_row = div().flex().flex_1().min_h_0().min_w_0();
+        for (index, pane) in panes.iter().copied().enumerate() {
+            if index > 0 {
+                let divider = PaneDivider::between(panes[index - 1], pane);
+                pane_row = pane_row.child(render_pane_divider(divider, theme, cx));
+            }
+            let width = self.pane_width(pane) / visible_total;
+            let content = match pane {
+                PaneKind::Stack => stack_pane::render(self, search_input.clone(), theme, cx),
+                PaneKind::Changes => changes_pane::render(self, theme, cx),
+                PaneKind::Inspector => inspector_pane::render(self, theme, cx),
+            };
+            pane_row = pane_row.child(content.w(relative(width)).min_w_0());
+        }
+        root.child(pane_row)
     }
 
     fn render_toolbar(&self, theme: Theme, cx: &mut Context<AppView>) -> Div {
@@ -426,9 +556,8 @@ impl WorkspaceView {
         };
         let Some(index) = self
             .state
-            .snapshot()
-            .branches
-            .iter()
+            .filtered_branches()
+            .into_iter()
             .position(|branch| branch.name == selected)
         else {
             return;
@@ -438,6 +567,29 @@ impl WorkspaceView {
         self.stack_scroll_handle
             .scroll_to_item(index, ScrollStrategy::Center);
     }
+}
+
+fn render_pane_divider(
+    divider: PaneDivider,
+    theme: Theme,
+    cx: &mut Context<AppView>,
+) -> gpui::Stateful<Div> {
+    div()
+        .id(divider.marker())
+        .debug_selector(|| divider.marker().into())
+        .w(px(5.0))
+        .h_full()
+        .flex_none()
+        .cursor(CursorStyle::ResizeLeftRight)
+        .bg(theme.border)
+        .hover(move |style| style.bg(theme.accent))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |app, event: &gpui::MouseDownEvent, _window, cx| {
+                cx.stop_propagation();
+                app.begin_pane_drag(divider, event.position.x);
+            }),
+        )
 }
 
 fn operation_banner(

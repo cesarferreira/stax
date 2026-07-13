@@ -1,7 +1,10 @@
 #[cfg(test)]
 use super::{changes_pane, inspector_pane, stack_pane};
 use super::{operation_overlay, text_input::BranchNameInput};
-use super::{welcome::WelcomeView, workspace::WorkspaceView};
+use super::{
+    welcome::WelcomeView,
+    workspace::{PaneDivider, PaneKind, WorkspaceView},
+};
 use crate::hydration::{
     BranchHydrationService, CiHydrationRequest, DetailsHydrationRequest, DiffHydrationRequest,
     HydrationCoordinator, NativeBranchHydrationService,
@@ -9,14 +12,17 @@ use crate::hydration::{
 use crate::operation::{
     BrowserService, NativeBrowserService, NativeOperationService, OperationService,
 };
-use crate::preferences::RecentRepositories;
+#[cfg(test)]
+use crate::preferences::TransientWorkspacePreferences;
+use crate::preferences::{RecentRepositories, WorkspacePreferenceStore, WorkspacePreferencesFile};
 use crate::state::{InteractionState, SelectionDirection};
 use crate::theme::{SYSTEM_UI_FONT, Theme};
 use gpui::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, PathPromptOptions,
-    Render, SharedString, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled as _,
-    Subscription, Window, actions, div, px,
+    InteractiveElement as _, IntoElement, KeyBinding, MouseMoveEvent, MouseUpEvent,
+    ParentElement as _, PathPromptOptions, Pixels, Render, SharedString, Stateful,
+    StatefulInteractiveElement as _, StyleRefinement, Styled as _, Subscription, Window, actions,
+    div, px,
 };
 use stax::application::{
     BranchDiff, DetailRequestToken, OperationError, OperationErrorDetails, OperationErrorKind,
@@ -53,6 +59,11 @@ actions!(
         DismissOverlay,
         DismissOperationBanner,
         OpenReceiptUrl,
+        ToggleStackPane,
+        ToggleChangesPane,
+        ToggleInspectorPane,
+        FocusStackSearch,
+        ClearStackSearch,
     ]
 );
 
@@ -81,6 +92,7 @@ pub struct AppServices {
     operation: Arc<dyn OperationService>,
     #[allow(dead_code)]
     browser: Arc<dyn BrowserService>,
+    workspace_preferences: Arc<dyn WorkspacePreferenceStore>,
 }
 
 impl AppServices {
@@ -89,14 +101,18 @@ impl AppServices {
         picker: Rc<dyn RepositoryPicker>,
         recents: Arc<dyn RecentRepositoryStore>,
     ) -> Self {
-        Self::with_hydration(
+        Self::with_all_services(
             loader,
             picker,
             recents,
             Arc::new(NativeBranchHydrationService),
+            Arc::new(NativeOperationService),
+            Arc::new(NativeBrowserService),
+            Arc::new(WorkspacePreferencesFile::default()),
         )
     }
 
+    #[cfg(test)]
     pub(super) fn with_hydration(
         loader: Arc<dyn SnapshotLoader>,
         picker: Rc<dyn RepositoryPicker>,
@@ -113,6 +129,7 @@ impl AppServices {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn with_operation_services(
         loader: Arc<dyn SnapshotLoader>,
         picker: Rc<dyn RepositoryPicker>,
@@ -121,6 +138,45 @@ impl AppServices {
         operation: Arc<dyn OperationService>,
         browser: Arc<dyn BrowserService>,
     ) -> Self {
+        Self::with_all_services(
+            loader,
+            picker,
+            recents,
+            hydration,
+            operation,
+            browser,
+            Arc::new(TransientWorkspacePreferences::default()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_workspace_preferences(
+        loader: Arc<dyn SnapshotLoader>,
+        picker: Rc<dyn RepositoryPicker>,
+        recents: Arc<dyn RecentRepositoryStore>,
+        hydration: Arc<dyn BranchHydrationService>,
+        workspace_preferences: Arc<dyn WorkspacePreferenceStore>,
+    ) -> Self {
+        Self::with_all_services(
+            loader,
+            picker,
+            recents,
+            hydration,
+            Arc::new(NativeOperationService),
+            Arc::new(NativeBrowserService),
+            workspace_preferences,
+        )
+    }
+
+    fn with_all_services(
+        loader: Arc<dyn SnapshotLoader>,
+        picker: Rc<dyn RepositoryPicker>,
+        recents: Arc<dyn RecentRepositoryStore>,
+        hydration: Arc<dyn BranchHydrationService>,
+        operation: Arc<dyn OperationService>,
+        browser: Arc<dyn BrowserService>,
+        workspace_preferences: Arc<dyn WorkspacePreferenceStore>,
+    ) -> Self {
         Self {
             loader,
             picker,
@@ -128,6 +184,7 @@ impl AppServices {
             hydration,
             operation,
             browser,
+            workspace_preferences,
         }
     }
 
@@ -265,9 +322,19 @@ pub struct AppView {
     branch_input: Option<Entity<BranchNameInput>>,
     branch_input_text: String,
     branch_input_observation: Option<Subscription>,
+    search_input: Option<Entity<BranchNameInput>>,
+    search_input_observation: Option<Subscription>,
     overlay_return_focus: Option<FocusHandle>,
+    pane_drag: Option<PaneDrag>,
     #[cfg(test)]
     copied_diagnostics: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaneDrag {
+    divider: PaneDivider,
+    last_x: Pixels,
+    changed: bool,
 }
 
 impl AppView {
@@ -300,7 +367,10 @@ impl AppView {
             branch_input: None,
             branch_input_text: String::new(),
             branch_input_observation: None,
+            search_input: None,
+            search_input_observation: None,
             overlay_return_focus: None,
+            pane_drag: None,
             #[cfg(test)]
             copied_diagnostics: None,
         };
@@ -353,6 +423,133 @@ impl AppView {
         match &mut self.mode {
             AppMode::Workspace(workspace) => Some(workspace),
             AppMode::Welcome(_) | AppMode::Opening(_) | AppMode::Error(_) => None,
+        }
+    }
+
+    fn persist_workspace_preferences(&mut self) {
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        let repository = workspace.state().snapshot().repository_root.clone();
+        let preferences = workspace.preferences().clone();
+        if let Err(error) = self
+            .services
+            .workspace_preferences
+            .save(&repository, &preferences)
+        {
+            self.set_inline_error(format!("Could not save workspace layout: {error}"));
+        }
+    }
+
+    fn toggle_pane(&mut self, pane: PaneKind, cx: &mut Context<Self>) {
+        if self
+            .workspace_mut()
+            .is_some_and(|workspace| workspace.toggle_pane(pane))
+        {
+            self.persist_workspace_preferences();
+            cx.notify();
+        }
+    }
+
+    fn install_search_input(&mut self, cx: &mut Context<Self>) {
+        let input = cx.new(BranchNameInput::new_search);
+        let observation = cx.observe(&input, |app, input, cx| {
+            let query = input.read(cx).text().to_string();
+            if let Some(workspace) = app.workspace_mut()
+                && workspace.state().search_query() != query
+            {
+                workspace.set_search_query(query);
+            }
+            cx.notify();
+        });
+        self.search_input = Some(input);
+        self.search_input_observation = Some(observation);
+    }
+
+    fn focus_stack_search_action(
+        &mut self,
+        _: &FocusStackSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace().is_none() {
+            return;
+        }
+        if self
+            .workspace()
+            .is_some_and(|workspace| !workspace.preferences().visibility.stack)
+        {
+            self.toggle_pane(PaneKind::Stack, cx);
+        }
+        if let Some(input) = &self.search_input {
+            input.read(cx).focus_handle().focus(window);
+        }
+    }
+
+    fn clear_stack_search_action(
+        &mut self,
+        _: &ClearStackSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(input) = &self.search_input {
+            input.update(cx, |input, cx| input.set_text(String::new(), cx));
+        } else if let Some(workspace) = self.workspace_mut() {
+            workspace.set_search_query(String::new());
+        }
+        self.focus_handle.focus(window);
+        cx.notify();
+    }
+
+    pub(super) fn resize_panes(
+        &mut self,
+        divider: PaneDivider,
+        delta: f32,
+        persist: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let changed = self
+            .workspace_mut()
+            .is_some_and(|workspace| workspace.resize_panes(divider, delta));
+        if changed {
+            if persist {
+                self.persist_workspace_preferences();
+            }
+            cx.notify();
+        }
+        changed
+    }
+
+    pub(super) fn begin_pane_drag(&mut self, divider: PaneDivider, x: Pixels) {
+        self.pane_drag = Some(PaneDrag {
+            divider,
+            last_x: x,
+            changed: false,
+        });
+    }
+
+    fn pane_drag_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut drag) = self.pane_drag else {
+            return;
+        };
+        let width = window.viewport_size().width;
+        if width <= px(0.0) {
+            return;
+        }
+        let delta = (event.position.x - drag.last_x) / width;
+        drag.last_x = event.position.x;
+        drag.changed |= self.resize_panes(drag.divider, delta, false, cx);
+        self.pane_drag = Some(drag);
+    }
+
+    fn pane_drag_end(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        if self.pane_drag.take().is_some_and(|drag| drag.changed) {
+            self.persist_workspace_preferences();
         }
     }
 
@@ -1363,6 +1560,8 @@ impl AppView {
             RootLoadKind::Open => {
                 self.action_error = None;
                 self.clear_overlay();
+                self.search_input = None;
+                self.search_input_observation = None;
                 self.overlay_return_focus = None;
                 self.mode = AppMode::Opening(self.welcome(None, Some(path.clone())));
             }
@@ -1393,9 +1592,15 @@ impl AppView {
             RootLoadKind::Open => match result {
                 Ok(snapshot) => {
                     self.remember_recent(&snapshot.repository_root);
+                    let preferences = self
+                        .services
+                        .workspace_preferences
+                        .load(&snapshot.repository_root);
                     self.action_error = None;
-                    self.mode =
-                        AppMode::Workspace(Box::new(WorkspaceView::from_snapshot(snapshot)));
+                    self.mode = AppMode::Workspace(Box::new(
+                        WorkspaceView::from_snapshot_with_preferences(snapshot, preferences),
+                    ));
+                    self.install_search_input(cx);
                     self.sync_storage_notice();
                 }
                 Err(error) => {
@@ -1694,6 +1899,33 @@ impl AppView {
         }
     }
 
+    fn toggle_stack_pane_action(
+        &mut self,
+        _: &ToggleStackPane,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_pane(PaneKind::Stack, cx);
+    }
+
+    fn toggle_changes_pane_action(
+        &mut self,
+        _: &ToggleChangesPane,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_pane(PaneKind::Changes, cx);
+    }
+
+    fn toggle_inspector_pane_action(
+        &mut self,
+        _: &ToggleInspectorPane,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_pane(PaneKind::Inspector, cx);
+    }
+
     fn open_action(&mut self, _: &OpenRepository, window: &mut Window, cx: &mut Context<Self>) {
         if self
             .interaction_state()
@@ -1975,11 +2207,12 @@ impl Focusable for AppView {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
+        let search_input = self.search_input.clone();
         let content = match &self.mode {
             AppMode::Welcome(welcome) | AppMode::Opening(welcome) | AppMode::Error(welcome) => {
                 welcome.render(theme, cx)
             }
-            AppMode::Workspace(workspace) => workspace.render(theme, cx),
+            AppMode::Workspace(workspace) => workspace.render(search_input, theme, cx),
         };
 
         let mut root = div()
@@ -2005,6 +2238,13 @@ impl Render for AppView {
             .on_action(cx.listener(Self::confirm_overlay_action))
             .on_action(cx.listener(Self::dismiss_overlay_action))
             .on_action(cx.listener(Self::dismiss_operation_banner_action))
+            .on_action(cx.listener(Self::toggle_stack_pane_action))
+            .on_action(cx.listener(Self::toggle_changes_pane_action))
+            .on_action(cx.listener(Self::toggle_inspector_pane_action))
+            .on_action(cx.listener(Self::focus_stack_search_action))
+            .on_action(cx.listener(Self::clear_stack_search_action))
+            .on_mouse_move(cx.listener(Self::pane_drag_move))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::pane_drag_end))
             .size_full()
             .relative()
             .border_1()
@@ -2167,6 +2407,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("p", OpenPullRequest, Some("StaxApp")),
         KeyBinding::new("cmd-o", OpenRepository, Some("StaxApp")),
         KeyBinding::new("cmd-r", RefreshRepository, Some("StaxApp")),
+        KeyBinding::new("1", ToggleStackPane, Some("StaxApp")),
+        KeyBinding::new("2", ToggleChangesPane, Some("StaxApp")),
+        KeyBinding::new("3", ToggleInspectorPane, Some("StaxApp")),
+        KeyBinding::new("/", FocusStackSearch, Some("StaxApp")),
         KeyBinding::new("enter", ConfirmOverlay, Some("StaxApp")),
         KeyBinding::new("escape", DismissOverlay, Some("StaxApp")),
         KeyBinding::new(
@@ -2188,5 +2432,33 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-r", gpui::NoAction, Some("BranchNameInput")),
         KeyBinding::new("s", gpui::NoAction, Some("BranchNameInput")),
         KeyBinding::new("p", gpui::NoAction, Some("BranchNameInput")),
+        KeyBinding::new(
+            "backspace",
+            super::text_input::Backspace,
+            Some("StackSearchInput"),
+        ),
+        KeyBinding::new(
+            "delete",
+            super::text_input::Delete,
+            Some("StackSearchInput"),
+        ),
+        KeyBinding::new("left", super::text_input::Left, Some("StackSearchInput")),
+        KeyBinding::new("right", super::text_input::Right, Some("StackSearchInput")),
+        KeyBinding::new("home", super::text_input::Home, Some("StackSearchInput")),
+        KeyBinding::new("end", super::text_input::End, Some("StackSearchInput")),
+        KeyBinding::new("escape", ClearStackSearch, Some("StackSearchInput")),
+        KeyBinding::new("n", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("e", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("d", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("m", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("o", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("r", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("shift-r", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("s", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("p", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("1", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("2", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("3", gpui::NoAction, Some("StackSearchInput")),
+        KeyBinding::new("/", gpui::NoAction, Some("StackSearchInput")),
     ]);
 }
