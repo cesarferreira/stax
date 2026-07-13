@@ -2402,10 +2402,10 @@ pub fn control_button(
             .text_color(theme.accent_text)
             .hover(move |style| style.bg(theme.accent.alpha(0.88))),
         ControlKind::Secondary => base
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
+            .border_color(theme.border)
+            .bg(theme.surface)
             .text_color(theme.text)
-            .hover(move |style| style.bg(theme.surface_selected)),
+            .hover(move |style| style.bg(theme.surface_hover)),
     }
 }
 

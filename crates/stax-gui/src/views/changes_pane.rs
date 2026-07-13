@@ -87,12 +87,10 @@ pub fn render(workspace: &WorkspaceView, theme: Theme, cx: &mut Context<AppView>
         .min_w_0()
         .flex()
         .flex_col()
-        .border_r_1()
-        .border_color(theme.border)
-        .bg(theme.surface_raised)
+        .bg(theme.window)
         .child(
             div()
-                .h(px(43.0))
+                .h(px(44.0))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -127,11 +125,14 @@ fn render_ready_diff(diff: &BranchDiff, theme: Theme, cx: &mut Context<AppView>)
     };
 
     let mut diffstat = div()
+        .debug_selector(|| "changes-file-summary".into())
         .flex_none()
         .flex()
         .flex_col()
-        .border_b_1()
+        .rounded_lg()
+        .border_1()
         .border_color(theme.border)
+        .bg(theme.surface)
         .child(
             div()
                 .flex()
@@ -225,6 +226,9 @@ fn render_ready_diff(diff: &BranchDiff, theme: Theme, cx: &mut Context<AppView>)
         .flex_1()
         .min_h_0()
         .flex_col()
+        .gap_3()
+        .px_3()
+        .pb_3()
         .child(diffstat)
         .child(
             uniform_list(
@@ -257,7 +261,7 @@ fn render_ready_diff(diff: &BranchDiff, theme: Theme, cx: &mut Context<AppView>)
             )
             .flex_1()
             .min_h_0()
-            .bg(theme.surface_raised),
+            .bg(theme.window),
         )
 }
 

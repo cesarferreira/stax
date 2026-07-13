@@ -51,10 +51,10 @@ pub fn render(
         .min_w_0()
         .flex()
         .flex_col()
-        .bg(theme.surface)
+        .bg(theme.window)
         .child(
             div()
-                .h(px(43.0))
+                .h(px(44.0))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -76,7 +76,17 @@ pub fn render(
                 .min_h_0()
                 .flex_col()
                 .overflow_y_scroll()
-                .child(content),
+                .p_3()
+                .child(
+                    div()
+                        .debug_selector(|| "inspector-card".into())
+                        .w_full()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.surface_raised)
+                        .child(content),
+                ),
         )
 }
 
@@ -90,7 +100,7 @@ fn render_selected(
         .flex()
         .flex_col()
         .gap_4()
-        .p_3()
+        .p_4()
         .child(
             div()
                 .flex()

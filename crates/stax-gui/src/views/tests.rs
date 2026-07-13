@@ -470,6 +470,30 @@ fn no_path_renders_the_welcome_mode_without_panicking(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn workspace_renders_codex_presentation_landmarks(cx: &mut TestAppContext) {
+    let services = services_with_workspace_preferences(
+        Ok(snapshot("/repo")),
+        Arc::new(FixtureWorkspacePreferences::default()),
+    );
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+
+    cx.run_until_parked();
+
+    for selector in [
+        "stack-topology-gutter",
+        "changes-file-summary",
+        "inspector-card",
+    ] {
+        assert!(
+            cx.debug_bounds(selector).is_some(),
+            "expected {selector} to be rendered"
+        );
+    }
+}
+
+#[gpui::test]
 fn keyboard_welcome_open_activates_once_for_enter_and_space(cx: &mut TestAppContext) {
     cx.update(super::init);
     let picker_calls = Arc::new(AtomicUsize::new(0));

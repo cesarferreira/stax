@@ -438,50 +438,30 @@ impl WorkspaceView {
             .border_color(theme.border)
             .bg(theme.window)
             .child(
-                div()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(24.0))
-                            .h(px(24.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_md()
-                            .bg(theme.surface_raised)
-                            .font_family(crate::theme::MONOSPACE_FONT)
-                            .text_xs()
-                            .text_color(theme.accent)
-                            .child("st"),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_sm()
-                            .child(
-                                div()
-                                    .truncate()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child(repository_name),
-                            )
-                            .child(div().text_color(theme.text_muted).child("/"))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_family(crate::theme::MONOSPACE_FONT)
-                                    .text_xs()
-                                    .text_color(theme.text_muted)
-                                    .child(snapshot.current_branch.clone()),
-                            ),
-                    ),
+                div().min_w_0().flex().items_center().gap_2().child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_sm()
+                        .child(
+                            div()
+                                .truncate()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(repository_name),
+                        )
+                        .child(div().text_color(theme.text_muted).child("/"))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(crate::theme::MONOSPACE_FONT)
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(snapshot.current_branch.clone()),
+                        ),
+                ),
             )
             .child(
                 div()

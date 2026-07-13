@@ -53,19 +53,15 @@ pub fn render(
         .min_w_0()
         .flex()
         .flex_col()
-        .border_r_1()
-        .border_color(theme.border)
-        .bg(theme.surface)
+        .bg(theme.sidebar)
         .child(
             div()
-                .h(px(43.0))
+                .h(px(46.0))
                 .flex_none()
                 .flex()
                 .items_center()
                 .justify_between()
                 .px_3()
-                .border_b_1()
-                .border_color(theme.border)
                 .child(
                     div()
                         .text_sm()
@@ -83,25 +79,33 @@ pub fn render(
         pane = pane.child(
             div()
                 .debug_selector(|| "stack-search".into())
-                .h(px(42.0))
+                .h(px(44.0))
                 .flex_none()
                 .flex()
                 .items_center()
-                .gap_2()
-                .px_3()
-                .border_b_1()
-                .border_color(theme.border)
-                .bg(theme.surface_raised)
-                .font_family(MONOSPACE_FONT)
-                .text_sm()
-                .text_color(theme.text_muted)
-                .child("/")
+                .px_2()
                 .child(
                     div()
+                        .h(px(32.0))
+                        .w_full()
                         .min_w_0()
-                        .flex_1()
-                        .text_color(theme.text)
-                        .child(search_input),
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .rounded_lg()
+                        .bg(theme.surface_hover)
+                        .font_family(MONOSPACE_FONT)
+                        .text_sm()
+                        .text_color(theme.text_muted)
+                        .child("/")
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .text_color(theme.text)
+                                .child(search_input),
+                        ),
                 ),
         );
     }
@@ -182,27 +186,27 @@ fn render_branch_row(
             .focusable()
             .tab_index(branch_index as isize + 20)
             .focus(move |style| control_focus_style(style, theme))
-            .h(px(54.0))
-            .w_full()
+            .h(px(48.0))
+            .mx_2()
             .min_w_0()
             .flex()
             .items_center()
             .gap_2()
-            .pl_2()
-            .pr_2()
+            .px_2()
+            .rounded_lg()
             .border_1()
             .border_color(if is_selected {
-                theme.accent
+                theme.surface_selected
             } else {
-                theme.border
+                theme.sidebar
             })
             .bg(if is_selected {
                 theme.surface_selected
             } else {
-                theme.surface
+                theme.sidebar
             })
             .cursor_pointer()
-            .hover(move |style| style.bg(theme.surface_selected))
+            .hover(move |style| style.bg(theme.surface_hover))
             .child(
                 div()
                     .debug_selector(|| "stack-topology-gutter".into())
@@ -232,7 +236,6 @@ fn render_branch_row(
                     .flex()
                     .flex_1()
                     .flex_col()
-                    .gap_1()
                     .child(
                         div()
                             .truncate()
@@ -245,18 +248,14 @@ fn render_branch_row(
                             })
                             .child(branch.name.clone()),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .children(statuses.into_iter().map(|(label, tone)| {
-                                div()
-                                    .text_xs()
-                                    .text_color(status_color(tone, theme))
-                                    .child(label)
-                            })),
-                    ),
+                    .child(div().flex().items_center().gap_1().truncate().children(
+                        statuses.into_iter().map(|(label, tone)| {
+                            div()
+                                .text_xs()
+                                .text_color(status_color(tone, theme))
+                                .child(label)
+                        }),
+                    )),
             );
 
     activate_control(row, cx, move |app, window, cx| {
