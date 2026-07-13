@@ -1,4 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 use std::process::Command;
 
 fn gui_command(cwd: &Path) -> Command {
@@ -14,7 +16,7 @@ fn gui_command(cwd: &Path) -> Command {
     command
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 fn recording_launcher(root: &Path, exit_code: i32) -> (PathBuf, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
 
