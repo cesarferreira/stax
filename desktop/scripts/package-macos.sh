@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENGINE_TARGET_DIR="$ROOT/target/desktop-engine"
-ENGINE="$ENGINE_TARGET_DIR/release/st"
+ENGINE="$ENGINE_TARGET_DIR/release/stax"
 DESKTOP="$ROOT/desktop"
 AUTOMATION_APP="$DESKTOP/dist/Stax.automation.app"
 cd "$ROOT"
@@ -13,7 +13,7 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   exit 1
 fi
 
-CARGO_TARGET_DIR="$ENGINE_TARGET_DIR" cargo build --release --bin st
+CARGO_TARGET_DIR="$ENGINE_TARGET_DIR" cargo build --release --bin stax
 /usr/bin/file "$ENGINE" | grep -q 'Mach-O 64-bit executable arm64'
 npm ci --prefix desktop
 npm run --prefix desktop check

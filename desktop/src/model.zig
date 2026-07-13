@@ -880,6 +880,26 @@ fn handleActionExit(model: *Model, exit: native_sdk.EffectExit, fx: *Effects) vo
     model.requestSnapshot(fx);
 }
 
+fn stripAnsi(input: []const u8, output: []u8) []const u8 {
+    var read_index: usize = 0;
+    var write_index: usize = 0;
+    while (read_index < input.len and write_index < output.len) {
+        if (input[read_index] == 0x1b and read_index + 1 < input.len and input[read_index + 1] == '[') {
+            read_index += 2;
+            while (read_index < input.len) {
+                const byte = input[read_index];
+                read_index += 1;
+                if (byte >= 0x40 and byte <= 0x7e) break;
+            }
+            continue;
+        }
+        output[write_index] = input[read_index];
+        write_index += 1;
+        read_index += 1;
+    }
+    return output[0..write_index];
+}
+
 fn validateCollectExit(model: *Model, exit: native_sdk.EffectExit, label: []const u8) bool {
     if (exit.output_truncated) {
         model.setError("The bridge response was truncated; reinstall the app or refresh.");
@@ -894,15 +914,17 @@ fn validateCollectExit(model: *Model, exit: native_sdk.EffectExit, label: []cons
         return false;
     }
     if (exit.output.len == 0) {
-        if (std.mem.indexOf(u8, exit.stderr_tail, "unrecognized subcommand 'desktop'") != null) {
+        var sanitized_buffer: [max_error_bytes]u8 = undefined;
+        const stderr_tail = stripAnsi(exit.stderr_tail, &sanitized_buffer);
+        if (std.mem.indexOf(u8, stderr_tail, "unrecognized subcommand 'desktop'") != null) {
             model.setError("The bundled engine does not support the desktop protocol. Rebuild the app and engine together.");
             return false;
         }
-        if (exit.stderr_tail.len > 0) {
+        if (stderr_tail.len > 0) {
             var buffer: [max_error_bytes]u8 = undefined;
             const prefix = "The bundled engine {s} command failed: ";
             const reserved = prefix.len + label.len;
-            const detail = exit.stderr_tail[0..@min(exit.stderr_tail.len, buffer.len -| reserved)];
+            const detail = stderr_tail[0..@min(stderr_tail.len, buffer.len -| reserved)];
             const text = std.fmt.bufPrint(&buffer, prefix ++ "{s}", .{ label, detail }) catch
                 "The bundled engine returned no terminal result.";
             model.setError(text);

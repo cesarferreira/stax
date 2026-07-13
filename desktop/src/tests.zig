@@ -487,7 +487,7 @@ test "bridge exits surface truncation malformed schema and spawn failures" {
     try testing.expect(std.mem.indexOf(u8, model.errorText(), "start") != null);
 }
 
-test "empty bridge output explains an incompatible development engine" {
+test "colored bridge stderr explains an incompatible development engine without escape codes" {
     var model = initModel();
     defer model.deinit();
     var fx = Effects.init(testing.allocator);
@@ -499,11 +499,12 @@ test "empty bridge output explains an incompatible development engine" {
         .key = model_mod.snapshot_effect_key,
         .code = 2,
         .reason = .exited,
-        .stderr_tail = "error: unrecognized subcommand 'desktop'",
+        .stderr_tail = "\x1b[1;31merror:\x1b[0m unrecognized subcommand '\x1b[33mdesktop\x1b[0m'",
     } }, &fx);
 
     try testing.expect(std.mem.indexOf(u8, model.errorText(), "does not support the desktop protocol") != null);
     try testing.expect(std.mem.indexOf(u8, model.errorText(), "Rebuild") != null);
+    try testing.expect(std.mem.indexOfScalar(u8, model.errorText(), 0x1b) == null);
 }
 
 test "malformed diff response clears loading state" {

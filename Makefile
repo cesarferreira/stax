@@ -197,6 +197,7 @@ desktop-check:
 	npm run --prefix desktop check
 
 desktop-test:
+	bash desktop/scripts/dev-macos-tests.sh
 	npm run --prefix desktop test
 
 desktop-build:
