@@ -680,6 +680,14 @@ impl AppView {
                     cx,
                 );
             }
+            operation_overlay::OperationOverlay::RenameBranch { .. }
+            | operation_overlay::OperationOverlay::ConfirmDelete { .. }
+            | operation_overlay::OperationOverlay::PickMoveParent { .. }
+            | operation_overlay::OperationOverlay::ConfirmMove { .. }
+            | operation_overlay::OperationOverlay::ReorderStack { .. }
+            | operation_overlay::OperationOverlay::ConfirmReorder { .. }
+            | operation_overlay::OperationOverlay::ConfirmUndo { .. }
+            | operation_overlay::OperationOverlay::ConfirmRedo { .. } => {}
         }
     }
 

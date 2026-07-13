@@ -5,10 +5,49 @@ use stax::application::{PullRequestMode, RestackScope};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum OperationOverlay {
     CreateBranch {
         parent: String,
         validation_error: Option<String>,
+    },
+    RenameBranch {
+        branch: String,
+        validation_error: Option<String>,
+    },
+    ConfirmDelete {
+        branch: String,
+        descendants: Vec<String>,
+    },
+    PickMoveParent {
+        source: String,
+        candidates: Vec<String>,
+        query: String,
+        selected: usize,
+    },
+    ConfirmMove {
+        source: String,
+        new_parent: String,
+        branches: Vec<String>,
+        auto_stash: bool,
+    },
+    ReorderStack {
+        original: Vec<String>,
+        proposed: Vec<String>,
+        moving: usize,
+    },
+    ConfirmReorder {
+        original: Vec<String>,
+        proposed: Vec<String>,
+        auto_stash: bool,
+    },
+    ConfirmUndo {
+        operation_id: String,
+        branches: Vec<String>,
+    },
+    ConfirmRedo {
+        operation_id: String,
+        branches: Vec<String>,
     },
     ConfirmRestack {
         scope: RestackScope,
@@ -51,10 +90,12 @@ fn card(
     theme: Theme,
     cx: &mut Context<AppView>,
 ) -> Div {
-    let create_input_is_empty = matches!(overlay, OperationOverlay::CreateBranch { .. })
-        && branch_input
-            .as_ref()
-            .is_none_or(|input| input.read(cx).text().trim().is_empty());
+    let create_input_is_empty = matches!(
+        overlay,
+        OperationOverlay::CreateBranch { .. } | OperationOverlay::RenameBranch { .. }
+    ) && branch_input
+        .as_ref()
+        .is_none_or(|input| input.read(cx).text().trim().is_empty());
     let (title, body, primary) = match overlay {
         OperationOverlay::CreateBranch {
             parent,
@@ -85,6 +126,107 @@ fn card(
             }
             ("Create branch", body, "Create")
         }
+        OperationOverlay::RenameBranch {
+            branch,
+            validation_error,
+        } => {
+            let mut body =
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(line("Current name", branch, theme));
+            if let Some(input) = branch_input {
+                body = body.child(
+                    div()
+                        .border_1()
+                        .border_color(theme.border_strong)
+                        .rounded_md()
+                        .bg(theme.surface)
+                        .child(input),
+                );
+            }
+            if let Some(error) = validation_error {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.danger)
+                        .child(error.clone()),
+                );
+            }
+            ("Rename branch", body, "Rename")
+        }
+        OperationOverlay::ConfirmDelete {
+            branch,
+            descendants,
+        } => (
+            "Delete branch",
+            branch_list(format!("Delete {branch}"), descendants)
+                .child("Descendants are retained with their existing metadata."),
+            "Delete",
+        ),
+        OperationOverlay::PickMoveParent {
+            source,
+            candidates,
+            query,
+            selected,
+        } => (
+            "Choose new parent",
+            branch_list(
+                format!("Move {source} · Filter: {query} · Selected: {selected}"),
+                candidates,
+            ),
+            "Continue",
+        ),
+        OperationOverlay::ConfirmMove {
+            source,
+            new_parent,
+            branches,
+            auto_stash,
+        } => (
+            "Confirm move",
+            branch_list(format!("Move {source} onto {new_parent}"), branches)
+                .child(format!("Auto stash: {auto_stash}")),
+            "Move",
+        ),
+        OperationOverlay::ReorderStack {
+            original,
+            proposed,
+            moving,
+        } => (
+            "Reorder stack",
+            branch_list(
+                format!("Original: {} · Moving: {moving}", original.join(" → ")),
+                proposed,
+            ),
+            "Continue",
+        ),
+        OperationOverlay::ConfirmReorder {
+            original,
+            proposed,
+            auto_stash,
+        } => (
+            "Confirm reorder",
+            branch_list(format!("Original: {}", original.join(" → ")), proposed)
+                .child(format!("Auto stash: {auto_stash}")),
+            "Reorder",
+        ),
+        OperationOverlay::ConfirmUndo {
+            operation_id,
+            branches,
+        } => (
+            "Undo local operation",
+            branch_list(format!("Operation: {operation_id}"), branches),
+            "Undo",
+        ),
+        OperationOverlay::ConfirmRedo {
+            operation_id,
+            branches,
+        } => (
+            "Redo local operation",
+            branch_list(format!("Operation: {operation_id}"), branches),
+            "Redo",
+        ),
         OperationOverlay::ConfirmRestack {
             scope,
             affected_branches,

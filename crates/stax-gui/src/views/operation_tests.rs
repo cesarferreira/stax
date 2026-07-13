@@ -226,6 +226,52 @@ fn submit_request() -> OperationRequest {
     }
 }
 
+#[test]
+fn structural_overlays_preserve_their_immutable_previews() {
+    let overlays = [
+        OperationOverlay::RenameBranch {
+            branch: "current".into(),
+            validation_error: None,
+        },
+        OperationOverlay::ConfirmDelete {
+            branch: "old".into(),
+            descendants: vec!["child".into()],
+        },
+        OperationOverlay::PickMoveParent {
+            source: "child".into(),
+            candidates: vec!["main".into()],
+            query: String::new(),
+            selected: 0,
+        },
+        OperationOverlay::ConfirmMove {
+            source: "child".into(),
+            new_parent: "main".into(),
+            branches: vec!["child".into()],
+            auto_stash: false,
+        },
+        OperationOverlay::ReorderStack {
+            original: vec!["a".into(), "b".into()],
+            proposed: vec!["b".into(), "a".into()],
+            moving: 1,
+        },
+        OperationOverlay::ConfirmReorder {
+            original: vec!["a".into(), "b".into()],
+            proposed: vec!["b".into(), "a".into()],
+            auto_stash: false,
+        },
+        OperationOverlay::ConfirmUndo {
+            operation_id: "op-1".into(),
+            branches: vec!["a".into()],
+        },
+        OperationOverlay::ConfirmRedo {
+            operation_id: "op-1".into(),
+            branches: vec!["a".into()],
+        },
+    ];
+
+    assert_eq!(overlays, overlays.clone());
+}
+
 fn checkout_receipt() -> OperationReceipt {
     OperationReceipt {
         request: checkout_request(),

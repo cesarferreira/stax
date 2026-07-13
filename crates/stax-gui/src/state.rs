@@ -103,6 +103,12 @@ impl ActionAvailability {
 pub struct InteractionState {
     pub checkout: ActionAvailability,
     pub create: ActionAvailability,
+    pub rename: ActionAvailability,
+    pub delete: ActionAvailability,
+    pub move_subtree: ActionAvailability,
+    pub reorder: ActionAvailability,
+    pub undo: ActionAvailability,
+    pub redo: ActionAvailability,
     pub restack: ActionAvailability,
     pub restack_all: ActionAvailability,
     pub submit: ActionAvailability,
@@ -193,6 +199,12 @@ impl WorkspaceState {
             return InteractionState {
                 checkout: operation_disabled.clone(),
                 create: operation_disabled.clone(),
+                rename: operation_disabled.clone(),
+                delete: operation_disabled.clone(),
+                move_subtree: operation_disabled.clone(),
+                reorder: operation_disabled.clone(),
+                undo: operation_disabled.clone(),
+                redo: operation_disabled.clone(),
                 restack: operation_disabled.clone(),
                 restack_all: operation_disabled.clone(),
                 submit: operation_disabled.clone(),
@@ -212,6 +224,12 @@ impl WorkspaceState {
             .map(|branch| branch.name.as_str())
             .unwrap_or("the selected branch");
         let has_non_trunk = self.snapshot.branches.iter().any(|branch| !branch.is_trunk);
+        let local_transaction = self
+            .last_receipt
+            .as_ref()
+            .and_then(|receipt| receipt.transaction.as_ref())
+            .filter(|transaction| !transaction.changed_remote_refs);
+        let reorder_order = selected.and_then(|branch| self.linear_stack_order(&branch.name));
 
         InteractionState {
             checkout: match selected {
@@ -230,6 +248,64 @@ impl WorkspaceState {
                 ActionAvailability::enabled()
             } else {
                 ActionAvailability::disabled("Open a repository before creating a branch.")
+            },
+            rename: match selected {
+                Some(branch) if branch.is_current && !branch.is_trunk => {
+                    ActionAvailability::enabled()
+                }
+                Some(branch) if branch.is_trunk => {
+                    ActionAvailability::disabled("The trunk branch cannot be renamed here.")
+                }
+                Some(_) => ActionAvailability::disabled("Check out the branch before renaming it."),
+                None => ActionAvailability::disabled("Select a branch to rename."),
+            },
+            delete: match selected {
+                Some(branch) if !branch.is_current && !branch.is_trunk => {
+                    ActionAvailability::enabled()
+                }
+                Some(branch) if branch.is_trunk => {
+                    ActionAvailability::disabled("The trunk branch cannot be deleted.")
+                }
+                Some(_) => ActionAvailability::disabled(
+                    "Check out another branch before deleting this one.",
+                ),
+                None => ActionAvailability::disabled("Select a branch to delete."),
+            },
+            move_subtree: match selected {
+                Some(branch)
+                    if !branch.is_trunk
+                        && !self.move_parent_candidates(&branch.name).is_empty() =>
+                {
+                    ActionAvailability::enabled()
+                }
+                Some(branch) if branch.is_trunk => {
+                    ActionAvailability::disabled("The trunk branch cannot be moved.")
+                }
+                Some(_) => ActionAvailability::disabled("No eligible parent branch is available."),
+                None => ActionAvailability::disabled("Select a branch to move."),
+            },
+            reorder: if reorder_order.is_some_and(|order| order.len() >= 2) {
+                ActionAvailability::enabled()
+            } else {
+                ActionAvailability::disabled("Select a linear stack with at least two branches.")
+            },
+            undo: match local_transaction {
+                Some(transaction) if transaction.can_undo => ActionAvailability::enabled(),
+                Some(_) => {
+                    ActionAvailability::disabled("The latest local operation cannot be undone.")
+                }
+                None => {
+                    ActionAvailability::disabled("No safe local operation is available to undo.")
+                }
+            },
+            redo: match local_transaction {
+                Some(transaction) if transaction.can_redo => ActionAvailability::enabled(),
+                Some(_) => {
+                    ActionAvailability::disabled("The latest local operation cannot be redone.")
+                }
+                None => {
+                    ActionAvailability::disabled("No safe local operation is available to redo.")
+                }
             },
             restack: match selected {
                 Some(branch) if !branch.is_trunk => ActionAvailability::enabled(),
@@ -260,6 +336,91 @@ impl WorkspaceState {
     pub fn dismiss_operation_presentation(&mut self) {
         self.operation_error = None;
         self.last_receipt = None;
+    }
+
+    pub fn descendants_of(&self, source: &str) -> Vec<String> {
+        let mut descendants = Vec::new();
+        loop {
+            let mut changed = false;
+            for branch in &self.snapshot.branches {
+                let is_descendant = branch.parent.as_deref().is_some_and(|parent| {
+                    parent == source || descendants.iter().any(|name| name == parent)
+                });
+                if branch.name != source && is_descendant && !descendants.contains(&branch.name) {
+                    descendants.push(branch.name.clone());
+                    changed = true;
+                }
+            }
+            if !changed {
+                return descendants;
+            }
+        }
+    }
+
+    pub fn move_parent_candidates(&self, source: &str) -> Vec<String> {
+        let Some(source_branch) = self
+            .snapshot
+            .branches
+            .iter()
+            .find(|branch| branch.name == source && !branch.is_trunk)
+        else {
+            return Vec::new();
+        };
+        let descendants = self.descendants_of(source);
+        self.snapshot
+            .branches
+            .iter()
+            .filter(|branch| {
+                branch.name != source
+                    && source_branch.parent.as_deref() != Some(branch.name.as_str())
+                    && !descendants.contains(&branch.name)
+            })
+            .map(|branch| branch.name.clone())
+            .collect()
+    }
+
+    pub fn linear_stack_order(&self, branch: &str) -> Option<Vec<String>> {
+        let selected = self
+            .snapshot
+            .branches
+            .iter()
+            .find(|candidate| candidate.name == branch && !candidate.is_trunk)?;
+        let mut root = selected;
+        let mut seen = vec![root.name.clone()];
+        loop {
+            let parent = root.parent.as_deref()?;
+            if parent == self.snapshot.trunk {
+                break;
+            }
+            root = self
+                .snapshot
+                .branches
+                .iter()
+                .find(|candidate| candidate.name == parent && !candidate.is_trunk)?;
+            if seen.contains(&root.name) {
+                return None;
+            }
+            seen.push(root.name.clone());
+        }
+
+        let mut order = vec![root.name.clone()];
+        let mut current = root.name.as_str();
+        loop {
+            let children = self
+                .snapshot
+                .branches
+                .iter()
+                .filter(|candidate| candidate.parent.as_deref() == Some(current))
+                .collect::<Vec<_>>();
+            match children.as_slice() {
+                [] => return order.contains(&branch.to_string()).then_some(order),
+                [child] if !order.contains(&child.name) => {
+                    order.push(child.name.clone());
+                    current = order.last().expect("order has a child");
+                }
+                [_] | [_, ..] => return None,
+            }
+        }
     }
 
     pub fn present_operation_error(&mut self, error: OperationError) {
@@ -632,7 +793,9 @@ fn preferred_selection(receipt: &OperationReceipt) -> Option<String> {
         OperationOutcome::BranchDeleted { .. } => None,
         OperationOutcome::SubtreeMoved { source, .. } => Some(source.clone()),
         OperationOutcome::StackReordered { .. } => None,
-        OperationOutcome::Restacked { .. }
+        OperationOutcome::TransactionUndone { .. }
+        | OperationOutcome::TransactionRedone { .. }
+        | OperationOutcome::Restacked { .. }
         | OperationOutcome::Submitted { .. }
         | OperationOutcome::PullRequestResolved { .. } => None,
     }
@@ -647,6 +810,8 @@ fn resolved_url(receipt: &OperationReceipt) -> Option<String> {
         | OperationOutcome::BranchDeleted { .. }
         | OperationOutcome::SubtreeMoved { .. }
         | OperationOutcome::StackReordered { .. }
+        | OperationOutcome::TransactionUndone { .. }
+        | OperationOutcome::TransactionRedone { .. }
         | OperationOutcome::Restacked { .. }
         | OperationOutcome::Submitted { .. } => None,
     }
@@ -656,7 +821,9 @@ fn resolved_url(receipt: &OperationReceipt) -> Option<String> {
 mod tests {
     use super::{LoadState, SelectionDirection, WorkspaceState};
     use stax::application::{
-        BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, RepositorySnapshot,
+        BranchDetails, BranchDiff, BranchSummary, CiSummary, DetailRequestToken, OperationOutcome,
+        OperationReceipt, OperationRequest, OperationSideEffects, RepositorySnapshot,
+        TransactionStatus, TransactionSummary,
     };
     use std::path::PathBuf;
 
@@ -672,6 +839,70 @@ mod tests {
             pr_state: None,
             ci_state: None,
         }
+    }
+
+    fn tracked_branch(
+        name: &str,
+        parent: Option<&str>,
+        is_current: bool,
+        is_trunk: bool,
+    ) -> BranchSummary {
+        BranchSummary {
+            name: name.into(),
+            parent: parent.map(str::to_string),
+            column: 0,
+            is_current,
+            is_trunk,
+            needs_restack: false,
+            pr_number: None,
+            pr_state: None,
+            ci_state: None,
+        }
+    }
+
+    fn structural_snapshot() -> RepositorySnapshot {
+        RepositorySnapshot {
+            repository_root: PathBuf::from("/repo"),
+            current_branch: "parent".into(),
+            trunk: "main".into(),
+            branches: vec![
+                tracked_branch("main", None, false, true),
+                tracked_branch("parent", Some("main"), true, false),
+                tracked_branch("child", Some("parent"), false, false),
+            ],
+        }
+    }
+
+    fn history_receipt(changed_remote_refs: bool) -> OperationReceipt {
+        OperationReceipt {
+            request: OperationRequest::UndoTransaction {
+                operation_id: Some("op-1".into()),
+                update_remote: false,
+            },
+            summary: "History available".into(),
+            affected_branches: vec!["parent".into()],
+            outcome: OperationOutcome::TransactionUndone {
+                operation_id: "op-1".into(),
+                changed_refs: vec!["refs/heads/parent".into()],
+            },
+            transaction: Some(TransactionSummary {
+                id: "op-1".into(),
+                kind: "rename".into(),
+                status: TransactionStatus::Succeeded,
+                branches: vec!["parent".into()],
+                can_undo: true,
+                can_redo: true,
+                changed_remote_refs,
+            }),
+            warnings: Vec::new(),
+            side_effects: OperationSideEffects::RepositoryChanged,
+        }
+    }
+
+    fn present_receipt(state: &mut WorkspaceState, receipt: OperationReceipt) {
+        let request = receipt.request.clone();
+        let token = state.begin_operation(request).unwrap();
+        state.finish_operation(&token, Ok(receipt)).unwrap();
     }
 
     fn snapshot(repository: &str, current: &str, branches: &[(&str, bool)]) -> RepositorySnapshot {
@@ -736,6 +967,76 @@ mod tests {
         assert_eq!(state.details(), &LoadState::Idle);
         assert_eq!(state.diff(), &LoadState::Idle);
         assert_eq!(state.ci(), &LoadState::Idle);
+    }
+
+    #[test]
+    fn interaction_structural_actions_follow_selection_and_stack_shape() {
+        let mut state = WorkspaceState::new(structural_snapshot());
+
+        let current = state.interaction_state();
+        assert!(current.rename.enabled);
+        assert!(!current.delete.enabled);
+        assert!(!current.move_subtree.enabled);
+        assert!(current.reorder.enabled);
+
+        state.select_branch("child").unwrap();
+        let selected = state.interaction_state();
+        assert!(!selected.rename.enabled);
+        assert!(selected.delete.enabled);
+        assert!(selected.move_subtree.enabled);
+        assert!(selected.reorder.enabled);
+        assert_eq!(state.descendants_of("parent"), vec!["child"]);
+        assert_eq!(state.move_parent_candidates("child"), vec!["main"]);
+        assert_eq!(
+            state.linear_stack_order("child"),
+            Some(vec!["parent".into(), "child".into()])
+        );
+    }
+
+    #[test]
+    fn interaction_history_is_available_only_for_local_receipts() {
+        let mut local = WorkspaceState::new(structural_snapshot());
+        present_receipt(&mut local, history_receipt(false));
+        let interaction = local.interaction_state();
+        assert!(interaction.undo.enabled);
+        assert!(interaction.redo.enabled);
+
+        let mut remote = WorkspaceState::new(structural_snapshot());
+        present_receipt(&mut remote, history_receipt(true));
+        let interaction = remote.interaction_state();
+        assert!(!interaction.undo.enabled);
+        assert!(!interaction.redo.enabled);
+    }
+
+    #[test]
+    fn interaction_mutation_disables_every_structural_action() {
+        let mut state = WorkspaceState::new(structural_snapshot());
+        state
+            .begin_operation(OperationRequest::DeleteBranch {
+                branch: "child".into(),
+                force: true,
+            })
+            .unwrap();
+
+        let interaction = state.interaction_state();
+        assert!(!interaction.rename.enabled);
+        assert!(!interaction.delete.enabled);
+        assert!(!interaction.move_subtree.enabled);
+        assert!(!interaction.reorder.enabled);
+        assert!(!interaction.undo.enabled);
+        assert!(!interaction.redo.enabled);
+    }
+
+    #[test]
+    fn interaction_reorder_rejects_forked_stacks() {
+        let mut snapshot = structural_snapshot();
+        snapshot
+            .branches
+            .push(tracked_branch("sibling", Some("parent"), false, false));
+        let state = WorkspaceState::new(snapshot);
+
+        assert!(!state.interaction_state().reorder.enabled);
+        assert_eq!(state.linear_stack_order("parent"), None);
     }
 
     #[test]
