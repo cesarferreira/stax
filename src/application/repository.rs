@@ -275,6 +275,9 @@ impl RepositorySession {
             OperationRequest::CreateBranch { name, parent } => {
                 self.create_empty_branch_unframed(&request, name, parent, reporter)
             }
+            OperationRequest::RenameBranch { branch, new_name } => {
+                self.rename_branch_unframed(&request, branch, new_name, reporter)
+            }
             OperationRequest::Restack { scope, auto_stash } => {
                 self.restack_unframed(&request, scope.clone(), *auto_stash, reporter)
             }

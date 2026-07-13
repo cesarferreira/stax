@@ -20,6 +20,13 @@ pub enum OperationRequest {
         /// Parent branch for the new branch.
         parent: String,
     },
+    /// Rename the current local branch.
+    RenameBranch {
+        /// Current branch name.
+        branch: String,
+        /// New literal branch name.
+        new_name: String,
+    },
     /// Restack branches selected by a deterministic scope.
     Restack {
         /// Branch scope to restack.
@@ -79,6 +86,8 @@ pub enum OperationStage {
     CheckingOut,
     /// Create a branch.
     CreatingBranch,
+    /// Rename a local branch and update its stack metadata.
+    RenamingBranch,
     /// Rebase branches onto their updated parents.
     Restacking,
     /// Push local refs to a remote.
@@ -168,6 +177,13 @@ pub enum OperationOutcome {
         branch: String,
         /// Parent assigned to the created branch.
         parent: String,
+    },
+    /// A local branch was renamed.
+    BranchRenamed {
+        /// Branch name before the rename.
+        old_name: String,
+        /// Branch name after the rename.
+        new_name: String,
     },
     /// One or more branches were restacked.
     Restacked {

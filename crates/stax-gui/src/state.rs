@@ -628,6 +628,7 @@ fn preferred_selection(receipt: &OperationReceipt) -> Option<String> {
             | stax::application::CheckoutOutcome::AlreadyCurrent { branch } => Some(branch.clone()),
         },
         OperationOutcome::BranchCreated { branch, .. } => Some(branch.clone()),
+        OperationOutcome::BranchRenamed { new_name, .. } => Some(new_name.clone()),
         OperationOutcome::Restacked { .. }
         | OperationOutcome::Submitted { .. }
         | OperationOutcome::PullRequestResolved { .. } => None,
@@ -639,6 +640,7 @@ fn resolved_url(receipt: &OperationReceipt) -> Option<String> {
         OperationOutcome::PullRequestResolved { url, .. } => Some(url.clone()),
         OperationOutcome::Checkout(_)
         | OperationOutcome::BranchCreated { .. }
+        | OperationOutcome::BranchRenamed { .. }
         | OperationOutcome::Restacked { .. }
         | OperationOutcome::Submitted { .. } => None,
     }

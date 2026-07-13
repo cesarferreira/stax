@@ -615,6 +615,7 @@ fn request_label(request: &stax::application::OperationRequest) -> &'static str 
     match request {
         stax::application::OperationRequest::Checkout { .. } => "checkout",
         stax::application::OperationRequest::CreateBranch { .. } => "branch creation",
+        stax::application::OperationRequest::RenameBranch { .. } => "branch rename",
         stax::application::OperationRequest::Restack { .. } => "restack",
         stax::application::OperationRequest::SubmitStack { .. } => "submit",
         stax::application::OperationRequest::ResolvePullRequestUrl { .. } => "pull request lookup",
@@ -627,6 +628,7 @@ fn stage_label(stage: OperationStage) -> &'static str {
         OperationStage::Preparing => "Preparing",
         OperationStage::CheckingOut => "Checking out",
         OperationStage::CreatingBranch => "Creating branch",
+        OperationStage::RenamingBranch => "Renaming branch",
         OperationStage::Restacking => "Restacking",
         OperationStage::Pushing => "Pushing",
         OperationStage::UpdatingPullRequests => "Updating pull requests",

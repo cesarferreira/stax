@@ -198,6 +198,86 @@ fn create_rejects_rebase_in_progress_before_creating_a_ref() {
     assert!(!repo.list_branches().contains(&"child".to_string()));
 }
 
+#[test]
+fn rename_updates_ref_metadata_children_and_returns_undoable_receipt() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["parent", "child"]);
+    repo.git(&["checkout", &branches[0]]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .rename_branch(&branches[0], "renamed", &mut NoopOperationReporter)
+        .unwrap();
+
+    assert_eq!(repo.current_branch(), "renamed");
+    assert!(!repo.list_branches().contains(&branches[0]));
+    assert!(repo.get_children("renamed").contains(&branches[1]));
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::BranchRenamed {
+            ref old_name,
+            ref new_name,
+        } if old_name == &branches[0] && new_name == "renamed"
+    ));
+    assert!(receipt.transaction.as_ref().is_some_and(|tx| {
+        tx.status == TransactionStatus::Succeeded && tx.can_undo && tx.can_redo
+    }));
+}
+
+#[test]
+fn rename_rejects_the_trunk_branch_without_changing_refs() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .rename_branch("main", "renamed", &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::PreconditionFailed);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert_eq!(repo.current_branch(), "main");
+    assert_eq!(receipt_count(&repo), 0);
+}
+
+#[test]
+fn rename_rejects_a_non_current_branch_without_changing_refs() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["parent", "child"]);
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .rename_branch(&branches[0], "renamed", &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::PreconditionFailed);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert!(repo.list_branches().contains(&branches[0]));
+    assert!(!repo.list_branches().contains(&"renamed".to_string()));
+    assert_eq!(receipt_count(&repo), 0);
+}
+
+#[test]
+fn rename_rejects_invalid_and_colliding_names_before_writing_a_receipt() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["parent", "child"]);
+
+    for new_name in ["///", branches[0].as_str()] {
+        let error = RepositorySession::open(repo.path())
+            .unwrap()
+            .rename_branch(&branches[1], new_name, &mut NoopOperationReporter)
+            .unwrap_err();
+        assert_eq!(error.kind, OperationErrorKind::InvalidInput);
+        assert_eq!(error.side_effects, OperationSideEffects::None);
+    }
+
+    assert_eq!(repo.current_branch(), branches[1]);
+    assert_eq!(receipt_count(&repo), 0);
+}
+
 #[tokio::test]
 async fn pull_request_network_fallback_returns_runtime_error_inside_tokio() {
     let repo = TestRepo::new();

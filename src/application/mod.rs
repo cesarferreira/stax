@@ -5,6 +5,7 @@ mod create;
 mod model;
 mod operation;
 mod pull_request;
+mod rename;
 mod repository;
 mod restack;
 pub(crate) mod submit;

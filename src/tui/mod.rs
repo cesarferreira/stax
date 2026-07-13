@@ -597,15 +597,12 @@ fn handle_input_action(app: &mut App, action: KeyAction, input_action: &InputAct
             } else {
                 match input_action {
                     InputAction::Rename => {
-                        queue_command(
+                        queue_operation(
                             app,
-                            vec![vec![
-                                "rename".to_string(),
-                                "--literal".to_string(),
-                                input.clone(),
-                            ]],
-                            format!("Renamed branch to '{}'", input),
-                            Some(input.clone()),
+                            OperationRequest::RenameBranch {
+                                branch: app.current_branch.clone(),
+                                new_name: input.clone(),
+                            },
                         );
                     }
                     InputAction::NewBranch => {
@@ -673,15 +670,12 @@ fn handle_input_key(app: &mut App, key: KeyEvent, input_action: &InputAction) ->
             } else {
                 match input_action {
                     InputAction::Rename => {
-                        queue_command(
+                        queue_operation(
                             app,
-                            vec![vec![
-                                "rename".to_string(),
-                                "--literal".to_string(),
-                                input.clone(),
-                            ]],
-                            format!("Renamed branch to '{}'", input),
-                            Some(input.clone()),
+                            OperationRequest::RenameBranch {
+                                branch: app.current_branch.clone(),
+                                new_name: input.clone(),
+                            },
                         );
                     }
                     InputAction::NewBranch => {
@@ -1010,6 +1004,10 @@ mod tests {
             OperationRequest::CreateBranch {
                 name: "child".into(),
                 parent: "feature".into(),
+            },
+            OperationRequest::RenameBranch {
+                branch: "feature".into(),
+                new_name: "renamed".into(),
             },
             OperationRequest::Restack {
                 scope: RestackScope::StackContaining("feature".into()),
