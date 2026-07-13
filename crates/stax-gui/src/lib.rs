@@ -102,7 +102,7 @@ fn show_about(_: &AboutStax, cx: &mut App) {
         return;
     };
     let _ = window.update(cx, |_, window, cx| {
-        let _ = window.prompt(
+        let answer = window.prompt(
             PromptLevel::Info,
             "Stax",
             Some(concat!(
@@ -112,6 +112,10 @@ fn show_about(_: &AboutStax, cx: &mut App) {
             &["OK"],
             cx,
         );
+        cx.spawn(async move |_| {
+            let _ = answer.await;
+        })
+        .detach();
     });
 }
 
