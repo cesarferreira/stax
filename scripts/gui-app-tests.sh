@@ -5,6 +5,48 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
 
+source_icon="$repo_root/crates/stax-gui/resources/AppIcon-1024.png"
+icon="$repo_root/crates/stax-gui/resources/AppIcon.icns"
+test "$(sips -g pixelWidth "$source_icon" | awk '/pixelWidth/{print $2}')" = "1024"
+test "$(sips -g pixelHeight "$source_icon" | awk '/pixelHeight/{print $2}')" = "1024"
+iconutil --convert iconset --output "$fixture/roundtrip.iconset" "$icon"
+for representation in \
+  icon_16x16.png \
+  icon_16x16@2x.png \
+  icon_32x32.png \
+  icon_32x32@2x.png \
+  icon_128x128.png \
+  icon_128x128@2x.png \
+  icon_256x256.png \
+  icon_256x256@2x.png \
+  icon_512x512.png \
+  icon_512x512@2x.png
+do
+  test -f "$fixture/roundtrip.iconset/$representation"
+done
+
+custom_icon="$fixture/CustomAppIcon.icns"
+"$repo_root/scripts/build-gui-icon.sh" "$source_icon" "$custom_icon" >/dev/null
+test -f "$custom_icon"
+
+jpeg_source="$fixture/AppIcon-1024.jpg"
+sips -s format jpeg "$source_icon" --out "$jpeg_source" >/dev/null
+if "$repo_root/scripts/build-gui-icon.sh" "$jpeg_source" "$fixture/jpeg.icns" \
+  >"$fixture/jpeg.stdout" 2>"$fixture/jpeg.stderr"
+then
+  echo "Expected JPEG icon source to be rejected." >&2
+  exit 1
+fi
+grep -q "PNG" "$fixture/jpeg.stderr"
+
+if "$repo_root/scripts/build-gui-icon.sh" "$fixture/missing.png" "$fixture/missing.icns" \
+  >"$fixture/missing.stdout" 2>"$fixture/missing.stderr"
+then
+  echo "Expected missing icon source to be rejected." >&2
+  exit 1
+fi
+grep -q "Missing icon source" "$fixture/missing.stderr"
+
 binary="$fixture/stax-gui-fixture"
 app="$fixture/Stax.app"
 

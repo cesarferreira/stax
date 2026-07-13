@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff install clean gui-app gui-app-test install-gui-app test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint benchmark-status all
+.PHONY: build build-release release ensure-git-cliff install clean gui-icon gui-app gui-app-test install-gui-app test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint benchmark-status all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -41,6 +41,9 @@ ensure-git-cliff:
 install:
 	CARGO_INCREMENTAL=0 cargo install --path . --locked --bins --debug
 	STAX_DISABLE_UPDATE_CHECK=1 "$${CARGO_HOME:-$$HOME/.cargo}/bin/stax" shell-setup --refresh
+
+gui-icon:
+	./scripts/build-gui-icon.sh
 
 gui-app:
 	./scripts/build-gui-app.sh
