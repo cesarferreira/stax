@@ -2329,11 +2329,7 @@ impl Render for AppView {
             .size_full()
             .relative()
             .border_1()
-            .border_color(if self.focus_handle.is_focused(window) {
-                theme.focus
-            } else {
-                theme.border
-            })
+            .border_color(theme.border)
             .font_family(SYSTEM_UI_FONT)
             .bg(theme.window)
             .text_color(theme.text)
@@ -2402,10 +2398,10 @@ pub fn control_button(
             .text_color(theme.accent_text)
             .hover(move |style| style.bg(theme.accent.alpha(0.88))),
         ControlKind::Secondary => base
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
+            .border_color(theme.border)
+            .bg(theme.surface)
             .text_color(theme.text)
-            .hover(move |style| style.bg(theme.surface_selected)),
+            .hover(move |style| style.bg(theme.surface_hover)),
     }
 }
 

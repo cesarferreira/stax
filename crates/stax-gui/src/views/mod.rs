@@ -3,6 +3,7 @@ mod changes_pane;
 mod inspector_pane;
 mod operation_overlay;
 mod stack_pane;
+mod stack_topology;
 mod text_input;
 mod welcome;
 mod workspace;

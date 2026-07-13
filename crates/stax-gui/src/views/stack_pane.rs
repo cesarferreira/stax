@@ -1,3 +1,4 @@
+use super::stack_topology::{TopologyCell, TopologyNode, TopologyRow, layout as layout_topology};
 use super::text_input::BranchNameInput;
 use super::{AppView, WorkspaceView, activate_control, control_focus_style};
 use crate::theme::{MONOSPACE_FONT, Theme};
@@ -6,10 +7,16 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, div, px, uniform_list,
 };
 use stax::application::BranchSummary;
+use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::Arc;
 
 pub const PANE_MARKER: &str = "stax-stack-pane";
 pub const PANE_HEADING: &str = "Stack";
+const BRANCH_ROW_HEIGHT: f32 = 48.0;
+const TOPOLOGY_LANE_WIDTH: f32 = 16.0;
+const TOPOLOGY_RAIL_WIDTH: f32 = 1.0;
+const TOPOLOGY_NODE_SIZE: f32 = 7.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StatusTone {
@@ -26,7 +33,22 @@ pub fn render(
     theme: Theme,
     cx: &mut Context<AppView>,
 ) -> Div {
-    let branch_count = workspace.state().filtered_branches().len();
+    let filtered_branches = workspace
+        .state()
+        .filtered_branches()
+        .iter()
+        .map(|branch| (*branch).clone())
+        .collect::<Vec<_>>();
+    let branch_count = filtered_branches.len();
+    let topology = Arc::new(topology_for_filtered_branches(
+        &workspace.state().snapshot().branches,
+        &filtered_branches,
+    ));
+    let topology_width = topology
+        .values()
+        .next()
+        .map(|row| row.cells.len())
+        .unwrap_or(1);
 
     let mut pane = div()
         .debug_selector(|| PANE_MARKER.into())
@@ -34,19 +56,15 @@ pub fn render(
         .min_w_0()
         .flex()
         .flex_col()
-        .border_r_1()
-        .border_color(theme.border)
-        .bg(theme.surface)
+        .bg(theme.sidebar)
         .child(
             div()
-                .h(px(43.0))
+                .h(px(46.0))
                 .flex_none()
                 .flex()
                 .items_center()
                 .justify_between()
                 .px_3()
-                .border_b_1()
-                .border_color(theme.border)
                 .child(
                     div()
                         .text_sm()
@@ -64,25 +82,33 @@ pub fn render(
         pane = pane.child(
             div()
                 .debug_selector(|| "stack-search".into())
-                .h(px(42.0))
+                .h(px(44.0))
                 .flex_none()
                 .flex()
                 .items_center()
-                .gap_2()
-                .px_3()
-                .border_b_1()
-                .border_color(theme.border)
-                .bg(theme.surface_raised)
-                .font_family(MONOSPACE_FONT)
-                .text_sm()
-                .text_color(theme.text_muted)
-                .child("/")
+                .px_2()
                 .child(
                     div()
+                        .h(px(32.0))
+                        .w_full()
                         .min_w_0()
-                        .flex_1()
-                        .text_color(theme.text)
-                        .child(search_input),
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .rounded_lg()
+                        .bg(theme.surface_hover)
+                        .font_family(MONOSPACE_FONT)
+                        .text_sm()
+                        .text_color(theme.text_muted)
+                        .child("/")
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .text_color(theme.text)
+                                .child(search_input),
+                        ),
                 ),
         );
     }
@@ -122,7 +148,16 @@ pub fn render(
 
                     rows.into_iter()
                         .map(|(index, branch)| {
-                            render_branch_row(branch, selected.as_deref(), index, theme, cx)
+                            let topology_row = topology.get(&branch.name).cloned();
+                            render_branch_row(
+                                branch,
+                                topology_row,
+                                topology_width,
+                                selected.as_deref(),
+                                index,
+                                theme,
+                                cx,
+                            )
                         })
                         .collect()
                 }),
@@ -134,8 +169,30 @@ pub fn render(
     }
 }
 
+fn topology_for_filtered_branches(
+    full_branches: &[BranchSummary],
+    filtered_branches: &[BranchSummary],
+) -> HashMap<String, TopologyRow> {
+    let full_topology = layout_topology(full_branches)
+        .into_iter()
+        .map(|row| (row.branch_name.clone(), row))
+        .collect::<HashMap<_, _>>();
+
+    filtered_branches
+        .iter()
+        .filter_map(|branch| {
+            full_topology
+                .get(&branch.name)
+                .cloned()
+                .map(|row| (branch.name.clone(), row))
+        })
+        .collect()
+}
+
 fn render_branch_row(
     branch: BranchSummary,
+    topology: Option<TopologyRow>,
+    topology_width: usize,
     selected: Option<&str>,
     branch_index: usize,
     theme: Theme,
@@ -143,9 +200,7 @@ fn render_branch_row(
 ) -> Stateful<Div> {
     let is_selected = selected == Some(branch.name.as_str());
     let branch_name = branch.name.clone();
-    let topology = topology_label(&branch);
     let statuses = branch_status_parts(&branch);
-    let indentation = px(10.0 + branch.column.min(8) as f32 * 14.0);
 
     let row = div()
         .id(SharedString::from(format!("stack-branch-{}", branch.name)))
@@ -153,39 +208,40 @@ fn render_branch_row(
         .focusable()
         .tab_index(branch_index as isize + 20)
         .focus(move |style| control_focus_style(style, theme))
-        .h(px(54.0))
-        .w_full()
+        .h(px(BRANCH_ROW_HEIGHT))
+        .mx_2()
         .min_w_0()
         .flex()
         .items_center()
         .gap_2()
-        .pl(indentation)
-        .pr_2()
+        .px_2()
+        .rounded_lg()
         .border_1()
         .border_color(if is_selected {
-            theme.accent
+            theme.surface_selected
         } else {
-            theme.border
+            theme.sidebar
         })
         .bg(if is_selected {
             theme.surface_selected
         } else {
-            theme.surface
+            theme.sidebar
         })
         .cursor_pointer()
-        .hover(move |style| style.bg(theme.surface_selected))
+        .hover(move |style| style.bg(theme.surface_hover))
         .child(
             div()
+                .debug_selector(|| "stack-topology-gutter".into())
                 .flex_none()
-                .w(px(38.0))
-                .font_family(MONOSPACE_FONT)
-                .text_xs()
-                .text_color(if branch.is_current {
-                    theme.accent
-                } else {
-                    theme.text_muted
-                })
-                .child(topology),
+                .w(px(topology_width as f32 * TOPOLOGY_LANE_WIDTH))
+                .h_full()
+                .flex()
+                .children(
+                    topology
+                        .into_iter()
+                        .flat_map(|row| row.cells)
+                        .map(move |cell| render_topology_cell(cell, theme, is_selected)),
+                ),
         )
         .child(
             div()
@@ -193,7 +249,6 @@ fn render_branch_row(
                 .flex()
                 .flex_1()
                 .flex_col()
-                .gap_1()
                 .child(
                     div()
                         .truncate()
@@ -206,18 +261,14 @@ fn render_branch_row(
                         })
                         .child(branch.name.clone()),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .children(statuses.into_iter().map(|(label, tone)| {
-                            div()
-                                .text_xs()
-                                .text_color(status_color(tone, theme))
-                                .child(label)
-                        })),
-                ),
+                .child(div().flex().items_center().gap_1().truncate().children(
+                    statuses.into_iter().map(|(label, tone)| {
+                        div()
+                            .text_xs()
+                            .text_color(status_color(tone, theme))
+                            .child(label)
+                    }),
+                )),
         );
 
     activate_control(row, cx, move |app, window, cx| {
@@ -225,16 +276,90 @@ fn render_branch_row(
     })
 }
 
-fn topology_label(branch: &BranchSummary) -> String {
-    let connector = if branch.is_trunk { "◆" } else { "●" };
-    if branch.column == 0 {
-        connector.to_string()
-    } else {
-        format!(
-            "{}╰{connector}",
-            "│".repeat(branch.column.saturating_sub(1))
-        )
+fn render_topology_cell(cell: TopologyCell, theme: Theme, selected: bool) -> Div {
+    let color = theme.topology_lane(cell.lane);
+    let center_x = (TOPOLOGY_LANE_WIDTH - TOPOLOGY_RAIL_WIDTH) / 2.0;
+    let center_y = (BRANCH_ROW_HEIGHT - TOPOLOGY_RAIL_WIDTH) / 2.0;
+    let half_lane = TOPOLOGY_LANE_WIDTH / 2.0;
+    let half_row = BRANCH_ROW_HEIGHT / 2.0;
+    let mut lane = div()
+        .debug_selector(|| "stack-topology-cell".into())
+        .relative()
+        .flex_none()
+        .w(px(TOPOLOGY_LANE_WIDTH))
+        .h(px(BRANCH_ROW_HEIGHT));
+
+    if cell.top {
+        lane = lane.child(
+            div()
+                .debug_selector(|| "stack-topology-vertical-rail".into())
+                .absolute()
+                .top_0()
+                .left(px(center_x))
+                .w(px(TOPOLOGY_RAIL_WIDTH))
+                .h(px(half_row))
+                .bg(color),
+        );
     }
+    if cell.bottom {
+        lane = lane.child(
+            div()
+                .debug_selector(|| "stack-topology-vertical-rail".into())
+                .absolute()
+                .top(px(half_row))
+                .left(px(center_x))
+                .w(px(TOPOLOGY_RAIL_WIDTH))
+                .bottom_0()
+                .bg(color),
+        );
+    }
+    if cell.left {
+        lane = lane.child(
+            div()
+                .debug_selector(|| "stack-topology-horizontal-rail".into())
+                .absolute()
+                .top(px(center_y))
+                .left_0()
+                .w(px(half_lane))
+                .h(px(TOPOLOGY_RAIL_WIDTH))
+                .bg(color),
+        );
+    }
+    if cell.right {
+        lane = lane.child(
+            div()
+                .debug_selector(|| "stack-topology-horizontal-rail".into())
+                .absolute()
+                .top(px(center_y))
+                .left(px(half_lane))
+                .right_0()
+                .h(px(TOPOLOGY_RAIL_WIDTH))
+                .bg(color),
+        );
+    }
+    if let Some(node) = cell.node {
+        let node_background = if selected {
+            theme.surface_selected
+        } else {
+            theme.sidebar
+        };
+        let mut node_view = div()
+            .debug_selector(|| "stack-topology-node".into())
+            .absolute()
+            .top(px((BRANCH_ROW_HEIGHT - TOPOLOGY_NODE_SIZE) / 2.0))
+            .left(px((TOPOLOGY_LANE_WIDTH - TOPOLOGY_NODE_SIZE) / 2.0))
+            .size(px(TOPOLOGY_NODE_SIZE))
+            .rounded_full()
+            .border_1()
+            .border_color(color)
+            .bg(node_background);
+        if node == TopologyNode::Current {
+            node_view = node_view.bg(color);
+        }
+        lane = lane.child(node_view);
+    }
+
+    lane
 }
 
 fn branch_status_parts(branch: &BranchSummary) -> Vec<(String, StatusTone)> {
@@ -279,7 +404,8 @@ fn status_color(tone: StatusTone, theme: Theme) -> gpui::Hsla {
 
 #[cfg(test)]
 mod tests {
-    use super::{StatusTone, branch_status_parts, topology_label};
+    use super::{StatusTone, branch_status_parts, topology_for_filtered_branches};
+    use crate::views::stack_topology::TopologyNode;
     use stax::application::BranchSummary;
 
     fn branch() -> BranchSummary {
@@ -306,7 +432,49 @@ mod tests {
     }
 
     #[test]
-    fn topology_uses_column_connectors() {
-        assert_eq!(topology_label(&branch()), "│╰●");
+    fn filtering_reuses_rows_from_the_full_topology() {
+        let full = vec![
+            BranchSummary {
+                name: "nested".into(),
+                parent: Some("side".into()),
+                column: 2,
+                is_current: false,
+                is_trunk: false,
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                ci_state: None,
+            },
+            BranchSummary {
+                name: "side".into(),
+                parent: Some("main".into()),
+                column: 1,
+                is_current: false,
+                is_trunk: false,
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                ci_state: None,
+            },
+            BranchSummary {
+                name: "main".into(),
+                parent: None,
+                column: 0,
+                is_current: true,
+                is_trunk: true,
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                ci_state: None,
+            },
+        ];
+        let filtered = vec![full[1].clone()];
+
+        let rows = topology_for_filtered_branches(&full, &filtered);
+        let side = rows.get("side").unwrap();
+        assert!(side.cells[0].top && side.cells[0].bottom);
+        assert_eq!(side.cells[1].node, Some(TopologyNode::Branch));
+        assert!(side.cells[1].right);
+        assert!(side.cells[2].top && side.cells[2].left);
     }
 }

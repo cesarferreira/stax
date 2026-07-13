@@ -51,10 +51,10 @@ pub fn render(
         .min_w_0()
         .flex()
         .flex_col()
-        .bg(theme.surface)
+        .bg(theme.window)
         .child(
             div()
-                .h(px(43.0))
+                .h(px(44.0))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -76,7 +76,17 @@ pub fn render(
                 .min_h_0()
                 .flex_col()
                 .overflow_y_scroll()
-                .child(content),
+                .p_3()
+                .child(
+                    div()
+                        .debug_selector(|| "inspector-card".into())
+                        .w_full()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.surface_raised)
+                        .child(content),
+                ),
         )
 }
 
@@ -87,24 +97,36 @@ fn render_selected(
     cx: &mut gpui::Context<super::AppView>,
 ) -> Div {
     div()
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap_4()
-        .p_3()
+        .p_4()
         .child(
             div()
+                .w_full()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .child(
                     div()
+                        .debug_selector(|| "inspector-branch-identity".into())
+                        .w_full()
+                        .min_w_0()
+                        .truncate()
                         .font_family(MONOSPACE_FONT)
-                        .text_base()
+                        .text_sm()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(branch.name.clone()),
                 )
                 .child(
                     div()
+                        .debug_selector(|| "inspector-parent-identity".into())
+                        .w_full()
+                        .min_w_0()
+                        .truncate()
                         .font_family(MONOSPACE_FONT)
                         .text_xs()
                         .text_color(theme.text_muted)
