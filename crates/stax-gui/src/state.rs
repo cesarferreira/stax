@@ -39,6 +39,8 @@ pub enum SelectionDirection {
 pub struct WorkspaceState {
     snapshot: RepositorySnapshot,
     selected_branch: Option<String>,
+    search_query: String,
+    search_origin_selection: Option<String>,
     details: LoadState<BranchDetails>,
     diff: LoadState<BranchDiff>,
     diff_refreshing: bool,
@@ -130,6 +132,8 @@ impl WorkspaceState {
         Self {
             snapshot,
             selected_branch,
+            search_query: String::new(),
+            search_origin_selection: None,
             details: LoadState::Idle,
             diff: LoadState::Idle,
             diff_refreshing: false,
@@ -154,6 +158,62 @@ impl WorkspaceState {
 
     pub fn selected_branch(&self) -> Option<&str> {
         self.selected_branch.as_deref()
+    }
+
+    pub fn search_query(&self) -> &str {
+        &self.search_query
+    }
+
+    pub fn filtered_branches(&self) -> Vec<&BranchSummary> {
+        let query = self.search_query.to_lowercase();
+        self.snapshot
+            .branches
+            .iter()
+            .filter(|branch| query.is_empty() || branch.name.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    pub fn set_search_query(&mut self, query: impl Into<String>) {
+        let query = query.into();
+        if self.search_query.is_empty() && !query.is_empty() {
+            self.search_origin_selection = self.selected_branch.clone();
+        }
+        self.search_query = query;
+        if self.search_query.is_empty() {
+            self.selected_branch = self.search_origin_selection.take().filter(|selected| {
+                self.snapshot
+                    .branches
+                    .iter()
+                    .any(|branch| branch.name == *selected)
+            });
+            if self.selected_branch.is_none() {
+                self.selected_branch = self
+                    .snapshot
+                    .branches
+                    .iter()
+                    .find(|branch| branch.name == self.snapshot.current_branch)
+                    .or_else(|| self.snapshot.branches.first())
+                    .map(|branch| branch.name.clone());
+            }
+        } else if !self.selected_branch.as_deref().is_some_and(|selected| {
+            self.filtered_branches()
+                .iter()
+                .any(|branch| branch.name == selected)
+        }) {
+            self.selected_branch = self
+                .filtered_branches()
+                .first()
+                .map(|branch| branch.name.clone());
+        }
+        self.advance_generation();
+        self.details = LoadState::Idle;
+        self.diff = LoadState::Idle;
+        self.diff_refreshing = false;
+        self.ci = LoadState::Idle;
+    }
+
+    pub fn clear_search(&mut self) {
+        self.set_search_query(String::new());
     }
 
     pub fn details(&self) -> &LoadState<BranchDetails> {
@@ -468,22 +528,16 @@ impl WorkspaceState {
         let Some(selected) = self.selected_branch.as_deref() else {
             return false;
         };
-        let Some(index) = self
-            .snapshot
-            .branches
-            .iter()
-            .position(|branch| branch.name == selected)
-        else {
+        let filtered = self.filtered_branches();
+        let Some(index) = filtered.iter().position(|branch| branch.name == selected) else {
             return false;
         };
         let next_index = match direction {
             SelectionDirection::Previous => index.checked_sub(1),
-            SelectionDirection::Next => index
-                .checked_add(1)
-                .filter(|next| *next < self.snapshot.branches.len()),
+            SelectionDirection::Next => index.checked_add(1).filter(|next| *next < filtered.len()),
         };
         let Some(next_name) = next_index
-            .and_then(|next| self.snapshot.branches.get(next))
+            .and_then(|next| filtered.get(next))
             .map(|branch| branch.name.clone())
         else {
             return false;
@@ -504,6 +558,8 @@ impl WorkspaceState {
             self.operation_error = None;
             self.last_receipt = None;
             self.active_operation = None;
+            self.search_query.clear();
+            self.search_origin_selection = None;
         }
         self.snapshot = snapshot;
         self.selected_branch = previous_selection
@@ -527,6 +583,18 @@ impl WorkspaceState {
                     .first()
                     .map(|branch| branch.name.clone())
             });
+        if !self.search_query.is_empty()
+            && !self.selected_branch.as_deref().is_some_and(|selected| {
+                self.filtered_branches()
+                    .iter()
+                    .any(|branch| branch.name == selected)
+            })
+        {
+            self.selected_branch = self
+                .filtered_branches()
+                .first()
+                .map(|branch| branch.name.clone());
+        }
         self.advance_generation();
         self.details = LoadState::Idle;
         self.diff = if same_repository && previous_selection == self.selected_branch {
@@ -1037,6 +1105,51 @@ mod tests {
 
         assert!(!state.interaction_state().reorder.enabled);
         assert_eq!(state.linear_stack_order("parent"), None);
+    }
+
+    #[test]
+    fn search_filters_case_insensitively_and_restores_the_prior_selection() {
+        let mut state = WorkspaceState::new(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-a", true), ("bugfix", false), ("Feature-B", false)],
+        ));
+        state.select_branch("bugfix").unwrap();
+
+        state.set_search_query("FEATURE");
+        assert_eq!(
+            state
+                .filtered_branches()
+                .iter()
+                .map(|branch| branch.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["feature-a", "Feature-B"]
+        );
+        assert_eq!(state.selected_branch(), Some("feature-a"));
+
+        state.clear_search();
+        assert_eq!(state.search_query(), "");
+        assert_eq!(state.selected_branch(), Some("bugfix"));
+    }
+
+    #[test]
+    fn search_navigation_moves_only_through_filtered_rows() {
+        let mut state = WorkspaceState::new(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-a", true), ("bugfix", false), ("feature-b", false)],
+        ));
+
+        state.set_search_query("feature");
+        assert!(state.move_selection(SelectionDirection::Next));
+        assert_eq!(state.selected_branch(), Some("feature-b"));
+        assert!(!state.move_selection(SelectionDirection::Next));
+        assert!(state.move_selection(SelectionDirection::Previous));
+        assert_eq!(state.selected_branch(), Some("feature-a"));
+
+        state.set_search_query("no matches");
+        assert!(state.filtered_branches().is_empty());
+        assert_eq!(state.selected_branch(), None);
     }
 
     #[test]
