@@ -1494,6 +1494,26 @@ mod tests {
     }
 
     #[test]
+    fn returning_to_a_branch_restores_its_accepted_cached_patch() {
+        let mut state = WorkspaceState::new(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-a", true), ("feature-b", false)],
+        ));
+        let (a, _) = state.begin_hydration().unwrap();
+        assert_eq!(state.diff(), &LoadState::Loading);
+        assert!(state.apply_cached_diff(a, diff("cached a")));
+
+        state.select_branch("feature-b").unwrap();
+        let (b, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(b, Ok(diff("b"))));
+        state.select_branch("feature-a").unwrap();
+
+        assert_eq!(state.diff().ready(), Some(&diff("cached a")));
+        assert!(!state.diff_is_refreshing());
+    }
+
+    #[test]
     fn returning_to_a_visited_branch_restores_its_ready_patch() {
         let mut state = WorkspaceState::new(snapshot(
             "/repo",
