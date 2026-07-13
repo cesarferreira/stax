@@ -274,23 +274,23 @@ fn rename_branch_inner(
         ));
     }
 
-    if let Some(metadata) = old_metadata {
-        if let Err(error) = metadata.write(repo.inner(), &new_name) {
-            return Err(finish_rename_error(
-                request,
-                transaction,
-                &repo,
-                branch,
-                &new_name,
-                &children,
-                formatted.warnings,
-                "Branch renamed, but its metadata could not be moved",
-                "Run `stax undo`, resolve the metadata error, and retry",
-                error,
-                "write-metadata",
-                OperationSideEffects::RepositoryChanged,
-            ));
-        }
+    if let Some(metadata) = old_metadata
+        && let Err(error) = metadata.write(repo.inner(), &new_name)
+    {
+        return Err(finish_rename_error(
+            request,
+            transaction,
+            &repo,
+            branch,
+            &new_name,
+            &children,
+            formatted.warnings,
+            "Branch renamed, but its metadata could not be moved",
+            "Run `stax undo`, resolve the metadata error, and retry",
+            error,
+            "write-metadata",
+            OperationSideEffects::RepositoryChanged,
+        ));
     }
     for (child, metadata) in child_metadata {
         let Some(mut metadata) = metadata else {

@@ -278,6 +278,127 @@ fn rename_rejects_invalid_and_colliding_names_before_writing_a_receipt() {
     assert_eq!(receipt_count(&repo), 0);
 }
 
+#[test]
+fn delete_removes_the_branch_and_returns_an_undoable_receipt() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["feature"]).remove(0);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .delete_branch(&branch, true, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert!(!repo.list_branches().contains(&branch));
+    assert!(
+        !repo
+            .git(&["show-ref", "--verify", "refs/branch-metadata/feature"])
+            .status
+            .success()
+    );
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::BranchDeleted {
+            ref branch,
+            ref retained_descendants,
+        } if branch == "feature" && retained_descendants.is_empty()
+    ));
+    assert!(receipt.transaction.as_ref().is_some_and(|tx| {
+        tx.status == TransactionStatus::Succeeded && tx.can_undo && tx.can_redo
+    }));
+}
+
+#[test]
+fn delete_rejects_trunk_current_and_missing_branches_without_a_receipt() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["feature"]).remove(0);
+
+    for target in ["main", branch.as_str(), "missing"] {
+        let error = RepositorySession::open(repo.path())
+            .unwrap()
+            .delete_branch(target, true, &mut NoopOperationReporter)
+            .unwrap_err();
+        assert!(matches!(
+            error.kind,
+            OperationErrorKind::InvalidInput | OperationErrorKind::PreconditionFailed
+        ));
+        assert_eq!(error.side_effects, OperationSideEffects::None);
+    }
+
+    assert!(repo.list_branches().contains(&branch));
+    assert_eq!(receipt_count(&repo), 0);
+}
+
+#[test]
+fn delete_without_force_rejects_an_unmerged_branch() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["feature"]).remove(0);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .delete_branch(&branch, false, &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::PreconditionFailed);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert!(repo.list_branches().contains(&branch));
+}
+
+#[test]
+fn delete_succeeds_when_the_target_has_no_stack_metadata() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    repo.git(&["branch", "untracked"]).assert_success();
+
+    RepositorySession::open(repo.path())
+        .unwrap()
+        .delete_branch("untracked", true, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert!(!repo.list_branches().contains(&"untracked".to_string()));
+}
+
+#[test]
+fn delete_retains_descendants_and_their_existing_parent_metadata() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["parent", "child"]);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .delete_branch(&branches[0], true, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert!(!repo.list_branches().contains(&branches[0]));
+    assert!(repo.list_branches().contains(&branches[1]));
+    let metadata =
+        TestRepo::stdout(&repo.git(&["show", &format!("refs/branch-metadata/{}", branches[1])]));
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(
+        metadata["parentBranchName"].as_str(),
+        Some(branches[0].as_str())
+    );
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::BranchDeleted {
+            ref retained_descendants,
+            ..
+        } if retained_descendants == &vec![branches[1].clone()]
+    ));
+    assert!(matches!(
+        receipt.warnings.as_slice(),
+        [stax::application::OperationWarning::DescendantsRetained {
+            deleted_branch,
+            descendants,
+        }] if deleted_branch == &branches[0] && descendants == &vec![branches[1].clone()]
+    ));
+}
+
 #[tokio::test]
 async fn pull_request_network_fallback_returns_runtime_error_inside_tokio() {
     let repo = TestRepo::new();

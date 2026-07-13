@@ -27,6 +27,13 @@ pub enum OperationRequest {
         /// New literal branch name.
         new_name: String,
     },
+    /// Delete a local branch.
+    DeleteBranch {
+        /// Branch to delete.
+        branch: String,
+        /// Whether an unmerged branch may be deleted.
+        force: bool,
+    },
     /// Restack branches selected by a deterministic scope.
     Restack {
         /// Branch scope to restack.
@@ -88,6 +95,8 @@ pub enum OperationStage {
     CreatingBranch,
     /// Rename a local branch and update its stack metadata.
     RenamingBranch,
+    /// Delete a local branch and its metadata.
+    DeletingBranch,
     /// Rebase branches onto their updated parents.
     Restacking,
     /// Push local refs to a remote.
@@ -184,6 +193,13 @@ pub enum OperationOutcome {
         old_name: String,
         /// Branch name after the rename.
         new_name: String,
+    },
+    /// A local branch was deleted.
+    BranchDeleted {
+        /// Deleted branch name.
+        branch: String,
+        /// Descendants deliberately retained with their existing metadata.
+        retained_descendants: Vec<String>,
     },
     /// One or more branches were restacked.
     Restacked {
@@ -304,6 +320,13 @@ pub enum OperationWarning {
         original: String,
         /// Normalized branch name used by the operation.
         normalized: String,
+    },
+    /// Deleting a branch retained descendants that still reference it as an ancestor.
+    DescendantsRetained {
+        /// Deleted branch name.
+        deleted_branch: String,
+        /// Descendants left unchanged.
+        descendants: Vec<String>,
     },
     /// A requested restack boundary was adjusted to preserve stack semantics.
     RestackBoundaryAdjusted {

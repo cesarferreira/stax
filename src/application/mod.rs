@@ -2,6 +2,7 @@ mod branch_name;
 mod checkout;
 mod ci;
 mod create;
+mod delete;
 mod model;
 mod operation;
 mod pull_request;

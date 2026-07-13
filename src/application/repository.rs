@@ -278,6 +278,9 @@ impl RepositorySession {
             OperationRequest::RenameBranch { branch, new_name } => {
                 self.rename_branch_unframed(&request, branch, new_name, reporter)
             }
+            OperationRequest::DeleteBranch { branch, force } => {
+                self.delete_branch_unframed(&request, branch, *force, reporter)
+            }
             OperationRequest::Restack { scope, auto_stash } => {
                 self.restack_unframed(&request, scope.clone(), *auto_stash, reporter)
             }

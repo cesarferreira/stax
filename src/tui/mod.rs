@@ -532,16 +532,12 @@ fn handle_confirm_action(
         KeyAction::Char('y') | KeyAction::Char('Y') => {
             match confirm_action {
                 ConfirmAction::Delete(branch) => {
-                    queue_command(
+                    queue_operation(
                         app,
-                        vec![vec![
-                            "branch".to_string(),
-                            "delete".to_string(),
-                            branch.clone(),
-                            "--force".to_string(),
-                        ]],
-                        format!("Deleted '{}'", branch),
-                        Some(app.current_branch.clone()),
+                        OperationRequest::DeleteBranch {
+                            branch: branch.clone(),
+                            force: true,
+                        },
                     );
                 }
                 ConfirmAction::Restack(branch) => {
@@ -1008,6 +1004,10 @@ mod tests {
             OperationRequest::RenameBranch {
                 branch: "feature".into(),
                 new_name: "renamed".into(),
+            },
+            OperationRequest::DeleteBranch {
+                branch: "feature".into(),
+                force: true,
             },
             OperationRequest::Restack {
                 scope: RestackScope::StackContaining("feature".into()),
