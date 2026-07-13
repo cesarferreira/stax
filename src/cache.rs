@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::NamedTempFile;
 
 const MAX_TUI_DIFF_CACHE_ENTRIES: usize = 128;
+const MAX_TUI_DIFF_CACHE_BYTES: u64 = 100 * 1024 * 1024;
 
 enum LockMode {
     Shared,
@@ -32,11 +33,7 @@ fn acquire_cache_lock(cache_path: &Path, mode: LockMode) -> Result<CacheLock> {
         .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)
         .with_context(|| format!("failed to create cache directory {}", parent.display()))?;
-    let file_name = cache_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("cache");
-    let lock_path = parent.join(format!(".{file_name}.lock"));
+    let lock_path = cache_lock_path(cache_path);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -50,6 +47,18 @@ fn acquire_cache_lock(cache_path: &Path, mode: LockMode) -> Result<CacheLock> {
     }
     .with_context(|| format!("failed to lock cache {}", cache_path.display()))?;
     Ok(CacheLock { file })
+}
+
+fn cache_lock_path(cache_path: &Path) -> PathBuf {
+    let parent = cache_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = cache_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("cache");
+    parent.join(format!(".{file_name}.lock"))
 }
 
 fn load_json_unlocked<T>(path: &Path) -> Result<T>
@@ -334,6 +343,18 @@ impl TuiDiffCache {
         git_dir.join("stax").join("tui-diff-cache.json")
     }
 
+    fn entries_dir(git_dir: &Path) -> PathBuf {
+        git_dir.join("stax").join("diff-cache").join("v1")
+    }
+
+    fn entry_path(git_dir: &Path, key: &str) -> PathBuf {
+        Self::entries_dir(git_dir).join(format!("{}.json", key.replace(':', "-")))
+    }
+
+    fn coordination_path(entries_dir: &Path) -> PathBuf {
+        entries_dir.join("directory")
+    }
+
     pub fn key(
         _parent: &str,
         _branch: &str,
@@ -349,30 +370,88 @@ impl TuiDiffCache {
         Self::load_strict(git_dir).unwrap_or_default()
     }
 
+    #[cfg(test)]
     pub(crate) fn load_strict(git_dir: &std::path::Path) -> Result<Self> {
-        let path = Self::cache_path(git_dir);
-        let _lock = acquire_cache_lock(&path, LockMode::Shared)?;
-        load_json_unlocked(&path)
+        let mut cache = Self::default();
+        let entries_dir = Self::entries_dir(git_dir);
+        let _directory_lock =
+            acquire_cache_lock(&Self::coordination_path(&entries_dir), LockMode::Shared)?;
+        let entries = match fs::read_dir(&entries_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(cache),
+            Err(error) => return Err(error).context("failed to read diff cache directory"),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if !entry.file_type()?.is_file()
+                || path.extension().and_then(|extension| extension.to_str()) != Some("json")
+            {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let _lock = acquire_cache_lock(&path, LockMode::Shared)?;
+            let Some(diff) = load_json_unlocked::<Option<DiskCachedDiff>>(&path)? else {
+                continue;
+            };
+            let updated_at = entry
+                .metadata()?
+                .modified()
+                .ok()
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs())
+                .unwrap_or_default();
+            cache.entries.insert(
+                stem.replace('-', ":"),
+                TuiDiffCacheEntry { diff, updated_at },
+            );
+        }
+        Ok(cache)
     }
 
     #[cfg(test)]
     pub fn save(&self, git_dir: &std::path::Path) -> Result<()> {
-        let path = Self::cache_path(git_dir);
-        let _lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
-        let mut stored = load_json_unlocked::<Self>(&path)?;
         for (key, entry) in &self.entries {
-            stored.entries.insert(key.clone(), entry.clone());
+            Self::insert_persisted(git_dir, key.clone(), entry.diff.clone())?;
         }
-        stored.prune_old_entries();
-        persist_json_atomic(&path, &stored)
+        Ok(())
     }
 
     pub(crate) fn read_persisted(
         git_dir: &std::path::Path,
         key: &str,
     ) -> Result<Option<DiskCachedDiff>> {
-        let cache = Self::load_strict(git_dir)?;
-        Ok(cache.get(key).cloned())
+        let path = Self::entry_path(git_dir, key);
+        let entries_dir = Self::entries_dir(git_dir);
+        let result = (|| {
+            let _directory_lock =
+                acquire_cache_lock(&Self::coordination_path(&entries_dir), LockMode::Shared)?;
+            if !path.exists() {
+                return Ok(None);
+            }
+            let _entry_lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+            match load_json_unlocked::<Option<DiskCachedDiff>>(&path) {
+                Ok(diff) => {
+                    if diff.is_some()
+                        && let Ok(file) = OpenOptions::new().read(true).write(true).open(&path)
+                    {
+                        let _ =
+                            file.set_times(fs::FileTimes::new().set_modified(SystemTime::now()));
+                    }
+                    Ok(diff)
+                }
+                Err(error) => {
+                    let _ = fs::remove_file(&path);
+                    Err(error)
+                }
+            }
+        })();
+        if result.is_err() {
+            let _ = Self::cleanup_orphaned_entry_lock(&entries_dir, &path);
+        }
+        result
     }
 
     /// Atomically insert one diff while preserving all other cached entries.
@@ -381,17 +460,223 @@ impl TuiDiffCache {
         key: String,
         diff: DiskCachedDiff,
     ) -> Result<()> {
-        let path = Self::cache_path(git_dir);
-        let _lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
-        let mut stored = load_json_unlocked::<Self>(&path)?;
-        stored.insert(key, diff);
-        persist_json_atomic(&path, &stored)
+        Self::insert_persisted_with_limits(
+            git_dir,
+            key,
+            diff,
+            MAX_TUI_DIFF_CACHE_ENTRIES,
+            MAX_TUI_DIFF_CACHE_BYTES,
+        )
     }
 
+    fn insert_persisted_with_limits(
+        git_dir: &Path,
+        key: String,
+        diff: DiskCachedDiff,
+        max_entries: usize,
+        max_bytes: u64,
+    ) -> Result<()> {
+        let path = Self::entry_path(git_dir, &key);
+        let entries_dir = Self::entries_dir(git_dir);
+        let write_result = (|| {
+            let _directory_lock =
+                acquire_cache_lock(&Self::coordination_path(&entries_dir), LockMode::Shared)?;
+            let _entry_lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+            persist_json_atomic(&path, &diff)?;
+            let _ = fs::remove_file(Self::cache_path(git_dir));
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            let _ = Self::cleanup_orphaned_entry_lock(&entries_dir, &path);
+            return Err(error);
+        }
+        let _ = Self::cleanup_entries(&entries_dir, max_entries, max_bytes);
+        Ok(())
+    }
+
+    fn cleanup_orphaned_entry_lock(entries_dir: &Path, entry_path: &Path) -> Result<()> {
+        let _directory_lock =
+            acquire_cache_lock(&Self::coordination_path(entries_dir), LockMode::Exclusive)?;
+        match fs::metadata(entry_path) {
+            Ok(metadata) if metadata.is_file() => return Ok(()),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect diff cache entry {}",
+                        entry_path.display()
+                    )
+                });
+            }
+        }
+        match fs::remove_file(cache_lock_path(entry_path)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "failed to remove orphaned diff cache entry lock {}",
+                    entry_path.display()
+                )
+            }),
+        }
+    }
+
+    fn cleanup_entries(entries_dir: &Path, max_entries: usize, max_bytes: u64) -> Result<()> {
+        let _directory_lock =
+            acquire_cache_lock(&Self::coordination_path(entries_dir), LockMode::Exclusive)?;
+        Self::cleanup_orphaned_entry_locks(entries_dir)?;
+        let entries = match fs::read_dir(entries_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to read diff cache directory {}",
+                        entries_dir.display()
+                    )
+                });
+            }
+        };
+        let mut cached = Vec::new();
+        let mut total_bytes = 0_u64;
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("failed to inspect diff cache entry"),
+            };
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("failed to inspect diff cache entry type"),
+            };
+            if !file_type.is_file()
+                || path.extension().and_then(|extension| extension.to_str()) != Some("json")
+            {
+                continue;
+            }
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to inspect diff cache entry {}", path.display())
+                    });
+                }
+            };
+            let bytes = metadata.len();
+            total_bytes = total_bytes.saturating_add(bytes);
+            cached.push((metadata.modified().unwrap_or(UNIX_EPOCH), path, bytes));
+        }
+        cached.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+        let mut remove_count = cached.len().saturating_sub(max_entries);
+        for (_, path, bytes) in cached {
+            if remove_count == 0 && total_bytes <= max_bytes {
+                break;
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to remove diff cache entry {}", path.display())
+                    });
+                }
+            }
+            match fs::remove_file(cache_lock_path(&path)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to remove diff cache entry lock {}", path.display())
+                    });
+                }
+            }
+            total_bytes = total_bytes.saturating_sub(bytes);
+            remove_count = remove_count.saturating_sub(1);
+        }
+        Ok(())
+    }
+
+    fn cleanup_orphaned_entry_locks(entries_dir: &Path) -> Result<()> {
+        let entries = match fs::read_dir(entries_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to read diff cache directory {}",
+                        entries_dir.display()
+                    )
+                });
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("failed to inspect diff cache entry"),
+            };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("failed to inspect diff cache entry type"),
+            };
+            if !file_type.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let Some(lock_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(payload_name) = lock_name
+                .strip_prefix('.')
+                .and_then(|name| name.strip_suffix(".lock"))
+            else {
+                continue;
+            };
+            if !payload_name.ends_with(".json") {
+                continue;
+            }
+            let payload_path = entries_dir.join(payload_name);
+            match fs::metadata(&payload_path) {
+                Ok(metadata) if metadata.is_file() => continue,
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to inspect diff cache entry {}",
+                            payload_path.display()
+                        )
+                    });
+                }
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to remove orphaned diff cache entry lock {}",
+                            path.display()
+                        )
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub fn get(&self, key: &str) -> Option<&DiskCachedDiff> {
         self.entries.get(key).map(|entry| &entry.diff)
     }
 
+    #[cfg(test)]
     pub fn insert(&mut self, key: String, diff: DiskCachedDiff) {
         self.entries.insert(
             key,
@@ -403,6 +688,7 @@ impl TuiDiffCache {
         self.prune_old_entries();
     }
 
+    #[cfg(test)]
     fn prune_old_entries(&mut self) {
         if self.entries.len() <= MAX_TUI_DIFF_CACHE_ENTRIES {
             return;
@@ -511,6 +797,7 @@ impl AheadBehindCache {
     }
 }
 
+#[cfg(test)]
 fn current_unix_time() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -533,6 +820,297 @@ mod tests {
                 line_type: "context".to_string(),
             }],
         }
+    }
+
+    fn assert_cleanup_limits(
+        max_entries: usize,
+        max_bytes: u64,
+        entries: &[(&str, usize)],
+        expected: &[&str],
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_dir = TuiDiffCache::entries_dir(dir.path());
+        fs::create_dir_all(&entries_dir).unwrap();
+        for (name, size) in entries {
+            fs::write(entries_dir.join(format!("{name}.json")), vec![b'x'; *size]).unwrap();
+        }
+        fs::write(entries_dir.join("keep.txt"), b"unrelated").unwrap();
+
+        TuiDiffCache::cleanup_entries(&entries_dir, max_entries, max_bytes).unwrap();
+
+        let mut remaining = fs::read_dir(&entries_dir)
+            .unwrap()
+            .filter_map(|entry| {
+                let name = entry.unwrap().file_name().into_string().unwrap();
+                name.ends_with(".json").then_some(name)
+            })
+            .collect::<Vec<_>>();
+        remaining.sort();
+        assert_eq!(remaining, expected);
+        assert_eq!(
+            fs::read(entries_dir.join("keep.txt")).unwrap(),
+            b"unrelated"
+        );
+    }
+
+    #[test]
+    fn persisted_diffs_use_independent_portable_json_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let first_key = "v1:aaa:bbb:ccc";
+        let second_key = "v1:ddd:eee:fff";
+
+        TuiDiffCache::insert_persisted(dir.path(), first_key.into(), disk_diff("first")).unwrap();
+        fs::write(TuiDiffCache::cache_path(dir.path()), b"legacy aggregate").unwrap();
+        TuiDiffCache::insert_persisted(dir.path(), second_key.into(), disk_diff("second")).unwrap();
+
+        assert_eq!(
+            serde_json::from_slice::<DiskCachedDiff>(
+                &fs::read(TuiDiffCache::entry_path(dir.path(), first_key)).unwrap()
+            )
+            .unwrap(),
+            disk_diff("first")
+        );
+        assert_eq!(
+            serde_json::from_slice::<DiskCachedDiff>(
+                &fs::read(TuiDiffCache::entry_path(dir.path(), second_key)).unwrap()
+            )
+            .unwrap(),
+            disk_diff("second")
+        );
+        assert_eq!(
+            TuiDiffCache::entry_path(dir.path(), first_key)
+                .file_name()
+                .unwrap(),
+            "v1-aaa-bbb-ccc.json"
+        );
+        assert!(!TuiDiffCache::cache_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn requested_diff_does_not_parse_unrelated_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        TuiDiffCache::insert_persisted(dir.path(), "v1:a:b:c".into(), disk_diff("kept")).unwrap();
+        fs::write(
+            TuiDiffCache::entries_dir(dir.path()).join("broken.json"),
+            b"{",
+        )
+        .unwrap();
+
+        assert_eq!(
+            TuiDiffCache::read_persisted(dir.path(), "v1:a:b:c").unwrap(),
+            Some(disk_diff("kept"))
+        );
+    }
+
+    #[test]
+    fn malformed_requested_diff_is_removed_and_can_be_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "v1:a:b:c";
+        let path = TuiDiffCache::entry_path(dir.path(), key);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{").unwrap();
+
+        assert!(TuiDiffCache::read_persisted(dir.path(), key).is_err());
+        assert!(!path.exists());
+        assert!(!cache_lock_path(&path).exists());
+
+        TuiDiffCache::insert_persisted(dir.path(), key.into(), disk_diff("replacement")).unwrap();
+        assert_eq!(
+            TuiDiffCache::read_persisted(dir.path(), key).unwrap(),
+            Some(disk_diff("replacement"))
+        );
+    }
+
+    #[test]
+    fn failed_diff_write_without_an_entry_removes_its_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "v1:a:b:c";
+        let path = TuiDiffCache::entry_path(dir.path(), key);
+        fs::create_dir_all(&path).unwrap();
+
+        assert!(
+            TuiDiffCache::insert_persisted(dir.path(), key.into(), disk_diff("unwritten")).is_err()
+        );
+
+        assert!(!cache_lock_path(&path).exists());
+    }
+
+    #[test]
+    fn reading_a_diff_touches_it_for_oldest_first_cleanup() {
+        let dir = tempfile::tempdir().unwrap();
+        let first_key = "v1:a:b:c";
+        let second_key = "v1:d:e:f";
+        TuiDiffCache::insert_persisted(dir.path(), first_key.into(), disk_diff("first")).unwrap();
+        TuiDiffCache::insert_persisted(dir.path(), second_key.into(), disk_diff("second")).unwrap();
+        let first_path = TuiDiffCache::entry_path(dir.path(), first_key);
+        let second_path = TuiDiffCache::entry_path(dir.path(), second_key);
+        File::open(&first_path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        File::open(&second_path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2)),
+            )
+            .unwrap();
+
+        assert_eq!(
+            TuiDiffCache::read_persisted(dir.path(), first_key).unwrap(),
+            Some(disk_diff("first"))
+        );
+        TuiDiffCache::cleanup_entries(&TuiDiffCache::entries_dir(dir.path()), 1, u64::MAX).unwrap();
+
+        assert!(first_path.exists());
+        assert!(!second_path.exists());
+    }
+
+    #[test]
+    fn diff_cache_cleanup_enforces_count_and_byte_limits() {
+        assert_cleanup_limits(
+            2,
+            100,
+            &[("a", 10), ("b", 10), ("c", 10)],
+            &["b.json", "c.json"],
+        );
+        assert_cleanup_limits(10, 45, &[("a", 10), ("b", 20), ("c", 30)], &["c.json"]);
+    }
+
+    #[test]
+    fn diff_cache_cleanup_removes_seeded_orphan_entry_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_dir = TuiDiffCache::entries_dir(dir.path());
+        fs::create_dir_all(&entries_dir).unwrap();
+        let orphan_payload = entries_dir.join("orphan.json");
+        let orphan_lock = cache_lock_path(&orphan_payload);
+        fs::write(&orphan_lock, b"").unwrap();
+
+        TuiDiffCache::cleanup_entries(&entries_dir, usize::MAX, u64::MAX).unwrap();
+
+        assert!(!orphan_lock.exists());
+    }
+
+    #[test]
+    fn diff_cache_cleanup_retains_entry_lock_for_live_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_dir = TuiDiffCache::entries_dir(dir.path());
+        fs::create_dir_all(&entries_dir).unwrap();
+        let live_payload = entries_dir.join("live.json");
+        let live_lock = cache_lock_path(&live_payload);
+        fs::write(&live_payload, b"{}").unwrap();
+        fs::write(&live_lock, b"").unwrap();
+
+        TuiDiffCache::cleanup_entries(&entries_dir, usize::MAX, u64::MAX).unwrap();
+
+        assert!(live_payload.exists());
+        assert!(live_lock.exists());
+    }
+
+    #[test]
+    fn diff_cache_cleanup_ignores_non_hidden_lock_like_file_and_enforces_count_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_dir = TuiDiffCache::entries_dir(dir.path());
+        fs::create_dir_all(&entries_dir).unwrap();
+        let first = entries_dir.join("first.json");
+        let second = entries_dir.join("second.json");
+        let unrelated = entries_dir.join("notes.json.lock");
+        fs::write(&first, vec![b'a'; 10]).unwrap();
+        fs::write(&second, vec![b'b'; 10]).unwrap();
+        fs::write(&unrelated, b"keep me").unwrap();
+        File::open(&first)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        File::open(&second)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2)),
+            )
+            .unwrap();
+
+        TuiDiffCache::cleanup_entries(&entries_dir, 1, u64::MAX).unwrap();
+
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep me");
+        assert!(!first.exists());
+        assert!(second.exists());
+    }
+
+    #[test]
+    fn diff_cache_cleanup_ignores_lock_like_directory_and_enforces_byte_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_dir = TuiDiffCache::entries_dir(dir.path());
+        fs::create_dir_all(&entries_dir).unwrap();
+        let first = entries_dir.join("first.json");
+        let second = entries_dir.join("second.json");
+        let unrelated = entries_dir.join(".notes.json.lock");
+        fs::write(&first, vec![b'a'; 10]).unwrap();
+        fs::write(&second, vec![b'b'; 20]).unwrap();
+        fs::create_dir(&unrelated).unwrap();
+        File::open(&first)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        File::open(&second)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2)),
+            )
+            .unwrap();
+
+        TuiDiffCache::cleanup_entries(&entries_dir, usize::MAX, 20).unwrap();
+
+        assert!(unrelated.is_dir());
+        assert!(!first.exists());
+        assert!(second.exists());
+    }
+
+    #[test]
+    fn concurrent_diff_writers_enforce_cleanup_limit_and_remove_evicted_locks() {
+        let temp = TempDir::new().unwrap();
+        let root = Arc::new(temp.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(25));
+        let writers = (0..24)
+            .map(|index| {
+                let root = Arc::clone(&root);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    TuiDiffCache::insert_persisted_with_limits(
+                        &root,
+                        format!("key-{index}"),
+                        disk_diff(&format!("patch-{index}")),
+                        4,
+                        u64::MAX,
+                    )
+                    .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        let entries_dir = TuiDiffCache::entries_dir(&root);
+        let names = fs::read_dir(entries_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        let entry_count = names.iter().filter(|name| name.ends_with(".json")).count();
+        let entry_lock_count = names
+            .iter()
+            .filter(|name| name.ends_with(".json.lock"))
+            .count();
+
+        assert!(entry_count <= 4, "found {entry_count} persisted entries");
+        assert_eq!(entry_lock_count, entry_count);
     }
 
     #[test]
@@ -958,9 +1536,14 @@ mod tests {
             writer.join().unwrap();
         }
 
-        let cache = TuiDiffCache::load_strict(&root).unwrap();
-        assert_eq!(cache.get("key-a"), Some(&disk_diff("patch-a")));
-        assert_eq!(cache.get("key-b"), Some(&disk_diff("patch-b")));
+        assert_eq!(
+            TuiDiffCache::read_persisted(&root, "key-a").unwrap(),
+            Some(disk_diff("patch-a"))
+        );
+        assert_eq!(
+            TuiDiffCache::read_persisted(&root, "key-b").unwrap(),
+            Some(disk_diff("patch-b"))
+        );
     }
 
     #[test]
@@ -980,18 +1563,20 @@ mod tests {
     }
 
     #[test]
-    fn malformed_diff_cache_is_not_clobbered_by_transaction() {
+    fn legacy_malformed_diff_cache_does_not_block_per_entry_write() {
         let temp = TempDir::new().unwrap();
         let path = TuiDiffCache::cache_path(temp.path());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let malformed = b"{\"entries\":";
         fs::write(&path, malformed).unwrap();
 
-        let error = TuiDiffCache::insert_persisted(temp.path(), "key".into(), disk_diff("patch"))
-            .unwrap_err();
+        TuiDiffCache::insert_persisted(temp.path(), "key".into(), disk_diff("patch")).unwrap();
 
-        assert!(error.to_string().contains("parse"));
-        assert_eq!(fs::read(path).unwrap(), malformed);
+        assert!(!path.exists());
+        assert_eq!(
+            TuiDiffCache::read_persisted(temp.path(), "key").unwrap(),
+            Some(disk_diff("patch"))
+        );
     }
 
     #[test]
@@ -1051,8 +1636,10 @@ mod tests {
 
         barrier.wait();
         for _ in 0..100 {
-            let cache = TuiDiffCache::load_strict(&root).unwrap();
-            assert_eq!(cache.get("seed"), Some(&disk_diff("seed")));
+            assert_eq!(
+                TuiDiffCache::read_persisted(&root, "seed").unwrap(),
+                Some(disk_diff("seed"))
+            );
         }
         writer.join().unwrap();
     }

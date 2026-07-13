@@ -257,17 +257,20 @@ mod tests {
 
         let session = RepositorySession::open(temp.path()).unwrap();
         let actual = session.diff("feature", "main").unwrap();
-        let cache_path = temp.path().join(".git/stax/tui-diff-cache.json");
+        let cache_dir = temp.path().join(".git/stax/diff-cache/v1");
+        let mut cache_entries = fs::read_dir(&cache_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension().and_then(|extension| extension.to_str()) == Some("json")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cache_entries.len(), 1);
+        let cache_path = cache_entries.pop().unwrap();
         let mut stored: serde_json::Value =
             serde_json::from_slice(&fs::read(&cache_path).unwrap()).unwrap();
-        let entry = stored["entries"]
-            .as_object_mut()
-            .unwrap()
-            .values_mut()
-            .next()
-            .unwrap();
-        entry["diff"]["stat"] = serde_json::json!([]);
-        entry["diff"]["lines"] = serde_json::json!([
+        stored["stat"] = serde_json::json!([]);
+        stored["lines"] = serde_json::json!([
             {"content": "incorrect cached patch", "line_type": "context"}
         ]);
         fs::write(&cache_path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
