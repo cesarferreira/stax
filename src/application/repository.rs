@@ -297,6 +297,24 @@ impl RepositorySession {
                 *auto_stash,
                 reporter,
             ),
+            OperationRequest::UndoTransaction {
+                operation_id,
+                update_remote,
+            } => self.undo_transaction_unframed(
+                &request,
+                operation_id.as_deref(),
+                *update_remote,
+                reporter,
+            ),
+            OperationRequest::RedoTransaction {
+                operation_id,
+                update_remote,
+            } => self.redo_transaction_unframed(
+                &request,
+                operation_id.as_deref(),
+                *update_remote,
+                reporter,
+            ),
             OperationRequest::Restack { scope, auto_stash } => {
                 self.restack_unframed(&request, scope.clone(), *auto_stash, reporter)
             }

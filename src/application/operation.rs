@@ -52,6 +52,20 @@ pub enum OperationRequest {
         /// Whether dirty affected worktrees may be stashed automatically.
         auto_stash: bool,
     },
+    /// Restore a persisted transaction's before-state.
+    UndoTransaction {
+        /// Specific operation id, or latest when absent.
+        operation_id: Option<String>,
+        /// Whether remote refs may also be updated.
+        update_remote: bool,
+    },
+    /// Restore a persisted transaction's after-state.
+    RedoTransaction {
+        /// Specific operation id, or latest when absent.
+        operation_id: Option<String>,
+        /// Whether remote refs may also be updated.
+        update_remote: bool,
+    },
     /// Restack branches selected by a deterministic scope.
     Restack {
         /// Branch scope to restack.
@@ -119,6 +133,10 @@ pub enum OperationStage {
     MovingSubtree,
     /// Apply a linear stack reorder.
     ReorderingStack,
+    /// Restore transaction before-state.
+    UndoingTransaction,
+    /// Restore transaction after-state.
+    RedoingTransaction,
     /// Rebase branches onto their updated parents.
     Restacking,
     /// Push local refs to a remote.
@@ -238,6 +256,20 @@ pub enum OperationOutcome {
         original_order: Vec<String>,
         /// Order applied by the operation.
         applied_order: Vec<String>,
+    },
+    /// A transaction's before-state was restored.
+    TransactionUndone {
+        /// Restored operation id.
+        operation_id: String,
+        /// Local refs changed.
+        changed_refs: Vec<String>,
+    },
+    /// A transaction's after-state was restored.
+    TransactionRedone {
+        /// Restored operation id.
+        operation_id: String,
+        /// Local refs changed.
+        changed_refs: Vec<String>,
     },
     /// One or more branches were restacked.
     Restacked {

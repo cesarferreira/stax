@@ -607,6 +607,56 @@ fn reorder_stack_reports_dirty_worktree_before_mutation() {
     assert_eq!(error.side_effects, OperationSideEffects::None);
 }
 
+#[test]
+fn undo_and_redo_round_trip_a_local_rename() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["old"]).remove(0);
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let renamed = session
+        .rename_branch(&branch, "new", &mut NoopOperationReporter)
+        .unwrap();
+    let operation_id = renamed.transaction.unwrap().id;
+
+    session
+        .undo_transaction(Some(&operation_id), false, &mut NoopOperationReporter)
+        .unwrap();
+    assert_eq!(repo.current_branch(), branch);
+    assert!(repo.list_branches().contains(&"old".to_string()));
+    assert!(!repo.list_branches().contains(&"new".to_string()));
+
+    session
+        .redo_transaction(Some(&operation_id), false, &mut NoopOperationReporter)
+        .unwrap();
+    assert_eq!(repo.current_branch(), "new");
+    assert!(!repo.list_branches().contains(&"old".to_string()));
+    assert!(repo.list_branches().contains(&"new".to_string()));
+}
+
+#[test]
+fn undo_rejects_a_dirty_worktree_without_changing_refs() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["old"]).remove(0);
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let renamed = session
+        .rename_branch(&branch, "new", &mut NoopOperationReporter)
+        .unwrap();
+    repo.create_file("dirty.txt", "keep");
+
+    let error = session
+        .undo_transaction(
+            renamed.transaction.as_ref().map(|tx| tx.id.as_str()),
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::DirtyWorktree);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert_eq!(repo.current_branch(), "new");
+}
+
 #[tokio::test]
 async fn pull_request_network_fallback_returns_runtime_error_inside_tokio() {
     let repo = TestRepo::new();

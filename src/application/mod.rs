@@ -3,6 +3,7 @@ mod checkout;
 mod ci;
 mod create;
 mod delete;
+mod history;
 mod model;
 mod move_subtree;
 mod operation;
