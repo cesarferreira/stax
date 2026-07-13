@@ -5558,13 +5558,18 @@ fn test_sync_detects_merged_branch_when_local_trunk_diverged() {
     );
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("main did not reach origin/main"),
+        stdout.contains("main diverged from origin/main"),
         "Expected diverged trunk attention, got: {}",
         stdout
     );
     assert!(
-        stdout.contains("Next: st trunk"),
-        "Expected trunk recovery command, got: {}",
+        stdout.contains("Next: inspect and reconcile main with origin/main"),
+        "Expected non-destructive diverged-trunk recovery guidance, got: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Next: st trunk"),
+        "Switching branches cannot repair a diverged trunk. Got: {}",
         stdout
     );
     assert!(
