@@ -3,7 +3,50 @@ use stax::application::{
     OperationEvent, OperationOutcome, OperationProgress, OperationReceipt, OperationRequest,
     OperationResult, RepositorySnapshot,
 };
-use std::path::PathBuf;
+use std::{
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
+};
+
+type SessionDiffKey = (String, Option<String>);
+const SESSION_DIFF_CACHE_CAPACITY: usize = 32;
+
+#[derive(Debug, Clone, Default)]
+struct SessionDiffCache {
+    entries: HashMap<SessionDiffKey, BranchDiff>,
+    recency: VecDeque<SessionDiffKey>,
+}
+
+impl SessionDiffCache {
+    fn get(&mut self, key: &SessionDiffKey) -> Option<BranchDiff> {
+        let diff = self.entries.get(key)?.clone();
+        self.touch(key);
+        Some(diff)
+    }
+
+    fn insert(&mut self, key: SessionDiffKey, diff: BranchDiff) {
+        self.entries.insert(key.clone(), diff);
+        self.touch(&key);
+        while self.entries.len() > SESSION_DIFF_CACHE_CAPACITY {
+            let Some(evicted) = self.recency.pop_front() else {
+                break;
+            };
+            self.entries.remove(&evicted);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.recency.clear();
+    }
+
+    fn touch(&mut self, key: &SessionDiffKey) {
+        if let Some(index) = self.recency.iter().position(|candidate| candidate == key) {
+            self.recency.remove(index);
+        }
+        self.recency.push_back(key.clone());
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadState<T> {
@@ -44,6 +87,7 @@ pub struct WorkspaceState {
     details: LoadState<BranchDetails>,
     diff: LoadState<BranchDiff>,
     diff_refreshing: bool,
+    diff_cache: SessionDiffCache,
     ci: LoadState<CiSummary>,
     generation: u64,
     operation_sequence: u64,
@@ -137,6 +181,7 @@ impl WorkspaceState {
             details: LoadState::Idle,
             diff: LoadState::Idle,
             diff_refreshing: false,
+            diff_cache: SessionDiffCache::default(),
             ci: LoadState::Idle,
             generation: 0,
             operation_sequence: 0,
@@ -513,11 +558,13 @@ impl WorkspaceState {
         }
 
         let same_branch = self.selected_branch.as_deref() == Some(name);
+        let cache_key = self.diff_cache_key(name);
+        let cached_diff = cache_key.as_ref().and_then(|key| self.diff_cache.get(key));
         self.selected_branch = Some(name.to_owned());
         self.advance_generation();
         self.details = LoadState::Idle;
         if !same_branch || !matches!(self.diff, LoadState::Ready(_)) {
-            self.diff = LoadState::Idle;
+            self.diff = cached_diff.map_or(LoadState::Idle, LoadState::Ready);
         }
         self.diff_refreshing = false;
         self.ci = LoadState::Idle;
@@ -553,6 +600,7 @@ impl WorkspaceState {
             LoadState::Ready(diff) => Some(diff.clone()),
             LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => None,
         };
+        self.diff_cache.clear();
         let same_repository = previous_repository == snapshot.repository_root;
         if !same_repository {
             self.operation_error = None;
@@ -746,6 +794,9 @@ impl WorkspaceState {
         {
             return false;
         }
+        if let Some(key) = self.diff_cache_key(&token.branch) {
+            self.diff_cache.insert(key, diff.clone());
+        }
         self.diff = LoadState::Ready(diff);
         true
     }
@@ -757,6 +808,11 @@ impl WorkspaceState {
     ) -> bool {
         if !self.matches(&token) {
             return false;
+        }
+        if let Ok(diff) = &result
+            && let Some(key) = self.diff_cache_key(&token.branch)
+        {
+            self.diff_cache.insert(key, diff.clone());
         }
         self.diff = result.map_or_else(LoadState::Failed, LoadState::Ready);
         self.diff_refreshing = false;
@@ -816,6 +872,14 @@ impl WorkspaceState {
             branch,
             self.generation,
         )
+    }
+
+    fn diff_cache_key(&self, branch: &str) -> Option<SessionDiffKey> {
+        self.snapshot
+            .branches
+            .iter()
+            .find(|summary| summary.name == branch)
+            .map(|summary| (summary.name.clone(), summary.parent.clone()))
     }
 
     fn selected_branch_summary(&self) -> Option<&BranchSummary> {
@@ -1430,20 +1494,21 @@ mod tests {
     }
 
     #[test]
-    fn selecting_a_different_branch_never_retains_the_prior_patch() {
+    fn returning_to_a_visited_branch_restores_its_ready_patch() {
         let mut state = WorkspaceState::new(snapshot(
             "/repo",
             "feature-a",
             &[("feature-a", true), ("feature-b", false)],
         ));
-        let (first, _) = state.begin_hydration().unwrap();
-        assert!(state.apply_diff(first, Ok(diff("feature-a patch"))));
+        let (a, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(a, Ok(diff("a"))));
 
         state.select_branch("feature-b").unwrap();
-        let (_, _) = state.begin_hydration().unwrap();
+        let (b, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(b, Ok(diff("b"))));
+        state.select_branch("feature-a").unwrap();
 
-        assert_eq!(state.diff(), &LoadState::Loading);
-        assert!(state.diff_is_refreshing());
+        assert_eq!(state.diff().ready(), Some(&diff("a")));
     }
 
     #[test]
@@ -1467,6 +1532,70 @@ mod tests {
         assert_eq!(state.selected_branch(), Some("feature-b"));
         assert_eq!(state.diff().ready(), Some(&diff("feature-b patch")));
         assert!(state.diff_is_refreshing());
+    }
+
+    #[test]
+    fn snapshot_refresh_invalidates_other_branch_session_patches() {
+        let mut state = WorkspaceState::new(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-a", true), ("feature-b", false)],
+        ));
+        let (a, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(a, Ok(diff("old a"))));
+        state.select_branch("feature-b").unwrap();
+        let (b, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(b, Ok(diff("old b"))));
+
+        state.replace_snapshot(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-b", false), ("feature-a", true)],
+        ));
+        let (_, _) = state.begin_hydration().unwrap();
+
+        assert_eq!(state.diff().ready(), Some(&diff("old b")));
+        assert!(state.diff_is_refreshing());
+        state.select_branch("feature-a").unwrap();
+        assert_eq!(state.diff(), &LoadState::Idle);
+    }
+
+    #[test]
+    fn session_diff_cache_evicts_the_least_recently_used_entry_after_32_patches() {
+        let branches = (0..33)
+            .map(|index| {
+                tracked_branch(
+                    &format!("branch-{index:02}"),
+                    Some("main"),
+                    index == 0,
+                    false,
+                )
+            })
+            .collect();
+        let mut state = WorkspaceState::new(RepositorySnapshot {
+            repository_root: PathBuf::from("/repo"),
+            current_branch: "branch-00".into(),
+            trunk: "main".into(),
+            branches,
+        });
+
+        for index in 0..32 {
+            let branch = format!("branch-{index:02}");
+            state.select_branch(&branch).unwrap();
+            let (token, _) = state.begin_hydration().unwrap();
+            assert!(state.apply_diff(token, Ok(diff(&format!("patch-{index:02}")))));
+        }
+
+        state.select_branch("branch-00").unwrap();
+        assert_eq!(state.diff().ready(), Some(&diff("patch-00")));
+        state.select_branch("branch-32").unwrap();
+        let (token, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(token, Ok(diff("patch-32"))));
+
+        state.select_branch("branch-01").unwrap();
+        assert_eq!(state.diff(), &LoadState::Idle);
+        state.select_branch("branch-00").unwrap();
+        assert_eq!(state.diff().ready(), Some(&diff("patch-00")));
     }
 
     #[test]
