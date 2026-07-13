@@ -52,11 +52,9 @@ pub fn run(branch: Option<String>, force: bool) -> Result<()> {
         }
     }
 
-    RepositorySession::open(repo.workdir()?)?.delete_branch(
-        &target,
-        force,
-        &mut NoopOperationReporter,
-    )?;
+    RepositorySession::open(repo.workdir()?)?
+        .delete_branch(&target, force, &mut NoopOperationReporter)
+        .map_err(|error| anyhow::anyhow!("{}\n{}", error.primary, error.action))?;
 
     println!("Deleted branch '{}'", target.red());
 
