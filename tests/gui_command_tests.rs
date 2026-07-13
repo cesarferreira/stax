@@ -45,7 +45,9 @@ fn gui_help_works_outside_a_repository() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("[PATH]"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PATH]"));
+    assert!(stdout.contains("native Stax macOS app"));
 }
 
 #[test]
@@ -85,7 +87,7 @@ fn gui_bypasses_initialization_in_plain_git_repository() {
         vec![
             "-n",
             "-b",
-            "dev.stax.Stax",
+            "com.cesarferreira.stax",
             "--args",
             repo.path().canonicalize().unwrap().to_str().unwrap(),
         ],
@@ -116,7 +118,7 @@ fn launcher_error_wins_over_active_rebase_and_leaves_repository_untouched() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("make install-gui-app"));
-    assert!(stderr.contains("unsigned developer preview"));
+    assert!(stderr.contains("GitHub Releases"));
     assert!(!stderr.contains("rebase"));
     assert!(!stderr.contains("st init"));
     assert!(repo.path().join(".git/rebase-merge").is_dir());
@@ -141,7 +143,7 @@ fn gui_missing_app_result_is_actionable() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("make install-gui-app"));
     assert!(stderr.contains("$HOME/Applications/Stax.app"));
-    assert!(stderr.contains("unsigned developer preview"));
+    assert!(stderr.contains("GitHub Releases"));
 }
 
 #[cfg(target_os = "macos")]
