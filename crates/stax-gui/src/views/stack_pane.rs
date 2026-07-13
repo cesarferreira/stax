@@ -29,13 +29,17 @@ pub fn render(
     theme: Theme,
     cx: &mut Context<AppView>,
 ) -> Div {
-    let branch_count = workspace.state().filtered_branches().len();
-    let topology = Arc::new(
-        layout_topology(&workspace.state().snapshot().branches)
-            .into_iter()
-            .map(|row| (row.branch_name.clone(), row))
-            .collect::<HashMap<_, _>>(),
-    );
+    let filtered_branches = workspace
+        .state()
+        .filtered_branches()
+        .iter()
+        .map(|branch| (*branch).clone())
+        .collect::<Vec<_>>();
+    let branch_count = filtered_branches.len();
+    let topology = Arc::new(topology_for_filtered_branches(
+        &workspace.state().snapshot().branches,
+        &filtered_branches,
+    ));
     let topology_width = topology
         .values()
         .next()
@@ -164,6 +168,26 @@ pub fn render(
             .min_h_0(),
         )
     }
+}
+
+fn topology_for_filtered_branches(
+    full_branches: &[BranchSummary],
+    filtered_branches: &[BranchSummary],
+) -> HashMap<String, TopologyRow> {
+    let full_topology = layout_topology(full_branches)
+        .into_iter()
+        .map(|row| (row.branch_name.clone(), row))
+        .collect::<HashMap<_, _>>();
+
+    filtered_branches
+        .iter()
+        .filter_map(|branch| {
+            full_topology
+                .get(&branch.name)
+                .cloned()
+                .map(|row| (branch.name.clone(), row))
+        })
+        .collect()
 }
 
 fn render_branch_row(
@@ -305,7 +329,7 @@ fn status_color(tone: StatusTone, theme: Theme) -> gpui::Hsla {
 
 #[cfg(test)]
 mod tests {
-    use super::{StatusTone, branch_status_parts};
+    use super::{StatusTone, branch_status_parts, topology_for_filtered_branches};
     use stax::application::BranchSummary;
 
     fn branch() -> BranchSummary {
@@ -329,5 +353,55 @@ mod tests {
         assert!(statuses.contains(&("Restack needed".into(), StatusTone::Warning)));
         assert!(statuses.contains(&("PR #17 · open".into(), StatusTone::Accent)));
         assert!(statuses.contains(&("CI: failure".into(), StatusTone::Danger)));
+    }
+
+    #[test]
+    fn filtering_reuses_rows_from_the_full_topology() {
+        let full = vec![
+            BranchSummary {
+                name: "nested".into(),
+                parent: Some("side".into()),
+                column: 2,
+                is_current: false,
+                is_trunk: false,
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                ci_state: None,
+            },
+            BranchSummary {
+                name: "side".into(),
+                parent: Some("main".into()),
+                column: 1,
+                is_current: false,
+                is_trunk: false,
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                ci_state: None,
+            },
+            BranchSummary {
+                name: "main".into(),
+                parent: None,
+                column: 0,
+                is_current: true,
+                is_trunk: true,
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                ci_state: None,
+            },
+        ];
+        let filtered = vec![full[1].clone()];
+
+        let rows = topology_for_filtered_branches(&full, &filtered);
+        let side = rows.get("side").unwrap();
+        let glyphs = side
+            .segments
+            .iter()
+            .map(|segment| segment.glyph.as_str())
+            .collect::<String>();
+
+        assert_eq!(glyphs, "│ ○─┘  ");
     }
 }

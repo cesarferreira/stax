@@ -112,7 +112,10 @@ fn render_selected(
                 .gap_1()
                 .child(
                     div()
+                        .debug_selector(|| "inspector-branch-identity".into())
+                        .w_full()
                         .min_w_0()
+                        .truncate()
                         .font_family(MONOSPACE_FONT)
                         .text_sm()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -120,7 +123,10 @@ fn render_selected(
                 )
                 .child(
                     div()
+                        .debug_selector(|| "inspector-parent-identity".into())
+                        .w_full()
                         .min_w_0()
+                        .truncate()
                         .font_family(MONOSPACE_FONT)
                         .text_xs()
                         .text_color(theme.text_muted)

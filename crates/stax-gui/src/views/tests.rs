@@ -494,6 +494,48 @@ fn workspace_renders_codex_presentation_landmarks(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn narrow_inspector_keeps_long_branch_identities_single_line(cx: &mut TestAppContext) {
+    let mut long_snapshot = snapshot("/repo");
+    let long_name = format!("feature/{}", "very-long-branch-name-".repeat(12));
+    let long_parent = format!("parent/{}", "equally-long-parent-name-".repeat(12));
+    long_snapshot.current_branch = long_name.clone();
+    long_snapshot.branches[1].name = long_name;
+    long_snapshot.branches[1].parent = Some(long_parent);
+    let preferences = WorkspacePreferences {
+        visibility: PaneVisibility::default(),
+        widths: PaneWidths {
+            stack: 0.25,
+            changes: 0.60,
+            inspector: 0.15,
+        },
+    };
+    let services = services_with_workspace_preferences(
+        Ok(long_snapshot),
+        Arc::new(FixtureWorkspacePreferences::with("/repo", preferences)),
+    );
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/repo")), services, window, cx)
+    });
+
+    cx.run_until_parked();
+
+    let title = cx
+        .debug_bounds("inspector-branch-identity")
+        .expect("branch identity should render");
+    let parent = cx
+        .debug_bounds("inspector-parent-identity")
+        .expect("parent identity should render");
+    let card = cx
+        .debug_bounds("inspector-card")
+        .expect("inspector card should render");
+
+    assert!(title.size.width <= card.size.width);
+    assert!(parent.size.width <= card.size.width);
+    assert!(title.size.height <= px(24.0));
+    assert!(parent.size.height <= px(20.0));
+}
+
+#[gpui::test]
 fn keyboard_welcome_open_activates_once_for_enter_and_space(cx: &mut TestAppContext) {
     cx.update(super::init);
     let picker_calls = Arc::new(AtomicUsize::new(0));

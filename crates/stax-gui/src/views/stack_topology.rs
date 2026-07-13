@@ -164,6 +164,20 @@ mod tests {
     }
 
     #[test]
+    fn linear_stack_keeps_every_node_on_the_same_lane() {
+        let rows = layout(&[
+            branch("tip", Some("middle"), 0, false, false),
+            branch("middle", Some("main"), 0, true, false),
+            branch("main", None, 0, false, true),
+        ]);
+
+        assert_eq!(
+            rows.iter().map(plain).collect::<Vec<_>>(),
+            vec!["○  ", "◉  ", "○  "]
+        );
+    }
+
+    #[test]
     fn dropping_a_lane_draws_the_return_corner() {
         let rows = layout(&[
             branch("nested", Some("side"), 2, false, false),
@@ -184,6 +198,21 @@ mod tests {
         ]);
 
         assert_eq!(plain(rows.last().unwrap()), "○─┘    ");
+    }
+
+    #[test]
+    fn trunk_joins_multiple_direct_sibling_lanes() {
+        let rows = layout(&[
+            branch("left", Some("main"), 0, false, false),
+            branch("middle", Some("main"), 1, false, false),
+            branch("right", Some("main"), 2, false, false),
+            branch("main", None, 0, false, true),
+        ]);
+
+        let trunk = rows.last().unwrap();
+        assert_eq!(plain(trunk), "○─┴─┘  ");
+        assert_eq!(trunk.segments[1].lane, Some(1));
+        assert_eq!(trunk.segments[2].lane, Some(2));
     }
 
     #[test]
