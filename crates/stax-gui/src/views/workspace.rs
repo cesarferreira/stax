@@ -426,20 +426,8 @@ impl WorkspaceView {
             submit
         };
 
-        let phase_label = div()
-            .flex_none()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.accent)
-            .bg(theme.surface_selected)
-            .text_xs()
-            .text_color(theme.accent)
-            .child("Operational · Phase 2");
-
         let mut toolbar = div()
-            .h(px(58.0))
+            .h(px(50.0))
             .flex_none()
             .flex()
             .items_center()
@@ -448,46 +436,52 @@ impl WorkspaceView {
             .px_4()
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.surface_raised)
+            .bg(theme.window)
             .child(
                 div()
                     .min_w_0()
                     .flex()
                     .items_center()
-                    .gap_3()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(24.0))
+                            .h(px(24.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .bg(theme.surface_raised)
+                            .font_family(crate::theme::MONOSPACE_FONT)
+                            .text_xs()
+                            .text_color(theme.accent)
+                            .child("st"),
+                    )
                     .child(
                         div()
                             .min_w_0()
                             .flex()
-                            .flex_col()
+                            .items_center()
+                            .gap_2()
+                            .text_sm()
                             .child(
                                 div()
                                     .truncate()
-                                    .text_sm()
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .child(repository_name),
                             )
+                            .child(div().text_color(theme.text_muted).child("/"))
                             .child(
                                 div()
+                                    .min_w_0()
                                     .truncate()
+                                    .font_family(crate::theme::MONOSPACE_FONT)
                                     .text_xs()
                                     .text_color(theme.text_muted)
-                                    .child(snapshot.repository_root.display().to_string()),
+                                    .child(snapshot.current_branch.clone()),
                             ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.surface)
-                            .text_xs()
-                            .child(format!("Current branch: {}", snapshot.current_branch)),
-                    )
-                    .child(phase_label),
+                    ),
             )
             .child(
                 div()
@@ -580,9 +574,11 @@ fn render_pane_divider(
         .w(px(5.0))
         .h_full()
         .flex_none()
+        .flex()
+        .justify_center()
         .cursor(CursorStyle::ResizeLeftRight)
-        .bg(theme.border)
-        .hover(move |style| style.bg(theme.accent))
+        .hover(move |style| style.bg(theme.surface_hover))
+        .child(div().w(px(1.0)).h_full().bg(theme.border))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |app, event: &gpui::MouseDownEvent, _window, cx| {

@@ -219,7 +219,7 @@ fn render_branch_row(
                                 .text_color(
                                     segment
                                         .lane
-                                        .map(|lane| topology_color(lane, theme))
+                                        .map(|lane| theme.topology_lane(lane))
                                         .unwrap_or(theme.text_muted),
                                 )
                                 .child(segment.glyph)
@@ -262,10 +262,6 @@ fn render_branch_row(
     activate_control(row, cx, move |app, window, cx| {
         app.select_branch(&branch_name, window, cx);
     })
-}
-
-fn topology_color(lane: usize, theme: Theme) -> gpui::Hsla {
-    [theme.accent, theme.success, theme.warning][lane % 3]
 }
 
 fn branch_status_parts(branch: &BranchSummary) -> Vec<(String, StatusTone)> {

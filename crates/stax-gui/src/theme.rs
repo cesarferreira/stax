@@ -6,8 +6,10 @@ pub const MONOSPACE_FONT: &str = "Menlo";
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Theme {
     pub window: Hsla,
+    pub sidebar: Hsla,
     pub surface: Hsla,
     pub surface_raised: Hsla,
+    pub surface_hover: Hsla,
     pub surface_selected: Hsla,
     pub border: Hsla,
     pub border_strong: Hsla,
@@ -26,14 +28,17 @@ pub struct Theme {
     pub disabled_surface: Hsla,
     pub disabled_text: Hsla,
     pub overlay_scrim: Hsla,
+    pub topology_lanes: [Hsla; 3],
 }
 
 impl Theme {
     pub fn light() -> Self {
         Self {
             window: rgb(0xf3f3f4).into(),
+            sidebar: rgb(0xebebee).into(),
             surface: rgb(0xf9f9fa).into(),
             surface_raised: rgb(0xffffff).into(),
+            surface_hover: rgb(0xeff2f7).into(),
             surface_selected: rgb(0xe6eef9).into(),
             border: rgb(0xd7d7da).into(),
             border_strong: rgb(0xb8b8bd).into(),
@@ -52,33 +57,49 @@ impl Theme {
             disabled_surface: rgb(0xebebed).into(),
             disabled_text: rgb(0x85878c).into(),
             overlay_scrim: gpui::hsla(0.0, 0.0, 0.0, 0.36),
+            topology_lanes: [
+                rgb(0x1677a8).into(),
+                rgb(0x287a45).into(),
+                rgb(0x668a14).into(),
+            ],
         }
     }
 
     pub fn dark() -> Self {
         Self {
-            window: rgb(0x202124).into(),
-            surface: rgb(0x27282b).into(),
-            surface_raised: rgb(0x2f3034).into(),
-            surface_selected: rgb(0x263e5d).into(),
-            border: rgb(0x414349).into(),
-            border_strong: rgb(0x5a5d64).into(),
-            text: rgb(0xf0f0f1).into(),
-            text_muted: rgb(0xb0b3b8).into(),
-            accent: rgb(0x7aadea).into(),
-            accent_text: rgb(0x142338).into(),
-            focus: rgb(0x83b7f2).into(),
-            focus_on_accent: rgb(0x142338).into(),
-            success: rgb(0x70c78a).into(),
-            warning: rgb(0xe0b25d).into(),
-            danger: rgb(0xf58a83).into(),
-            diff_addition: rgb(0x79c991).into(),
-            diff_deletion: rgb(0xf08a84).into(),
-            diff_hunk: rgb(0xb8a5ed).into(),
-            disabled_surface: rgb(0x34363a).into(),
-            disabled_text: rgb(0x858990).into(),
+            window: rgb(0x1c1c2b).into(),
+            sidebar: rgb(0x3a3a46).into(),
+            surface: rgb(0x242433).into(),
+            surface_raised: rgb(0x303040).into(),
+            surface_hover: rgb(0x41414e).into(),
+            surface_selected: rgb(0x4a4a58).into(),
+            border: rgb(0x3a3a4a).into(),
+            border_strong: rgb(0x515164).into(),
+            text: rgb(0xdedeea).into(),
+            text_muted: rgb(0xbfc0d2).into(),
+            accent: rgb(0xaeb7ff).into(),
+            accent_text: rgb(0x171724).into(),
+            focus: rgb(0x94a0ff).into(),
+            focus_on_accent: rgb(0x171724).into(),
+            success: rgb(0x8bd5a1).into(),
+            warning: rgb(0xe5c07b).into(),
+            danger: rgb(0xffb3c2).into(),
+            diff_addition: rgb(0x8bd5a1).into(),
+            diff_deletion: rgb(0xffb3c2).into(),
+            diff_hunk: rgb(0xb8a7ff).into(),
+            disabled_surface: rgb(0x343442).into(),
+            disabled_text: rgb(0x77778a).into(),
             overlay_scrim: gpui::hsla(0.0, 0.0, 0.0, 0.52),
+            topology_lanes: [
+                rgb(0x46bff7).into(),
+                rgb(0x4ddd9a).into(),
+                rgb(0xa3e635).into(),
+            ],
         }
+    }
+
+    pub fn topology_lane(self, lane: usize) -> Hsla {
+        self.topology_lanes[lane % self.topology_lanes.len()]
     }
 
     pub fn for_appearance(appearance: WindowAppearance) -> Self {
@@ -136,6 +157,23 @@ mod tests {
             Theme::for_appearance(WindowAppearance::VibrantDark),
             Theme::dark()
         );
+    }
+
+    #[test]
+    fn dark_theme_has_distinct_codex_style_depths() {
+        let theme = Theme::dark();
+        assert_ne!(theme.window, theme.sidebar);
+        assert_ne!(theme.sidebar, theme.surface);
+        assert_ne!(theme.surface, theme.surface_raised);
+        assert_ne!(theme.surface_hover, theme.surface_selected);
+    }
+
+    #[test]
+    fn topology_lane_palette_cycles_deterministically() {
+        let theme = Theme::dark();
+        assert_ne!(theme.topology_lane(0), theme.topology_lane(1));
+        assert_ne!(theme.topology_lane(1), theme.topology_lane(2));
+        assert_eq!(theme.topology_lane(0), theme.topology_lane(3));
     }
 
     #[test]
