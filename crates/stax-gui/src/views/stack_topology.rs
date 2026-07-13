@@ -72,7 +72,7 @@ fn branch_row(
     }
 
     let node = &mut cells[branch.column];
-    node.top = previous_column == Some(branch.column);
+    node.top = previous_column.is_some_and(|column| column >= branch.column);
     node.bottom = true;
     node.node = Some(if branch.is_current {
         TopologyNode::Current
@@ -253,7 +253,7 @@ mod tests {
             rows[1].cells,
             vec![
                 cell(0, true, true, false, false, None),
-                cell(1, false, true, false, true, Some(TopologyNode::Branch)),
+                cell(1, true, true, false, true, Some(TopologyNode::Branch)),
                 cell(2, true, false, true, false, None),
             ]
         );
