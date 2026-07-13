@@ -483,6 +483,9 @@ fn workspace_renders_codex_presentation_landmarks(cx: &mut TestAppContext) {
 
     for selector in [
         "stack-topology-gutter",
+        "stack-topology-cell",
+        "stack-topology-vertical-rail",
+        "stack-topology-node",
         "changes-file-summary",
         "inspector-card",
     ] {

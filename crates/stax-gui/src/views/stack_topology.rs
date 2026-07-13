@@ -1,31 +1,54 @@
 use stax::application::BranchSummary;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct TopologySegment {
-    pub lane: Option<usize>,
-    pub glyph: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TopologyNode {
+    Branch,
+    Current,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TopologyCell {
+    pub lane: usize,
+    pub top: bool,
+    pub bottom: bool,
+    pub left: bool,
+    pub right: bool,
+    pub node: Option<TopologyNode>,
+}
+
+impl TopologyCell {
+    fn empty(lane: usize) -> Self {
+        Self {
+            lane,
+            top: false,
+            bottom: false,
+            left: false,
+            right: false,
+            node: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TopologyRow {
     pub branch_name: String,
-    pub segments: Vec<TopologySegment>,
+    pub cells: Vec<TopologyCell>,
 }
 
 pub(super) fn layout(branches: &[BranchSummary]) -> Vec<TopologyRow> {
     let Some(max_column) = branches.iter().map(|branch| branch.column).max() else {
         return Vec::new();
     };
-    let target_width = (max_column + 1) * 2;
+    let lane_count = max_column + 1;
 
     branches
         .iter()
         .enumerate()
         .map(|(index, branch)| {
             if branch.is_trunk {
-                trunk_row(branches, branch, target_width)
+                trunk_row(branches, branch, lane_count)
             } else {
-                branch_row(branches, index, branch, target_width)
+                branch_row(branches, index, branch, lane_count)
             }
         })
         .collect()
@@ -35,89 +58,88 @@ fn branch_row(
     branches: &[BranchSummary],
     row_index: usize,
     branch: &BranchSummary,
-    target_width: usize,
+    lane_count: usize,
 ) -> TopologyRow {
-    let needs_corner = row_index
+    let previous_column = row_index
         .checked_sub(1)
         .and_then(|index| branches.get(index))
-        .is_some_and(|previous| previous.column > branch.column);
-    let mut segments = Vec::new();
+        .map(|previous| previous.column);
+    let mut cells = cells(lane_count);
 
-    for lane in 0..=branch.column {
-        if lane == branch.column {
-            segments.push(TopologySegment {
-                lane: Some(lane),
-                glyph: if branch.is_current { "◉" } else { "○" }.into(),
-            });
-            if needs_corner {
-                segments.push(TopologySegment {
-                    lane: Some(lane),
-                    glyph: "─┘".into(),
-                });
-            }
-        } else {
-            segments.push(TopologySegment {
-                lane: Some(lane),
-                glyph: "│ ".into(),
-            });
+    for cell in cells.iter_mut().take(branch.column) {
+        cell.top = true;
+        cell.bottom = true;
+    }
+
+    let node = &mut cells[branch.column];
+    node.top = previous_column == Some(branch.column);
+    node.bottom = true;
+    node.node = Some(if branch.is_current {
+        TopologyNode::Current
+    } else {
+        TopologyNode::Branch
+    });
+
+    if let Some(previous_column) = previous_column.filter(|column| *column > branch.column) {
+        cells[branch.column].right = true;
+        for (lane, cell) in cells
+            .iter_mut()
+            .enumerate()
+            .take(previous_column + 1)
+            .skip(branch.column + 1)
+        {
+            cell.left = true;
+            cell.right = lane < previous_column;
+            cell.top = lane == previous_column;
         }
     }
 
-    pad_row(&mut segments, target_width);
     TopologyRow {
         branch_name: branch.name.clone(),
-        segments,
+        cells,
     }
 }
 
-fn trunk_row(
-    branches: &[BranchSummary],
-    trunk: &BranchSummary,
-    target_width: usize,
-) -> TopologyRow {
+fn trunk_row(branches: &[BranchSummary], trunk: &BranchSummary, lane_count: usize) -> TopologyRow {
     let direct_child_max_column = branches
         .iter()
         .filter(|branch| branch.parent.as_deref() == Some(trunk.name.as_str()))
         .map(|branch| branch.column)
         .max()
         .unwrap_or(0);
-    let mut segments = vec![TopologySegment {
-        lane: Some(0),
-        glyph: if trunk.is_current { "◉" } else { "○" }.into(),
-    }];
+    let mut cells = cells(lane_count);
+    cells[0].top = branches.iter().any(|branch| !branch.is_trunk);
+    cells[0].right = direct_child_max_column > 0;
+    cells[0].node = Some(if trunk.is_current {
+        TopologyNode::Current
+    } else {
+        TopologyNode::Branch
+    });
 
-    for lane in 1..=direct_child_max_column {
-        segments.push(TopologySegment {
-            lane: Some(lane),
-            glyph: if lane < direct_child_max_column {
-                "─┴".into()
-            } else {
-                "─┘".into()
-            },
-        });
+    for (lane, cell) in cells
+        .iter_mut()
+        .enumerate()
+        .take(direct_child_max_column + 1)
+        .skip(1)
+    {
+        cell.top = true;
+        cell.left = true;
+        cell.right = lane < direct_child_max_column;
     }
 
-    pad_row(&mut segments, target_width);
     TopologyRow {
         branch_name: trunk.name.clone(),
-        segments,
+        cells,
     }
 }
 
-fn pad_row(segments: &mut Vec<TopologySegment>, target_width: usize) {
-    let visual_width = segments
-        .iter()
-        .map(|segment| segment.glyph.chars().count())
-        .sum::<usize>();
-    segments.push(TopologySegment {
-        lane: None,
-        glyph: " ".repeat(target_width.saturating_sub(visual_width) + 1),
-    });
+fn cells(lane_count: usize) -> Vec<TopologyCell> {
+    (0..lane_count).map(TopologyCell::empty).collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::layout;
+    use super::{TopologyCell, TopologyNode, layout};
     use stax::application::BranchSummary;
 
     fn branch(
@@ -140,11 +162,22 @@ mod tests {
         }
     }
 
-    fn plain(row: &super::TopologyRow) -> String {
-        row.segments
-            .iter()
-            .map(|segment| segment.glyph.as_str())
-            .collect()
+    fn cell(
+        lane: usize,
+        top: bool,
+        bottom: bool,
+        left: bool,
+        right: bool,
+        node: Option<TopologyNode>,
+    ) -> TopologyCell {
+        TopologyCell {
+            lane,
+            top,
+            bottom,
+            left,
+            right,
+            node,
+        }
     }
 
     #[test]
@@ -156,11 +189,34 @@ mod tests {
             branch("main", None, 0, false, true),
         ]);
 
-        assert_eq!(plain(&rows[0]), "○    ");
-        assert_eq!(plain(&rows[1]), "│ ◉  ");
-        assert_eq!(plain(&rows[2]), "│ ○  ");
-        assert_eq!(plain(&rows[3]), "○─┘  ");
-        assert_eq!(rows[1].segments[1].lane, Some(1));
+        assert_eq!(
+            rows[0].cells,
+            vec![
+                cell(0, false, true, false, false, Some(TopologyNode::Branch)),
+                cell(1, false, false, false, false, None),
+            ]
+        );
+        assert_eq!(
+            rows[1].cells,
+            vec![
+                cell(0, true, true, false, false, None),
+                cell(1, false, true, false, false, Some(TopologyNode::Current)),
+            ]
+        );
+        assert_eq!(
+            rows[2].cells,
+            vec![
+                cell(0, true, true, false, false, None),
+                cell(1, true, true, false, false, Some(TopologyNode::Branch)),
+            ]
+        );
+        assert_eq!(
+            rows[3].cells,
+            vec![
+                cell(0, true, false, false, true, Some(TopologyNode::Branch)),
+                cell(1, true, false, true, false, None),
+            ]
+        );
     }
 
     #[test]
@@ -172,8 +228,16 @@ mod tests {
         ]);
 
         assert_eq!(
-            rows.iter().map(plain).collect::<Vec<_>>(),
-            vec!["○  ", "◉  ", "○  "]
+            rows[0].cells[0],
+            cell(0, false, true, false, false, Some(TopologyNode::Branch))
+        );
+        assert_eq!(
+            rows[1].cells[0],
+            cell(0, true, true, false, false, Some(TopologyNode::Current))
+        );
+        assert_eq!(
+            rows[2].cells[0],
+            cell(0, true, false, false, false, Some(TopologyNode::Branch))
         );
     }
 
@@ -185,7 +249,14 @@ mod tests {
             branch("main", None, 0, false, true),
         ]);
 
-        assert_eq!(plain(&rows[1]), "│ ○─┘  ");
+        assert_eq!(
+            rows[1].cells,
+            vec![
+                cell(0, true, true, false, false, None),
+                cell(1, false, true, false, true, Some(TopologyNode::Branch)),
+                cell(2, true, false, true, false, None),
+            ]
+        );
     }
 
     #[test]
@@ -197,7 +268,14 @@ mod tests {
             branch("main", None, 0, false, true),
         ]);
 
-        assert_eq!(plain(rows.last().unwrap()), "○─┘    ");
+        assert_eq!(
+            rows.last().unwrap().cells,
+            vec![
+                cell(0, true, false, false, true, Some(TopologyNode::Branch)),
+                cell(1, true, false, true, false, None),
+                cell(2, false, false, false, false, None),
+            ]
+        );
     }
 
     #[test]
@@ -210,9 +288,14 @@ mod tests {
         ]);
 
         let trunk = rows.last().unwrap();
-        assert_eq!(plain(trunk), "○─┴─┘  ");
-        assert_eq!(trunk.segments[1].lane, Some(1));
-        assert_eq!(trunk.segments[2].lane, Some(2));
+        assert_eq!(
+            trunk.cells,
+            vec![
+                cell(0, true, false, false, true, Some(TopologyNode::Branch)),
+                cell(1, true, false, true, true, None),
+                cell(2, true, false, true, false, None),
+            ]
+        );
     }
 
     #[test]
