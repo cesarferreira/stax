@@ -7,6 +7,10 @@
 use crate::common;
 
 use common::{OutputAssertions, TestRepo};
+use stax::application::{
+    NoopOperationReporter, OperationErrorDetails, OperationErrorKind, OperationOutcome,
+    OperationSideEffects, RepositorySession, RestackScope, TransactionStatus,
+};
 
 // =============================================================================
 // Bug 1: Conflict-stop must exit non-zero
@@ -84,6 +88,52 @@ fn test_restack_no_conflict_exits_zero() {
     let output = repo.run_stax(&["restack", "--yes", "--quiet"]);
 
     output.assert_success();
+}
+
+#[test]
+fn restack_conflict_failed_receipt_lists_only_completed_branches() {
+    let repo = TestRepo::new();
+    let branches = repo.create_stack(&["receipt-clean", "receipt-conflict"]);
+    let first = branches[0].clone();
+    let second = branches[1].clone();
+
+    repo.git(&["checkout", &second]).assert_success();
+    repo.create_file("receipt-conflict.txt", "branch version\n");
+    repo.commit("Prepare conflicting child change");
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("receipt-main-advance.txt", "main moved\n");
+    repo.commit("Advance main cleanly");
+    repo.create_file("receipt-conflict.txt", "main version\n");
+    repo.commit("Prepare conflicting main change");
+    repo.git(&["checkout", &second]).assert_success();
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .restack(
+            RestackScope::StackContaining(second.clone()),
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::RebaseConflict);
+    assert_eq!(error.side_effects, OperationSideEffects::RepositoryChanged);
+    assert_eq!(
+        error.details,
+        OperationErrorDetails::Rebase {
+            branch: Some(second.clone()),
+            worktree: repo.path().canonicalize().unwrap(),
+        }
+    );
+    let receipt = error.receipt.expect("failed restack receipt");
+    let transaction = receipt.transaction.expect("failed transaction summary");
+    assert_eq!(transaction.status, TransactionStatus::Failed);
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::Restacked { ref branches, .. } if branches == &vec![first]
+    ));
+    assert!(repo.has_rebase_in_progress());
+    repo.abort_rebase();
 }
 
 // =============================================================================

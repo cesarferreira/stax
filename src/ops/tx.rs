@@ -38,6 +38,11 @@ pub struct Transaction {
     quiet: bool,
 }
 
+pub(crate) struct ReceiptFinalization {
+    pub receipt: OpReceipt,
+    pub persistence_error: Option<anyhow::Error>,
+}
+
 impl Transaction {
     /// Begin a new transaction
     pub fn begin(kind: OpKind, repo: &GitRepo, quiet: bool) -> Result<Self> {
@@ -209,30 +214,71 @@ impl Transaction {
     }
 
     /// Finish the transaction successfully
-    pub fn finish_ok(mut self) -> Result<()> {
+    pub fn finish_ok(self) -> Result<()> {
+        self.finish_ok_with_receipt().map(drop)
+    }
+
+    pub(crate) fn finish_ok_preserving_receipt(mut self) -> ReceiptFinalization {
         self.receipt.mark_success();
-        self.receipt.save(&self.git_dir)?;
+        let persistence_error = self.receipt.save(&self.git_dir).err();
         self.finished = true;
-        Ok(())
+        ReceiptFinalization {
+            receipt: self.receipt.clone(),
+            persistence_error,
+        }
+    }
+
+    pub(crate) fn finish_ok_with_receipt(self) -> Result<OpReceipt> {
+        let finalized = self.finish_ok_preserving_receipt();
+        match finalized.persistence_error {
+            Some(error) => Err(error),
+            None => Ok(finalized.receipt),
+        }
     }
 
     /// Finish the transaction with an error
     pub fn finish_err(
-        mut self,
+        self,
         message: &str,
         failed_step: Option<&str>,
         failed_branch: Option<&str>,
     ) -> Result<()> {
+        self.finish_err_with_receipt(message, failed_step, failed_branch)
+            .map(drop)
+    }
+
+    pub(crate) fn finish_err_with_receipt(
+        self,
+        message: &str,
+        failed_step: Option<&str>,
+        failed_branch: Option<&str>,
+    ) -> Result<OpReceipt> {
+        let finalized = self.finish_err_preserving_receipt(message, failed_step, failed_branch);
+        match finalized.persistence_error {
+            Some(error) => Err(error),
+            None => Ok(finalized.receipt),
+        }
+    }
+
+    pub(crate) fn finish_err_preserving_receipt(
+        mut self,
+        message: &str,
+        failed_step: Option<&str>,
+        failed_branch: Option<&str>,
+    ) -> ReceiptFinalization {
         self.receipt
             .mark_failed(message, failed_step, failed_branch);
-        self.receipt.save(&self.git_dir)?;
+        let persistence_error = self.receipt.save(&self.git_dir).err();
         self.finished = true;
 
         if !self.quiet {
             self.print_recovery_hint();
         }
 
-        Ok(())
+        ReceiptFinalization {
+            receipt: self.receipt.clone(),
+            persistence_error,
+        }
     }
 
     /// Print the recovery hint after a failure
@@ -299,5 +345,67 @@ pub fn print_plan(_kind: &OpKind, summary: &PlanSummary, quiet: bool) {
 
     for desc in &summary.description {
         println!("  {} {}", "▸".dimmed(), desc);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::ops::receipt::OpStatus;
+
+    #[test]
+    fn successful_finalization_preserves_receipt_when_persistence_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let ops_dir = super::super::ops_dir(temp.path());
+        std::fs::create_dir_all(&ops_dir).unwrap();
+        let receipt_path = OpReceipt::file_path(temp.path(), "success-save-failure");
+        std::fs::create_dir(&receipt_path).unwrap();
+        let transaction = Transaction {
+            receipt: OpReceipt::new(
+                "success-save-failure".into(),
+                OpKind::Restack,
+                temp.path().display().to_string(),
+                "main".into(),
+                "feature".into(),
+            ),
+            git_dir: temp.path().to_path_buf(),
+            workdir: temp.path().to_path_buf(),
+            snapshotted: true,
+            finished: false,
+            quiet: true,
+        };
+
+        let finalized = transaction.finish_ok_preserving_receipt();
+
+        assert_eq!(finalized.receipt.summary_status(), &OpStatus::Success);
+        let persistence_error = finalized.persistence_error.unwrap();
+        let io_error = persistence_error.downcast_ref::<std::io::Error>().unwrap();
+        assert_eq!(io_error.kind(), std::io::ErrorKind::IsADirectory);
+    }
+
+    #[test]
+    fn failed_finalization_returns_the_failed_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let transaction = Transaction {
+            receipt: OpReceipt::new(
+                "failed-receipt".into(),
+                OpKind::Restack,
+                temp.path().display().to_string(),
+                "main".into(),
+                "feature".into(),
+            ),
+            git_dir: temp.path().to_path_buf(),
+            workdir: temp.path().to_path_buf(),
+            snapshotted: true,
+            finished: false,
+            quiet: true,
+        };
+
+        let receipt = transaction
+            .finish_err_with_receipt("conflict", Some("rebase"), Some("feature"))
+            .unwrap();
+
+        assert_eq!(receipt.summary_status(), &OpStatus::Failed);
+        assert_eq!(receipt.error.unwrap().message, "conflict");
     }
 }

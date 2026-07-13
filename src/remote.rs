@@ -37,7 +37,7 @@ pub struct RemoteInfo {
 }
 
 /// A remote whose Git host, provider, and API destination were validated before
-/// automatic credential lookup.
+/// noninteractive credential lookup.
 #[derive(Debug, Clone)]
 pub(crate) struct TrustedRemoteInfo {
     remote: RemoteInfo,
@@ -46,7 +46,7 @@ pub(crate) struct TrustedRemoteInfo {
 impl TrustedRemoteInfo {
     pub(crate) fn from_repo(repo: &GitRepo, global_config: &Config) -> Result<Self> {
         let remote = RemoteInfo::from_repo(repo, global_config)?;
-        validate_automatic_network_remote(&remote, global_config)?;
+        validate_trusted_network_remote(&remote, global_config)?;
         Ok(Self { remote })
     }
 
@@ -162,12 +162,12 @@ fn default_api_base_url(forge: ForgeType, base_url: &str) -> String {
     }
 }
 
-fn validate_automatic_network_remote(remote: &RemoteInfo, global_config: &Config) -> Result<()> {
+fn validate_trusted_network_remote(remote: &RemoteInfo, global_config: &Config) -> Result<()> {
     let remote_host = remote.host.to_ascii_lowercase();
     let base_host = network_url_host(&remote.base_url, "provider base URL")?;
     if base_host != remote_host {
         anyhow::bail!(
-            "Automatic CI hydration blocked a provider base URL that does not match the Git \
+            "Noninteractive repository network access blocked a provider base URL that does not match the Git \
              remote hostname; configure matching global remote.base_url settings"
         );
     }
@@ -176,7 +176,7 @@ fn validate_automatic_network_remote(remote: &RemoteInfo, global_config: &Config
     if let Some(expected) = official_forge {
         if remote.forge != expected {
             anyhow::bail!(
-                "Automatic CI hydration blocked a provider mismatch for an official forge host; \
+                "Noninteractive repository network access blocked a provider mismatch for an official forge host; \
                  remove or correct the global remote.forge override"
             );
         }
@@ -185,14 +185,14 @@ fn validate_automatic_network_remote(remote: &RemoteInfo, global_config: &Config
             network_url_host(&global_config.remote.base_url, "global provider base URL")?;
         if configured_base_host != remote_host {
             anyhow::bail!(
-                "Automatic CI hydration blocked an untrusted Git remote hostname; configure \
+                "Noninteractive repository network access blocked an untrusted Git remote hostname; configure \
                  matching global remote.base_url and remote.forge settings to trust this host"
             );
         }
     }
 
     let api_url = remote.api_base_url.as_deref().context(
-        "Automatic CI hydration requires a resolved provider API URL in global configuration",
+        "Noninteractive repository network access requires a resolved provider API URL in global configuration",
     )?;
     let api_host = network_url_host(api_url, "provider API URL")?;
     let built_in_relationship = matches!(
@@ -206,7 +206,7 @@ fn validate_automatic_network_remote(remote: &RemoteInfo, global_config: &Config
         && global_config.remote.api_base_url.is_none()
     {
         anyhow::bail!(
-            "Automatic CI hydration blocked an untrusted provider API hostname; configure the \
+            "Noninteractive repository network access blocked an untrusted provider API hostname; configure the \
              remote/API relationship explicitly in global remote.api_base_url"
         );
     }
@@ -224,13 +224,15 @@ fn official_forge_for_host(host: &str) -> Option<ForgeType> {
 }
 
 fn network_url_host(url: &str, label: &str) -> Result<String> {
-    let parsed = reqwest::Url::parse(url)
-        .with_context(|| format!("Automatic CI hydration has an invalid {label}"))?;
+    let parsed = reqwest::Url::parse(url).with_context(|| {
+        format!("Noninteractive repository network access has an invalid {label}")
+    })?;
     if !matches!(parsed.scheme(), "http" | "https") {
-        anyhow::bail!("Automatic CI hydration requires an HTTP(S) {label}");
+        anyhow::bail!("Noninteractive repository network access requires an HTTP(S) {label}");
     }
-    parsed_url_host(&parsed)
-        .with_context(|| format!("Automatic CI hydration has an invalid {label} hostname"))
+    parsed_url_host(&parsed).with_context(|| {
+        format!("Noninteractive repository network access has an invalid {label} hostname")
+    })
 }
 
 fn normalize_url_host(host: &str) -> String {
@@ -596,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_network_remote_does_not_trust_a_hostname_hidden_in_ssh_userinfo() {
+    fn trusted_network_remote_does_not_trust_a_hostname_hidden_in_ssh_userinfo() {
         let (_dir, repo) =
             repo_with_remote("ssh://git@github.com@attacker.example/owner/private-repo.git");
 
@@ -869,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_network_remote_trusts_official_host_resolutions() {
+    fn trusted_network_remote_trusts_official_host_resolutions() {
         let cases = [
             (
                 "https://github.com/owner/repo.git",
@@ -907,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_network_remote_accepts_globally_configured_custom_relationship() {
+    fn trusted_network_remote_accepts_globally_configured_custom_relationship() {
         let (_dir, repo) = repo_with_remote("git@git.corp.example:platform/service.git");
         let mut config = Config::default();
         config.remote.base_url = "https://git.corp.example".to_string();
@@ -927,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_network_remote_accepts_a_globally_configured_ipv6_host() {
+    fn trusted_network_remote_accepts_a_globally_configured_ipv6_host() {
         let (_dir, repo) = repo_with_remote("ssh://git@[2001:db8::1]:2222/platform/service.git");
         let mut config = Config::default();
         config.remote.base_url = "https://[2001:db8::1]".to_string();
@@ -946,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_network_remote_rejects_unconfigured_unknown_host() {
+    fn trusted_network_remote_rejects_unconfigured_unknown_host() {
         let (_dir, repo) = repo_with_remote("https://untrusted.example/owner/private-repo.git");
 
         let error = TrustedRemoteInfo::from_repo(&repo, &Config::default()).unwrap_err();
@@ -958,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_network_remote_rejects_official_provider_mismatch() {
+    fn trusted_network_remote_rejects_official_provider_mismatch() {
         let (_dir, repo) = repo_with_remote("https://github.com/owner/repo.git");
         let mut config = Config::default();
         config.remote.forge = Some(ForgeType::GitLab);
@@ -969,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_network_remote_rejects_implicit_api_host_mismatch() {
+    fn trusted_network_remote_rejects_implicit_api_host_mismatch() {
         let mut config = Config::default();
         config.remote.base_url = "https://git.corp.example".to_string();
         config.remote.forge = Some(ForgeType::GitHub);
@@ -983,7 +985,7 @@ mod tests {
             api_base_url: Some("https://api.other.example/v3".to_string()),
         };
 
-        let error = validate_automatic_network_remote(&remote, &config).unwrap_err();
+        let error = validate_trusted_network_remote(&remote, &config).unwrap_err();
 
         assert!(error.to_string().contains("API hostname"));
         assert!(error.to_string().contains("global"));

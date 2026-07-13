@@ -286,6 +286,45 @@ impl OpReceipt {
         self.local_refs.iter().any(|r| r.oid_before.is_some())
     }
 
+    pub(crate) fn summary_id(&self) -> &str {
+        &self.op_id
+    }
+
+    pub(crate) fn summary_kind(&self) -> &'static str {
+        self.kind.display_name()
+    }
+
+    pub(crate) fn summary_status(&self) -> &OpStatus {
+        &self.status
+    }
+
+    pub(crate) fn summary_branch_names(&self) -> Vec<String> {
+        let mut branches = Vec::new();
+        for entry in &self.local_refs {
+            let branch = if entry
+                .refname
+                .starts_with(crate::git::refs::METADATA_REF_PREFIX)
+            {
+                entry
+                    .branch
+                    .strip_suffix(super::tx::METADATA_REF_LABEL_SUFFIX)
+                    .unwrap_or(&entry.branch)
+            } else {
+                &entry.branch
+            };
+            if !branches.iter().any(|existing| existing == branch) {
+                branches.push(branch.to_string());
+            }
+        }
+        branches
+    }
+
+    pub(crate) fn changed_remote_refs(&self) -> bool {
+        self.remote_refs
+            .iter()
+            .any(|entry| entry.oid_after.is_some())
+    }
+
     /// Check if this receipt can be redone
     pub fn can_redo(&self) -> bool {
         // Can redo if we have local refs with after-OIDs
@@ -310,6 +349,27 @@ impl OpReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_branch_names_preserve_legal_metadata_suffixes_and_deduplicate() {
+        let mut receipt = OpReceipt::new(
+            "test".to_string(),
+            OpKind::Restack,
+            "/tmp".to_string(),
+            "main".to_string(),
+            "feature@meta".to_string(),
+        );
+        receipt.add_local_ref("feature@meta", Some("branch-before"));
+        receipt.add_metadata_ref("feature@meta", Some("metadata-before"));
+        receipt.add_local_ref("feature@meta", Some("branch-before"));
+        receipt.add_local_ref("other", Some("other-before"));
+        receipt.add_metadata_ref("other", Some("other-metadata-before"));
+
+        assert_eq!(
+            receipt.summary_branch_names(),
+            vec!["feature@meta".to_string(), "other".to_string()]
+        );
+    }
 
     #[test]
     fn test_receipt_roundtrip() {

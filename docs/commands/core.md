@@ -7,6 +7,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | Command | What it does |
 |---|---|
 | `st` | Launch the interactive TUI |
+| `st gui [path]` | Launch a fresh unsigned macOS GUI developer-preview window for a repository |
 | `st ls` | Show stack with PR, rebase, and metadata-repair status |
 | `st ll` | Like `st ls` plus PR URLs and detail |
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
@@ -97,3 +98,5 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 See also: [Navigation](navigation.md) · [Stack health](stack-health.md) · [Full reference](reference.md)
 
 `st ready` and `st pr list --ready` launch a TUI in an interactive terminal and default to all tracked PRs, ordered newest changed PR first. Use `--current` or `--stack` for only the current stack. Use Up/Down or `j`/`k` to move, Enter or `o` to open the selected PR, `r` to refresh, `?` for help, and `q`/Esc to quit. Use `--plain` for the static table and `--json` for machine-readable output.
+
+`st gui [path]` is macOS-only and launches the Phase 2 GUI developer preview. Install the unsigned bundle with `make install-gui-app` first; it writes `$HOME/Applications/Stax.app` with bundle id `dev.stax.Stax`. The GUI can check out selected branches, create explicit-name empty children, restack selected/all, confirm stash-and-restack, submit the current stack as Draft after explicit confirmation, and Open PR for a selected branch without checkout.

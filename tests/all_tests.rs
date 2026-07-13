@@ -18,6 +18,8 @@ mod abort_tests;
 mod absorb_tests;
 #[path = "additional_coverage_tests.rs"]
 mod additional_coverage_tests;
+#[path = "application_operation_tests.rs"]
+mod application_operation_tests;
 #[path = "application_session_tests.rs"]
 mod application_session_tests;
 #[path = "auth_tests.rs"]
@@ -72,6 +74,8 @@ mod get_tests;
 mod gh_stack_tests;
 #[path = "github_list_tests.rs"]
 mod github_list_tests;
+#[path = "gui_command_tests.rs"]
+mod gui_command_tests;
 #[path = "integration_tests.rs"]
 mod integration_tests;
 #[path = "navigation_tests.rs"]

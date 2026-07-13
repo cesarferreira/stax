@@ -27,7 +27,7 @@ impl RepositorySession {
         }
 
         let repo = self.open_repo()?;
-        let config = Config::load_for_automatic_network(self.repository_root()).map_err(|_| {
+        let config = Config::load_for_trusted_network(self.repository_root()).map_err(|_| {
             anyhow!(
                 "Failed to load stax config for repository '{}'; check the global config and repository stax.toml",
                 self.repository_root().display()
@@ -36,7 +36,7 @@ impl RepositorySession {
         let remote_name = config.remote_name().to_string();
         let trusted_remote = TrustedRemoteInfo::from_repo(&repo, &config).map_err(|error| {
             let message = error.to_string();
-            if message.starts_with("Automatic CI hydration") {
+            if message.starts_with("Noninteractive repository network access") {
                 anyhow!(message)
             } else {
                 anyhow!(
@@ -59,7 +59,7 @@ impl RepositorySession {
         let (overall_status, checks) = run_in_tokio_runtime_with(
             || tokio::runtime::Runtime::new().map_err(Into::into),
             || {
-                let client = ForgeClient::new_for_automatic(&trusted_remote, &config)
+                let client = ForgeClient::new_for_trusted_remote(&trusted_remote, &config)
                     .map_err(|error| provider_error(branch, forge, &error))?;
                 Ok(async move {
                     client
@@ -620,7 +620,7 @@ mod tests {
             "[remote]\nname = \"origin\"\n",
         )
         .unwrap();
-        let secret = "automatic-hydration-secret";
+        let secret = "trusted-network-secret";
         fs::write(config_dir.join(".credentials"), secret).unwrap();
         fs::write(
             dir.path().join("stax.toml"),

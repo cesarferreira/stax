@@ -22,6 +22,7 @@ Stax manages stacked branches: small focused branches layered on top of each oth
 stax status|ls                # Stack status (tree)
 stax ll                        # Stack status with PR URLs/details
 stax log|l                     # Stack status with commits + PR info
+stax gui [path]                # Launch fresh native macOS GUI preview for one repository
 
 stax submit|ss                 # Submit full stack
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
@@ -146,6 +147,19 @@ cargo release patch --no-confirm # Dry-run cargo release only (no bump/tag/push)
 ```
 
 Release prep regenerates `CHANGELOG.md` with [git-cliff](https://git-cliff.org/) (config in `cliff.toml`) inside `cargo release`'s pre-release hook, grouping the commits since the latest `v*` tag under the new version. Conventional prefixes map to grouped sections (`feat` → Features, `fix` → Bug Fixes, `docs` → Documentation, etc.); non-conventional subjects land in `Other` rather than being dropped. git-cliff must be installed locally (`cargo install git-cliff`).
+
+### Native macOS GUI Developer Preview
+
+```bash
+make gui-app                     # Build the unsigned local developer preview
+make install-gui-app             # Install $HOME/Applications/Stax.app
+stax gui                         # Launch GUI for the current directory
+stax gui /path/to/repo           # Launch GUI for an explicit repository
+```
+
+`stax gui [path]` is macOS-only and expects the unsigned developer-preview app bundle installed at `$HOME/Applications/Stax.app` with bundle id `dev.stax.Stax`. It canonicalizes the supplied path, defaults to the current directory, and launches exactly `open -n -b dev.stax.Stax --args <canonical-path>`. The `-n` fresh-instance behavior is intentional: every invocation opens a new app process/window for one repository.
+
+The GUI operations are typed and repository-scoped. It can checkout selected branches, create explicit-name empty child branches, restack selected branches or all tracked branches, confirm stash-and-restack for dirty worktrees, submit the current stack as Draft after an explicit confirmation, and Open PR for a selected branch without checkout. GUI submit has no CLI prompts and does not auto-open PR pages. Keep AI naming, staging/commit creation, `--below`, `--insert`, custom prefixes, and advanced submit options in CLI workflows.
 
 ### Create and Edit Branches
 
@@ -667,6 +681,7 @@ Symbols:
 ## Tips
 
 - Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, unchanged branch diffs can be reused from the repo-local TUI cache on reopen, and `1`/`2`/`3` toggle the Stack/Summary/Patch panes for small terminals. Pane visibility is remembered per repo.
+- Run `stax gui [path]` on macOS to launch a fresh unsigned GUI preview window for one repository after `make install-gui-app`.
 - Use `stax --help` or `stax <command> --help` for exact flags.
 - Add global `--trace` to profile instrumented Git subprocesses and total command time; use `make benchmark-status` for reproducible cold status scaling fixtures.
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.

@@ -6896,6 +6896,7 @@ name = "stax-gui"
 version = "0.94.0"
 dependencies = [
  "anyhow",
+ "async-channel 2.5.0",
  "dirs 6.0.0",
  "fs4",
  "gpui",
@@ -6903,6 +6904,8 @@ dependencies = [
  "serde_json",
  "stax",
  "tempfile",
+ "unicode-segmentation",
+ "url",
 ]
 
 [[package]]

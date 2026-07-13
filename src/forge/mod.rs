@@ -111,13 +111,13 @@ impl ForgeClient {
         }
     }
 
-    pub(crate) fn new_for_automatic(
+    pub(crate) fn new_for_trusted_remote(
         trusted_remote: &TrustedRemoteInfo,
         config: &Config,
     ) -> Result<Self> {
         let remote = trusted_remote.remote();
         match remote.forge {
-            ForgeType::GitHub => Ok(Self::GitHub(GitHubClient::new_for_automatic(
+            ForgeType::GitHub => Ok(Self::GitHub(GitHubClient::new_for_trusted_remote(
                 remote.owner(),
                 &remote.repo,
                 remote.api_base_url.clone(),

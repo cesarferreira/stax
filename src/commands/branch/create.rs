@@ -20,13 +20,17 @@
 //! `stax create` offers the shared staging menu (see
 //! `crate::commands::staging`) — stage all, `--patch`, empty branch, or abort.
 
+use crate::application::{
+    BranchNameContext, BranchNameError, BranchNameResult, NoopOperationReporter, OperationOutcome,
+    OperationWarning, RepositorySession, format_branch_name,
+};
 use crate::commands::staging::{self, ContinueLabel, StagingAction};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::git::GitRepo;
 use crate::progress::LiveTimer;
 use crate::remote;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use colored::Colorize;
 use console::Term;
 use dialoguer::{Input, Select, theme::ColorfulTheme};
@@ -368,6 +372,75 @@ fn require_non_empty(value: String, field: &str) -> Result<String> {
     non_empty_trimmed(value).with_context(|| format!("{} cannot be empty", field))
 }
 
+fn branch_name_context(
+    config: &Config,
+    prefix_override: Option<&str>,
+    workdir: &Path,
+) -> BranchNameContext {
+    let prefix = if let Some(prefix) = prefix_override {
+        Some(prefix.to_string())
+    } else if config.branch.format.is_none() {
+        config.branch.prefix.clone()
+    } else {
+        None
+    };
+    let user = config
+        .branch
+        .user
+        .clone()
+        .or_else(|| git_user_for_branch(workdir));
+    BranchNameContext {
+        format: config.branch.format.clone(),
+        prefix,
+        legacy_date: config.branch.date,
+        date_format: config.branch.date_format.clone(),
+        replacement: config.branch.replacement.clone(),
+        user,
+        date: chrono::Local::now().date_naive(),
+    }
+}
+
+fn git_user_for_branch(workdir: &Path) -> Option<String> {
+    Command::new("git")
+        .args(["config", "user.name"])
+        .current_dir(workdir)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (!name.is_empty()).then_some(name)
+        })
+}
+
+fn branch_name_error(error: BranchNameError) -> anyhow::Error {
+    match error {
+        BranchNameError::Empty => anyhow!("Branch name cannot be empty"),
+        BranchNameError::MissingMessagePlaceholder { format } => anyhow!(
+            "branch.format template '{}' is missing {{message}} placeholder",
+            format
+        ),
+        BranchNameError::InvalidRef { candidate } => {
+            anyhow!("'{}' is not a valid Git branch name", candidate)
+        }
+    }
+}
+
+fn print_branch_name_warnings(warnings: &[OperationWarning]) {
+    for warning in warnings {
+        if let OperationWarning::BranchNameNormalized {
+            original,
+            normalized,
+        } = warning
+        {
+            eprintln!(
+                "{}",
+                format!("Branch name normalized from '{original}' to '{normalized}'").dimmed()
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     name: Option<String>,
@@ -481,13 +554,19 @@ pub fn run(
     };
 
     // Format the branch name according to config
-    let branch_name = match prefix.as_deref() {
-        Some(_) => config.format_branch_name_with_prefix_override(&input, prefix.as_deref()),
-        None => config.format_branch_name(&input),
-    };
+    let branch_name_context = branch_name_context(&config, prefix.as_deref(), workdir);
+    let branch_name_result =
+        format_branch_name(&input, &branch_name_context).map_err(branch_name_error)?;
     let existing_branches = repo.list_branches()?;
-    let branch_name =
-        resolve_branch_name_conflicts(&branch_name, &existing_branches, generated_branch_name)?;
+    let branch_name = resolve_branch_name_conflicts(
+        &branch_name_result.name,
+        &existing_branches,
+        generated_branch_name,
+    )?;
+    let branch_name_result = BranchNameResult {
+        name: branch_name.clone(),
+        warnings: branch_name_result.warnings,
+    };
 
     // Before creating the branch, resolve the staging question. Doing this
     // early means declining ("Abort" / empty `--patch` exit) is a clean no-op
@@ -540,7 +619,7 @@ pub fn run(
     // command. Only after a successful commit do we create metadata and move
     // into the requested placement.
     if let Some(msg) = commit_message.as_deref() {
-        return run_commit_first(
+        let result = run_commit_first(
             &repo,
             &config,
             &current,
@@ -553,6 +632,38 @@ pub fn run(
             below_current_meta.as_ref(),
             no_verify,
         );
+        if result.is_ok() {
+            print_branch_name_warnings(&branch_name_result.warnings);
+        }
+        return result;
+    }
+
+    let simple_explicit_empty_create = name.is_some()
+        && message.is_none()
+        && prefix.is_none()
+        && !all
+        && !insert
+        && below_current_meta.is_none()
+        && !no_verify
+        && !ai
+        && stage_mode == StageMode::None;
+    if simple_explicit_empty_create {
+        let receipt = RepositorySession::open(workdir)?.create_empty_branch_with_formatted_name(
+            branch_name_result,
+            &parent_branch,
+            &mut NoopOperationReporter,
+        )?;
+        print_branch_name_warnings(&receipt.warnings);
+        if let OperationOutcome::BranchCreated { branch, parent } = receipt.outcome {
+            print_remote_parent_warning(&repo, &config, &parent);
+            println!(
+                "Created and switched to branch '{}' (stacked on {})",
+                branch.green(),
+                parent.blue()
+            );
+        }
+        print_tips(&config);
+        return Ok(());
     }
 
     create_branch_with_banner(
@@ -565,6 +676,7 @@ pub fn run(
         below_current_meta.as_ref(),
         !staging::is_staging_area_empty(workdir)?,
     )?;
+    print_branch_name_warnings(&branch_name_result.warnings);
 
     // Stage/commit behavior:
     // - StageMode::All / needs_stage_all => run `git add -A`

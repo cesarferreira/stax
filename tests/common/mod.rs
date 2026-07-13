@@ -39,6 +39,56 @@ pub fn stax_bin() -> PathBuf {
         .unwrap_or_else(|| panic!("Failed to locate compiled stax binary"))
 }
 
+#[allow(dead_code)]
+pub struct IsolatedProcessEnv {
+    _temp: tempfile::TempDir,
+    home_dir: PathBuf,
+    config_dir: PathBuf,
+    gh_config_dir: PathBuf,
+}
+
+#[allow(dead_code)]
+impl IsolatedProcessEnv {
+    pub fn with_config(config_toml: &str) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let home_dir = temp.path().join("home");
+        let config_dir = temp.path().join("config");
+        let gh_config_dir = temp.path().join("gh");
+        std::fs::create_dir_all(&home_dir).unwrap();
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&gh_config_dir).unwrap();
+        std::fs::write(config_dir.join("config.toml"), config_toml).unwrap();
+        Self {
+            home_dir,
+            gh_config_dir,
+            _temp: temp,
+            config_dir,
+        }
+    }
+
+    pub fn command(&self, repository: &Path) -> Command {
+        let mut command = Command::new(stax_bin());
+        let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        command
+            .current_dir(repository)
+            .env("HOME", &self.home_dir)
+            .env("STAX_CONFIG_DIR", &self.config_dir)
+            .env("GH_CONFIG_DIR", &self.gh_config_dir)
+            .env("GIT_CONFIG_GLOBAL", null)
+            .env("GIT_CONFIG_SYSTEM", null)
+            .env_remove("STAX_GITHUB_TOKEN")
+            .env_remove("STAX_GITLAB_TOKEN")
+            .env_remove("STAX_GITEA_TOKEN")
+            .env_remove("STAX_FORGE_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_TOKEN")
+            .env_remove("GITLAB_TOKEN")
+            .env_remove("GITEA_TOKEN")
+            .env("STAX_DISABLE_UPDATE_CHECK", "1");
+        command
+    }
+}
+
 /// Create temporary directories in STAX_TEST_TMPDIR when set.
 ///
 /// This keeps test repos off slower default temp paths on some macOS setups.
@@ -829,5 +879,31 @@ mod tests {
 
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("timed out waiting for TUI text"));
+    }
+
+    #[test]
+    fn isolated_process_env_removes_all_forge_token_sources() {
+        let repo = TestRepo::new();
+        let env = IsolatedProcessEnv::with_config("");
+        let command = env.command(&repo.path());
+        let removed = command.get_envs().collect::<Vec<_>>();
+
+        for token in [
+            "STAX_GITHUB_TOKEN",
+            "STAX_GITLAB_TOKEN",
+            "STAX_GITEA_TOKEN",
+            "STAX_FORGE_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+            "GITLAB_TOKEN",
+            "GITEA_TOKEN",
+        ] {
+            assert!(
+                removed
+                    .iter()
+                    .any(|(key, value)| key.to_string_lossy() == token && value.is_none()),
+                "expected {token} to be explicitly removed"
+            );
+        }
     }
 }

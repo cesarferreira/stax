@@ -109,6 +109,18 @@ Verify the install:
 st --version
 ```
 
+### Native macOS GUI developer preview
+
+Phase 2 includes an unsigned local developer preview of the native macOS app. Build the bundle without installing it, or install it into your user Applications folder:
+
+```bash
+make gui-app           # Build the unsigned local developer preview
+make install-gui-app   # Build and install $HOME/Applications/Stax.app
+st gui [path]          # Launch a fresh Stax.app instance for one repository
+```
+
+The preview bundle uses bundle id `dev.stax.Stax`. `st gui [path]` is macOS-only; it canonicalizes the supplied path, defaults to the current directory when omitted, and launches LaunchServices as `open -n -b dev.stax.Stax --args <canonical-path>`. The `-n` flag is intentional: every invocation starts a fresh app process/window for exactly one repository.
+
 <a id="quickstart"></a>
 ## Quickstart
 
@@ -263,6 +275,14 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 
 → [TUI guide](docs/interface/tui.md)
 
+### Native macOS GUI
+
+The developer-preview GUI opens a repository-scoped workspace with stack, changes, and inspector panes. It can check out the selected branch, create an explicit-name empty child branch, restack the selected branch or all tracked branches, stash-and-restack after an explicit dirty-worktree confirmation, submit the current stack as Draft, and open the selected PR without checking it out.
+
+Submit is always confirmed first, pushes the current stack as Draft, and does not show CLI prompts or auto-open PR pages. The GUI uses typed repository operations rather than shelling out to `st`, so `st gui [path]` only launches the app.
+
+→ [GUI guide](docs/interface/gui.md)
+
 ### AI branch names, PR details, and standups
 
 ```bash
@@ -290,6 +310,7 @@ st config --set-ai
 | Command | What it does |
 |---|---|
 | `st` | Launch interactive TUI |
+| `st gui [path]` | Launch the unsigned macOS GUI developer preview for a repository |
 | `st ls` / `st ll` | Show stack health and PR status (`st ll` adds PR URLs/details) |
 | `st watch` | Live auto-refreshing stack status with CI and PR state (adaptive polling: 15s active CI → 60s open PRs → 120s idle) |
 | `st watch --current` | Watch only the current stack |

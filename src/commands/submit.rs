@@ -1,3 +1,7 @@
+pub(crate) use crate::application::SubmitScope;
+use crate::application::submit::{
+    PushSpec, TemporaryPublishRefs, TemporarySubmitWorktree, push_branches,
+};
 use crate::commands::open::open_url_in_browser;
 use crate::config::{
     Config, NativeStackMode, SingleStackMode, StackLinksMode, StackLinksWhenNative,
@@ -22,28 +26,9 @@ use futures_util::future::join_all;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubmitScope {
-    Branch,
-    Downstack,
-    Upstack,
-    Stack,
-}
-
-impl SubmitScope {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            SubmitScope::Branch => "branch",
-            SubmitScope::Downstack => "downstack",
-            SubmitScope::Upstack => "upstack",
-            SubmitScope::Stack => "stack",
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct SubmitOptions {
@@ -84,6 +69,7 @@ struct PrPlan {
     publish_ref: String,
     publish_oid: Option<String>,
     uses_temporary_publish_ref: bool,
+    remote_oid_after_fetch: Option<String>,
     existing_pr: Option<u64>,
     existing_pr_is_draft: Option<bool>,
     /// Tip commit subject line (for auto-updating PR title)
@@ -125,85 +111,6 @@ struct PublishSource {
     commit_range_base: String,
     oid: Option<String>,
     is_temporary: bool,
-}
-
-#[derive(Debug, Clone)]
-struct PushSpec {
-    branch: String,
-    source_ref: String,
-    oid: Option<String>,
-}
-
-struct TemporaryPublishRefs {
-    workdir: PathBuf,
-    refs: Vec<String>,
-}
-
-impl TemporaryPublishRefs {
-    fn empty(workdir: &Path) -> Self {
-        Self {
-            workdir: workdir.to_path_buf(),
-            refs: Vec::new(),
-        }
-    }
-}
-
-impl Drop for TemporaryPublishRefs {
-    fn drop(&mut self) {
-        for refname in &self.refs {
-            let _ = Command::new("git")
-                .args(["update-ref", "-d", refname])
-                .current_dir(&self.workdir)
-                .output();
-        }
-    }
-}
-
-struct TemporarySubmitWorktree {
-    workdir: PathBuf,
-    path: PathBuf,
-    active: bool,
-}
-
-impl TemporarySubmitWorktree {
-    fn new(workdir: &Path, path: &Path) -> Self {
-        Self {
-            workdir: workdir.to_path_buf(),
-            path: path.to_path_buf(),
-            active: true,
-        }
-    }
-
-    fn remove(&mut self) -> Result<()> {
-        if !self.active {
-            return Ok(());
-        }
-
-        let remove = Command::new("git")
-            .args(["worktree", "remove", "--force"])
-            .arg(&self.path)
-            .current_dir(&self.workdir)
-            .output()
-            .context("Failed to remove temporary submit worktree")?;
-        if !remove.status.success() {
-            anyhow::bail!("{}", command_output_details("git worktree remove", &remove));
-        }
-
-        self.active = false;
-        Ok(())
-    }
-}
-
-impl Drop for TemporarySubmitWorktree {
-    fn drop(&mut self) {
-        if self.active {
-            let _ = Command::new("git")
-                .args(["worktree", "remove", "--force"])
-                .arg(&self.path)
-                .current_dir(&self.workdir)
-                .output();
-        }
-    }
 }
 
 #[derive(Default, Clone)]
@@ -348,9 +255,212 @@ fn resolve_is_draft_without_prompt(
     }
 }
 
+#[allow(dead_code)]
+pub(crate) trait SubmitPrompter {
+    fn answer(
+        &mut self,
+        request: &crate::application::SubmitPromptRequest,
+    ) -> Result<crate::application::SubmitPromptAnswer>;
+}
+
+#[allow(dead_code)]
+pub(crate) trait DefaultSubmitBackend {
+    type Prepared;
+
+    fn prepare(
+        &mut self,
+        options: crate::application::SubmitOptions,
+        reporter: &mut dyn crate::application::OperationReporter,
+    ) -> Result<Self::Prepared>;
+
+    fn execute(
+        &mut self,
+        prepared: Self::Prepared,
+        answers: Vec<crate::application::SubmitPromptAnswer>,
+        reporter: &mut dyn crate::application::OperationReporter,
+    ) -> Result<crate::application::OperationReceipt>;
+}
+
+#[allow(dead_code)]
+struct RepositorySubmitBackend<'a> {
+    session: &'a crate::application::RepositorySession,
+}
+
+impl DefaultSubmitBackend for RepositorySubmitBackend<'_> {
+    type Prepared = crate::application::PreparedSubmit;
+
+    fn prepare(
+        &mut self,
+        options: crate::application::SubmitOptions,
+        reporter: &mut dyn crate::application::OperationReporter,
+    ) -> Result<Self::Prepared> {
+        self.session
+            .prepare_submit(options, reporter)
+            .map_err(Into::into)
+    }
+
+    fn execute(
+        &mut self,
+        prepared: Self::Prepared,
+        answers: Vec<crate::application::SubmitPromptAnswer>,
+        reporter: &mut dyn crate::application::OperationReporter,
+    ) -> Result<crate::application::OperationReceipt> {
+        self.session
+            .execute_prepared_submit(prepared, answers, reporter)
+            .map_err(Into::into)
+    }
+}
+
+#[allow(dead_code)]
+struct TerminalSubmitPrompter;
+
+impl SubmitPrompter for TerminalSubmitPrompter {
+    fn answer(
+        &mut self,
+        request: &crate::application::SubmitPromptRequest,
+    ) -> Result<crate::application::SubmitPromptAnswer> {
+        let title = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("  Title")
+            .default(request.suggested_title.clone())
+            .interact_text()?;
+        let body = request.suggested_body.clone();
+        let choice = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("  PR type")
+            .items(PR_TYPE_OPTIONS)
+            .default(PR_TYPE_DEFAULT_INDEX)
+            .interact()?;
+        Ok(crate::application::SubmitPromptAnswer {
+            branch: request.branch.clone(),
+            title,
+            body,
+            mode: if choice == 0 {
+                crate::application::PullRequestMode::Draft
+            } else {
+                crate::application::PullRequestMode::Ready
+            },
+        })
+    }
+}
+
+struct CliOperationReporter {
+    quiet: bool,
+}
+
+impl crate::application::OperationReporter for CliOperationReporter {
+    fn report(&mut self, event: crate::application::OperationEvent) {
+        if self.quiet {
+            return;
+        }
+        match event {
+            crate::application::OperationEvent::Started(_) => {
+                eprintln!("  {}", "Validating repository...".dimmed());
+            }
+            crate::application::OperationEvent::Progress(progress) => {
+                let count = match progress.total {
+                    Some(total) => format!(" ({}/{total})", progress.completed),
+                    None => String::new(),
+                };
+                let branch = progress
+                    .branch
+                    .as_ref()
+                    .map(|branch| format!(" {}", branch.cyan()))
+                    .unwrap_or_default();
+                eprintln!("  {}{}{}", progress.message, branch, count);
+            }
+            crate::application::OperationEvent::Completed(_)
+            | crate::application::OperationEvent::Failed(_) => {}
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn run_default_with_prompter<B, P>(
+    scope: SubmitScope,
+    options: &SubmitOptions,
+    backend: &mut B,
+    prompter: &mut P,
+    reporter: &mut dyn crate::application::OperationReporter,
+) -> Result<crate::application::OperationReceipt>
+where
+    B: DefaultSubmitBackend,
+    B::Prepared: PreparedPromptRequests,
+    P: SubmitPrompter,
+{
+    let application_options = crate::application::SubmitOptions {
+        scope,
+        new_pull_requests: if options.publish {
+            crate::application::PullRequestMode::Ready
+        } else {
+            crate::application::PullRequestMode::Draft
+        },
+        fetch: !options.no_fetch,
+        prefetched: options.prefetched,
+        verify_hooks: !options.no_verify,
+        create_pull_requests: !options.no_pr,
+        reviewers: options.reviewers.clone(),
+        labels: options.labels.clone(),
+        assignees: options.assignees.clone(),
+        rerequest_review: options.rerequest_review,
+        native_stack_override: options.native_stack_override,
+        update_title: options.update_title,
+    };
+    let prepared = backend.prepare(application_options, reporter)?;
+    let prompt_requests = prepared_prompt_requests(&prepared);
+    let auto_accept_prompts = options.yes || options.no_prompt;
+    let answers = if auto_accept_prompts {
+        prompt_requests
+            .iter()
+            .map(|request| crate::application::SubmitPromptAnswer {
+                branch: request.branch.clone(),
+                title: request.suggested_title.clone(),
+                body: request.suggested_body.clone(),
+                mode: if options.publish {
+                    crate::application::PullRequestMode::Ready
+                } else {
+                    crate::application::PullRequestMode::Draft
+                },
+            })
+            .collect()
+    } else {
+        prompt_requests
+            .iter()
+            .map(|request| prompter.answer(request))
+            .collect::<Result<Vec<_>>>()?
+    };
+    backend.execute(prepared, answers, reporter)
+}
+
+#[allow(dead_code)]
+trait PreparedPromptRequests {
+    fn prompt_requests(&self) -> &[crate::application::SubmitPromptRequest];
+}
+
+impl PreparedPromptRequests for crate::application::PreparedSubmit {
+    fn prompt_requests(&self) -> &[crate::application::SubmitPromptRequest] {
+        self.prompt_requests()
+    }
+}
+
+impl PreparedPromptRequests for Vec<crate::application::SubmitPromptRequest> {
+    fn prompt_requests(&self) -> &[crate::application::SubmitPromptRequest] {
+        self
+    }
+}
+
+#[allow(dead_code)]
+fn prepared_prompt_requests<P: PreparedPromptRequests>(
+    prepared: &P,
+) -> &[crate::application::SubmitPromptRequest] {
+    prepared.prompt_requests()
+}
+
 pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     if options.dry_run {
         return super::submit_plan::run(scope, &options);
+    }
+
+    if uses_application_default_submit(scope, &options) {
+        return run_application_default_submit(scope, &options);
     }
 
     let SubmitOptions {
@@ -770,6 +880,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 publish_ref: publish_source.source_ref,
                 publish_oid: publish_source.oid,
                 uses_temporary_publish_ref: publish_source.is_temporary,
+                remote_oid_after_fetch: rev_parse_ref(
+                    repo.workdir().ok(),
+                    &format!("{}/{}", remote_info.name, branch),
+                ),
                 existing_pr,
                 existing_pr_is_draft: None,
                 tip_commit_subject: None,
@@ -982,6 +1096,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 publish_ref: publish_source.source_ref,
                 publish_oid: publish_source.oid,
                 uses_temporary_publish_ref: publish_source.is_temporary,
+                remote_oid_after_fetch: rev_parse_ref(
+                    repo.workdir().ok(),
+                    &format!("{}/{}", remote_info.name, branch),
+                ),
                 existing_pr: pr_number,
                 existing_pr_is_draft: existing_pr.as_ref().map(|pr| pr.info.is_draft),
                 tip_commit_subject,
@@ -1410,6 +1528,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     .publish_oid
                     .clone()
                     .or_else(|| rev_parse_ref(repo.workdir().ok(), &plan.publish_ref)),
+                expected_remote_oid: plan.remote_oid_after_fetch.clone(),
             });
         }
 
@@ -1946,6 +2065,270 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     Ok(())
 }
 
+fn uses_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> bool {
+    matches!(scope, SubmitScope::Stack)
+        && options.no_pr
+        && !options.dry_run
+        && !options.json
+        && !options.ai
+        && !options.title
+        && !options.body
+        && !options.squash
+        && !options.edit
+        && !options.prefetched
+        && !options.no_template
+        && options.template.is_none()
+        && !options.update_title
+}
+
+fn run_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> Result<()> {
+    if options.force && !options.quiet {
+        eprintln!(
+            "  {} --force is deprecated and has no effect (see issue #222)",
+            "warning:".yellow()
+        );
+    }
+    let repo = GitRepo::open()?;
+    let current = repo.current_branch()?;
+    if !options.quiet {
+        println!("{} {}...", "Submitting".bold(), scope.label().bold());
+    }
+    let session = crate::application::RepositorySession::open(repo.workdir()?)?;
+    let mut backend = RepositorySubmitBackend { session: &session };
+    let mut prompter = TerminalSubmitPrompter;
+    let mut reporter = CliOperationReporter {
+        quiet: options.quiet,
+    };
+    let receipt =
+        run_default_with_prompter(scope, options, &mut backend, &mut prompter, &mut reporter)?;
+    sync_application_submit_links(&repo, &current, &receipt, options)?;
+    render_application_submit_receipt(&receipt, &current, options.open, options.quiet);
+    Ok(())
+}
+
+fn sync_application_submit_links(
+    repo: &GitRepo,
+    current: &str,
+    receipt: &crate::application::OperationReceipt,
+    options: &SubmitOptions,
+) -> Result<()> {
+    if options.no_pr {
+        return refresh_application_no_pr_metadata(repo, receipt);
+    }
+    let pull_requests = match &receipt.outcome {
+        crate::application::OperationOutcome::Submitted { pull_requests } => pull_requests,
+        _ => return Ok(()),
+    };
+    if pull_requests.is_empty() {
+        return Ok(());
+    }
+
+    let stack = Stack::load(repo)?;
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(repo, &config)?;
+    let imported_branches = imported_branches_for_stack(repo, &stack, current)?;
+    let mut pr_infos = pull_requests
+        .iter()
+        .map(|pull_request| StackPrInfo {
+            branch: pull_request.branch.clone(),
+            pr_number: Some(pull_request.number),
+            is_imported: imported_branches.contains(&pull_request.branch),
+            depth: stack.ancestors(&pull_request.branch).len(),
+        })
+        .collect::<Vec<_>>();
+    let created_pr_numbers = pull_requests
+        .iter()
+        .filter(|pull_request| {
+            matches!(
+                pull_request.change,
+                crate::application::PullRequestChange::Created
+            )
+        })
+        .map(|pull_request| pull_request.number)
+        .collect::<HashSet<_>>();
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _enter = runtime.enter();
+    let client = ForgeClient::new(&remote_info)?;
+    runtime.block_on(async {
+        if config.submit.stack_links != StackLinksMode::Off {
+            discover_stack_link_pr_infos(
+                &client,
+                &stack,
+                current,
+                &imported_branches,
+                &mut pr_infos,
+            )
+            .await?;
+        }
+        let stack_link_contexts =
+            stack_link_contexts_for_sync(&stack, current, &pr_infos, &imported_branches);
+        let native_stack_mode = options
+            .native_stack_override
+            .unwrap_or(config.submit.native_stack);
+        let native_stack_linked = maybe_link_native_stack(
+            repo.workdir()?,
+            &remote_info,
+            &stack.trunk,
+            native_stack_mode,
+            &stack,
+            &stack_link_contexts,
+            options.quiet,
+        )?;
+
+        let native_forces_links_off = native_stack_linked
+            && config.submit.stack_links_when_native == StackLinksWhenNative::Off;
+        let single_stack_skips_links =
+            config.submit.single_stack == SingleStackMode::Off && stack_link_contexts.len() <= 1;
+        let effective_stack_links_mode = if native_forces_links_off || single_stack_skips_links {
+            StackLinksMode::Off
+        } else {
+            config.submit.stack_links
+        };
+
+        for (pr_number, _branch, stack_link_pr_infos) in &stack_link_contexts {
+            let stack_links = generate_stack_links_markdown(
+                stack_link_pr_infos,
+                *pr_number,
+                &remote_info,
+                &stack.trunk,
+            );
+
+            match effective_stack_links_mode {
+                StackLinksMode::Comment | StackLinksMode::Both => {
+                    if created_pr_numbers.contains(pr_number) {
+                        client
+                            .create_stack_comment(*pr_number, &stack_links)
+                            .await?;
+                    } else {
+                        client
+                            .update_stack_comment(*pr_number, &stack_links)
+                            .await?;
+                    }
+                }
+                StackLinksMode::Body | StackLinksMode::Off => {
+                    client.delete_stack_comment(*pr_number).await?;
+                }
+            }
+
+            let current_body = client.get_pr_body(*pr_number).await?;
+            let desired_body = match effective_stack_links_mode {
+                StackLinksMode::Body | StackLinksMode::Both => {
+                    upsert_stack_links_in_body(&current_body, &stack_links)
+                }
+                StackLinksMode::Comment | StackLinksMode::Off => {
+                    remove_stack_links_from_body(&current_body)
+                }
+            };
+
+            if desired_body != current_body {
+                client.update_pr_body(*pr_number, &desired_body).await?;
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })?;
+
+    Ok(())
+}
+
+fn refresh_application_no_pr_metadata(
+    repo: &GitRepo,
+    receipt: &crate::application::OperationReceipt,
+) -> Result<()> {
+    if receipt.affected_branches.is_empty() {
+        return Ok(());
+    }
+    let config = Config::load()?;
+    let remote_info = RemoteInfo::from_repo(repo, &config)?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _enter = runtime.enter();
+    let client = match ForgeClient::new(&remote_info) {
+        Ok(client) => client,
+        Err(_) => return Ok(()),
+    };
+
+    for branch in &receipt.affected_branches {
+        let Some(meta) = BranchMetadata::read(repo.inner(), branch)? else {
+            continue;
+        };
+        let found_pr = runtime
+            .block_on(async { client.find_open_pr_by_head(branch).await })
+            .ok()
+            .flatten();
+        let Some(pr) = found_pr else {
+            continue;
+        };
+        let owner_matches = pr
+            .head_label
+            .as_ref()
+            .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
+            .map(|owner| owner == remote_info.owner())
+            .unwrap_or(false);
+        if !owner_matches {
+            continue;
+        }
+        let needs_meta_update = meta
+            .pr_info
+            .as_ref()
+            .map(|info| {
+                info.number != pr.info.number
+                    || info.state != pr.info.state
+                    || info.is_draft.unwrap_or(false) != pr.info.is_draft
+            })
+            .unwrap_or(true);
+        if needs_meta_update {
+            let updated_meta = BranchMetadata {
+                pr_info: Some(crate::engine::metadata::PrInfo {
+                    number: pr.info.number,
+                    state: pr.info.state.clone(),
+                    is_draft: Some(pr.info.is_draft),
+                }),
+                ..meta
+            };
+            updated_meta.write(repo.inner(), branch)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn render_application_submit_receipt(
+    receipt: &crate::application::OperationReceipt,
+    current: &str,
+    open: bool,
+    quiet: bool,
+) {
+    let pull_requests = match &receipt.outcome {
+        crate::application::OperationOutcome::Submitted { pull_requests } => pull_requests,
+        _ => return,
+    };
+    if !quiet {
+        println!();
+        println!("{}", "✓ Stack submitted!".green().bold());
+        for pull_request in pull_requests {
+            println!("  {} {}", "✓".green(), pull_request.url);
+        }
+    }
+    if open {
+        if let Some(url) = pull_requests
+            .iter()
+            .find(|pull_request| pull_request.branch == current)
+            .map(|pull_request| pull_request.url.as_str())
+        {
+            if !quiet {
+                println!("Opening {} in browser...", url.cyan());
+            }
+            open_url_in_browser(url);
+        } else if !quiet {
+            eprintln!(
+                "  {} No PR found for current branch {}; nothing to open.",
+                "!".yellow(),
+                current.cyan()
+            );
+        }
+    }
+}
+
 /// Squash all commits on a branch down to one commit above the base.
 /// Uses `git reset --soft` + `git commit` to preserve the tree while collapsing history.
 fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()> {
@@ -2031,58 +2414,6 @@ fn squash_branch_commits(workdir: &Path, branch: &str, base: &str) -> Result<()>
             .output();
     }
 
-    Ok(())
-}
-
-fn push_branches(
-    workdir: &std::path::Path,
-    remote: &str,
-    specs: &[PushSpec],
-    no_verify: bool,
-) -> Result<()> {
-    let mut args = vec!["push", "--porcelain", "--force-with-lease"];
-    if no_verify {
-        args.push("--no-verify");
-    }
-    args.extend(["-u", remote]);
-    let refspecs = specs
-        .iter()
-        .map(|spec| format!("{}:refs/heads/{}", spec.source_ref, spec.branch))
-        .collect::<Vec<_>>();
-    args.extend(refspecs.iter().map(String::as_str));
-
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(workdir)
-        .output()
-        .context("Failed to push branches")?;
-
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let rejected = rejected_push_branches(&stdout, specs);
-        let details = push_failure_details(&stdout, &stderr);
-        let branch_list = specs
-            .iter()
-            .map(|spec| spec.branch.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        if !rejected.is_empty() {
-            let mut message = format!(
-                "Failed to push branches {branch_list}: rejected {}",
-                rejected.join(", ")
-            );
-            if !details.is_empty() {
-                message.push('\n');
-                message.push_str(&details);
-            }
-            anyhow::bail!("{message}");
-        }
-        if details.is_empty() {
-            anyhow::bail!("Failed to push branches: {branch_list}");
-        }
-        anyhow::bail!("Failed to push branches {branch_list}:\n{details}");
-    }
     Ok(())
 }
 
@@ -2355,6 +2686,7 @@ fn print_native_stack_unavailable_note(status: ExtensionStatus) {
     println!("  {} {}", "note:".dimmed(), note.dimmed());
 }
 
+#[cfg(test)]
 fn rejected_push_branches(porcelain: &str, specs: &[PushSpec]) -> Vec<String> {
     porcelain
         .lines()
@@ -3326,14 +3658,22 @@ fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AiPrTargets, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX, PR_TYPE_OPTIONS, PushSpec,
-        StackPrInfo, build_ai_pr_details_prompt, existing_ai_prompt_items,
-        existing_ai_targets_for_auto_accept, parse_ai_pr_details, push_failure_details,
-        rejected_push_branches, resolve_ai_targets, resolve_is_draft_without_prompt,
-        stack_has_fork, stack_link_contexts_for_sync, stack_pr_infos_for_links, truncate_ai_diff,
+        AiPrTargets, DefaultSubmitBackend, MAX_AI_DIFF_BYTES, PR_TYPE_DEFAULT_INDEX,
+        PR_TYPE_OPTIONS, PushSpec, StackPrInfo, SubmitOptions, SubmitPrompter, SubmitScope,
+        build_ai_pr_details_prompt, existing_ai_prompt_items, existing_ai_targets_for_auto_accept,
+        parse_ai_pr_details, push_failure_details, rejected_push_branches, resolve_ai_targets,
+        resolve_is_draft_without_prompt, run_default_with_prompter, stack_has_fork,
+        stack_link_contexts_for_sync, stack_pr_infos_for_links, truncate_ai_diff,
+    };
+    use crate::application::{
+        NoopOperationReporter, OperationOutcome, OperationReceipt, OperationRequest,
+        OperationSideEffects, PullRequestChange, PullRequestMode, PullRequestReceipt,
+        SubmitOptions as ApplicationSubmitOptions, SubmitPromptAnswer, SubmitPromptRequest,
+        SubmitScope as ApplicationSubmitScope,
     };
     use crate::engine::Stack;
     use crate::engine::stack::StackBranch;
+    use anyhow::Result;
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -3342,6 +3682,207 @@ mod tests {
             resolve_is_draft_without_prompt(false, false, false, true),
             Some(true)
         );
+    }
+
+    #[derive(Default)]
+    struct RecordingSubmitBackend {
+        prepared_options: Vec<ApplicationSubmitOptions>,
+        prepared_requests: Vec<SubmitPromptRequest>,
+        executed_answers: Vec<Vec<SubmitPromptAnswer>>,
+    }
+
+    impl RecordingSubmitBackend {
+        fn with_requests(requests: Vec<SubmitPromptRequest>) -> Self {
+            Self {
+                prepared_requests: requests,
+                ..Self::default()
+            }
+        }
+    }
+
+    impl DefaultSubmitBackend for RecordingSubmitBackend {
+        type Prepared = Vec<SubmitPromptRequest>;
+
+        fn prepare(
+            &mut self,
+            options: ApplicationSubmitOptions,
+            _reporter: &mut dyn crate::application::OperationReporter,
+        ) -> Result<Self::Prepared> {
+            self.prepared_options.push(options);
+            Ok(self.prepared_requests.clone())
+        }
+
+        fn execute(
+            &mut self,
+            prepared: Self::Prepared,
+            answers: Vec<SubmitPromptAnswer>,
+            _reporter: &mut dyn crate::application::OperationReporter,
+        ) -> Result<OperationReceipt> {
+            assert_eq!(
+                prepared
+                    .iter()
+                    .map(|request| &request.branch)
+                    .collect::<Vec<_>>(),
+                answers
+                    .iter()
+                    .map(|answer| &answer.branch)
+                    .collect::<Vec<_>>()
+            );
+            self.executed_answers.push(answers);
+            Ok(submit_receipt())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSubmitPrompter {
+        requests: Vec<SubmitPromptRequest>,
+        answers: Vec<SubmitPromptAnswer>,
+    }
+
+    impl RecordingSubmitPrompter {
+        fn answering(answers: Vec<SubmitPromptAnswer>) -> Self {
+            Self {
+                answers,
+                ..Self::default()
+            }
+        }
+    }
+
+    impl SubmitPrompter for RecordingSubmitPrompter {
+        fn answer(&mut self, request: &SubmitPromptRequest) -> Result<SubmitPromptAnswer> {
+            self.requests.push(request.clone());
+            Ok(self.answers.remove(0))
+        }
+    }
+
+    fn submit_prompt_request() -> SubmitPromptRequest {
+        SubmitPromptRequest {
+            branch: "feature".into(),
+            suggested_title: "Suggested title".into(),
+            suggested_body: "Suggested body".into(),
+            suggested_mode: PullRequestMode::Draft,
+        }
+    }
+
+    fn ready_answer() -> SubmitPromptAnswer {
+        SubmitPromptAnswer {
+            branch: "feature".into(),
+            title: "Reviewed title".into(),
+            body: "Reviewed body".into(),
+            mode: PullRequestMode::Ready,
+        }
+    }
+
+    fn submit_receipt() -> OperationReceipt {
+        OperationReceipt {
+            request: OperationRequest::SubmitStack {
+                new_pull_requests: PullRequestMode::Draft,
+            },
+            summary: "Submitted 1 branch".into(),
+            affected_branches: vec!["feature".into()],
+            outcome: OperationOutcome::Submitted {
+                pull_requests: vec![PullRequestReceipt {
+                    branch: "feature".into(),
+                    number: 1,
+                    url: "https://example.com/pull/1".into(),
+                    change: PullRequestChange::Created,
+                }],
+            },
+            transaction: None,
+            warnings: Vec::new(),
+            side_effects: OperationSideEffects::RemoteMayHaveChanged,
+        }
+    }
+
+    #[test]
+    fn interactive_default_calls_prepare_then_execute_once() {
+        let request = submit_prompt_request();
+        let mut backend = RecordingSubmitBackend::with_requests(vec![request.clone()]);
+        let answer = ready_answer();
+        let mut prompter = RecordingSubmitPrompter::answering(vec![answer.clone()]);
+        let mut reporter = NoopOperationReporter;
+
+        run_default_with_prompter(
+            SubmitScope::Stack,
+            &SubmitOptions::default(),
+            &mut backend,
+            &mut prompter,
+            &mut reporter,
+        )
+        .unwrap();
+
+        assert_eq!(backend.prepared_options.len(), 1);
+        assert_eq!(
+            backend.prepared_options[0].scope,
+            ApplicationSubmitScope::Stack
+        );
+        assert_eq!(
+            backend.prepared_options[0].new_pull_requests,
+            PullRequestMode::Draft
+        );
+        assert!(backend.prepared_options[0].fetch);
+        assert!(backend.prepared_options[0].verify_hooks);
+        assert_eq!(prompter.requests, vec![request]);
+        assert_eq!(backend.executed_answers, vec![vec![answer]]);
+    }
+
+    #[test]
+    fn no_prompt_default_calls_prepare_then_execute_once() {
+        let request = submit_prompt_request();
+        let mut backend = RecordingSubmitBackend::with_requests(vec![request.clone()]);
+        let mut prompter = RecordingSubmitPrompter::default();
+        let mut reporter = NoopOperationReporter;
+
+        let options = SubmitOptions {
+            no_prompt: true,
+            ..SubmitOptions::default()
+        };
+        run_default_with_prompter(
+            SubmitScope::Stack,
+            &options,
+            &mut backend,
+            &mut prompter,
+            &mut reporter,
+        )
+        .unwrap();
+
+        assert_eq!(backend.prepared_options.len(), 1);
+        assert!(prompter.requests.is_empty());
+        assert_eq!(
+            backend.executed_answers,
+            vec![vec![SubmitPromptAnswer {
+                branch: request.branch,
+                title: request.suggested_title,
+                body: request.suggested_body,
+                mode: PullRequestMode::Draft,
+            }]]
+        );
+    }
+
+    #[test]
+    fn yes_default_uses_the_same_automatic_answers_as_no_prompt() {
+        let request = submit_prompt_request();
+        let mut backend = RecordingSubmitBackend::with_requests(vec![request.clone()]);
+        let mut prompter = RecordingSubmitPrompter::default();
+        let mut reporter = NoopOperationReporter;
+
+        let options = SubmitOptions {
+            yes: true,
+            ..SubmitOptions::default()
+        };
+        run_default_with_prompter(
+            SubmitScope::Stack,
+            &options,
+            &mut backend,
+            &mut prompter,
+            &mut reporter,
+        )
+        .unwrap();
+
+        assert_eq!(backend.prepared_options.len(), 1);
+        assert!(prompter.requests.is_empty());
+        assert_eq!(backend.executed_answers.len(), 1);
+        assert_eq!(backend.executed_answers[0][0].mode, PullRequestMode::Draft);
     }
 
     #[test]
@@ -3398,6 +3939,7 @@ mod tests {
             branch: branch.to_string(),
             source_ref: source_ref.to_string(),
             oid: None,
+            expected_remote_oid: None,
         }
     }
 
