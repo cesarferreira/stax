@@ -94,9 +94,11 @@ modification time, and removes the oldest entries until both limits hold:
 - no more than 100 MiB in total serialized size.
 
 Cleanup failures do not fail diff calculation or overwrite the successfully
-written entry. Temporary files, lock files, directories, and unrelated files
-are ignored. A cache hit updates the entry's modification time best-effort so
-the cleanup policy approximates persistent LRU behavior.
+written entry. Lock files are excluded from count and byte accounting, while
+orphan cache-owned entry locks are reaped. Temporary files, directories,
+symlinks, and unrelated files are ignored. A cache hit updates the entry's
+modification time best-effort so the cleanup policy approximates persistent LRU
+behavior.
 
 ## Error handling
 

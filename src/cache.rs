@@ -620,18 +620,28 @@ impl TuiDiffCache {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error).context("failed to inspect diff cache entry"),
             };
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("failed to inspect diff cache entry type"),
+            };
+            if !file_type.is_file() {
+                continue;
+            }
             let path = entry.path();
             let Some(lock_name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            let Some(payload_name) = lock_name.strip_suffix(".lock") else {
+            let Some(payload_name) = lock_name
+                .strip_prefix('.')
+                .and_then(|name| name.strip_suffix(".lock"))
+            else {
                 continue;
             };
             if !payload_name.ends_with(".json") {
                 continue;
             }
-            let payload_path =
-                entries_dir.join(payload_name.strip_prefix('.').unwrap_or(payload_name));
+            let payload_path = entries_dir.join(payload_name);
             match fs::metadata(&payload_path) {
                 Ok(metadata) if metadata.is_file() => continue,
                 Ok(_) => {}
@@ -996,6 +1006,68 @@ mod tests {
 
         assert!(live_payload.exists());
         assert!(live_lock.exists());
+    }
+
+    #[test]
+    fn diff_cache_cleanup_ignores_non_hidden_lock_like_file_and_enforces_count_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_dir = TuiDiffCache::entries_dir(dir.path());
+        fs::create_dir_all(&entries_dir).unwrap();
+        let first = entries_dir.join("first.json");
+        let second = entries_dir.join("second.json");
+        let unrelated = entries_dir.join("notes.json.lock");
+        fs::write(&first, vec![b'a'; 10]).unwrap();
+        fs::write(&second, vec![b'b'; 10]).unwrap();
+        fs::write(&unrelated, b"keep me").unwrap();
+        File::open(&first)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        File::open(&second)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2)),
+            )
+            .unwrap();
+
+        TuiDiffCache::cleanup_entries(&entries_dir, 1, u64::MAX).unwrap();
+
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep me");
+        assert!(!first.exists());
+        assert!(second.exists());
+    }
+
+    #[test]
+    fn diff_cache_cleanup_ignores_lock_like_directory_and_enforces_byte_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_dir = TuiDiffCache::entries_dir(dir.path());
+        fs::create_dir_all(&entries_dir).unwrap();
+        let first = entries_dir.join("first.json");
+        let second = entries_dir.join("second.json");
+        let unrelated = entries_dir.join(".notes.json.lock");
+        fs::write(&first, vec![b'a'; 10]).unwrap();
+        fs::write(&second, vec![b'b'; 20]).unwrap();
+        fs::create_dir(&unrelated).unwrap();
+        File::open(&first)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        File::open(&second)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2)),
+            )
+            .unwrap();
+
+        TuiDiffCache::cleanup_entries(&entries_dir, usize::MAX, 20).unwrap();
+
+        assert!(unrelated.is_dir());
+        assert!(!first.exists());
+        assert!(second.exists());
     }
 
     #[test]
