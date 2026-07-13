@@ -425,26 +425,33 @@ impl TuiDiffCache {
     ) -> Result<Option<DiskCachedDiff>> {
         let path = Self::entry_path(git_dir, key);
         let entries_dir = Self::entries_dir(git_dir);
-        let _directory_lock =
-            acquire_cache_lock(&Self::coordination_path(&entries_dir), LockMode::Shared)?;
-        if !path.exists() {
-            return Ok(None);
-        }
-        let _entry_lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
-        match load_json_unlocked::<Option<DiskCachedDiff>>(&path) {
-            Ok(diff) => {
-                if diff.is_some()
-                    && let Ok(file) = OpenOptions::new().read(true).write(true).open(&path)
-                {
-                    let _ = file.set_times(fs::FileTimes::new().set_modified(SystemTime::now()));
+        let result = (|| {
+            let _directory_lock =
+                acquire_cache_lock(&Self::coordination_path(&entries_dir), LockMode::Shared)?;
+            if !path.exists() {
+                return Ok(None);
+            }
+            let _entry_lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+            match load_json_unlocked::<Option<DiskCachedDiff>>(&path) {
+                Ok(diff) => {
+                    if diff.is_some()
+                        && let Ok(file) = OpenOptions::new().read(true).write(true).open(&path)
+                    {
+                        let _ =
+                            file.set_times(fs::FileTimes::new().set_modified(SystemTime::now()));
+                    }
+                    Ok(diff)
                 }
-                Ok(diff)
+                Err(error) => {
+                    let _ = fs::remove_file(&path);
+                    Err(error)
+                }
             }
-            Err(error) => {
-                let _ = fs::remove_file(&path);
-                Err(error)
-            }
+        })();
+        if result.is_err() {
+            let _ = Self::cleanup_orphaned_entry_lock(&entries_dir, &path);
         }
+        result
     }
 
     /// Atomically insert one diff while preserving all other cached entries.
@@ -471,15 +478,48 @@ impl TuiDiffCache {
     ) -> Result<()> {
         let path = Self::entry_path(git_dir, &key);
         let entries_dir = Self::entries_dir(git_dir);
-        {
+        let write_result = (|| {
             let _directory_lock =
                 acquire_cache_lock(&Self::coordination_path(&entries_dir), LockMode::Shared)?;
             let _entry_lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
             persist_json_atomic(&path, &diff)?;
             let _ = fs::remove_file(Self::cache_path(git_dir));
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            let _ = Self::cleanup_orphaned_entry_lock(&entries_dir, &path);
+            return Err(error);
         }
         let _ = Self::cleanup_entries(&entries_dir, max_entries, max_bytes);
         Ok(())
+    }
+
+    fn cleanup_orphaned_entry_lock(entries_dir: &Path, entry_path: &Path) -> Result<()> {
+        let _directory_lock =
+            acquire_cache_lock(&Self::coordination_path(entries_dir), LockMode::Exclusive)?;
+        match fs::metadata(entry_path) {
+            Ok(metadata) if metadata.is_file() => return Ok(()),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect diff cache entry {}",
+                        entry_path.display()
+                    )
+                });
+            }
+        }
+        match fs::remove_file(cache_lock_path(entry_path)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "failed to remove orphaned diff cache entry lock {}",
+                    entry_path.display()
+                )
+            }),
+        }
     }
 
     fn cleanup_entries(entries_dir: &Path, max_entries: usize, max_bytes: u64) -> Result<()> {
@@ -801,12 +841,27 @@ mod tests {
 
         assert!(TuiDiffCache::read_persisted(dir.path(), key).is_err());
         assert!(!path.exists());
+        assert!(!cache_lock_path(&path).exists());
 
         TuiDiffCache::insert_persisted(dir.path(), key.into(), disk_diff("replacement")).unwrap();
         assert_eq!(
             TuiDiffCache::read_persisted(dir.path(), key).unwrap(),
             Some(disk_diff("replacement"))
         );
+    }
+
+    #[test]
+    fn failed_diff_write_without_an_entry_removes_its_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "v1:a:b:c";
+        let path = TuiDiffCache::entry_path(dir.path(), key);
+        fs::create_dir_all(&path).unwrap();
+
+        assert!(
+            TuiDiffCache::insert_persisted(dir.path(), key.into(), disk_diff("unwritten")).is_err()
+        );
+
+        assert!(!cache_lock_path(&path).exists());
     }
 
     #[test]
