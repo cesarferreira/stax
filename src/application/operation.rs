@@ -253,6 +253,8 @@ pub struct TransactionSummary {
     pub branches: Vec<String>,
     /// Whether canonical receipt semantics permit undo.
     pub can_undo: bool,
+    /// Whether canonical receipt semantics permit redo.
+    pub can_redo: bool,
     /// Whether at least one remote ref was changed.
     pub changed_remote_refs: bool,
 }
@@ -271,6 +273,7 @@ impl From<&crate::ops::receipt::OpReceipt> for TransactionSummary {
             },
             branches: receipt.summary_branch_names(),
             can_undo: receipt.can_undo(),
+            can_redo: receipt.can_redo(),
             changed_remote_refs: receipt.changed_remote_refs(),
         }
     }
@@ -644,7 +647,9 @@ mod tests {
 
         assert_eq!(summary.status, TransactionStatus::Succeeded);
         assert_eq!(summary.can_undo, receipt.can_undo());
+        assert_eq!(summary.can_redo, receipt.can_redo());
         assert!(summary.can_undo);
+        assert!(summary.can_redo);
     }
 
     #[test]
@@ -655,7 +660,9 @@ mod tests {
 
         assert_eq!(summary.status, TransactionStatus::Failed);
         assert_eq!(summary.can_undo, receipt.can_undo());
-        assert!(!summary.can_undo);
+        assert_eq!(summary.can_redo, receipt.can_redo());
+        assert!(summary.can_undo);
+        assert!(!summary.can_redo);
     }
 
     #[test]

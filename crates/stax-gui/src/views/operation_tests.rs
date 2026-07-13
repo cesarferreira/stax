@@ -550,6 +550,7 @@ fn transaction(status: TransactionStatus) -> TransactionSummary {
         status,
         branches: vec!["child".into()],
         can_undo: status == TransactionStatus::Succeeded,
+        can_redo: status == TransactionStatus::Succeeded,
         changed_remote_refs: false,
     }
 }

@@ -19,6 +19,9 @@ pub enum OpStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum OpKind {
+    Rename,
+    Delete,
+    MoveSubtree,
     Restack,
     UpstackRestack,
     SyncRestack,
@@ -35,6 +38,9 @@ pub enum OpKind {
 impl OpKind {
     pub fn display_name(&self) -> &'static str {
         match self {
+            OpKind::Rename => "rename",
+            OpKind::Delete => "delete",
+            OpKind::MoveSubtree => "move subtree",
             OpKind::Restack => "restack",
             OpKind::UpstackRestack => "upstack restack",
             OpKind::SyncRestack => "sync --restack",
@@ -63,6 +69,9 @@ pub struct LocalRefEntry {
     pub oid_before: Option<String>,
     /// OID after the operation (filled in on success)
     pub oid_after: Option<String>,
+    /// Whether the after-state was recorded, including an explicitly absent ref.
+    #[serde(default)]
+    pub after_recorded: bool,
 }
 
 /// Information about a remote ref that was modified (for submit)
@@ -120,6 +129,9 @@ pub struct OpReceipt {
     pub auto_stash_pop: bool,
     /// Branch that was checked out when operation started
     pub head_branch_before: String,
+    /// Branch that was checked out after the operation completed.
+    #[serde(default)]
+    pub head_branch_after: Option<String>,
     /// Local refs that were/will be modified
     pub local_refs: Vec<LocalRefEntry>,
     /// Remote refs that were/will be modified (for submit)
@@ -154,6 +166,7 @@ impl OpReceipt {
             trunk,
             auto_stash_pop: false,
             head_branch_before,
+            head_branch_after: None,
             local_refs: Vec::new(),
             remote_refs: Vec::new(),
             plan_summary: PlanSummary::default(),
@@ -170,6 +183,7 @@ impl OpReceipt {
             existed_before: oid_before.is_some(),
             oid_before: oid_before.map(|s| s.to_string()),
             oid_after: None,
+            after_recorded: false,
         });
     }
 
@@ -185,6 +199,7 @@ impl OpReceipt {
             existed_before: oid_before.is_some(),
             oid_before: oid_before.map(|s| s.to_string()),
             oid_after: None,
+            after_recorded: false,
         });
     }
 
@@ -193,6 +208,7 @@ impl OpReceipt {
         let label = format!("{}{}", branch, super::tx::METADATA_REF_LABEL_SUFFIX);
         if let Some(entry) = self.local_refs.iter_mut().find(|e| e.branch == label) {
             entry.oid_after = oid_after.map(|s| s.to_string());
+            entry.after_recorded = true;
         }
     }
 
@@ -209,9 +225,27 @@ impl OpReceipt {
 
     /// Update the after-OID for a local ref
     pub fn update_local_ref_after(&mut self, branch: &str, oid_after: &str) {
+        self.update_local_ref_after_optional(branch, Some(oid_after));
+    }
+
+    /// Record the after-state for a local ref, including explicit absence.
+    pub fn update_local_ref_after_optional(&mut self, branch: &str, oid_after: Option<&str>) {
         if let Some(entry) = self.local_refs.iter_mut().find(|e| e.branch == branch) {
-            entry.oid_after = Some(oid_after.to_string());
+            entry.oid_after = oid_after.map(str::to_string);
+            entry.after_recorded = true;
         }
+    }
+
+    /// Branch to check out after undoing this operation.
+    pub fn undo_head_branch(&self) -> &str {
+        &self.head_branch_before
+    }
+
+    /// Branch to check out after redoing this operation.
+    pub fn redo_head_branch(&self) -> &str {
+        self.head_branch_after
+            .as_deref()
+            .unwrap_or(&self.head_branch_before)
     }
 
     /// Update the after-OID for a remote ref
@@ -282,8 +316,11 @@ impl OpReceipt {
 
     /// Check if this receipt can be undone
     pub fn can_undo(&self) -> bool {
-        // Can undo if we have local refs with before-OIDs
-        self.local_refs.iter().any(|r| r.oid_before.is_some())
+        self.local_refs.iter().any(|entry| {
+            entry.oid_before.is_some()
+                || ((entry.after_recorded || entry.oid_after.is_some())
+                    && entry.oid_before != entry.oid_after)
+        })
     }
 
     pub(crate) fn summary_id(&self) -> &str {
@@ -327,8 +364,11 @@ impl OpReceipt {
 
     /// Check if this receipt can be redone
     pub fn can_redo(&self) -> bool {
-        // Can redo if we have local refs with after-OIDs
-        self.local_refs.iter().any(|r| r.oid_after.is_some())
+        self.status == OpStatus::Success
+            && self.local_refs.iter().any(|entry| {
+                (entry.after_recorded || entry.oid_after.is_some())
+                    && entry.oid_before != entry.oid_after
+            })
     }
 
     /// Check if this receipt has remote changes
@@ -349,6 +389,69 @@ impl OpReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn successful_receipt(kind: OpKind) -> OpReceipt {
+        let mut receipt = OpReceipt::new(
+            "op-1".into(),
+            kind,
+            "/tmp/repo".into(),
+            "main".into(),
+            "feature".into(),
+        );
+        receipt.mark_success();
+        receipt
+    }
+
+    #[test]
+    fn deleted_ref_is_redoable_with_an_explicit_absent_after_state() {
+        let mut receipt = successful_receipt(OpKind::Delete);
+        receipt.add_local_ref("feature", Some("1111111111111111111111111111111111111111"));
+        receipt.update_local_ref_after_optional("feature", None);
+
+        assert!(receipt.can_undo());
+        assert!(receipt.can_redo());
+    }
+
+    #[test]
+    fn renamed_head_records_distinct_before_and_after_checkout_names() {
+        let mut receipt = successful_receipt(OpKind::Rename);
+        receipt.head_branch_before = "old".into();
+        receipt.head_branch_after = Some("new".into());
+
+        assert_eq!(receipt.undo_head_branch(), "old");
+        assert_eq!(receipt.redo_head_branch(), "new");
+    }
+
+    #[test]
+    fn legacy_receipt_defaults_new_structural_transition_fields() {
+        let mut receipt = successful_receipt(OpKind::Restack);
+        receipt.add_local_ref("feature", Some("before"));
+        receipt.update_local_ref_after("feature", "after");
+        let mut json = serde_json::to_value(&receipt).unwrap();
+        json.as_object_mut().unwrap().remove("head_branch_after");
+        json["local_refs"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("after_recorded");
+
+        let loaded: OpReceipt = serde_json::from_value(json).unwrap();
+
+        assert_eq!(loaded.redo_head_branch(), "feature");
+        assert!(!loaded.local_refs[0].after_recorded);
+        assert!(loaded.can_redo());
+    }
+
+    #[test]
+    fn created_ref_becomes_undoable_once_its_after_state_is_recorded() {
+        let mut receipt = successful_receipt(OpKind::Rename);
+        receipt.add_local_ref("new", None);
+        assert!(!receipt.can_undo());
+
+        receipt.update_local_ref_after("new", "after");
+
+        assert!(receipt.can_undo());
+        assert!(receipt.can_redo());
+    }
 
     #[test]
     fn summary_branch_names_preserve_legal_metadata_suffixes_and_deduplicate() {
@@ -585,6 +688,7 @@ mod tests {
 
         // Add after OID
         receipt.update_local_ref_after("feature", "def456");
+        receipt.mark_success();
         assert!(receipt.can_redo());
     }
 
@@ -646,6 +750,7 @@ mod tests {
             existed_before: true,
             oid_before: Some("abc123".to_string()),
             oid_after: Some("def456".to_string()),
+            after_recorded: true,
         };
         let cloned = entry.clone();
         assert_eq!(cloned.branch, "feature");
