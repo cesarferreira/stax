@@ -57,6 +57,22 @@ and the immediate cached return all updated correctly.
 
 ## Comparison History
 
+### Connected Rails Iteration
+
+- User feedback source: `/var/folders/lb/g35_rg7j1xdc51ncphzlt21w0000gn/T/codex-clipboard-5fc57368-81ea-4f32-8429-f20e1dbc1a29.png`.
+- Native implementation screenshot: `/var/folders/lb/g35_rg7j1xdc51ncphzlt21w0000gn/T/com.openai.sky.CUAService/Stax Rails QA Screenshot 2026-07-13 at 7.33.13 PM.jpeg`.
+- Side-by-side comparison: `/tmp/stax-connected-rails-comparison.png`.
+- [P2] The original per-row glyphs described the correct topology but left
+  visible vertical gaps between 48 px branch rows, so branches did not read as
+  one continuous stack graph.
+- Fix: replaced glyph strings with fixed-width topology cells whose vertical
+  and horizontal rail halves meet at row boundaries. Nodes render above the
+  rails, preserving the branch, current-branch, return-corner, and trunk-join
+  semantics from `st ls`.
+- Result: rails now connect continuously through every visible branch row at
+  both the normal and maximized native app sizes. Filtering retains lane
+  positions from the full stack. No actionable P0, P1, or P2 issue remains.
+
 ### Iteration 1
 
 - Evidence: `/tmp/codex-stax-comparison-pass-1.png`.
@@ -104,6 +120,7 @@ No actionable P0, P1, or P2 findings remain.
 - [x] Compact toolbar and quiet dividers.
 - [x] Rounded stack selection and search surface.
 - [x] `st ls`-equivalent topology lanes and joins.
+- [x] Continuous topology rails across full-height branch rows.
 - [x] Raised file summary and inspector card.
 - [x] Keyboard, pointer, loading, and cached branch-return behavior retained.
 - [x] P0–P2 visual findings fixed and recaptured.
