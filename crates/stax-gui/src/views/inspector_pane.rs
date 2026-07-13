@@ -1,6 +1,9 @@
 use super::{
-    ControlKind, WorkspaceView, activate_control, app::OpenPullRequest, app::RestackSelected,
-    app::mouse_control_button,
+    ControlKind, WorkspaceView, activate_control,
+    app::{
+        DeleteSelected, MoveSelected, OpenPullRequest, RenameSelected, ReorderSelectedStack,
+        RestackSelected, mouse_control_button,
+    },
 };
 use crate::state::LoadState;
 use crate::theme::{MONOSPACE_FONT, Theme};
@@ -314,6 +317,62 @@ fn render_actions(
     } else {
         restack
     };
+    let rename = mouse_control_button(
+        "inspector-rename",
+        control_label("Rename", &actions.rename),
+        ControlKind::Secondary,
+        actions.rename.enabled,
+        theme,
+    );
+    let rename = if actions.rename.enabled {
+        activate_control(rename, cx, |app, window, cx| {
+            app.rename_action(&RenameSelected, window, cx);
+        })
+    } else {
+        rename
+    };
+    let delete = mouse_control_button(
+        "inspector-delete",
+        control_label("Delete", &actions.delete),
+        ControlKind::Secondary,
+        actions.delete.enabled,
+        theme,
+    );
+    let delete = if actions.delete.enabled {
+        activate_control(delete, cx, |app, window, cx| {
+            app.delete_action(&DeleteSelected, window, cx);
+        })
+    } else {
+        delete
+    };
+    let move_subtree = mouse_control_button(
+        "inspector-move",
+        control_label("Move", &actions.move_subtree),
+        ControlKind::Secondary,
+        actions.move_subtree.enabled,
+        theme,
+    );
+    let move_subtree = if actions.move_subtree.enabled {
+        activate_control(move_subtree, cx, |app, window, cx| {
+            app.move_action(&MoveSelected, window, cx);
+        })
+    } else {
+        move_subtree
+    };
+    let reorder = mouse_control_button(
+        "inspector-reorder",
+        control_label("Reorder stack", &actions.reorder),
+        ControlKind::Secondary,
+        actions.reorder.enabled,
+        theme,
+    );
+    let reorder = if actions.reorder.enabled {
+        activate_control(reorder, cx, |app, window, cx| {
+            app.reorder_action(&ReorderSelectedStack, window, cx);
+        })
+    } else {
+        reorder
+    };
     let open_pr = mouse_control_button(
         "inspector-open-pr",
         control_label("Open PR", &actions.open_pr),
@@ -342,6 +401,10 @@ fn render_actions(
                 .child("STACK ACTIONS"),
         )
         .child(checkout)
+        .child(rename)
+        .child(delete)
+        .child(move_subtree)
+        .child(reorder)
         .child(restack)
         .child(open_pr)
 }

@@ -1,8 +1,9 @@
 #[cfg(test)]
 use super::PaneMarkers;
 use super::{
-    AppView, ControlKind, activate_control, app::CreateBranch, app::SubmitStack,
-    app::mouse_control_button, changes_pane, control_button, inspector_pane, stack_pane,
+    AppView, ControlKind, activate_control,
+    app::{CreateBranch, RedoLatest, SubmitStack, UndoLatest, mouse_control_button},
+    changes_pane, control_button, inspector_pane, stack_pane,
 };
 use crate::state::{ActionAvailability, SelectionDirection, WorkspaceState};
 use crate::theme::{SYSTEM_UI_FONT, Theme};
@@ -547,9 +548,44 @@ fn render_receipt(receipt: &OperationReceipt, theme: Theme, cx: &mut Context<App
     }
     if let Some(transaction) = &receipt.transaction {
         body = body.child(format!(
-            "Transaction {} · {:?} · undo: {}",
-            transaction.id, transaction.status, transaction.can_undo
+            "Transaction {} · {:?} · undo: {} · redo: {}",
+            transaction.id, transaction.status, transaction.can_undo, transaction.can_redo
         ));
+        if transaction.changed_remote_refs {
+            body = body.child(format!(
+                "Remote refs changed. Use `st undo {}` or `st redo {}` in the CLI to review remote restoration.",
+                transaction.id, transaction.id
+            ));
+        } else {
+            let mut controls = div().flex().gap_2();
+            if transaction.can_undo {
+                controls = controls.child(activate_control(
+                    control_button(
+                        "operation-receipt-undo",
+                        "Undo",
+                        ControlKind::Secondary,
+                        true,
+                        theme,
+                    ),
+                    cx,
+                    |app, window, cx| app.undo_action(&UndoLatest, window, cx),
+                ));
+            }
+            if transaction.can_redo {
+                controls = controls.child(activate_control(
+                    control_button(
+                        "operation-receipt-redo",
+                        "Redo",
+                        ControlKind::Secondary,
+                        true,
+                        theme,
+                    ),
+                    cx,
+                    |app, window, cx| app.redo_action(&RedoLatest, window, cx),
+                ));
+            }
+            body = body.child(controls);
+        }
     }
     if let OperationOutcome::Submitted { pull_requests } = &receipt.outcome {
         for (index, pull_request) in pull_requests.iter().enumerate() {

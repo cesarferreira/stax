@@ -272,6 +272,202 @@ fn structural_overlays_preserve_their_immutable_previews() {
     assert_eq!(overlays, overlays.clone());
 }
 
+#[gpui::test]
+fn rename_shortcut_cancels_without_request_and_confirms_exact_request(cx: &mut TestAppContext) {
+    let (_app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("e escape");
+    assert!(service.requests().is_empty());
+
+    cx.simulate_keystrokes("e renamed enter");
+    assert_eq!(
+        service.requests(),
+        vec![OperationRequest::RenameBranch {
+            branch: "child".into(),
+            new_name: "renamed".into(),
+        }]
+    );
+    service.complete_next_success(OperationReceipt {
+        request: service.requests()[0].clone(),
+        summary: "Renamed child".into(),
+        affected_branches: vec!["renamed".into()],
+        outcome: OperationOutcome::BranchRenamed {
+            old_name: "child".into(),
+            new_name: "renamed".into(),
+        },
+        transaction: None,
+        warnings: Vec::new(),
+        side_effects: OperationSideEffects::RepositoryChanged,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn delete_shortcut_confirms_the_selected_non_current_branch(cx: &mut TestAppContext) {
+    let (_app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("up d enter");
+
+    assert_eq!(
+        service.requests(),
+        vec![OperationRequest::DeleteBranch {
+            branch: "parent".into(),
+            force: true,
+        }]
+    );
+    service.complete_next_success(OperationReceipt {
+        request: service.requests()[0].clone(),
+        summary: "Deleted parent".into(),
+        affected_branches: vec!["parent".into()],
+        outcome: OperationOutcome::BranchDeleted {
+            branch: "parent".into(),
+            retained_descendants: vec!["child".into()],
+        },
+        transaction: None,
+        warnings: Vec::new(),
+        side_effects: OperationSideEffects::RepositoryChanged,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn move_shortcut_picks_a_parent_then_confirms_the_exact_request(cx: &mut TestAppContext) {
+    let (_app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("m enter enter");
+
+    assert_eq!(
+        service.requests(),
+        vec![OperationRequest::MoveSubtree {
+            source: "child".into(),
+            new_parent: "main".into(),
+            auto_stash: false,
+        }]
+    );
+    service.complete_next_success(OperationReceipt {
+        request: service.requests()[0].clone(),
+        summary: "Moved child".into(),
+        affected_branches: vec!["child".into()],
+        outcome: OperationOutcome::SubtreeMoved {
+            source: "child".into(),
+            new_parent: "main".into(),
+            moved_branches: vec!["child".into()],
+        },
+        transaction: None,
+        warnings: Vec::new(),
+        side_effects: OperationSideEffects::RepositoryChanged,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn reorder_shortcut_edits_and_confirms_the_preview(cx: &mut TestAppContext) {
+    let (_app, cx, service) = open_loaded_app(cx);
+
+    cx.simulate_keystrokes("o down enter enter");
+
+    assert_eq!(
+        service.requests(),
+        vec![OperationRequest::ReorderStack {
+            original_order: vec!["parent".into(), "child".into()],
+            proposed_order: vec!["child".into(), "parent".into()],
+            auto_stash: false,
+        }]
+    );
+    service.complete_next_success(OperationReceipt {
+        request: service.requests()[0].clone(),
+        summary: "Reordered stack".into(),
+        affected_branches: vec!["parent".into(), "child".into()],
+        outcome: OperationOutcome::StackReordered {
+            original_order: vec!["parent".into(), "child".into()],
+            applied_order: vec!["child".into(), "parent".into()],
+        },
+        transaction: None,
+        warnings: Vec::new(),
+        side_effects: OperationSideEffects::RepositoryChanged,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn history_shortcuts_confirm_local_only_undo_and_redo_requests(cx: &mut TestAppContext) {
+    let (_app, cx, service) = open_loaded_app(cx);
+    cx.simulate_keystrokes("s enter");
+    service.complete_next_success(submit_receipt());
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("cmd-z enter");
+    assert_eq!(
+        service.requests().last(),
+        Some(&OperationRequest::UndoTransaction {
+            operation_id: Some("op-1".into()),
+            update_remote: false,
+        })
+    );
+    service.complete_next_success(OperationReceipt {
+        request: OperationRequest::UndoTransaction {
+            operation_id: Some("op-1".into()),
+            update_remote: false,
+        },
+        summary: "Undid op-1".into(),
+        affected_branches: vec!["child".into()],
+        outcome: OperationOutcome::TransactionUndone {
+            operation_id: "op-1".into(),
+            changed_refs: vec!["refs/heads/child".into()],
+        },
+        transaction: Some(transaction(TransactionStatus::Succeeded)),
+        warnings: Vec::new(),
+        side_effects: OperationSideEffects::RepositoryChanged,
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("cmd-shift-z enter");
+    assert_eq!(
+        service.requests().last(),
+        Some(&OperationRequest::RedoTransaction {
+            operation_id: Some("op-1".into()),
+            update_remote: false,
+        })
+    );
+    service.complete_next_success(OperationReceipt {
+        request: OperationRequest::RedoTransaction {
+            operation_id: Some("op-1".into()),
+            update_remote: false,
+        },
+        summary: "Redid op-1".into(),
+        affected_branches: vec!["child".into()],
+        outcome: OperationOutcome::TransactionRedone {
+            operation_id: "op-1".into(),
+            changed_refs: vec!["refs/heads/child".into()],
+        },
+        transaction: Some(transaction(TransactionStatus::Succeeded)),
+        warnings: Vec::new(),
+        side_effects: OperationSideEffects::RepositoryChanged,
+    });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn receipt_banner_shows_history_controls_only_for_local_transactions(cx: &mut TestAppContext) {
+    let (_app, cx, service) = open_loaded_app(cx);
+    cx.simulate_keystrokes("s enter");
+    service.complete_next_success(submit_receipt());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("operation-receipt-undo").is_some());
+    assert!(cx.debug_bounds("operation-receipt-redo").is_some());
+
+    let (_app, cx, service) = open_loaded_app(cx);
+    cx.simulate_keystrokes("s enter");
+    let mut remote = submit_receipt();
+    remote.transaction.as_mut().unwrap().changed_remote_refs = true;
+    service.complete_next_success(remote);
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("operation-receipt-undo").is_none());
+    assert!(cx.debug_bounds("operation-receipt-redo").is_none());
+}
+
 fn checkout_receipt() -> OperationReceipt {
     OperationReceipt {
         request: checkout_request(),
@@ -336,6 +532,22 @@ fn dirty_error(side_effects: OperationSideEffects) -> OperationError {
         diagnostic_chain: "dirty worktree precondition failed".into(),
         receipt: None,
         side_effects,
+    }
+}
+
+fn dirty_structural_error(request: OperationRequest) -> OperationError {
+    OperationError {
+        request,
+        kind: OperationErrorKind::DirtyWorktree,
+        details: OperationErrorDetails::Rebase {
+            branch: Some("child".into()),
+            worktree: PathBuf::from("/repo"),
+        },
+        primary: "Affected worktrees contain uncommitted changes".into(),
+        action: "Stash and retry.".into(),
+        diagnostic_chain: "dirty worktree precondition failed".into(),
+        receipt: None,
+        side_effects: OperationSideEffects::None,
     }
 }
 
@@ -1439,6 +1651,60 @@ fn dirty_restack_uses_explicit_stash_confirmation(cx: &mut TestAppContext) {
     assert!(matches!(
         service.requests().last(),
         Some(OperationRequest::Restack {
+            auto_stash: true,
+            ..
+        })
+    ));
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn dirty_move_reopens_the_same_confirmation_with_auto_stash(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+    cx.simulate_keystrokes("m enter enter");
+    let request = service.requests()[0].clone();
+    service.complete_next_error(dirty_structural_error(request));
+    cx.run_until_parked();
+
+    assert!(matches!(
+        cx.update(|_, gpui| app.read(gpui).operation_overlay().cloned()),
+        Some(OperationOverlay::ConfirmMove {
+            auto_stash: true,
+            ..
+        })
+    ));
+    cx.simulate_keystrokes("enter");
+    assert!(matches!(
+        service.requests().last(),
+        Some(OperationRequest::MoveSubtree {
+            auto_stash: true,
+            ..
+        })
+    ));
+    service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn dirty_reorder_reopens_the_same_confirmation_with_auto_stash(cx: &mut TestAppContext) {
+    let (app, cx, service) = open_loaded_app(cx);
+    cx.simulate_keystrokes("o enter enter");
+    let request = service.requests()[0].clone();
+    service.complete_next_error(dirty_structural_error(request));
+    cx.run_until_parked();
+
+    assert!(matches!(
+        cx.update(|_, gpui| app.read(gpui).operation_overlay().cloned()),
+        Some(OperationOverlay::ConfirmReorder {
+            auto_stash: true,
+            ..
+        })
+    ));
+    cx.simulate_keystrokes("enter");
+    assert!(matches!(
+        service.requests().last(),
+        Some(OperationRequest::ReorderStack {
             auto_stash: true,
             ..
         })
