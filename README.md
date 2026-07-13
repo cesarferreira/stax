@@ -289,6 +289,10 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 
 ### Native macOS GUI
 
+<p align="center">
+  <img alt="Stax native macOS GUI showing a stacked branch graph, changes, and branch inspector" src="assets/gui.png" width="960">
+</p>
+
 The native GUI opens a repository-scoped workspace with searchable Stack, Changes, and Inspector panes. It can check out, create, rename, delete, move, and reorder local branches; restack the selected branch or all tracked branches; submit the current stack as Draft; open the selected PR; and safely undo or redo fully local recorded operations. Destructive and history-rewriting actions show exact previews and confirmations, including explicit auto-stash follow-ups for dirty move/reorder/restack flows.
 
 Use `/` to search, `1`/`2`/`3` to toggle panes, and drag dividers to resize them; visibility and widths persist per canonical repository. Native menus and keyboard shortcuts dispatch the same typed actions as the buttons. Submit is always confirmed first, pushes the current stack as Draft, and does not show CLI prompts or auto-open PR pages. `st gui [path]` only launches the app.
