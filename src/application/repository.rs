@@ -281,6 +281,11 @@ impl RepositorySession {
             OperationRequest::DeleteBranch { branch, force } => {
                 self.delete_branch_unframed(&request, branch, *force, reporter)
             }
+            OperationRequest::MoveSubtree {
+                source,
+                new_parent,
+                auto_stash,
+            } => self.move_subtree_unframed(&request, source, new_parent, *auto_stash, reporter),
             OperationRequest::Restack { scope, auto_stash } => {
                 self.restack_unframed(&request, scope.clone(), *auto_stash, reporter)
             }

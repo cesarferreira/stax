@@ -22,7 +22,7 @@ use crate::git::GitRepo;
 use crate::git::RebaseResult;
 use crate::ops::receipt::{OpKind, PlanSummary};
 use crate::ops::tx::{self, Transaction};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::{
     event::{Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
@@ -31,7 +31,6 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::io::Write;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -404,24 +403,13 @@ fn handle_move_picker_key(app: &mut App, key: KeyEvent) -> Result<()> {
             let source = app.move_picker_source.clone();
             app.clear_move_picker();
             app.mode = Mode::Normal;
-            // Run `checkout <source> && upstack onto <target>` so the
-            // reparent operates on the picker's source branch regardless
-            // of where HEAD is — `upstack onto` always reparents the
-            // *current* branch.
-            let mut commands = Vec::new();
-            if app.current_branch != source {
-                commands.push(vec!["checkout".to_string(), source.clone()]);
-            }
-            commands.push(vec![
-                "upstack".to_string(),
-                "onto".to_string(),
-                target.clone(),
-            ]);
-            queue_command(
+            queue_operation(
                 app,
-                commands,
-                format!("Moved '{}' onto '{}'", source, target),
-                Some(source),
+                OperationRequest::MoveSubtree {
+                    source,
+                    new_parent: target,
+                    auto_stash: false,
+                },
             );
         }
         KeyCode::Up => app.move_picker_select_previous(),
@@ -758,26 +746,13 @@ fn queue_operation(app: &mut App, request: OperationRequest) {
     app.queue_operation(request);
 }
 
-fn queue_command(
-    app: &mut App,
-    commands: Vec<Vec<String>>,
-    success_message: impl Into<String>,
-    preferred_selection: Option<String>,
-) {
-    app.queue_command(commands, success_message, preferred_selection);
-}
-
 fn execute_pending_command(command: &PendingCommand) -> Result<Option<String>> {
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?.to_path_buf();
     drop(repo);
 
-    match &command.action {
-        PendingAction::Operation(request) => execute_pending_operation(&workdir, request.clone()),
-        PendingAction::LegacyCommands(commands) => {
-            execute_legacy_commands(commands, &workdir, command)
-        }
-    }
+    let PendingAction::Operation(request) = &command.action;
+    execute_pending_operation(&workdir, request.clone())
 }
 
 fn execute_pending_operation(
@@ -809,29 +784,6 @@ fn execute_pending_operation(
             Ok(Some(format!("{}; {}", error.primary, error.action)))
         }
     }
-}
-
-fn execute_legacy_commands(
-    commands: &[Vec<String>],
-    workdir: &std::path::Path,
-    command: &PendingCommand,
-) -> Result<Option<String>> {
-    let exe = std::env::current_exe().context("Failed to locate current executable")?;
-
-    for args in commands {
-        let status = Command::new(&exe)
-            .args(args)
-            .current_dir(workdir)
-            .stdin(Stdio::null())
-            .status()
-            .with_context(|| format!("Failed to run '{}'", args.join(" ")))?;
-
-        if !status.success() {
-            return Ok(Some(format!("Command failed: {}", args.join(" "))));
-        }
-    }
-
-    Ok(Some(command.success_message.clone()))
 }
 
 /// Apply reorder changes - reparent branches and trigger restack (as single transaction)
@@ -1008,6 +960,11 @@ mod tests {
             OperationRequest::DeleteBranch {
                 branch: "feature".into(),
                 force: true,
+            },
+            OperationRequest::MoveSubtree {
+                source: "feature".into(),
+                new_parent: "main".into(),
+                auto_stash: false,
             },
             OperationRequest::Restack {
                 scope: RestackScope::StackContaining("feature".into()),

@@ -34,6 +34,15 @@ pub enum OperationRequest {
         /// Whether an unmerged branch may be deleted.
         force: bool,
     },
+    /// Move a branch and its descendant subtree onto a new parent.
+    MoveSubtree {
+        /// Root of the subtree to move.
+        source: String,
+        /// New parent branch.
+        new_parent: String,
+        /// Whether dirty affected worktrees may be stashed automatically.
+        auto_stash: bool,
+    },
     /// Restack branches selected by a deterministic scope.
     Restack {
         /// Branch scope to restack.
@@ -97,6 +106,8 @@ pub enum OperationStage {
     RenamingBranch,
     /// Delete a local branch and its metadata.
     DeletingBranch,
+    /// Prepare and apply a subtree move.
+    MovingSubtree,
     /// Rebase branches onto their updated parents.
     Restacking,
     /// Push local refs to a remote.
@@ -200,6 +211,15 @@ pub enum OperationOutcome {
         branch: String,
         /// Descendants deliberately retained with their existing metadata.
         retained_descendants: Vec<String>,
+    },
+    /// A branch and its descendants were moved onto a new parent.
+    SubtreeMoved {
+        /// Root branch that moved.
+        source: String,
+        /// New parent of the root branch.
+        new_parent: String,
+        /// Root and descendants restacked by the operation.
+        moved_branches: Vec<String>,
     },
     /// One or more branches were restacked.
     Restacked {

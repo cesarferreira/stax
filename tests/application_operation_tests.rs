@@ -399,6 +399,109 @@ fn delete_retains_descendants_and_their_existing_parent_metadata() {
     ));
 }
 
+#[test]
+fn move_subtree_preserves_the_original_checkout() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["a", "b"]);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .move_subtree(&branches[1], "main", false, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert_eq!(repo.current_branch(), "main");
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::SubtreeMoved {
+            ref source,
+            ref new_parent,
+            ..
+        } if source == &branches[1] && new_parent == "main"
+    ));
+    assert!(receipt.transaction.as_ref().is_some_and(|tx| {
+        tx.status == TransactionStatus::Succeeded && tx.can_undo && tx.can_redo
+    }));
+    let metadata =
+        TestRepo::stdout(&repo.git(&["show", &format!("refs/branch-metadata/{}", branches[1])]));
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(metadata["parentBranchName"].as_str(), Some("main"));
+}
+
+#[test]
+fn move_subtree_to_the_existing_parent_is_a_noop() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["a", "b"]);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .move_subtree(
+            &branches[1],
+            &branches[0],
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap();
+
+    assert_eq!(receipt.side_effects, OperationSideEffects::None);
+    assert!(receipt.transaction.is_none());
+    assert_eq!(receipt_count(&repo), 0);
+}
+
+#[test]
+fn move_subtree_rejects_trunk_missing_metadata_parent_and_cycles() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["a", "b"]);
+    repo.git(&["branch", "untracked"]).assert_success();
+
+    for (source, parent) in [
+        ("main", branches[0].as_str()),
+        ("untracked", "main"),
+        (branches[1].as_str(), "missing"),
+        (branches[0].as_str(), branches[1].as_str()),
+    ] {
+        let error = RepositorySession::open(repo.path())
+            .unwrap()
+            .move_subtree(source, parent, false, &mut NoopOperationReporter)
+            .unwrap_err();
+        assert!(matches!(
+            error.kind,
+            OperationErrorKind::InvalidInput | OperationErrorKind::PreconditionFailed
+        ));
+        assert_eq!(error.side_effects, OperationSideEffects::None);
+    }
+}
+
+#[test]
+fn move_subtree_reports_dirty_worktree_and_supports_auto_stash_retry() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branches = repo.create_stack(&["a", "b"]);
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.create_file("dirty.txt", "keep me");
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .move_subtree(&branches[1], "main", false, &mut NoopOperationReporter)
+        .unwrap_err();
+    assert_eq!(error.kind, OperationErrorKind::DirtyWorktree);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+
+    RepositorySession::open(repo.path())
+        .unwrap()
+        .move_subtree(&branches[1], "main", true, &mut NoopOperationReporter)
+        .unwrap();
+    assert_eq!(repo.current_branch(), "main");
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("dirty.txt")).unwrap(),
+        "keep me"
+    );
+}
+
 #[tokio::test]
 async fn pull_request_network_fallback_returns_runtime_error_inside_tokio() {
     let repo = TestRepo::new();

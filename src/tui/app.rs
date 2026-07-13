@@ -300,14 +300,12 @@ pub struct ReorderState {
 #[derive(Debug, Clone)]
 pub struct PendingCommand {
     pub action: PendingAction,
-    pub success_message: String,
     pub preferred_selection: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingAction {
     Operation(OperationRequest),
-    LegacyCommands(Vec<Vec<String>>),
 }
 
 /// Main application state
@@ -751,24 +749,9 @@ impl App {
         self.status_set_at = Some(Instant::now());
     }
 
-    pub fn queue_command(
-        &mut self,
-        commands: Vec<Vec<String>>,
-        success_message: impl Into<String>,
-        preferred_selection: Option<String>,
-    ) {
-        self.pending_command = Some(PendingCommand {
-            action: PendingAction::LegacyCommands(commands),
-            success_message: success_message.into(),
-            preferred_selection,
-        });
-        self.should_quit = true;
-    }
-
     pub fn queue_operation(&mut self, request: OperationRequest) {
         self.pending_command = Some(PendingCommand {
             action: PendingAction::Operation(request),
-            success_message: String::new(),
             preferred_selection: None,
         });
         self.should_quit = true;

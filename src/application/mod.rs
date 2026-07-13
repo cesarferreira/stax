@@ -4,6 +4,7 @@ mod ci;
 mod create;
 mod delete;
 mod model;
+mod move_subtree;
 mod operation;
 mod pull_request;
 mod rename;

@@ -630,6 +630,7 @@ fn preferred_selection(receipt: &OperationReceipt) -> Option<String> {
         OperationOutcome::BranchCreated { branch, .. } => Some(branch.clone()),
         OperationOutcome::BranchRenamed { new_name, .. } => Some(new_name.clone()),
         OperationOutcome::BranchDeleted { .. } => None,
+        OperationOutcome::SubtreeMoved { source, .. } => Some(source.clone()),
         OperationOutcome::Restacked { .. }
         | OperationOutcome::Submitted { .. }
         | OperationOutcome::PullRequestResolved { .. } => None,
@@ -643,6 +644,7 @@ fn resolved_url(receipt: &OperationReceipt) -> Option<String> {
         | OperationOutcome::BranchCreated { .. }
         | OperationOutcome::BranchRenamed { .. }
         | OperationOutcome::BranchDeleted { .. }
+        | OperationOutcome::SubtreeMoved { .. }
         | OperationOutcome::Restacked { .. }
         | OperationOutcome::Submitted { .. } => None,
     }
