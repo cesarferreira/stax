@@ -33,11 +33,7 @@ fn acquire_cache_lock(cache_path: &Path, mode: LockMode) -> Result<CacheLock> {
         .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)
         .with_context(|| format!("failed to create cache directory {}", parent.display()))?;
-    let file_name = cache_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("cache");
-    let lock_path = parent.join(format!(".{file_name}.lock"));
+    let lock_path = cache_lock_path(cache_path);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -51,6 +47,18 @@ fn acquire_cache_lock(cache_path: &Path, mode: LockMode) -> Result<CacheLock> {
     }
     .with_context(|| format!("failed to lock cache {}", cache_path.display()))?;
     Ok(CacheLock { file })
+}
+
+fn cache_lock_path(cache_path: &Path) -> PathBuf {
+    let parent = cache_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = cache_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("cache");
+    parent.join(format!(".{file_name}.lock"))
 }
 
 fn load_json_unlocked<T>(path: &Path) -> Result<T>
@@ -343,6 +351,10 @@ impl TuiDiffCache {
         Self::entries_dir(git_dir).join(format!("{}.json", key.replace(':', "-")))
     }
 
+    fn coordination_path(entries_dir: &Path) -> PathBuf {
+        entries_dir.join("directory")
+    }
+
     pub fn key(
         _parent: &str,
         _branch: &str,
@@ -361,7 +373,10 @@ impl TuiDiffCache {
     #[cfg(test)]
     pub(crate) fn load_strict(git_dir: &std::path::Path) -> Result<Self> {
         let mut cache = Self::default();
-        let entries = match fs::read_dir(Self::entries_dir(git_dir)) {
+        let entries_dir = Self::entries_dir(git_dir);
+        let _directory_lock =
+            acquire_cache_lock(&Self::coordination_path(&entries_dir), LockMode::Shared)?;
+        let entries = match fs::read_dir(&entries_dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(cache),
             Err(error) => return Err(error).context("failed to read diff cache directory"),
@@ -409,7 +424,13 @@ impl TuiDiffCache {
         key: &str,
     ) -> Result<Option<DiskCachedDiff>> {
         let path = Self::entry_path(git_dir, key);
-        let _lock = acquire_cache_lock(&path, LockMode::Shared)?;
+        let entries_dir = Self::entries_dir(git_dir);
+        let _directory_lock =
+            acquire_cache_lock(&Self::coordination_path(&entries_dir), LockMode::Shared)?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let _entry_lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
         match load_json_unlocked::<Option<DiskCachedDiff>>(&path) {
             Ok(diff) => {
                 if diff.is_some()
@@ -432,19 +453,38 @@ impl TuiDiffCache {
         key: String,
         diff: DiskCachedDiff,
     ) -> Result<()> {
-        let path = Self::entry_path(git_dir, &key);
-        let _lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
-        persist_json_atomic(&path, &diff)?;
-        let _ = fs::remove_file(Self::cache_path(git_dir));
-        let _ = Self::cleanup_entries(
-            &Self::entries_dir(git_dir),
+        Self::insert_persisted_with_limits(
+            git_dir,
+            key,
+            diff,
             MAX_TUI_DIFF_CACHE_ENTRIES,
             MAX_TUI_DIFF_CACHE_BYTES,
-        );
+        )
+    }
+
+    fn insert_persisted_with_limits(
+        git_dir: &Path,
+        key: String,
+        diff: DiskCachedDiff,
+        max_entries: usize,
+        max_bytes: u64,
+    ) -> Result<()> {
+        let path = Self::entry_path(git_dir, &key);
+        let entries_dir = Self::entries_dir(git_dir);
+        {
+            let _directory_lock =
+                acquire_cache_lock(&Self::coordination_path(&entries_dir), LockMode::Shared)?;
+            let _entry_lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+            persist_json_atomic(&path, &diff)?;
+            let _ = fs::remove_file(Self::cache_path(git_dir));
+        }
+        let _ = Self::cleanup_entries(&entries_dir, max_entries, max_bytes);
         Ok(())
     }
 
     fn cleanup_entries(entries_dir: &Path, max_entries: usize, max_bytes: u64) -> Result<()> {
+        let _directory_lock =
+            acquire_cache_lock(&Self::coordination_path(entries_dir), LockMode::Exclusive)?;
         let entries = match fs::read_dir(entries_dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -460,14 +500,31 @@ impl TuiDiffCache {
         let mut cached = Vec::new();
         let mut total_bytes = 0_u64;
         for entry in entries {
-            let entry = entry?;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("failed to inspect diff cache entry"),
+            };
             let path = entry.path();
-            if !entry.file_type()?.is_file()
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("failed to inspect diff cache entry type"),
+            };
+            if !file_type.is_file()
                 || path.extension().and_then(|extension| extension.to_str()) != Some("json")
             {
                 continue;
             }
-            let metadata = entry.metadata()?;
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to inspect diff cache entry {}", path.display())
+                    });
+                }
+            };
             let bytes = metadata.len();
             total_bytes = total_bytes.saturating_add(bytes);
             cached.push((metadata.modified().unwrap_or(UNIX_EPOCH), path, bytes));
@@ -479,8 +536,24 @@ impl TuiDiffCache {
             if remove_count == 0 && total_bytes <= max_bytes {
                 break;
             }
-            fs::remove_file(&path)
-                .with_context(|| format!("failed to remove diff cache entry {}", path.display()))?;
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to remove diff cache entry {}", path.display())
+                    });
+                }
+            }
+            match fs::remove_file(cache_lock_path(&path)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to remove diff cache entry lock {}", path.display())
+                    });
+                }
+            }
             total_bytes = total_bytes.saturating_sub(bytes);
             remove_count = remove_count.saturating_sub(1);
         }
@@ -777,6 +850,49 @@ mod tests {
             &["b.json", "c.json"],
         );
         assert_cleanup_limits(10, 45, &[("a", 10), ("b", 20), ("c", 30)], &["c.json"]);
+    }
+
+    #[test]
+    fn concurrent_diff_writers_enforce_cleanup_limit_and_remove_evicted_locks() {
+        let temp = TempDir::new().unwrap();
+        let root = Arc::new(temp.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(25));
+        let writers = (0..24)
+            .map(|index| {
+                let root = Arc::clone(&root);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    TuiDiffCache::insert_persisted_with_limits(
+                        &root,
+                        format!("key-{index}"),
+                        disk_diff(&format!("patch-{index}")),
+                        4,
+                        u64::MAX,
+                    )
+                    .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        let entries_dir = TuiDiffCache::entries_dir(&root);
+        let names = fs::read_dir(entries_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        let entry_count = names.iter().filter(|name| name.ends_with(".json")).count();
+        let entry_lock_count = names
+            .iter()
+            .filter(|name| name.ends_with(".json.lock"))
+            .count();
+
+        assert!(entry_count <= 4, "found {entry_count} persisted entries");
+        assert_eq!(entry_lock_count, entry_count);
     }
 
     #[test]

@@ -424,6 +424,32 @@ fn cached_diff_returns_the_same_entry_without_recalculating() {
 }
 
 #[test]
+fn cached_diff_treats_a_malformed_persisted_entry_as_a_miss() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    let session = RepositorySession::open(repo.path()).unwrap();
+    session.diff("feature", "main").unwrap();
+    std::fs::write(only_diff_cache_entry(&repo), b"{").unwrap();
+
+    let cached = session.cached_diff("feature", "main").unwrap();
+
+    assert_eq!(cached, None);
+}
+
+#[test]
+fn cached_diff_still_reports_revision_resolution_errors() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["feature"]);
+    let session = RepositorySession::open(repo.path()).unwrap();
+
+    let error = session.cached_diff("missing", "main").unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(message.contains("cached diff lookup"));
+    assert!(message.contains("missing"));
+}
+
+#[test]
 fn refresh_diff_bypasses_matching_stale_cache_and_replaces_it() {
     let repo = TestRepo::new();
     repo.create_stack(&["feature"]);

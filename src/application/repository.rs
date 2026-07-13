@@ -248,8 +248,10 @@ impl RepositorySession {
             &target.branch_oid,
             &target.merge_base_oid,
         );
-        TuiDiffCache::read_persisted(&self.common_git_dir, &key)
-            .map(|diff| diff.as_ref().map(branch_diff_from_disk))
+        let cached = TuiDiffCache::read_persisted(&self.common_git_dir, &key)
+            .ok()
+            .flatten();
+        Ok(cached.as_ref().map(branch_diff_from_disk))
     }
 
     pub(super) fn open_repo(&self) -> Result<GitRepo> {
