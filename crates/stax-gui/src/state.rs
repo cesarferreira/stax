@@ -859,6 +859,7 @@ impl WorkspaceState {
         {
             self.selected_branch = Some(preferred.to_string());
         }
+        self.diff_cache.clear();
         self.advance_generation();
         self.details = LoadState::Idle;
         self.diff = LoadState::Idle;
@@ -1577,6 +1578,25 @@ mod tests {
         assert_eq!(state.diff().ready(), Some(&diff("old b")));
         assert!(state.diff_is_refreshing());
         state.select_branch("feature-a").unwrap();
+        assert_eq!(state.diff(), &LoadState::Idle);
+    }
+
+    #[test]
+    fn repository_change_invalidates_session_patches_before_snapshot_refresh() {
+        let mut state = WorkspaceState::new(snapshot(
+            "/repo",
+            "feature-a",
+            &[("feature-a", true), ("feature-b", false)],
+        ));
+        let (a, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(a, Ok(diff("old a"))));
+        state.select_branch("feature-b").unwrap();
+        let (b, _) = state.begin_hydration().unwrap();
+        assert!(state.apply_diff(b, Ok(diff("old b"))));
+
+        present_receipt(&mut state, history_receipt(false));
+        state.select_branch("feature-a").unwrap();
+
         assert_eq!(state.diff(), &LoadState::Idle);
     }
 

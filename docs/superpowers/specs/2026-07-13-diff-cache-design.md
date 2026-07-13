@@ -73,11 +73,12 @@ the branch commit alone. Branch and parent names are intentionally excluded:
 renames may reuse identical content, and object IDs produce portable filenames
 without escaping user input.
 
-Each document contains the existing `DiskCachedDiff` payload. Reads acquire a
-shared lock for that entry only, deserialize that entry only, and clone no
-unrelated patches. Writes acquire an exclusive entry lock and use the existing
-temporary-file plus atomic-rename helper. Concurrent writers may calculate the
-same deterministic patch; the last complete atomic write wins.
+Each document contains the existing `DiskCachedDiff` payload. Reads deliberately
+acquire an exclusive lock for that entry so deserialization and the best-effort
+modification-time touch happen atomically, and clone no unrelated patches.
+Writes acquire an exclusive entry lock and use the existing temporary-file plus
+atomic-rename helper. Concurrent writers may calculate the same deterministic
+patch; the last complete atomic write wins.
 
 The old `tui-diff-cache.json` file is not read or migrated. It is disposable
 cache data and will be removed best-effort during the first successful cleanup.

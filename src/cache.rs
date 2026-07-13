@@ -525,6 +525,7 @@ impl TuiDiffCache {
     fn cleanup_entries(entries_dir: &Path, max_entries: usize, max_bytes: u64) -> Result<()> {
         let _directory_lock =
             acquire_cache_lock(&Self::coordination_path(entries_dir), LockMode::Exclusive)?;
+        Self::cleanup_orphaned_entry_locks(entries_dir)?;
         let entries = match fs::read_dir(entries_dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -596,6 +597,66 @@ impl TuiDiffCache {
             }
             total_bytes = total_bytes.saturating_sub(bytes);
             remove_count = remove_count.saturating_sub(1);
+        }
+        Ok(())
+    }
+
+    fn cleanup_orphaned_entry_locks(entries_dir: &Path) -> Result<()> {
+        let entries = match fs::read_dir(entries_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to read diff cache directory {}",
+                        entries_dir.display()
+                    )
+                });
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("failed to inspect diff cache entry"),
+            };
+            let path = entry.path();
+            let Some(lock_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(payload_name) = lock_name.strip_suffix(".lock") else {
+                continue;
+            };
+            if !payload_name.ends_with(".json") {
+                continue;
+            }
+            let payload_path =
+                entries_dir.join(payload_name.strip_prefix('.').unwrap_or(payload_name));
+            match fs::metadata(&payload_path) {
+                Ok(metadata) if metadata.is_file() => continue,
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to inspect diff cache entry {}",
+                            payload_path.display()
+                        )
+                    });
+                }
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to remove orphaned diff cache entry lock {}",
+                            path.display()
+                        )
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -905,6 +966,36 @@ mod tests {
             &["b.json", "c.json"],
         );
         assert_cleanup_limits(10, 45, &[("a", 10), ("b", 20), ("c", 30)], &["c.json"]);
+    }
+
+    #[test]
+    fn diff_cache_cleanup_removes_seeded_orphan_entry_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_dir = TuiDiffCache::entries_dir(dir.path());
+        fs::create_dir_all(&entries_dir).unwrap();
+        let orphan_payload = entries_dir.join("orphan.json");
+        let orphan_lock = cache_lock_path(&orphan_payload);
+        fs::write(&orphan_lock, b"").unwrap();
+
+        TuiDiffCache::cleanup_entries(&entries_dir, usize::MAX, u64::MAX).unwrap();
+
+        assert!(!orphan_lock.exists());
+    }
+
+    #[test]
+    fn diff_cache_cleanup_retains_entry_lock_for_live_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries_dir = TuiDiffCache::entries_dir(dir.path());
+        fs::create_dir_all(&entries_dir).unwrap();
+        let live_payload = entries_dir.join("live.json");
+        let live_lock = cache_lock_path(&live_payload);
+        fs::write(&live_payload, b"{}").unwrap();
+        fs::write(&live_lock, b"").unwrap();
+
+        TuiDiffCache::cleanup_entries(&entries_dir, usize::MAX, u64::MAX).unwrap();
+
+        assert!(live_payload.exists());
+        assert!(live_lock.exists());
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 **Architecture:** `TuiDiffCache` keeps its caller-facing revision-key API but persists each `DiskCachedDiff` independently. `WorkspaceState` adds a small snapshot-scoped LRU that restores a previously displayed branch patch synchronously before background hydration.
 
-**Tech Stack:** Rust, serde_json, fs2 file locks, GPUI state tests, cargo-nextest, Docker-backed `make test`.
+**Tech Stack:** Rust, serde_json, fs4 file locks, GPUI state tests, cargo-nextest, Docker-backed `make test`.
 
 ## Global Constraints
 
