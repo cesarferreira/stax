@@ -1,3 +1,4 @@
+use super::stack_topology::{TopologyRow, layout as layout_topology};
 use super::text_input::BranchNameInput;
 use super::{AppView, WorkspaceView, activate_control, control_focus_style};
 use crate::theme::{MONOSPACE_FONT, Theme};
@@ -6,7 +7,9 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, div, px, uniform_list,
 };
 use stax::application::BranchSummary;
+use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::Arc;
 
 pub const PANE_MARKER: &str = "stax-stack-pane";
 pub const PANE_HEADING: &str = "Stack";
@@ -27,6 +30,22 @@ pub fn render(
     cx: &mut Context<AppView>,
 ) -> Div {
     let branch_count = workspace.state().filtered_branches().len();
+    let topology = Arc::new(
+        layout_topology(&workspace.state().snapshot().branches)
+            .into_iter()
+            .map(|row| (row.branch_name.clone(), row))
+            .collect::<HashMap<_, _>>(),
+    );
+    let topology_width = topology
+        .values()
+        .next()
+        .map(|row| {
+            row.segments
+                .iter()
+                .map(|segment| segment.glyph.chars().count())
+                .sum::<usize>()
+        })
+        .unwrap_or(1);
 
     let mut pane = div()
         .debug_selector(|| PANE_MARKER.into())
@@ -122,7 +141,16 @@ pub fn render(
 
                     rows.into_iter()
                         .map(|(index, branch)| {
-                            render_branch_row(branch, selected.as_deref(), index, theme, cx)
+                            let topology_row = topology.get(&branch.name).cloned();
+                            render_branch_row(
+                                branch,
+                                topology_row,
+                                topology_width,
+                                selected.as_deref(),
+                                index,
+                                theme,
+                                cx,
+                            )
                         })
                         .collect()
                 }),
@@ -136,6 +164,8 @@ pub fn render(
 
 fn render_branch_row(
     branch: BranchSummary,
+    topology: Option<TopologyRow>,
+    topology_width: usize,
     selected: Option<&str>,
     branch_index: usize,
     theme: Theme,
@@ -143,98 +173,99 @@ fn render_branch_row(
 ) -> Stateful<Div> {
     let is_selected = selected == Some(branch.name.as_str());
     let branch_name = branch.name.clone();
-    let topology = topology_label(&branch);
     let statuses = branch_status_parts(&branch);
-    let indentation = px(10.0 + branch.column.min(8) as f32 * 14.0);
 
-    let row = div()
-        .id(SharedString::from(format!("stack-branch-{}", branch.name)))
-        .debug_selector(|| format!("stack-branch-{}", branch.name))
-        .focusable()
-        .tab_index(branch_index as isize + 20)
-        .focus(move |style| control_focus_style(style, theme))
-        .h(px(54.0))
-        .w_full()
-        .min_w_0()
-        .flex()
-        .items_center()
-        .gap_2()
-        .pl(indentation)
-        .pr_2()
-        .border_1()
-        .border_color(if is_selected {
-            theme.accent
-        } else {
-            theme.border
-        })
-        .bg(if is_selected {
-            theme.surface_selected
-        } else {
-            theme.surface
-        })
-        .cursor_pointer()
-        .hover(move |style| style.bg(theme.surface_selected))
-        .child(
-            div()
-                .flex_none()
-                .w(px(38.0))
-                .font_family(MONOSPACE_FONT)
-                .text_xs()
-                .text_color(if branch.is_current {
-                    theme.accent
-                } else {
-                    theme.text_muted
-                })
-                .child(topology),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .flex()
-                .flex_1()
-                .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .truncate()
-                        .font_family(MONOSPACE_FONT)
-                        .text_sm()
-                        .font_weight(if is_selected {
-                            gpui::FontWeight::SEMIBOLD
-                        } else {
-                            gpui::FontWeight::NORMAL
-                        })
-                        .child(branch.name.clone()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .children(statuses.into_iter().map(|(label, tone)| {
+    let row =
+        div()
+            .id(SharedString::from(format!("stack-branch-{}", branch.name)))
+            .debug_selector(|| format!("stack-branch-{}", branch.name))
+            .focusable()
+            .tab_index(branch_index as isize + 20)
+            .focus(move |style| control_focus_style(style, theme))
+            .h(px(54.0))
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap_2()
+            .pl_2()
+            .pr_2()
+            .border_1()
+            .border_color(if is_selected {
+                theme.accent
+            } else {
+                theme.border
+            })
+            .bg(if is_selected {
+                theme.surface_selected
+            } else {
+                theme.surface
+            })
+            .cursor_pointer()
+            .hover(move |style| style.bg(theme.surface_selected))
+            .child(
+                div()
+                    .debug_selector(|| "stack-topology-gutter".into())
+                    .flex_none()
+                    .w(px(topology_width as f32 * 7.5))
+                    .flex()
+                    .items_center()
+                    .font_family(MONOSPACE_FONT)
+                    .text_xs()
+                    .children(topology.into_iter().flat_map(|row| row.segments).map(
+                        move |segment| {
                             div()
-                                .text_xs()
-                                .text_color(status_color(tone, theme))
-                                .child(label)
-                        })),
-                ),
-        );
+                                .flex_none()
+                                .text_color(
+                                    segment
+                                        .lane
+                                        .map(|lane| topology_color(lane, theme))
+                                        .unwrap_or(theme.text_muted),
+                                )
+                                .child(segment.glyph)
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex()
+                    .flex_1()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .truncate()
+                            .font_family(MONOSPACE_FONT)
+                            .text_sm()
+                            .font_weight(if is_selected {
+                                gpui::FontWeight::SEMIBOLD
+                            } else {
+                                gpui::FontWeight::NORMAL
+                            })
+                            .child(branch.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .children(statuses.into_iter().map(|(label, tone)| {
+                                div()
+                                    .text_xs()
+                                    .text_color(status_color(tone, theme))
+                                    .child(label)
+                            })),
+                    ),
+            );
 
     activate_control(row, cx, move |app, window, cx| {
         app.select_branch(&branch_name, window, cx);
     })
 }
 
-fn topology_label(branch: &BranchSummary) -> String {
-    let connector = if branch.is_trunk { "◆" } else { "●" };
-    if branch.column == 0 {
-        connector.to_string()
-    } else {
-        format!(
-            "{}╰{connector}",
-            "│".repeat(branch.column.saturating_sub(1))
-        )
-    }
+fn topology_color(lane: usize, theme: Theme) -> gpui::Hsla {
+    [theme.accent, theme.success, theme.warning][lane % 3]
 }
 
 fn branch_status_parts(branch: &BranchSummary) -> Vec<(String, StatusTone)> {
@@ -279,7 +310,7 @@ fn status_color(tone: StatusTone, theme: Theme) -> gpui::Hsla {
 
 #[cfg(test)]
 mod tests {
-    use super::{StatusTone, branch_status_parts, topology_label};
+    use super::{StatusTone, branch_status_parts};
     use stax::application::BranchSummary;
 
     fn branch() -> BranchSummary {
@@ -303,10 +334,5 @@ mod tests {
         assert!(statuses.contains(&("Restack needed".into(), StatusTone::Warning)));
         assert!(statuses.contains(&("PR #17 · open".into(), StatusTone::Accent)));
         assert!(statuses.contains(&("CI: failure".into(), StatusTone::Danger)));
-    }
-
-    #[test]
-    fn topology_uses_column_connectors() {
-        assert_eq!(topology_label(&branch()), "│╰●");
     }
 }
