@@ -634,6 +634,43 @@ fn undo_and_redo_round_trip_a_local_rename() {
 }
 
 #[test]
+fn undo_and_redo_round_trip_a_local_delete() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let branch = repo.create_stack(&["deleted"]).remove(0);
+    repo.git(&["checkout", "main"]).assert_success();
+    let session = RepositorySession::open(repo.path()).unwrap();
+    let deleted = session
+        .delete_branch(&branch, true, &mut NoopOperationReporter)
+        .unwrap();
+    let operation_id = deleted.transaction.unwrap().id;
+
+    session
+        .undo_transaction(Some(&operation_id), false, &mut NoopOperationReporter)
+        .unwrap();
+    assert!(repo.list_branches().contains(&branch));
+
+    session
+        .redo_transaction(Some(&operation_id), false, &mut NoopOperationReporter)
+        .unwrap();
+    assert!(!repo.list_branches().contains(&branch));
+    assert_eq!(repo.current_branch(), "main");
+}
+
+#[test]
+fn undo_reports_a_missing_operation_without_side_effects() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .undo_transaction(Some("missing-operation"), false, &mut NoopOperationReporter)
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::InvalidInput);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+}
+
+#[test]
 fn undo_rejects_a_dirty_worktree_without_changing_refs() {
     let repo = TestRepo::new();
     repo.set_trunk("main");
