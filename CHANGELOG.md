@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.95.0] - 2026-07-13
+
+### 🚀 Features
+
+- Preview submits and generate completions ([#598](https://github.com/cesarferreira/stax/issues/598))
+- Add stack review inbox and next navigation ([#599](https://github.com/cesarferreira/stax/issues/599))
+- Parallelize stack checks and freeze branches ([#600](https://github.com/cesarferreira/stax/issues/600))
+- Make sync summaries actionable ([#604](https://github.com/cesarferreira/stax/issues/604))
+- Add GPUI desktop read-only cockpit ([#611](https://github.com/cesarferreira/stax/issues/611))
+- Add GPUI everyday stack operations ([#612](https://github.com/cesarferreira/stax/issues/612))
+
+### 🐛 Bug Fixes
+
+- Make CLI runtime behavior consistent and non-blocking ([#596](https://github.com/cesarferreira/stax/issues/596))
+- Explain forced native stack setup gaps ([#589](https://github.com/cesarferreira/stax/issues/589))
+- Always show sync diff stats
+
+### 💼 Other
+
+- Make test and CI inputs reproducible ([#595](https://github.com/cesarferreira/stax/issues/595))
+- Promote linked worktrees to the main checkout ([#605](https://github.com/cesarferreira/stax/issues/605))
+- Regenerated cargo.lock
+
+### 📚 Documentation
+
+- Clarify native stack unlink limits ([#593](https://github.com/cesarferreira/stax/issues/593))
+- Design the GPUI desktop app ([#607](https://github.com/cesarferreira/stax/issues/607))
+- *(gui)* Design phase 3 parity ([#615](https://github.com/cesarferreira/stax/issues/615))
+- *(gui)* Design phase 4 distribution ([#616](https://github.com/cesarferreira/stax/issues/616))
+
+### ⚡ Performance
+
+- Bound stack fan-out and add tracing ([#597](https://github.com/cesarferreira/stax/issues/597))
+- *(test)* Reduce native macOS test overhead ([#606](https://github.com/cesarferreira/stax/issues/606))
+- *(gui)* Reuse cached branch diffs instantly ([#617](https://github.com/cesarferreira/stax/issues/617))
+
+### 🎨 Styling
+
+- *(gui)* Adopt a Codex-inspired workspace ([#618](https://github.com/cesarferreira/stax/issues/618))
 ## [0.94.0] - 2026-07-07
 
 ### 🚀 Features
