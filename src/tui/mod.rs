@@ -17,11 +17,7 @@ use crate::application::{
     PullRequestMode, RestackScope, execute_repository_operation,
 };
 use crate::commands::open::open_url_in_browser;
-use crate::engine::BranchMetadata;
 use crate::git::GitRepo;
-use crate::git::RebaseResult;
-use crate::ops::receipt::{OpKind, PlanSummary};
-use crate::ops::tx::{self, Transaction};
 use anyhow::Result;
 use crossterm::{
     event::{Event, KeyCode, KeyEvent, KeyModifiers},
@@ -788,9 +784,6 @@ fn execute_pending_operation(
 
 /// Apply reorder changes - reparent branches and trigger restack (as single transaction)
 fn apply_reorder_changes(app: &mut App) -> Result<()> {
-    // Get the reparent operations before clearing state
-    let reparent_ops = app.get_reparent_operations();
-
     let state = match app.reorder_state.take() {
         Some(s) => s,
         None => {
@@ -805,11 +798,30 @@ fn apply_reorder_changes(app: &mut App) -> Result<()> {
         return Ok(());
     }
 
-    if reparent_ops.is_empty() {
-        app.set_status("No reparenting needed");
-        return Ok(());
-    }
+    let original_order = state
+        .original_chain
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    let proposed_order = state
+        .pending_chain
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    queue_operation(
+        app,
+        OperationRequest::ReorderStack {
+            original_order,
+            proposed_order,
+            auto_stash: false,
+        },
+    );
+    Ok(())
+}
 
+#[cfg(any())]
+fn legacy_apply_reorder_changes(app: &mut App) -> Result<()> {
+    let reparent_ops = app.get_reparent_operations();
     let branch_word = if reparent_ops.len() == 1 {
         "branch"
     } else {
@@ -964,6 +976,11 @@ mod tests {
             OperationRequest::MoveSubtree {
                 source: "feature".into(),
                 new_parent: "main".into(),
+                auto_stash: false,
+            },
+            OperationRequest::ReorderStack {
+                original_order: vec!["a".into(), "b".into()],
+                proposed_order: vec!["b".into(), "a".into()],
                 auto_stash: false,
             },
             OperationRequest::Restack {

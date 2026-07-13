@@ -8,6 +8,7 @@ mod move_subtree;
 mod operation;
 mod pull_request;
 mod rename;
+mod reorder;
 mod repository;
 mod restack;
 pub(crate) mod submit;

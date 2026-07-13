@@ -286,6 +286,17 @@ impl RepositorySession {
                 new_parent,
                 auto_stash,
             } => self.move_subtree_unframed(&request, source, new_parent, *auto_stash, reporter),
+            OperationRequest::ReorderStack {
+                original_order,
+                proposed_order,
+                auto_stash,
+            } => self.reorder_stack_unframed(
+                &request,
+                original_order,
+                proposed_order,
+                *auto_stash,
+                reporter,
+            ),
             OperationRequest::Restack { scope, auto_stash } => {
                 self.restack_unframed(&request, scope.clone(), *auto_stash, reporter)
             }

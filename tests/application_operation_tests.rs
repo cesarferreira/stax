@@ -502,6 +502,111 @@ fn move_subtree_reports_dirty_worktree_and_supports_auto_stash_retry() {
     );
 }
 
+#[test]
+fn reorder_stack_applies_a_three_branch_order_and_restores_checkout() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let original = repo.create_stack(&["a", "b", "c"]);
+    let proposed = vec![
+        original[2].clone(),
+        original[0].clone(),
+        original[1].clone(),
+    ];
+    let checkout = repo.current_branch();
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .reorder_stack(&original, &proposed, false, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert_eq!(repo.current_branch(), checkout);
+    assert!(matches!(
+        receipt.outcome,
+        OperationOutcome::StackReordered {
+            ref original_order,
+            ref applied_order,
+        } if original_order == &original && applied_order == &proposed
+    ));
+    assert!(
+        receipt
+            .transaction
+            .as_ref()
+            .is_some_and(|tx| tx.can_undo && tx.can_redo)
+    );
+}
+
+#[test]
+fn reorder_stack_unchanged_order_is_a_noop() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let order = repo.create_stack(&["a", "b"]);
+
+    let receipt = RepositorySession::open(repo.path())
+        .unwrap()
+        .reorder_stack(&order, &order, false, &mut NoopOperationReporter)
+        .unwrap();
+
+    assert_eq!(receipt.side_effects, OperationSideEffects::None);
+    assert!(receipt.transaction.is_none());
+}
+
+#[test]
+fn reorder_stack_rejects_invalid_stale_and_forked_previews() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let order = repo.create_stack(&["a", "b"]);
+
+    let invalid = vec![order[0].clone(), order[0].clone()];
+    let stale = vec![order[1].clone(), order[0].clone()];
+    for original in [&invalid, &stale] {
+        let error = RepositorySession::open(repo.path())
+            .unwrap()
+            .reorder_stack(original, &order, false, &mut NoopOperationReporter)
+            .unwrap_err();
+        assert!(matches!(
+            error.kind,
+            OperationErrorKind::InvalidInput | OperationErrorKind::PreconditionFailed
+        ));
+        assert_eq!(error.side_effects, OperationSideEffects::None);
+    }
+
+    repo.git(&["checkout", &order[0]]).assert_success();
+    let sibling = repo.create_stack(&["sibling"]).remove(0);
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .reorder_stack(
+            &order,
+            &[order[1].clone(), order[0].clone()],
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+    assert_eq!(error.kind, OperationErrorKind::PreconditionFailed);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+    assert!(repo.list_branches().contains(&sibling));
+}
+
+#[test]
+fn reorder_stack_reports_dirty_worktree_before_mutation() {
+    let repo = TestRepo::new();
+    repo.set_trunk("main");
+    let order = repo.create_stack(&["a", "b"]);
+    repo.create_file("dirty.txt", "keep");
+
+    let error = RepositorySession::open(repo.path())
+        .unwrap()
+        .reorder_stack(
+            &order,
+            &[order[1].clone(), order[0].clone()],
+            false,
+            &mut NoopOperationReporter,
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind, OperationErrorKind::DirtyWorktree);
+    assert_eq!(error.side_effects, OperationSideEffects::None);
+}
+
 #[tokio::test]
 async fn pull_request_network_fallback_returns_runtime_error_inside_tokio() {
     let repo = TestRepo::new();

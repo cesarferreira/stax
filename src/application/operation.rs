@@ -43,6 +43,15 @@ pub enum OperationRequest {
         /// Whether dirty affected worktrees may be stashed automatically.
         auto_stash: bool,
     },
+    /// Apply a previously previewed linear stack order.
+    ReorderStack {
+        /// Exact live order used to create the preview.
+        original_order: Vec<String>,
+        /// Proposed bottom-to-top order.
+        proposed_order: Vec<String>,
+        /// Whether dirty affected worktrees may be stashed automatically.
+        auto_stash: bool,
+    },
     /// Restack branches selected by a deterministic scope.
     Restack {
         /// Branch scope to restack.
@@ -108,6 +117,8 @@ pub enum OperationStage {
     DeletingBranch,
     /// Prepare and apply a subtree move.
     MovingSubtree,
+    /// Apply a linear stack reorder.
+    ReorderingStack,
     /// Rebase branches onto their updated parents.
     Restacking,
     /// Push local refs to a remote.
@@ -220,6 +231,13 @@ pub enum OperationOutcome {
         new_parent: String,
         /// Root and descendants restacked by the operation.
         moved_branches: Vec<String>,
+    },
+    /// A linear stack order was applied.
+    StackReordered {
+        /// Order validated before mutation.
+        original_order: Vec<String>,
+        /// Order applied by the operation.
+        applied_order: Vec<String>,
     },
     /// One or more branches were restacked.
     Restacked {
