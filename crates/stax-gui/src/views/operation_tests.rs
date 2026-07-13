@@ -2,7 +2,11 @@ use super::operation_overlay::OperationOverlay;
 use super::text_input::BranchNameInput;
 use super::{
     AppServices, AppView, PickerFuture, RecentRepositoryStore, RepositoryPicker, SnapshotLoader,
-    app::DismissOperationBanner,
+    app::{
+        CheckoutSelected, CreateBranch, DeleteSelected, DismissOperationBanner, MoveSelected,
+        OpenPullRequest, OpenRepository, RefreshRepository, RenameSelected, ReorderSelectedStack,
+        RestackAll, RestackSelected, SubmitStack,
+    },
 };
 use crate::hydration::{BranchHydrationService, HydrationFuture};
 use crate::operation::{
@@ -1510,6 +1514,36 @@ fn every_action_is_disabled_during_active_mutation(cx: &mut TestAppContext) {
         })
     );
     service.complete_next_success(checkout_receipt());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn shortcut_and_menu_actions_are_unavailable_during_active_mutation(cx: &mut TestAppContext) {
+    let (_app, cx, service) = open_loaded_app(cx);
+
+    assert!(cx.update(|window, app| window.is_action_available(&SubmitStack, app)));
+    cx.simulate_keystrokes("s enter");
+    assert_eq!(service.requests(), vec![submit_request()]);
+
+    let availability = cx.update(|window, app| {
+        [
+            window.is_action_available(&OpenRepository, app),
+            window.is_action_available(&RefreshRepository, app),
+            window.is_action_available(&CheckoutSelected, app),
+            window.is_action_available(&CreateBranch, app),
+            window.is_action_available(&RenameSelected, app),
+            window.is_action_available(&DeleteSelected, app),
+            window.is_action_available(&MoveSelected, app),
+            window.is_action_available(&ReorderSelectedStack, app),
+            window.is_action_available(&RestackSelected, app),
+            window.is_action_available(&RestackAll, app),
+            window.is_action_available(&SubmitStack, app),
+            window.is_action_available(&OpenPullRequest, app),
+        ]
+    });
+    assert_eq!(availability, [false; 12]);
+
+    service.complete_next_success(submit_receipt());
     cx.run_until_parked();
 }
 

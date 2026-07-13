@@ -17,6 +17,7 @@ use crate::preferences::TransientWorkspacePreferences;
 use crate::preferences::{RecentRepositories, WorkspacePreferenceStore, WorkspacePreferencesFile};
 use crate::state::{InteractionState, SelectionDirection};
 use crate::theme::{SYSTEM_UI_FONT, Theme};
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyBinding, MouseMoveEvent, MouseUpEvent,
@@ -2208,6 +2209,12 @@ impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
         let search_input = self.search_input.clone();
+        let actions = self.interaction_state();
+        let has_workspace = actions.is_some();
+        let can_open = actions
+            .as_ref()
+            .is_none_or(|actions| actions.open_repository.enabled);
+        let has_overlay = self.operation_overlay.is_some();
         let content = match &self.mode {
             AppMode::Welcome(welcome) | AppMode::Opening(welcome) | AppMode::Error(welcome) => {
                 welcome.render(theme, cx)
@@ -2219,30 +2226,104 @@ impl Render for AppView {
             .id("stax-app")
             .key_context("StaxApp")
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::select_previous))
-            .on_action(cx.listener(Self::select_next))
-            .on_action(cx.listener(Self::open_action))
-            .on_action(cx.listener(Self::refresh_action))
-            .on_action(cx.listener(Self::checkout_action))
-            .on_action(cx.listener(Self::create_action))
-            .on_action(cx.listener(Self::rename_action))
-            .on_action(cx.listener(Self::delete_action))
-            .on_action(cx.listener(Self::move_action))
-            .on_action(cx.listener(Self::reorder_action))
-            .on_action(cx.listener(Self::undo_action))
-            .on_action(cx.listener(Self::redo_action))
-            .on_action(cx.listener(Self::restack_selected_action))
-            .on_action(cx.listener(Self::restack_all_action))
-            .on_action(cx.listener(Self::submit_action))
-            .on_action(cx.listener(Self::open_pull_request_action))
-            .on_action(cx.listener(Self::confirm_overlay_action))
-            .on_action(cx.listener(Self::dismiss_overlay_action))
             .on_action(cx.listener(Self::dismiss_operation_banner_action))
-            .on_action(cx.listener(Self::toggle_stack_pane_action))
-            .on_action(cx.listener(Self::toggle_changes_pane_action))
-            .on_action(cx.listener(Self::toggle_inspector_pane_action))
-            .on_action(cx.listener(Self::focus_stack_search_action))
-            .on_action(cx.listener(Self::clear_stack_search_action))
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.navigation.enabled),
+                |root| {
+                    root.on_action(cx.listener(Self::select_previous))
+                        .on_action(cx.listener(Self::select_next))
+                },
+            )
+            .when(can_open, |root| {
+                root.on_action(cx.listener(Self::open_action))
+            })
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.refresh.enabled),
+                |root| root.on_action(cx.listener(Self::refresh_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.checkout.enabled),
+                |root| root.on_action(cx.listener(Self::checkout_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.create.enabled),
+                |root| root.on_action(cx.listener(Self::create_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.rename.enabled),
+                |root| root.on_action(cx.listener(Self::rename_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.delete.enabled),
+                |root| root.on_action(cx.listener(Self::delete_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.move_subtree.enabled),
+                |root| root.on_action(cx.listener(Self::move_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.reorder.enabled),
+                |root| root.on_action(cx.listener(Self::reorder_action)),
+            )
+            .when(
+                actions.as_ref().is_some_and(|actions| actions.undo.enabled),
+                |root| root.on_action(cx.listener(Self::undo_action)),
+            )
+            .when(
+                actions.as_ref().is_some_and(|actions| actions.redo.enabled),
+                |root| root.on_action(cx.listener(Self::redo_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.restack.enabled),
+                |root| root.on_action(cx.listener(Self::restack_selected_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.restack_all.enabled),
+                |root| root.on_action(cx.listener(Self::restack_all_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.submit.enabled),
+                |root| root.on_action(cx.listener(Self::submit_action)),
+            )
+            .when(
+                actions
+                    .as_ref()
+                    .is_some_and(|actions| actions.open_pr.enabled),
+                |root| root.on_action(cx.listener(Self::open_pull_request_action)),
+            )
+            .when(has_overlay, |root| {
+                root.on_action(cx.listener(Self::confirm_overlay_action))
+                    .on_action(cx.listener(Self::dismiss_overlay_action))
+            })
+            .when(has_workspace, |root| {
+                root.on_action(cx.listener(Self::toggle_stack_pane_action))
+                    .on_action(cx.listener(Self::toggle_changes_pane_action))
+                    .on_action(cx.listener(Self::toggle_inspector_pane_action))
+                    .on_action(cx.listener(Self::focus_stack_search_action))
+                    .on_action(cx.listener(Self::clear_stack_search_action))
+            })
             .on_mouse_move(cx.listener(Self::pane_drag_move))
             .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::pane_drag_end))
             .size_full()

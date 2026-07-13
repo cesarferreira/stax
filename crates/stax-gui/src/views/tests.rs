@@ -9,7 +9,8 @@ use crate::preferences::{
 };
 use crate::state::LoadState;
 use gpui::{
-    App, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, TestAppContext, point, px,
+    App, KeyDownEvent, KeyUpEvent, Keystroke, MenuItem, Modifiers, MouseButton, TestAppContext,
+    point, px,
 };
 use stax::application::{
     BranchDetails, BranchDiff, BranchSummary, CiSummary, DiffLine, DiffLineKind, RepositorySnapshot,
@@ -1547,4 +1548,54 @@ fn pane_search_no_match_and_text_editing_take_priority_over_shortcuts(cx: &mut T
         }),
         ("nobody".to_string(), false)
     );
+}
+
+#[test]
+fn menu_models_reuse_workspace_actions_and_cover_the_main_command_set() {
+    let menus = crate::native_menus();
+    assert_eq!(
+        menus
+            .iter()
+            .map(|menu| menu.name.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["Stax", "File", "Edit", "View", "Branch", "Stack"]
+    );
+
+    let actions = menus
+        .iter()
+        .flat_map(|menu| menu.items.iter())
+        .filter_map(|item| match item {
+            MenuItem::Action { name, action, .. } => {
+                Some((name.to_string(), action.name().to_string()))
+            }
+            MenuItem::Separator | MenuItem::Submenu(_) | MenuItem::SystemMenu(_) => None,
+        })
+        .collect::<Vec<_>>();
+    for (label, action_suffix) in [
+        ("Open Repository…", "OpenRepository"),
+        ("Refresh Repository", "RefreshRepository"),
+        ("Undo", "UndoLatest"),
+        ("Redo", "RedoLatest"),
+        ("Search Stack", "FocusStackSearch"),
+        ("Show/Hide Stack", "ToggleStackPane"),
+        ("Show/Hide Changes", "ToggleChangesPane"),
+        ("Show/Hide Inspector", "ToggleInspectorPane"),
+        ("Checkout Selected", "CheckoutSelected"),
+        ("Create Branch…", "CreateBranch"),
+        ("Rename Branch…", "RenameSelected"),
+        ("Delete Branch…", "DeleteSelected"),
+        ("Move Branch…", "MoveSelected"),
+        ("Reorder Stack…", "ReorderSelectedStack"),
+        ("Restack Selected", "RestackSelected"),
+        ("Restack All", "RestackAll"),
+        ("Submit Stack…", "SubmitStack"),
+        ("Open Pull Request", "OpenPullRequest"),
+    ] {
+        assert!(
+            actions
+                .iter()
+                .any(|(name, action)| name == label && action.ends_with(action_suffix)),
+            "missing {label} backed by {action_suffix}"
+        );
+    }
 }
