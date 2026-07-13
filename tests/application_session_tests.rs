@@ -56,6 +56,34 @@ fn write_stack_parent(repo: &TestRepo, branch: &str, parent: &str) {
     std::fs::remove_file(repo.path().join(metadata_file)).unwrap();
 }
 
+fn diff_cache_entries(repo: &TestRepo) -> Vec<PathBuf> {
+    let dir = repo
+        .path()
+        .join(".git")
+        .join("stax")
+        .join("diff-cache")
+        .join("v1");
+    let mut entries = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| {
+                    let path = entry.ok()?.path();
+                    (path.extension().and_then(|extension| extension.to_str()) == Some("json"))
+                        .then_some(path)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    entries.sort();
+    entries
+}
+
+fn only_diff_cache_entry(repo: &TestRepo) -> PathBuf {
+    let entries = diff_cache_entries(repo);
+    assert_eq!(entries.len(), 1, "expected one persisted diff entry");
+    entries.into_iter().next().unwrap()
+}
+
 #[test]
 fn snapshot_orders_tracked_stacks_before_trunk() {
     let repo = TestRepo::new();
@@ -370,12 +398,7 @@ fn second_diff_round_trips_through_the_tui_cache() {
         .diff("feature", "main")
         .unwrap();
 
-    let cache_path = repo
-        .path()
-        .join(".git")
-        .join("stax")
-        .join("tui-diff-cache.json");
-    assert!(cache_path.is_file());
+    assert!(only_diff_cache_entry(&repo).is_file());
 
     let second = RepositorySession::open(repo.path())
         .unwrap()
@@ -406,21 +429,11 @@ fn refresh_diff_bypasses_matching_stale_cache_and_replaces_it() {
     repo.create_stack(&["feature"]);
     let session = RepositorySession::open(repo.path()).unwrap();
     let actual = session.diff("feature", "main").unwrap();
-    let cache_path = repo
-        .path()
-        .join(".git")
-        .join("stax")
-        .join("tui-diff-cache.json");
+    let cache_path = only_diff_cache_entry(&repo);
     let mut stored: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
-    let entry = stored["entries"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
-        .next()
-        .unwrap();
-    entry["diff"]["stat"] = serde_json::json!([]);
-    entry["diff"]["lines"] = serde_json::json!([
+    stored["stat"] = serde_json::json!([]);
+    stored["lines"] = serde_json::json!([
         {"content": "deliberately incorrect cached patch", "line_type": "context"}
     ]);
     std::fs::write(&cache_path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
@@ -441,23 +454,23 @@ fn refresh_diff_bypasses_matching_stale_cache_and_replaces_it() {
 }
 
 #[test]
-fn refresh_diff_returns_live_result_without_clobbering_malformed_cache() {
+fn refresh_diff_returns_live_result_and_replaces_malformed_cache() {
     let repo = TestRepo::new();
     repo.create_stack(&["feature"]);
     let session = RepositorySession::open(repo.path()).unwrap();
     let expected = session.diff("feature", "main").unwrap();
-    let cache_path = repo
-        .path()
-        .join(".git")
-        .join("stax")
-        .join("tui-diff-cache.json");
-    let malformed = b"{\"entries\":";
+    let cache_path = only_diff_cache_entry(&repo);
+    let malformed = b"{";
     std::fs::write(&cache_path, malformed).unwrap();
 
     let refreshed = session.refresh_diff("feature", "main").unwrap();
 
     assert_eq!(refreshed, expected);
-    assert_eq!(std::fs::read(cache_path).unwrap(), malformed);
+    assert_eq!(
+        session.cached_diff("feature", "main").unwrap(),
+        Some(expected)
+    );
+    assert_ne!(std::fs::read(cache_path).unwrap(), malformed);
 }
 
 #[test]
@@ -472,17 +485,12 @@ fn cached_diff_miss_does_not_calculate_a_patch() {
         .join(&blob_oid[..2])
         .join(&blob_oid[2..]);
     std::fs::remove_file(object_path).unwrap();
-    let cache_path = repo
-        .path()
-        .join(".git")
-        .join("stax")
-        .join("tui-diff-cache.json");
     let session = RepositorySession::open(repo.path()).unwrap();
 
     let cached = session.cached_diff("feature", "main").unwrap();
 
     assert_eq!(cached, None);
-    assert!(!cache_path.exists());
+    assert!(diff_cache_entries(&repo).is_empty());
 }
 
 #[test]
@@ -515,12 +523,7 @@ fn diff_failure_after_ref_validation_is_not_cached_as_empty() {
         .join(&blob_oid[..2])
         .join(&blob_oid[2..]);
     std::fs::remove_file(&object_path).unwrap();
-    let cache_path = repo
-        .path()
-        .join(".git")
-        .join("stax")
-        .join("tui-diff-cache.json");
-    assert!(!cache_path.exists());
+    assert!(diff_cache_entries(&repo).is_empty());
     let session = RepositorySession::open(repo.path()).unwrap();
 
     let error = session.diff("feature", "main").unwrap_err();
@@ -531,5 +534,5 @@ fn diff_failure_after_ref_validation_is_not_cached_as_empty() {
     assert!(message.contains("main"));
     assert!(message.contains("exit status"));
     assert!(message.contains("fatal:"));
-    assert!(!cache_path.exists());
+    assert!(diff_cache_entries(&repo).is_empty());
 }
