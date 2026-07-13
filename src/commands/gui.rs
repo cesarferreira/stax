@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BUNDLE_ID: &str = "dev.stax.Stax";
+const BUNDLE_ID: &str = "com.cesarferreira.stax";
 const DEFAULT_OPEN: &str = "/usr/bin/open";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +67,7 @@ fn run_with_runner(
 
     runner.run(&program, &args).with_context(|| {
         format!(
-            "failed to launch unsigned developer preview Stax.app with {}; run `make install-gui-app` to install $HOME/Applications/Stax.app",
+            "failed to launch Stax.app with {}; install it from GitHub Releases or run `make install-gui-app` for a local contributor build at $HOME/Applications/Stax.app",
             program.display()
         )
     })
@@ -92,7 +92,7 @@ fn open_executable() -> Result<PathBuf> {
             let path = PathBuf::from(value);
             if !path.is_absolute() {
                 anyhow::bail!(
-                    "STAX_GUI_OPEN_EXECUTABLE must be an absolute path; run `make install-gui-app` to install the unsigned developer preview"
+                    "STAX_GUI_OPEN_EXECUTABLE must be an absolute path; install Stax.app from GitHub Releases or run `make install-gui-app` for a local contributor build"
                 );
             }
             Ok(path)
@@ -171,7 +171,7 @@ mod tests {
             vec![
                 OsString::from("-n"),
                 OsString::from("-b"),
-                OsString::from("dev.stax.Stax"),
+                OsString::from("com.cesarferreira.stax"),
                 OsString::from("--args"),
                 path.canonicalize().unwrap().into_os_string(),
             ]
@@ -188,7 +188,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("make install-gui-app"));
-        assert!(error.to_string().contains("unsigned developer preview"));
+        assert!(error.to_string().contains("GitHub Releases"));
     }
 
     #[test]

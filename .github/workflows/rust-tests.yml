@@ -92,6 +92,8 @@ jobs:
         run: make gui-app-test
       - name: Build developer app bundle
         run: make gui-app
+      - name: Test GUI release packaging
+        run: make gui-release-test
 
   unit-tests:
     name: Unit Tests

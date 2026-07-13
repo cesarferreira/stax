@@ -3,7 +3,7 @@ use super::PaneMarkers;
 use super::text_input::BranchNameInput;
 use super::{
     AppView, ControlKind, activate_control,
-    app::{CreateBranch, RedoLatest, SubmitStack, UndoLatest, mouse_control_button},
+    app::{CreateBranch, RedoLatest, SubmitStack, UndoLatest},
     changes_pane, control_button, inspector_pane, stack_pane,
 };
 use crate::preferences::WorkspacePreferences;
@@ -396,7 +396,7 @@ impl WorkspaceView {
             open
         };
 
-        let create = mouse_control_button(
+        let create = control_button(
             "toolbar-create-branch",
             control_label("Create Branch", &actions.create),
             ControlKind::Secondary,
@@ -411,7 +411,7 @@ impl WorkspaceView {
             create
         };
 
-        let submit = mouse_control_button(
+        let submit = control_button(
             "toolbar-submit-stack",
             control_label("Submit Stack", &actions.submit),
             ControlKind::Primary,

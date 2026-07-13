@@ -248,7 +248,7 @@ pub(crate) enum Commands {
     #[command(name = "__update-check", hide = true)]
     UpdateCheck,
 
-    /// Launch the native Stax developer preview
+    /// Launch the native Stax macOS app
     Gui(GuiArgs),
 
     /// Generate shell completions
