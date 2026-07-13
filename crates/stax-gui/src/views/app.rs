@@ -2329,11 +2329,7 @@ impl Render for AppView {
             .size_full()
             .relative()
             .border_1()
-            .border_color(if self.focus_handle.is_focused(window) {
-                theme.focus
-            } else {
-                theme.border
-            })
+            .border_color(theme.border)
             .font_family(SYSTEM_UI_FONT)
             .bg(theme.window)
             .text_color(theme.text)

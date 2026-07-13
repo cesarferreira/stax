@@ -97,24 +97,30 @@ fn render_selected(
     cx: &mut gpui::Context<super::AppView>,
 ) -> Div {
     div()
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap_4()
         .p_4()
         .child(
             div()
+                .w_full()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .child(
                     div()
+                        .min_w_0()
                         .font_family(MONOSPACE_FONT)
-                        .text_base()
+                        .text_sm()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(branch.name.clone()),
                 )
                 .child(
                     div()
+                        .min_w_0()
                         .font_family(MONOSPACE_FONT)
                         .text_xs()
                         .text_color(theme.text_muted)
