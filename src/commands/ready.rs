@@ -365,23 +365,32 @@ pub(crate) async fn fetch_row_for_branch(
         .await
         .with_context(|| format!("Failed to fetch live readiness for PR #{}", pr_number))?;
 
+    let ci_revision = status.head_sha.clone();
     let ci_summary = CiSummary::from_checks(status.ci_status.clone(), &[]);
     let mut row = PrReadinessRow::from_status(&branch.name, status, ci_summary);
     row.pr_url = Some(remote.pr_url(pr_number));
-    let _ = warm_caches_for_ready_row(repo, &row);
+    let _ = warm_caches_for_ready_row(repo, &row, &ci_revision);
     Ok(Some(row))
 }
 
-pub(crate) fn warm_caches_for_ready_row(repo: &GitRepo, row: &PrReadinessRow) -> Result<()> {
-    let git_dir = repo.git_dir()?;
-    let mut cache = CiCache::load(git_dir);
-    cache.update(
-        &row.branch,
-        Some(row.ci_status.clone()),
-        Some(ready_row_pr_cache_state(row)),
-    );
-    cache.mark_refreshed();
-    cache.save(git_dir)?;
+pub(crate) fn warm_caches_for_ready_row(
+    repo: &GitRepo,
+    row: &PrReadinessRow,
+    ci_revision: &str,
+) -> Result<()> {
+    let cache_dir = repo.common_git_dir()?;
+    let pr_state = ready_row_pr_cache_state(row);
+    if ci_revision.trim().is_empty() {
+        CiCache::update_branch_pr(&cache_dir, &row.branch, Some(pr_state))?;
+    } else {
+        CiCache::refresh_branch_states(
+            &cache_dir,
+            &row.branch,
+            ci_revision,
+            Some(row.ci_status.clone()),
+            Some(pr_state),
+        )?;
+    }
 
     if let Some(mut meta) = BranchMetadata::read(repo.inner(), &row.branch)? {
         meta.pr_info = Some(PrInfo {
@@ -960,10 +969,11 @@ mod tests {
             CiSummary::passed(),
         );
 
-        warm_caches_for_ready_row(&repo, &row).expect("warm cache");
+        warm_caches_for_ready_row(&repo, &row, "abc123").expect("warm cache");
 
-        let cache = CiCache::load(repo.git_dir().expect("git dir"));
+        let cache = CiCache::load(&repo.common_git_dir().expect("common git dir"));
         let entry = cache.branches.get(branch).expect("cache entry");
+        assert_eq!(entry.ci_revision.as_deref(), Some("abc123"));
         assert_eq!(entry.ci_state.as_deref(), Some("success"));
         assert_eq!(entry.pr_state.as_deref(), Some("draft"));
 
@@ -974,5 +984,43 @@ mod tests {
         assert_eq!(pr.number, 123);
         assert_eq!(pr.state, "open");
         assert_eq!(pr.is_draft, Some(true));
+    }
+
+    #[test]
+    fn ready_row_from_linked_worktree_warms_the_common_ci_cache() {
+        let (temp, main_repo) = temp_repo();
+        let linked_path = temp.path().join("linked");
+        run_git(
+            temp.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature/linked-cache",
+                linked_path.to_str().unwrap(),
+            ],
+        );
+        let linked_repo = GitRepo::open_from_path(&linked_path).expect("open linked repo");
+        let row = PrReadinessRow::from_status(
+            "feature/linked-cache",
+            status(|s| {
+                s.state = "open".to_string();
+                s.is_draft = true;
+                s.ci_status = CiStatus::Success;
+            }),
+            CiSummary::passed(),
+        );
+
+        warm_caches_for_ready_row(&linked_repo, &row, "abc123").expect("warm linked cache");
+
+        let cache = CiCache::load(&main_repo.common_git_dir().expect("common git dir"));
+        let entry = cache
+            .branches
+            .get("feature/linked-cache")
+            .expect("common cache entry");
+        assert_eq!(entry.ci_revision.as_deref(), Some("abc123"));
+        assert_eq!(entry.ci_state.as_deref(), Some("success"));
+        assert_eq!(entry.pr_state.as_deref(), Some("draft"));
+        assert!(cache.last_refresh > 0);
     }
 }

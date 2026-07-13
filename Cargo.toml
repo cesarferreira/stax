@@ -1,13 +1,26 @@
-[package]
-name = "stax"
+[workspace]
+members = [".", "crates/stax-gui"]
+default-members = ["."]
+resolver = "2"
+
+[workspace.package]
 version = "0.94.0"
 edition = "2024"
 rust-version = "1.96"
-default-run = "stax"
-description = "Fast stacked Git branches and PRs"
 license = "MIT"
 authors = ["Cesar Ferreira"]
 repository = "https://github.com/cesarferreira/stax"
+
+[package]
+name = "stax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+default-run = "stax"
+description = "Fast stacked Git branches and PRs"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 # Integration tests are consolidated into a single binary (tests/all_tests.rs)
 # instead of one binary per file. Linking ~50 separate test binaries (each
 # statically linking the whole stax lib + octocrab/git2/ratatui) dominated build
@@ -82,7 +95,7 @@ chrono = "0.4"
 update-informer = "1"
 
 # Advisory file locking for the warm-worktree pool manifest
-fs4 = "0.13"
+fs4 = "1.1.0"
 
 # Temp files
 tempfile = "3"

@@ -1,14 +1,130 @@
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use anyhow::{Context, Result};
+use fs4::FileExt;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tempfile::NamedTempFile;
 
 const MAX_TUI_DIFF_CACHE_ENTRIES: usize = 128;
 
+enum LockMode {
+    Shared,
+    Exclusive,
+}
+
+struct CacheLock {
+    file: File,
+}
+
+impl Drop for CacheLock {
+    fn drop(&mut self) {
+        let _ = <File as FileExt>::unlock(&self.file);
+    }
+}
+
+fn acquire_cache_lock(cache_path: &Path, mode: LockMode) -> Result<CacheLock> {
+    let parent = cache_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create cache directory {}", parent.display()))?;
+    let file_name = cache_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("cache");
+    let lock_path = parent.join(format!(".{file_name}.lock"));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open cache lock {}", lock_path.display()))?;
+    match mode {
+        LockMode::Shared => <File as FileExt>::lock_shared(&file),
+        LockMode::Exclusive => <File as FileExt>::lock(&file),
+    }
+    .with_context(|| format!("failed to lock cache {}", cache_path.display()))?;
+    Ok(CacheLock { file })
+}
+
+fn load_json_unlocked<T>(path: &Path) -> Result<T>
+where
+    T: DeserializeOwned + Default,
+{
+    let contents = match fs::read(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read cache {}", path.display()));
+        }
+    };
+    serde_json::from_slice(&contents)
+        .with_context(|| format!("failed to parse cache {}", path.display()))
+}
+
+fn persist_json_atomic<T>(path: &Path, value: &T) -> Result<()>
+where
+    T: Serialize,
+{
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to create temporary cache in {}", parent.display()))?;
+    serde_json::to_writer_pretty(temporary.as_file_mut(), value)
+        .with_context(|| format!("failed to serialize cache {}", path.display()))?;
+    temporary
+        .as_file_mut()
+        .write_all(b"\n")
+        .with_context(|| format!("failed to write cache {}", path.display()))?;
+    temporary
+        .as_file_mut()
+        .flush()
+        .with_context(|| format!("failed to flush cache {}", path.display()))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("failed to sync cache {}", path.display()))?;
+    let persisted = temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to atomically replace cache {}", path.display()))?;
+    drop(persisted);
+    sync_parent_directory(parent)?;
+    Ok(())
+}
+
+fn sync_parent_directory(parent: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let directory = File::open(parent)
+            .with_context(|| format!("failed to open cache directory {}", parent.display()))?;
+        match directory.sync_all() {
+            Ok(()) => {}
+            #[cfg(target_os = "macos")]
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to sync cache directory {}", parent.display())
+                });
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = parent;
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BranchCacheEntry {
+    #[serde(default)]
+    pub ci_revision: Option<String>,
     pub ci_state: Option<String>,
     pub pr_state: Option<String>,
     pub updated_at: u64,
@@ -29,35 +145,98 @@ impl CiCache {
 
     /// Load cache from disk
     pub fn load(git_dir: &std::path::Path) -> Self {
-        let path = Self::cache_path(git_dir);
-        if !path.exists() {
-            return Self::default();
-        }
-
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        Self::load_strict(git_dir).unwrap_or_default()
     }
 
-    /// Save cache to disk
+    pub(crate) fn load_strict(git_dir: &std::path::Path) -> Result<Self> {
+        let path = Self::cache_path(git_dir);
+        let _lock = acquire_cache_lock(&path, LockMode::Shared)?;
+        load_json_unlocked(&path)
+    }
+
+    /// Persist an exact snapshot for isolated tests.
+    #[cfg(test)]
     pub fn save(&self, git_dir: &std::path::Path) -> Result<()> {
         let path = Self::cache_path(git_dir);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let json = serde_json::to_string_pretty(self)?;
-        fs::write(&path, json)?;
-        Ok(())
+        let _lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+        persist_json_atomic(&path, self)
     }
 
-    /// Get cached CI state for a branch
-    pub fn get_ci_state(&self, branch: &str) -> Option<String> {
-        self.branches.get(branch).and_then(|e| e.ci_state.clone())
+    fn transaction(git_dir: &std::path::Path, update: impl FnOnce(&mut Self)) -> Result<()> {
+        let path = Self::cache_path(git_dir);
+        let _lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+        let mut stored = load_json_unlocked::<Self>(&path)?;
+        update(&mut stored);
+        persist_json_atomic(&path, &stored)
     }
 
-    /// Update cache entry for a branch
-    pub fn update(&mut self, branch: &str, ci_state: Option<String>, pr_state: Option<String>) {
+    /// Atomically update one branch while preserving all other cached entries.
+    pub(crate) fn update_branch_ci(
+        git_dir: &std::path::Path,
+        branch: &str,
+        revision: &str,
+        ci_state: Option<String>,
+    ) -> Result<()> {
+        Self::transaction(git_dir, |stored| {
+            stored.update_ci(branch, revision, ci_state)
+        })
+    }
+
+    /// Atomically update one branch's pull-request state while preserving CI.
+    pub(crate) fn update_branch_pr(
+        git_dir: &std::path::Path,
+        branch: &str,
+        pr_state: Option<String>,
+    ) -> Result<()> {
+        Self::transaction(git_dir, |stored| stored.update_pr(branch, pr_state))
+    }
+
+    /// Atomically refresh both live fields and the cache timestamp for one branch.
+    pub(crate) fn refresh_branch_states(
+        git_dir: &std::path::Path,
+        branch: &str,
+        revision: &str,
+        ci_state: Option<String>,
+        pr_state: Option<String>,
+    ) -> Result<()> {
+        Self::transaction(git_dir, |stored| {
+            stored.update(branch, revision, ci_state, pr_state);
+            stored.mark_refreshed();
+        })
+    }
+
+    /// Atomically replace the refreshed branch set in one cache transaction.
+    pub(crate) fn refresh_branches(
+        git_dir: &std::path::Path,
+        updates: &[(String, String, Option<String>, Option<String>)],
+        valid_branches: &[String],
+    ) -> Result<()> {
+        Self::transaction(git_dir, |stored| {
+            for (branch, revision, ci_state, pr_state) in updates {
+                stored.update(branch, revision, ci_state.clone(), pr_state.clone());
+            }
+            stored.cleanup(valid_branches);
+            stored.mark_refreshed();
+        })
+    }
+
+    /// Get cached CI state only when it belongs to the branch's current commit.
+    pub fn get_ci_state_for_revision(&self, branch: &str, revision: &str) -> Option<String> {
+        self.branches.get(branch).and_then(|entry| {
+            (entry.ci_revision.as_deref() == Some(revision))
+                .then(|| entry.ci_state.clone())
+                .flatten()
+        })
+    }
+
+    /// Update both cached fields for one exact branch revision.
+    pub fn update(
+        &mut self,
+        branch: &str,
+        revision: &str,
+        ci_state: Option<String>,
+        pr_state: Option<String>,
+    ) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -66,11 +245,43 @@ impl CiCache {
         self.branches.insert(
             branch.to_string(),
             BranchCacheEntry {
+                ci_revision: Some(revision.to_string()),
                 ci_state,
                 pr_state,
                 updated_at: now,
             },
         );
+    }
+
+    /// Update only CI state while retaining any cached pull-request state.
+    pub fn update_ci(&mut self, branch: &str, revision: &str, ci_state: Option<String>) {
+        let pr_state = self
+            .branches
+            .get(branch)
+            .and_then(|entry| entry.pr_state.clone());
+        self.update(branch, revision, ci_state, pr_state);
+    }
+
+    /// Update only pull-request state while retaining cached CI and its revision.
+    fn update_pr(&mut self, branch: &str, pr_state: Option<String>) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if let Some(entry) = self.branches.get_mut(branch) {
+            entry.pr_state = pr_state;
+            entry.updated_at = now;
+        } else {
+            self.branches.insert(
+                branch.to_string(),
+                BranchCacheEntry {
+                    ci_revision: None,
+                    ci_state: None,
+                    pr_state,
+                    updated_at: now,
+                },
+            );
+        }
     }
 
     /// Mark cache as refreshed
@@ -133,26 +344,48 @@ impl TuiDiffCache {
         format!("v1:{parent_oid}:{branch_oid}:{merge_base_oid}")
     }
 
+    #[cfg(test)]
     pub fn load(git_dir: &std::path::Path) -> Self {
-        let path = Self::cache_path(git_dir);
-        if !path.exists() {
-            return Self::default();
-        }
-
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        Self::load_strict(git_dir).unwrap_or_default()
     }
 
+    pub(crate) fn load_strict(git_dir: &std::path::Path) -> Result<Self> {
+        let path = Self::cache_path(git_dir);
+        let _lock = acquire_cache_lock(&path, LockMode::Shared)?;
+        load_json_unlocked(&path)
+    }
+
+    #[cfg(test)]
     pub fn save(&self, git_dir: &std::path::Path) -> Result<()> {
         let path = Self::cache_path(git_dir);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+        let _lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+        let mut stored = load_json_unlocked::<Self>(&path)?;
+        for (key, entry) in &self.entries {
+            stored.entries.insert(key.clone(), entry.clone());
         }
-        let json = serde_json::to_string_pretty(self)?;
-        fs::write(&path, json)?;
-        Ok(())
+        stored.prune_old_entries();
+        persist_json_atomic(&path, &stored)
+    }
+
+    pub(crate) fn read_persisted(
+        git_dir: &std::path::Path,
+        key: &str,
+    ) -> Result<Option<DiskCachedDiff>> {
+        let cache = Self::load_strict(git_dir)?;
+        Ok(cache.get(key).cloned())
+    }
+
+    /// Atomically insert one diff while preserving all other cached entries.
+    pub(crate) fn insert_persisted(
+        git_dir: &std::path::Path,
+        key: String,
+        diff: DiskCachedDiff,
+    ) -> Result<()> {
+        let path = Self::cache_path(git_dir);
+        let _lock = acquire_cache_lock(&path, LockMode::Exclusive)?;
+        let mut stored = load_json_unlocked::<Self>(&path)?;
+        stored.insert(key, diff);
+        persist_json_atomic(&path, &stored)
     }
 
     pub fn get(&self, key: &str) -> Option<&DiskCachedDiff> {
@@ -288,7 +521,19 @@ fn current_unix_time() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use tempfile::TempDir;
+
+    fn disk_diff(content: &str) -> DiskCachedDiff {
+        DiskCachedDiff {
+            stat: Vec::new(),
+            lines: vec![DiskDiffLine {
+                content: content.to_string(),
+                line_type: "context".to_string(),
+            }],
+        }
+    }
 
     #[test]
     fn test_cache_path() {
@@ -318,6 +563,7 @@ mod tests {
         let mut cache = CiCache::default();
         cache.update(
             "feature-1",
+            "revision-1",
             Some("success".to_string()),
             Some("OPEN".to_string()),
         );
@@ -326,7 +572,7 @@ mod tests {
         let loaded = CiCache::load(temp.path());
         assert!(loaded.branches.contains_key("feature-1"));
         assert_eq!(
-            loaded.get_ci_state("feature-1"),
+            loaded.get_ci_state_for_revision("feature-1", "revision-1"),
             Some("success".to_string())
         );
     }
@@ -336,24 +582,105 @@ mod tests {
         let mut cache = CiCache::default();
         cache.update(
             "branch-1",
+            "revision-1",
             Some("pending".to_string()),
             Some("DRAFT".to_string()),
         );
 
         assert!(cache.branches.contains_key("branch-1"));
         let entry = cache.branches.get("branch-1").unwrap();
+        assert_eq!(entry.ci_revision.as_deref(), Some("revision-1"));
         assert_eq!(entry.ci_state, Some("pending".to_string()));
         assert_eq!(entry.pr_state, Some("DRAFT".to_string()));
         assert!(entry.updated_at > 0);
     }
 
     #[test]
+    fn updating_ci_preserves_the_cached_pull_request_state() {
+        let mut cache = CiCache::default();
+        cache.update(
+            "branch-1",
+            "revision-1",
+            Some("pending".to_string()),
+            Some("OPEN".to_string()),
+        );
+
+        cache.update_ci("branch-1", "revision-2", Some("success".to_string()));
+
+        let entry = cache.branches.get("branch-1").unwrap();
+        assert_eq!(entry.ci_revision.as_deref(), Some("revision-2"));
+        assert_eq!(entry.ci_state.as_deref(), Some("success"));
+        assert_eq!(entry.pr_state.as_deref(), Some("OPEN"));
+    }
+
+    #[test]
     fn test_cache_get_ci_state() {
         let mut cache = CiCache::default();
-        assert_eq!(cache.get_ci_state("nonexistent"), None);
+        assert_eq!(
+            cache.get_ci_state_for_revision("nonexistent", "revision"),
+            None
+        );
 
-        cache.update("feature", Some("success".to_string()), None);
-        assert_eq!(cache.get_ci_state("feature"), Some("success".to_string()));
+        cache.update("feature", "revision", Some("success".to_string()), None);
+        assert_eq!(
+            cache.get_ci_state_for_revision("feature", "revision"),
+            Some("success".to_string())
+        );
+    }
+
+    #[test]
+    fn legacy_ci_cache_entries_are_not_current_for_any_revision() {
+        let entry: BranchCacheEntry =
+            serde_json::from_str(r#"{"ci_state":"success","pr_state":"OPEN","updated_at":123}"#)
+                .unwrap();
+        let mut cache = CiCache::default();
+        cache.branches.insert("feature".to_string(), entry);
+
+        assert_eq!(cache.get_ci_state_for_revision("feature", "deadbeef"), None);
+        assert_eq!(
+            cache
+                .branches
+                .get("feature")
+                .and_then(|entry| entry.ci_revision.as_deref()),
+            None
+        );
+    }
+
+    #[test]
+    fn ci_cache_lookup_requires_the_exact_commit_revision() {
+        let mut cache = CiCache::default();
+        cache.update_ci("feature", "revision-a", Some("success".to_string()));
+
+        assert_eq!(
+            cache
+                .get_ci_state_for_revision("feature", "revision-a")
+                .as_deref(),
+            Some("success")
+        );
+        assert_eq!(
+            cache.get_ci_state_for_revision("feature", "revision-b"),
+            None
+        );
+    }
+
+    #[test]
+    fn pull_request_only_transaction_preserves_ci_revision_and_state() {
+        let temp = TempDir::new().unwrap();
+        CiCache::update_branch_ci(
+            temp.path(),
+            "feature",
+            "revision-a",
+            Some("success".to_string()),
+        )
+        .unwrap();
+
+        CiCache::update_branch_pr(temp.path(), "feature", Some("DRAFT".to_string())).unwrap();
+
+        let cache = CiCache::load_strict(temp.path()).unwrap();
+        let entry = cache.branches.get("feature").unwrap();
+        assert_eq!(entry.ci_revision.as_deref(), Some("revision-a"));
+        assert_eq!(entry.ci_state.as_deref(), Some("success"));
+        assert_eq!(entry.pr_state.as_deref(), Some("DRAFT"));
     }
 
     #[test]
@@ -366,10 +693,10 @@ mod tests {
     #[test]
     fn test_cache_cleanup() {
         let mut cache = CiCache::default();
-        cache.update("keep-1", Some("success".to_string()), None);
-        cache.update("keep-2", Some("success".to_string()), None);
-        cache.update("remove-1", Some("failure".to_string()), None);
-        cache.update("remove-2", Some("pending".to_string()), None);
+        cache.update("keep-1", "revision", Some("success".to_string()), None);
+        cache.update("keep-2", "revision", Some("success".to_string()), None);
+        cache.update("remove-1", "revision", Some("failure".to_string()), None);
+        cache.update("remove-2", "revision", Some("pending".to_string()), None);
 
         let valid = vec!["keep-1".to_string(), "keep-2".to_string()];
         cache.cleanup(&valid);
@@ -383,8 +710,8 @@ mod tests {
     #[test]
     fn test_cache_cleanup_empty_valid() {
         let mut cache = CiCache::default();
-        cache.update("branch-1", Some("success".to_string()), None);
-        cache.update("branch-2", Some("success".to_string()), None);
+        cache.update("branch-1", "revision", Some("success".to_string()), None);
+        cache.update("branch-2", "revision", Some("success".to_string()), None);
 
         cache.cleanup(&[]);
         assert!(cache.branches.is_empty());
@@ -393,6 +720,7 @@ mod tests {
     #[test]
     fn test_branch_cache_entry_serialization() {
         let entry = BranchCacheEntry {
+            ci_revision: Some("revision-1".to_string()),
             ci_state: Some("success".to_string()),
             pr_state: Some("OPEN".to_string()),
             updated_at: 1234567890,
@@ -403,6 +731,7 @@ mod tests {
         assert!(json.contains("1234567890"));
 
         let deserialized: BranchCacheEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.ci_revision, entry.ci_revision);
         assert_eq!(deserialized.ci_state, entry.ci_state);
         assert_eq!(deserialized.pr_state, entry.pr_state);
         assert_eq!(deserialized.updated_at, entry.updated_at);
@@ -413,6 +742,7 @@ mod tests {
         let mut cache = CiCache::default();
         cache.update(
             "branch",
+            "revision",
             Some("success".to_string()),
             Some("MERGED".to_string()),
         );
@@ -423,5 +753,307 @@ mod tests {
 
         assert_eq!(deserialized.branches.len(), 1);
         assert!(deserialized.last_refresh > 0);
+    }
+
+    #[test]
+    fn concurrent_ci_transactions_preserve_different_branches() {
+        let temp = TempDir::new().unwrap();
+        let root = Arc::new(temp.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(3));
+        let writers = [("feature-a", "success"), ("feature-b", "failure")]
+            .into_iter()
+            .map(|(branch, status)| {
+                let root = Arc::clone(&root);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    CiCache::update_branch_ci(
+                        &root,
+                        branch,
+                        &format!("revision-{branch}"),
+                        Some(status.to_string()),
+                    )
+                    .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        let cache = CiCache::load_strict(&root).unwrap();
+        assert_eq!(
+            cache
+                .get_ci_state_for_revision("feature-a", "revision-feature-a")
+                .as_deref(),
+            Some("success")
+        );
+        assert_eq!(
+            cache
+                .get_ci_state_for_revision("feature-b", "revision-feature-b")
+                .as_deref(),
+            Some("failure")
+        );
+    }
+
+    #[test]
+    fn stale_snapshot_writer_cannot_revert_newer_ci_or_pr_fields() {
+        let temp = TempDir::new().unwrap();
+        CiCache::refresh_branch_states(
+            temp.path(),
+            "branch-a",
+            "revision-a-old",
+            Some("pending".into()),
+            Some("DRAFT".into()),
+        )
+        .unwrap();
+        CiCache::refresh_branch_states(
+            temp.path(),
+            "branch-b",
+            "revision-b-old",
+            Some("pending".into()),
+            Some("DRAFT".into()),
+        )
+        .unwrap();
+        let mut stale = CiCache::load_strict(temp.path()).unwrap();
+
+        CiCache::refresh_branch_states(
+            temp.path(),
+            "branch-a",
+            "revision-a-new",
+            Some("success".into()),
+            Some("OPEN".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            stale
+                .branches
+                .get("branch-a")
+                .and_then(|entry| entry.ci_state.as_deref()),
+            Some("pending")
+        );
+
+        let stale_branch_b = stale.branches.get_mut("branch-b").unwrap();
+        stale_branch_b.ci_state = Some("failure".into());
+        stale_branch_b.pr_state = Some("MERGED".into());
+        let stale_branch_b_ci = stale_branch_b.ci_state.clone();
+        let stale_branch_b_pr = stale_branch_b.pr_state.clone();
+        CiCache::update_branch_ci(temp.path(), "branch-b", "revision-b-old", stale_branch_b_ci)
+            .unwrap();
+        CiCache::update_branch_pr(temp.path(), "branch-b", stale_branch_b_pr).unwrap();
+
+        let current = CiCache::load_strict(temp.path()).unwrap();
+        let branch_a = current.branches.get("branch-a").unwrap();
+        assert_eq!(branch_a.ci_state.as_deref(), Some("success"));
+        assert_eq!(branch_a.pr_state.as_deref(), Some("OPEN"));
+        let branch_b = current.branches.get("branch-b").unwrap();
+        assert_eq!(branch_b.ci_state.as_deref(), Some("failure"));
+        assert_eq!(branch_b.pr_state.as_deref(), Some("MERGED"));
+    }
+
+    #[test]
+    fn linked_worktrees_share_ci_cache_and_preserve_concurrent_field_updates() {
+        let temp = TempDir::new().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let signature = git2::Signature::now("Test User", "test@example.com").unwrap();
+        let mut index = repo.index().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+            .unwrap();
+        drop(tree);
+        drop(index);
+        let linked_path = temp.path().join("linked");
+        repo.worktree("linked", &linked_path, None).unwrap();
+        drop(repo);
+
+        let main_repo = crate::git::GitRepo::open_from_path(temp.path()).unwrap();
+        let linked_repo = crate::git::GitRepo::open_from_path(&linked_path).unwrap();
+        let main_cache_dir = main_repo.common_git_dir().unwrap();
+        let linked_cache_dir = linked_repo.common_git_dir().unwrap();
+        assert_eq!(main_cache_dir, linked_cache_dir);
+
+        CiCache::update_branch_ci(
+            &main_cache_dir,
+            "main-write",
+            "main-revision",
+            Some("success".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            CiCache::load_strict(&linked_cache_dir)
+                .unwrap()
+                .get_ci_state_for_revision("main-write", "main-revision")
+                .as_deref(),
+            Some("success")
+        );
+        CiCache::update_branch_pr(&linked_cache_dir, "linked-write", Some("DRAFT".into())).unwrap();
+        assert_eq!(
+            CiCache::load_strict(&main_cache_dir)
+                .unwrap()
+                .branches
+                .get("linked-write")
+                .and_then(|entry| entry.pr_state.as_deref()),
+            Some("DRAFT")
+        );
+
+        let main_cache_dir = Arc::new(main_cache_dir);
+        let linked_cache_dir = Arc::new(linked_cache_dir);
+        let barrier = Arc::new(Barrier::new(3));
+        let ci_writer = {
+            let cache_dir = Arc::clone(&main_cache_dir);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                CiCache::update_branch_ci(
+                    &cache_dir,
+                    "shared",
+                    "shared-revision",
+                    Some("success".into()),
+                )
+                .unwrap();
+            })
+        };
+        let pr_writer = {
+            let cache_dir = Arc::clone(&linked_cache_dir);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                CiCache::update_branch_pr(&cache_dir, "shared", Some("OPEN".into())).unwrap();
+            })
+        };
+
+        barrier.wait();
+        ci_writer.join().unwrap();
+        pr_writer.join().unwrap();
+
+        let current = CiCache::load_strict(&main_cache_dir).unwrap();
+        let shared = current.branches.get("shared").unwrap();
+        assert_eq!(shared.ci_state.as_deref(), Some("success"));
+        assert_eq!(shared.pr_state.as_deref(), Some("OPEN"));
+    }
+
+    #[test]
+    fn concurrent_diff_transactions_preserve_different_keys() {
+        let temp = TempDir::new().unwrap();
+        let root = Arc::new(temp.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(3));
+        let writers = [("key-a", "patch-a"), ("key-b", "patch-b")]
+            .into_iter()
+            .map(|(key, content)| {
+                let root = Arc::clone(&root);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    TuiDiffCache::insert_persisted(&root, key.to_string(), disk_diff(content))
+                        .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        let cache = TuiDiffCache::load_strict(&root).unwrap();
+        assert_eq!(cache.get("key-a"), Some(&disk_diff("patch-a")));
+        assert_eq!(cache.get("key-b"), Some(&disk_diff("patch-b")));
+    }
+
+    #[test]
+    fn malformed_ci_cache_is_not_clobbered_by_transaction() {
+        let temp = TempDir::new().unwrap();
+        let path = CiCache::cache_path(temp.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let malformed = b"{\"branches\":";
+        fs::write(&path, malformed).unwrap();
+
+        let error =
+            CiCache::update_branch_ci(temp.path(), "feature", "revision", Some("success".into()))
+                .unwrap_err();
+
+        assert!(error.to_string().contains("parse"));
+        assert_eq!(fs::read(path).unwrap(), malformed);
+    }
+
+    #[test]
+    fn malformed_diff_cache_is_not_clobbered_by_transaction() {
+        let temp = TempDir::new().unwrap();
+        let path = TuiDiffCache::cache_path(temp.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let malformed = b"{\"entries\":";
+        fs::write(&path, malformed).unwrap();
+
+        let error = TuiDiffCache::insert_persisted(temp.path(), "key".into(), disk_diff("patch"))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("parse"));
+        assert_eq!(fs::read(path).unwrap(), malformed);
+    }
+
+    #[test]
+    fn shared_lock_readers_never_observe_partial_ci_json() {
+        let temp = TempDir::new().unwrap();
+        CiCache::update_branch_ci(temp.path(), "seed", "seed-revision", Some("pending".into()))
+            .unwrap();
+        let root = Arc::new(temp.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(2));
+        let writer_root = Arc::clone(&root);
+        let writer_barrier = Arc::clone(&barrier);
+        let writer = thread::spawn(move || {
+            writer_barrier.wait();
+            for index in 0..100 {
+                CiCache::update_branch_ci(
+                    &writer_root,
+                    &format!("branch-{index}"),
+                    &format!("revision-{index}"),
+                    Some("success".into()),
+                )
+                .unwrap();
+            }
+        });
+
+        barrier.wait();
+        for _ in 0..100 {
+            let cache = CiCache::load_strict(&root).unwrap();
+            assert_eq!(
+                cache
+                    .get_ci_state_for_revision("seed", "seed-revision")
+                    .as_deref(),
+                Some("pending")
+            );
+        }
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn shared_lock_readers_never_observe_partial_diff_json() {
+        let temp = TempDir::new().unwrap();
+        TuiDiffCache::insert_persisted(temp.path(), "seed".into(), disk_diff("seed")).unwrap();
+        let root = Arc::new(temp.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(2));
+        let writer_root = Arc::clone(&root);
+        let writer_barrier = Arc::clone(&barrier);
+        let writer = thread::spawn(move || {
+            writer_barrier.wait();
+            for index in 0..100 {
+                TuiDiffCache::insert_persisted(
+                    &writer_root,
+                    format!("key-{index}"),
+                    disk_diff(&format!("patch-{index}")),
+                )
+                .unwrap();
+            }
+        });
+
+        barrier.wait();
+        for _ in 0..100 {
+            let cache = TuiDiffCache::load_strict(&root).unwrap();
+            assert_eq!(cache.get("seed"), Some(&disk_diff("seed")));
+        }
+        writer.join().unwrap();
     }
 }

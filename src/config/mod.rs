@@ -31,6 +31,18 @@ pub struct Config {
     pub restack: RestackConfig,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct AutomaticRepoConfig {
+    #[serde(default)]
+    remote: AutomaticRepoRemoteConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct AutomaticRepoRemoteConfig {
+    #[serde(default)]
+    name: Option<String>,
+}
+
 /// User-configurable restack behaviour.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RestackConfig {
@@ -518,6 +530,57 @@ impl Config {
         }
     }
 
+    /// Load global config with the selected repository's `stax.toml` overlay.
+    ///
+    /// `STAX_CONFIG_DIR` intentionally keeps its existing test-isolation
+    /// behavior and disables repository overlays.
+    pub(crate) fn load_for_repo(root: &Path) -> Result<Self> {
+        let path = Self::path()?;
+        let config = Self::load_path_or_default(&path)?;
+        if std::env::var("STAX_CONFIG_DIR").is_ok() {
+            return Ok(config);
+        }
+
+        let repo_path = root.join("stax.toml");
+        if repo_path.exists() {
+            Self::load_with_overlay(config, &repo_path)
+        } else {
+            Ok(config)
+        }
+    }
+
+    /// Load config for automatic credential-bearing repository hydration.
+    ///
+    /// Repository-local config may select the non-secret Git remote name, but
+    /// network destinations, provider selection, and auth settings are loaded
+    /// only from the trusted global config.
+    pub(crate) fn load_for_automatic_network(root: &Path) -> Result<Self> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        if std::env::var("STAX_CONFIG_DIR").is_ok() {
+            return Ok(config);
+        }
+
+        let repo_path = root.join("stax.toml");
+        if !repo_path.exists() {
+            return Ok(config);
+        }
+
+        let repo_content = fs::read_to_string(&repo_path)
+            .with_context(|| format!("Failed to read repo config {}", repo_path.display()))?;
+        let repo_config: AutomaticRepoConfig = toml::from_str(&repo_content)
+            .with_context(|| format!("Failed to parse repo config {}", repo_path.display()))?;
+        if let Some(remote_name) = repo_config
+            .remote
+            .name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+        {
+            config.remote.name = remote_name;
+        }
+        Ok(config)
+    }
+
     fn load_path_or_default(path: &Path) -> Result<Self> {
         if path.exists() {
             let content = fs::read_to_string(path)?;
@@ -581,6 +644,50 @@ impl Config {
     pub fn github_token_with_source() -> Option<(GitHubAuthSource, String)> {
         let auth_config = Self::load().map(|c| c.auth).unwrap_or_default();
         Self::resolve_github_auth_with_config(&auth_config)
+    }
+
+    /// Resolve GitHub auth for a validated automatic network destination.
+    ///
+    /// The gh CLI lookup is always scoped to the validated Git remote host. An
+    /// explicitly configured global hostname must match before gh is executed.
+    pub(crate) fn github_token_with_source_for_host(
+        &self,
+        validated_host: &str,
+    ) -> Result<Option<(GitHubAuthSource, String)>> {
+        if self
+            .auth
+            .gh_hostname
+            .as_deref()
+            .and_then(Self::normalize_token)
+            .is_some_and(|configured| !configured.eq_ignore_ascii_case(validated_host))
+        {
+            anyhow::bail!(
+                "Configured GitHub auth hostname does not match the validated Git remote \
+                 hostname; update global auth.gh_hostname before automatic CI hydration"
+            );
+        }
+
+        if let Some(token) = Self::read_env_token("STAX_GITHUB_TOKEN") {
+            return Ok(Some((GitHubAuthSource::StaxGithubTokenEnv, token)));
+        }
+
+        if let Some(token) = Self::token_from_credentials_file() {
+            return Ok(Some((GitHubAuthSource::CredentialsFile, token)));
+        }
+
+        if self.auth.use_gh_cli {
+            if let Some(token) = Self::token_from_gh_cli(Some(validated_host))? {
+                return Ok(Some((GitHubAuthSource::GhCli, token)));
+            }
+        }
+
+        if self.auth.allow_github_token_env {
+            if let Some(token) = Self::read_env_token("GITHUB_TOKEN") {
+                return Ok(Some((GitHubAuthSource::GithubTokenEnv, token)));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Get the saved credentials-file token written by `stax auth`.

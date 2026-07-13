@@ -9,7 +9,7 @@
 //! `st lane` invocations don't race on the same slot.
 
 use anyhow::{Context, Result};
-use fs4::fs_std::FileExt;
+use fs4::FileExt;
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
@@ -132,7 +132,7 @@ pub fn with_lock<T>(dir: &Path, f: impl FnOnce(&mut Pool) -> Result<T>) -> Resul
         .truncate(false)
         .open(lock_path(dir))
         .with_context(|| format!("Failed to open pool lock in {}", dir.display()))?;
-    FileExt::lock_exclusive(&lock_file).context("Failed to acquire pool lock")?;
+    <std::fs::File as FileExt>::lock(&lock_file).context("Failed to acquire pool lock")?;
 
     let result = (|| {
         let mut pool = load(dir)?;
@@ -141,7 +141,7 @@ pub fn with_lock<T>(dir: &Path, f: impl FnOnce(&mut Pool) -> Result<T>) -> Resul
         Ok(value)
     })();
 
-    let _ = FileExt::unlock(&lock_file);
+    let _ = <std::fs::File as FileExt>::unlock(&lock_file);
     result
 }
 

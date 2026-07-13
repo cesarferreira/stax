@@ -1794,15 +1794,13 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
             return Some(started_at.elapsed());
         }
     };
-    let git_dir = match repo.git_dir() {
+    let cache_dir = match repo.common_git_dir() {
         Ok(p) => p,
         Err(_) => {
             LiveTimer::maybe_finish_skipped(timer, "skipped");
             return Some(started_at.elapsed());
         }
     };
-    let mut cache = CiCache::load(&git_dir);
-    let mut cache_dirty = false;
 
     let live_prs = rt.block_on(async {
         stream::iter(
@@ -1823,12 +1821,7 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
             continue;
         };
 
-        apply_live_pr_state(repo, &stack, &mut cache, &branch_name, &live_pr);
-        cache_dirty = true;
-    }
-
-    if cache_dirty {
-        let _ = cache.save(&git_dir);
+        apply_live_pr_state(repo, &stack, &cache_dir, &branch_name, &live_pr);
     }
 
     LiveTimer::maybe_finish_timed(timer);
@@ -1838,7 +1831,7 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
 fn apply_live_pr_state(
     repo: &GitRepo,
     stack: &Stack,
-    cache: &mut CiCache,
+    cache_dir: &Path,
     branch_name: &str,
     live_pr: &ForgePrInfo,
 ) {
@@ -1873,11 +1866,7 @@ fn apply_live_pr_state(
         let _ = meta.write(repo.inner(), branch_name);
     }
 
-    let existing_ci = cache
-        .branches
-        .get(branch_name)
-        .and_then(|e| e.ci_state.clone());
-    cache.update(branch_name, existing_ci, Some(pr_state));
+    let _ = CiCache::update_branch_pr(cache_dir, branch_name, Some(pr_state));
 }
 
 fn sync_fetch_refs(

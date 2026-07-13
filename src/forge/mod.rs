@@ -14,7 +14,7 @@ use crate::github::client::{GitHubClient, OpenPrInfo};
 use crate::github::pr::{
     CiStatus, IssueComment, MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus,
 };
-use crate::remote::{ForgeType, RemoteInfo};
+use crate::remote::{ForgeType, RemoteInfo, TrustedRemoteInfo};
 
 /// PR activity for standup reports.
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +105,24 @@ impl ForgeClient {
                 remote.owner(),
                 &remote.repo,
                 remote.api_base_url.clone(),
+            )?)),
+            ForgeType::GitLab => Ok(Self::GitLab(GitLabClient::new(remote)?)),
+            ForgeType::Gitea => Ok(Self::Gitea(GiteaClient::new(remote)?)),
+        }
+    }
+
+    pub(crate) fn new_for_automatic(
+        trusted_remote: &TrustedRemoteInfo,
+        config: &Config,
+    ) -> Result<Self> {
+        let remote = trusted_remote.remote();
+        match remote.forge {
+            ForgeType::GitHub => Ok(Self::GitHub(GitHubClient::new_for_automatic(
+                remote.owner(),
+                &remote.repo,
+                remote.api_base_url.clone(),
+                config,
+                &remote.host,
             )?)),
             ForgeType::GitLab => Ok(Self::GitLab(GitLabClient::new(remote)?)),
             ForgeType::Gitea => Ok(Self::Gitea(GiteaClient::new(remote)?)),
@@ -439,6 +457,18 @@ fn base_headers(token: &str, auth_style: AuthStyle) -> Result<HeaderMap> {
 fn build_http_client(token: &str, auth_style: AuthStyle) -> Result<Client> {
     Client::builder()
         .default_headers(base_headers(token, auth_style)?)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let stays_on_origin = attempt.previous().first().is_some_and(|origin| {
+                attempt.url().scheme() == origin.scheme()
+                    && attempt.url().host_str() == origin.host_str()
+                    && attempt.url().port_or_known_default() == origin.port_or_known_default()
+            });
+            if stays_on_origin {
+                reqwest::redirect::Policy::limited(10).redirect(attempt)
+            } else {
+                attempt.stop()
+            }
+        }))
         .connect_timeout(Duration::from_secs(10))
         .read_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(60))
@@ -555,6 +585,8 @@ mod tests {
     use std::env;
     use std::fs;
     use std::sync::{Mutex, OnceLock};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -608,6 +640,92 @@ mod tests {
         let statuses: [&str; 0] = [];
         let result = aggregate_ci_overall(statuses.iter().copied(), is_failure, is_pending);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn authenticated_forge_client_does_not_forward_headers_across_origins() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            for (auth_style, header_name) in [
+                (AuthStyle::AuthorizationToken, "authorization"),
+                (AuthStyle::PrivateToken, "private-token"),
+            ] {
+                let attacker = MockServer::start().await;
+                Mock::given(method("GET"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+                    .mount(&attacker)
+                    .await;
+
+                let trusted = MockServer::start().await;
+                Mock::given(method("GET"))
+                    .respond_with(ResponseTemplate::new(302).insert_header(
+                        "Location",
+                        format!(
+                            "{}/stolen",
+                            attacker.uri().replacen("127.0.0.1", "localhost", 1)
+                        ),
+                    ))
+                    .mount(&trusted)
+                    .await;
+
+                let client = build_http_client("redirect-secret", auth_style).unwrap();
+                let _ = client
+                    .get(format!("{}/checks", trusted.uri()))
+                    .send()
+                    .await
+                    .unwrap();
+                let trusted_requests = trusted.received_requests().await.unwrap_or_default();
+                let attacker_requests = attacker.received_requests().await.unwrap_or_default();
+
+                assert_eq!(trusted_requests.len(), 1);
+                assert!(
+                    trusted_requests[0].headers.contains_key(header_name),
+                    "trusted endpoint did not receive {header_name}"
+                );
+                assert!(
+                    attacker_requests
+                        .iter()
+                        .all(|request| !request.headers.contains_key(header_name)),
+                    "attacker endpoint received {header_name}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn authenticated_forge_client_preserves_same_origin_redirects() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/checks"))
+                .respond_with(ResponseTemplate::new(302).insert_header("Location", "/final"))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/final"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+                .mount(&server)
+                .await;
+
+            let client = build_http_client("redirect-secret", AuthStyle::PrivateToken).unwrap();
+            let response = client
+                .get(format!("{}/checks", server.uri()))
+                .send()
+                .await
+                .unwrap();
+            let requests = server.received_requests().await.unwrap_or_default();
+
+            assert!(response.status().is_success());
+            assert_eq!(requests.len(), 2);
+            assert!(
+                requests
+                    .iter()
+                    .all(|request| request.headers.contains_key("private-token"))
+            );
+        });
     }
 
     #[test]
