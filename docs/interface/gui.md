@@ -49,7 +49,7 @@ The `-n` flag is part of the contract. Every `st gui [path]` invocation opens a 
 
 ## Workspace
 
-![Stax native macOS GUI showing a stacked branch graph, changes, and branch inspector](../../assets/gui.png)
+![Stax native macOS GUI showing a stacked branch graph, changes, and branch inspector](../assets/gui.png)
 
 The workspace shows the repository stack, the selected branch changes, and an inspector for branch actions and status. Background hydration refreshes CI, PR, and diff data without blocking normal browsing. Selecting a branch changes the visible details; it does not check out the branch until you explicitly run Checkout.
 
