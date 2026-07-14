@@ -11,6 +11,8 @@ packager="$repo_root/scripts/package-gui-release.sh"
 fixture="$(mktemp -d)"
 trap 'rm -rf "$fixture"' EXIT
 
+grep -Fq 'stax = { path = "../..", features = ["vendored-openssl"] }' "$repo_root/crates/stax-gui/Cargo.toml"
+
 case "$(uname -m)" in
   arm64) target=aarch64-apple-darwin ;;
   x86_64) target=x86_64-apple-darwin ;;

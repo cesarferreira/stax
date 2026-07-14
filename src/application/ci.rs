@@ -196,7 +196,7 @@ mod tests {
             let previous_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
             unsafe {
                 env::set_var("HOME", path);
-                env::remove_var("STAX_CONFIG_DIR");
+                env::set_var("STAX_CONFIG_DIR", path.join(".config").join("stax"));
             }
             Self {
                 previous_home,
@@ -216,6 +216,15 @@ mod tests {
                 None => unsafe { env::remove_var("STAX_CONFIG_DIR") },
             }
         }
+    }
+
+    #[test]
+    fn home_config_guard_sets_an_explicit_config_directory() {
+        let home = tempfile::tempdir().unwrap();
+        let expected = home.path().join(".config").join("stax");
+        let _guard = HomeConfigGuard::set(home.path());
+
+        assert_eq!(env::var_os("STAX_CONFIG_DIR"), Some(expected.into_os_string()));
     }
 
     fn commit_file(repo: &git2::Repository, contents: &str) -> String {
