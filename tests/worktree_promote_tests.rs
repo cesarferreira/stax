@@ -78,6 +78,18 @@ if [ "$mode" = "remove" ] && [ "$cwd" = "$STAX_PROMOTE_MAIN" ] && \
   echo "synthetic worktree remove failure" >&2
   exit 42
 fi
+if [ "$mode" = "remove-after-retire" ] && [ "$cwd" = "$STAX_PROMOTE_MAIN" ] && \
+   [ "${1:-}" = "worktree" ] && [ "${2:-}" = "remove" ]; then
+  "$REAL_GIT" "$@"
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    exit "$status"
+  fi
+  mkdir -p "$3"
+  printf 'gitdir: /missing/stax-worktree-admin\n' > "$3/.git"
+  echo "synthetic worktree remove failure after retirement" >&2
+  exit 43
+fi
 exec "$REAL_GIT" "$@"
 "#,
     )
@@ -313,4 +325,45 @@ fn wt_promote_rolls_back_when_retirement_fails() {
     assert_eq!(current_branch(&repo, &repo.path()), "main");
     assert_eq!(current_branch(&repo, &linked), branch);
     assert!(linked.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn wt_promote_keeps_main_promoted_when_removal_fails_after_retiring_source() {
+    let (repo, branch, linked) = setup_promotable_worktree();
+    let (_shim_dir, path) = failing_git_path();
+    let main = fs::canonicalize(repo.path())
+        .expect("canonical main path")
+        .to_string_lossy()
+        .into_owned();
+    let real_git = real_git_path();
+
+    let output = repo.run_stax_in_with_env(
+        &linked,
+        &["wt", "promote"],
+        &[
+            ("PATH", path.as_str()),
+            ("REAL_GIT", real_git.as_str()),
+            ("STAX_PROMOTE_FAIL_MODE", "remove-after-retire"),
+            ("STAX_PROMOTE_MAIN", main.as_str()),
+            ("STAX_PROMOTE_BRANCH", branch.as_str()),
+        ],
+    );
+
+    output
+        .assert_success()
+        .assert_stderr_contains("already retired the linked worktree");
+    assert_eq!(current_branch(&repo, &repo.path()), branch);
+    assert!(
+        linked.exists(),
+        "the simulated removal leaves directory residue"
+    );
+    assert!(
+        !linked.join(".git").exists(),
+        "a retired worktree must not retain a dangling .git file"
+    );
+    assert!(
+        !worktree_list(&repo).contains(linked.to_string_lossy().as_ref()),
+        "retired source must not remain registered"
+    );
 }

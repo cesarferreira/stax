@@ -9,7 +9,7 @@ use crate::git::GitRepo;
 use crate::git::repo::WorktreeInfo;
 use anyhow::{Context, Result, anyhow, bail};
 use colored::Colorize;
-use std::path::Path;
+use std::{fs, path::Path};
 
 pub fn run(shell_output: bool) -> Result<()> {
     let repo = GitRepo::open()?;
@@ -78,6 +78,26 @@ pub fn run(shell_output: bool) -> Result<()> {
         false,
         RemovalMode::AllowParking,
     ) {
+        if source_was_retired(&main, &source) {
+            let removed_dangling_git_file = remove_dangling_git_file(&source.path)?;
+            eprintln!(
+                "Warning: Git reported a removal failure after it had already retired the linked worktree. \
+                 Promotion completed in the main worktree.{} Inspect any leftover files at '{}'.",
+                if removed_dangling_git_file {
+                    " Removed its dangling .git file."
+                } else {
+                    ""
+                },
+                source.path.display()
+            );
+            spawn_background_hook(
+                config.worktree.hooks.post_remove.as_deref(),
+                &main.path,
+                "post_remove",
+            )?;
+            finish_success(shell_output, &main.path, &branch);
+            return Ok(());
+        }
         let main_rollback = restore_checkout(&repo, &main, &main_head).err();
         let source_rollback = repo.switch_branch_in(&source.path, &branch).err();
         return Err(transaction_error(
@@ -94,6 +114,43 @@ pub fn run(shell_output: bool) -> Result<()> {
     )?;
     finish_success(shell_output, &main.path, &branch);
     Ok(())
+}
+
+fn source_was_retired(main: &WorktreeInfo, source: &WorktreeInfo) -> bool {
+    GitRepo::list_worktrees_in(&main.path)
+        .map(|worktrees| {
+            worktrees
+                .iter()
+                .all(|worktree| worktree.path != source.path)
+        })
+        .unwrap_or(false)
+}
+
+fn remove_dangling_git_file(worktree_path: &Path) -> Result<bool> {
+    let git_file = worktree_path.join(".git");
+    let contents = match fs::read_to_string(&git_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to inspect '{}'", git_file.display()));
+        }
+    };
+    let Some(gitdir) = contents.trim().strip_prefix("gitdir:") else {
+        return Ok(false);
+    };
+    let gitdir = Path::new(gitdir.trim());
+    let gitdir = if gitdir.is_absolute() {
+        gitdir.to_path_buf()
+    } else {
+        worktree_path.join(gitdir)
+    };
+    if gitdir.exists() {
+        return Ok(false);
+    }
+    fs::remove_file(&git_file)
+        .with_context(|| format!("Failed to remove dangling '{}'.", git_file.display()))?;
+    Ok(true)
 }
 
 fn ensure_clean_checkout(label: &str, details: &WorktreeDetails) -> Result<()> {
