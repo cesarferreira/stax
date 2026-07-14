@@ -84,6 +84,8 @@ mod navigation_tests;
 mod performance_tests;
 #[path = "pr_body_tests.rs"]
 mod pr_body_tests;
+#[path = "pr_open_tests.rs"]
+mod pr_open_tests;
 #[path = "pr_template_tests.rs"]
 mod pr_template_tests;
 #[path = "reorder_tests.rs"]

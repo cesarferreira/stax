@@ -58,45 +58,13 @@ impl RepositorySession {
         }
 
         require_blocking_network_context(request)?;
-        let repo = self.open_repo().map_err(|error| {
-            OperationError::from_source(
-                request.clone(),
-                OperationErrorKind::RepositoryUnavailable,
-                OperationErrorDetails::None,
-                "Could not open the repository",
-                "Check the repository path and retry",
-                &error,
-                None,
-                OperationSideEffects::None,
-            )
-        })?;
-        let config = Config::load_for_trusted_network(self.repository_root()).map_err(|error| {
-            OperationError::from_source(
-                request.clone(),
-                OperationErrorKind::Authorization,
-                OperationErrorDetails::None,
-                "Could not load trusted repository network configuration",
-                "Check the global stax config and repository stax.toml, then retry",
-                &error,
-                None,
-                OperationSideEffects::None,
-            )
-        })?;
-        let trusted_remote = TrustedRemoteInfo::from_repo(&repo, &config).map_err(|error| {
-            OperationError::from_source(
-                request.clone(),
-                OperationErrorKind::Authorization,
-                OperationErrorDetails::None,
-                "Repository network access is not trusted for this remote",
-                "Configure trusted global remote settings and retry",
-                &error,
-                None,
-                OperationSideEffects::None,
-            )
-        })?;
-        let client = ForgeClient::new_for_trusted_remote(&trusted_remote, &config)
-            .map_err(|error| operation_error_from_source(request, &error))?;
-        resolve_with_lookup(self, request, branch, &client, reporter)
+        resolve_with_lookup(
+            self,
+            request,
+            branch,
+            ForgeClient::new_for_trusted_remote,
+            reporter,
+        )
     }
 }
 
@@ -138,13 +106,17 @@ fn resolve_metadata_only(
     Ok(Some(pull_request_receipt(request, branch, url)))
 }
 
-fn resolve_with_lookup<L: PullRequestLookup + ?Sized>(
+fn resolve_with_lookup<F, L>(
     session: &RepositorySession,
     request: &OperationRequest,
     branch: &str,
-    lookup: &L,
+    create_lookup: F,
     reporter: &mut dyn OperationReporter,
-) -> OperationResult {
+) -> OperationResult
+where
+    F: FnOnce(&TrustedRemoteInfo, &Config) -> Result<L>,
+    L: PullRequestLookup,
+{
     if let Some(receipt) = resolve_metadata_only(session, request, branch, reporter)? {
         return Ok(receipt);
     }
@@ -193,7 +165,10 @@ fn resolve_with_lookup<L: PullRequestLookup + ?Sized>(
         )
     })?;
     let found = runtime
-        .block_on(lookup.find_open_by_head(branch))
+        .block_on(async {
+            let lookup = create_lookup(&trusted_remote, &config)?;
+            lookup.find_open_by_head(branch).await
+        })
         .map_err(|error| operation_error_from_source(request, &error))?;
     let pr = found.ok_or_else(|| {
         operation_error(
@@ -521,7 +496,7 @@ mod tests {
             &session,
             &request("feature"),
             "feature",
-            &FakePullRequestLookup { result: None },
+            |_, _| Ok(FakePullRequestLookup { result: None }),
             &mut NoopOperationReporter,
         )
         .unwrap();
@@ -546,8 +521,10 @@ mod tests {
             &session,
             &request("feature"),
             "feature",
-            &FakePullRequestLookup {
-                result: Some(fake_pr(42)),
+            |_, _| {
+                Ok(FakePullRequestLookup {
+                    result: Some(fake_pr(42)),
+                })
             },
             &mut NoopOperationReporter,
         )
