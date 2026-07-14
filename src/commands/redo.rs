@@ -1,5 +1,6 @@
 //! Redo the last undone stax operation.
 
+use crate::application::{NoopOperationReporter, OperationOutcome, RepositorySession};
 use crate::config::Config;
 use crate::git::GitRepo;
 use crate::ops::receipt::{OpReceipt, OpStatus};
@@ -75,63 +76,20 @@ pub fn run(op_id: Option<String>, yes: bool, no_push: bool, quiet: bool) -> Resu
         }
     }
 
-    // Restore local refs to after-OIDs
-    let mut restored_count = 0;
-    let head_branch_before = receipt.head_branch_before.clone();
-
     if !quiet {
         println!();
         println!("{}", "Restoring refs to after-state...".bold());
     }
 
-    for entry in &receipt.local_refs {
-        if let Some(oid_after) = &entry.oid_after {
-            if !quiet {
-                print!(
-                    "  {} {} → {}... ",
-                    "▸".dimmed(),
-                    entry.branch.cyan(),
-                    &oid_after[..10]
-                );
-                std::io::Write::flush(&mut std::io::stdout()).ok();
-            }
-
-            // Update the ref to the after-OID
-            repo.update_ref(&entry.refname, oid_after)?;
-
-            if !quiet {
-                println!("{}", "done".green());
-            }
-            restored_count += 1;
-        }
-    }
-
-    // If the head branch was modified, reset the working tree
-    if receipt
-        .local_refs
-        .iter()
-        .any(|r| r.branch == head_branch_before)
-    {
-        if !quiet {
-            println!(
-                "  {} Resetting working tree to {}...",
-                "▸".dimmed(),
-                head_branch_before.cyan()
-            );
-        }
-
-        repo.checkout(&head_branch_before)?;
-
-        if let Some(entry) = receipt
-            .local_refs
-            .iter()
-            .find(|r| r.branch == head_branch_before)
-        {
-            if let Some(oid_after) = &entry.oid_after {
-                repo.reset_hard(oid_after)?;
-            }
-        }
-    }
+    let operation = RepositorySession::open(repo.workdir()?)?.redo_transaction(
+        Some(&receipt.op_id),
+        false,
+        &mut NoopOperationReporter,
+    )?;
+    let restored_count = match operation.outcome {
+        OperationOutcome::TransactionRedone { changed_refs, .. } => changed_refs.len(),
+        _ => 0,
+    };
 
     // Handle remote refs
     if receipt.has_remote_changes() && !no_push {

@@ -1,4 +1,6 @@
 use super::*;
+use crate::git::GitRepo;
+use crate::remote::TrustedRemoteInfo;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -34,6 +36,331 @@ fn restore_env_var(name: &str, value: Option<String>) {
         Some(value) => unsafe { env::set_var(name, value) },
         None => unsafe { env::remove_var(name) },
     }
+}
+
+#[test]
+fn config_load_for_repo_uses_selected_root_outside_process_cwd() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let original_dir = env::current_dir().unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("selected-repo");
+    let elsewhere = temp_dir.path().join("elsewhere");
+    let home_dir = temp_dir.path().join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        "[ui]\ntips = true\n[remote]\nname = \"global\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        "[ui]\ntips = false\n[remote]\nname = \"selected\"\n",
+    )
+    .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+    env::set_current_dir(&elsewhere).unwrap();
+
+    let config = Config::load_for_repo(&repo_dir).unwrap();
+
+    assert!(!config.ui.tips);
+    assert_eq!(config.remote_name(), "selected");
+
+    env::set_current_dir(original_dir).unwrap();
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
+#[test]
+fn config_load_for_repo_preserves_stax_config_dir_isolation() {
+    let _guard = env_lock();
+
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let original_dir = env::current_dir().unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("selected-repo");
+    let elsewhere = temp_dir.path().join("elsewhere");
+    let override_dir = temp_dir.path().join("isolated-config");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::create_dir_all(&override_dir).unwrap();
+    fs::write(
+        override_dir.join("config.toml"),
+        "[ui]\ntips = true\n[remote]\nname = \"isolated\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        "[ui]\ntips = false\n[remote]\nname = \"repo-overlay\"\n",
+    )
+    .unwrap();
+
+    unsafe { env::set_var("STAX_CONFIG_DIR", &override_dir) };
+    env::set_current_dir(&elsewhere).unwrap();
+
+    let config = Config::load_for_repo(&repo_dir).unwrap();
+
+    assert!(config.ui.tips);
+    assert_eq!(config.remote_name(), "isolated");
+
+    env::set_current_dir(original_dir).unwrap();
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
+#[test]
+fn trusted_network_config_only_accepts_repo_local_remote_name() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("selected-repo");
+    let home_dir = temp_dir.path().join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        r#"
+[remote]
+name = "global"
+base_url = "https://git.trusted.example"
+api_base_url = "https://api.trusted.example/v1"
+forge = "gitea"
+
+[auth]
+use_gh_cli = false
+allow_github_token_env = false
+gh_hostname = "git.trusted.example"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        r#"
+[remote]
+name = "selected"
+base_url = "http://attacker.invalid"
+api_base_url = "http://attacker.invalid/api"
+forge = "github"
+
+[auth]
+use_gh_cli = true
+allow_github_token_env = true
+gh_hostname = "attacker.invalid"
+"#,
+    )
+    .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+
+    let config = Config::load_for_trusted_network(&repo_dir).unwrap();
+
+    assert_eq!(config.remote_name(), "selected");
+    assert_eq!(config.remote.base_url, "https://git.trusted.example");
+    assert_eq!(
+        config.remote.api_base_url.as_deref(),
+        Some("https://api.trusted.example/v1")
+    );
+    assert_eq!(config.remote.forge, Some(ForgeType::Gitea));
+    assert!(!config.auth.use_gh_cli);
+    assert!(!config.auth.allow_github_token_env);
+    assert_eq!(
+        config.auth.gh_hostname.as_deref(),
+        Some("git.trusted.example")
+    );
+
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
+#[test]
+fn trusted_network_config_preserves_repository_remote_name_only() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("selected-repo");
+    let missing_remote_repo_dir = temp_dir.path().join("missing-remote-repo");
+    let home_dir = temp_dir.path().join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&missing_remote_repo_dir).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        r#"
+[remote]
+name = "origin"
+base_url = "https://git.trusted.example"
+api_base_url = "https://api.trusted.example/v3"
+forge = "github"
+
+[auth]
+use_gh_cli = false
+allow_github_token_env = false
+gh_hostname = "git.trusted.example"
+"#,
+    )
+    .unwrap();
+    let repo_config = r#"
+[remote]
+name = "upstream"
+base_url = "http://attacker.invalid"
+api_base_url = "http://attacker.invalid/api"
+forge = "gitlab"
+
+[auth]
+use_gh_cli = true
+allow_github_token_env = true
+gh_hostname = "attacker.invalid"
+"#;
+    fs::write(repo_dir.join("stax.toml"), repo_config).unwrap();
+    fs::write(missing_remote_repo_dir.join("stax.toml"), repo_config).unwrap();
+
+    git2::Repository::init(&repo_dir)
+        .unwrap()
+        .remote(
+            "upstream",
+            "https://git.trusted.example/platform/service.git",
+        )
+        .unwrap();
+    git2::Repository::init(&missing_remote_repo_dir)
+        .unwrap()
+        .remote("origin", "https://git.trusted.example/platform/service.git")
+        .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+
+    let config = Config::load_for_trusted_network(&repo_dir).unwrap();
+    let repo = GitRepo::open_from_path(&repo_dir).unwrap();
+    let trusted = TrustedRemoteInfo::from_repo(&repo, &config).unwrap();
+    let remote = trusted.remote();
+
+    assert_eq!(remote.name, "upstream");
+    assert_eq!(remote.base_url, "https://git.trusted.example");
+    assert_eq!(
+        remote.api_base_url.as_deref(),
+        Some("https://api.trusted.example/v3")
+    );
+    assert_eq!(remote.forge, ForgeType::GitHub);
+    assert!(!config.auth.use_gh_cli);
+    assert!(!config.auth.allow_github_token_env);
+    assert_eq!(
+        config.auth.gh_hostname.as_deref(),
+        Some("git.trusted.example")
+    );
+
+    let missing_config = Config::load_for_trusted_network(&missing_remote_repo_dir).unwrap();
+    let missing_repo = GitRepo::open_from_path(&missing_remote_repo_dir).unwrap();
+    let error = TrustedRemoteInfo::from_repo(&missing_repo, &missing_config).unwrap_err();
+
+    assert!(error.to_string().contains("upstream"));
+
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
+}
+
+#[test]
+fn repository_submit_preferences_overlay_without_redirecting_trusted_network() {
+    let _guard = env_lock();
+
+    let original_home = env::var("HOME").ok();
+    let original_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let repo_dir = temp_dir.path().join("selected-repo");
+    let home_dir = temp_dir.path().join("home");
+    let global_config_dir = home_dir.join(".config").join("stax");
+
+    fs::create_dir_all(&repo_dir).unwrap();
+    fs::create_dir_all(&global_config_dir).unwrap();
+    fs::write(
+        global_config_dir.join("config.toml"),
+        r#"
+[remote]
+name = "origin"
+base_url = "https://git.trusted.example"
+api_base_url = "https://api.trusted.example/v3"
+forge = "github"
+
+[auth]
+use_gh_cli = false
+allow_github_token_env = false
+gh_hostname = "git.trusted.example"
+
+[submit]
+stack_links = "comment"
+single_stack = "on"
+native_stack = "off"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("stax.toml"),
+        r#"
+[remote]
+name = "upstream"
+base_url = "http://attacker.invalid"
+api_base_url = "http://attacker.invalid/api"
+forge = "gitlab"
+
+[auth]
+use_gh_cli = true
+allow_github_token_env = true
+gh_hostname = "attacker.invalid"
+
+[submit]
+stack_links = "both"
+single_stack = "off"
+native_stack = "link"
+"#,
+    )
+    .unwrap();
+
+    unsafe { env::set_var("HOME", &home_dir) };
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+
+    let trusted = Config::load_for_trusted_network(&repo_dir).unwrap();
+    let preferences = Config::load_repository_submit_preferences(&repo_dir).unwrap();
+
+    assert_eq!(trusted.remote_name(), "upstream");
+    assert_eq!(trusted.remote.base_url, "https://git.trusted.example");
+    assert_eq!(
+        trusted.remote.api_base_url.as_deref(),
+        Some("https://api.trusted.example/v3")
+    );
+    assert_eq!(trusted.remote.forge, Some(ForgeType::GitHub));
+    assert!(!trusted.auth.use_gh_cli);
+    assert!(!trusted.auth.allow_github_token_env);
+    assert_eq!(
+        trusted.auth.gh_hostname.as_deref(),
+        Some("git.trusted.example")
+    );
+    assert_eq!(trusted.submit.stack_links, StackLinksMode::Comment);
+
+    assert_eq!(preferences.remote_name(), "origin");
+    assert_eq!(preferences.remote.base_url, "https://git.trusted.example");
+    assert!(!preferences.auth.use_gh_cli);
+    assert_eq!(preferences.submit.stack_links, StackLinksMode::Both);
+    assert_eq!(preferences.submit.single_stack, SingleStackMode::Off);
+    assert_eq!(preferences.submit.native_stack, NativeStackMode::Link);
+
+    restore_env_var("HOME", original_home);
+    restore_env_var("STAX_CONFIG_DIR", original_stax_config_dir);
 }
 
 #[cfg(unix)]
@@ -1225,6 +1552,63 @@ fn test_github_token_passes_gh_hostname() {
 
     let token = Config::github_token();
     assert_eq!(token, Some("gh-host-token".to_string()));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    unsafe { env::remove_var("STAX_CONFIG_DIR") };
+    match orig_home {
+        Some(v) => unsafe { env::set_var("HOME", v) },
+        None => unsafe { env::remove_var("HOME") },
+    }
+    match orig_path {
+        Some(v) => unsafe { env::set_var("PATH", v) },
+        None => unsafe { env::remove_var("PATH") },
+    }
+    match orig_stax {
+        Some(v) => unsafe { env::set_var("STAX_GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("STAX_GITHUB_TOKEN") },
+    }
+    match orig_github {
+        Some(v) => unsafe { env::set_var("GITHUB_TOKEN", v) },
+        None => unsafe { env::remove_var("GITHUB_TOKEN") },
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn trusted_network_github_auth_rejects_configured_hostname_mismatch_before_gh_lookup() {
+    let _guard = env_lock();
+
+    let orig_home = env::var("HOME").ok();
+    let orig_path = env::var("PATH").ok();
+    let orig_stax = env::var("STAX_GITHUB_TOKEN").ok();
+    let orig_github = env::var("GITHUB_TOKEN").ok();
+    let temp_dir =
+        std::env::temp_dir().join(format!("stax-test-gh-host-mismatch-{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+    write_auth_config(&temp_dir, true, false, Some("github.corp.example"));
+    unsafe { env::set_var("HOME", &temp_dir) };
+    unsafe { env::set_var("STAX_CONFIG_DIR", temp_dir.join(".config").join("stax")) };
+    unsafe { env::remove_var("STAX_GITHUB_TOKEN") };
+    unsafe { env::remove_var("GITHUB_TOKEN") };
+
+    let marker = temp_dir.join("gh-was-called");
+    let mock_path = write_mock_gh(
+        &temp_dir,
+        &format!(
+            "#!/bin/sh\ntouch \"{}\"\necho \"must-not-be-read\"\n",
+            marker.display()
+        ),
+    );
+    unsafe { env::set_var("PATH", mock_path) };
+    let config = Config::load().unwrap();
+
+    let error = config
+        .github_token_with_source_for_host("github.other.example")
+        .unwrap_err();
+
+    assert!(error.to_string().contains("hostname"));
+    assert!(!marker.exists(), "gh token lookup must not run on mismatch");
+    assert!(!error.to_string().contains("must-not-be-read"));
 
     let _ = fs::remove_dir_all(&temp_dir);
     unsafe { env::remove_var("STAX_CONFIG_DIR") };

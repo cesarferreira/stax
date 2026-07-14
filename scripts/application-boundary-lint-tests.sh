@@ -1,0 +1,406 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+wrapper="$script_dir/application-boundary-lint.sh"
+temp_root="$(mktemp -d)"
+fixture="$temp_root/fixture"
+unrelated="$temp_root/unrelated"
+trap 'rm -rf "$temp_root"' EXIT
+mkdir -p "$fixture/src/application" "$unrelated"
+git -C "$fixture" init -q
+
+failures=0
+
+record_failure() {
+  echo "$1" >&2
+  failures=$((failures + 1))
+}
+
+run_lint() {
+  (
+    cd "$unrelated"
+    bash "$wrapper" "$fixture"
+  )
+}
+
+assert_rejected() {
+  local source="$1"
+  local expected="$2"
+  printf '%s\n' "$source" > "$fixture/src/application/checkout.rs"
+  if run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected boundary lint rejection for: $source"
+  elif rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected '$expected', not a scanner error, for: $source"
+  elif ! rg -F "$expected" "$temp_root/output" >/dev/null; then
+    record_failure "expected '$expected' for rejected source: $source"
+  fi
+}
+
+assert_accepted() {
+  local source="$1"
+  printf '%s\n' "$source" > "$fixture/src/application/checkout.rs"
+  if ! run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected boundary lint acceptance for: $source"
+  fi
+}
+
+assert_scanner_error() {
+  local source="$1"
+  printf '%s\n' "$source" > "$fixture/src/application/checkout.rs"
+  if run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected scanner failure for malformed source: $source"
+  elif ! rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected scanner error label for malformed source: $source"
+  fi
+}
+
+reset_application_fixture() {
+  rm -rf "$fixture/src/application"
+  mkdir -p "$fixture/src/application"
+}
+
+assert_fixture_rejected() {
+  local expected="$1"
+  local description="$2"
+  if run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected boundary lint rejection for: $description"
+  elif rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected '$expected', not a scanner error, for: $description"
+  elif ! rg -F "$expected" "$temp_root/output" >/dev/null; then
+    record_failure "expected '$expected' for rejected fixture: $description"
+  fi
+}
+
+assert_fixture_accepted() {
+  local description="$1"
+  if ! run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected boundary lint acceptance for: $description"
+  fi
+}
+
+assert_fixture_scanner_error() {
+  local description="$1"
+  if run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected scanner failure for: $description"
+  elif ! rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected scanner error label for: $description"
+  fi
+}
+
+assert_fixture_scanner_error_label() {
+  local expected="$1"
+  local description="$2"
+  if run_lint >"$temp_root/output" 2>&1; then
+    record_failure "expected scanner failure for: $description"
+  elif ! rg -F 'application boundary scanner error:' "$temp_root/output" >/dev/null; then
+    record_failure "expected scanner error label for: $description"
+  elif ! rg -F "$expected" "$temp_root/output" >/dev/null; then
+    record_failure "expected '$expected' for scanner failure: $description"
+  fi
+}
+
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/checkout.rs"
+run_lint
+git -C "$fixture" add src/application/checkout.rs
+
+assert_rejected 'use crate::commands::submit;' 'command or TUI modules'
+assert_rejected 'use crate::{commands::submit, git::GitRepo};' 'command or TUI modules'
+assert_rejected 'use crate::commands as cli_commands;' 'command or TUI modules'
+assert_rejected 'use crate::commands::{};' 'command or TUI modules'
+assert_rejected 'fn bad() { crate::commands::submit::run(); }' 'command or TUI modules'
+assert_rejected 'fn bad() { crate::r#commands::submit::run(); }' 'command or TUI modules'
+assert_rejected 'fn bad() { r#extern::commands::run(); }' 'command or TUI modules'
+assert_rejected 'use crate::{tui, git};' 'command or TUI modules'
+assert_rejected $'use crate::{\n    commands as cli_commands,\n    git,\n};' 'command or TUI modules'
+assert_rejected 'fn bad() { crate :: tui :: run(); }' 'command or TUI modules'
+assert_rejected 'mod commands { pub fn run() {} } fn bad() { commands::run(); }' 'command or TUI modules'
+
+assert_rejected 'use gpui::App;' 'presentation frameworks'
+assert_rejected 'use {ratatui as terminal_ui, git2};' 'presentation frameworks'
+assert_rejected 'fn bad() { ::crossterm::execute!(); }' 'presentation frameworks'
+assert_rejected 'use dialoguer as prompt;' 'presentation frameworks'
+assert_rejected 'use colored::Colorize;' 'presentation frameworks'
+assert_rejected 'use console::Style;' 'presentation frameworks'
+assert_rejected 'fn bad() { :: gpui :: App::new(); }' 'presentation frameworks'
+assert_rejected 'mod gpui { pub fn run() {} } fn bad() { gpui::run(); }' 'presentation frameworks'
+
+assert_rejected 'use crate::progress::LiveTimer;' 'terminal progress'
+assert_rejected 'use crate::{progress as terminal_progress, git};' 'terminal progress'
+assert_rejected 'fn bad() { crate::progress::LiveTimer::new(); }' 'terminal progress'
+assert_rejected 'fn bad() { crate :: progress :: LiveTimer::new(); }' 'terminal progress'
+assert_rejected 'mod progress { pub fn run() {} } fn bad() { progress::run(); }' 'terminal progress'
+
+assert_rejected 'use std::io::{stdout, IsTerminal};' 'terminal I/O'
+assert_rejected 'use std::{io::stdout};' 'terminal I/O'
+assert_rejected 'use std :: io :: { stderr as terminal_stderr, IsTerminal };' 'terminal I/O'
+assert_rejected 'use std::io::stdin;' 'terminal I/O'
+assert_rejected 'use std::io::stderr as terminal_stderr;' 'terminal I/O'
+assert_rejected 'fn bad() { std::io::stdout(); }' 'terminal I/O'
+assert_rejected 'use std::io as io; fn bad() { io::stdout(); }' 'terminal I/O'
+assert_rejected 'use std::{io as terminal_io}; fn bad() { terminal_io::stderr(); }' 'terminal I/O'
+assert_rejected 'use std::{io::{self as io}}; fn bad() { io::stdin(); }' 'terminal I/O'
+assert_rejected 'use std::io as r#io; fn bad() { r#io::stdout(); }' 'terminal I/O'
+assert_rejected 'use std::io::*;' 'terminal I/O'
+assert_rejected 'use std::{io::*};' 'terminal I/O'
+assert_rejected 'use crate::model::*;' 'glob imports'
+assert_rejected 'use crate::{model::*, git};' 'glob imports'
+assert_rejected 'use super::*;' 'glob imports'
+assert_rejected 'pub use crate::model::*;' 'glob imports'
+assert_rejected 'use std as standard; fn bad() { standard::io::stdout(); }' 'terminal I/O'
+assert_rejected 'use {std as r#standard}; fn bad() { r#standard::io::stdin(); }' 'terminal I/O'
+assert_rejected 'use std::{self as standard}; fn bad() { standard::io::stderr(); }' 'terminal I/O'
+assert_rejected 'use std as standard; use standard::io as io; fn bad() { io::stdout(); }' 'terminal I/O'
+assert_rejected '#[cfg(any())] mod std {} fn bad() { std::io::stdout(); }' 'terminal I/O'
+assert_rejected $'use std::io as r#io;\n#[cfg(any())]\nmod r#io { pub fn stdout() {} }\nfn bad() { r#io::stdout(); }' 'terminal I/O'
+assert_rejected 'extern crate std as standard; fn bad() { standard::io::stderr(); }' 'terminal I/O'
+assert_rejected 'extern crate std as r#standard; fn bad() { r#standard::io::stdout(); }' 'terminal I/O'
+assert_rejected 'fn bad() { io::stdout(); } use std::io as io;' 'terminal I/O'
+assert_rejected 'fn bad() { standard::io::stdout(); } use std as standard;' 'terminal I/O'
+assert_rejected 'fn bad() { standard::io::stderr(); } extern crate std as standard;' 'terminal I/O'
+assert_rejected $'mod nested {\n    fn bad() { io::stdout(); }\n    use std::io as io;\n}' 'terminal I/O'
+assert_rejected $'mod nested {\n    fn bad() { standard::io::stdout(); }\n    use std as standard;\n}' 'terminal I/O'
+assert_rejected $'mod nested {\n    fn bad() { io::stderr(); }\n    use standard::io as io;\n    use std as standard;\n}' 'terminal I/O'
+assert_rejected 'use std as standard; fn bad() { crate::standard::io::stdout(); }' 'terminal I/O'
+assert_rejected $'use std as standard;\nmod nested {\n    fn bad() { super::standard::io::stdout(); }\n}' 'terminal I/O'
+assert_rejected $'use std as standard;\nuse standard::io as io;\nmod nested {\n    fn bad() { super::io::stdout(); }\n}' 'terminal I/O'
+assert_rejected $'use std as r#standard;\nmod outer {\n    mod nested {\n        fn bad() { super::super::r#standard::io::stderr(); }\n    }\n}' 'terminal I/O'
+assert_rejected $'mod nested {\n    use std as standard;\n    fn bad() { self::standard::io::stdin(); }\n}' 'terminal I/O'
+assert_rejected $'mod nested {\n    use standard::io as r#io;\n    use std as standard;\n    fn bad() { self::r#io::stderr(); }\n}' 'terminal I/O'
+assert_rejected 'fn bad() { super::std::io::stdout(); }' 'terminal I/O'
+assert_rejected 'fn bad() { super::r#commands::run(); }' 'command or TUI modules'
+assert_rejected $'use std::io as io;\ntrait Output { fn stdout(); }\nfn bad<io: Output>() { self::io::stdout(); }' 'terminal I/O'
+assert_rejected $'use std::io as io;\nfn bad<\'io, const io: usize>() { io::stdout(); }' 'terminal I/O'
+assert_rejected 'fn bad<commands>() { commands::run(); }' 'command or TUI modules'
+assert_rejected $'use std::io as io;\nmod nested {\n    mod io { pub fn stdout() {} }\n    fn clean() { io::stdout(); }\n}\nfn bad() { io::stdout(); }' 'terminal I/O'
+assert_rejected $'use std::io as io;\nfn clean() {\n    use crate::model as io;\n    let _: Option<io::RepositorySnapshot> = None;\n}\nfn bad() { io::stdout(); }' 'terminal I/O'
+assert_rejected 'use std::io as io; fn bad(io: usize) { let io = io; io::stdout(); }' 'terminal I/O'
+assert_rejected $'use std::io as io;\ntrait Output { fn stdout(); }\nfn clean<io: Output>() { io::stdout(); }\nfn bad() { io::stdout(); }' 'terminal I/O'
+assert_rejected $'use std::io as Output;\ntrait T { type Output; }\nfn bad() { Output::stdout(); }' 'terminal I/O'
+assert_rejected $'use std::io as Output;\ntrait T { type Output; fn f() { Output::stdout(); } }' 'terminal I/O'
+assert_rejected $'use std::io as Output;\ntrait T { type Output; fn f(); }\nstruct S;\nimpl T for S { type Output = (); fn f() { Output::stdout(); } }' 'terminal I/O'
+
+assert_rejected 'print!("hidden terminal output");' 'terminal output macros'
+assert_rejected 'println!("hidden terminal output");' 'terminal output macros'
+assert_rejected 'println ! ("hidden spaced terminal output");' 'terminal output macros'
+assert_rejected 'use std::{println as terminal_print};' 'terminal output macros'
+assert_rejected 'eprint!("hidden terminal error");' 'terminal output macros'
+assert_rejected 'std::eprintln!("hidden terminal error");' 'terminal output macros'
+assert_rejected ':: std :: eprintln ! ("hidden qualified terminal error");' 'terminal output macros'
+assert_rejected 'dbg!("hidden terminal debug");' 'terminal output macros'
+assert_rejected 'include!("generated.rs");' 'source injection macros'
+assert_rejected 'include_str!("payload.txt");' 'source injection macros'
+assert_rejected 'include_bytes!("payload.bin");' 'source injection macros'
+assert_rejected 'std::include!("generated.rs");' 'source injection macros'
+assert_rejected '::std::include_bytes!("payload.bin");' 'source injection macros'
+assert_rejected 'r#include_str!("payload.txt");' 'source injection macros'
+assert_rejected 'use std::include as inject;' 'source injection macros'
+assert_rejected 'use std as standard; use standard::include_bytes as inject;' 'source injection macros'
+assert_rejected 'use crate::outside::inject; inject!();' 'unknown source macro imports'
+assert_rejected 'use self::outside::inject as r#run; r#run!();' 'unknown source macro imports'
+assert_rejected 'use crate::outside as external; external::inject!();' 'unknown source macro imports'
+assert_rejected 'macro_rules! dispatch { ($name:ident) => { $name!() }; } dispatch!(println);' 'local declarative macros'
+assert_rejected 'fn nested() { macro_rules! hidden { () => { println!() }; } hidden!(); }' 'local declarative macros'
+assert_rejected 'macro_rules! r#benign { () => { 1 }; }' 'local declarative macros'
+assert_rejected 'macro_rules! harmless { () => { 42 }; } harmless!();' 'local declarative macros'
+assert_rejected 'macro modern($value:ident) { $value }' 'local declarative macros'
+assert_rejected 'mod nested { pub macro r#modern() {} }' 'local declarative macros'
+
+assert_rejected 'extern crate gpui as ui;' 'presentation frameworks'
+assert_rejected 'extern crate r#console as r#ui;' 'presentation frameworks'
+assert_rejected 'extern crate commands as cli_commands;' 'command or TUI modules'
+assert_rejected 'extern crate tui;' 'command or TUI modules'
+assert_rejected 'extern crate progress as terminal_progress;' 'terminal progress'
+
+assert_accepted 'pub fn commandster_progress(stdout_buffer: usize) -> usize { stdout_buffer }'
+assert_accepted '// use crate::commands::submit; println!("not code");'
+assert_accepted '/* use gpui::App; /* std::io::stdout(); */ crate::progress::LiveTimer */ pub fn clean() {}'
+assert_accepted 'const TEXT: &str = "crate::commands::submit println!(hidden)";'
+assert_accepted 'const RAW: &str = r###"use gpui::App; std::io::stdout();"###;'
+assert_accepted 'const BYTES: &[u8] = b"use crate::tui; eprintln!(hidden)";'
+assert_accepted 'const RAW_BYTES: &[u8] = br##"use dialoguer::Select; dbg!(hidden)"##;'
+assert_accepted "const CHARACTER: char = 'p'; const BYTE: u8 = b'p';"
+assert_accepted "fn lifetime<'progress>(value: &'progress str) -> &'progress str { value }"
+assert_accepted 'use crate::model as r#type; fn clean(value: r#type::RepositorySnapshot) { drop(value); }'
+assert_accepted 'use std::io as io; fn clean<T: io::Read>() {}'
+assert_accepted 'use std::{io as r#type}; fn clean<T: r#type::Write>() {}'
+assert_accepted $'use std::io as io;\nmod nested {\n    mod io { pub fn stdout() {} }\n    fn clean() { io::stdout(); }\n}'
+assert_accepted $'use std as standard;\nmod nested {\n    mod standard { pub mod io { pub fn stdout() {} } }\n    fn clean() { standard::io::stdout(); }\n}'
+assert_accepted $'use std::io as io;\nfn clean() {\n    use crate::model as io;\n    let _: Option<io::RepositorySnapshot> = None;\n}'
+assert_accepted $'use std::io as io;\nfn clean() {\n    mod r#io { pub fn stdout() {} }\n    r#io::stdout();\n}'
+assert_accepted $'use std::io as io;\ntrait Output { fn stdout(); }\nfn clean<io: Output>() { io::stdout(); }'
+assert_accepted $'fn clean() { std::io::stdout(); }\nmod std { pub mod io { pub fn stdout() {} } }'
+assert_accepted $'use std::io as io;\nmod nested {\n    fn clean() { io::stdout(); }\n    mod io { pub fn stdout() {} }\n}'
+assert_accepted $'use std as standard;\nmod nested {\n    fn clean() { standard::io::stdout(); }\n    mod standard { pub mod io { pub fn stdout() {} } }\n}'
+assert_accepted $'use std::io as io;\nmod nested {\n    fn clean() { io::stdout(); }\n    use self::local_io as io;\n    mod local_io { pub fn stdout() {} }\n}'
+assert_accepted $'mod standard { pub mod io { pub fn stdout() {} } }\nfn clean() { crate::standard::io::stdout(); }'
+assert_accepted $'use std as standard;\nmod outer {\n    mod nested {\n        fn clean() { super::standard::io::stdout(); }\n    }\n    mod standard { pub mod io { pub fn stdout() {} } }\n}'
+assert_accepted $'use std as standard;\nmod nested {\n    fn clean() { self::standard::io::stdout(); }\n    mod standard { pub mod io { pub fn stdout() {} } }\n}'
+assert_accepted $'use std::io as io;\ntrait Output { type stdout; }\nfn clean<\'a, io: Output, const N: usize>() where io::stdout: Output {\n    let _: Option<io::stdout> = None;\n}'
+assert_accepted $'use std::io as io;\ntrait Output { fn stdout(); }\nstruct Holder<T>(T);\nimpl<io: Output> Holder<io> where io::stdout: Output {\n    fn clean() { io::stdout(); }\n}'
+assert_accepted $'use std::io as io;\ntrait Clean<io> where io::stdout: Sized {\n    fn clean() { let _: Option<io::stdout> = None; }\n}'
+assert_accepted $'use std::io as io;\nstruct Clean<io> where io::stdout: Sized { value: Option<io::stdout> }\nenum Choice<io> where io::stdout: Sized { Value(io::stdout) }\nunion Either<io> where io::stdout: Copy { value: std::mem::ManuallyDrop<io::stdout> }\ntype Alias<io> where io::stdout: Sized = io::stdout;'
+assert_accepted 'use super::RepositorySnapshot;'
+assert_accepted '// extern crate gpui as ui; use std::io as io; io::stdout();'
+assert_accepted 'const TEXT: &str = "extern crate tui; use std::io::*;";'
+assert_accepted 'const INCLUDE_TEXT: &str = "include!(generated.rs)"; // include_bytes!("ignored")'
+assert_accepted 'serde_json::json!({}); tracing::debug!("audited direct macro");'
+assert_scanner_error 'use std::io as #;'
+assert_scanner_error 'extern crate safe_dependency as ;'
+
+reset_application_fixture
+printf '%s\n' 'mod child; use std as standard;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdout(); }' > "$fixture/src/application/child.rs"
+assert_fixture_rejected 'terminal I/O' 'parent alias used by conventional child.rs'
+
+reset_application_fixture
+printf '%s\n' 'use std as standard; mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn bad() { crate::application::standard::io::stderr(); }' > "$fixture/src/application/child.rs"
+assert_fixture_rejected 'terminal I/O' 'crate-qualified parent alias'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/outer"
+printf '%s\n' 'mod outer;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'mod child; use std as r#standard;' > "$fixture/src/application/outer/mod.rs"
+printf '%s\n' 'fn bad() { super::r#standard::io::stdin(); }' > "$fixture/src/application/outer/child.rs"
+assert_fixture_rejected 'terminal I/O' 'raw alias through nested mod.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/feature"
+printf '%s\n' 'mod feature;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'mod child; use std as standard;' > "$fixture/src/application/feature.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdout(); }' > "$fixture/src/application/feature/child.rs"
+assert_fixture_rejected 'terminal I/O' 'nested child of sibling feature.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/outer"
+printf '%s\n' 'use std as standard; mod outer { mod child; }' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn bad() { super::super::standard::io::stderr(); }' > "$fixture/src/application/outer/child.rs"
+assert_fixture_rejected 'terminal I/O' 'external child under inline module'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/custom"
+printf '%s\n' 'use std as standard; #[path = "custom/child_impl.rs"] mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdout(); }' > "$fixture/src/application/custom/child_impl.rs"
+assert_fixture_rejected 'terminal I/O' 'path-attributed child module'
+
+reset_application_fixture
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'use std as standard; #[path = "foo_child.rs"] mod child;' > "$fixture/src/application/foo.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdout(); }' > "$fixture/src/application/foo_child.rs"
+assert_fixture_rejected 'terminal I/O' 'direct path module from foo.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/foo/inline"
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'use std as standard; mod inline { #[path = "nested_child.rs"] mod child; }' > "$fixture/src/application/foo.rs"
+printf '%s\n' 'fn bad() { super::super::standard::io::stderr(); }' > "$fixture/src/application/foo/inline/nested_child.rs"
+assert_fixture_rejected 'terminal I/O' 'nested path module from foo.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/foo"
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'use std as standard; #[path = "direct_child.rs"] mod child;' > "$fixture/src/application/foo/mod.rs"
+printf '%s\n' 'fn bad() { super::standard::io::stdin(); }' > "$fixture/src/application/foo/direct_child.rs"
+assert_fixture_rejected 'terminal I/O' 'direct path module from foo/mod.rs'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/foo/inline"
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'use std as standard; mod inline { #[path = "nested_child.rs"] mod child; }' > "$fixture/src/application/foo/mod.rs"
+printf '%s\n' 'fn clean() { self::standard::io::stdout(); } mod standard { pub mod io { pub fn stdout() {} } }' > "$fixture/src/application/foo/inline/nested_child.rs"
+assert_fixture_accepted 'nested path module shadow from foo/mod.rs'
+
+reset_application_fixture
+printf '%s\n' 'mod foo;' > "$fixture/src/application/mod.rs"
+printf '%s\n' '#[path = "renamed_child.rs"] mod child;' > "$fixture/src/application/foo.rs"
+printf '%s\n' 'use std as standard; fn clean() { crate::application::renamed_child::standard::io::stdout(); }' > "$fixture/src/application/renamed_child.rs"
+assert_fixture_accepted 'path target is not independently inferred'
+
+reset_application_fixture
+printf '%s\n' 'mod macros; mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'macro_rules! local_macro { () => {} } pub(crate) use local_macro;' > "$fixture/src/application/macros.rs"
+printf '%s\n' 'use super::macros::local_macro; local_macro!();' > "$fixture/src/application/child.rs"
+assert_fixture_rejected 'local declarative macros' 'known application macro definition'
+
+reset_application_fixture
+printf '%s\n' '#[cfg_attr(feature = "alternate", path = "alternate.rs")] mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/child.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/alternate.rs"
+assert_fixture_scanner_error_label 'conditional module source attribute' 'cfg_attr path module'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/outer"
+printf '%s\n' 'mod outer { #[cfg_attr(all(unix, feature = "alternate"), cfg_attr(any(), path = "alternate.rs"))] mod child; }' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/outer/child.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/outer/alternate.rs"
+assert_fixture_scanner_error_label 'conditional module source attribute' 'nested cfg_attr path module'
+
+reset_application_fixture
+printf '%s\n' '#[path = concat!("child", ".rs")] mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/child.rs"
+assert_fixture_scanner_error_label 'dynamic module source attribute' 'dynamic path attribute'
+
+reset_application_fixture
+printf '%s\n' 'use std as standard; mod left; mod right;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'fn clean() { self::standard::io::stdout(); } mod standard { pub mod io { pub fn stdout() {} } }' > "$fixture/src/application/left.rs"
+printf '%s\n' 'fn clean() { self::standard::io::stdout(); } mod standard { pub mod io { pub fn stdout() {} } }' > "$fixture/src/application/right.rs"
+assert_fixture_accepted 'legitimate local shadows in sibling modules'
+
+reset_application_fixture
+mkdir -p "$fixture/src/application/child"
+printf '%s\n' 'mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/child.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/child/mod.rs"
+assert_fixture_scanner_error 'ambiguous child.rs and child/mod.rs'
+
+reset_application_fixture
+printf '%s\n' '#[path = "../../outside.rs"] mod child;' > "$fixture/src/application/mod.rs"
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/outside.rs"
+assert_fixture_scanner_error 'path attribute escaping src/application'
+
+reset_application_fixture
+printf '%s\n' '#[path = "missing.rs"] mod child;' > "$fixture/src/application/mod.rs"
+assert_fixture_scanner_error 'missing path-attributed module'
+
+reset_application_fixture
+printf '%s\n' 'pub fn clean() {}' > "$fixture/src/application/checkout.rs"
+mkdir -p "$fixture/src/application/nested/future"
+printf '%s\n' 'use dialoguer as prompt;' > "$fixture/src/application/nested/future/module.rs"
+if run_lint >"$temp_root/output" 2>&1; then
+  record_failure "expected recursive boundary lint rejection"
+elif ! rg -F 'presentation frameworks' "$temp_root/output" >/dev/null; then
+  record_failure "expected presentation framework label for nested module"
+fi
+rm -rf "$fixture/src/application/nested"
+
+printf '\377' > "$fixture/src/application/checkout.rs"
+if run_lint >"$temp_root/output" 2>&1; then
+  record_failure "expected invalid UTF-8 scanner failure"
+fi
+
+non_git="$temp_root/non-git"
+mkdir -p "$non_git/src/application"
+printf '%s\n' 'pub fn clean() {}' > "$non_git/src/application/clean.rs"
+if (
+  cd "$unrelated"
+  bash "$wrapper" "$non_git"
+) >"$temp_root/output" 2>&1; then
+  record_failure "expected git discovery failure"
+fi
+
+if ! rg -F 'bash scripts/application-boundary-lint-tests.sh' "$repo_root/scripts/lint.sh" >/dev/null; then
+  record_failure "expected scripts/lint.sh to run the application boundary lint fixtures"
+fi
+
+if ! rg -F 'bash scripts/application-boundary-lint.sh' "$repo_root/scripts/lint.sh" >/dev/null; then
+  record_failure "expected scripts/lint.sh to run the application boundary lint"
+fi
+
+if ((failures > 0)); then
+  echo "application boundary lint tests failed: $failures" >&2
+  exit 1
+fi
+
+printf '%s\n' "application boundary lint tests passed"

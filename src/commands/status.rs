@@ -95,7 +95,7 @@ pub fn run(
     let config = Config::load()?;
     let workdir = repo.workdir()?;
     let has_tracked = stack.branches.len() > 1;
-    let git_dir = repo.git_dir()?;
+    let cache_dir = repo.common_git_dir()?;
 
     let remote_info = RemoteInfo::from_repo(&repo, &config).ok();
 
@@ -162,12 +162,17 @@ pub fn run(
     let missing_parent_by_branch = collect_missing_parent_branches(&repo, &stack);
 
     // Load CI cache (refresh happens in `stax ci`)
-    let cache = CiCache::load(git_dir);
+    let cache = CiCache::load(&cache_dir);
 
     // Build CI states from cache
     let ci_states: HashMap<String, String> = ordered_branches
         .iter()
-        .filter_map(|b| cache.get_ci_state(b).map(|s| (b.clone(), s)))
+        .filter_map(|branch| {
+            let revision = repo.branch_commit(branch).ok()?;
+            cache
+                .get_ci_state_for_revision(branch, &revision)
+                .map(|state| (branch.clone(), state))
+        })
         .collect();
 
     let mut branch_statuses: Vec<BranchStatusJson> = Vec::new();

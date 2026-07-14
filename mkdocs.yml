@@ -60,6 +60,7 @@ nav:
       - Multiple Stacks: concepts/multiple-stacks.md
   - Interface:
       - Interactive TUI: interface/tui.md
+      - Native macOS GUI: interface/gui.md
   - Commands:
       - Core Commands: commands/core.md
       - Full Reference: commands/reference.md

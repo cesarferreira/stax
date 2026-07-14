@@ -152,3 +152,32 @@ fn test_track_already_tracked_branch() {
         stdout
     );
 }
+
+#[test]
+fn submit_force_with_lease_uses_post_fetch_remote_oid() {
+    let repo = TestRepo::new_with_remote();
+    repo.set_trunk("main");
+    repo.configure_github_like_submit_remote();
+    let branch = repo.create_stack(&["lease-check"]).remove(0);
+    repo.git(&["push", "-u", "origin", &branch])
+        .assert_success();
+    let remote_oid_after_fetch = repo.get_commit_sha(&format!("origin/{branch}"));
+
+    repo.create_file("lease-check-update.txt", "updated\n");
+    repo.commit("Update lease-check");
+
+    let trace_dir = tempfile::tempdir().unwrap();
+    let trace_path = trace_dir.path().join("git-trace.log");
+    let output = repo.run_stax_with_env(
+        &["submit", "--no-pr", "--no-prompt", "--yes"],
+        &[("GIT_TRACE", trace_path.to_str().unwrap())],
+    );
+    output.assert_success();
+
+    let trace = std::fs::read_to_string(&trace_path).unwrap();
+    let expected = format!("--force-with-lease=refs/heads/{branch}:{remote_oid_after_fetch}");
+    assert!(
+        trace.contains(&expected),
+        "submit must push with an explicit post-fetch lease `{expected}`; trace was:\n{trace}"
+    );
+}

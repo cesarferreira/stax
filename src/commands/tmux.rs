@@ -107,9 +107,12 @@ fn run_status() -> Result<()> {
     let pr_number = info.and_then(|b| b.pr_number);
     let pr_state = info.and_then(|b| b.pr_state.as_deref());
 
-    let git_dir = repo.git_dir()?;
-    let cache = CiCache::load(git_dir);
-    let ci_state_owned = cache.get_ci_state(&current);
+    let cache_dir = repo.common_git_dir()?;
+    let cache = CiCache::load(&cache_dir);
+    let ci_state_owned = repo
+        .branch_commit(&current)
+        .ok()
+        .and_then(|revision| cache.get_ci_state_for_revision(&current, &revision));
     let ci_state = ci_state_owned.as_deref();
 
     // Prefer cache pr_state over metadata: cache is refreshed on every CI fetch,

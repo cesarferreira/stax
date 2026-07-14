@@ -1,3 +1,6 @@
+use crate::application::{
+    CheckoutOutcome, NoopOperationReporter, OperationOutcome, RepositorySession,
+};
 use crate::commands::stack_palette;
 use crate::commands::worktree::{go, shared::emit_shell_message};
 use crate::config::Config;
@@ -348,12 +351,19 @@ pub fn run(
             eprintln!("Warning: failed to save previous branch: {}", e);
         }
         let timer = LiveTimer::maybe_new(true, &format!("Checking out {}...", target));
-        checkout_branch_in(&workdir, &target)?;
+        let receipt = RepositorySession::open(&workdir)?
+            .checkout(&target, &mut NoopOperationReporter)
+            .map_err(anyhow::Error::from)?;
         LiveTimer::maybe_finish_ok(timer, "done");
+        let checked_out_branch = match receipt.outcome {
+            OperationOutcome::Checkout(CheckoutOutcome::CheckedOut { branch }) => branch,
+            OperationOutcome::Checkout(CheckoutOutcome::AlreadyCurrent { branch }) => branch,
+            _ => target.clone(),
+        };
         if shell_output {
-            emit_shell_message(&checkout_completion_shell_message(&target));
+            emit_shell_message(&checkout_completion_shell_message(&checked_out_branch));
         } else {
-            println!("{}", checkout_completion_message(&target));
+            println!("{}", checkout_completion_message(&checked_out_branch));
         }
     }
 

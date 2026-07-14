@@ -7,6 +7,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | Command | What it does |
 |---|---|
 | `st` | Launch the interactive TUI |
+| `st gui [path]` | Launch a fresh native macOS GUI window for a repository |
 | `st ls` | Show stack with PR, rebase, and metadata-repair status |
 | `st ll` | Like `st ls` plus PR URLs and detail |
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
@@ -97,3 +98,5 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 See also: [Navigation](navigation.md) · [Stack health](stack-health.md) · [Full reference](reference.md)
 
 `st ready` and `st pr list --ready` launch a TUI in an interactive terminal and default to all tracked PRs, ordered newest changed PR first. Use `--current` or `--stack` for only the current stack. Use Up/Down or `j`/`k` to move, Enter or `o` to open the selected PR, `r` to refresh, `?` for help, and `q`/Esc to quit. Use `--plain` for the static table and `--json` for machine-readable output.
+
+`st gui [path]` is macOS-only and launches the installed app with bundle id `com.cesarferreira.stax`. Download `Stax-aarch64-apple-darwin.zip` or `Stax-x86_64-apple-darwin.zip` from GitHub Releases and move `Stax.app` to `/Applications`; contributors can use `make install-gui-app` for `$HOME/Applications/Stax.app`. The GUI can search and inspect stacks; check out, create, rename, delete, move, and reorder local branches; restack selected/all; submit Draft PRs; Open PR without checkout; and safely undo/redo fully local receipts. Pane visibility and widths persist per repository, while visible controls, native menus, and shortcuts use the same enabled-state rules.

@@ -25,6 +25,12 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Commands>,
 }
 
+#[derive(Args, Debug, Clone)]
+pub(crate) struct GuiArgs {
+    /// Repository to open; defaults to the current directory
+    pub(crate) path: Option<PathBuf>,
+}
+
 #[derive(Args, Clone)]
 pub(crate) struct SubmitOptions {
     /// Show the submit plan without fetching, pushing, or changing metadata
@@ -241,6 +247,9 @@ pub(crate) enum Commands {
     /// Internal worker that refreshes the cached release check.
     #[command(name = "__update-check", hide = true)]
     UpdateCheck,
+
+    /// Launch the native Stax macOS app
+    Gui(GuiArgs),
 
     /// Generate shell completions
     Completions {
@@ -1822,4 +1831,38 @@ pub(crate) enum CommandPolicy {
     RebaseControl,
     RebaseSafe,
     RequiresCleanRepoState,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Commands, GuiArgs};
+    use clap::Parser;
+    use std::path::Path;
+
+    fn parse_cli(args: &[&str]) -> Cli {
+        let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+        std::thread::Builder::new()
+            .name("gui-cli-parse".into())
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || Cli::try_parse_from(args))
+            .expect("spawn parse thread")
+            .join()
+            .expect("join parse thread")
+            .expect("parse CLI")
+    }
+
+    #[test]
+    fn gui_accepts_optional_path_and_defaults_to_none() {
+        let with_path = parse_cli(&["st", "gui", "/tmp/repo"]);
+        assert!(matches!(
+            with_path.command,
+            Some(Commands::Gui(GuiArgs { path: Some(path) }))
+                if path == Path::new("/tmp/repo")
+        ));
+        let default = parse_cli(&["st", "gui"]);
+        assert!(matches!(
+            default.command,
+            Some(Commands::Gui(GuiArgs { path: None }))
+        ));
+    }
 }

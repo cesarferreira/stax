@@ -1409,27 +1409,31 @@ fn format_duration(secs: u64) -> String {
 }
 
 pub(crate) fn update_ci_cache(repo: &GitRepo, stack: &Stack, statuses: &[BranchCiStatus]) {
-    let git_dir = match repo.git_dir() {
+    let cache_dir = match repo.common_git_dir() {
         Ok(path) => path,
         Err(_) => return,
     };
 
-    let mut cache = CiCache::load(git_dir);
-    for status in statuses {
-        let pr_state = status.pr_is_draft.map(|is_draft| {
-            if is_draft {
-                "DRAFT".to_string()
-            } else {
-                "OPEN".to_string()
-            }
-        });
-        cache.update(&status.branch, status.overall_status.clone(), pr_state);
-    }
-
+    let updates = statuses
+        .iter()
+        .map(|status| {
+            let pr_state = status.pr_is_draft.map(|is_draft| {
+                if is_draft {
+                    "DRAFT".to_string()
+                } else {
+                    "OPEN".to_string()
+                }
+            });
+            (
+                status.branch.clone(),
+                status.sha.clone(),
+                status.overall_status.clone(),
+                pr_state,
+            )
+        })
+        .collect::<Vec<_>>();
     let valid_branches: Vec<String> = stack.branches.keys().cloned().collect();
-    cache.cleanup(&valid_branches);
-    cache.mark_refreshed();
-    let _ = cache.save(git_dir);
+    let _ = CiCache::refresh_branches(&cache_dir, &updates, &valid_branches);
 }
 
 /// Fetch all checks (both check runs and commit statuses), deduplicated
@@ -2085,6 +2089,31 @@ mod tests {
             pr_title: None,
             pr_review_decision: None,
         }
+    }
+
+    #[test]
+    fn ci_cache_write_uses_the_fetched_status_revision() {
+        let (_temp, repo, sha_b1, _sha_b2) = git_repo_with_two_branches();
+        let stack = test_stack_for_ci_fetch(201, 202);
+        let status = BranchCiStatus {
+            branch: "b1".to_string(),
+            sha: sha_b1.clone(),
+            sha_short: sha_b1.chars().take(7).collect(),
+            overall_status: Some("success".to_string()),
+            check_runs: Vec::new(),
+            pr_number: Some(201),
+            pr_is_draft: Some(false),
+            pr_title: None,
+            pr_review_decision: None,
+        };
+
+        update_ci_cache(&repo, &stack, &[status]);
+
+        let cache = CiCache::load(&repo.common_git_dir().unwrap());
+        let entry = cache.branches.get("b1").unwrap();
+        assert_eq!(entry.ci_revision.as_deref(), Some(sha_b1.as_str()));
+        assert_eq!(entry.ci_state.as_deref(), Some("success"));
+        assert_eq!(entry.pr_state.as_deref(), Some("OPEN"));
     }
 
     #[test]

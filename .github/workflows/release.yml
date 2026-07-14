@@ -78,10 +78,126 @@ jobs:
           name: stax-${{ matrix.target }}
           path: stax-${{ matrix.target }}.*
 
+  gui-build:
+    name: Build Stax.app ${{ matrix.target }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: gui-${{ matrix.target }}
+
+      - name: Resolve app version
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(cargo pkgid -p stax-gui | sed 's/.*#//')"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            release_version="${GITHUB_REF_NAME#v}"
+            if [ "$release_version" != "$package_version" ]; then
+              echo "Release tag $GITHUB_REF_NAME does not match stax-gui $package_version." >&2
+              exit 1
+            fi
+          else
+            release_version="$package_version"
+          fi
+          echo "STAX_GUI_VERSION=$release_version" >> "$GITHUB_ENV"
+          echo "STAX_GUI_BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Configure optional signing certificate
+        shell: bash
+        env:
+          CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          configured=0
+          for value in "$CERTIFICATE_P12" "$CERTIFICATE_PASSWORD" "$SIGNING_IDENTITY"; do
+            if [ -n "$value" ]; then
+              configured=$((configured + 1))
+            fi
+          done
+
+          if [ "$configured" -eq 0 ]; then
+            echo "STAX_GUI_SIGNING_IDENTITY=" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$configured" -ne 3 ]; then
+            echo "MACOS_CERTIFICATE_P12, MACOS_CERTIFICATE_PASSWORD, and MACOS_SIGNING_IDENTITY must be configured together." >&2
+            exit 1
+          fi
+
+          certificate_path="$RUNNER_TEMP/stax-signing.p12"
+          keychain_path="$RUNNER_TEMP/stax-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          printf '%s' "$CERTIFICATE_P12" | base64 -D > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          rm -f "$certificate_path"
+
+          echo "STAX_GUI_SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          echo "STAX_GUI_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+
+      - name: Package app release
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          scripts/package-gui-release.sh \
+            --target "${{ matrix.target }}" \
+            --version "$STAX_GUI_VERSION" \
+            --build-number "$STAX_GUI_BUILD_NUMBER" \
+            --output-dir "$GITHUB_WORKSPACE"
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Stax-${{ matrix.target }}
+          path: Stax-${{ matrix.target }}.zip
+
+      - name: Remove temporary signing keychain
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${STAX_GUI_KEYCHAIN:-}" ]; then
+            security delete-keychain "$STAX_GUI_KEYCHAIN"
+          fi
+
   release:
     name: Release
-    needs: build
-    if: needs.build.result == 'success'
+    needs: [build, gui-build]
+    if: needs.build.result == 'success' && needs.gui-build.result == 'success'
     runs-on: ubuntu-latest
 
     steps:
@@ -114,6 +230,8 @@ jobs:
             stax-x86_64-unknown-linux-gnu.tar.gz
             stax-aarch64-unknown-linux-gnu.tar.gz
             stax-x86_64-pc-windows-msvc.zip
+            Stax-aarch64-apple-darwin.zip
+            Stax-x86_64-apple-darwin.zip
           )
 
           for artifact in "${expected_artifacts[@]}"; do

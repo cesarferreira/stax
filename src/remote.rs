@@ -36,6 +36,25 @@ pub struct RemoteInfo {
     pub api_base_url: Option<String>,
 }
 
+/// A remote whose Git host, provider, and API destination were validated before
+/// noninteractive credential lookup.
+#[derive(Debug, Clone)]
+pub(crate) struct TrustedRemoteInfo {
+    remote: RemoteInfo,
+}
+
+impl TrustedRemoteInfo {
+    pub(crate) fn from_repo(repo: &GitRepo, global_config: &Config) -> Result<Self> {
+        let remote = RemoteInfo::from_repo(repo, global_config)?;
+        validate_trusted_network_remote(&remote, global_config)?;
+        Ok(Self { remote })
+    }
+
+    pub(crate) fn remote(&self) -> &RemoteInfo {
+        &self.remote
+    }
+}
+
 impl RemoteInfo {
     pub fn from_repo(repo: &GitRepo, config: &Config) -> Result<Self> {
         let name = config.remote_name().to_string();
@@ -54,7 +73,7 @@ impl RemoteInfo {
             || (configured_base == "https://gitlab.com" && host != "gitlab.com")
             || (configured_base == "https://gitea.com" && host != "gitea.com")
         {
-            format!("https://{}", host)
+            format!("https://{}", url_authority_host(&host))
         } else {
             configured_base.to_string()
         };
@@ -140,6 +159,108 @@ fn default_api_base_url(forge: ForgeType, base_url: &str) -> String {
         }
         ForgeType::GitLab => format!("{}/api/v4", base_url),
         ForgeType::Gitea => format!("{}/api/v1", base_url),
+    }
+}
+
+fn validate_trusted_network_remote(remote: &RemoteInfo, global_config: &Config) -> Result<()> {
+    let remote_host = remote.host.to_ascii_lowercase();
+    let base_host = network_url_host(&remote.base_url, "provider base URL")?;
+    if base_host != remote_host {
+        anyhow::bail!(
+            "Noninteractive repository network access blocked a provider base URL that does not match the Git \
+             remote hostname; configure matching global remote.base_url settings"
+        );
+    }
+
+    let official_forge = official_forge_for_host(&remote_host);
+    if let Some(expected) = official_forge {
+        if remote.forge != expected {
+            anyhow::bail!(
+                "Noninteractive repository network access blocked a provider mismatch for an official forge host; \
+                 remove or correct the global remote.forge override"
+            );
+        }
+    } else {
+        let configured_base_host =
+            network_url_host(&global_config.remote.base_url, "global provider base URL")?;
+        if configured_base_host != remote_host {
+            anyhow::bail!(
+                "Noninteractive repository network access blocked an untrusted Git remote hostname; configure \
+                 matching global remote.base_url and remote.forge settings to trust this host"
+            );
+        }
+    }
+
+    let api_url = remote.api_base_url.as_deref().context(
+        "Noninteractive repository network access requires a resolved provider API URL in global configuration",
+    )?;
+    let api_host = network_url_host(api_url, "provider API URL")?;
+    let built_in_relationship = matches!(
+        (remote.forge, remote_host.as_str(), api_host.as_str()),
+        (ForgeType::GitHub, "github.com", "api.github.com")
+            | (ForgeType::GitLab, "gitlab.com", "gitlab.com")
+            | (ForgeType::Gitea, "gitea.com", "gitea.com")
+    );
+    if api_host != remote_host
+        && !built_in_relationship
+        && global_config.remote.api_base_url.is_none()
+    {
+        anyhow::bail!(
+            "Noninteractive repository network access blocked an untrusted provider API hostname; configure the \
+             remote/API relationship explicitly in global remote.api_base_url"
+        );
+    }
+
+    Ok(())
+}
+
+fn official_forge_for_host(host: &str) -> Option<ForgeType> {
+    match host {
+        "github.com" => Some(ForgeType::GitHub),
+        "gitlab.com" => Some(ForgeType::GitLab),
+        "gitea.com" => Some(ForgeType::Gitea),
+        _ => None,
+    }
+}
+
+fn network_url_host(url: &str, label: &str) -> Result<String> {
+    let parsed = reqwest::Url::parse(url).with_context(|| {
+        format!("Noninteractive repository network access has an invalid {label}")
+    })?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        anyhow::bail!("Noninteractive repository network access requires an HTTP(S) {label}");
+    }
+    parsed_url_host(&parsed).with_context(|| {
+        format!("Noninteractive repository network access has an invalid {label} hostname")
+    })
+}
+
+fn normalize_url_host(host: &str) -> String {
+    host.strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host)
+        .to_ascii_lowercase()
+}
+
+fn parsed_url_host(parsed: &reqwest::Url) -> Result<String> {
+    let host = normalize_url_host(
+        parsed
+            .host_str()
+            .context("Remote URL does not contain a hostname")?,
+    );
+    if host.chars().any(|character| {
+        matches!(character, '@' | '%' | '/' | '\\' | '?' | '#') || character.is_whitespace()
+    }) {
+        anyhow::bail!("Remote URL contains an ambiguous hostname");
+    }
+    Ok(host)
+}
+
+fn url_authority_host(host: &str) -> String {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
+        format!("[{host}]")
+    } else {
+        host.to_string()
     }
 }
 
@@ -288,57 +409,67 @@ pub fn fetch_remote_refs(workdir: &Path, remote: &str, branches: &[String]) -> R
 }
 
 fn parse_remote_url(url: &str) -> Result<(String, String)> {
-    if let Some(stripped) = url.strip_prefix("git@") {
-        let mut parts = stripped.splitn(2, ':');
-        let host = parts.next().unwrap_or("").to_string();
-        let path = parts
-            .next()
-            .context("Invalid SSH remote URL")?
-            .trim_end_matches(".git")
-            .to_string();
-        return Ok((host, path));
+    if url.contains("://") {
+        let parsed = reqwest::Url::parse(url).context("Invalid remote URL")?;
+        if !matches!(parsed.scheme(), "ssh" | "http" | "https") {
+            anyhow::bail!("Unsupported remote URL scheme");
+        }
+        return remote_host_and_path(&parsed);
     }
 
-    if let Some(stripped) = url.strip_prefix("ssh://") {
-        let without_scheme = stripped;
-        let mut host_and_path = without_scheme.splitn(2, '/');
-        let host_part = host_and_path.next().unwrap_or("");
-        let path = host_and_path
-            .next()
-            .context("Invalid SSH remote URL")?
-            .trim_end_matches(".git")
-            .to_string();
-
-        let host_with_user = host_part.split('@').nth(1).unwrap_or(host_part);
-        // SSH listen port (e.g. :2222) is not the HTTPS/web port; omit it from host.
-        let host = host_with_user
-            .split(':')
-            .next()
-            .unwrap_or(host_with_user)
-            .to_string();
-        return Ok((host, path));
-    }
-
-    if let Some(stripped) = url.strip_prefix("https://") {
-        return parse_http_remote(stripped);
-    }
-
-    if let Some(stripped) = url.strip_prefix("http://") {
-        return parse_http_remote(stripped);
-    }
-
-    anyhow::bail!("Unsupported remote URL format: {}", url)
+    parse_scp_like_remote(url)
 }
 
-fn parse_http_remote(stripped: &str) -> Result<(String, String)> {
-    let mut parts = stripped.splitn(2, '/');
-    let host = parts.next().unwrap_or("").to_string();
-    let path = parts
-        .next()
-        .context("Invalid HTTP remote URL")?
+fn remote_host_and_path(parsed: &reqwest::Url) -> Result<(String, String)> {
+    let host = parsed_url_host(parsed)?;
+    let path = parsed
+        .path()
+        .trim_start_matches('/')
         .trim_end_matches(".git")
         .to_string();
+    if path.is_empty() {
+        anyhow::bail!("Invalid remote URL: missing repository path");
+    }
     Ok((host, path))
+}
+
+fn parse_scp_like_remote(url: &str) -> Result<(String, String)> {
+    let mut inside_ipv6_literal = false;
+    let mut separator = None;
+    for (index, character) in url.char_indices() {
+        match character {
+            '[' if !inside_ipv6_literal => inside_ipv6_literal = true,
+            ']' if inside_ipv6_literal => inside_ipv6_literal = false,
+            ':' if !inside_ipv6_literal => {
+                separator = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+    if inside_ipv6_literal {
+        anyhow::bail!("Invalid SCP-like remote URL: unterminated IPv6 hostname");
+    }
+
+    let separator = separator.context("Unsupported remote URL format")?;
+    let authority = &url[..separator];
+    let path = url[separator + 1..].trim_end_matches(".git");
+    if authority.is_empty() || path.is_empty() {
+        anyhow::bail!("Invalid SCP-like remote URL");
+    }
+    if authority.matches('@').count() > 1 {
+        anyhow::bail!("Invalid SCP-like remote URL: ambiguous user information");
+    }
+    if let Some((user, _)) = authority.split_once('@')
+        && user.is_empty()
+    {
+        anyhow::bail!("Invalid SCP-like remote URL: empty user information");
+    }
+
+    let authority_url = reqwest::Url::parse(&format!("ssh://{authority}/"))
+        .context("Invalid SCP-like remote URL authority")?;
+    let host = parsed_url_host(&authority_url)?;
+    Ok((host, path.to_string()))
 }
 
 fn split_namespace_repo(path: &str) -> Result<(String, String)> {
@@ -412,6 +543,72 @@ mod tests {
             parse_remote_url("ssh://git@gitlab.example.com:2222/org/project.git").unwrap();
         assert_eq!(host, "gitlab.example.com");
         assert_eq!(path, "org/project");
+    }
+
+    #[test]
+    fn test_parse_ssh_scheme_uses_the_actual_authority_host() {
+        let (host, path) =
+            parse_remote_url("ssh://git@github.com@attacker.example/org/project.git").unwrap();
+        assert_eq!(host, "attacker.example");
+        assert_eq!(path, "org/project");
+    }
+
+    #[test]
+    fn test_parse_ssh_scheme_ignores_userinfo_that_looks_like_a_host_and_port() {
+        let (host, path) =
+            parse_remote_url("ssh://github.com:22@attacker.example/org/project.git").unwrap();
+        assert_eq!(host, "attacker.example");
+        assert_eq!(path, "org/project");
+    }
+
+    #[test]
+    fn test_parse_ssh_scheme_rejects_an_encoded_authority_delimiter() {
+        assert!(
+            parse_remote_url("ssh://git@github.com%40attacker.example/org/project.git").is_err()
+        );
+    }
+
+    #[test]
+    fn test_parse_ssh_scheme_ipv6_host_and_port() {
+        let (host, path) =
+            parse_remote_url("ssh://git@[2001:db8::1]:2222/org/project.git").unwrap();
+        assert_eq!(host, "2001:db8::1");
+        assert_eq!(path, "org/project");
+    }
+
+    #[test]
+    fn test_parse_scp_like_ipv6_remote() {
+        let (host, path) = parse_remote_url("git@[2001:db8::1]:org/project.git").unwrap();
+        assert_eq!(host, "2001:db8::1");
+        assert_eq!(path, "org/project");
+    }
+
+    #[test]
+    fn test_parse_scp_like_remote_with_custom_user() {
+        let (host, path) = parse_remote_url("deploy@git.example.com:org/project.git").unwrap();
+        assert_eq!(host, "git.example.com");
+        assert_eq!(path, "org/project");
+    }
+
+    #[test]
+    fn test_parse_scp_like_remote_rejects_ambiguous_userinfo() {
+        let error =
+            parse_remote_url("git@github.com@attacker.example:org/project.git").unwrap_err();
+        assert!(error.to_string().contains("ambiguous"));
+    }
+
+    #[test]
+    fn trusted_network_remote_does_not_trust_a_hostname_hidden_in_ssh_userinfo() {
+        let (_dir, repo) =
+            repo_with_remote("ssh://git@github.com@attacker.example/owner/private-repo.git");
+
+        let error = TrustedRemoteInfo::from_repo(&repo, &Config::default()).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("untrusted"));
+        assert!(message.contains("global"));
+        assert!(!message.contains("private-repo"));
+        assert!(!message.contains("github.com@attacker.example"));
     }
 
     #[test]
@@ -664,6 +861,136 @@ mod tests {
         );
     }
 
+    fn repo_with_remote(url: &str) -> (TempDir, GitRepo) {
+        let dir = TempDir::new().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        repo.remote("origin", url).unwrap();
+        drop(repo);
+        let repo = GitRepo::open_from_path(dir.path()).unwrap();
+        (dir, repo)
+    }
+
+    #[test]
+    fn trusted_network_remote_trusts_official_host_resolutions() {
+        let cases = [
+            (
+                "https://github.com/owner/repo.git",
+                "github.com",
+                ForgeType::GitHub,
+                "https://github.com",
+                "https://api.github.com",
+            ),
+            (
+                "https://gitlab.com/owner/repo.git",
+                "gitlab.com",
+                ForgeType::GitLab,
+                "https://gitlab.com",
+                "https://gitlab.com/api/v4",
+            ),
+            (
+                "https://gitea.com/owner/repo.git",
+                "gitea.com",
+                ForgeType::Gitea,
+                "https://gitea.com",
+                "https://gitea.com/api/v1",
+            ),
+        ];
+
+        for (url, host, forge, base_url, api_base_url) in cases {
+            let (_dir, repo) = repo_with_remote(url);
+            let trusted = TrustedRemoteInfo::from_repo(&repo, &Config::default()).unwrap();
+            let remote = trusted.remote();
+
+            assert_eq!(remote.host, host);
+            assert_eq!(remote.forge, forge);
+            assert_eq!(remote.base_url, base_url);
+            assert_eq!(remote.api_base_url.as_deref(), Some(api_base_url));
+        }
+    }
+
+    #[test]
+    fn trusted_network_remote_accepts_globally_configured_custom_relationship() {
+        let (_dir, repo) = repo_with_remote("git@git.corp.example:platform/service.git");
+        let mut config = Config::default();
+        config.remote.base_url = "https://git.corp.example".to_string();
+        config.remote.api_base_url = Some("https://api.corp.example/v3".to_string());
+        config.remote.forge = Some(ForgeType::GitHub);
+        config.auth.gh_hostname = Some("git.corp.example".to_string());
+
+        let trusted = TrustedRemoteInfo::from_repo(&repo, &config).unwrap();
+        let remote = trusted.remote();
+
+        assert_eq!(remote.host, "git.corp.example");
+        assert_eq!(remote.forge, ForgeType::GitHub);
+        assert_eq!(
+            remote.api_base_url.as_deref(),
+            Some("https://api.corp.example/v3")
+        );
+    }
+
+    #[test]
+    fn trusted_network_remote_accepts_a_globally_configured_ipv6_host() {
+        let (_dir, repo) = repo_with_remote("ssh://git@[2001:db8::1]:2222/platform/service.git");
+        let mut config = Config::default();
+        config.remote.base_url = "https://[2001:db8::1]".to_string();
+        config.remote.api_base_url = Some("https://[2001:db8::1]/api/v3".to_string());
+        config.remote.forge = Some(ForgeType::GitHub);
+
+        let trusted = TrustedRemoteInfo::from_repo(&repo, &config).unwrap();
+        let remote = trusted.remote();
+
+        assert_eq!(remote.host, "2001:db8::1");
+        assert_eq!(remote.base_url, "https://[2001:db8::1]");
+        assert_eq!(
+            remote.api_base_url.as_deref(),
+            Some("https://[2001:db8::1]/api/v3")
+        );
+    }
+
+    #[test]
+    fn trusted_network_remote_rejects_unconfigured_unknown_host() {
+        let (_dir, repo) = repo_with_remote("https://untrusted.example/owner/private-repo.git");
+
+        let error = TrustedRemoteInfo::from_repo(&repo, &Config::default()).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("untrusted"));
+        assert!(message.contains("global"));
+        assert!(!message.contains("private-repo"));
+    }
+
+    #[test]
+    fn trusted_network_remote_rejects_official_provider_mismatch() {
+        let (_dir, repo) = repo_with_remote("https://github.com/owner/repo.git");
+        let mut config = Config::default();
+        config.remote.forge = Some(ForgeType::GitLab);
+
+        let error = TrustedRemoteInfo::from_repo(&repo, &config).unwrap_err();
+
+        assert!(error.to_string().contains("provider"));
+    }
+
+    #[test]
+    fn trusted_network_remote_rejects_implicit_api_host_mismatch() {
+        let mut config = Config::default();
+        config.remote.base_url = "https://git.corp.example".to_string();
+        config.remote.forge = Some(ForgeType::GitHub);
+        let remote = RemoteInfo {
+            name: "origin".to_string(),
+            forge: ForgeType::GitHub,
+            host: "git.corp.example".to_string(),
+            namespace: "platform".to_string(),
+            repo: "service".to_string(),
+            base_url: "https://git.corp.example".to_string(),
+            api_base_url: Some("https://api.other.example/v3".to_string()),
+        };
+
+        let error = validate_trusted_network_remote(&remote, &config).unwrap_err();
+
+        assert!(error.to_string().contains("API hostname"));
+        assert!(error.to_string().contains("global"));
+    }
+
     #[test]
     fn test_detect_forge_prefers_host() {
         assert_eq!(
@@ -741,19 +1068,5 @@ mod tests {
             serde_json::from_str::<ForgeType>(r#""forgejo""#).unwrap(),
             ForgeType::Gitea
         );
-    }
-
-    #[test]
-    fn test_parse_http_remote_simple() {
-        let (host, path) = parse_http_remote("github.com/owner/repo").unwrap();
-        assert_eq!(host, "github.com");
-        assert_eq!(path, "owner/repo");
-    }
-
-    #[test]
-    fn test_parse_http_remote_with_git_extension() {
-        let (host, path) = parse_http_remote("github.com/owner/repo.git").unwrap();
-        assert_eq!(host, "github.com");
-        assert_eq!(path, "owner/repo");
     }
 }

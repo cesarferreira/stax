@@ -14,7 +14,6 @@
 use crate::config::Config;
 use crate::git::GitRepo;
 use anyhow::Result;
-use colored::Colorize;
 
 /// Minimum stored-range size before we even consider warning. Tiny drifts on
 /// short-lived branches are noise, not signal.
@@ -42,6 +41,20 @@ pub struct RestackPreflight {
     pub merge_base: Option<String>,
     pub stored_to_branch: Option<usize>,
     pub merge_base_to_branch: Option<usize>,
+}
+
+pub struct RebaseBoundaryDecision {
+    pub upstream: String,
+    pub adjusted: bool,
+    pub reason: Option<String>,
+}
+
+impl std::ops::Deref for RebaseBoundaryDecision {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.upstream
+    }
 }
 
 impl RestackPreflight {
@@ -106,36 +119,6 @@ impl RestackPreflight {
         }
         self.merge_base.as_deref()
     }
-
-    /// Print a one-line notice explaining the automatic correction. Caller
-    /// should gate this on `corrected_upstream()` and on the user's config.
-    pub fn print_correction(&self) {
-        let stored = self
-            .stored_to_branch
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "?".to_string());
-        let mb = self
-            .merge_base_to_branch
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "?".to_string());
-
-        println!(
-            "  {} '{}' stored boundary would replay {} commit(s); using merge-base boundary ({} commit(s)).",
-            "preflight:".yellow().bold(),
-            self.branch,
-            stored.yellow(),
-            mb.cyan()
-        );
-        println!(
-            "    {}",
-            format!(
-                "Stax will rebase '{}' with the merge-base boundary to avoid replaying unrelated history from '{}'.",
-                self.branch,
-                self.parent
-            )
-            .dimmed()
-        );
-    }
 }
 
 /// Return the upstream boundary to pass to `git rebase --onto`.
@@ -150,23 +133,43 @@ pub fn choose_rebase_upstream(
     branch: &str,
     parent: &str,
     stored_revision: &str,
-    quiet: bool,
-) -> String {
+    _quiet: bool,
+) -> RebaseBoundaryDecision {
     if !config.restack.preflight_auto_repair {
-        return stored_revision.to_string();
+        return RebaseBoundaryDecision {
+            upstream: stored_revision.to_string(),
+            adjusted: false,
+            reason: None,
+        };
     }
 
     if let Ok(report) = RestackPreflight::analyze(repo, branch, parent, stored_revision) {
         if let Some(upstream) = report.corrected_upstream() {
-            let upstream = upstream.to_string();
-            if !quiet && config.restack.preflight_warn {
-                report.print_correction();
-            }
-            return upstream;
+            return RebaseBoundaryDecision {
+                upstream: upstream.to_string(),
+                adjusted: true,
+                reason: Some(format!(
+                    "'{}' stored boundary from '{}' would replay {} commit(s); using merge-base boundary ({} commit(s))",
+                    report.branch,
+                    report.parent,
+                    report
+                        .stored_to_branch
+                        .map(|count| count.to_string())
+                        .unwrap_or_else(|| "?".into()),
+                    report
+                        .merge_base_to_branch
+                        .map(|count| count.to_string())
+                        .unwrap_or_else(|| "?".into())
+                )),
+            };
         }
     }
 
-    stored_revision.to_string()
+    RebaseBoundaryDecision {
+        upstream: stored_revision.to_string(),
+        adjusted: false,
+        reason: None,
+    }
 }
 
 #[cfg(test)]
