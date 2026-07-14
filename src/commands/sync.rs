@@ -1700,11 +1700,14 @@ pub fn run(
         stats.trunk_not_updated = Some(TrunkNotUpdated {
             branch: stack.trunk.clone(),
             remote_ref: remote_trunk_ref.clone(),
-            failure: remote_trunk_after_fetch
+            failure: if remote_trunk_after_fetch
                 .as_deref()
                 .is_some_and(|remote| !is_ancestor(&workdir, &stack.trunk, remote))
-                .then_some(TrunkUpdateFailure::Diverged)
-                .unwrap_or(TrunkUpdateFailure::Other),
+            {
+                TrunkUpdateFailure::Diverged
+            } else {
+                TrunkUpdateFailure::Other
+            },
         });
     }
 
