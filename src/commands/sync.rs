@@ -43,6 +43,13 @@ struct SyncStats {
 struct TrunkNotUpdated {
     branch: String,
     remote_ref: String,
+    failure: TrunkUpdateFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrunkUpdateFailure {
+    Diverged,
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1693,6 +1700,14 @@ pub fn run(
         stats.trunk_not_updated = Some(TrunkNotUpdated {
             branch: stack.trunk.clone(),
             remote_ref: remote_trunk_ref.clone(),
+            failure: if remote_trunk_after_fetch
+                .as_deref()
+                .is_some_and(|remote| !is_ancestor(&workdir, &stack.trunk, remote))
+            {
+                TrunkUpdateFailure::Diverged
+            } else {
+                TrunkUpdateFailure::Other
+            },
         });
     }
 
@@ -2960,10 +2975,16 @@ fn render_sync_follow_up(stats: &SyncStats) -> Vec<String> {
     let mut lines = Vec::new();
 
     if let Some(trunk) = &stats.trunk_not_updated {
-        lines.push(format!(
-            "⚠ {} did not reach {}; review the warnings above",
-            trunk.branch, trunk.remote_ref
-        ));
+        match trunk.failure {
+            TrunkUpdateFailure::Diverged => lines.push(format!(
+                "⚠ {} diverged from {}; review the warnings above",
+                trunk.branch, trunk.remote_ref
+            )),
+            TrunkUpdateFailure::Other => lines.push(format!(
+                "⚠ {} did not reach {}; review the warnings above",
+                trunk.branch, trunk.remote_ref
+            )),
+        }
     }
 
     for skip in &stats.cleanup_skips {
@@ -2980,8 +3001,14 @@ fn render_sync_follow_up(stats: &SyncStats) -> Vec<String> {
         ));
     }
 
-    if stats.trunk_not_updated.is_some() {
-        lines.push("Next: st trunk".to_string());
+    if let Some(trunk) = &stats.trunk_not_updated {
+        match trunk.failure {
+            TrunkUpdateFailure::Diverged => lines.push(format!(
+                "Next: inspect and reconcile {} with {}",
+                trunk.branch, trunk.remote_ref
+            )),
+            TrunkUpdateFailure::Other => lines.push("Next: st trunk".to_string()),
+        }
     } else if !stats.cleanup_skips.is_empty() {
         lines.push("Next: st sweep".to_string());
     }
@@ -3230,11 +3257,12 @@ mod tests {
     }
 
     #[test]
-    fn render_sync_follow_up_prioritizes_trunk_recovery() {
+    fn render_sync_follow_up_prioritizes_diverged_trunk_recovery() {
         let lines = render_sync_follow_up(&SyncStats {
             trunk_not_updated: Some(TrunkNotUpdated {
                 branch: "main".to_string(),
                 remote_ref: "origin/main".to_string(),
+                failure: TrunkUpdateFailure::Diverged,
             }),
             cleanup_skips: vec![CleanupSkip {
                 branch: "old-auth".to_string(),
@@ -3248,10 +3276,11 @@ mod tests {
         });
         let output = lines.join("\n");
 
-        assert!(output.contains("main did not reach origin/main"));
+        assert!(output.contains("main diverged from origin/main"));
         assert!(output.contains("Cleanup skipped for old-auth (dirty worktree)"));
         assert!(output.contains("Checked out main after cleanup (was old-auth)"));
-        assert!(output.contains("Next: st trunk"));
+        assert!(output.contains("Next: inspect and reconcile main with origin/main"));
+        assert!(!output.contains("Next: st trunk"));
         assert_eq!(
             lines
                 .iter()
@@ -3259,6 +3288,22 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn render_sync_follow_up_suggests_trunk_for_non_divergence_failures() {
+        let lines = render_sync_follow_up(&SyncStats {
+            trunk_not_updated: Some(TrunkNotUpdated {
+                branch: "main".to_string(),
+                remote_ref: "origin/main".to_string(),
+                failure: TrunkUpdateFailure::Other,
+            }),
+            ..SyncStats::default()
+        });
+        let output = lines.join("\n");
+
+        assert!(output.contains("main did not reach origin/main"));
+        assert!(output.contains("Next: st trunk"));
     }
 
     #[test]
