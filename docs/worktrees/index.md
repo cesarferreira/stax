@@ -174,8 +174,11 @@ lane according to the existing warm-slot configuration.
 Promotion preserves the branch, commits, upstream, PR linkage, and stax
 metadata. It does not merge, delete, untrack, or automatically stash anything.
 Both the current lane and main worktree must be clean, unlocked, and free of an
-in-progress merge, rebase, or conflicts. If switching or retirement fails,
-Stax restores the original checkouts and reports any rollback problem.
+in-progress merge, rebase, or conflicts. If switching fails, Stax restores the
+original checkouts and reports any rollback problem. Git may report a removal
+failure only after it has already unregistered the old lane; in that case Stax
+keeps the completed handoff in the main worktree, removes a dangling `.git` file
+when safe, and tells you to inspect any remaining files in the old lane path.
 
 With shell integration, the current shell moves to the main worktree only after
 the handoff succeeds. Without it, Stax prints the main worktree path and a

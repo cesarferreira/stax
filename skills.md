@@ -693,5 +693,5 @@ Symbols:
 - Use `--json` on supported commands for machine-readable output.
 - Use `stax lane` with no arguments for an interactive picker over all stax-managed lanes — useful when you forget where a session lives.
 - Use `stax worktree go` (or `sw`) + shell integration to switch between stacks without `cd` gymnastics.
-- Use `stax worktree promote` when a lane should become the main-worktree checkout; it refuses dirty or conflicted checkouts instead of stashing automatically.
+- Use `stax worktree promote` when a lane should become the main-worktree checkout; it refuses dirty or conflicted checkouts instead of stashing automatically. If Git reports a removal failure after already retiring the lane, Stax keeps the completed promotion and warns you to inspect leftover files.
 - `stax worktree list` shows ALL worktrees including those created externally via `git worktree add`.
