@@ -4,8 +4,9 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ## Prerequisites
 
-- **Rust** via [rustup](https://rustup.rs/) (the repository pins the supported
-  toolchain in `rust-toolchain.toml`)
+- **Rust** via [rustup](https://rustup.rs/) or your system package manager. Local
+  commands use the Rust toolchain installed on your machine; it must satisfy the
+  `rust-version` declared in `Cargo.toml`.
 - **cargo-nextest** for running tests: `cargo install cargo-nextest`
 - **Docker** (optional, recommended on macOS for faster full test suite)
 
@@ -66,6 +67,12 @@ cargo nextest run --tests
 
 ## Code Quality
 
+Use the focused lint target while iterating:
+
+```bash
+make lint-fast
+```
+
 Before submitting a PR, make sure these pass:
 
 ```bash
@@ -79,9 +86,9 @@ make lint
 cargo check
 ```
 
-CI enforces `make lint` on every PR. This checks formatting and treats new
-Clippy diagnostics as errors while the explicit legacy-lint allowlist in
-`scripts/lint.sh` is paid down.
+CI enforces `make lint` on every PR. This checks all targets and features,
+validates formatting, and treats new Clippy diagnostics as errors while the
+explicit legacy-lint allowlist in `scripts/clippy-lint.sh` is paid down.
 
 ## Submitting Changes
 

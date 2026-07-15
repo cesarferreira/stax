@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff install clean gui-icon gui-app gui-app-test gui-release gui-release-test install-gui-app test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint benchmark-status all
+.PHONY: build build-release release ensure-git-cliff install clean gui-icon gui-app gui-app-test gui-release gui-release-test install-gui-app test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -191,7 +191,7 @@ test-integration:
 # Run clippy and check
 check:
 	cargo check --all-targets --all-features
-	./scripts/lint.sh
+	./scripts/lint.sh full
 
 # Format code
 fmt:
@@ -200,7 +200,12 @@ fmt:
 # Lint (check formatting)
 lint:
 	cargo fmt -- --check
-	./scripts/lint.sh
+	./scripts/lint.sh full
+
+# Fast lint for local iteration (library and binary targets only)
+lint-fast:
+	cargo fmt -- --check
+	./scripts/clippy-lint.sh fast
 
 # Benchmark cold JSON status across deterministic stack sizes.
 benchmark-status:

@@ -64,9 +64,9 @@ jobs:
         run: cargo nextest run -p stax-gui --locked
       - name: Lint GPUI package
         # Clippy also lints the local stax path dependency. Mirror the reviewed
-        # legacy allowances from scripts/lint.sh while keeping other warnings fatal.
+        # legacy allowances from scripts/clippy-lint.sh while keeping other warnings fatal.
         run: |
-          cargo clippy -p stax-gui --all-targets --locked -- \
+          cargo clippy -p stax-gui --all-targets --locked --no-deps -- \
             -D warnings \
             -A clippy::assertions_on_constants \
             -A clippy::bool_assert_comparison \
