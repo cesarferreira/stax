@@ -224,7 +224,10 @@ mod tests {
         let expected = home.path().join(".config").join("stax");
         let _guard = HomeConfigGuard::set(home.path());
 
-        assert_eq!(env::var_os("STAX_CONFIG_DIR"), Some(expected.into_os_string()));
+        assert_eq!(
+            env::var_os("STAX_CONFIG_DIR"),
+            Some(expected.into_os_string())
+        );
     }
 
     fn commit_file(repo: &git2::Repository, contents: &str) -> String {
