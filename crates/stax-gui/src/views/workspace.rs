@@ -4,7 +4,7 @@ use super::text_input::BranchNameInput;
 use super::{
     AppView, ControlKind, activate_control,
     app::{CreateBranch, RedoLatest, SubmitStack, UndoLatest},
-    changes_pane, control_button, inspector_pane, stack_pane,
+    changes_pane, control_button, inspector_pane, project_switcher, stack_pane,
 };
 use crate::preferences::WorkspacePreferences;
 use crate::state::{ActionAvailability, SelectionDirection, WorkspaceState};
@@ -19,7 +19,6 @@ use stax::application::{
     OperationOutcome, OperationProgress, OperationReceipt, OperationStage, PullRequestChange,
     RepositorySnapshot, TransactionStatus,
 };
-use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefreshState {
@@ -322,6 +321,8 @@ impl WorkspaceView {
     pub fn render(
         &self,
         search_input: Option<Entity<BranchNameInput>>,
+        project_switcher_open: bool,
+        project_switcher_enabled: bool,
         theme: Theme,
         cx: &mut Context<AppView>,
     ) -> Div {
@@ -334,7 +335,7 @@ impl WorkspaceView {
             .font_family(SYSTEM_UI_FONT)
             .bg(theme.window)
             .text_color(theme.text)
-            .child(self.render_toolbar(theme, cx));
+            .child(self.render_toolbar(project_switcher_open, project_switcher_enabled, theme, cx));
         if let Some(banner) = self.render_operation_banner(theme, cx) {
             root = root.child(banner);
         }
@@ -357,10 +358,15 @@ impl WorkspaceView {
         root.child(pane_row)
     }
 
-    fn render_toolbar(&self, theme: Theme, cx: &mut Context<AppView>) -> Div {
+    fn render_toolbar(
+        &self,
+        project_switcher_open: bool,
+        project_switcher_enabled: bool,
+        theme: Theme,
+        cx: &mut Context<AppView>,
+    ) -> Div {
         let snapshot = self.state.snapshot();
         let actions = self.state.interaction_state();
-        let repository_name = repository_name(&snapshot.repository_root);
         let refresh_label = match &self.refresh {
             RefreshState::Idle => "Refresh Repository",
             RefreshState::Loading => "Refreshing…",
@@ -445,12 +451,13 @@ impl WorkspaceView {
                         .items_center()
                         .gap_2()
                         .text_sm()
-                        .child(
-                            div()
-                                .truncate()
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child(repository_name),
-                        )
+                        .child(project_switcher::button(
+                            &snapshot.repository_root,
+                            project_switcher_open,
+                            project_switcher_enabled,
+                            theme,
+                            cx,
+                        ))
                         .child(div().text_color(theme.text_muted).child("/"))
                         .child(
                             div()
@@ -825,14 +832,6 @@ fn transaction_status_label(status: TransactionStatus) -> &'static str {
         TransactionStatus::Succeeded => "succeeded",
         TransactionStatus::Failed => "failed",
     }
-}
-
-fn repository_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Repository")
-        .to_string()
 }
 
 #[cfg(test)]

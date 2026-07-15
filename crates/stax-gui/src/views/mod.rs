@@ -2,6 +2,7 @@ mod app;
 mod changes_pane;
 mod inspector_pane;
 mod operation_overlay;
+mod project_switcher;
 mod stack_pane;
 mod stack_topology;
 mod text_input;

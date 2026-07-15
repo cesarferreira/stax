@@ -41,6 +41,19 @@ impl SnapshotLoader for FixtureLoader {
     }
 }
 
+struct PathAwareLoader {
+    rejected: Option<PathBuf>,
+}
+
+impl SnapshotLoader for PathAwareLoader {
+    fn load(&self, path: &Path) -> Result<RepositorySnapshot, String> {
+        if self.rejected.as_deref() == Some(path) {
+            return Err(format!("{} is not a Git repository", path.display()));
+        }
+        Ok(snapshot(&path.display().to_string()))
+    }
+}
+
 struct FixturePicker {
     result: Result<Option<PathBuf>, String>,
     calls: Arc<AtomicUsize>,
@@ -451,6 +464,19 @@ fn services_with_workspace_preferences(
     )
 }
 
+fn path_aware_services(
+    picker: Rc<dyn RepositoryPicker>,
+    recents: Arc<FixtureRecents>,
+    rejected: Option<PathBuf>,
+) -> AppServices {
+    AppServices::with_hydration(
+        Arc::new(PathAwareLoader { rejected }),
+        picker,
+        recents,
+        Arc::new(FixtureHydration::immediate_no_remote()),
+    )
+}
+
 #[gpui::test]
 fn no_path_renders_the_welcome_mode_without_panicking(cx: &mut TestAppContext) {
     let recents = Arc::new(FixtureRecents::default());
@@ -467,6 +493,62 @@ fn no_path_renders_the_welcome_mode_without_panicking(cx: &mut TestAppContext) {
         cx.update(|_, app| view.read(app).inline_error().map(str::to_string)),
         None
     );
+}
+
+#[gpui::test]
+fn no_path_reopens_the_most_recent_repository(cx: &mut TestAppContext) {
+    let recents = Arc::new(FixtureRecents {
+        paths: Mutex::new(vec![
+            PathBuf::from("/recent/last"),
+            PathBuf::from("/recent/older"),
+        ]),
+        ..Default::default()
+    });
+    let services = path_aware_services(
+        Rc::new(FixturePicker::new(Ok(None))),
+        Arc::clone(&recents),
+        None,
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
+
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.update(|_, app| {
+            view.read(app)
+                .workspace()
+                .map(|workspace| workspace.state().snapshot().repository_root.clone())
+        }),
+        Some(PathBuf::from("/recent/last"))
+    );
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 1);
+}
+
+#[gpui::test]
+fn invalid_restored_repository_returns_to_the_actionable_error_view(cx: &mut TestAppContext) {
+    let rejected = PathBuf::from("/recent/not-a-repository");
+    let recents = Arc::new(FixtureRecents {
+        paths: Mutex::new(vec![rejected.clone()]),
+        ..Default::default()
+    });
+    let services = path_aware_services(
+        Rc::new(FixturePicker::new(Ok(None))),
+        recents,
+        Some(rejected.clone()),
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
+
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.update(|_, app| view.read(app).mode_kind()),
+        AppModeKind::Error
+    );
+    assert!(cx.update(|_, app| {
+        view.read(app)
+            .inline_error()
+            .is_some_and(|error| error.contains("is not a Git repository"))
+    }));
 }
 
 #[gpui::test]
@@ -488,12 +570,140 @@ fn workspace_renders_codex_presentation_landmarks(cx: &mut TestAppContext) {
         "stack-topology-node",
         "changes-file-summary",
         "inspector-card",
+        "inspector-branch-strip",
+        "inspector-health-section",
+        "inspector-metrics",
+        "inspector-pr-section",
+        "inspector-ci-section",
+        "inspector-actions-section",
     ] {
         assert!(
             cx.debug_bounds(selector).is_some(),
             "expected {selector} to be rendered"
         );
     }
+}
+
+#[gpui::test]
+fn project_switcher_lists_recent_repositories_and_switches_on_release(cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let recents = Arc::new(FixtureRecents {
+        paths: Mutex::new(vec![
+            PathBuf::from("/projects/current"),
+            PathBuf::from("/projects/other"),
+        ]),
+        ..Default::default()
+    });
+    let services = path_aware_services(Rc::new(FixturePicker::new(Ok(None))), recents, None);
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(
+            Some(PathBuf::from("/projects/current")),
+            services,
+            window,
+            cx,
+        )
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("project-switcher-control").is_some());
+    assert!(cx.debug_bounds("project-switcher-menu").is_none());
+
+    let switcher = cx
+        .debug_bounds("project-switcher-control")
+        .expect("project switcher control should be rendered")
+        .center();
+    cx.simulate_mouse_move(switcher, None, Modifiers::default());
+    cx.simulate_mouse_down(switcher, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(switcher, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("project-switcher-menu").is_some());
+    assert!(cx.debug_bounds("project-switcher-add").is_some());
+    let other = cx
+        .debug_bounds("project-switcher-repository-0")
+        .expect("other recent repository should be rendered")
+        .center();
+    cx.simulate_mouse_move(other, None, Modifiers::default());
+    cx.simulate_mouse_down(other, MouseButton::Left, Modifiers::default());
+    assert_eq!(
+        cx.update(|_, app| {
+            view.read(app)
+                .workspace()
+                .map(|workspace| workspace.state().snapshot().repository_root.clone())
+        }),
+        Some(PathBuf::from("/projects/current"))
+    );
+    cx.simulate_mouse_up(other, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.update(|_, app| {
+            view.read(app)
+                .workspace()
+                .map(|workspace| workspace.state().snapshot().repository_root.clone())
+        }),
+        Some(PathBuf::from("/projects/other"))
+    );
+    assert!(!cx.update(|_, app| view.read(app).project_switcher_is_open()));
+}
+
+#[gpui::test]
+fn project_switcher_add_opens_and_keeps_the_selected_repository_visible(cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let picker_calls = Arc::new(AtomicUsize::new(0));
+    let services = path_aware_services(
+        Rc::new(FixturePicker::with_calls(
+            Ok(Some(PathBuf::from("/projects/new"))),
+            Arc::clone(&picker_calls),
+        )),
+        Arc::new(FixtureRecents::default()),
+        None,
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(
+            Some(PathBuf::from("/projects/current")),
+            services,
+            window,
+            cx,
+        )
+    });
+    cx.run_until_parked();
+
+    let switcher = cx
+        .debug_bounds("project-switcher-control")
+        .expect("project switcher control should be rendered")
+        .center();
+    cx.simulate_mouse_move(switcher, None, Modifiers::default());
+    cx.simulate_mouse_down(switcher, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(switcher, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    let add = cx
+        .debug_bounds("project-switcher-add")
+        .expect("Add Project control should be rendered")
+        .center();
+    cx.simulate_mouse_move(add, None, Modifiers::default());
+    cx.simulate_mouse_down(add, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(add, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(picker_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        cx.update(|_, app| {
+            view.read(app)
+                .workspace()
+                .map(|workspace| workspace.state().snapshot().repository_root.clone())
+        }),
+        Some(PathBuf::from("/projects/new"))
+    );
+
+    view.update_in(cx, |view, _window, cx| view.toggle_project_switcher(cx));
+    cx.run_until_parked();
+
+    assert!(
+        cx.debug_bounds("project-switcher-current").is_some(),
+        "the selected project should remain visible as the current recent project"
+    );
 }
 
 #[gpui::test]
@@ -644,78 +854,114 @@ fn keyboard_recent_repository_row_space_activates_once(cx: &mut TestAppContext) 
 fn assert_recent_repository_row_key_activates_once(key: &str, cx: &mut TestAppContext) {
     cx.update(super::init);
     let recents = Arc::new(FixtureRecents {
-        paths: Mutex::new(vec![PathBuf::from("/recent/repo")]),
+        paths: Mutex::new(vec![
+            PathBuf::from("/current/repo"),
+            PathBuf::from("/recent/repo"),
+        ]),
         ..Default::default()
     });
-    let services = services(Ok(snapshot("/recent/repo")), Ok(None), Arc::clone(&recents));
-    let (view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
+    let services = path_aware_services(
+        Rc::new(FixturePicker::new(Ok(None))),
+        Arc::clone(&recents),
+        None,
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/current/repo")), services, window, cx)
+    });
     cx.run_until_parked();
 
-    cx.update(|window, _| {
-        window.focus_next();
-        window.focus_next();
-    });
+    let switcher = cx
+        .debug_bounds("project-switcher-control")
+        .expect("project switcher control should be rendered")
+        .center();
+    cx.simulate_mouse_move(switcher, None, Modifiers::default());
+    cx.simulate_mouse_down(switcher, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(switcher, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, _| window.focus_next());
     cx.simulate_keystrokes(key);
-    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 1);
     cx.simulate_event(KeyDownEvent {
         keystroke: Keystroke::parse(key).unwrap(),
         is_held: true,
     });
-    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 1);
 
     cx.simulate_event(KeyUpEvent {
         keystroke: Keystroke::parse(key).unwrap(),
     });
-    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 1);
+    cx.run_until_parked();
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 2);
     assert_eq!(
-        cx.update(|_, app| view.read(app).mode_kind()),
-        AppModeKind::Workspace
+        cx.update(|_, app| {
+            view.read(app)
+                .workspace()
+                .map(|workspace| workspace.state().snapshot().repository_root.clone())
+        }),
+        Some(PathBuf::from("/recent/repo"))
     );
 }
 
 #[gpui::test]
 fn mouse_recent_repository_row_activates_once_on_release(cx: &mut TestAppContext) {
     let recents = Arc::new(FixtureRecents {
-        paths: Mutex::new(vec![PathBuf::from("/recent/repo")]),
+        paths: Mutex::new(vec![
+            PathBuf::from("/current/repo"),
+            PathBuf::from("/recent/repo"),
+        ]),
         ..Default::default()
     });
-    let services = services(Ok(snapshot("/recent/repo")), Ok(None), Arc::clone(&recents));
-    let (view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
+    let services = path_aware_services(
+        Rc::new(FixturePicker::new(Ok(None))),
+        Arc::clone(&recents),
+        None,
+    );
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        AppView::new(Some(PathBuf::from("/current/repo")), services, window, cx)
+    });
+    cx.run_until_parked();
+    view.update_in(cx, |view, _window, cx| view.toggle_project_switcher(cx));
     cx.run_until_parked();
     let position = cx
-        .debug_bounds("recent-repository-control-0")
+        .debug_bounds("project-switcher-repository-0")
         .expect("first recent repository control was not rendered")
         .center();
 
     cx.simulate_mouse_move(position, None, Modifiers::default());
     cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
-    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 1);
     assert_eq!(
-        cx.update(|_, app| view.read(app).mode_kind()),
-        AppModeKind::Welcome
+        cx.update(|_, app| {
+            view.read(app)
+                .workspace()
+                .map(|workspace| workspace.state().snapshot().repository_root.clone())
+        }),
+        Some(PathBuf::from("/current/repo"))
     );
 
     cx.simulate_mouse_up(position, MouseButton::Left, Modifiers::default());
-    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 1);
+    cx.run_until_parked();
+    assert_eq!(recents.record_attempts.load(Ordering::SeqCst), 2);
     assert_eq!(
-        cx.update(|_, app| view.read(app).mode_kind()),
-        AppModeKind::Workspace
+        cx.update(|_, app| {
+            view.read(app)
+                .workspace()
+                .map(|workspace| workspace.state().snapshot().repository_root.clone())
+        }),
+        Some(PathBuf::from("/recent/repo"))
     );
 }
 
 #[gpui::test]
 fn recent_repositories_load_after_the_welcome_first_paint(cx: &mut TestAppContext) {
-    let recents = Arc::new(FixtureRecents {
-        paths: Mutex::new(vec![PathBuf::from("/recent/repo")]),
-        ..Default::default()
-    });
+    let recents = Arc::new(FixtureRecents::default());
     let services = services(Ok(snapshot("/repo")), Ok(None), recents);
     let (view, cx) = cx.add_window_view(|window, cx| AppView::new(None, services, window, cx));
 
     cx.run_until_parked();
     assert_eq!(
         cx.update(|_, app| view.read(app).recent_repositories().to_vec()),
-        vec![PathBuf::from("/recent/repo")]
+        Vec::<PathBuf>::new()
     );
 
     let token = view.update_in(cx, |view, _window, cx| {
@@ -1277,6 +1523,7 @@ fn keyboard_stack_row_activates_once_for_enter_and_space(cx: &mut TestAppContext
         cx.update(|_, app| view.read(app).workspace().unwrap().state().generation());
 
     cx.update(|window, _| {
+        window.focus_next();
         window.focus_next();
         window.focus_next();
         window.focus_next();

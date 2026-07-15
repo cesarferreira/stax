@@ -47,11 +47,15 @@ open -n -b com.cesarferreira.stax --args <canonical-path>
 
 The `-n` flag is part of the contract. Every `st gui [path]` invocation opens a fresh app process/window and forwards exactly one canonical repository path after `--args`. If LaunchServices cannot find or start the bundle, install `Stax.app` in `/Applications` or run `make install-gui-app` and confirm `$HOME/Applications/Stax.app` exists.
 
+Launching Stax directly from Finder or the Dock supplies no repository path. In that case, and when macOS reopens the app after its last window closed, Stax automatically opens the most recently used valid repository. An explicit path always takes precedence. If the saved repository can no longer be opened, Stax shows the normal actionable repository error and keeps the folder picker available.
+
 ## Workspace
 
 ![Stax native macOS GUI showing a stacked branch graph, changes, and branch inspector](../assets/gui.png)
 
 The workspace shows the repository stack, the selected branch changes, and an inspector for branch actions and status. Background hydration refreshes CI, PR, and diff data without blocking normal browsing. Selecting a branch changes the visible details; it does not check out the branch until you explicitly run Checkout.
+
+The project name at the left of the toolbar is a dropdown. The active project remains visible at the top marked **Current**; use the other entries to switch to any recent repository or choose **Add Project…** to select another folder. Successfully opened projects move to the top of the recent list, which keeps up to ten canonical repository paths. Switching and adding projects are disabled while a Git mutation is running, under the same safety rule as Open Repository.
 
 Press `/` to focus case-insensitive branch-name search. Up and Down move through the filtered rows, Enter checks out the selected result, and Escape clears the query and restores the selection from before search. A query with no matches leaves the workspace geometry intact.
 

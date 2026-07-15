@@ -685,7 +685,7 @@ Symbols:
 ## Tips
 
 - Run `stax` with no args to launch the interactive TUI; selected-branch CI hydrates in the background, unchanged branch diffs can be reused from the repo-local TUI cache on reopen, and `1`/`2`/`3` toggle the Stack/Summary/Patch panes for small terminals. Pane visibility is remembered per repo.
-- Run `stax gui [path]` on macOS to launch a fresh installed GUI window for one repository; use `/` for search, `1`/`2`/`3` for persistent pane toggles, and the guarded controls, menus, or shortcuts for structural operations and local-only undo/redo.
+- Run `stax gui [path]` on macOS to launch a fresh installed GUI window for one repository. A pathless app launch restores the last project; use the toolbar project dropdown to switch recent repositories or add another. Use `/` for search, `1`/`2`/`3` for persistent pane toggles, and the guarded controls, menus, or shortcuts for structural operations and local-only undo/redo.
 - Use `stax --help` or `stax <command> --help` for exact flags.
 - Add global `--trace` to profile instrumented Git subprocesses and total command time; use `make benchmark-status` for reproducible cold status scaling fixtures.
 - Hidden convenience shortcuts: `stax bc`, `stax bu`, `stax bd`, `stax bs`, `stax w`, `stax wtc`, `stax wtgo`, `stax wtrm`.
