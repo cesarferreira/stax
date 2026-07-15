@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.5] - 2026-07-15
+
+### 🐛 Bug Fixes
+
+- Require notarized macOS app releases
+- Ad-hoc sign macOS app releases
 ## [0.96.4] - 2026-07-15
 
 ### 🧪 Testing
 
 - Make diff failure assertion cross-platform
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.96.3] - 2026-07-15
 
 ### 🐛 Bug Fixes
