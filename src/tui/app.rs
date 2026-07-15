@@ -2077,7 +2077,9 @@ mod tests {
             .expect("open session")
             .diff("feature", "main")
             .unwrap_err();
-        assert!(format!("{error:#}").contains("exit status"));
+        let message = format!("{error:#}");
+        assert!(message.contains("git diff"), "{message}");
+        assert!(message.contains("failed with"), "{message}");
         assert!(TuiDiffCache::load(&cache_dir).get(&key).is_none());
     }
 
