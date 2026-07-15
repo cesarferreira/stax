@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.2] - 2026-07-15
+
+### 🧪 Testing
+
+- Align PID lease checks with platform behavior
 ## [0.96.1] - 2026-07-15
 
 ### 🐛 Bug Fixes
@@ -11,6 +16,10 @@ All notable changes to this project will be documented in this file.
 ### ⚡ Performance
 
 - Streamline Clippy workflow ([#630](https://github.com/cesarferreira/stax/issues/630))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.96.0] - 2026-07-15
 
 ### 🚀 Features
