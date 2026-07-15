@@ -236,6 +236,7 @@ mod tests {
         assert!(acquire_idle_slot(dir.path()).unwrap().is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn acquire_reclaims_dead_pid_lease() {
         let dir = tempdir().unwrap();
@@ -258,6 +259,26 @@ mod tests {
             .expect("dead-pid slot reclaimed");
         assert_eq!(slot.path, PathBuf::from("/tmp/slot-dead"));
         assert_eq!(slot.lease_owner_pid, Some(std::process::id()));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn leased_slot_is_not_reclaimed_without_pid_liveness() {
+        let dir = tempdir().unwrap();
+        let unknown_pid = 999_999_999u32;
+        with_lock(dir.path(), |pool| {
+            pool.slots.push(Slot {
+                path: PathBuf::from("/tmp/slot-unknown"),
+                state: SlotState::Leased,
+                branch: None,
+                lease_owner_pid: Some(unknown_pid),
+                last_used: 1,
+            });
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(acquire_idle_slot(dir.path()).unwrap().is_none());
     }
 
     #[test]
