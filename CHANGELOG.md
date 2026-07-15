@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.0] - 2026-07-15
+
+### 🚀 Features
+
+- *(gui)* Restore and switch projects ([#626](https://github.com/cesarferreira/stax/issues/626))
+
+### 🐛 Bug Fixes
+
+- Preserve promoted worktree after partial retirement ([#621](https://github.com/cesarferreira/stax/issues/621))
+- Fixed st pr panic
+- Clarify diverged trunk sync recovery ([#620](https://github.com/cesarferreira/stax/issues/620))
+- Preserve st pr lookup errors ([#625](https://github.com/cesarferreira/stax/issues/625))
+
+### 💼 Other
+
+- Fix GUI screenshot link in docs ([#623](https://github.com/cesarferreira/stax/issues/623))
+- Guard CI tests with explicit config dir and vendored OpenSSL for GUI
+- Removed unnecessary files
+- Fix worktree promotion for nested worktrees ([#629](https://github.com/cesarferreira/stax/issues/629))
+
+### 📚 Documentation
+
+- *(gui)* Add missing GUI screenshot to interface page ([#619](https://github.com/cesarferreira/stax/issues/619))
+
+### 🧪 Testing
+
+- Cover worktree promotion safety guards ([#609](https://github.com/cesarferreira/stax/issues/609))
 ## [0.95.0] - 2026-07-13
 
 ### 🚀 Features
@@ -41,6 +68,10 @@ All notable changes to this project will be documented in this file.
 ### 🎨 Styling
 
 - *(gui)* Adopt a Codex-inspired workspace ([#618](https://github.com/cesarferreira/stax/issues/618))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.94.0] - 2026-07-07
 
 ### 🚀 Features
