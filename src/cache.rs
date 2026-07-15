@@ -944,13 +944,19 @@ mod tests {
         TuiDiffCache::insert_persisted(dir.path(), second_key.into(), disk_diff("second")).unwrap();
         let first_path = TuiDiffCache::entry_path(dir.path(), first_key);
         let second_path = TuiDiffCache::entry_path(dir.path(), second_key);
-        File::open(&first_path)
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&first_path)
             .unwrap()
             .set_times(
                 fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1)),
             )
             .unwrap();
-        File::open(&second_path)
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&second_path)
             .unwrap()
             .set_times(
                 fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2)),
@@ -1019,13 +1025,19 @@ mod tests {
         fs::write(&first, vec![b'a'; 10]).unwrap();
         fs::write(&second, vec![b'b'; 10]).unwrap();
         fs::write(&unrelated, b"keep me").unwrap();
-        File::open(&first)
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&first)
             .unwrap()
             .set_times(
                 fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1)),
             )
             .unwrap();
-        File::open(&second)
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&second)
             .unwrap()
             .set_times(
                 fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2)),
@@ -1050,13 +1062,19 @@ mod tests {
         fs::write(&first, vec![b'a'; 10]).unwrap();
         fs::write(&second, vec![b'b'; 20]).unwrap();
         fs::create_dir(&unrelated).unwrap();
-        File::open(&first)
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&first)
             .unwrap()
             .set_times(
                 fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1)),
             )
             .unwrap();
-        File::open(&second)
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&second)
             .unwrap()
             .set_times(
                 fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(2)),
