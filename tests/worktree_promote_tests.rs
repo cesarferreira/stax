@@ -161,6 +161,44 @@ fn wt_promote_works_from_nested_directory() {
 }
 
 #[test]
+fn wt_promote_works_when_linked_worktree_is_nested_under_main() {
+    let repo = TestRepo::new();
+    repo.create_file(".gitignore", ".worktrees/\n");
+    repo.commit("Ignore nested worktrees");
+
+    repo.run_stax(&["create", "promote-feature"])
+        .assert_success();
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "promoted\n");
+    repo.commit("Add promoted feature");
+    repo.run_stax(&["checkout", "main"]).assert_success();
+
+    let linked = repo
+        .path()
+        .join(".worktrees")
+        .join("promote-feature-worktree");
+    fs::create_dir_all(linked.parent().expect("nested worktree parent"))
+        .expect("create nested worktree parent");
+    repo.git(&[
+        "worktree",
+        "add",
+        linked.to_str().expect("UTF-8 worktree path"),
+        &branch,
+    ])
+    .assert_success();
+
+    let output = repo.run_stax_in(&linked, &["wt", "promote"]);
+
+    output.assert_success();
+    assert_eq!(current_branch(&repo, &repo.path()), branch);
+    assert!(repo.path().join("feature.txt").exists());
+    assert!(
+        !linked.exists(),
+        "promoted nested worktree should be retired"
+    );
+}
+
+#[test]
 fn wt_promote_refuses_dirty_linked_worktree() {
     let (repo, branch, linked) = setup_promotable_worktree();
     fs::write(linked.join("dirty.txt"), "dirty\n").expect("write dirty source file");

@@ -580,6 +580,16 @@ impl GitRepo {
             &mut current_prunable_reason,
         );
 
+        // Worktrees can be nested beneath another worktree's path (for example,
+        // `<repo>/.worktrees/feature`). Choose the deepest matching root so only
+        // the actual current worktree is marked current.
+        let current_worktree_path = raw_entries
+            .iter()
+            .map(|(path, _, _, _, _, _)| path)
+            .filter(|path| cwd_normalized.starts_with(path))
+            .max_by_key(|path| path.components().count())
+            .cloned();
+
         let label_candidates = raw_entries
             .iter()
             .enumerate()
@@ -602,7 +612,7 @@ impl GitRepo {
             .map(
                 |(idx, (path, branch, is_locked, lock_reason, is_prunable, prunable_reason))| {
                     let is_main = idx == 0;
-                    let is_current = cwd_normalized.starts_with(&path);
+                    let is_current = current_worktree_path.as_ref() == Some(&path);
                     WorktreeInfo {
                         name: labels[idx].clone(),
                         path,
