@@ -1,4 +1,7 @@
-use crate::application::{NoopOperationReporter, OperationOutcome, RepositorySession};
+use crate::application::{
+    NoopOperationReporter, OperationErrorDetails, OperationErrorKind, OperationOutcome,
+    RepositorySession,
+};
 use crate::commands::github_list::{
     CellTone, TableCell, TableColumn, TruncationMode, format_relative_time, print_table,
     split_flexible_width, terminal_width,
@@ -43,11 +46,17 @@ pub fn run_open() -> Result<()> {
         .resolve_pull_request_url(&current, &mut NoopOperationReporter)
     {
         Ok(receipt) => receipt,
-        Err(_) => anyhow::bail!(
-            "No PR found for branch '{}'. Use {} to create one.",
-            current,
-            "stax submit".cyan()
-        ),
+        Err(error)
+            if error.kind == OperationErrorKind::PreconditionFailed
+                && matches!(error.details, OperationErrorDetails::PullRequest { .. }) =>
+        {
+            anyhow::bail!(
+                "No PR found for branch '{}'. Use {} to create one.",
+                current,
+                "stax submit".cyan()
+            )
+        }
+        Err(error) => return Err(error.into()),
     };
     let pr_url = match receipt.outcome {
         OperationOutcome::PullRequestResolved { url, .. } => url,
