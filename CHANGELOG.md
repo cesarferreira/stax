@@ -2,11 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.3] - 2026-07-15
+
+### 🐛 Bug Fixes
+
+- Honor HOME for config directory
 ## [0.96.2] - 2026-07-15
 
 ### 🧪 Testing
 
 - Align PID lease checks with platform behavior
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.96.1] - 2026-07-15
 
 ### 🐛 Bug Fixes
