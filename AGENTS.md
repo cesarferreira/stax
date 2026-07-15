@@ -20,6 +20,12 @@
 - This suite is process/filesystem heavy (`git` + `stax` subprocesses), and Linux Docker is dramatically faster and more stable than native macOS for full runs.
 - Native macOS performance remains sensitive to endpoint-security tooling; do not assume a warm native timing will match Docker.
 
+## Lint Command Policy
+
+- During implementation, use `make lint-fast` for formatting plus Clippy on library and binary targets.
+- Before completion or submission, run `make lint` once to cover all targets and features.
+- Use these Make targets instead of ad hoc `cargo clippy` commands so local and CI lint flags stay aligned.
+
 ## Documentation Policy
 
 When a change touches user-visible behaviour — new commands, changed flags, renamed concepts, removed features, or updated defaults — the following must also be updated in the same PR:
