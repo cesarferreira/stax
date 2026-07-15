@@ -14,7 +14,7 @@ mv Stax.app /Applications/
 
 Use `Stax-x86_64-apple-darwin.zip` on Intel. The app is a separate artifact on the same release, not a new package, and it does not enlarge the CLI binaries.
 
-Unsigned builds are usable without weakening system security: download only from the project GitHub Releases page, Control-click `Stax.app`, choose **Open**, then choose **Open** again. If Gatekeeper blocks the first launch, use **System Settings → Privacy & Security → Open Anyway**. Never disable Gatekeeper globally. When maintainers configure signing and notarization, the same artifact names open through the normal macOS flow.
+Ad-hoc-signed builds are usable through a per-app Gatekeeper exception: download only from the project GitHub Releases page and try to open `Stax.app` once, then use **System Settings → Privacy & Security → Open Anyway**, authenticate, and confirm **Open**. The override is available for about an hour after the blocked launch. Never disable Gatekeeper globally. When maintainers configure Developer ID signing and notarization, the same artifact names open through the normal macOS flow.
 
 Contributors can build and register a local bundle instead:
 

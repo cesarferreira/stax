@@ -72,7 +72,7 @@ if [ "$notary_values" -eq 3 ] && [ -z "$signing_identity" ]; then
   fail "notarization requires STAX_GUI_SIGNING_IDENTITY"
 fi
 
-release_mode=unsigned
+release_mode=adhoc
 if [ -n "$signing_identity" ]; then
   release_mode=signed
 fi
@@ -140,8 +140,10 @@ STAX_GUI_BUILD_NUMBER="$build_number" \
 if [ -n "$signing_identity" ]; then
   codesign --force --deep --options runtime --timestamp \
     --sign "$signing_identity" "$app"
-  codesign --verify --deep --strict --verbose=2 "$app"
+else
+  codesign --force --deep --sign - "$app"
 fi
+codesign --verify --deep --strict --verbose=2 "$app"
 
 archive="$fixture/Stax-$target.zip"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"

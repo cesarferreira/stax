@@ -62,7 +62,7 @@ ditto -x -k Stax-x86_64-apple-darwin.zip .
 mv Stax.app /Applications/
 ```
 
-Download only from the project [GitHub Releases page](https://github.com/cesarferreira/stax/releases/latest). For an unsigned release, Control-click `/Applications/Stax.app`, choose **Open**, then choose **Open** again. If Gatekeeper still blocks the first launch, open **System Settings → Privacy & Security** and choose **Open Anyway** for Stax. Do not disable Gatekeeper globally. Signed and notarized releases open normally.
+Download only from the project [GitHub Releases page](https://github.com/cesarferreira/stax/releases/latest). For an ad-hoc-signed release, try to open `/Applications/Stax.app` once, then open **System Settings → Privacy & Security** and choose **Open Anyway** for Stax. Authenticate and confirm **Open**. The override is available for about an hour after the blocked launch. Do not disable Gatekeeper globally. Developer ID-signed and notarized releases open normally.
 
 Launch the welcome window from Finder or Spotlight, or open a repository directly with `st gui [path]`. The app bundle id is `com.cesarferreira.stax`.
 

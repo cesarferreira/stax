@@ -170,7 +170,6 @@ jobs:
       - name: Package app release
         shell: bash
         env:
-          STAX_GUI_REQUIRE_NOTARIZATION: "1"
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}

@@ -37,7 +37,7 @@ expect_validation() {
   test "$actual" = "$expected"
 }
 
-expect_validation unsigned
+expect_validation adhoc
 expect_validation signed STAX_GUI_SIGNING_IDENTITY="Developer ID Application: Test"
 expect_validation notarized \
   STAX_GUI_SIGNING_IDENTITY="Developer ID Application: Test" \
@@ -111,3 +111,11 @@ test -f "$archive"
 unzip -l "$archive" >"$fixture/archive-list.txt"
 grep -q 'Stax.app/Contents/MacOS/Stax' "$fixture/archive-list.txt"
 grep -q 'Stax.app/Contents/Resources/AppIcon.icns' "$fixture/archive-list.txt"
+
+extracted="$fixture/extracted"
+mkdir -p "$extracted"
+ditto -x -k "$archive" "$extracted"
+codesign --verify --deep --strict --verbose=2 "$extracted/Stax.app"
+codesign -dvvv "$extracted/Stax.app" \
+  >"$fixture/signature.stdout" 2>"$fixture/signature.stderr"
+grep -q '^Signature=adhoc$' "$fixture/signature.stderr"

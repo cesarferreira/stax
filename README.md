@@ -121,7 +121,7 @@ mv Stax.app /Applications/
 
 On an Intel Mac, use `Stax-x86_64-apple-darwin.zip` instead. The app is a separate release artifact, not a new crates.io package, and installing it does not enlarge the `stax` or `st` CLI binaries.
 
-Unsigned releases are supported. Download only from the project Releases page, move the app to `/Applications`, then Control-click `Stax.app`, choose **Open**, and choose **Open** again. If macOS still blocks the first launch, use **System Settings → Privacy & Security → Open Anyway** for Stax. Do not disable Gatekeeper globally. Releases open normally when the optional signing and notarization credentials are configured.
+Ad-hoc-signed releases are supported. Download only from the project Releases page, move the app to `/Applications`, and try to open it once. Then use **System Settings → Privacy & Security → Open Anyway** for Stax, authenticate, and confirm **Open**. The override is available for about an hour after the blocked launch. Do not disable Gatekeeper globally. Releases open normally when the optional signing and notarization credentials are configured.
 
 Contributors can also build or install the app locally:
 

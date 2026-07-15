@@ -45,7 +45,7 @@ The release workflow keeps the five existing CLI archives and adds two independe
 
 These contain `Stax.app` with bundle id `com.cesarferreira.stax`. They are separate artifacts on the same GitHub Release, not a new crates.io package. Homebrew checksum updates remain CLI-only. The GUI package test validates the bundle metadata, executable architecture and version, and enforces an 80 MiB archive ceiling without increasing either CLI binary.
 
-Unsigned artifacts are the no-secret baseline. Optional signing and notarization use these six repository secrets:
+Ad-hoc-signed artifacts are the no-secret baseline. Optional Developer ID signing and notarization use these six repository secrets:
 
 | Secret | Purpose |
 |---|---|
@@ -56,7 +56,7 @@ Unsigned artifacts are the no-secret baseline. Optional signing and notarization
 | `APPLE_TEAM_ID` | Apple Developer team id |
 | `APPLE_APP_PASSWORD` | App-specific password used by `notarytool` |
 
-The three `MACOS_*` certificate values are all-or-none. With all three, CI imports a temporary keychain and signs with the hardened runtime; with none, it publishes unsigned archives. The three notarization values are also all-or-none and require a complete signing configuration. Partial configuration fails the release instead of silently downgrading it. With all six values, CI submits each signed archive, waits for acceptance, staples the ticket, validates it, and recreates the same artifact filename.
+The three `MACOS_*` certificate values are all-or-none. With all three, CI imports a temporary keychain and signs with the hardened runtime; with none, it ad-hoc signs the complete app bundle so its sealed resources remain valid. The three notarization values are also all-or-none and require a complete signing configuration. Partial configuration fails the release instead of silently downgrading it. With all six values, CI submits each signed archive, waits for acceptance, staples the ticket, validates it, and recreates the same artifact filename.
 
 To inspect an extracted release locally:
 
@@ -67,4 +67,4 @@ spctl --assess --type execute --verbose=4 Stax.app
 Stax.app/Contents/MacOS/Stax --version
 ```
 
-For unsigned output, the first command reports an ad-hoc or absent authority and `spctl` may reject the app; that is expected for the supported Gatekeeper Control-click/Open Anyway flow. `make gui-release-test` exercises unsigned environment validation and a native architecture-specific package. `scripts/gui-release-workflow-tests.sh` checks the CI artifact and secret contract.
+Without Developer ID credentials, the first command reports an ad-hoc signature and `spctl` rejects the app; that is expected for the supported per-app **Privacy & Security → Open Anyway** flow. Strict `codesign` verification must still pass so Gatekeeper does not report the bundle as damaged. `make gui-release-test` exercises ad-hoc environment validation and a native architecture-specific package. `scripts/gui-release-workflow-tests.sh` checks the CI artifact and optional secret contract.
