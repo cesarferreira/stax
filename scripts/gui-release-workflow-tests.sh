@@ -21,6 +21,7 @@ require_literal "$release_workflow" "MACOS_CERTIFICATE_P12"
 require_literal "$release_workflow" "security create-keychain"
 require_literal "$release_workflow" "codesign"
 require_literal "$release_workflow" "APPLE_APP_PASSWORD"
+require_literal "$release_workflow" 'STAX_GUI_REQUIRE_NOTARIZATION: "1"'
 
 for target in aarch64-apple-darwin x86_64-apple-darwin; do
   require_literal "$release_workflow" "target: $target"

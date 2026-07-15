@@ -53,6 +53,11 @@ signing_identity="${STAX_GUI_SIGNING_IDENTITY:-}"
 apple_id="${APPLE_ID:-}"
 team_id="${APPLE_TEAM_ID:-}"
 app_password="${APPLE_APP_PASSWORD:-}"
+require_notarization="${STAX_GUI_REQUIRE_NOTARIZATION:-0}"
+case "$require_notarization" in
+  0|1) ;;
+  *) fail "STAX_GUI_REQUIRE_NOTARIZATION must be 0 or 1" ;;
+esac
 notary_values=0
 for value in "$apple_id" "$team_id" "$app_password"; do
   if [ -n "$value" ]; then
@@ -73,6 +78,9 @@ if [ -n "$signing_identity" ]; then
 fi
 if [ "$notary_values" -eq 3 ]; then
   release_mode=notarized
+fi
+if [ "$require_notarization" = 1 ] && [ "$release_mode" != notarized ]; then
+  fail "this release requires a signed and notarized app"
 fi
 
 if [ "$validate_only" = true ]; then

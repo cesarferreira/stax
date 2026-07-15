@@ -25,6 +25,7 @@ run_validation() {
     -u APPLE_ID \
     -u APPLE_TEAM_ID \
     -u APPLE_APP_PASSWORD \
+    -u STAX_GUI_REQUIRE_NOTARIZATION \
     "$@" \
     "$packager" --validate-environment --target "$target"
 }
@@ -43,6 +44,30 @@ expect_validation notarized \
   APPLE_ID="release@example.com" \
   APPLE_TEAM_ID="TEAM123456" \
   APPLE_APP_PASSWORD="app-password"
+
+if run_validation STAX_GUI_REQUIRE_NOTARIZATION=1 \
+  >"$fixture/required.stdout" 2>"$fixture/required.stderr"
+then
+  echo "Expected required notarization without credentials to fail." >&2
+  exit 1
+fi
+grep -q "requires a signed and notarized app" "$fixture/required.stderr"
+
+expect_validation notarized \
+  STAX_GUI_REQUIRE_NOTARIZATION=1 \
+  STAX_GUI_SIGNING_IDENTITY="Developer ID Application: Test" \
+  APPLE_ID="release@example.com" \
+  APPLE_TEAM_ID="TEAM123456" \
+  APPLE_APP_PASSWORD="app-password"
+
+if run_validation STAX_GUI_REQUIRE_NOTARIZATION=maybe \
+  >"$fixture/invalid-required.stdout" 2>"$fixture/invalid-required.stderr"
+then
+  echo "Expected invalid required-notarization setting to fail." >&2
+  exit 1
+fi
+grep -q "STAX_GUI_REQUIRE_NOTARIZATION must be 0 or 1" \
+  "$fixture/invalid-required.stderr"
 
 for partial in \
   "APPLE_ID=release@example.com" \
