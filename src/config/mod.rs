@@ -479,7 +479,11 @@ impl Config {
         if let Ok(dir) = std::env::var("STAX_CONFIG_DIR") {
             return Ok(PathBuf::from(dir));
         }
-        let home = dirs::home_dir().context("Could not find home directory")?;
+        let home = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+            .or_else(dirs::home_dir)
+            .context("Could not find home directory")?;
         Ok(home.join(".config").join("stax"))
     }
 
