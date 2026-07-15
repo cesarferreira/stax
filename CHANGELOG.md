@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.1] - 2026-07-15
+
+### 🐛 Bug Fixes
+
+- Make cache timestamp tests Windows-safe
+
+### ⚡ Performance
+
+- Streamline Clippy workflow ([#630](https://github.com/cesarferreira/stax/issues/630))
 ## [0.96.0] - 2026-07-15
 
 ### 🚀 Features
@@ -29,6 +38,10 @@ All notable changes to this project will be documented in this file.
 ### 🧪 Testing
 
 - Cover worktree promotion safety guards ([#609](https://github.com/cesarferreira/stax/issues/609))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.95.0] - 2026-07-13
 
 ### 🚀 Features
