@@ -2,11 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.4] - 2026-07-15
+
+### 🧪 Testing
+
+- Make diff failure assertion cross-platform
 ## [0.96.3] - 2026-07-15
 
 ### 🐛 Bug Fixes
 
 - Honor HOME for config directory
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.96.2] - 2026-07-15
 
 ### 🧪 Testing

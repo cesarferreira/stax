@@ -4,7 +4,7 @@ default-members = ["."]
 resolver = "2"
 
 [workspace.package]
-version = "0.96.3"
+version = "0.96.4"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
