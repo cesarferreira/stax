@@ -295,6 +295,8 @@ Bare `st` launches a full-screen TUI for browsing stacks, inspecting branch summ
 
 The native GUI opens a repository-scoped workspace with searchable Stack, Changes, and Inspector panes. It can check out, create, rename, delete, move, and reorder local branches; restack the selected branch or all tracked branches; submit the current stack as Draft; open the selected PR; and safely undo or redo fully local recorded operations. Destructive and history-rewriting actions show exact previews and confirmations, including explicit auto-stash follow-ups for dirty move/reorder/restack flows.
 
+When the app starts without an explicit path, it reopens the most recently used project. Use the project dropdown in the toolbar to switch between recent projects or choose **Add Project…** to open another repository. An explicit `st gui <path>` launch still opens that repository.
+
 Use `/` to search, `1`/`2`/`3` to toggle panes, and drag dividers to resize them; visibility and widths persist per canonical repository. Native menus and keyboard shortcuts dispatch the same typed actions as the buttons. Submit is always confirmed first, pushes the current stack as Draft, and does not show CLI prompts or auto-open PR pages. `st gui [path]` only launches the app.
 
 → [GUI guide](docs/interface/gui.md)

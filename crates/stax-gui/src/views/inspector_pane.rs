@@ -8,9 +8,10 @@ use super::{
 };
 use crate::state::LoadState;
 use crate::theme::{MONOSPACE_FONT, Theme};
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Div, InteractiveElement as _, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
-    div, px,
+    Div, Hsla, InteractiveElement as _, ParentElement as _, StatefulInteractiveElement as _,
+    Styled as _, div, px,
 };
 use stax::application::{BranchDetails, BranchSummary, CiSummary};
 
@@ -81,10 +82,7 @@ pub fn render(
                     div()
                         .debug_selector(|| "inspector-card".into())
                         .w_full()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.surface_raised)
+                        .min_w_0()
                         .child(content),
                 ),
         )
@@ -96,51 +94,78 @@ fn render_selected(
     theme: Theme,
     cx: &mut gpui::Context<super::AppView>,
 ) -> Div {
+    let branch_context = if branch.is_trunk {
+        "Trunk"
+    } else if branch.is_current {
+        "Current branch"
+    } else {
+        "Selected branch"
+    };
+
     div()
         .w_full()
         .min_w_0()
         .flex()
         .flex_col()
-        .gap_4()
-        .p_4()
+        .gap_3()
         .child(
             div()
+                .debug_selector(|| "inspector-branch-strip".into())
                 .w_full()
                 .min_w_0()
                 .flex()
-                .flex_col()
-                .gap_1()
+                .bg(theme.accent.alpha(0.08))
+                .child(div().flex_none().w(px(3.0)).bg(theme.accent))
                 .child(
                     div()
-                        .debug_selector(|| "inspector-branch-identity".into())
                         .w_full()
                         .min_w_0()
-                        .truncate()
-                        .font_family(MONOSPACE_FONT)
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(branch.name.clone()),
-                )
-                .child(
-                    div()
-                        .debug_selector(|| "inspector-parent-identity".into())
-                        .w_full()
-                        .min_w_0()
-                        .truncate()
-                        .font_family(MONOSPACE_FONT)
-                        .text_xs()
-                        .text_color(theme.text_muted)
-                        .child(format!(
-                            "Parent: {}",
-                            branch.parent.as_deref().unwrap_or("No parent (trunk)")
-                        )),
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .p_3()
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .debug_selector(|| "inspector-branch-identity".into())
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_family(MONOSPACE_FONT)
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(theme.accent)
+                                        .child(branch.name.clone()),
+                                )
+                                .child(status_badge(branch_context, theme.accent, theme)),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "inspector-parent-identity".into())
+                                .w_full()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(MONOSPACE_FONT)
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(format!(
+                                    "Parent: {}",
+                                    branch.parent.as_deref().unwrap_or("No parent (trunk)")
+                                )),
+                        ),
                 ),
         )
         .child(render_branch_health(branch, theme))
         .child(render_details(workspace.state().details(), theme))
         .child(render_pull_request(branch, theme))
-        .child(render_ci(workspace.state().ci(), branch, theme))
         .child(render_actions(workspace, theme, cx))
+        .child(render_ci(workspace.state().ci(), branch, theme))
 }
 
 fn render_branch_health(branch: &BranchSummary, theme: Theme) -> Div {
@@ -152,10 +177,12 @@ fn render_branch_health(branch: &BranchSummary, theme: Theme) -> Div {
         ("Restack health: up to date", theme.success)
     };
 
-    section(
+    status_section(
+        "inspector-health-section",
         "Stack health",
+        label,
+        color,
         theme,
-        div().text_sm().text_color(color).child(label.to_string()),
     )
 }
 
@@ -187,30 +214,67 @@ fn render_details(details: &LoadState<BranchDetails>, theme: Theme) -> Div {
             .child(error.clone())
             .child("Use Refresh Repository to retry."),
         LoadState::Ready(details) => {
-            let remote = if details.has_remote {
-                format!(
-                    "Remote: {} unpushed · {} unpulled",
-                    details.unpushed, details.unpulled
-                )
-            } else {
-                "Remote: not published".to_string()
-            };
             let mut ready = div()
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap_3()
                 .text_sm()
-                .child(format!(
-                    "Divergence: {} ahead · {} behind",
-                    details.ahead, details.behind
-                ))
-                .child(remote)
+                .child(
+                    div()
+                        .debug_selector(|| "inspector-metrics".into())
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(metric_row(
+                            metric("Ahead", details.ahead, theme.accent, theme),
+                            metric(
+                                "Behind",
+                                details.behind,
+                                if details.behind == 0 {
+                                    theme.success
+                                } else {
+                                    theme.warning
+                                },
+                                theme,
+                            ),
+                        ))
+                        .child(metric_row(
+                            metric(
+                                "Unpushed",
+                                details.unpushed,
+                                if details.unpushed == 0 {
+                                    theme.text_muted
+                                } else {
+                                    theme.warning
+                                },
+                                theme,
+                            ),
+                            metric(
+                                "Unpulled",
+                                details.unpulled,
+                                if details.unpulled == 0 {
+                                    theme.success
+                                } else {
+                                    theme.danger
+                                },
+                                theme,
+                            ),
+                        )),
+                )
+                .when(!details.has_remote, |ready| {
+                    ready.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child("This branch has not been published to a remote."),
+                    )
+                })
                 .child(
                     div()
                         .text_xs()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(theme.text_muted)
-                        .child(format!("COMMITS · {}", details.commits.len())),
+                        .child(format!("Commits · {}", details.commits.len())),
                 );
             if details.commits.is_empty() {
                 ready = ready.child(
@@ -222,88 +286,147 @@ fn render_details(details: &LoadState<BranchDetails>, theme: Theme) -> Div {
             } else {
                 ready = ready.children(details.commits.iter().map(|commit| {
                     div()
+                        .pl_2()
+                        .py_1()
                         .font_family(MONOSPACE_FONT)
                         .text_xs()
-                        .child(format!("• {commit}"))
+                        .text_color(theme.text)
+                        .child(commit.clone())
                 }));
             }
             ready
         }
     };
 
-    section("Branch details", theme, body)
+    section(
+        "inspector-details-section",
+        "Branch details",
+        theme,
+        theme.accent,
+        body,
+    )
 }
 
 fn render_pull_request(branch: &BranchSummary, theme: Theme) -> Div {
-    let body = match branch.pr_number {
-        Some(number) => div().text_sm().child(format!(
-            "PR #{number} · {}",
-            branch.pr_state.as_deref().unwrap_or("state unavailable")
-        )),
-        None => div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .text_sm()
-            .child("No pull request cached.")
-            .child(
+    let (body, color) = match branch.pr_number {
+        Some(number) => {
+            let state = branch.pr_state.as_deref().unwrap_or("state unavailable");
+            let color = match state.to_ascii_lowercase().as_str() {
+                "merged" => theme.success,
+                "closed" => theme.danger,
+                _ => theme.accent,
+            };
+            (
                 div()
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .child("Submit and Open PR become available in phase 2."),
-            ),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .font_family(MONOSPACE_FONT)
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(format!("PR #{number}")),
+                    )
+                    .child(status_badge(state, color, theme)),
+                color,
+            )
+        }
+        None => (
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_sm()
+                .child("No pull request cached.")
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child("Submit the stack to publish this branch."),
+                ),
+            theme.border,
+        ),
     };
-    section("Pull request", theme, body)
+    section("inspector-pr-section", "Pull request", theme, color, body)
 }
 
 fn render_ci(ci: &LoadState<CiSummary>, branch: &BranchSummary, theme: Theme) -> Div {
-    let body = match ci {
-        LoadState::Idle => div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .text_sm()
-            .child(
-                branch
-                    .ci_state
-                    .as_ref()
-                    .map(|state| format!("Cached CI: {state}"))
-                    .unwrap_or_else(|| "CI details not loaded.".into()),
-            )
-            .child(
+    let (body, color) = match ci {
+        LoadState::Idle => {
+            let status = branch.ci_state.as_deref().unwrap_or("Not loaded");
+            let color = status_color(status, theme);
+            (
                 div()
-                    .text_xs()
-                    .text_color(theme.text_muted)
-                    .child("Select a published branch or refresh to load live checks."),
-            ),
-        LoadState::Loading => div()
-            .text_sm()
-            .text_color(theme.text_muted)
-            .child("Loading CI checks…"),
-        LoadState::Failed(error) => div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .text_sm()
-            .text_color(theme.danger)
-            .child("CI checks are unavailable.")
-            .child(error.clone())
-            .child("Resolve the message above, then refresh the repository."),
-        LoadState::Ready(summary) => div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .text_sm()
-            .child(format!(
-                "Status: {}",
-                summary.overall_status.as_deref().unwrap_or("unknown")
-            ))
-            .child(format!(
-                "{} passed · {} failed · {} running · {} queued · {} skipped",
-                summary.passed, summary.failed, summary.running, summary.queued, summary.skipped
-            )),
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(status_badge(status, color, theme))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child("Refresh to load the latest checks."),
+                    ),
+                color,
+            )
+        }
+        LoadState::Loading => (
+            div()
+                .text_sm()
+                .text_color(theme.warning)
+                .child("Loading CI checks…"),
+            theme.warning,
+        ),
+        LoadState::Failed(error) => (
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_sm()
+                .text_color(theme.danger)
+                .child("CI checks are unavailable.")
+                .child(error.clone())
+                .child("Resolve the message above, then refresh the repository."),
+            theme.danger,
+        ),
+        LoadState::Ready(summary) => {
+            let status = summary.overall_status.as_deref().unwrap_or("unknown");
+            let color = status_color(status, theme);
+            (
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(status_badge(status, color, theme))
+                    .child(metric_row(
+                        metric("Passed", summary.passed, theme.success, theme),
+                        metric("Failed", summary.failed, theme.danger, theme),
+                    ))
+                    .child(metric_row(
+                        metric("Running", summary.running, theme.warning, theme),
+                        metric("Queued", summary.queued, theme.text_muted, theme),
+                    ))
+                    .when(summary.skipped > 0, |body| {
+                        body.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(format!("{} skipped", summary.skipped)),
+                        )
+                    }),
+                color,
+            )
+        }
     };
-    section("Continuous integration", theme, body)
+    section(
+        "inspector-ci-section",
+        "Continuous integration",
+        theme,
+        color,
+        body,
+    )
 }
 
 fn render_actions(
@@ -399,7 +522,7 @@ fn render_actions(
     let open_pr = control_button(
         "inspector-open-pr",
         control_label("Open PR", &actions.open_pr),
-        ControlKind::Secondary,
+        ControlKind::Primary,
         actions.open_pr.enabled,
         theme,
     );
@@ -411,25 +534,23 @@ fn render_actions(
         open_pr
     };
 
-    div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .pt_1()
-        .child(
-            div()
-                .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(theme.text_muted)
-                .child("STACK ACTIONS"),
-        )
-        .child(checkout)
-        .child(rename)
-        .child(delete)
-        .child(move_subtree)
-        .child(reorder)
-        .child(restack)
-        .child(open_pr)
+    section(
+        "inspector-actions-section",
+        "Actions",
+        theme,
+        theme.accent,
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(checkout)
+            .child(rename)
+            .child(delete)
+            .child(move_subtree)
+            .child(reorder)
+            .child(restack)
+            .child(open_pr),
+    )
 }
 
 pub(super) fn control_label(
@@ -447,22 +568,107 @@ pub(super) fn control_label(
     }
 }
 
-fn section(title: &str, theme: Theme, body: Div) -> Div {
+fn section(selector: &'static str, title: &str, theme: Theme, accent: Hsla, body: Div) -> Div {
     div()
+        .debug_selector(move || selector.into())
         .flex()
         .flex_col()
         .gap_2()
-        .pb_3()
-        .border_b_1()
+        .border_t_1()
         .border_color(theme.border)
+        .pt_3()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().w(px(3.0)).h(px(12.0)).bg(accent))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.text_muted)
+                        .child(title.to_string()),
+                ),
+        )
+        .child(body)
+}
+
+fn status_section(
+    selector: &'static str,
+    title: &str,
+    label: &str,
+    color: Hsla,
+    theme: Theme,
+) -> Div {
+    section(
+        selector,
+        title,
+        theme,
+        color,
+        div()
+            .text_sm()
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(color)
+            .child(label.to_string()),
+    )
+}
+
+fn status_badge(label: &str, color: Hsla, theme: Theme) -> Div {
+    div()
+        .flex_none()
+        .rounded_sm()
+        .border_1()
+        .border_color(color.alpha(0.5))
+        .bg(color.alpha(0.12))
+        .px_2()
+        .py_1()
+        .text_xs()
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(color)
+        .child(label.to_string())
+        .when(label.is_empty(), |badge| badge.text_color(theme.text_muted))
+}
+
+fn metric_row(left: Div, right: Div) -> Div {
+    div().flex().gap_4().child(left).child(right)
+}
+
+fn metric(label: &str, value: usize, color: Hsla, theme: Theme) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap_2()
+        .py_1()
+        .child(
+            div()
+                .font_family(MONOSPACE_FONT)
+                .text_lg()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(color)
+                .child(value.to_string()),
+        )
         .child(
             div()
                 .text_xs()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(theme.text_muted)
-                .child(title.to_uppercase()),
+                .child(label.to_string()),
         )
-        .child(body)
+}
+
+fn status_color(status: &str, theme: Theme) -> Hsla {
+    let status = status.to_ascii_lowercase();
+    if status.contains("success") || status.contains("pass") {
+        theme.success
+    } else if status.contains("fail") || status.contains("error") {
+        theme.danger
+    } else if status.contains("run") || status.contains("queue") || status.contains("pending") {
+        theme.warning
+    } else {
+        theme.text_muted
+    }
 }
 
 #[cfg(test)]

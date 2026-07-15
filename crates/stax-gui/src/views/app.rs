@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::{changes_pane, inspector_pane, stack_pane};
-use super::{operation_overlay, text_input::BranchNameInput};
+use super::{operation_overlay, project_switcher, text_input::BranchNameInput};
 use super::{
     welcome::WelcomeView,
     workspace::{PaneDivider, PaneKind, WorkspaceView},
@@ -313,6 +313,7 @@ pub struct AppView {
     recent_load_error: Option<String>,
     recent_write_error: Option<String>,
     recent_load_pending: bool,
+    restore_recent_on_load: bool,
     recent_load_generation: u64,
     recent_write_generation: u64,
     recent_write_queue: VecDeque<RecentWriteToken>,
@@ -327,6 +328,7 @@ pub struct AppView {
     search_input_observation: Option<Subscription>,
     overlay_return_focus: Option<FocusHandle>,
     pane_drag: Option<PaneDrag>,
+    project_switcher_open: bool,
     #[cfg(test)]
     copied_diagnostics: Option<String>,
 }
@@ -345,6 +347,7 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let restore_recent_on_load = repository.is_none();
         let focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         focus_handle.focus(window);
         window.set_window_title("Stax");
@@ -358,6 +361,7 @@ impl AppView {
             recent_load_error: None,
             recent_write_error: None,
             recent_load_pending: false,
+            restore_recent_on_load,
             recent_load_generation: 0,
             recent_write_generation: 0,
             recent_write_queue: VecDeque::new(),
@@ -372,6 +376,7 @@ impl AppView {
             search_input_observation: None,
             overlay_return_focus: None,
             pane_drag: None,
+            project_switcher_open: false,
             #[cfg(test)]
             copied_diagnostics: None,
         };
@@ -411,6 +416,11 @@ impl AppView {
     #[cfg(test)]
     pub fn recent_repositories(&self) -> &[PathBuf] {
         &self.recent_repositories
+    }
+
+    #[cfg(test)]
+    pub fn project_switcher_is_open(&self) -> bool {
+        self.project_switcher_open
     }
 
     pub fn workspace(&self) -> Option<&WorkspaceView> {
@@ -645,6 +655,8 @@ impl AppView {
     }
 
     pub fn pick_repository(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.project_switcher_open = false;
+        cx.notify();
         let picker = Rc::clone(&self.services.picker);
         let future = picker.pick(cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -668,7 +680,19 @@ impl AppView {
         {
             return;
         }
+        self.restore_recent_on_load = false;
+        self.project_switcher_open = false;
         self.start_load(path, RootLoadKind::Open, window, cx);
+    }
+
+    pub fn toggle_project_switcher(&mut self, cx: &mut Context<Self>) {
+        if self
+            .interaction_state()
+            .is_some_and(|actions| actions.open_repository.enabled)
+        {
+            self.project_switcher_open = !self.project_switcher_open;
+            cx.notify();
+        }
     }
 
     pub fn refresh_repository(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1669,8 +1693,13 @@ impl AppView {
 
         cx.spawn_in(window, async move |this, cx| {
             let result = background.spawn(async move { recents.load() }).await;
-            let _ = this.update_in(cx, |view, _window, cx| {
-                view.apply_recent_load_result(token, result, cx);
+            let _ = this.update_in(cx, |view, window, cx| {
+                if view.apply_recent_load_result(token, result, cx) && view.restore_recent_on_load {
+                    view.restore_recent_on_load = false;
+                    if let Some(repository) = view.recent_repositories.first().cloned() {
+                        view.open_repository(repository, window, cx);
+                    }
+                }
             });
         })
         .detach();
@@ -2214,12 +2243,19 @@ impl Render for AppView {
         let can_open = actions
             .as_ref()
             .is_none_or(|actions| actions.open_repository.enabled);
+        let project_switcher_open = self.project_switcher_open && can_open;
+        let current_repository = self
+            .workspace()
+            .map(|workspace| workspace.state().snapshot().repository_root.clone());
+        let recent_repositories = self.recent_repositories.clone();
         let has_overlay = self.operation_overlay.is_some();
         let content = match &self.mode {
             AppMode::Welcome(welcome) | AppMode::Opening(welcome) | AppMode::Error(welcome) => {
                 welcome.render(theme, cx)
             }
-            AppMode::Workspace(workspace) => workspace.render(search_input, theme, cx),
+            AppMode::Workspace(workspace) => {
+                workspace.render(search_input, project_switcher_open, can_open, theme, cx)
+            }
         };
 
         let mut root = div()
@@ -2334,6 +2370,14 @@ impl Render for AppView {
             .bg(theme.window)
             .text_color(theme.text)
             .child(content);
+        if project_switcher_open && let Some(current_repository) = current_repository {
+            root = root.child(project_switcher::menu(
+                &current_repository,
+                &recent_repositories,
+                theme,
+                cx,
+            ));
+        }
         if let Some(overlay) = &self.operation_overlay {
             root = root.child(operation_overlay::render(
                 overlay,
