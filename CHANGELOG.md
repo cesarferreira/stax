@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.7] - 2026-07-16
+
+### 🐛 Bug Fixes
+
+- Serialize CI test config environment
 ## [0.96.6] - 2026-07-16
 
 ### 🐛 Bug Fixes
@@ -20,6 +25,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - Pay down legacy clippy lint debt ([#634](https://github.com/cesarferreira/stax/issues/634))
+- Release
 ## [0.96.5] - 2026-07-15
 
 ### 🐛 Bug Fixes
