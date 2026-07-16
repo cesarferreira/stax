@@ -3574,6 +3574,437 @@ fn test_sync_deletes_merged_branches() {
 }
 
 #[test]
+fn test_sync_force_preserves_worktree_for_merged_branch() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "preserved-worktree"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.create_file(".gitignore", ".env\n");
+    repo.commit("Feature commit");
+    let push = repo.git(&["push", "-u", "origin", &branch]);
+    assert!(
+        push.status.success(),
+        "failed to push feature branch: {}",
+        TestRepo::stderr(&push)
+    );
+
+    repo.run_stax(&["t"]);
+    let worktree_root = test_tempdir();
+    let worktree = worktree_root.path().join("preserved-worktree");
+    let add_worktree = repo.git(&[
+        "worktree",
+        "add",
+        worktree.to_str().expect("utf8 worktree path"),
+        &branch,
+    ]);
+    assert!(
+        add_worktree.status.success(),
+        "failed to add linked worktree: {}",
+        TestRepo::stderr(&add_worktree)
+    );
+    fs::write(worktree.join(".env"), "TOKEN=local\n").expect("write ignored env file");
+
+    repo.merge_branch_on_remote(&branch);
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        worktree.exists(),
+        "sync --force should preserve the linked worktree"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join(".env")).expect("read preserved env file"),
+        "TOKEN=local\n"
+    );
+    assert!(
+        !repo.list_branches().contains(&branch),
+        "merged branch should be deleted after its worktree is preserved\nstdout:\n{}\nstderr:\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let head = repo.git_in(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert!(
+        head.status.success(),
+        "failed to inspect linked worktree HEAD"
+    );
+    assert_eq!(TestRepo::stdout(&head).trim(), "HEAD");
+}
+
+#[test]
+fn test_sync_interactive_removes_linked_worktree() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "removed-worktree"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.commit("Feature commit");
+    assert!(
+        repo.git(&["push", "-u", "origin", &branch])
+            .status
+            .success()
+    );
+
+    repo.run_stax(&["t"]);
+    let worktree_root = test_tempdir();
+    let worktree = worktree_root.path().join("removed-worktree");
+    assert!(
+        repo.git(&[
+            "worktree",
+            "add",
+            worktree.to_str().expect("utf8 worktree path"),
+            &branch,
+        ])
+        .status
+        .success()
+    );
+    repo.merge_branch_on_remote(&branch);
+
+    let output = crate::common::run_stax_in_script(
+        &repo.path(),
+        &["sync"],
+        "wait_for_tui_text \"What should stax do?\"; printf '\\033[B\\n'",
+    );
+    assert!(
+        output.status.success(),
+        "interactive sync failed\nstdout:\n{}\nstderr:\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(
+        !worktree.exists(),
+        "explicit remove action should remove the linked worktree"
+    );
+    assert!(
+        !repo.list_branches().contains(&branch),
+        "explicit remove action should delete the merged branch"
+    );
+}
+
+#[test]
+fn test_sync_interactive_skips_linked_worktree_cleanup() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "skipped-worktree"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.commit("Feature commit");
+    assert!(
+        repo.git(&["push", "-u", "origin", &branch])
+            .status
+            .success()
+    );
+
+    repo.run_stax(&["t"]);
+    let worktree_root = test_tempdir();
+    let worktree = worktree_root.path().join("skipped-worktree");
+    assert!(
+        repo.git(&[
+            "worktree",
+            "add",
+            worktree.to_str().expect("utf8 worktree path"),
+            &branch,
+        ])
+        .status
+        .success()
+    );
+    repo.merge_branch_on_remote(&branch);
+    let metadata_ref = format!("refs/branch-metadata/{}", branch);
+
+    let output = crate::common::run_stax_in_script(
+        &repo.path(),
+        &["sync"],
+        "wait_for_tui_text \"What should stax do?\"; printf '\\033[B\\033[B\\n'",
+    );
+    assert!(
+        output.status.success(),
+        "interactive sync failed\nstdout:\n{}\nstderr:\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(worktree.exists());
+    assert!(repo.list_branches().contains(&branch));
+    assert!(repo.list_remote_branches().contains(&branch));
+    assert!(
+        repo.git(&["show-ref", "--verify", &metadata_ref])
+            .status
+            .success(),
+        "skip should keep branch metadata"
+    );
+}
+
+#[test]
+fn test_sync_failed_explicit_removal_keeps_all_refs() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "failed-removal-worktree"]);
+    let branch = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.commit("Feature commit");
+    assert!(
+        repo.git(&["push", "-u", "origin", &branch])
+            .status
+            .success()
+    );
+
+    repo.run_stax(&["t"]);
+    let worktree_root = test_tempdir();
+    let worktree = worktree_root.path().join("failed-removal-worktree");
+    assert!(
+        repo.git(&[
+            "worktree",
+            "add",
+            worktree.to_str().expect("utf8 worktree path"),
+            &branch,
+        ])
+        .status
+        .success()
+    );
+    repo.merge_branch_on_remote(&branch);
+
+    let config_dir = test_tempdir();
+    fs::write(
+        config_dir.path().join("config.toml"),
+        "[worktree.hooks]\npre_remove = \"exit 17\"\n",
+    )
+    .expect("write failing pre-remove hook config");
+    let config_dir_value = config_dir.path().to_string_lossy().into_owned();
+    let output = crate::common::run_stax_in_script_with_env(
+        &repo.path(),
+        &["sync"],
+        "wait_for_tui_text \"What should stax do?\"; printf '\\033[B\\n'",
+        &[("STAX_CONFIG_DIR", config_dir_value.as_str())],
+    );
+    assert!(
+        output.status.success(),
+        "interactive sync failed\nstdout:\n{}\nstderr:\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(worktree.exists());
+    assert!(repo.list_branches().contains(&branch));
+    assert!(
+        repo.list_remote_branches().contains(&branch),
+        "failed worktree removal must not delete the remote branch\nstdout:\n{}",
+        TestRepo::stdout(&output)
+    );
+    let metadata_ref = format!("refs/branch-metadata/{}", branch);
+    assert!(
+        repo.git(&["show-ref", "--verify", &metadata_ref])
+            .status
+            .success(),
+        "failed worktree removal must keep branch metadata"
+    );
+}
+
+#[test]
+fn test_sync_force_preserves_dirty_linked_worktree() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.create_file(".gitignore", ".env\n");
+    repo.create_file("shared.txt", "base\n");
+    repo.commit("Add shared file");
+    assert!(repo.git(&["push", "origin", "main"]).status.success());
+
+    repo.run_stax(&["bc", "dirty-preserved-worktree"]);
+    let branch = repo.current_branch();
+    repo.create_file("shared.txt", "feature\n");
+    repo.commit("Feature commit");
+    assert!(
+        repo.git(&["push", "-u", "origin", &branch])
+            .status
+            .success()
+    );
+
+    repo.run_stax(&["t"]);
+    repo.merge_branch_on_remote(&branch);
+    assert!(repo.git(&["pull", "origin", "main"]).status.success());
+    repo.create_file("shared.txt", "main after merge\n");
+    repo.commit("Advance main");
+    assert!(repo.git(&["push", "origin", "main"]).status.success());
+    assert!(repo.git(&["switch", "-c", "sync-runner"]).status.success());
+
+    let worktree_root = test_tempdir();
+    let worktree = worktree_root.path().join("dirty-preserved-worktree");
+    assert!(
+        repo.git(&[
+            "worktree",
+            "add",
+            worktree.to_str().expect("utf8 worktree path"),
+            &branch,
+        ])
+        .status
+        .success()
+    );
+    fs::write(worktree.join("shared.txt"), "local tracked change\n").expect("write tracked change");
+    fs::write(worktree.join("scratch.txt"), "local untracked file\n")
+        .expect("write untracked file");
+    fs::write(worktree.join(".env"), "TOKEN=dirty-local\n").expect("write ignored env file");
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "sync failed\nstdout:\n{}\nstderr:\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(worktree.exists());
+    assert_eq!(
+        fs::read_to_string(worktree.join("shared.txt")).expect("read tracked change"),
+        "local tracked change\n"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join("scratch.txt")).expect("read untracked file"),
+        "local untracked file\n"
+    );
+    assert_eq!(
+        fs::read_to_string(worktree.join(".env")).expect("read ignored env file"),
+        "TOKEN=dirty-local\n"
+    );
+    assert!(!repo.list_branches().contains(&branch));
+    let head = repo.git_in(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(TestRepo::stdout(&head).trim(), "HEAD");
+}
+
+#[test]
+fn test_sync_force_preserves_upstream_gone_linked_worktree() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "upstream-gone-worktree"]);
+    let branch = repo.current_branch();
+    assert!(
+        repo.git(&["push", "-u", "origin", &branch])
+            .status
+            .success()
+    );
+    repo.run_stax(&["t"]);
+
+    let worktree_root = test_tempdir();
+    let worktree = worktree_root.path().join("upstream-gone-worktree");
+    assert!(
+        repo.git(&[
+            "worktree",
+            "add",
+            worktree.to_str().expect("utf8 worktree path"),
+            &branch,
+        ])
+        .status
+        .success()
+    );
+    fs::write(worktree.join("local-note.txt"), "keep me\n").expect("write local note");
+    assert!(
+        repo.git(&["push", "origin", "--delete", &branch])
+            .status
+            .success()
+    );
+
+    let output = repo.run_stax(&["sync", "--no-delete", "--delete-upstream-gone", "--force"]);
+    assert!(
+        output.status.success(),
+        "sync failed\nstdout:\n{}\nstderr:\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(worktree.exists());
+    assert_eq!(
+        fs::read_to_string(worktree.join("local-note.txt")).expect("read local note"),
+        "keep me\n"
+    );
+    assert!(!repo.list_branches().contains(&branch));
+    let head = repo.git_in(&worktree, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(TestRepo::stdout(&head).trim(), "HEAD");
+}
+
+#[test]
+fn test_sync_preservation_failure_keeps_all_refs() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.create_file("conflict.txt", "base\n");
+    repo.commit("Add conflict base");
+    assert!(repo.git(&["push", "origin", "main"]).status.success());
+
+    repo.run_stax(&["bc", "blocked-preserved-worktree"]);
+    let branch = repo.current_branch();
+    repo.create_file("conflict.txt", "feature\n");
+    repo.commit("Feature conflict change");
+    assert!(
+        repo.git(&["push", "-u", "origin", &branch])
+            .status
+            .success()
+    );
+
+    repo.run_stax(&["t"]);
+    assert!(repo.git(&["switch", "-c", "sync-runner"]).status.success());
+    repo.create_file("conflict.txt", "runner\n");
+    repo.commit("Runner conflict change");
+
+    let worktree_root = test_tempdir();
+    let worktree = worktree_root.path().join("blocked-preserved-worktree");
+    assert!(
+        repo.git(&[
+            "worktree",
+            "add",
+            worktree.to_str().expect("utf8 worktree path"),
+            &branch,
+        ])
+        .status
+        .success()
+    );
+    let conflict = repo.git_in(&worktree, &["merge", "sync-runner"]);
+    assert!(
+        !conflict.status.success(),
+        "fixture merge should leave unresolved conflicts"
+    );
+    assert!(worktree.join(".git").exists());
+
+    repo.merge_branch_on_remote(&branch);
+    let metadata_ref = format!("refs/branch-metadata/{}", branch);
+    assert!(
+        repo.git(&["show-ref", "--verify", &metadata_ref])
+            .status
+            .success(),
+        "fixture should start with branch metadata"
+    );
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "sync failed\nstdout:\n{}\nstderr:\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+    assert!(worktree.exists());
+    assert!(repo.list_branches().contains(&branch));
+    assert!(repo.list_remote_branches().contains(&branch));
+    assert!(
+        repo.git(&["show-ref", "--verify", &metadata_ref])
+            .status
+            .success(),
+        "failed preservation must keep branch metadata"
+    );
+    assert!(
+        worktree.join(".git").exists(),
+        "failed preservation must keep the worktree"
+    );
+    assert!(
+        TestRepo::stdout(&output).contains("couldn't preserve linked worktree"),
+        "expected preservation failure guidance\nstdout:\n{}",
+        TestRepo::stdout(&output)
+    );
+    assert!(
+        TestRepo::stdout(&output).contains("git switch main failed")
+            && TestRepo::stdout(&output).contains("git switch --detach failed"),
+        "guidance should report both failed preservation attempts\nstdout:\n{}",
+        TestRepo::stdout(&output)
+    );
+}
+
+#[test]
 fn test_sync_preserves_unmerged_branches() {
     let repo = TestRepo::new_with_remote();
 

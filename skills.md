@@ -297,12 +297,13 @@ stax rs                            # Sync trunk + clean merged branches
 stax rs --restack                  # Sync then restack
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
-stax sync --force                  # Force sync without prompts
+stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
 stax sync --prune                  # No-op: kept for CLI compatibility (use --full to fetch --prune all remote-tracking refs)
 stax sync --full                   # Fetch all remote branches with --prune (slower; default is trunk-only fetch + ls-remote)
 stax sync --no-delete              # Keep merged branches
 stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
-# sync cleanup may delete merged/gone imported support branches locally, but never push-deletes their remotes.
+# sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
+# Imported support branches may still be deleted locally after merge/gone, but their remotes are never push-deleted.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
 # Conditional attention lines name blocked cleanup, trunk failures, and checkout changes, followed by one prioritized next command. For a diverged trunk, inspect and reconcile it with its remote instead of treating `st trunk` as a repair; other trunk failures use `st trunk`. Routine restack health stays in stax ls and the TUI.
 # When --restack is requested, a failed fetch or trunk that did not reach the fetched remote commit stops sync before imported refresh, merged cleanup, or feature-branch rebases. Any sync auto-stash is restored first.
