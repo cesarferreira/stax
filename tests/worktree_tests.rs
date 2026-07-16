@@ -619,7 +619,7 @@ fn interactive_checkout_selector_routes_to_worktree() {
 }
 
 #[test]
-fn sync_removes_safe_linked_worktree_when_branch_delete_confirmed() {
+fn sync_force_preserves_safe_linked_worktree_when_branch_delete_confirmed() {
     let repo = TestRepo::new_with_remote();
 
     repo.run_stax(&["create", "A"]).assert_success();
@@ -643,12 +643,12 @@ fn sync_removes_safe_linked_worktree_when_branch_delete_confirmed() {
     let output = repo.run_stax(&["sync", "--force"]);
     output
         .assert_success()
-        .assert_stdout_contains("removed linked worktree")
+        .assert_stdout_contains("kept linked worktree")
         .assert_stdout_contains("deleted (local only)");
 
     assert!(
-        !wt_a.exists(),
-        "expected sync to remove the linked worktree after confirmation"
+        wt_a.exists(),
+        "expected sync --force to preserve the linked worktree"
     );
     assert!(
         !repo
@@ -667,56 +667,7 @@ fn sync_removes_safe_linked_worktree_when_branch_delete_confirmed() {
 }
 
 #[test]
-fn sync_confirmed_dirty_linked_worktree_removes_it_without_global_force() {
-    let repo = TestRepo::new_with_remote();
-
-    repo.run_stax(&["create", "A"]).assert_success();
-    let branch = repo.current_branch();
-    repo.create_file("a.txt", "A\n");
-    repo.commit("A commit");
-    repo.git(&["push", "-u", "origin", &branch])
-        .assert_success();
-    repo.run_stax(&["checkout", "main"]).assert_success();
-
-    let wt_a = repo.path().join("wt-a");
-    repo.git(&["worktree", "add", wt_a.to_str().unwrap(), &branch])
-        .assert_success();
-    fs::write(wt_a.join("dirty.txt"), "dirty\n").expect("write dirty worktree file");
-
-    repo.git(&["merge", "--no-ff", &branch, "-m", "Merge A"])
-        .assert_success();
-    repo.git(&["push", "origin", "main"]).assert_success();
-    repo.git(&["push", "origin", "--delete", &branch])
-        .assert_success();
-
-    let output = common::run_stax_in_script(&repo.path(), &["sync"], "printf 'y\\n'");
-    output
-        .assert_success()
-        .assert_stdout_contains("force-remove dirty linked worktree")
-        .assert_stdout_contains("removed linked worktree")
-        .assert_stdout_contains("deleted (local only)");
-
-    let stdout = TestRepo::stdout(&output);
-    assert!(
-        !stdout.contains("sync kept linked worktree"),
-        "expected interactive sync confirmation to remove the dirty linked worktree, got:\n{}",
-        stdout
-    );
-    assert!(
-        !wt_a.exists(),
-        "expected interactive sync confirmation to remove the dirty linked worktree"
-    );
-    assert!(
-        !repo
-            .list_branches()
-            .iter()
-            .any(|candidate| candidate == &branch),
-        "expected interactive sync confirmation to delete the local branch"
-    );
-}
-
-#[test]
-fn sync_force_removes_dirty_linked_worktree_and_local_branch() {
+fn sync_force_preserves_dirty_linked_worktree_and_deletes_local_branch() {
     let repo = TestRepo::new_with_remote();
 
     repo.run_stax(&["create", "A"]).assert_success();
@@ -741,30 +692,30 @@ fn sync_force_removes_dirty_linked_worktree_and_local_branch() {
     let output = repo.run_stax(&["sync", "--force"]);
     output
         .assert_success()
-        .assert_stdout_contains("removed linked worktree")
+        .assert_stdout_contains("kept linked worktree")
         .assert_stdout_contains("deleted (local only)");
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        !stdout.contains("sync kept linked worktree"),
-        "expected sync --force to remove the dirty linked worktree, got:\n{}",
+        !stdout.contains("removed linked worktree"),
+        "expected sync --force to preserve the dirty linked worktree, got:\n{}",
         stdout
     );
     assert!(
-        !wt_a.exists(),
-        "expected sync --force to remove the dirty linked worktree"
+        wt_a.exists(),
+        "expected sync --force to preserve the dirty linked worktree"
     );
     assert!(
         !repo
             .list_branches()
             .iter()
             .any(|candidate| candidate == &branch),
-        "expected sync --force to delete the local branch after removing the dirty worktree"
+        "expected sync --force to delete the local branch after preserving the dirty worktree"
     );
 }
 
 #[test]
-fn sync_force_removes_dirty_linked_worktree_even_with_ambiguous_basename() {
+fn sync_force_preserves_dirty_linked_worktree_even_with_ambiguous_basename() {
     let repo = TestRepo::new_with_remote();
 
     repo.run_stax(&["create", "A"]).assert_success();
@@ -799,7 +750,7 @@ fn sync_force_removes_dirty_linked_worktree_even_with_ambiguous_basename() {
     let output = repo.run_stax(&["sync", "--force"]);
     output
         .assert_success()
-        .assert_stdout_contains("removed linked worktree")
+        .assert_stdout_contains("kept linked worktree")
         .assert_stdout_contains("deleted (local only)");
 
     let stdout = TestRepo::stdout(&output);
@@ -809,8 +760,8 @@ fn sync_force_removes_dirty_linked_worktree_even_with_ambiguous_basename() {
         stdout
     );
     assert!(
-        !wt_a.exists(),
-        "expected sync --force to remove the dirty linked worktree even when its basename is ambiguous"
+        wt_a.exists(),
+        "expected sync --force to preserve the dirty linked worktree even when its basename is ambiguous"
     );
     assert!(
         wt_side.exists(),
@@ -821,12 +772,12 @@ fn sync_force_removes_dirty_linked_worktree_even_with_ambiguous_basename() {
             .list_branches()
             .iter()
             .any(|candidate| candidate == &branch),
-        "expected sync --force to delete the local branch after removing the dirty worktree"
+        "expected sync --force to delete the local branch after preserving the dirty worktree"
     );
 }
 
 #[test]
-fn sync_delete_upstream_gone_removes_safe_linked_worktree() {
+fn sync_delete_upstream_gone_preserves_safe_linked_worktree() {
     let repo = TestRepo::new_with_remote();
 
     repo.run_stax(&["create", "stale-lane"]).assert_success();
@@ -853,19 +804,19 @@ fn sync_delete_upstream_gone_removes_safe_linked_worktree() {
     let output = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
     output
         .assert_success()
-        .assert_stdout_contains("removed linked worktree")
+        .assert_stdout_contains("kept linked worktree")
         .assert_stdout_contains("deleted (local only)");
 
     assert!(
-        !wt_lane.exists(),
-        "expected upstream-gone sync cleanup to remove the linked worktree"
+        wt_lane.exists(),
+        "expected upstream-gone sync cleanup to preserve the linked worktree"
     );
     assert!(
         !repo
             .list_branches()
             .iter()
             .any(|candidate| candidate == &branch),
-        "expected upstream-gone branch to be deleted locally after linked worktree removal"
+        "expected upstream-gone branch to be deleted locally after linked worktree preservation"
     );
 }
 

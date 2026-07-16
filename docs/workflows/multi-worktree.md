@@ -9,8 +9,14 @@ This page covers repo-wide behavior across linked checkouts. For the `st worktre
 - `st restack` and `st sync --restack` run `git rebase` in the target worktree when needed.
 - `st cascade` fast-forwards trunk before restacking, even if trunk is checked out elsewhere.
 - `st sync` updates trunk in whichever worktree currently has trunk checked out.
-- `st sync` cleanup will remove a linked worktree that owned a merged or upstream-gone branch, when it's safe. Dirty/locked/in-progress lanes are kept for manual cleanup.
+- `st sync` cleanup preserves a linked worktree that owns a merged or upstream-gone branch by switching it to trunk or detaching `HEAD` before deleting the branch.
 - Metadata (`refs/branch-metadata/*`) is shared across all worktrees automatically.
+
+## Sync cleanup
+
+When a cleanup candidate is checked out in another worktree, interactive sync offers to keep the worktree (the default), remove it, or skip the branch. Keeping it preserves ignored, untracked, and modified files. If switching the worktree to trunk would overwrite local changes, stax leaves it on a detached `HEAD` at its existing commit instead.
+
+`st sync --force` also keeps the worktree. In this command, `--force` skips prompts but never authorizes worktree removal. If stax cannot switch or detach the worktree safely—for example, because a merge is in progress—it keeps the worktree, branch, remote branch, and metadata and reports the commands needed for manual recovery.
 
 ## Dirty worktrees
 

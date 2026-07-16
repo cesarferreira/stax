@@ -10,7 +10,7 @@ use crate::engine::branch_detect::has_unique_commits_since_any_base;
 use crate::engine::{BranchMetadata, PrInfo, Stack};
 use crate::errors::ConflictStopped;
 use crate::forge::ForgeClient;
-use crate::git::repo::BranchDeleteResolution;
+use crate::git::repo::{BranchDeleteResolution, BranchDeleteSwitchTarget};
 use crate::git::{GitRepo, RebaseResult, RebaseTimings};
 use crate::github::pr::PrInfo as ForgePrInfo;
 use crate::ops::receipt::{OpKind, PlanSummary};
@@ -19,7 +19,7 @@ use crate::progress::LiveTimer;
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
-use dialoguer::{Confirm, theme::ColorfulTheme};
+use dialoguer::{Confirm, Select, theme::ColorfulTheme};
 use futures_util::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -154,6 +154,14 @@ impl BlockingWorktreeCleanup {
 struct LocalBranchDeleteOutcome {
     deleted: bool,
     worktree_blocked: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncBranchDeleteAction {
+    DeleteOnly,
+    PreserveWorktree,
+    RemoveWorktree { force: bool },
+    Skip,
 }
 
 /// Sync repo: pull trunk from remote, delete merged branches, optionally restack
@@ -724,26 +732,33 @@ pub fn run(
                     blocking_worktree_cleanup.as_ref(),
                 );
 
-                let confirm = if auto_confirm {
-                    true
+                let action = if auto_confirm {
+                    if blocking_worktree_cleanup.is_some() {
+                        SyncBranchDeleteAction::PreserveWorktree
+                    } else {
+                        SyncBranchDeleteAction::DeleteOnly
+                    }
                 } else if quiet {
-                    false
+                    SyncBranchDeleteAction::Skip
+                } else if let Some(cleanup) = blocking_worktree_cleanup.as_ref() {
+                    choose_linked_worktree_delete_action(branch, cleanup)?
                 } else {
-                    Confirm::with_theme(&ColorfulTheme::default())
+                    let confirm = Confirm::with_theme(&ColorfulTheme::default())
                         .with_prompt(prompt)
                         .default(true)
-                        .interact()?
+                        .interact()?;
+                    if !confirm {
+                        SyncBranchDeleteAction::Skip
+                    } else {
+                        SyncBranchDeleteAction::DeleteOnly
+                    }
                 };
-                let confirmed_dirty_worktree_removal = confirm
-                    && blocking_worktree_cleanup.as_ref().is_some_and(
-                        BlockingWorktreeCleanup::can_force_remove_dirty_worktree_during_sync,
-                    );
 
-                if confirm {
+                if action != SyncBranchDeleteAction::Skip {
                     deletion_decisions.push((
                         merged_info.clone(),
                         blocking_worktree_cleanup,
-                        confirmed_dirty_worktree_removal,
+                        action,
                     ));
                 } else {
                     stats.record_cleanup_skip(branch, "not confirmed");
@@ -760,9 +775,7 @@ pub fn run(
             let confirmed_deletions: HashSet<String> =
                 confirmed_branch_names.iter().cloned().collect();
 
-            for (merged_info, blocking_worktree_cleanup, confirmed_dirty_worktree_removal) in
-                deletion_decisions
-            {
+            for (merged_info, blocking_worktree_cleanup, action) in deletion_decisions {
                 let branch = &merged_info.branch;
                 let merge_type = &merged_info.merge_type;
                 let is_current_branch = branch == &current;
@@ -803,6 +816,28 @@ pub fn run(
                         );
                     }
                     continue;
+                }
+
+                if action == SyncBranchDeleteAction::PreserveWorktree {
+                    let Some(cleanup) = blocking_worktree_cleanup.as_ref() else {
+                        stats.record_cleanup_skip(branch, "worktree resolution missing");
+                        continue;
+                    };
+                    if let Err(error) = preserve_worktree_for_sync(&repo, cleanup, quiet) {
+                        stats.record_cleanup_skip(
+                            branch,
+                            format!("couldn't preserve linked worktree: {}", error),
+                        );
+                        if !quiet {
+                            println!(
+                                "    {} couldn't preserve linked worktree '{}': {}",
+                                "↷".yellow(),
+                                cleanup.resolution.worktree.name,
+                                error
+                            );
+                        }
+                        continue;
+                    }
                 }
 
                 // Handle squash-merged branches with surviving children.
@@ -943,13 +978,43 @@ pub fn run(
                     &config,
                     &workdir,
                     branch,
-                    blocking_worktree_cleanup.as_ref(),
-                    force,
-                    confirmed_dirty_worktree_removal,
+                    if matches!(action, SyncBranchDeleteAction::RemoveWorktree { .. }) {
+                        blocking_worktree_cleanup.as_ref()
+                    } else {
+                        None
+                    },
+                    matches!(
+                        action,
+                        SyncBranchDeleteAction::RemoveWorktree { force: true }
+                    ),
                     quiet,
                 )?;
                 let local_deleted = local_delete.deleted;
                 let local_worktree_blocked = local_delete.worktree_blocked;
+
+                if !local_deleted && local_branch_exists(&workdir, branch) {
+                    let reason = blocking_worktree_cleanup
+                        .as_ref()
+                        .and_then(BlockingWorktreeCleanup::blocker_summary)
+                        .unwrap_or_else(|| "local branch kept".to_string());
+                    stats.record_cleanup_skip(branch, reason);
+                    if !quiet {
+                        if local_worktree_blocked {
+                            print_blocked_branch_delete_recovery(
+                                branch,
+                                blocking_worktree_cleanup.as_ref(),
+                            );
+                        } else {
+                            println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+                        }
+                        println!(
+                            "    {} {}",
+                            "↷".yellow(),
+                            "metadata kept because local branch still exists".dimmed()
+                        );
+                    }
+                    continue;
+                }
 
                 // Imported branches are read-only remote references. Clean them
                 // up locally after merge, but never push-delete someone else's
@@ -1205,27 +1270,56 @@ pub fn run(
                     blocking_worktree_cleanup.as_ref(),
                 );
 
-                let confirm = if auto_confirm {
-                    true
+                let action = if auto_confirm {
+                    if blocking_worktree_cleanup.is_some() {
+                        SyncBranchDeleteAction::PreserveWorktree
+                    } else {
+                        SyncBranchDeleteAction::DeleteOnly
+                    }
                 } else if quiet {
-                    false
+                    SyncBranchDeleteAction::Skip
+                } else if let Some(cleanup) = blocking_worktree_cleanup.as_ref() {
+                    choose_linked_worktree_delete_action(branch, cleanup)?
                 } else {
-                    Confirm::with_theme(&ColorfulTheme::default())
+                    let confirm = Confirm::with_theme(&ColorfulTheme::default())
                         .with_prompt(prompt)
                         .default(true)
-                        .interact()?
+                        .interact()?;
+                    if !confirm {
+                        SyncBranchDeleteAction::Skip
+                    } else {
+                        SyncBranchDeleteAction::DeleteOnly
+                    }
                 };
-                let confirmed_dirty_worktree_removal = confirm
-                    && blocking_worktree_cleanup.as_ref().is_some_and(
-                        BlockingWorktreeCleanup::can_force_remove_dirty_worktree_during_sync,
-                    );
 
-                if !confirm {
+                if action == SyncBranchDeleteAction::Skip {
                     stats.record_cleanup_skip(branch, "not confirmed");
                     if !quiet {
                         println!("    {} {}", branch.bright_black(), "skipped".dimmed());
                     }
                     continue;
+                }
+
+                if action == SyncBranchDeleteAction::PreserveWorktree {
+                    let Some(cleanup) = blocking_worktree_cleanup.as_ref() else {
+                        stats.record_cleanup_skip(branch, "worktree resolution missing");
+                        continue;
+                    };
+                    if let Err(error) = preserve_worktree_for_sync(&repo, cleanup, quiet) {
+                        stats.record_cleanup_skip(
+                            branch,
+                            format!("couldn't preserve linked worktree: {}", error),
+                        );
+                        if !quiet {
+                            println!(
+                                "    {} couldn't preserve linked worktree '{}': {}",
+                                "↷".yellow(),
+                                cleanup.resolution.worktree.name,
+                                error
+                            );
+                        }
+                        continue;
+                    }
                 }
 
                 if is_current_branch {
@@ -1284,9 +1378,15 @@ pub fn run(
                     &config,
                     &workdir,
                     branch,
-                    blocking_worktree_cleanup.as_ref(),
-                    force,
-                    confirmed_dirty_worktree_removal,
+                    if matches!(action, SyncBranchDeleteAction::RemoveWorktree { .. }) {
+                        blocking_worktree_cleanup.as_ref()
+                    } else {
+                        None
+                    },
+                    matches!(
+                        action,
+                        SyncBranchDeleteAction::RemoveWorktree { force: true }
+                    ),
                     quiet,
                 )?;
                 let local_deleted = local_delete.deleted;
@@ -2171,7 +2271,7 @@ fn find_merged_branches(
     let merged_output = String::from_utf8_lossy(&output.stdout);
 
     for line in merged_output.lines() {
-        let branch = line.trim().trim_start_matches("* ");
+        let branch = branch_name_from_merged_output(line);
 
         // Skip trunk itself and any non-tracked branches
         if branch == stack.trunk || branch.is_empty() {
@@ -2199,7 +2299,7 @@ fn find_merged_branches(
         let merged_output = String::from_utf8_lossy(&output.stdout);
 
         for line in merged_output.lines() {
-            let branch = line.trim().trim_start_matches("* ");
+            let branch = branch_name_from_merged_output(line);
 
             // Skip trunk itself and any non-tracked branches
             if branch == stack.trunk || branch.is_empty() {
@@ -2419,6 +2519,14 @@ fn find_merged_branches(
     Ok(merged)
 }
 
+fn branch_name_from_merged_output(line: &str) -> &str {
+    let branch = line.trim();
+    branch
+        .strip_prefix("* ")
+        .or_else(|| branch.strip_prefix("+ "))
+        .unwrap_or(branch)
+}
+
 fn find_upstream_gone_branches(workdir: &std::path::Path, trunk: &str) -> Result<Vec<String>> {
     let output = Command::new("git")
         .args([
@@ -2484,6 +2592,27 @@ fn plan_blocking_worktree_cleanup(
     }))
 }
 
+fn preserve_worktree_for_sync(
+    repo: &GitRepo,
+    cleanup: &BlockingWorktreeCleanup,
+    quiet: bool,
+) -> Result<()> {
+    let target = repo.switch_worktree_for_branch_delete(&cleanup.resolution)?;
+    if !quiet {
+        let destination = match target {
+            BranchDeleteSwitchTarget::Branch(target) => format!("switched to {}", target),
+            BranchDeleteSwitchTarget::Detach => "detached HEAD".to_string(),
+        };
+        println!(
+            "    {} kept linked worktree {} ({})",
+            "→".cyan(),
+            cleanup.resolution.worktree.name.cyan(),
+            destination
+        );
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn delete_local_branch_for_sync(
     repo: &GitRepo,
@@ -2491,8 +2620,7 @@ fn delete_local_branch_for_sync(
     workdir: &std::path::Path,
     branch: &str,
     blocking_worktree_cleanup: Option<&BlockingWorktreeCleanup>,
-    force: bool,
-    confirmed_dirty_worktree_removal: bool,
+    force_remove_linked_worktree: bool,
     quiet: bool,
 ) -> Result<LocalBranchDeleteOutcome> {
     let mut outcome = attempt_local_branch_delete(workdir, branch);
@@ -2504,9 +2632,8 @@ fn delete_local_branch_for_sync(
         return Ok(outcome);
     };
 
-    let force_remove_linked_worktree = force
-        || (confirmed_dirty_worktree_removal
-            && cleanup.can_force_remove_dirty_worktree_during_sync());
+    let force_remove_linked_worktree =
+        force_remove_linked_worktree && cleanup.can_force_remove_dirty_worktree_during_sync();
     if !cleanup.can_remove_during_sync() && !force_remove_linked_worktree {
         return Ok(outcome);
     }
@@ -2629,6 +2756,58 @@ fn sync_delete_prompt(
     } else {
         format!("Delete '{}'?", branch)
     }
+}
+
+fn linked_worktree_delete_options(
+    cleanup: &BlockingWorktreeCleanup,
+) -> Vec<(String, SyncBranchDeleteAction)> {
+    let keep_label = match &cleanup.resolution.switch_target {
+        BranchDeleteSwitchTarget::Branch(target) => {
+            format!(
+                "Keep worktree, switch it to '{}', and delete branch",
+                target
+            )
+        }
+        BranchDeleteSwitchTarget::Detach => {
+            "Keep worktree, detach HEAD, and delete branch".to_string()
+        }
+    };
+    let mut options = vec![(keep_label, SyncBranchDeleteAction::PreserveWorktree)];
+
+    if cleanup.can_remove_during_sync() {
+        options.push((
+            "Remove worktree and delete branch".to_string(),
+            SyncBranchDeleteAction::RemoveWorktree { force: false },
+        ));
+    } else if cleanup.can_force_remove_dirty_worktree_during_sync() {
+        options.push((
+            "Force-remove dirty worktree and delete branch".to_string(),
+            SyncBranchDeleteAction::RemoveWorktree { force: true },
+        ));
+    }
+
+    options.push(("Skip".to_string(), SyncBranchDeleteAction::Skip));
+    options
+}
+
+fn choose_linked_worktree_delete_action(
+    branch: &str,
+    cleanup: &BlockingWorktreeCleanup,
+) -> Result<SyncBranchDeleteAction> {
+    let options = linked_worktree_delete_options(cleanup);
+    let labels = options
+        .iter()
+        .map(|(label, _)| label.as_str())
+        .collect::<Vec<_>>();
+    let selected = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(format!(
+            "Branch '{}' is checked out in worktree '{}'. What should stax do?",
+            branch, cleanup.resolution.worktree.name
+        ))
+        .items(&labels)
+        .default(0)
+        .interact()?;
+    Ok(options[selected].1)
 }
 
 fn print_blocked_branch_delete_recovery(
@@ -3439,17 +3618,18 @@ mod tests {
     }
 
     #[test]
-    fn sync_delete_prompt_mentions_removed_linked_worktree_for_safe_non_current_branch() {
-        let prompt = sync_delete_prompt(
-            "cesar/review-pass",
-            None,
-            None,
-            Some(&linked_worktree_cleanup(&[])),
-        );
+    fn linked_worktree_delete_options_default_to_preserve() {
+        let options = linked_worktree_delete_options(&linked_worktree_cleanup(&[]));
 
+        assert_eq!(options[0].1, SyncBranchDeleteAction::PreserveWorktree);
+        assert!(options[0].0.contains("Keep worktree"));
         assert_eq!(
-            prompt,
-            "Delete 'cesar/review-pass' and remove linked worktree 'review-pass'?"
+            options[1].1,
+            SyncBranchDeleteAction::RemoveWorktree { force: false }
+        );
+        assert_eq!(
+            options.last().expect("skip option").1,
+            SyncBranchDeleteAction::Skip
         );
     }
 
@@ -3469,32 +3649,45 @@ mod tests {
     }
 
     #[test]
-    fn sync_delete_prompt_mentions_force_removed_dirty_linked_worktree_when_confirmable() {
-        let prompt = sync_delete_prompt(
-            "cesar/review-pass",
-            None,
-            Some("upstream gone"),
-            Some(&linked_worktree_cleanup(&["dirty"])),
-        );
+    fn linked_worktree_delete_options_label_dirty_removal_as_destructive() {
+        let options = linked_worktree_delete_options(&linked_worktree_cleanup(&["dirty"]));
 
         assert_eq!(
-            prompt,
-            "Delete 'cesar/review-pass' (upstream gone) and force-remove dirty linked worktree 'review-pass'?"
+            options[1].1,
+            SyncBranchDeleteAction::RemoveWorktree { force: true }
+        );
+        assert!(
+            options[1]
+                .0
+                .contains("Force-remove dirty worktree and delete branch")
         );
     }
 
     #[test]
-    fn sync_delete_prompt_mentions_kept_linked_worktree_when_still_unsafe() {
-        let prompt = sync_delete_prompt(
-            "cesar/review-pass",
-            None,
-            Some("upstream gone"),
-            Some(&linked_worktree_cleanup(&["dirty", "locked"])),
-        );
+    fn linked_worktree_delete_options_omit_remove_for_locked_worktree() {
+        let options = linked_worktree_delete_options(&linked_worktree_cleanup(&["locked"]));
 
-        assert_eq!(
-            prompt,
-            "Delete 'cesar/review-pass' (upstream gone; keep linked worktree 'review-pass')?"
+        assert_eq!(options.len(), 2);
+        assert!(
+            options.iter().all(|(_, action)| !matches!(
+                action,
+                SyncBranchDeleteAction::RemoveWorktree { .. }
+            ))
+        );
+    }
+
+    #[test]
+    fn linked_worktree_delete_options_omit_remove_for_main_worktree() {
+        let mut cleanup = linked_worktree_cleanup(&[]);
+        cleanup.resolution.worktree.is_main = true;
+        let options = linked_worktree_delete_options(&cleanup);
+
+        assert_eq!(options.len(), 2);
+        assert!(
+            options.iter().all(|(_, action)| !matches!(
+                action,
+                SyncBranchDeleteAction::RemoveWorktree { .. }
+            ))
         );
     }
 }

@@ -794,6 +794,41 @@ impl GitRepo {
         }))
     }
 
+    pub fn switch_worktree_for_branch_delete(
+        &self,
+        resolution: &BranchDeleteResolution,
+    ) -> Result<BranchDeleteSwitchTarget> {
+        let switch_error =
+            if let BranchDeleteSwitchTarget::Branch(target) = &resolution.switch_target {
+                match self.switch_branch_in(&resolution.worktree.path, target) {
+                    Ok(()) => return Ok(BranchDeleteSwitchTarget::Branch(target.clone())),
+                    Err(error) => Some(error),
+                }
+            } else {
+                None
+            };
+
+        let output = self.run_git(&resolution.worktree.path, &["switch", "--detach"])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if let Some(switch_error) = switch_error {
+                anyhow::bail!(
+                    "{}; fallback git switch --detach failed in '{}': {}",
+                    switch_error,
+                    resolution.worktree.path.display(),
+                    stderr
+                );
+            }
+            anyhow::bail!(
+                "git switch --detach failed in '{}': {}",
+                resolution.worktree.path.display(),
+                stderr
+            );
+        }
+
+        Ok(BranchDeleteSwitchTarget::Detach)
+    }
+
     pub fn branch_delete_resolution_hint(&self, branch: &str) -> Result<Option<String>> {
         let Some(resolution) = self.branch_delete_resolution(branch)? else {
             return Ok(None);
