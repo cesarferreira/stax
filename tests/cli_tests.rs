@@ -507,6 +507,17 @@ fn test_downstack_commands() {
 }
 
 #[test]
+fn test_stack_help_describes_native_link_commands() {
+    let output = stax(&["stack", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("link"));
+    assert!(stdout.contains("unlink"));
+    assert!(stdout.contains("Stack commands (submit, restack, native GitHub Stack link/unlink)"));
+    assert!(!stdout.contains("Stack commands (submit, restack)"));
+}
+
+#[test]
 fn test_scoped_submit_subcommand_help_flags() {
     for args in [
         ["branch", "submit", "--help"],
