@@ -36,7 +36,8 @@ cargo run -- <command>
 ## Test Runner Policy
 
 - Do not run the full suite via `cargo test` in this repo.
-- For full-suite validation, always use `make test`.
+- While iterating, scope runs to what changed: `cargo nextest run test_name` (or a module prefix, e.g. `status_tests::`) for the tests you added or touched.
+- Run `make test` once before considering work done, before opening a PR, or whenever a change touches shared/core logic (e.g. `engine/`, `git/repo.rs`) that many tests depend on — CI also runs the full suite, but catching a shared-code regression locally is cheaper than a post-push CI failure.
 - On macOS, this route intentionally uses Docker for speed and consistency.
 - All integration tests compile into ONE binary (`tests/all_tests.rs`; `autotests = false` in `Cargo.toml`) so cargo links a single test binary instead of ~50. When you add a new `tests/<name>_tests.rs`, you MUST register it in `tests/all_tests.rs` with `#[path = "<name>_tests.rs"] mod <name>_tests;`, and reach shared helpers via `use crate::common;` (not `mod common;`). `cargo test --test <name>` only accepts `all_tests`; scope runs by module path instead.
 
