@@ -154,7 +154,7 @@ mod tests {
     use std::net::TcpListener;
     use std::path::Path;
     use std::sync::{
-        Arc,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     };
@@ -164,15 +164,24 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
+
     struct ConfigDirGuard {
         previous: Option<String>,
+        _lock: MutexGuard<'static, ()>,
     }
 
     impl ConfigDirGuard {
         fn set(path: &Path) -> Self {
+            let lock = CONFIG_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let previous = env::var("STAX_CONFIG_DIR").ok();
             unsafe { env::set_var("STAX_CONFIG_DIR", path) };
-            Self { previous }
+            Self {
+                previous,
+                _lock: lock,
+            }
         }
     }
 
@@ -188,10 +197,14 @@ mod tests {
     struct HomeConfigGuard {
         previous_home: Option<String>,
         previous_stax_config_dir: Option<String>,
+        _lock: MutexGuard<'static, ()>,
     }
 
     impl HomeConfigGuard {
         fn set(path: &Path) -> Self {
+            let lock = CONFIG_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let previous_home = env::var("HOME").ok();
             let previous_stax_config_dir = env::var("STAX_CONFIG_DIR").ok();
             unsafe {
@@ -201,6 +214,7 @@ mod tests {
             Self {
                 previous_home,
                 previous_stax_config_dir,
+                _lock: lock,
             }
         }
     }
@@ -228,6 +242,34 @@ mod tests {
             env::var_os("STAX_CONFIG_DIR"),
             Some(expected.into_os_string())
         );
+    }
+
+    #[test]
+    fn config_environment_guards_serialize_mutations() {
+        let first_home = tempfile::tempdir().unwrap();
+        let second_config = tempfile::tempdir().unwrap();
+        let first_guard = HomeConfigGuard::set(first_home.path());
+        let second_path = second_config.path().to_path_buf();
+        let (attempted_tx, attempted_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+
+        let contender = thread::spawn(move || {
+            attempted_tx.send(()).unwrap();
+            let _guard = ConfigDirGuard::set(&second_path);
+            acquired_tx.send(()).unwrap();
+        });
+
+        attempted_rx.recv().unwrap();
+        assert!(
+            acquired_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "a second config environment guard acquired access concurrently"
+        );
+
+        drop(first_guard);
+        acquired_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        contender.join().unwrap();
     }
 
     fn commit_file(repo: &git2::Repository, contents: &str) -> String {
