@@ -74,7 +74,7 @@ fuzzy-matcher = "0.3"
 indicatif = "0.18"
 ratatui = "0.30"
 crossterm = "0.29"
-termimad = "0.34"
+termimad = "0.35"
 
 # Error handling
 anyhow = "1"
