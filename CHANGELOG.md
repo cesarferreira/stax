@@ -2,12 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.96.6] - 2026-07-16
+
+### 🐛 Bug Fixes
+
+- Abort restack when trunk diverges ([#633](https://github.com/cesarferreira/stax/issues/633))
+- Ignore empty config directory override ([#637](https://github.com/cesarferreira/stax/issues/637))
+
+### 💼 Other
+
+- Keep linked worktrees during sync cleanup ([#638](https://github.com/cesarferreira/stax/issues/638))
+
+### 📚 Documentation
+
+- Scope test runs to changed tests during iteration ([#632](https://github.com/cesarferreira/stax/issues/632))
+
+### ⚙️ Miscellaneous Tasks
+
+- Pay down legacy clippy lint debt ([#634](https://github.com/cesarferreira/stax/issues/634))
 ## [0.96.5] - 2026-07-15
 
 ### 🐛 Bug Fixes
 
 - Require notarized macOS app releases
 - Ad-hoc sign macOS app releases
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.96.4] - 2026-07-15
 
 ### 🧪 Testing
