@@ -471,13 +471,20 @@ fn default_allow_github_token_env() -> bool {
     false
 }
 
+fn config_dir_override() -> Option<PathBuf> {
+    std::env::var("STAX_CONFIG_DIR")
+        .ok()
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
 impl Config {
     /// Get the config directory.
     /// Default: `~/.config/stax` (Unix) or `C:\Users\<you>\.config\stax` (Windows).
     /// Override with `STAX_CONFIG_DIR` env var for testing or custom locations.
     pub fn dir() -> Result<PathBuf> {
-        if let Ok(dir) = std::env::var("STAX_CONFIG_DIR") {
-            return Ok(PathBuf::from(dir));
+        if let Some(dir) = config_dir_override() {
+            return Ok(dir);
         }
         let home = std::env::var_os("HOME")
             .filter(|home| !home.is_empty())
@@ -522,7 +529,7 @@ impl Config {
     /// Load config from file
     pub fn load() -> Result<Self> {
         let path = Self::path()?;
-        if std::env::var("STAX_CONFIG_DIR").is_ok() {
+        if config_dir_override().is_some() {
             return Self::load_path_or_default(&path);
         }
 
@@ -541,7 +548,7 @@ impl Config {
     pub(crate) fn load_for_repo(root: &Path) -> Result<Self> {
         let path = Self::path()?;
         let config = Self::load_path_or_default(&path)?;
-        if std::env::var("STAX_CONFIG_DIR").is_ok() {
+        if config_dir_override().is_some() {
             return Ok(config);
         }
 
