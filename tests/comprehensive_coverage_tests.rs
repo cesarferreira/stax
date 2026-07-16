@@ -233,7 +233,7 @@ fn test_doctor_output_format() {
     // Should contain check symbols
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("✓") || stdout.contains("✗") || stdout.contains("!") || stdout.len() > 0
+        stdout.contains("✓") || stdout.contains("✗") || stdout.contains("!") || !stdout.is_empty()
     );
 }
 
@@ -306,7 +306,7 @@ fn test_config_output_contains_path() {
     output.assert_success();
     // Should show config path
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("config") || stdout.contains("Config") || stdout.len() > 0);
+    assert!(stdout.contains("config") || stdout.contains("Config") || !stdout.is_empty());
 }
 
 // =============================================================================

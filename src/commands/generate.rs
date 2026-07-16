@@ -733,17 +733,17 @@ pub(crate) fn resolve_model(
     if let Some(model) = config.ai.model_for(feature) {
         // If resolved model is a known model for a different agent, ignore it and
         // fall back to the selected agent default.
-        if let Some(model_agent) = known_agent_for_model(model) {
-            if model_agent != agent {
-                eprintln!(
-                    "  {} Configured model '{}' is for agent '{}', but current agent is '{}'. Using agent default.",
-                    "⚠".yellow(),
-                    model.yellow(),
-                    model_agent,
-                    agent
-                );
-                return Ok(None);
-            }
+        if let Some(model_agent) = known_agent_for_model(model)
+            && model_agent != agent
+        {
+            eprintln!(
+                "  {} Configured model '{}' is for agent '{}', but current agent is '{}'. Using agent default.",
+                "⚠".yellow(),
+                model.yellow(),
+                model_agent,
+                agent
+            );
+            return Ok(None);
         }
         validate_model_soft(agent, model);
         return Ok(Some(model.to_string()));
@@ -991,12 +991,11 @@ struct ModelOption {
 }
 
 fn available_models_for(agent: &str) -> Vec<ModelOption> {
-    if agent == "codex" {
-        if let Ok(models) = fetch_openai_codex_models() {
-            if !models.is_empty() {
-                return models;
-            }
-        }
+    if agent == "codex"
+        && let Ok(models) = fetch_openai_codex_models()
+        && !models.is_empty()
+    {
+        return models;
     }
     known_models_for(agent)
 }

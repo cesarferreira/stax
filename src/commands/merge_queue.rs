@@ -503,19 +503,18 @@ pub fn run(
             false, // verbose
             false, // auto_stash_pop
             &[],
-        ) {
-            if !quiet {
-                println!();
-                println!(
-                    "{} {}",
-                    "warning:".yellow().bold(),
-                    format!("post-merge sync failed: {}", err).yellow()
-                );
-                println!(
-                    "{}",
-                    "Run 'stax rs --force' manually to sync local state.".dimmed()
-                );
-            }
+        ) && !quiet
+        {
+            println!();
+            println!(
+                "{} {}",
+                "warning:".yellow().bold(),
+                format!("post-merge sync failed: {}", err).yellow()
+            );
+            println!(
+                "{}",
+                "Run 'stax rs --force' manually to sync local state.".dimmed()
+            );
         }
     }
 

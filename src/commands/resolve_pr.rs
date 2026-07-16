@@ -20,10 +20,10 @@ pub fn resolve_pr_number(
     config: &Config,
 ) -> Result<Option<u64>> {
     // Check local metadata first
-    if let Some(branch_info) = stack.branches.get(branch) {
-        if let Some(pr_number) = branch_info.pr_number {
-            return Ok(Some(pr_number));
-        }
+    if let Some(branch_info) = stack.branches.get(branch)
+        && let Some(pr_number) = branch_info.pr_number
+    {
+        return Ok(Some(pr_number));
     }
 
     // Fall back to forge lookup — all failures are non-fatal so that

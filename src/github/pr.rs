@@ -1443,10 +1443,10 @@ fn format_merge_error(err: octocrab::Error) -> anyhow::Error {
                 msg.push_str(&format!("\n  - {}", item));
             }
         }
-        if let Some(url) = source.documentation_url.as_ref() {
-            if !url.is_empty() {
-                msg.push_str(&format!("\n  docs: {}", url));
-            }
+        if let Some(url) = source.documentation_url.as_ref()
+            && !url.is_empty()
+        {
+            msg.push_str(&format!("\n  docs: {}", url));
         }
         return anyhow::Error::new(err).context(msg);
     }

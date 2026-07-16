@@ -462,21 +462,20 @@ impl GitHubClient {
                 .unwrap_or_default();
 
             for review in pr_reviews {
-                if let Some(submitted) = review.submitted_at {
-                    if submitted >= since {
-                        if let Some(reviewer) = review.user {
-                            // Don't include self-reviews
-                            if reviewer.login != username {
-                                reviews.push(ReviewActivity {
-                                    pr_number: issue.number,
-                                    pr_title: issue.title.clone(),
-                                    reviewer: reviewer.login,
-                                    state: review.state,
-                                    timestamp: submitted,
-                                    is_received: true,
-                                });
-                            }
-                        }
+                if let Some(submitted) = review.submitted_at
+                    && submitted >= since
+                    && let Some(reviewer) = review.user
+                {
+                    // Don't include self-reviews
+                    if reviewer.login != username {
+                        reviews.push(ReviewActivity {
+                            pr_number: issue.number,
+                            pr_title: issue.title.clone(),
+                            reviewer: reviewer.login,
+                            state: review.state,
+                            timestamp: submitted,
+                            is_received: true,
+                        });
                     }
                 }
             }

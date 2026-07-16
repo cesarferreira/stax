@@ -358,10 +358,10 @@ fn expand_home_path(path: &str) -> Result<PathBuf> {
 }
 
 pub fn default_create_base(repo: &GitRepo) -> Result<String> {
-    if let Ok(current) = repo.current_branch() {
-        if BranchMetadata::read(repo.inner(), &current)?.is_some() {
-            return Ok(current);
-        }
+    if let Ok(current) = repo.current_branch()
+        && BranchMetadata::read(repo.inner(), &current)?.is_some()
+    {
+        return Ok(current);
     }
 
     repo.trunk_branch()

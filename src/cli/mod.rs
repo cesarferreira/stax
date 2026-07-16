@@ -180,15 +180,14 @@ pub fn run() -> Result<()> {
     commands::init::ensure_initialized()?;
 
     // Block commands that do not explicitly support running during an active rebase.
-    if !command.allows_during_rebase() {
-        if let Ok(repo) = GitRepo::open() {
-            if repo.rebase_in_progress().unwrap_or(false) {
-                anyhow::bail!(
-                    "A rebase is in progress. Resolve conflicts and run one of:\n  \
+    if !command.allows_during_rebase()
+        && let Ok(repo) = GitRepo::open()
+        && repo.rebase_in_progress().unwrap_or(false)
+    {
+        anyhow::bail!(
+            "A rebase is in progress. Resolve conflicts and run one of:\n  \
                      stax resolve\n  stax continue\n  stax abort"
-                );
-            }
-        }
+        );
     }
 
     let result = match command {

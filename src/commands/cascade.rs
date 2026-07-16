@@ -78,22 +78,22 @@ fn warn_if_trunk_stale(repo: &GitRepo, stack: &Stack) {
         .current_dir(workdir)
         .output();
 
-    if let Ok(out) = output {
-        if out.status.success() {
-            let count_str = String::from_utf8_lossy(&out.stdout);
-            let count: u64 = count_str.trim().parse().unwrap_or(0);
-            if count > 0 {
-                println!(
-                    "  {} {} is {} commit{} behind {} — run {} to sync first",
-                    "warning:".yellow().bold(),
-                    stack.trunk.cyan(),
-                    count.to_string().yellow(),
-                    if count == 1 { "" } else { "s" },
-                    remote_ref.cyan(),
-                    "stax rs".bold(),
-                );
-            }
+    if let Ok(out) = output
+        && out.status.success()
+    {
+        let count_str = String::from_utf8_lossy(&out.stdout);
+        let count: u64 = count_str.trim().parse().unwrap_or(0);
+        if count > 0 {
+            println!(
+                "  {} {} is {} commit{} behind {} — run {} to sync first",
+                "warning:".yellow().bold(),
+                stack.trunk.cyan(),
+                count.to_string().yellow(),
+                if count == 1 { "" } else { "s" },
+                remote_ref.cyan(),
+                "stax rs".bold(),
+            );
         }
-        // If rev-list fails (e.g. remote ref doesn't exist yet), silently skip.
     }
+    // If rev-list fails (e.g. remote ref doesn't exist yet), silently skip.
 }

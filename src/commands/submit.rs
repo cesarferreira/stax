@@ -557,14 +557,12 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let empty_branches: Vec<_> = branches_to_submit
         .iter()
         .filter(|b| {
-            if let Some(branch_info) = stack.branches.get(*b) {
-                if let Some(parent) = &branch_info.parent {
-                    if let Ok(branch_commit) = repo.branch_commit(b) {
-                        if let Ok(parent_commit) = repo.branch_commit(parent) {
-                            return branch_commit == parent_commit;
-                        }
-                    }
-                }
+            if let Some(branch_info) = stack.branches.get(*b)
+                && let Some(parent) = &branch_info.parent
+                && let Ok(branch_commit) = repo.branch_commit(b)
+                && let Ok(parent_commit) = repo.branch_commit(parent)
+            {
+                return branch_commit == parent_commit;
             }
             false
         })
@@ -791,84 +789,84 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
             let had_metadata_pr = meta.pr_info.as_ref().filter(|p| p.number > 0).is_some();
 
             // Best-effort metadata refresh when no-pr is used.
-            if !is_empty {
-                if let (Some(runtime), Some(forge_client)) =
+            if !is_empty
+                && let (Some(runtime), Some(forge_client)) =
                     (runtime.as_ref(), forge_client.as_ref())
-                {
-                    let mut found_pr: Option<PrInfoWithHead> = None;
+            {
+                let mut found_pr: Option<PrInfoWithHead> = None;
 
-                    if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+                if let Some(pr_info) = meta.pr_info.as_ref().filter(|p| p.number > 0) {
+                    let lookup_started_at = Instant::now();
+                    found_pr = runtime
+                        .block_on(async { forge_client.get_pr_with_head(pr_info.number).await })
+                        .ok();
+                    timings.open_pr_discovery += lookup_started_at.elapsed();
+                }
+
+                if found_pr.is_none() {
+                    let lookup_started_at = Instant::now();
+                    found_pr = runtime
+                        .block_on(async { forge_client.find_open_pr_by_head(branch).await })
+                        .ok()
+                        .flatten();
+                    timings.open_pr_discovery += lookup_started_at.elapsed();
+                }
+
+                if found_pr.is_none() && (had_metadata_pr || remote_branches.contains(branch)) {
+                    full_scan_fallbacks += 1;
+                    if verbose && !quiet {
+                        println!(
+                            "    Falling back to full open PR scan for {} (metadata mismatch)",
+                            branch.cyan()
+                        );
+                    }
+                    if open_prs_by_head.is_none() {
                         let lookup_started_at = Instant::now();
-                        found_pr = runtime
-                            .block_on(async { forge_client.get_pr_with_head(pr_info.number).await })
+                        open_prs_by_head = runtime
+                            .block_on(async { forge_client.list_open_prs_by_head().await })
                             .ok();
                         timings.open_pr_discovery += lookup_started_at.elapsed();
-                    }
-
-                    if found_pr.is_none() {
-                        let lookup_started_at = Instant::now();
-                        found_pr = runtime
-                            .block_on(async { forge_client.find_open_pr_by_head(branch).await })
-                            .ok()
-                            .flatten();
-                        timings.open_pr_discovery += lookup_started_at.elapsed();
-                    }
-
-                    if found_pr.is_none() && (had_metadata_pr || remote_branches.contains(branch)) {
-                        full_scan_fallbacks += 1;
-                        if verbose && !quiet {
-                            println!(
-                                "    Falling back to full open PR scan for {} (metadata mismatch)",
-                                branch.cyan()
-                            );
-                        }
-                        if open_prs_by_head.is_none() {
-                            let lookup_started_at = Instant::now();
-                            open_prs_by_head = runtime
-                                .block_on(async { forge_client.list_open_prs_by_head().await })
-                                .ok();
-                            timings.open_pr_discovery += lookup_started_at.elapsed();
-                            if verbose && !quiet {
-                                if let Some(map) = &open_prs_by_head {
-                                    println!("      Cached {} open PRs", map.len());
-                                }
-                            }
-                        }
-                        if let Some(map) = &open_prs_by_head {
-                            found_pr = map.get(branch).cloned();
+                        if verbose
+                            && !quiet
+                            && let Some(map) = &open_prs_by_head
+                        {
+                            println!("      Cached {} open PRs", map.len());
                         }
                     }
+                    if let Some(map) = &open_prs_by_head {
+                        found_pr = map.get(branch).cloned();
+                    }
+                }
 
-                    if let Some(pr) = found_pr {
-                        existing_pr = Some(pr.info.number);
-                        let owner_matches = pr
-                            .head_label
-                            .as_ref()
-                            .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
-                            .map(|owner| owner == remote_info.owner())
-                            .unwrap_or(false);
+                if let Some(pr) = found_pr {
+                    existing_pr = Some(pr.info.number);
+                    let owner_matches = pr
+                        .head_label
+                        .as_ref()
+                        .and_then(|label| label.split_once(':').map(|(owner, _)| owner))
+                        .map(|owner| owner == remote_info.owner())
+                        .unwrap_or(false);
 
-                        let needs_meta_update = meta
-                            .pr_info
-                            .as_ref()
-                            .map(|info| {
-                                info.number != pr.info.number
-                                    || info.state != pr.info.state
-                                    || info.is_draft.unwrap_or(false) != pr.info.is_draft
-                            })
-                            .unwrap_or(true);
+                    let needs_meta_update = meta
+                        .pr_info
+                        .as_ref()
+                        .map(|info| {
+                            info.number != pr.info.number
+                                || info.state != pr.info.state
+                                || info.is_draft.unwrap_or(false) != pr.info.is_draft
+                        })
+                        .unwrap_or(true);
 
-                        if needs_meta_update && owner_matches {
-                            meta = BranchMetadata {
-                                pr_info: Some(crate::engine::metadata::PrInfo {
-                                    number: pr.info.number,
-                                    state: pr.info.state.clone(),
-                                    is_draft: Some(pr.info.is_draft),
-                                }),
-                                ..meta
-                            };
-                            meta.write(repo.inner(), branch)?;
-                        }
+                    if needs_meta_update && owner_matches {
+                        meta = BranchMetadata {
+                            pr_info: Some(crate::engine::metadata::PrInfo {
+                                number: pr.info.number,
+                                state: pr.info.state.clone(),
+                                is_draft: Some(pr.info.is_draft),
+                            }),
+                            ..meta
+                        };
+                        meta.write(repo.inner(), branch)?;
                     }
                 }
             }
@@ -1515,10 +1513,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                         "--squash cannot be combined with submitting a branch that needs a temporary restack. Run `stax restack` first, then submit with --squash."
                     );
                 }
-                if let Err(e) = squash_branch_commits(repo.workdir()?, &plan.branch, &plan.parent) {
-                    if !quiet {
-                        println!("  {} squash {}: {}", "⚠".yellow(), plan.branch, e);
-                    }
+                if let Err(e) = squash_branch_commits(repo.workdir()?, &plan.branch, &plan.parent)
+                    && !quiet
+                {
+                    println!("  {} squash {}: {}", "⚠".yellow(), plan.branch, e);
                 }
             }
             pushed_branches.push(PushSpec {
@@ -1668,40 +1666,39 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     // is also true for a plain push with no base change, and GitHub's
                     // native Stacked PRs API rejects *any* base PATCH (even a no-op)
                     // once a PR is registered in a stack.
-                    if plan.needs_base_update {
-                        if let Err(e) = client
+                    if plan.needs_base_update
+                        && let Err(e) = client
                             .update_pr_base(existing_pr_number, &plan.parent)
                             .await
-                        {
-                            if is_native_stack_base_locked_error(&e) {
-                                if !quiet {
-                                    println!(
-                                        "      {} {}",
-                                        "note:".dimmed(),
-                                        format!(
-                                            "skipped base update for #{existing_pr_number} — \
+                    {
+                        if is_native_stack_base_locked_error(&e) {
+                            if !quiet {
+                                println!(
+                                    "      {} {}",
+                                    "note:".dimmed(),
+                                    format!(
+                                        "skipped base update for #{existing_pr_number} — \
                                              GitHub manages the base for PRs registered in a \
                                              native Stack; run `st stack link` to re-sync"
-                                        )
-                                        .dimmed()
-                                    );
-                                }
-                            } else {
-                                LiveTimer::maybe_finish_warn(update_timer, "failed");
-                                return Err(e).context(format!(
-                                    "Failed to update PR base for #{existing_pr_number}"
-                                ));
+                                    )
+                                    .dimmed()
+                                );
                             }
+                        } else {
+                            LiveTimer::maybe_finish_warn(update_timer, "failed");
+                            return Err(e).context(format!(
+                                "Failed to update PR base for #{existing_pr_number}"
+                            ));
                         }
                     }
 
                     // Auto-update PR title from tip commit subject when it has changed
-                    if plan.needs_title_update {
-                        if let Some(ref commit_subject) = plan.tip_commit_subject {
-                            client
-                                .update_pr_title(existing_pr_number, commit_subject)
-                                .await?;
-                        }
+                    if plan.needs_title_update
+                        && let Some(ref commit_subject) = plan.tip_commit_subject
+                    {
+                        client
+                            .update_pr_title(existing_pr_number, commit_subject)
+                            .await?;
                     }
 
                     apply_ai_pr_content_updates(
@@ -2846,12 +2843,12 @@ async fn discover_existing_pr(
     let mut existing_pr = None;
     let had_metadata_pr = metadata_pr_number.is_some();
 
-    if let Some(pr_number) = metadata_pr_number {
-        if let Ok(pr) = forge_client.get_pr_with_head(pr_number).await {
-            let state = pr.info.state.to_ascii_lowercase();
-            if pr.head == branch && matches!(state.as_str(), "open" | "opened") {
-                existing_pr = Some(pr);
-            }
+    if let Some(pr_number) = metadata_pr_number
+        && let Ok(pr) = forge_client.get_pr_with_head(pr_number).await
+    {
+        let state = pr.info.state.to_ascii_lowercase();
+        if pr.head == branch && matches!(state.as_str(), "open" | "opened") {
+            existing_pr = Some(pr);
         }
     }
 
@@ -2976,15 +2973,15 @@ fn prepare_publish_sources_for_submit(
         );
     }
 
-    if let Err(err) = remove_path_if_exists(&temp_root) {
-        if !quiet {
-            eprintln!(
-                "  {} could not remove temporary submit worktree root {}: {}",
-                "warning:".yellow(),
-                temp_root.display(),
-                err
-            );
-        }
+    if let Err(err) = remove_path_if_exists(&temp_root)
+        && !quiet
+    {
+        eprintln!(
+            "  {} could not remove temporary submit worktree root {}: {}",
+            "warning:".yellow(),
+            temp_root.display(),
+            err
+        );
     }
 
     Ok((sources, temporary_refs))
@@ -3507,10 +3504,10 @@ fn load_pr_template(workdir: &Path) -> Option<String> {
 
     for candidate in &candidates {
         let path = workdir.join(candidate);
-        if path.is_file() {
-            if let Ok(content) = fs::read_to_string(path) {
-                return Some(content);
-            }
+        if path.is_file()
+            && let Ok(content) = fs::read_to_string(path)
+        {
+            return Some(content);
         }
     }
 
@@ -3528,10 +3525,10 @@ fn load_pr_template(workdir: &Path) -> Option<String> {
             })
             .collect();
         entries.sort_by_key(|entry| entry.path());
-        if let Some(entry) = entries.first() {
-            if let Ok(content) = fs::read_to_string(entry.path()) {
-                return Some(content);
-            }
+        if let Some(entry) = entries.first()
+            && let Ok(content) = fs::read_to_string(entry.path())
+        {
+            return Some(content);
         }
     }
 

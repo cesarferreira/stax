@@ -104,10 +104,10 @@ fn assign_unique_label_stage<F>(
             continue;
         }
 
-        if let Some(label) = label_for(candidate) {
-            if !reserved.contains(&label) {
-                *counts.entry(label).or_insert(0usize) += 1;
-            }
+        if let Some(label) = label_for(candidate)
+            && !reserved.contains(&label)
+        {
+            *counts.entry(label).or_insert(0usize) += 1;
         }
     }
 
@@ -462,10 +462,8 @@ impl GitRepo {
 
         let mut by_branch = HashMap::new();
         for (idx, (_, branch, is_prunable)) in entries.into_iter().enumerate().skip(1) {
-            if !is_prunable {
-                if let Some(branch) = branch {
-                    by_branch.insert(branch, labels[idx].clone());
-                }
+            if !is_prunable && let Some(branch) = branch {
+                by_branch.insert(branch, labels[idx].clone());
             }
         }
 
@@ -915,11 +913,11 @@ impl GitRepo {
         // Collect indices that need computation (cache misses).
         let mut misses: Vec<(usize, String, String)> = Vec::new();
         for (i, ((base, head), sha_pair)) in pairs.iter().zip(shas.iter()).enumerate() {
-            if let Some((base_sha, head_sha)) = sha_pair {
-                if let Some(cached) = cache.get(base_sha, head_sha) {
-                    results[i] = Some(cached);
-                    continue;
-                }
+            if let Some((base_sha, head_sha)) = sha_pair
+                && let Some(cached) = cache.get(base_sha, head_sha)
+            {
+                results[i] = Some(cached);
+                continue;
             }
             misses.push((i, base.clone(), head.clone()));
         }
@@ -983,10 +981,10 @@ impl GitRepo {
         let mut commits = Vec::new();
         for oid in revwalk {
             let oid = oid?;
-            if let Ok(commit) = self.repo.find_commit(oid) {
-                if let Ok(Some(msg)) = commit.summary() {
-                    commits.push(msg.to_string());
-                }
+            if let Ok(commit) = self.repo.find_commit(oid)
+                && let Ok(Some(msg)) = commit.summary()
+            {
+                commits.push(msg.to_string());
             }
         }
 
@@ -1007,22 +1005,22 @@ impl GitRepo {
 
     fn resolve_to_oid_in(repo: &Repository, refspec: &str) -> Result<git2::Oid> {
         // Try as local branch first
-        if let Ok(branch) = repo.find_branch(refspec, BranchType::Local) {
-            if let Some(oid) = branch.get().target() {
-                return Ok(oid);
-            }
+        if let Ok(branch) = repo.find_branch(refspec, BranchType::Local)
+            && let Some(oid) = branch.get().target()
+        {
+            return Ok(oid);
         }
         // Try as remote branch (e.g., "origin/main")
-        if let Ok(branch) = repo.find_branch(refspec, BranchType::Remote) {
-            if let Some(oid) = branch.get().target() {
-                return Ok(oid);
-            }
+        if let Ok(branch) = repo.find_branch(refspec, BranchType::Remote)
+            && let Some(oid) = branch.get().target()
+        {
+            return Ok(oid);
         }
         // Try as reference
-        if let Ok(reference) = repo.find_reference(refspec) {
-            if let Some(oid) = reference.target() {
-                return Ok(oid);
-            }
+        if let Ok(reference) = repo.find_reference(refspec)
+            && let Some(oid) = reference.target()
+        {
+            return Ok(oid);
         }
         // Try revparse
         let obj = repo.revparse_single(refspec)?;
@@ -1677,14 +1675,12 @@ Use --auto-stash-pop or stash/commit changes first.",
             let branch_commit = branch.get().peel_to_commit()?;
             let mut candidate_bases = vec![self.trunk_branch()?];
 
-            if let Ok(Some(json)) = crate::git::refs::read_metadata(&self.repo, name) {
-                if let Ok(meta) = serde_json::from_str::<BranchParentMetadata>(&json) {
-                    if meta.parent_branch_name != name
-                        && !candidate_bases.contains(&meta.parent_branch_name)
-                    {
-                        candidate_bases.insert(0, meta.parent_branch_name);
-                    }
-                }
+            if let Ok(Some(json)) = crate::git::refs::read_metadata(&self.repo, name)
+                && let Ok(meta) = serde_json::from_str::<BranchParentMetadata>(&json)
+                && meta.parent_branch_name != name
+                && !candidate_bases.contains(&meta.parent_branch_name)
+            {
+                candidate_bases.insert(0, meta.parent_branch_name);
             }
 
             let merged_into_any_base = candidate_bases.into_iter().any(|base| {
@@ -1750,12 +1746,11 @@ Use --auto-stash-pop or stash/commit changes first.",
         revwalk.push(branch_commit.id())?;
 
         // If parent specified, exclude its commits
-        if let Some(parent_name) = parent {
-            if let Ok(parent_ref) = self.repo.find_branch(parent_name, BranchType::Local) {
-                if let Ok(parent_commit) = parent_ref.get().peel_to_commit() {
-                    revwalk.hide(parent_commit.id())?;
-                }
-            }
+        if let Some(parent_name) = parent
+            && let Ok(parent_ref) = self.repo.find_branch(parent_name, BranchType::Local)
+            && let Ok(parent_commit) = parent_ref.get().peel_to_commit()
+        {
+            revwalk.hide(parent_commit.id())?;
         }
 
         for oid in revwalk.take(5) {
@@ -1943,10 +1938,10 @@ Use --auto-stash-pop or stash/commit changes first.",
             .context("Failed to glob remote refs")?;
         let mut names = HashSet::new();
         for r in refs.flatten() {
-            if let Ok(name) = r.name() {
-                if let Some(branch) = name.strip_prefix(&prefix) {
-                    names.insert(branch.to_string());
-                }
+            if let Ok(name) = r.name()
+                && let Some(branch) = name.strip_prefix(&prefix)
+            {
+                names.insert(branch.to_string());
             }
         }
         Ok(names)

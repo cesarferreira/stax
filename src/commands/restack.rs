@@ -54,16 +54,15 @@ pub fn run(
                 .as_ref()
                 .and_then(|e| e.failed_branch.as_deref())
             {
-                if let Some(meta) = BranchMetadata::read(repo.inner(), failed_branch)? {
-                    if let Ok(actual_parent_rev) = repo.branch_commit(&meta.parent_branch_name) {
-                        if meta.parent_branch_revision != actual_parent_rev {
-                            let updated = BranchMetadata {
-                                parent_branch_revision: actual_parent_rev,
-                                ..meta
-                            };
-                            updated.write(repo.inner(), failed_branch)?;
-                        }
-                    }
+                if let Some(meta) = BranchMetadata::read(repo.inner(), failed_branch)?
+                    && let Ok(actual_parent_rev) = repo.branch_commit(&meta.parent_branch_name)
+                    && meta.parent_branch_revision != actual_parent_rev
+                {
+                    let updated = BranchMetadata {
+                        parent_branch_revision: actual_parent_rev,
+                        ..meta
+                    };
+                    updated.write(repo.inner(), failed_branch)?;
                 }
                 completed_from_receipt.insert(failed_branch.to_string());
             }
@@ -374,36 +373,34 @@ fn render_restack_error(repo: &GitRepo, error: &OperationError, quiet: bool) {
         branch: Some(branch),
         ..
     } = &error.details
+        && let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), branch)
+        && let Ok(stack) = Stack::load(repo)
     {
-        if let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), branch) {
-            if let Ok(stack) = Stack::load(repo) {
-                let completed = error
-                    .receipt
-                    .as_ref()
-                    .and_then(|receipt| match &receipt.outcome {
-                        OperationOutcome::Restacked { branches, .. } => Some(branches.as_slice()),
-                        _ => None,
-                    })
-                    .unwrap_or(&[]);
-                let stack_branches = stack.current_stack(branch);
-                let remaining = stack_branches
-                    .iter()
-                    .filter(|candidate| *candidate != &stack.trunk)
-                    .filter(|candidate| *candidate != branch)
-                    .filter(|candidate| !completed.contains(candidate))
-                    .count();
-                let context = RestackConflictContext {
-                    branch,
-                    parent_branch: &meta.parent_branch_name,
-                    completed_branches: completed,
-                    remaining_branches: remaining,
-                    continue_commands: &["stax restack --continue", "git rebase --abort"],
-                    stack_branches: &stack_branches,
-                };
-                print_restack_conflict(repo, &context);
-                return;
-            }
-        }
+        let completed = error
+            .receipt
+            .as_ref()
+            .and_then(|receipt| match &receipt.outcome {
+                OperationOutcome::Restacked { branches, .. } => Some(branches.as_slice()),
+                _ => None,
+            })
+            .unwrap_or(&[]);
+        let stack_branches = stack.current_stack(branch);
+        let remaining = stack_branches
+            .iter()
+            .filter(|candidate| *candidate != &stack.trunk)
+            .filter(|candidate| *candidate != branch)
+            .filter(|candidate| !completed.contains(candidate))
+            .count();
+        let context = RestackConflictContext {
+            branch,
+            parent_branch: &meta.parent_branch_name,
+            completed_branches: completed,
+            remaining_branches: remaining,
+            continue_commands: &["stax restack --continue", "git rebase --abort"],
+            stack_branches: &stack_branches,
+        };
+        print_restack_conflict(repo, &context);
+        return;
     }
     println!("{}", error.primary.red());
     println!("{}", error.action);

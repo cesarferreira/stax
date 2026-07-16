@@ -265,16 +265,13 @@ fn url_authority_host(host: &str) -> String {
 }
 
 pub fn get_remote_url(workdir: &Path, remote: &str) -> Result<String> {
-    if let Ok(repo) = Repository::discover(workdir) {
-        if let Ok(config) = repo.config() {
-            if let Ok(local) = config.open_level(ConfigLevel::Local) {
-                if let Ok(url) = local.get_string(&format!("remote.{}.url", remote)) {
-                    if !url.trim().is_empty() {
-                        return Ok(url);
-                    }
-                }
-            }
-        }
+    if let Ok(repo) = Repository::discover(workdir)
+        && let Ok(config) = repo.config()
+        && let Ok(local) = config.open_level(ConfigLevel::Local)
+        && let Ok(url) = local.get_string(&format!("remote.{}.url", remote))
+        && !url.trim().is_empty()
+    {
+        return Ok(url);
     }
 
     let output = Command::new("git")
@@ -369,10 +366,10 @@ pub fn ls_remote_head_oids(workdir: &Path, remote: &str) -> Result<HashMap<Strin
         if line.is_empty() {
             continue;
         }
-        if let Some((oid, refpart)) = line.split_once('\t') {
-            if let Some(name) = refpart.strip_prefix(prefix) {
-                heads.insert(name.to_string(), oid.to_string());
-            }
+        if let Some((oid, refpart)) = line.split_once('\t')
+            && let Some(name) = refpart.strip_prefix(prefix)
+        {
+            heads.insert(name.to_string(), oid.to_string());
         }
     }
     Ok(heads)

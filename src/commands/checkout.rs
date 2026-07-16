@@ -210,10 +210,10 @@ pub fn run(
     }
 
     // Parse "#123" from branch string
-    if let Some(ref branch_str) = branch {
-        if let Some(pr_num) = parse_pr_number(branch_str)? {
-            return checkout_by_pr(&repo, pr_num, shell_output);
-        }
+    if let Some(ref branch_str) = branch
+        && let Some(pr_num) = parse_pr_number(branch_str)?
+    {
+        return checkout_by_pr(&repo, pr_num, shell_output);
     }
 
     if branch.is_some() && (trunk || parent || child.is_some()) {
@@ -225,12 +225,11 @@ pub fn run(
         if trunk {
             stack.trunk.clone()
         } else if parent {
-            let parent_branch = stack
+            stack
                 .branches
                 .get(&current)
                 .and_then(|b| b.parent.clone())
-                .ok_or_else(|| anyhow::anyhow!("Branch '{}' has no tracked parent.", current))?;
-            parent_branch
+                .ok_or_else(|| anyhow::anyhow!("Branch '{}' has no tracked parent.", current))?
         } else {
             let children: Vec<String> = stack
                 .branches
@@ -877,7 +876,7 @@ mod tests {
         let stack = test_stack();
         let mut display_branches = Vec::new();
         let mut max_column = 0;
-        let mut roots = vec!["auth".to_string(), "hotfix".to_string()];
+        let mut roots = ["auth".to_string(), "hotfix".to_string()];
         roots.sort();
         for (i, root) in roots.iter().enumerate() {
             collect_display_branches_with_nesting(

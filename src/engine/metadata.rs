@@ -63,14 +63,12 @@ impl BranchMetadata {
                         refs::read_trunk(repo)?.unwrap_or_else(|| "main".to_string());
                 }
 
-                if meta.parent_branch_revision.trim().is_empty() {
-                    if let Ok(parent_ref) =
+                if meta.parent_branch_revision.trim().is_empty()
+                    && let Ok(parent_ref) =
                         repo.find_branch(&meta.parent_branch_name, git2::BranchType::Local)
-                    {
-                        if let Ok(commit) = parent_ref.get().peel_to_commit() {
-                            meta.parent_branch_revision = commit.id().to_string();
-                        }
-                    }
+                    && let Ok(commit) = parent_ref.get().peel_to_commit()
+                {
+                    meta.parent_branch_revision = commit.id().to_string();
                 }
 
                 Ok(Some(meta))

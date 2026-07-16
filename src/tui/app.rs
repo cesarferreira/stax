@@ -730,7 +730,7 @@ impl App {
             .unwrap_or(0);
 
         for offset in 1..=panes.len() {
-            let next = panes[(current + offset) % panes.len()].clone();
+            let next = panes[(current + offset) % panes.len()];
             let is_visible = match next {
                 FocusedPane::Stack => self.pane_visibility.stack,
                 FocusedPane::Summary => self.pane_visibility.summary,
@@ -759,11 +759,11 @@ impl App {
 
     /// Clear status message if it's been shown long enough
     pub fn clear_stale_status(&mut self) {
-        if let Some(set_at) = self.status_set_at {
-            if set_at.elapsed().as_secs() >= 2 {
-                self.status_message = None;
-                self.status_set_at = None;
-            }
+        if let Some(set_at) = self.status_set_at
+            && set_at.elapsed().as_secs() >= 2
+        {
+            self.status_message = None;
+            self.status_set_at = None;
         }
     }
 
@@ -1186,61 +1186,61 @@ impl App {
 
     /// Move the selected branch up in the stack (becomes earlier in the chain)
     pub fn reorder_move_up(&mut self) {
-        if let Some(ref mut state) = self.reorder_state {
-            if state.moving_index > 0 {
-                // Swap positions: branch at moving_index moves up
-                let i = state.moving_index;
+        if let Some(ref mut state) = self.reorder_state
+            && state.moving_index > 0
+        {
+            // Swap positions: branch at moving_index moves up
+            let i = state.moving_index;
 
-                // Get the parent of the branch we're swapping with
-                let new_parent = state.pending_chain[i - 1].parent.clone();
-                let moving_branch = state.pending_chain[i].name.clone();
-                let displaced_branch = state.pending_chain[i - 1].name.clone();
+            // Get the parent of the branch we're swapping with
+            let new_parent = state.pending_chain[i - 1].parent.clone();
+            let moving_branch = state.pending_chain[i].name.clone();
+            let displaced_branch = state.pending_chain[i - 1].name.clone();
 
-                // Update parents for the swap
-                state.pending_chain[i - 1].parent = moving_branch.clone();
-                state.pending_chain[i].parent = new_parent;
+            // Update parents for the swap
+            state.pending_chain[i - 1].parent = moving_branch.clone();
+            state.pending_chain[i].parent = new_parent;
 
-                // Update parent of branch after the displaced one (if any)
-                if i + 1 < state.pending_chain.len() {
-                    state.pending_chain[i + 1].parent = displaced_branch.clone();
-                }
-
-                // Swap the entries
-                state.pending_chain.swap(i, i - 1);
-                state.moving_index -= 1;
-
-                self.update_reorder_preview();
+            // Update parent of branch after the displaced one (if any)
+            if i + 1 < state.pending_chain.len() {
+                state.pending_chain[i + 1].parent = displaced_branch.clone();
             }
+
+            // Swap the entries
+            state.pending_chain.swap(i, i - 1);
+            state.moving_index -= 1;
+
+            self.update_reorder_preview();
         }
     }
 
     /// Move the selected branch down in the stack (becomes later in the chain)
     pub fn reorder_move_down(&mut self) {
-        if let Some(ref mut state) = self.reorder_state {
-            if state.moving_index < state.pending_chain.len() - 1 {
-                // Swap positions: branch at moving_index moves down
-                let i = state.moving_index;
+        if let Some(ref mut state) = self.reorder_state
+            && state.moving_index < state.pending_chain.len() - 1
+        {
+            // Swap positions: branch at moving_index moves down
+            let i = state.moving_index;
 
-                // Get info for the swap
-                let moving_branch = state.pending_chain[i].name.clone();
-                let displaced_branch = state.pending_chain[i + 1].name.clone();
-                let moving_parent = state.pending_chain[i].parent.clone();
+            // Get info for the swap
+            let moving_branch = state.pending_chain[i].name.clone();
+            let displaced_branch = state.pending_chain[i + 1].name.clone();
+            let moving_parent = state.pending_chain[i].parent.clone();
 
-                // Update parents for the swap
-                state.pending_chain[i].parent = displaced_branch.clone();
-                state.pending_chain[i + 1].parent = moving_parent;
+            // Update parents for the swap
+            state.pending_chain[i].parent = displaced_branch.clone();
+            state.pending_chain[i + 1].parent = moving_parent;
 
-                // Update parent of branch after the moving one (if any)
-                if i + 2 < state.pending_chain.len() {
-                    state.pending_chain[i + 2].parent = moving_branch.clone();
-                }
-
-                // Swap the entries
-                state.pending_chain.swap(i, i + 1);
-                state.moving_index += 1;
-
-                self.update_reorder_preview();
+            // Update parent of branch after the moving one (if any)
+            if i + 2 < state.pending_chain.len() {
+                state.pending_chain[i + 2].parent = moving_branch.clone();
             }
+
+            // Swap the entries
+            state.pending_chain.swap(i, i + 1);
+            state.moving_index += 1;
+
+            self.update_reorder_preview();
         }
     }
 
@@ -1264,10 +1264,10 @@ impl App {
         // Compare original and pending chains to find what needs reparenting
         for pending in &state.pending_chain {
             // Find this branch in the original chain
-            if let Some(original) = state.original_chain.iter().find(|e| e.name == pending.name) {
-                if original.parent != pending.parent {
-                    ops.push((pending.name.clone(), pending.parent.clone()));
-                }
+            if let Some(original) = state.original_chain.iter().find(|e| e.name == pending.name)
+                && original.parent != pending.parent
+            {
+                ops.push((pending.name.clone(), pending.parent.clone()));
             }
         }
 
@@ -1389,10 +1389,10 @@ fn live_ci_summary_text(summary: &CiSummary) -> (String, bool) {
     if summary.skipped > 0 {
         parts.push(format!("{} skipped", summary.skipped));
     }
-    if let Some(percent) = summary.progress_percent(now) {
-        if summary.is_active() {
-            parts.push(format!("{}%", percent));
-        }
+    if let Some(percent) = summary.progress_percent(now)
+        && summary.is_active()
+    {
+        parts.push(format!("{}%", percent));
     }
     if let Some(elapsed_secs) = summary.elapsed_secs(now) {
         if summary.is_complete() {
@@ -1401,10 +1401,11 @@ fn live_ci_summary_text(summary: &CiSummary) -> (String, bool) {
             parts.push(format!("{} elapsed", format_duration_compact(elapsed_secs)));
         }
     }
-    if let Some(eta_secs) = summary.eta_secs(now) {
-        if summary.is_active() && eta_secs > 0 {
-            parts.push(format!("~{} left", format_duration_compact(eta_secs)));
-        }
+    if let Some(eta_secs) = summary.eta_secs(now)
+        && summary.is_active()
+        && eta_secs > 0
+    {
+        parts.push(format!("~{} left", format_duration_compact(eta_secs)));
     }
 
     let is_dimmed = summary.failed == 0 && !summary.is_active();

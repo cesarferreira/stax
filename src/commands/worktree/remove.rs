@@ -79,25 +79,26 @@ pub(crate) fn retire_worktree(
     // A `--force` dirty removal must NEVER park: the caller explicitly asked to
     // discard the worktree, so parking (which keeps the directory) would defeat
     // the intent and hand out a slot that still carries the dirty tree.
-    if mode == RemovalMode::AllowParking && config.worktree.reuse_slots && !force {
-        if let Some(worktrees_dir) = pool_dir.as_deref() {
-            if try_park_slot(repo, config, worktree, worktrees_dir)? {
-                return Ok(display_name);
-            }
-        }
+    if mode == RemovalMode::AllowParking
+        && config.worktree.reuse_slots
+        && !force
+        && let Some(worktrees_dir) = pool_dir.as_deref()
+        && try_park_slot(repo, config, worktree, worktrees_dir)?
+    {
+        return Ok(display_name);
     }
 
     repo.worktree_remove(&worktree.path, force)?;
 
     // Real removal: forget any pooled slot entry that referenced this path.
-    if config.worktree.reuse_slots {
-        if let Some(worktrees_dir) = pool_dir.as_deref() {
-            let path = worktree.path.clone();
-            let _ = pool::with_lock(worktrees_dir, |pool| {
-                pool.remove_path(&path);
-                Ok(())
-            });
-        }
+    if config.worktree.reuse_slots
+        && let Some(worktrees_dir) = pool_dir.as_deref()
+    {
+        let path = worktree.path.clone();
+        let _ = pool::with_lock(worktrees_dir, |pool| {
+            pool.remove_path(&path);
+            Ok(())
+        });
     }
 
     Ok(display_name)
@@ -148,10 +149,10 @@ fn try_park_slot(
     }
 
     // Only recycle a branch that is safe to discard (merged/equivalent to trunk).
-    if let Some(branch) = worktree.branch.as_deref() {
-        if !repo.is_branch_merged_equivalent_to_trunk(branch)? {
-            return Ok(false);
-        }
+    if let Some(branch) = worktree.branch.as_deref()
+        && !repo.is_branch_merged_equivalent_to_trunk(branch)?
+    {
+        return Ok(false);
     }
 
     let idle_count = pool::load(worktrees_dir)?.idle_count();

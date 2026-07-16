@@ -40,9 +40,7 @@ fn test_create_insert_reparents_children() {
     repo.run_stax(&["checkout", &branches[1]]);
     let b_parent = repo.get_current_parent();
     assert!(
-        b_parent
-            .as_ref()
-            .map_or(false, |p| p.contains("insert-mid")),
+        b_parent.as_ref().is_some_and(|p| p.contains("insert-mid")),
         "B should be reparented to insert-mid, got parent: {:?}",
         b_parent
     );
@@ -50,9 +48,7 @@ fn test_create_insert_reparents_children() {
     repo.run_stax(&["checkout", &extra[0]]);
     let c_parent = repo.get_current_parent();
     assert!(
-        c_parent
-            .as_ref()
-            .map_or(false, |p| p.contains("insert-mid")),
+        c_parent.as_ref().is_some_and(|p| p.contains("insert-mid")),
         "C should be reparented to insert-mid, got parent: {:?}",
         c_parent
     );
@@ -110,7 +106,7 @@ fn test_create_insert_via_bc_alias() {
     repo.run_stax(&["checkout", &branches[1]]);
     let b_parent = repo.get_current_parent();
     assert!(
-        b_parent.as_ref().map_or(false, |p| p.contains("alias-mid")),
+        b_parent.as_ref().is_some_and(|p| p.contains("alias-mid")),
         "B should be reparented to alias-mid, got parent: {:?}",
         b_parent
     );
@@ -142,7 +138,7 @@ fn test_create_without_insert_does_not_reparent() {
     repo.run_stax(&["checkout", &branches[1]]);
     let b_parent = repo.get_current_parent();
     assert!(
-        b_parent.as_ref().map_or(false, |p| p.contains("norep-a")),
+        b_parent.as_ref().is_some_and(|p| p.contains("norep-a")),
         "B should still have A as parent, got parent: {:?}",
         b_parent
     );

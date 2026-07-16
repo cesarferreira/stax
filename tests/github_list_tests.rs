@@ -43,7 +43,7 @@ fn setup_repo(home: &Path, api_base_url: &str) -> TestRepo {
     repo
 }
 
-fn env_with_auth<'a>(home: &'a TempDir) -> [(&'a str, &'a str); 2] {
+fn env_with_auth(home: &TempDir) -> [(&str, &str); 2] {
     [
         ("HOME", home.path().to_str().unwrap()),
         ("STAX_GITHUB_TOKEN", "mock-token"),

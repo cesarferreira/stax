@@ -123,12 +123,11 @@ pub fn run(
     // For branches missing PR metadata, check the forge for existing PRs
     if let Some(ref client) = client {
         for branch_info in &mut scope.to_merge {
-            if branch_info.pr_number.is_none() {
-                if let Ok(Some(pr_info)) =
+            if branch_info.pr_number.is_none()
+                && let Ok(Some(pr_info)) =
                     rt.block_on(async { client.find_pr(&branch_info.branch).await })
-                {
-                    branch_info.pr_number = Some(pr_info.number);
-                }
+            {
+                branch_info.pr_number = Some(pr_info.number);
             }
         }
     }
@@ -168,10 +167,10 @@ pub fn run(
 
     // Fetch status for remaining branches too (for display)
     for branch_info in &mut scope.remaining {
-        if let Some(pr_num) = branch_info.pr_number {
-            if let Ok(status) = rt.block_on(async { client.get_pr_merge_status(pr_num).await }) {
-                branch_info.pr_status = Some(status);
-            }
+        if let Some(pr_num) = branch_info.pr_number
+            && let Ok(status) = rt.block_on(async { client.get_pr_merge_status(pr_num).await })
+        {
+            branch_info.pr_status = Some(status);
         }
     }
 
@@ -523,19 +522,18 @@ pub fn run(
                 false, // verbose
                 false, // auto_stash_pop
                 &[],
-            ) {
-                if !quiet {
-                    println!();
-                    println!(
-                        "{} {}",
-                        "warning:".yellow().bold(),
-                        format!("post-merge sync failed: {}", err).yellow()
-                    );
-                    println!(
-                        "{}",
-                        "Run 'stax rs --force' manually to sync local state.".dimmed()
-                    );
-                }
+            ) && !quiet
+            {
+                println!();
+                println!(
+                    "{} {}",
+                    "warning:".yellow().bold(),
+                    format!("post-merge sync failed: {}", err).yellow()
+                );
+                println!(
+                    "{}",
+                    "Run 'stax rs --force' manually to sync local state.".dimmed()
+                );
             }
         }
     }
@@ -819,10 +817,10 @@ fn wait_for_github_head_sync(
     let start = Instant::now();
     let poll_interval = Duration::from_millis(500);
     loop {
-        if let Ok(sha) = rt.block_on(async { client.get_pr_head_sha(pr_number).await }) {
-            if sha == expected_sha {
-                return;
-            }
+        if let Ok(sha) = rt.block_on(async { client.get_pr_head_sha(pr_number).await })
+            && sha == expected_sha
+        {
+            return;
         }
         // Stop before sleeping past the deadline.
         if start.elapsed() + poll_interval >= max_wait {
@@ -940,10 +938,10 @@ fn pr_base_matches_after_recheck(
     let deadline = Instant::now() + DUPLICATE_PR_BASE_RECHECK_TIMEOUT;
 
     loop {
-        if let Ok(pr) = rt.block_on(async { client.get_pr(pr_number).await }) {
-            if pr.base == new_base {
-                return true;
-            }
+        if let Ok(pr) = rt.block_on(async { client.get_pr(pr_number).await })
+            && pr.base == new_base
+        {
+            return true;
         }
 
         if Instant::now() >= deadline {
@@ -996,11 +994,11 @@ fn finalize_remaining_branch_push(
         return Ok(());
     }
 
-    if let Some(pr_num) = pr_number {
-        if let Err(e) = update_pr_base_unless_current(rt, client, pr_num, new_base, branch) {
-            LiveTimer::maybe_finish_err(timer, &format!("retarget failed: {:#}", e));
-            return Ok(());
-        }
+    if let Some(pr_num) = pr_number
+        && let Err(e) = update_pr_base_unless_current(rt, client, pr_num, new_base, branch)
+    {
+        LiveTimer::maybe_finish_err(timer, &format!("retarget failed: {:#}", e));
+        return Ok(());
     }
 
     LiveTimer::maybe_finish_ok(timer, "done");

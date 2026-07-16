@@ -242,16 +242,16 @@ fn handle_normal_action(app: &mut App, action: KeyAction) -> Result<()> {
             }
         },
         KeyAction::Enter => {
-            if let Some(branch) = app.selected_branch() {
-                if !branch.is_current {
-                    let name = branch.name.clone();
-                    queue_operation(
-                        app,
-                        OperationRequest::Checkout {
-                            branch: name.clone(),
-                        },
-                    );
-                }
+            if let Some(branch) = app.selected_branch()
+                && !branch.is_current
+            {
+                let name = branch.name.clone();
+                queue_operation(
+                    app,
+                    OperationRequest::Checkout {
+                        branch: name.clone(),
+                    },
+                );
             }
         }
         KeyAction::Quit | KeyAction::Escape => app.should_quit = true,
@@ -620,11 +620,9 @@ fn handle_input_action(app: &mut App, action: KeyAction, input_action: &InputAct
             app.input_buffer.insert(app.input_cursor, c);
             app.input_cursor += 1;
         }
-        KeyAction::Backspace => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-                app.input_buffer.remove(app.input_cursor);
-            }
+        KeyAction::Backspace if app.input_cursor > 0 => {
+            app.input_cursor -= 1;
+            app.input_buffer.remove(app.input_cursor);
         }
         _ => {}
     }
@@ -693,11 +691,9 @@ fn handle_input_key(app: &mut App, key: KeyEvent, input_action: &InputAction) ->
             app.input_buffer.insert(app.input_cursor, c);
             app.input_cursor += 1;
         }
-        KeyCode::Backspace => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-                app.input_buffer.remove(app.input_cursor);
-            }
+        KeyCode::Backspace if app.input_cursor > 0 => {
+            app.input_cursor -= 1;
+            app.input_buffer.remove(app.input_cursor);
         }
         _ => {}
     }

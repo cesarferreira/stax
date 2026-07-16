@@ -161,16 +161,16 @@ fn sync_branch(
         anyhow::bail!("Parent branch '{}' does not exist locally.", parent_branch);
     }
 
-    if let Some(worktree) = repo.branch_worktree(branch)? {
-        if !same_path(&worktree.path, workdir) {
-            println!(
-                "{} {} because it is checked out in another worktree: {}",
-                "Skipped".yellow().bold(),
-                branch.cyan(),
-                worktree.path.display()
-            );
-            return Ok(BranchSyncOutcome::SkippedWorktree);
-        }
+    if let Some(worktree) = repo.branch_worktree(branch)?
+        && !same_path(&worktree.path, workdir)
+    {
+        println!(
+            "{} {} because it is checked out in another worktree: {}",
+            "Skipped".yellow().bold(),
+            branch.cyan(),
+            worktree.path.display()
+        );
+        return Ok(BranchSyncOutcome::SkippedWorktree);
     }
 
     println!(
@@ -625,10 +625,9 @@ fn rebase_local_branch(workdir: &Path, branch: &str, remote_ref: &str) -> Result
         if original_branch
             .as_deref()
             .is_some_and(|original| original != branch)
+            && let Some(original) = original_branch
         {
-            if let Some(original) = original_branch {
-                checkout_branch(workdir, &original)?;
-            }
+            checkout_branch(workdir, &original)?;
         }
         return Ok(());
     }

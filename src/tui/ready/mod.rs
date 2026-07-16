@@ -56,10 +56,10 @@ fn run_app(
         poll_loader(app, loader);
         terminal.draw(|f| ui::render(f, app))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                handle_key(app, key.code, scope, loader);
-            }
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            handle_key(app, key.code, scope, loader);
         }
 
         if app.should_quit {
