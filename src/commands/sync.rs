@@ -333,7 +333,8 @@ pub fn run(
 
     step_timings.push((format!("fetch {}", remote_name), fetch_started_at.elapsed()));
 
-    if output.status.success() {
+    let fetch_succeeded = output.status.success();
+    if fetch_succeeded {
         LiveTimer::maybe_finish_timed(fetch_timer);
         if !quiet && verbose {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -354,6 +355,16 @@ pub fn run(
                 }
             }
         }
+    }
+
+    if restack && !fetch_succeeded {
+        restore_stashed_changes(&repo, stashed, quiet)?;
+        anyhow::bail!(
+            "Cannot restack because fetching {} did not succeed.\n\
+             Restore access to {}, then retry.",
+            remote_name,
+            remote_name,
+        );
     }
 
     let local_trunk_before_sync = resolve_ref_oid(&workdir, &stack.trunk);
@@ -575,6 +586,22 @@ pub fn run(
         format!("update {}", stack.trunk),
         update_trunk_started_at.elapsed(),
     ));
+
+    // Restack is a history-rewriting operation, so fail closed before imported-branch
+    // refresh or merged-branch cleanup can move any feature refs. Keep the later check
+    // as a second boundary in case cleanup itself changes trunk state.
+    if restack && !trunk_reached_remote(&workdir, &stack.trunk, remote_trunk_after_fetch.as_deref())
+    {
+        restore_stashed_changes(&repo, stashed, quiet)?;
+        anyhow::bail!(
+            "Cannot restack because {} did not reach {}.\n\
+             Inspect and reconcile {} with {}, then retry.",
+            stack.trunk,
+            remote_trunk_ref,
+            stack.trunk,
+            remote_trunk_ref,
+        );
+    }
 
     let imported_update_started_at = Instant::now();
     let updated_imported_branches = refresh_imported_branches(
@@ -1406,6 +1433,20 @@ pub fn run(
     }
 
     // 4. Optionally restack
+    if restack && !trunk_reached_remote(&workdir, &stack.trunk, remote_trunk_after_fetch.as_deref())
+    {
+        restore_stashed_changes(&repo, stashed, quiet)?;
+
+        anyhow::bail!(
+            "Cannot restack because {} did not reach {}.\n\
+             Inspect and reconcile {} with {}, then retry.",
+            stack.trunk,
+            remote_trunk_ref,
+            stack.trunk,
+            remote_trunk_ref,
+        );
+    }
+
     if restack {
         let restack_started_at = Instant::now();
         if !quiet {
@@ -1691,9 +1732,8 @@ pub fn run(
     }
 
     let trunk_summary = wait_for_trunk_summary(trunk_stats_worker)?;
-    let trunk_reached_remote = remote_trunk_after_fetch
-        .as_deref()
-        .is_some_and(|remote| resolve_ref_oid(&workdir, &stack.trunk).as_deref() == Some(remote));
+    let trunk_reached_remote =
+        trunk_reached_remote(&workdir, &stack.trunk, remote_trunk_after_fetch.as_deref());
     stats.trunk = trunk_reached_remote.then_some(trunk_summary).flatten();
 
     if !trunk_reached_remote {
@@ -3072,6 +3112,20 @@ fn resolve_ref_oid(workdir: &Path, reference: &str) -> Option<String> {
     }
 
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn trunk_reached_remote(workdir: &Path, trunk: &str, remote_oid: Option<&str>) -> bool {
+    remote_oid.is_some_and(|remote| resolve_ref_oid(workdir, trunk).as_deref() == Some(remote))
+}
+
+fn restore_stashed_changes(repo: &GitRepo, stashed: bool, quiet: bool) -> Result<()> {
+    if stashed {
+        repo.stash_pop()?;
+        if !quiet {
+            println!("{}", "✓ Restored stashed changes.".green());
+        }
+    }
+    Ok(())
 }
 
 fn is_ancestor(workdir: &Path, ancestor: &str, descendant: &str) -> bool {

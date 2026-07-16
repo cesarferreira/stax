@@ -305,6 +305,7 @@ stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
 # sync cleanup may delete merged/gone imported support branches locally, but never push-deletes their remotes.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
 # Conditional attention lines name blocked cleanup, trunk failures, and checkout changes, followed by one prioritized next command. For a diverged trunk, inspect and reconcile it with its remote instead of treating `st trunk` as a repair; other trunk failures use `st trunk`. Routine restack health stays in stax ls and the TUI.
+# When --restack is requested, a failed fetch or trunk that did not reach the fetched remote commit stops sync before imported refresh, merged cleanup, or feature-branch rebases. Any sync auto-stash is restored first.
 
 stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
 stax sweep --delete                # Delete merged/tracked-merged PRs + upstream-gone branches with no unique work after confirmation
@@ -319,6 +320,7 @@ stax update --no-submit            # Trunk sync/restack only
 stax update --force                # Force sync without prompts first
 stax update --force --yes --no-prompt # Full update without sync/submit prompts
 stax update --verbose              # Show detailed sync/restack/submit timings
+# update inherits sync's fetch/trunk guard and exits before its submit phase, so it does not push or update PRs after that failure.
 
 stax restack                       # Restack current branch onto parent
 stax restack --all                 # Restack whole stack
