@@ -2234,6 +2234,252 @@ fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
 }
 
 #[test]
+fn test_update_aborts_before_restack_when_trunk_diverges() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "diverged-update"]);
+    let feature = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.commit("Feature commit");
+    let push = repo.git(&["push", "-u", "origin", &feature]);
+    assert!(push.status.success(), "failed to seed feature remote");
+
+    let feature_before = repo.get_commit_sha(&feature);
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let remote_ref = format!("refs/heads/{feature}");
+    let remote_before = TestRepo::stdout(&repo.git_in(&remote_path, &["rev-parse", &remote_ref]))
+        .trim()
+        .to_string();
+
+    repo.run_stax(&["checkout", "main"]);
+    repo.create_file("local-main.txt", "local main\n");
+    repo.commit("Local main commit");
+    let local_main_before = repo.get_commit_sha("main");
+    repo.simulate_remote_commit("remote-main.txt", "remote main\n", "Remote main commit");
+    configure_submit_remote(&repo);
+    repo.run_stax(&["checkout", &feature]);
+
+    let output = repo.run_stax(&["update", "--no-pr", "--force", "--yes", "--no-prompt"]);
+
+    assert!(
+        !output.status.success(),
+        "update must fail when trunk diverges\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output),
+    );
+    let diagnostic = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output),);
+    assert!(diagnostic.contains("Cannot restack because main did not reach origin/main"));
+    assert!(diagnostic.contains("Inspect and reconcile main with origin/main, then retry"));
+    assert_eq!(repo.get_commit_sha(&feature), feature_before);
+    assert_eq!(repo.get_commit_sha("main"), local_main_before);
+
+    let remote_after = TestRepo::stdout(&repo.git_in(&remote_path, &["rev-parse", &remote_ref]))
+        .trim()
+        .to_string();
+    assert_eq!(remote_after, remote_before);
+    assert!(!repo.path().join(".git/rebase-merge").exists());
+    assert!(!repo.path().join(".git/rebase-apply").exists());
+}
+
+#[test]
+fn test_sync_restack_aborts_and_restores_stash_when_trunk_diverges() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "diverged-sync"]);
+    let feature = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.commit("Feature commit");
+    let push = repo.git(&["push", "-u", "origin", &feature]);
+    assert!(push.status.success(), "failed to seed feature remote");
+
+    let feature_before = repo.get_commit_sha(&feature);
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let remote_ref = format!("refs/heads/{feature}");
+    let remote_before = TestRepo::stdout(&repo.git_in(&remote_path, &["rev-parse", &remote_ref]))
+        .trim()
+        .to_string();
+
+    repo.run_stax(&["checkout", "main"]);
+    repo.create_file("local-main.txt", "local main\n");
+    repo.commit("Local main commit");
+    let local_main_before = repo.get_commit_sha("main");
+    repo.simulate_remote_commit("remote-main.txt", "remote main\n", "Remote main commit");
+    repo.run_stax(&["checkout", &feature]);
+    repo.create_file("dirty.txt", "dirty worktree\n");
+
+    let output = repo.run_stax(&["sync", "--restack", "--force", "--no-delete"]);
+
+    assert!(
+        !output.status.success(),
+        "sync --restack must fail when trunk diverges\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output),
+    );
+    let diagnostic = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(diagnostic.contains("Cannot restack because main did not reach origin/main"));
+    assert!(diagnostic.contains("Inspect and reconcile main with origin/main, then retry"));
+    assert_eq!(
+        fs::read_to_string(repo.path().join("dirty.txt")).expect("read restored dirty file"),
+        "dirty worktree\n"
+    );
+
+    let stash_list = repo.git(&["stash", "list"]);
+    assert!(stash_list.status.success());
+    assert!(
+        TestRepo::stdout(&stash_list).trim().is_empty(),
+        "expected no leftover auto-stash entries, got:\n{}",
+        TestRepo::stdout(&stash_list)
+    );
+    assert_eq!(repo.get_commit_sha(&feature), feature_before);
+    assert_eq!(repo.get_commit_sha("main"), local_main_before);
+
+    let remote_after = TestRepo::stdout(&repo.git_in(&remote_path, &["rev-parse", &remote_ref]))
+        .trim()
+        .to_string();
+    assert_eq!(remote_after, remote_before);
+    assert!(!repo.path().join(".git/rebase-merge").exists());
+    assert!(!repo.path().join(".git/rebase-apply").exists());
+}
+
+#[test]
+fn test_sync_restack_aborts_before_squash_cleanup_when_trunk_diverges() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "diverged-cleanup-parent"]);
+    let parent = repo.current_branch();
+    repo.create_file("parent.txt", "parent change\n");
+    repo.commit("Parent commit");
+    assert!(
+        repo.git(&["push", "-u", "origin", &parent])
+            .status
+            .success()
+    );
+
+    repo.run_stax(&["bc", "diverged-cleanup-child"]);
+    let child = repo.current_branch();
+    repo.create_file("child.txt", "child change\n");
+    repo.commit("Child commit");
+    assert!(repo.git(&["push", "-u", "origin", &child]).status.success());
+    let child_before = repo.get_commit_sha(&child);
+
+    repo.run_stax(&["checkout", "main"]);
+    let local_squash = repo.git(&["merge", "--squash", &parent]);
+    assert!(
+        local_squash.status.success(),
+        "failed to squash parent locally\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&local_squash),
+        TestRepo::stderr(&local_squash)
+    );
+    repo.commit("Local squash merge parent");
+    repo.create_file("local-main.txt", "local main\n");
+    repo.commit("Local main commit");
+    let local_main_before = repo.get_commit_sha("main");
+
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let clone_dir = test_tempdir();
+    let run_remote_git = |args: &[&str]| {
+        let output = hermetic_git_command()
+            .args(args)
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to run git in remote clone");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_remote_git(&["clone", remote_path.to_str().unwrap(), "."]);
+    run_remote_git(&["checkout", "-B", "main", "origin/main"]);
+    run_remote_git(&["config", "user.email", "merger@test.com"]);
+    run_remote_git(&["config", "user.name", "Merger"]);
+    run_remote_git(&["fetch", "origin", &parent]);
+    run_remote_git(&["merge", "--squash", &format!("origin/{}", parent)]);
+    run_remote_git(&["commit", "-m", "Squash merge parent"]);
+    run_remote_git(&["push", "origin", "main"]);
+    run_remote_git(&["push", "origin", "--delete", &parent]);
+
+    repo.run_stax(&["checkout", &child]);
+    let output = repo.run_stax(&["sync", "--restack", "--force"]);
+
+    assert!(
+        !output.status.success(),
+        "sync --restack must fail when trunk diverges\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output),
+    );
+    let diagnostic = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(diagnostic.contains("Cannot restack because main did not reach origin/main"));
+    assert_eq!(repo.get_commit_sha(&child), child_before);
+    assert_eq!(repo.get_commit_sha("main"), local_main_before);
+    assert!(
+        repo.list_branches().iter().any(|branch| branch == &parent),
+        "cleanup must not delete the squash-merged parent before the guard"
+    );
+    assert!(!repo.path().join(".git/rebase-merge").exists());
+    assert!(!repo.path().join(".git/rebase-apply").exists());
+}
+
+#[test]
+fn test_sync_restack_aborts_and_restores_stash_when_fetch_fails() {
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "failed-fetch"]);
+    let feature = repo.current_branch();
+    repo.create_file("feature.txt", "feature\n");
+    repo.commit("Feature commit");
+    assert!(
+        repo.git(&["push", "-u", "origin", &feature])
+            .status
+            .success()
+    );
+    let feature_before = repo.get_commit_sha(&feature);
+    let local_main_before = repo.get_commit_sha("main");
+    assert_eq!(repo.get_commit_sha("origin/main"), local_main_before);
+
+    let missing_remote = repo.path().join("missing-origin.git");
+    assert!(
+        repo.git(&[
+            "remote",
+            "set-url",
+            "origin",
+            missing_remote.to_str().unwrap(),
+        ])
+        .status
+        .success()
+    );
+    repo.create_file("dirty.txt", "dirty worktree\n");
+
+    let output = repo.run_stax(&["sync", "--restack", "--force", "--no-delete"]);
+
+    assert!(
+        !output.status.success(),
+        "sync --restack must fail when fetch fails\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output),
+    );
+    let diagnostic = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(diagnostic.contains("Cannot restack because fetching origin did not succeed"));
+    assert_eq!(repo.get_commit_sha(&feature), feature_before);
+    assert_eq!(repo.get_commit_sha("main"), local_main_before);
+    assert_eq!(
+        fs::read_to_string(repo.path().join("dirty.txt")).expect("read restored dirty file"),
+        "dirty worktree\n"
+    );
+    let stash_list = repo.git(&["stash", "list"]);
+    assert!(stash_list.status.success());
+    assert!(
+        TestRepo::stdout(&stash_list).trim().is_empty(),
+        "expected no leftover auto-stash entries, got:\n{}",
+        TestRepo::stdout(&stash_list)
+    );
+    assert!(!repo.path().join(".git/rebase-merge").exists());
+    assert!(!repo.path().join(".git/rebase-apply").exists());
+}
+
+#[test]
 fn test_update_no_submit_skips_merged_branch_cleanup() {
     let repo = TestRepo::new_with_remote();
 
@@ -2256,6 +2502,8 @@ fn test_update_no_submit_skips_merged_branch_cleanup() {
         TestRepo::stdout(&merge),
         TestRepo::stderr(&merge)
     );
+    let push = repo.git(&["push", "origin", "main"]);
+    assert!(push.status.success(), "failed to update remote main");
 
     repo.run_stax(&["checkout", &child]);
     let output = repo.run_stax(&["update", "--no-submit", "--force"]);
@@ -3234,6 +3482,8 @@ fn test_sync_restack_only_targets_current_stack() {
     repo.run_stax(&["t"]);
     repo.create_file("main.txt", "main change");
     repo.commit("main commit");
+    let push = repo.git(&["push", "origin", "main"]);
+    assert!(push.status.success(), "failed to update remote main");
 
     // Run sync --restack from stack A tip; only stack A should be restacked.
     repo.run_stax(&["checkout", &a2]);
