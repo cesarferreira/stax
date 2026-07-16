@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn test_copy_target_clone() {
         let target = CopyTarget::Pr;
-        let cloned = target.clone();
+        let cloned = target;
         assert_eq!(target, cloned);
     }
 

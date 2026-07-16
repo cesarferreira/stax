@@ -46,7 +46,7 @@ pub fn run(
     let gone_branches = find_upstream_gone_branches(&workdir, &trunk)?;
     let gone_branch_set: HashSet<String> = gone_branches.iter().cloned().collect();
     let remote_heads = if stack.branches.values().any(|info| info.pr_number.is_some()) {
-        remote::ls_remote_heads(&workdir, &remote_name).ok()
+        remote::ls_remote_heads(&workdir, remote_name).ok()
     } else {
         None
     };

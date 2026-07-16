@@ -42,10 +42,10 @@ fn run_app(
         terminal.draw(|f| ui::render(f, app))?;
 
         // Handle events with timeout
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                handle_key(app, key.code, key.modifiers)?;
-            }
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            handle_key(app, key.code, key.modifiers)?;
         }
 
         if app.should_quit {
@@ -144,10 +144,8 @@ fn handle_naming_key(app: &mut SplitApp, code: KeyCode) -> Result<()> {
                 app.input_cursor -= 1;
             }
         }
-        KeyCode::Right => {
-            if app.input_cursor < app.input_buffer.len() {
-                app.input_cursor += 1;
-            }
+        KeyCode::Right if app.input_cursor < app.input_buffer.len() => {
+            app.input_cursor += 1;
         }
         _ => {}
     }

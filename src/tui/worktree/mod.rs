@@ -65,10 +65,10 @@ fn run_app(
         app.refresh_background();
         terminal.draw(|f| ui::render(f, app))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                handle_key(app, key.code, key.modifiers)?;
-            }
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            handle_key(app, key.code, key.modifiers)?;
         }
         app.refresh_background();
 

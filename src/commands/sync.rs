@@ -777,15 +777,13 @@ pub fn run(
                 );
                 let parent_exists_locally = local_branch_exists(&workdir, &parent_branch);
 
-                if !quiet {
-                    if let Some(missing_parent) = &parent_fallback_from {
-                        println!(
-                            "    {} parent {} not available; using {}",
-                            "↪".yellow(),
-                            missing_parent.yellow(),
-                            parent_branch.cyan()
-                        );
-                    }
+                if !quiet && let Some(missing_parent) = &parent_fallback_from {
+                    println!(
+                        "    {} parent {} not available; using {}",
+                        "↪".yellow(),
+                        missing_parent.yellow(),
+                        parent_branch.cyan()
+                    );
                 }
 
                 if !parent_exists_locally {
@@ -899,14 +897,15 @@ pub fn run(
                                 .stderr(std::process::Stdio::null())
                                 .status();
 
-                            if let Ok(status) = pull_status {
-                                if status.success() && !quiet {
-                                    println!(
-                                        "    {} pulled latest {}",
-                                        "↓".cyan(),
-                                        parent_branch.cyan()
-                                    );
-                                }
+                            if let Ok(status) = pull_status
+                                && status.success()
+                                && !quiet
+                            {
+                                println!(
+                                    "    {} pulled latest {}",
+                                    "↓".cyan(),
+                                    parent_branch.cyan()
+                                );
                             }
                         }
                         Err(checkout_error) => {
@@ -1186,15 +1185,13 @@ pub fn run(
 
                 // Print the parent-fallback hint BEFORE the confirm prompt so the
                 // user knows why the prompt mentions a non-recorded parent.
-                if !quiet {
-                    if let Some(missing_parent) = &parent_fallback_from {
-                        println!(
-                            "    {} parent {} not available; using {}",
-                            "↪".yellow(),
-                            missing_parent.yellow(),
-                            fallback_parent.cyan()
-                        );
-                    }
+                if !quiet && let Some(missing_parent) = &parent_fallback_from {
+                    println!(
+                        "    {} parent {} not available; using {}",
+                        "↪".yellow(),
+                        missing_parent.yellow(),
+                        fallback_parent.cyan()
+                    );
                 }
 
                 let prompt = sync_delete_prompt(
@@ -1909,10 +1906,9 @@ fn apply_live_pr_state(
                 if let Ok(parent_ref) = repo
                     .inner()
                     .find_branch(&live_pr.base, git2::BranchType::Local)
+                    && let Ok(commit) = parent_ref.get().peel_to_commit()
                 {
-                    if let Ok(commit) = parent_ref.get().peel_to_commit() {
-                        meta.parent_branch_revision = commit.id().to_string();
-                    }
+                    meta.parent_branch_revision = commit.id().to_string();
                 }
                 meta.parent_branch_name = live_pr.base.clone();
             }

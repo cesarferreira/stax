@@ -163,15 +163,13 @@ pub fn run(
     let tip = resolved.last().context("stack merge scope is empty")?;
     let mut tip_status = statuses.last().context("missing tip status")?.clone();
 
-    if !when_ready {
-        if let Some(reason) = tip_blocker(&tip_status) {
-            anyhow::bail!(
-                "Selected tip PR #{} ({}) is not ready: {}.\n\nRun `stax merge --stack --when-ready` to wait.",
-                tip.pr_number,
-                tip.branch,
-                reason
-            );
-        }
+    if !when_ready && let Some(reason) = tip_blocker(&tip_status) {
+        anyhow::bail!(
+            "Selected tip PR #{} ({}) is not ready: {}.\n\nRun `stax merge --stack --when-ready` to wait.",
+            tip.pr_number,
+            tip.branch,
+            reason
+        );
     }
 
     if !quiet {
@@ -883,19 +881,18 @@ fn run_post_merge_sync(quiet: bool) {
         false, // verbose
         false, // auto_stash_pop
         &[],
-    ) {
-        if !quiet {
-            println!();
-            println!(
-                "{} {}",
-                "warning:".yellow().bold(),
-                format!("post-merge sync failed: {}", err).yellow()
-            );
-            println!(
-                "{}",
-                "Run 'stax rs --force' manually to sync local state.".dimmed()
-            );
-        }
+    ) && !quiet
+    {
+        println!();
+        println!(
+            "{} {}",
+            "warning:".yellow().bold(),
+            format!("post-merge sync failed: {}", err).yellow()
+        );
+        println!(
+            "{}",
+            "Run 'stax rs --force' manually to sync local state.".dimmed()
+        );
     }
 }
 

@@ -102,13 +102,11 @@ pub fn run(
         let branch_info = stack.branches.get(branch_name);
         let mut pr_number = branch_info.and_then(|b| b.pr_number);
 
-        if pr_number.is_none() {
-            if let Some(ref client) = probe_client {
-                if let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await })
-                {
-                    pr_number = Some(pr_info.number);
-                }
-            }
+        if pr_number.is_none()
+            && let Some(ref client) = probe_client
+            && let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await })
+        {
+            pr_number = Some(pr_info.number);
         }
 
         match pr_number {
@@ -131,13 +129,11 @@ pub fn run(
         let branch_info = stack.branches.get(branch_name);
         let mut pr_number = branch_info.and_then(|b| b.pr_number);
 
-        if pr_number.is_none() {
-            if let Some(ref client) = probe_client {
-                if let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await })
-                {
-                    pr_number = Some(pr_info.number);
-                }
-            }
+        if pr_number.is_none()
+            && let Some(ref client) = probe_client
+            && let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await })
+        {
+            pr_number = Some(pr_info.number);
         }
 
         remaining_branches.push(RemainingBranchInfo {

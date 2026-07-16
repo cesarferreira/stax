@@ -685,16 +685,11 @@ pub fn run(
     if stage_mode != StageMode::None {
         let workdir = repo.workdir()?;
 
-        if stage_mode == StageMode::All || needs_stage_all {
-            if let Err(e) = staging::stage_all(workdir) {
-                rollback_create_and_restore(
-                    &repo,
-                    &current,
-                    &branch_name,
-                    below_current_meta.as_ref(),
-                );
-                return Err(e);
-            }
+        if (stage_mode == StageMode::All || needs_stage_all)
+            && let Err(e) = staging::stage_all(workdir)
+        {
+            rollback_create_and_restore(&repo, &current, &branch_name, below_current_meta.as_ref());
+            return Err(e);
         }
 
         if stage_mode == StageMode::All {
@@ -986,17 +981,17 @@ fn run_commit_first(
     }
 
     // Stage (if requested) BEFORE the commit so hooks see the final tree.
-    if stage_mode == StageMode::All || needs_stage_all {
-        if let Err(e) = staging::stage_all(workdir) {
-            restore_after_failed_pre_branch_commit(
-                repo,
-                workdir,
-                current,
-                committing_on_current,
-                &mut auto_stash,
-            );
-            return Err(e);
-        }
+    if (stage_mode == StageMode::All || needs_stage_all)
+        && let Err(e) = staging::stage_all(workdir)
+    {
+        restore_after_failed_pre_branch_commit(
+            repo,
+            workdir,
+            current,
+            committing_on_current,
+            &mut auto_stash,
+        );
+        return Err(e);
     }
 
     // If nothing is staged by the time we reach here, there is no commit to
@@ -1138,36 +1133,34 @@ fn run_commit_first(
         return Err(e);
     }
 
-    if insert {
-        if let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name) {
-            rollback_after_commit(
-                workdir,
-                current,
-                &parent_sha,
-                Some(branch_name),
-                repo,
-                committing_on_current,
-                below_current_meta,
-                &mut auto_stash,
-            );
-            return Err(e);
-        }
+    if insert && let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name) {
+        rollback_after_commit(
+            workdir,
+            current,
+            &parent_sha,
+            Some(branch_name),
+            repo,
+            committing_on_current,
+            below_current_meta,
+            &mut auto_stash,
+        );
+        return Err(e);
     }
 
-    if let Some(current_meta) = below_current_meta {
-        if let Err(e) = apply_below_reparenting(repo, current, branch_name, current_meta) {
-            rollback_after_commit(
-                workdir,
-                current,
-                &parent_sha,
-                Some(branch_name),
-                repo,
-                committing_on_current,
-                below_current_meta,
-                &mut auto_stash,
-            );
-            return Err(e);
-        }
+    if let Some(current_meta) = below_current_meta
+        && let Err(e) = apply_below_reparenting(repo, current, branch_name, current_meta)
+    {
+        rollback_after_commit(
+            workdir,
+            current,
+            &parent_sha,
+            Some(branch_name),
+            repo,
+            committing_on_current,
+            below_current_meta,
+            &mut auto_stash,
+        );
+        return Err(e);
     }
 
     if committing_on_current {
@@ -1426,20 +1419,18 @@ fn create_branch_with_banner(
         return Err(e);
     }
 
-    if insert {
-        if let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name) {
-            rollback_create(repo, original, branch_name);
-            auto_stash.restore_on_original_branch(repo, workdir, original)?;
-            return Err(e);
-        }
+    if insert && let Err(e) = apply_insert_reparenting(repo, parent_branch, branch_name) {
+        rollback_create(repo, original, branch_name);
+        auto_stash.restore_on_original_branch(repo, workdir, original)?;
+        return Err(e);
     }
 
-    if let Some(current_meta) = below_current_meta {
-        if let Err(e) = apply_below_reparenting(repo, original, branch_name, current_meta) {
-            rollback_create_and_restore(repo, original, branch_name, below_current_meta);
-            auto_stash.restore_on_original_branch(repo, workdir, original)?;
-            return Err(e);
-        }
+    if let Some(current_meta) = below_current_meta
+        && let Err(e) = apply_below_reparenting(repo, original, branch_name, current_meta)
+    {
+        rollback_create_and_restore(repo, original, branch_name, below_current_meta);
+        auto_stash.restore_on_original_branch(repo, workdir, original)?;
+        return Err(e);
     }
 
     if let Err(e) = repo.checkout(branch_name) {
@@ -1616,18 +1607,18 @@ fn print_remote_parent_warning(repo: &GitRepo, config: &Config, parent_branch: &
     let Ok(workdir) = repo.workdir() else {
         return;
     };
-    if let Ok(remote_branches) = remote::get_remote_branches(workdir, config.remote_name()) {
-        if !remote_branches.contains(&parent_branch.to_string()) {
-            println!(
-                "{}",
-                format!(
-                    "Warning: parent '{}' is not on remote '{}'.",
-                    parent_branch,
-                    config.remote_name()
-                )
-                .yellow()
-            );
-        }
+    if let Ok(remote_branches) = remote::get_remote_branches(workdir, config.remote_name())
+        && !remote_branches.contains(&parent_branch.to_string())
+    {
+        println!(
+            "{}",
+            format!(
+                "Warning: parent '{}' is not on remote '{}'.",
+                parent_branch,
+                config.remote_name()
+            )
+            .yellow()
+        );
     }
 }
 

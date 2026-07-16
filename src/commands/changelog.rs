@@ -389,7 +389,7 @@ fn find_commit_entries(commits: &[CommitEntry], query: &str) -> Vec<ScoredCommit
         })
         .collect();
 
-    matches.sort_by(|a, b| b.score.cmp(&a.score));
+    matches.sort_by_key(|b| std::cmp::Reverse(b.score));
     matches
 }
 

@@ -195,19 +195,18 @@ impl SplitApp {
             .split_points
             .iter()
             .position(|sp| sp.after_commit_index == self.selected_index)
+            && self.split_points[pos].after_commit_index > 0
         {
-            if self.split_points[pos].after_commit_index > 0 {
-                // Check no conflict with adjacent split
-                let new_idx = self.split_points[pos].after_commit_index - 1;
-                if !self
-                    .split_points
-                    .iter()
-                    .any(|sp| sp.after_commit_index == new_idx)
-                {
-                    self.split_points[pos].after_commit_index = new_idx;
-                    self.selected_index = new_idx;
-                    self.split_points.sort_by_key(|sp| sp.after_commit_index);
-                }
+            // Check no conflict with adjacent split
+            let new_idx = self.split_points[pos].after_commit_index - 1;
+            if !self
+                .split_points
+                .iter()
+                .any(|sp| sp.after_commit_index == new_idx)
+            {
+                self.split_points[pos].after_commit_index = new_idx;
+                self.selected_index = new_idx;
+                self.split_points.sort_by_key(|sp| sp.after_commit_index);
             }
         }
     }

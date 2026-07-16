@@ -219,12 +219,11 @@ pub fn run_validate() -> Result<()> {
         if orphaned.contains(name) {
             continue;
         }
-        if let Some(meta) = BranchMetadata::read(repo.inner(), name)? {
-            if meta.parent_branch_name != trunk
-                && repo.branch_commit(&meta.parent_branch_name).is_err()
-            {
-                missing_parents.push((name.clone(), meta.parent_branch_name.clone()));
-            }
+        if let Some(meta) = BranchMetadata::read(repo.inner(), name)?
+            && meta.parent_branch_name != trunk
+            && repo.branch_commit(&meta.parent_branch_name).is_err()
+        {
+            missing_parents.push((name.clone(), meta.parent_branch_name.clone()));
         }
     }
     if missing_parents.is_empty() {
@@ -280,10 +279,10 @@ pub fn run_validate() -> Result<()> {
         if orphaned.contains(name) {
             continue;
         }
-        if let Some(json) = refs::read_metadata(repo.inner(), name)? {
-            if serde_json::from_str::<BranchMetadata>(&json).is_err() {
-                invalid.push(name.clone());
-            }
+        if let Some(json) = refs::read_metadata(repo.inner(), name)?
+            && serde_json::from_str::<BranchMetadata>(&json).is_err()
+        {
+            invalid.push(name.clone());
         }
     }
     if invalid.is_empty() {

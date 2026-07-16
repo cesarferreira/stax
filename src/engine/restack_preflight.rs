@@ -143,26 +143,26 @@ pub fn choose_rebase_upstream(
         };
     }
 
-    if let Ok(report) = RestackPreflight::analyze(repo, branch, parent, stored_revision) {
-        if let Some(upstream) = report.corrected_upstream() {
-            return RebaseBoundaryDecision {
-                upstream: upstream.to_string(),
-                adjusted: true,
-                reason: Some(format!(
-                    "'{}' stored boundary from '{}' would replay {} commit(s); using merge-base boundary ({} commit(s))",
-                    report.branch,
-                    report.parent,
-                    report
-                        .stored_to_branch
-                        .map(|count| count.to_string())
-                        .unwrap_or_else(|| "?".into()),
-                    report
-                        .merge_base_to_branch
-                        .map(|count| count.to_string())
-                        .unwrap_or_else(|| "?".into())
-                )),
-            };
-        }
+    if let Ok(report) = RestackPreflight::analyze(repo, branch, parent, stored_revision)
+        && let Some(upstream) = report.corrected_upstream()
+    {
+        return RebaseBoundaryDecision {
+            upstream: upstream.to_string(),
+            adjusted: true,
+            reason: Some(format!(
+                "'{}' stored boundary from '{}' would replay {} commit(s); using merge-base boundary ({} commit(s))",
+                report.branch,
+                report.parent,
+                report
+                    .stored_to_branch
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "?".into()),
+                report
+                    .merge_base_to_branch
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "?".into())
+            )),
+        };
     }
 
     RebaseBoundaryDecision {

@@ -371,27 +371,23 @@ pub fn run(
             }
 
             // Only show PR info in verbose mode (ll command)
-            if verbose {
-                if let Some(pr_number) = entry.pr_number {
-                    let mut pr_text = format!(" PR #{}", pr_number);
-                    if let Some(ref state) = entry.pr_state {
-                        pr_text.push_str(&format!(" {}", state.to_lowercase()));
-                    }
-                    if entry.pr_is_draft.unwrap_or(false) {
-                        pr_text.push_str(" draft");
-                    }
-                    if let Some(ref url) = entry.pr_url {
-                        pr_text.push_str(&format!(" {}", url));
-                    }
-                    info_str.push_str(&format!("{}", pr_text.bright_magenta()));
+            if verbose && let Some(pr_number) = entry.pr_number {
+                let mut pr_text = format!(" PR #{}", pr_number);
+                if let Some(ref state) = entry.pr_state {
+                    pr_text.push_str(&format!(" {}", state.to_lowercase()));
                 }
+                if entry.pr_is_draft.unwrap_or(false) {
+                    pr_text.push_str(" draft");
+                }
+                if let Some(ref url) = entry.pr_url {
+                    pr_text.push_str(&format!(" {}", url));
+                }
+                info_str.push_str(&format!("{}", pr_text.bright_magenta()));
             }
 
             // Only show CI state in verbose mode (ll command)
-            if verbose {
-                if let Some(ref ci) = entry.ci_state {
-                    info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
-                }
+            if verbose && let Some(ref ci) = entry.ci_state {
+                info_str.push_str(&format!("{}", format!(" CI:{}", ci).bright_cyan()));
             }
         }
 
@@ -664,6 +660,46 @@ fn collect_missing_parent_branches(repo: &GitRepo, stack: &Stack) -> HashMap<Str
     missing
 }
 
+/// Get line additions and deletions between parent and branch
+fn get_line_diff_stats_many(
+    workdir: &Path,
+    branch_pairs: &[Option<(String, String)>],
+) -> Vec<(usize, usize)> {
+    crate::parallel::map_ordered(branch_pairs, |pair| {
+        pair.as_ref()
+            .and_then(|(parent, branch)| get_line_diff_stats(workdir, parent, branch))
+            .unwrap_or((0, 0))
+    })
+}
+
+fn get_line_diff_stats(workdir: &Path, parent: &str, branch: &str) -> Option<(usize, usize)> {
+    let range = format!("{}...{}", parent, branch);
+    let output = command::output(workdir, &["diff", "--numstat", &range]).ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 2 {
+            // Binary files show "-" instead of numbers
+            if let Ok(add) = parts[0].parse::<usize>() {
+                additions += add;
+            }
+            if let Ok(del) = parts[1].parse::<usize>() {
+                deletions += del;
+            }
+        }
+    }
+
+    Some((additions, deletions))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,44 +836,4 @@ mod tests {
         colored::control::unset_override();
         assert_eq!(label, "\u{1b}[1;37m(needs restack)\u{1b}[0m");
     }
-}
-
-/// Get line additions and deletions between parent and branch
-fn get_line_diff_stats_many(
-    workdir: &Path,
-    branch_pairs: &[Option<(String, String)>],
-) -> Vec<(usize, usize)> {
-    crate::parallel::map_ordered(branch_pairs, |pair| {
-        pair.as_ref()
-            .and_then(|(parent, branch)| get_line_diff_stats(workdir, parent, branch))
-            .unwrap_or((0, 0))
-    })
-}
-
-fn get_line_diff_stats(workdir: &Path, parent: &str, branch: &str) -> Option<(usize, usize)> {
-    let range = format!("{}...{}", parent, branch);
-    let output = command::output(workdir, &["diff", "--numstat", &range]).ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut additions = 0usize;
-    let mut deletions = 0usize;
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 2 {
-            // Binary files show "-" instead of numbers
-            if let Ok(add) = parts[0].parse::<usize>() {
-                additions += add;
-            }
-            if let Ok(del) = parts[1].parse::<usize>() {
-                deletions += del;
-            }
-        }
-    }
-
-    Some((additions, deletions))
 }

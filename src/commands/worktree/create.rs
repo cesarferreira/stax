@@ -46,38 +46,38 @@ pub fn run(
         agent_args,
     };
 
-    if let Some(ref target) = name {
-        if let Some(worktree) = find_worktree(&repo, target)? {
-            let launch = build_launch_spec(&config, &launch_options, &worktree.name)?;
-            format_go_message(&worktree);
-            if !no_verify {
-                spawn_background_hook(
-                    config.worktree.hooks.post_go.as_deref(),
-                    &worktree.path,
-                    "post_go",
-                )?;
-            }
-
-            if shell_output {
-                emit_shell_payload(&worktree.path, launch.as_ref());
-            } else if let Some(launch) = launch.as_ref() {
-                launch.execute_in(&worktree.path)?;
-            } else {
-                println!();
-                println!("{}", "Current shell did not move automatically.".yellow());
-                println!("  {}", format!("cd {}", worktree.path.display()).cyan());
-                if !shell_setup::is_installed() {
-                    println!();
-                    println!(
-                        "{}",
-                        "Tip: add shell integration for automatic cd:".dimmed()
-                    );
-                    println!("  {}", "stax setup".cyan());
-                }
-            }
-
-            return Ok(());
+    if let Some(ref target) = name
+        && let Some(worktree) = find_worktree(&repo, target)?
+    {
+        let launch = build_launch_spec(&config, &launch_options, &worktree.name)?;
+        format_go_message(&worktree);
+        if !no_verify {
+            spawn_background_hook(
+                config.worktree.hooks.post_go.as_deref(),
+                &worktree.path,
+                "post_go",
+            )?;
         }
+
+        if shell_output {
+            emit_shell_payload(&worktree.path, launch.as_ref());
+        } else if let Some(launch) = launch.as_ref() {
+            launch.execute_in(&worktree.path)?;
+        } else {
+            println!();
+            println!("{}", "Current shell did not move automatically.".yellow());
+            println!("  {}", format!("cd {}", worktree.path.display()).cyan());
+            if !shell_setup::is_installed() {
+                println!();
+                println!(
+                    "{}",
+                    "Tip: add shell integration for automatic cd:".dimmed()
+                );
+                println!("  {}", "stax setup".cyan());
+            }
+        }
+
+        return Ok(());
     }
 
     let input_name = match (pick, name) {

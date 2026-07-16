@@ -622,7 +622,7 @@ fn display_branch_compact(repo: &GitRepo, status: &BranchCiStatus, is_current: b
     if !passed.is_empty() {
         // Sort slowest first for the snippet
         let mut sorted_passed = passed.clone();
-        sorted_passed.sort_by(|a, b| b.elapsed_secs.cmp(&a.elapsed_secs));
+        sorted_passed.sort_by_key(|b| std::cmp::Reverse(b.elapsed_secs));
 
         let show_n = 3.min(sorted_passed.len());
         let snippets: Vec<String> = sorted_passed[..show_n]
@@ -1149,26 +1149,26 @@ pub fn record_ci_history(repo: &GitRepo, statuses: &[BranchCiStatus]) {
             .min();
 
         for check in &status.check_runs {
-            if check.status == "completed" && check.conclusion.as_deref() == Some("success") {
-                if let (Some(elapsed), Some(completed_at)) =
+            if check.status == "completed"
+                && check.conclusion.as_deref() == Some("success")
+                && let (Some(elapsed), Some(completed_at)) =
                     (check.elapsed_secs, check.completed_at.as_ref())
-                {
-                    let end_offset_secs = earliest_start.and_then(|earliest| {
-                        completed_at.parse::<DateTime<Utc>>().ok().map(|completed| {
-                            completed
-                                .signed_duration_since(earliest)
-                                .num_seconds()
-                                .max(0) as u64
-                        })
-                    });
-                    let _ = history::add_timing_sample(
-                        repo,
-                        &check.name,
-                        elapsed,
-                        completed_at.clone(),
-                        end_offset_secs,
-                    );
-                }
+            {
+                let end_offset_secs = earliest_start.and_then(|earliest| {
+                    completed_at.parse::<DateTime<Utc>>().ok().map(|completed| {
+                        completed
+                            .signed_duration_since(earliest)
+                            .num_seconds()
+                            .max(0) as u64
+                    })
+                });
+                let _ = history::add_timing_sample(
+                    repo,
+                    &check.name,
+                    elapsed,
+                    completed_at.clone(),
+                    end_offset_secs,
+                );
             }
         }
     }
@@ -1609,11 +1609,7 @@ fn normalize_commit_status_context(
 
     let completion_percent = if status == "in_progress" {
         if let (Some(elapsed), Some(avg)) = (elapsed_secs, average_secs) {
-            if avg > 0 {
-                Some(((elapsed * 100) / avg).min(99) as u8)
-            } else {
-                None
-            }
+            (elapsed * 100).checked_div(avg).map(|v| v.min(99) as u8)
         } else {
             None
         }
@@ -1707,12 +1703,7 @@ async fn fetch_check_runs(
 
         let completion_percent = if r.status == "in_progress" {
             if let (Some(elapsed), Some(avg)) = (elapsed_secs, average_secs) {
-                if avg > 0 {
-                    let pct: u64 = ((elapsed * 100) / avg).min(99);
-                    Some(pct as u8)
-                } else {
-                    None
-                }
+                (elapsed * 100).checked_div(avg).map(|v| v.min(99) as u8)
             } else {
                 None
             }

@@ -201,13 +201,13 @@ fn render_details(f: &mut Frame, app: &WorktreeApp, area: Rect) {
         .collect::<Vec<_>>();
     lines.push(Line::from(badge_line));
 
-    if let Some(details) = record.details.as_ref() {
-        if let Some(marker) = &details.marker {
-            lines.push(Line::from(vec![
-                Span::styled("Marker: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(marker.clone(), Style::default().fg(Color::Yellow)),
-            ]));
-        }
+    if let Some(details) = record.details.as_ref()
+        && let Some(marker) = &details.marker
+    {
+        lines.push(Line::from(vec![
+            Span::styled("Marker: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(marker.clone(), Style::default().fg(Color::Yellow)),
+        ]));
     }
 
     lines.push(Line::from(vec![

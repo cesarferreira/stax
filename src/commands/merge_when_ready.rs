@@ -156,10 +156,10 @@ pub fn run(
         let mut pr_number = branch_info.and_then(|b| b.pr_number);
 
         // If no PR in metadata, try looking it up on the forge
-        if pr_number.is_none() {
-            if let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await }) {
-                pr_number = Some(pr_info.number);
-            }
+        if pr_number.is_none()
+            && let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await })
+        {
+            pr_number = Some(pr_info.number);
         }
 
         match pr_number {
@@ -183,10 +183,10 @@ pub fn run(
         let branch_info = stack.branches.get(branch_name);
         let mut pr_number = branch_info.and_then(|b| b.pr_number);
 
-        if pr_number.is_none() {
-            if let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await }) {
-                pr_number = Some(pr_info.number);
-            }
+        if pr_number.is_none()
+            && let Ok(Some(pr_info)) = rt.block_on(async { client.find_pr(branch_name).await })
+        {
+            pr_number = Some(pr_info.number);
         }
 
         remaining_branches.push(RemainingBranchInfo {
@@ -621,19 +621,18 @@ pub fn run(
                 false, // verbose
                 false, // auto_stash_pop
                 &[],
-            ) {
-                if !quiet {
-                    println!();
-                    println!(
-                        "{} {}",
-                        "warning:".yellow().bold(),
-                        format!("post-merge sync failed: {}", err).yellow()
-                    );
-                    println!(
-                        "{}",
-                        "Run 'stax rs --force' manually to sync local state.".dimmed()
-                    );
-                }
+            ) && !quiet
+            {
+                println!();
+                println!(
+                    "{} {}",
+                    "warning:".yellow().bold(),
+                    format!("post-merge sync failed: {}", err).yellow()
+                );
+                println!(
+                    "{}",
+                    "Run 'stax rs --force' manually to sync local state.".dimmed()
+                );
             }
         }
     }

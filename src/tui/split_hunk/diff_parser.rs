@@ -56,10 +56,8 @@ pub fn parse_diff(diff_text: &str) -> Vec<DiffFile> {
             } else if let Some(stripped) = line.strip_prefix("+++ b/") {
                 path = stripped.to_string();
             } else if is_deleted && line.starts_with("+++ /dev/null") {
-            } else if is_deleted {
-                if let Some(stripped) = line.strip_prefix("--- a/") {
-                    path = stripped.to_string();
-                }
+            } else if is_deleted && let Some(stripped) = line.strip_prefix("--- a/") {
+                path = stripped.to_string();
             }
 
             i += 1;

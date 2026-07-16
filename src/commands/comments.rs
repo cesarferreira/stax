@@ -403,14 +403,14 @@ fn strip_html_comments(text: &str) -> String {
                 // Skip until -->
                 let mut found_end = false;
                 while let Some(c) = chars.next() {
-                    if c == '-' {
-                        if let Some(&'-') = chars.peek() {
+                    if c == '-'
+                        && let Some(&'-') = chars.peek()
+                    {
+                        chars.next();
+                        if let Some(&'>') = chars.peek() {
                             chars.next();
-                            if let Some(&'>') = chars.peek() {
-                                chars.next();
-                                found_end = true;
-                                break;
-                            }
+                            found_end = true;
+                            break;
                         }
                     }
                 }

@@ -402,10 +402,7 @@ fn configure_submit_remote(repo: &TestRepo) {
     repo.git(&[
         "config",
         "--local",
-        &format!(
-            "url.{}.insteadOf",
-            file_url.trim_end_matches('/').to_string()
-        ),
+        &format!("url.{}.insteadOf", file_url.trim_end_matches('/')),
         "https://github.com/test-owner/test-repo.git",
     ]);
 }
@@ -1087,7 +1084,7 @@ fn test_checkout_shell_output_colors_branch_in_completion_message() {
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains(&format!("STAX_SHELL_MESSAGE=Checked out ")),
+        stdout.contains(&"STAX_SHELL_MESSAGE=Checked out ".to_string()),
         "Expected shell completion message, got:\n{}",
         stdout
     );

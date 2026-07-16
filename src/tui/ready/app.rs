@@ -141,14 +141,13 @@ impl ReadyTuiApp {
                 ),
         });
 
-        if let Some(selected_branch) = selected_branch {
-            if let Some(index) = self
+        if let Some(selected_branch) = selected_branch
+            && let Some(index) = self
                 .rows
                 .iter()
                 .position(|row| row.branch() == selected_branch)
-            {
-                self.selected_index = index;
-            }
+        {
+            self.selected_index = index;
         }
     }
 

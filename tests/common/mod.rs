@@ -26,11 +26,11 @@ pub fn stax_bin() -> PathBuf {
 
     candidates.push(PathBuf::from(env!("CARGO_BIN_EXE_stax")));
 
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(debug_dir) = current_exe.parent().and_then(|p| p.parent()) {
-            candidates.push(debug_dir.join(&exe_name));
-            candidates.push(debug_dir.join("deps").join(&exe_name));
-        }
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(debug_dir) = current_exe.parent().and_then(|p| p.parent())
+    {
+        candidates.push(debug_dir.join(&exe_name));
+        candidates.push(debug_dir.join("deps").join(&exe_name));
     }
 
     candidates

@@ -276,15 +276,15 @@ impl HunkSplitApp {
 
     /// Select the current hunk and advance to the next (sequential mode)
     pub fn accept_and_advance(&mut self) {
-        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().copied() {
-            if !self.selected[file_idx][hunk_idx] {
-                self.selected[file_idx][hunk_idx] = true;
-                self.undo_stack.push(UndoAction::ToggleHunk {
-                    file_idx,
-                    hunk_idx,
-                    was_selected: false,
-                });
-            }
+        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().copied()
+            && !self.selected[file_idx][hunk_idx]
+        {
+            self.selected[file_idx][hunk_idx] = true;
+            self.undo_stack.push(UndoAction::ToggleHunk {
+                file_idx,
+                hunk_idx,
+                was_selected: false,
+            });
         }
         self.advance_to_next_hunk();
         self.diff_scroll = 0;
@@ -292,15 +292,15 @@ impl HunkSplitApp {
 
     /// Skip the current hunk and advance to the next (sequential mode)
     pub fn skip_and_advance(&mut self) {
-        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().copied() {
-            if self.selected[file_idx][hunk_idx] {
-                self.selected[file_idx][hunk_idx] = false;
-                self.undo_stack.push(UndoAction::ToggleHunk {
-                    file_idx,
-                    hunk_idx,
-                    was_selected: true,
-                });
-            }
+        if let Some(FlatItem::Hunk { file_idx, hunk_idx }) = self.current_item().copied()
+            && self.selected[file_idx][hunk_idx]
+        {
+            self.selected[file_idx][hunk_idx] = false;
+            self.undo_stack.push(UndoAction::ToggleHunk {
+                file_idx,
+                hunk_idx,
+                was_selected: true,
+            });
         }
         self.advance_to_next_hunk();
         self.diff_scroll = 0;

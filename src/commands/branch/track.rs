@@ -98,18 +98,17 @@ pub fn run(parent: Option<String>, all_prs: bool) -> Result<()> {
     meta.write(repo.inner(), &current)?;
 
     if let Ok(remote_branches) = remote::get_remote_branches(repo.workdir()?, config.remote_name())
+        && !remote_branches.contains(&parent_branch)
     {
-        if !remote_branches.contains(&parent_branch) {
-            println!(
-                "{}",
-                format!(
-                    "Warning: parent '{}' is not on remote '{}'.",
-                    parent_branch,
-                    config.remote_name()
-                )
-                .yellow()
-            );
-        }
+        println!(
+            "{}",
+            format!(
+                "Warning: parent '{}' is not on remote '{}'.",
+                parent_branch,
+                config.remote_name()
+            )
+            .yellow()
+        );
     }
 
     println!(

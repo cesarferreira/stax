@@ -210,10 +210,10 @@ pub fn run(fix: bool) -> Result<()> {
     if let Ok(stack) = Stack::load(&repo) {
         let mut orphaned = Vec::new();
         for (name, info) in &stack.branches {
-            if let Some(parent) = &info.parent {
-                if repo.branch_commit(parent).is_err() {
-                    orphaned.push((name.clone(), parent.clone()));
-                }
+            if let Some(parent) = &info.parent
+                && repo.branch_commit(parent).is_err()
+            {
+                orphaned.push((name.clone(), parent.clone()));
             }
         }
 
@@ -335,12 +335,11 @@ pub fn run(fix: bool) -> Result<()> {
             if local_branches.contains(branch_name) {
                 continue;
             }
-            if let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), branch_name) {
-                if let Some(pr) = &meta.pr_info {
-                    if pr.state == "OPEN" {
-                        stale.push((branch_name.clone(), pr.number));
-                    }
-                }
+            if let Ok(Some(meta)) = BranchMetadata::read(repo.inner(), branch_name)
+                && let Some(pr) = &meta.pr_info
+                && pr.state == "OPEN"
+            {
+                stale.push((branch_name.clone(), pr.number));
             }
         }
 

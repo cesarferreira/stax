@@ -703,16 +703,16 @@ impl Config {
             return Ok(Some((GitHubAuthSource::CredentialsFile, token)));
         }
 
-        if self.auth.use_gh_cli {
-            if let Some(token) = Self::token_from_gh_cli(Some(validated_host))? {
-                return Ok(Some((GitHubAuthSource::GhCli, token)));
-            }
+        if self.auth.use_gh_cli
+            && let Some(token) = Self::token_from_gh_cli(Some(validated_host))?
+        {
+            return Ok(Some((GitHubAuthSource::GhCli, token)));
         }
 
-        if self.auth.allow_github_token_env {
-            if let Some(token) = Self::read_env_token("GITHUB_TOKEN") {
-                return Ok(Some((GitHubAuthSource::GithubTokenEnv, token)));
-            }
+        if self.auth.allow_github_token_env
+            && let Some(token) = Self::read_env_token("GITHUB_TOKEN")
+        {
+            return Ok(Some((GitHubAuthSource::GithubTokenEnv, token)));
         }
 
         Ok(None)
@@ -847,16 +847,16 @@ impl Config {
             return Some((GitHubAuthSource::CredentialsFile, token));
         }
 
-        if auth_config.use_gh_cli {
-            if let Ok(Some(token)) = Self::token_from_gh_cli(auth_config.gh_hostname.as_deref()) {
-                return Some((GitHubAuthSource::GhCli, token));
-            }
+        if auth_config.use_gh_cli
+            && let Ok(Some(token)) = Self::token_from_gh_cli(auth_config.gh_hostname.as_deref())
+        {
+            return Some((GitHubAuthSource::GhCli, token));
         }
 
-        if auth_config.allow_github_token_env {
-            if let Some(token) = Self::read_env_token("GITHUB_TOKEN") {
-                return Some((GitHubAuthSource::GithubTokenEnv, token));
-            }
+        if auth_config.allow_github_token_env
+            && let Some(token) = Self::read_env_token("GITHUB_TOKEN")
+        {
+            return Some((GitHubAuthSource::GithubTokenEnv, token));
         }
 
         None
@@ -908,10 +908,10 @@ impl Config {
             self.branch.prefix.clone()
         };
 
-        if let Some(prefix) = prefix {
-            if !result.starts_with(&prefix) {
-                result = format!("{}{}", prefix, result);
-            }
+        if let Some(prefix) = prefix
+            && !result.starts_with(&prefix)
+        {
+            result = format!("{}{}", prefix, result);
         }
 
         result
@@ -1010,12 +1010,11 @@ impl Config {
         if let Ok(output) = std::process::Command::new("git")
             .args(["config", "user.name"])
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !name.is_empty() {
-                    return self.sanitize_branch_segment(&name);
-                }
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return self.sanitize_branch_segment(&name);
             }
         }
 
