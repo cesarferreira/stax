@@ -749,7 +749,7 @@ pub(crate) enum Commands {
     #[command(subcommand, visible_alias = "ds")]
     Downstack(DownstackCommands),
 
-    /// Stack commands (submit, restack)
+    /// Stack commands (submit, restack, native GitHub Stack link/unlink)
     #[command(subcommand, visible_alias = "s")]
     Stack(StackCommands),
 
