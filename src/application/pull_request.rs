@@ -9,29 +9,10 @@ use super::{
 use crate::application::repository::require_blocking_network_context;
 use crate::config::Config;
 use crate::engine::metadata::BranchMetadata;
-use crate::forge::ForgeClient;
-use crate::github::pr::PrInfoWithHead;
+use crate::forge::{Forge, ForgeClient};
 use crate::remote::TrustedRemoteInfo;
 use anyhow::Result;
 use git2::BranchType;
-use std::future::Future;
-use std::pin::Pin;
-
-trait PullRequestLookup {
-    fn find_open_by_head<'a>(
-        &'a self,
-        branch: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<PrInfoWithHead>>> + Send + 'a>>;
-}
-
-impl PullRequestLookup for ForgeClient {
-    fn find_open_by_head<'a>(
-        &'a self,
-        branch: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<PrInfoWithHead>>> + Send + 'a>> {
-        Box::pin(async move { self.find_open_pr_by_head(branch).await })
-    }
-}
 
 impl RepositorySession {
     pub fn resolve_pull_request_url(
@@ -115,7 +96,7 @@ fn resolve_with_lookup<F, L>(
 ) -> OperationResult
 where
     F: FnOnce(&TrustedRemoteInfo, &Config) -> Result<L>,
-    L: PullRequestLookup,
+    L: Forge,
 {
     if let Some(receipt) = resolve_metadata_only(session, request, branch, reporter)? {
         return Ok(receipt);
@@ -167,7 +148,7 @@ where
     let found = runtime
         .block_on(async {
             let lookup = create_lookup(&trusted_remote, &config)?;
-            lookup.find_open_by_head(branch).await
+            lookup.find_open_pr_by_head(branch).await
         })
         .map_err(|error| operation_error_from_source(request, &error))?;
     let pr = found.ok_or_else(|| {
@@ -366,31 +347,16 @@ fn operation_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{PullRequestLookup, resolve_with_lookup};
+    use super::resolve_with_lookup;
     use crate::application::{
         NoopOperationReporter, OperationOutcome, OperationRequest, OperationSideEffects,
         RepositorySession,
     };
     use crate::engine::metadata::{BranchMetadata, PrInfo};
+    use crate::forge::FakeForge;
     use crate::git::GitRepo;
     use crate::github::pr::{PrInfo as ForgePrInfo, PrInfoWithHead};
-    use anyhow::Result;
-    use std::future::Future;
     use std::path::Path;
-    use std::pin::Pin;
-
-    struct FakePullRequestLookup {
-        result: Option<PrInfoWithHead>,
-    }
-
-    impl PullRequestLookup for FakePullRequestLookup {
-        fn find_open_by_head<'a>(
-            &'a self,
-            _branch: &'a str,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<PrInfoWithHead>>> + Send + 'a>> {
-            Box::pin(async move { Ok(self.result.clone()) })
-        }
-    }
 
     fn git(cwd: &Path, args: &[&str]) {
         let output = std::process::Command::new("git")
@@ -496,7 +462,7 @@ mod tests {
             &session,
             &request("feature"),
             "feature",
-            |_, _| Ok(FakePullRequestLookup { result: None }),
+            |_, _| Ok(FakeForge::default()),
             &mut NoopOperationReporter,
         )
         .unwrap();
@@ -522,8 +488,8 @@ mod tests {
             &request("feature"),
             "feature",
             |_, _| {
-                Ok(FakePullRequestLookup {
-                    result: Some(fake_pr(42)),
+                Ok(FakeForge {
+                    open_pr_by_head: Some(fake_pr(42)),
                 })
             },
             &mut NoopOperationReporter,
