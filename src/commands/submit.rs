@@ -2717,26 +2717,7 @@ pub(crate) fn resolve_branches_for_scope(
     current: &str,
     scope: SubmitScope,
 ) -> Vec<String> {
-    let branches = match scope {
-        SubmitScope::Stack => stack.current_stack(current),
-        SubmitScope::Downstack => {
-            let mut ancestors = stack.ancestors(current);
-            ancestors.reverse();
-            ancestors.push(current.to_string());
-            ancestors
-        }
-        SubmitScope::Upstack => {
-            let mut upstack = vec![current.to_string()];
-            upstack.extend(stack.descendants(current));
-            upstack
-        }
-        SubmitScope::Branch => vec![current.to_string()],
-    };
-
-    branches
-        .into_iter()
-        .filter(|branch| branch != &stack.trunk)
-        .collect()
+    crate::application::submit::branches_for_submit_scope(stack, current, scope)
 }
 
 /// Ref names to pass to `git fetch --no-tags <remote> ...` before submit (trunk, submitted branches,
@@ -3679,6 +3660,59 @@ mod tests {
             resolve_is_draft_without_prompt(false, false, false, true),
             Some(true)
         );
+    }
+
+    fn branch_scope_test_stack() -> Stack {
+        // main (trunk)
+        //  ├── a
+        //  │   └── a1
+        //  │       └── a2
+        //  └── b
+        let mut branches = HashMap::new();
+        let mut branch = |name: &str, parent: Option<&str>, children: &[&str]| {
+            branches.insert(
+                name.to_string(),
+                StackBranch {
+                    name: name.to_string(),
+                    parent: parent.map(str::to_string),
+                    parent_revision: parent.map(|p| format!("sha-{p}")),
+                    children: children.iter().map(|c| c.to_string()).collect(),
+                    needs_restack: false,
+                    pr_number: None,
+                    pr_state: None,
+                    pr_is_draft: None,
+                },
+            );
+        };
+        branch("main", None, &["a", "b"]);
+        branch("a", Some("main"), &["a1"]);
+        branch("a1", Some("a"), &["a2"]);
+        branch("a2", Some("a1"), &[]);
+        branch("b", Some("main"), &[]);
+        Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    // Regression guard: `resolve_branches_for_scope` must keep delegating to the
+    // canonical `application::submit::branches_for_submit_scope`. Lives here (not in
+    // the application module) so it does not cross the application→command boundary.
+    #[test]
+    fn resolve_and_application_selection_match() {
+        let stack = branch_scope_test_stack();
+        for (current, scope) in [
+            ("a", SubmitScope::Stack),
+            ("a2", SubmitScope::Downstack),
+            ("a1", SubmitScope::Upstack),
+            ("a1", SubmitScope::Branch),
+        ] {
+            assert_eq!(
+                super::resolve_branches_for_scope(&stack, current, scope),
+                crate::application::submit::branches_for_submit_scope(&stack, current, scope),
+                "scope {scope:?} from {current}"
+            );
+        }
     }
 
     #[derive(Default)]
