@@ -3,6 +3,8 @@ use git2::Repository;
 use std::path::Path;
 use std::process::Command;
 
+use super::command;
+
 pub(crate) const METADATA_REF_PREFIX: &str = "refs/branch-metadata/";
 
 /// Build the full ref name for a branch's stax metadata blob.
@@ -62,10 +64,7 @@ pub fn write_metadata(repo: &Repository, branch: &str, json: &str) -> Result<()>
 
     // Update the ref to point to the blob
     let ref_name = metadata_refname(branch);
-    let status = Command::new("git")
-        .args(["update-ref", &ref_name, &hash])
-        .current_dir(workdir)
-        .status()
+    let status = command::status(workdir, &["update-ref", &ref_name, &hash])
         .context("Failed to update ref")?;
 
     if !status.success() {
@@ -82,10 +81,7 @@ pub fn delete_metadata(repo: &Repository, branch: &str) -> Result<()> {
         .workdir()
         .context("Repository has no working directory")?;
 
-    let status = Command::new("git")
-        .args(["update-ref", "-d", &ref_name])
-        .current_dir(workdir)
-        .status()
+    let status = command::status(workdir, &["update-ref", "-d", &ref_name])
         .context("Failed to delete ref")?;
 
     if !status.success() {
@@ -152,10 +148,7 @@ pub fn write_trunk(repo: &Repository, trunk: &str) -> Result<()> {
     let hash = String::from_utf8(output.stdout)?.trim().to_string();
 
     // Update the ref
-    Command::new("git")
-        .args(["update-ref", STAX_TRUNK_REF, &hash])
-        .current_dir(workdir)
-        .status()
+    command::status(workdir, &["update-ref", STAX_TRUNK_REF, &hash])
         .context("Failed to update trunk ref")?;
 
     Ok(())
@@ -176,14 +169,6 @@ pub fn read_prev_branch(repo: &Repository) -> Result<Option<String>> {
 }
 
 /// Write the previous branch (for `stax prev` command)
-#[allow(dead_code)]
-pub fn write_prev_branch(repo: &Repository, branch: &str) -> Result<()> {
-    let workdir = repo
-        .workdir()
-        .context("Repository has no working directory")?;
-    write_prev_branch_at(workdir, branch)
-}
-
 pub fn write_prev_branch_at(workdir: &Path, branch: &str) -> Result<()> {
     // Create blob with branch name
     let mut child = Command::new("git")
@@ -202,10 +187,7 @@ pub fn write_prev_branch_at(workdir: &Path, branch: &str) -> Result<()> {
     let hash = String::from_utf8(output.stdout)?.trim().to_string();
 
     // Update the ref
-    Command::new("git")
-        .args(["update-ref", STAX_PREV_BRANCH_REF, &hash])
-        .current_dir(workdir)
-        .status()
+    command::status(workdir, &["update-ref", STAX_PREV_BRANCH_REF, &hash])
         .context("Failed to update prev-branch ref")?;
 
     Ok(())
