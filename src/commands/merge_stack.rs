@@ -4,8 +4,9 @@
 //! once, retarget that PR to trunk, merge it via GitHub's merge API, then
 //! reconcile selected lower PRs as merged or absorbed.
 
-use crate::commands::merge::{
-    PrBaseUpdate, rebase_and_finalize_remaining_branch, update_pr_base_unless_current,
+use crate::commands::merge_shared::{
+    PrBaseUpdate, WaitResult, print_header, print_header_success,
+    rebase_and_finalize_remaining_branch, update_pr_base_unless_current,
 };
 use crate::config::Config;
 use crate::engine::Stack;
@@ -46,12 +47,6 @@ struct ResolvedStackPr {
 struct RemainingStackBranch {
     branch: String,
     pr_number: Option<u64>,
-}
-
-enum WaitResult {
-    Ready(PrMergeStatus),
-    Failed(String),
-    Timeout,
 }
 
 /// How the stack-merge confirmation should be resolved.
@@ -988,49 +983,6 @@ fn print_stack_preview(
                 .dimmed()
         );
     }
-}
-
-fn display_width(s: &str) -> usize {
-    s.chars()
-        .map(|c| match c {
-            '\x00'..='\x1f' | '\x7f' => 0,
-            '\x20'..='\x7e' => 1,
-            '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╭' | '╮' | '╯'
-            | '╰' | '║' | '═' => 1,
-            '←' | '→' | '↑' | '↓' => 1,
-            '✓' | '✗' | '✔' | '✘' => 1,
-            _ => 2,
-        })
-        .sum()
-}
-
-fn print_header(title: &str) {
-    let width: usize = 56;
-    let title_width = display_width(title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        title.bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
-}
-
-fn print_header_success(title: &str) {
-    let width: usize = 56;
-    let full_title = format!("✓ {}", title);
-    let title_width = display_width(&full_title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        full_title.green().bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
 }
 
 #[cfg(test)]

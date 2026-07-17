@@ -17,6 +17,23 @@ pub enum Sound {
     Path(PathBuf),
 }
 
+/// Show a desktop notification (macOS only; a no-op on other platforms).
+pub fn send_desktop_notification(title: &str, message: &str) {
+    if cfg!(target_os = "macos") {
+        let script = notification_script(title, message);
+        let _ = Command::new("osascript").args(["-e", &script]).output();
+    }
+}
+
+/// Build the escaped AppleScript `display notification` command for `osascript`.
+fn notification_script(title: &str, message: &str) -> String {
+    format!(
+        r#"display notification "{}" with title "{}""#,
+        message.replace('"', "\\\""),
+        title.replace('"', "\\\""),
+    )
+}
+
 pub fn play_sound(sound: &Sound) -> Result<(), String> {
     match sound {
         Sound::BuiltIn(kind) => {
@@ -164,5 +181,16 @@ mod tests {
         assert_eq!(&bytes[8..12], b"WAVE");
         assert!(bytes.windows(4).any(|chunk| chunk == b"data"));
         assert!(bytes.len() > 44);
+    }
+
+    #[test]
+    fn notification_script_escapes_quotes() {
+        let script = notification_script("ti\"tle", "mes\"sage");
+        assert_eq!(
+            script,
+            r#"display notification "mes\"sage" with title "ti\"tle""#
+        );
+        assert!(!script.contains("mes\"sage"));
+        assert!(!script.contains("ti\"tle"));
     }
 }
