@@ -90,12 +90,11 @@ fn extension_status_with_env(env: &[(&str, &str)]) -> ExtensionStatus {
     match extensions {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.lines().any(|line| line.contains("github/gh-stack")) {
-                if link_command_supported(env) {
-                    ExtensionStatus::Installed
-                } else {
-                    ExtensionStatus::Outdated
-                }
+            let extension_listed = stdout.lines().any(|line| line.contains("github/gh-stack"));
+            if link_command_supported(env) {
+                ExtensionStatus::Installed
+            } else if extension_listed {
+                ExtensionStatus::Outdated
             } else {
                 ExtensionStatus::NoExtension
             }
@@ -233,7 +232,7 @@ pub fn link_stack_with_env(
     remote: &str,
     env: &[(&str, &str)],
 ) -> LinkOutcome {
-    let mut command = gh_command(env);
+    let mut command = gh_stack_command(env);
     command.args(["stack", "link"]);
     for number in pr_numbers {
         command.arg(number.to_string());
@@ -277,7 +276,7 @@ pub fn unlink_stack() -> LinkOutcome {
 }
 
 pub fn unlink_stack_with_env(env: &[(&str, &str)]) -> LinkOutcome {
-    match gh_command(env).args(["stack", "unstack"]).output() {
+    match gh_stack_command(env).args(["stack", "unstack"]).output() {
         Ok(output) if output.status.success() => LinkOutcome::Linked,
         Ok(output) if auth_token_unsupported_output(&output) => LinkOutcome::AuthTokenUnsupported {
             message: command_message(&output),
@@ -333,11 +332,6 @@ pub fn upgrade_extension_with_env(env: &[(&str, &str)]) -> Result<()> {
     Ok(())
 }
 
-/// `gh` env vars that override the CLI's stored (OAuth) credentials.
-/// GitHub's native Stacked PRs API is in private preview and rejects
-/// Personal Access Tokens, so stax strips these before shelling out to
-/// `gh stack`, letting `gh` fall back to a keyring-stored OAuth account
-/// even when a PAT is exported for other tooling (CI scripts, other CLIs).
 const AUTH_OVERRIDE_ENV_VARS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN"];
 
 fn gh_command(env: &[(&str, &str)]) -> Command {
@@ -345,6 +339,13 @@ fn gh_command(env: &[(&str, &str)]) -> Command {
     for (key, value) in env {
         command.env(key, value);
     }
+    command
+}
+
+/// GitHub's native Stacked PRs API rejects Personal Access Tokens, so remote
+/// stack operations must fall back to a keyring-stored OAuth account.
+fn gh_stack_command(env: &[(&str, &str)]) -> Command {
+    let mut command = gh_command(env);
     for var in AUTH_OVERRIDE_ENV_VARS {
         command.env_remove(var);
     }
