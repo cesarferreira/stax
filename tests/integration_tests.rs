@@ -3543,34 +3543,27 @@ fn test_sync_deletes_merged_branches() {
     // Pull the merge into local main
     repo.git(&["pull", "origin", "main"]);
 
-    // Now the branch should be detected as merged (its commits are in main)
-    // Check that git considers it merged
+    // Verify the fixture's merge precondition before exercising sync.
     let merged_output = repo.git(&["branch", "--merged", "main"]);
     let merged_str = String::from_utf8_lossy(&merged_output.stdout);
+    assert!(
+        merged_str.contains(&feature_branch),
+        "expected {feature_branch} to be merged into main before sync, got: {merged_str}"
+    );
 
-    // Sync with --force should detect and offer to delete merged branches
+    // `--force` auto-confirms deletion of tracked branches merged into trunk.
     let output = repo.run_stax(&["sync", "--force"]);
     assert!(
         output.status.success(),
         "Failed: {}",
         TestRepo::stderr(&output)
     );
-
-    // The branch should be deleted (--force auto-confirms) IF it was detected as merged
-    // Note: sync only deletes tracked branches that are merged
-    let branches = repo.list_branches();
-
-    // The test is successful if either:
-    // 1. The branch was deleted
-    // 2. Or we at least synced successfully (the merge detection may vary)
-    if branches.iter().any(|b| b.contains("feature-merged")) {
-        // Branch still exists - check if it's because it wasn't detected as merged
-        // This can happen depending on merge strategy
-        assert!(
-            !merged_str.contains("feature-merged") || merged_str.contains("feature-merged"),
-            "Sync completed but branch handling may differ"
-        );
-    }
+    assert!(
+        !repo.list_branches().contains(&feature_branch),
+        "sync --force should delete the merged tracked branch {feature_branch}\nstdout:\n{}\nstderr:\n{}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
 }
 
 #[test]
