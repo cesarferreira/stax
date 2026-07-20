@@ -91,15 +91,7 @@ struct CheckRun {
     conclusion: Option<String>,
 }
 
-/// Open PR info for tracking command
-#[derive(Debug, Clone)]
-pub struct OpenPrInfo {
-    pub number: u64,
-    pub head_branch: String,
-    pub base_branch: String,
-    pub state: String,
-    pub is_draft: bool,
-}
+pub use crate::forge::OpenPrInfo;
 
 #[derive(Debug, Deserialize)]
 struct ReviewUser {

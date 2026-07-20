@@ -10,59 +10,18 @@ use std::time::Duration;
 
 use crate::ci::CheckRunInfo;
 use crate::config::Config;
-use crate::github::client::{GitHubClient, OpenPrInfo};
-use crate::github::pr::{
-    CiStatus, IssueComment, MergeMethod, PrComment, PrInfo, PrInfoWithHead, PrMergeStatus,
-};
+use crate::github::client::GitHubClient;
 use crate::remote::{ForgeType, RemoteInfo, TrustedRemoteInfo};
-
-/// PR activity for standup reports.
-#[derive(Debug, Clone, Serialize)]
-pub struct PrActivity {
-    pub number: u64,
-    pub title: String,
-    pub timestamp: DateTime<Utc>,
-    pub url: String,
-}
-
-/// Review activity for standup reports.
-#[derive(Debug, Clone, Serialize)]
-pub struct ReviewActivity {
-    pub pr_number: u64,
-    pub pr_title: String,
-    pub reviewer: String,
-    pub state: String,
-    pub timestamp: DateTime<Utc>,
-    pub is_received: bool,
-}
-
-/// Open pull request info for repo-level listing commands.
-#[derive(Debug, Clone, Serialize)]
-pub struct RepoPrListItem {
-    pub number: u64,
-    pub title: String,
-    pub url: String,
-    pub author: String,
-    pub head_branch: String,
-    pub base_branch: String,
-    pub state: String,
-    pub is_draft: bool,
-    pub created_at: DateTime<Utc>,
-}
-
-/// Open issue info for repo-level listing commands.
-#[derive(Debug, Clone, Serialize)]
-pub struct RepoIssueListItem {
-    pub number: u64,
-    pub title: String,
-    pub url: String,
-    pub author: String,
-    pub labels: Vec<String>,
-    pub updated_at: DateTime<Utc>,
-}
 
 mod gitea;
 mod gitlab;
+mod model;
+mod traits;
+
+pub use model::*;
+pub use traits::Forge;
+#[cfg(test)]
+pub(crate) use traits::tests::FakeForge;
 
 use gitea::GiteaClient;
 use gitlab::GitLabClient;
@@ -80,13 +39,16 @@ pub enum AuthStyle {
     PrivateToken,
 }
 
-/// Dispatch an async method call uniformly across all forge variants.
+/// Dispatch an async trait method call uniformly across all forge variants.
+///
+/// Each arm forwards to the per-variant `Forge` implementation, which in turn
+/// resolves to the concrete inherent method (inherent-priority) — no recursion.
 macro_rules! dispatch {
     ($self:expr, $method:ident ( $($arg:expr),* $(,)? )) => {
         match $self {
-            Self::GitHub(c) => c.$method($($arg),*).await,
-            Self::GitLab(c) => c.$method($($arg),*).await,
-            Self::Gitea(c) => c.$method($($arg),*).await,
+            Self::GitHub(c) => Forge::$method(c, $($arg),*).await,
+            Self::GitLab(c) => Forge::$method(c, $($arg),*).await,
+            Self::Gitea(c) => Forge::$method(c, $($arg),*).await,
         }
     };
 }
@@ -141,11 +103,7 @@ impl ForgeClient {
     /// GitHub uses the stored owner for fork-aware lookup; other forges
     /// filter by source branch only.
     pub async fn find_open_pr_by_head(&self, branch: &str) -> Result<Option<PrInfoWithHead>> {
-        match self {
-            Self::GitHub(client) => client.find_open_pr_by_head(&client.owner, branch).await,
-            Self::GitLab(client) => client.find_open_pr_by_head(branch).await,
-            Self::Gitea(client) => client.find_open_pr_by_head(branch).await,
-        }
+        dispatch!(self, find_open_pr_by_head(branch))
     }
 
     pub async fn find_pr(&self, branch: &str) -> Result<Option<PrInfo>> {
@@ -195,27 +153,13 @@ impl ForgeClient {
 
     /// Enqueue a PR into the forge's merge queue (GitHub) or merge train (GitLab).
     /// Not supported on Gitea/Forgejo (no merge queue feature).
-    pub async fn enqueue_pr(&self, number: u64) -> Result<crate::github::pr::EnqueueResult> {
-        match self {
-            Self::GitHub(client) => client.enqueue_pr(number).await,
-            Self::GitLab(client) => client.add_to_merge_train(number).await,
-            Self::Gitea(_) => {
-                bail!(
-                    "`stax merge --queue` is not supported for Gitea/Forgejo — \
-                     Gitea does not have a merge queue feature"
-                )
-            }
-        }
+    pub async fn enqueue_pr(&self, number: u64) -> Result<EnqueueResult> {
+        dispatch!(self, enqueue_pr(number))
     }
 
     /// GitHub only: merge the PR base into the head branch remotely ("Update branch").
     pub async fn update_pr_branch(&self, number: u64) -> Result<()> {
-        match self {
-            Self::GitHub(client) => client.update_pr_branch(number).await,
-            Self::GitLab(_) | Self::Gitea(_) => {
-                bail!("`stax merge --remote` is currently only supported for GitHub")
-            }
-        }
+        dispatch!(self, update_pr_branch(number))
     }
 
     pub async fn update_pr_title(&self, number: u64, title: &str) -> Result<()> {
@@ -239,21 +183,11 @@ impl ForgeClient {
     }
 
     pub async fn create_issue_comment(&self, number: u64, body: &str) -> Result<()> {
-        match self {
-            Self::GitHub(client) => client.create_issue_comment(number, body).await,
-            Self::GitLab(_) | Self::Gitea(_) => {
-                bail!("creating plain PR comments is currently only supported for GitHub")
-            }
-        }
+        dispatch!(self, create_issue_comment(number, body))
     }
 
     pub async fn close_pr(&self, number: u64) -> Result<()> {
-        match self {
-            Self::GitHub(client) => client.close_pr(number).await,
-            Self::GitLab(_) | Self::Gitea(_) => {
-                bail!("closing PRs from stack merge is currently only supported for GitHub")
-            }
-        }
+        dispatch!(self, close_pr(number))
     }
 
     pub async fn delete_stack_comment(&self, number: u64) -> Result<()> {
@@ -271,21 +205,7 @@ impl ForgeClient {
         commit_title: Option<&str>,
         sha: Option<&str>,
     ) -> Result<()> {
-        match self {
-            Self::GitHub(client) => {
-                client
-                    .merge_pr(
-                        number,
-                        method,
-                        commit_title.map(str::to_string),
-                        None,
-                        sha.map(str::to_string),
-                    )
-                    .await
-            }
-            Self::GitLab(client) => client.merge_pr(number, method, commit_title, sha).await,
-            Self::Gitea(client) => client.merge_pr(number, method, commit_title, sha).await,
-        }
+        dispatch!(self, merge_pr(number, method, commit_title, sha))
     }
 
     pub async fn get_pr_merge_status(&self, number: u64) -> Result<PrMergeStatus> {
@@ -309,65 +229,23 @@ impl ForgeClient {
         repo: &crate::git::GitRepo,
         sha: &str,
     ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
-        match self {
-            Self::GitHub(client) => {
-                crate::commands::ci::fetch_github_checks(repo, client, sha).await
-            }
-            Self::GitLab(client) => client.fetch_checks(sha).await,
-            Self::Gitea(client) => client.fetch_checks(sha).await,
-        }
+        dispatch!(self, fetch_checks(repo, sha))
     }
 
     pub async fn request_reviewers(&self, number: u64, reviewers: &[String]) -> Result<()> {
-        match self {
-            Self::GitHub(client) => client.request_reviewers(number, reviewers).await,
-            Self::GitLab(_) | Self::Gitea(_) => {
-                if !reviewers.is_empty() {
-                    eprintln!(
-                        "{} Requesting reviewers is not yet supported for this forge — skipping.",
-                        "warn:".yellow()
-                    );
-                }
-                Ok(())
-            }
-        }
+        dispatch!(self, request_reviewers(number, reviewers))
     }
 
     pub async fn get_requested_reviewers(&self, number: u64) -> Result<Vec<String>> {
-        match self {
-            Self::GitHub(client) => client.get_requested_reviewers(number).await,
-            Self::GitLab(_) | Self::Gitea(_) => Ok(Vec::new()),
-        }
+        dispatch!(self, get_requested_reviewers(number))
     }
 
     pub async fn add_labels(&self, number: u64, labels: &[String]) -> Result<()> {
-        match self {
-            Self::GitHub(client) => client.add_labels(number, labels).await,
-            Self::GitLab(_) | Self::Gitea(_) => {
-                if !labels.is_empty() {
-                    eprintln!(
-                        "{} Adding labels is not yet supported for this forge — skipping.",
-                        "warn:".yellow()
-                    );
-                }
-                Ok(())
-            }
-        }
+        dispatch!(self, add_labels(number, labels))
     }
 
     pub async fn add_assignees(&self, number: u64, assignees: &[String]) -> Result<()> {
-        match self {
-            Self::GitHub(client) => client.add_assignees(number, assignees).await,
-            Self::GitLab(_) | Self::Gitea(_) => {
-                if !assignees.is_empty() {
-                    eprintln!(
-                        "{} Adding assignees is not yet supported for this forge — skipping.",
-                        "warn:".yellow()
-                    );
-                }
-                Ok(())
-            }
-        }
+        dispatch!(self, add_assignees(number, assignees))
     }
 
     pub async fn get_current_user(&self) -> Result<String> {
@@ -408,6 +286,592 @@ impl ForgeClient {
         username: &str,
     ) -> Result<Vec<ReviewActivity>> {
         dispatch!(self, get_reviews_given(hours, username))
+    }
+}
+
+impl Forge for GitHubClient {
+    async fn find_open_pr_by_head(&self, branch: &str) -> Result<Option<PrInfoWithHead>> {
+        self.find_open_pr_by_head(&self.owner, branch).await
+    }
+    async fn find_pr(&self, branch: &str) -> Result<Option<PrInfo>> {
+        self.find_pr(branch).await
+    }
+    async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfoWithHead>> {
+        self.list_open_prs_by_head().await
+    }
+    async fn list_open_pull_requests(&self, limit: u8) -> Result<Vec<RepoPrListItem>> {
+        self.list_open_pull_requests(limit).await
+    }
+    async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
+        self.list_open_issues(limit).await
+    }
+    async fn create_pr(
+        &self,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+        is_draft: bool,
+    ) -> Result<PrInfo> {
+        self.create_pr(head, base, title, body, is_draft).await
+    }
+    async fn get_pr(&self, number: u64) -> Result<PrInfo> {
+        self.get_pr(number).await
+    }
+    async fn get_pr_with_head(&self, number: u64) -> Result<PrInfoWithHead> {
+        self.get_pr_with_head(number).await
+    }
+    async fn update_pr_base(&self, number: u64, new_base: &str) -> Result<()> {
+        self.update_pr_base(number, new_base).await
+    }
+    async fn set_pr_draft(&self, number: u64, is_draft: bool) -> Result<()> {
+        self.set_pr_draft(number, is_draft).await
+    }
+    async fn enqueue_pr(&self, number: u64) -> Result<EnqueueResult> {
+        self.enqueue_pr(number).await
+    }
+    async fn update_pr_branch(&self, number: u64) -> Result<()> {
+        self.update_pr_branch(number).await
+    }
+    async fn update_pr_title(&self, number: u64, title: &str) -> Result<()> {
+        self.update_pr_title(number, title).await
+    }
+    async fn update_pr_body(&self, number: u64, body: &str) -> Result<()> {
+        self.update_pr_body(number, body).await
+    }
+    async fn get_pr_body(&self, number: u64) -> Result<String> {
+        self.get_pr_body(number).await
+    }
+    async fn update_stack_comment(&self, number: u64, stack_comment: &str) -> Result<()> {
+        self.update_stack_comment(number, stack_comment).await
+    }
+    async fn create_stack_comment(&self, number: u64, stack_comment: &str) -> Result<()> {
+        self.create_stack_comment(number, stack_comment).await
+    }
+    async fn create_issue_comment(&self, number: u64, body: &str) -> Result<()> {
+        self.create_issue_comment(number, body).await
+    }
+    async fn close_pr(&self, number: u64) -> Result<()> {
+        self.close_pr(number).await
+    }
+    async fn delete_stack_comment(&self, number: u64) -> Result<()> {
+        self.delete_stack_comment(number).await
+    }
+    async fn list_all_comments(&self, number: u64) -> Result<Vec<PrComment>> {
+        self.list_all_comments(number).await
+    }
+    async fn merge_pr(
+        &self,
+        number: u64,
+        method: MergeMethod,
+        commit_title: Option<&str>,
+        sha: Option<&str>,
+    ) -> Result<()> {
+        self.merge_pr(
+            number,
+            method,
+            commit_title.map(str::to_string),
+            None,
+            sha.map(str::to_string),
+        )
+        .await
+    }
+    async fn get_pr_merge_status(&self, number: u64) -> Result<PrMergeStatus> {
+        self.get_pr_merge_status(number).await
+    }
+    async fn get_pr_review_decision(&self, number: u64) -> Result<Option<String>> {
+        self.get_pr_review_decision(number).await
+    }
+    async fn is_pr_merged(&self, number: u64) -> Result<bool> {
+        self.is_pr_merged(number).await
+    }
+    async fn get_pr_head_sha(&self, number: u64) -> Result<String> {
+        self.get_pr_head_sha(number).await
+    }
+    async fn fetch_checks(
+        &self,
+        repo: &crate::git::GitRepo,
+        sha: &str,
+    ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
+        crate::commands::ci::fetch_github_checks(repo, self, sha).await
+    }
+    async fn request_reviewers(&self, number: u64, reviewers: &[String]) -> Result<()> {
+        self.request_reviewers(number, reviewers).await
+    }
+    async fn get_requested_reviewers(&self, number: u64) -> Result<Vec<String>> {
+        self.get_requested_reviewers(number).await
+    }
+    async fn add_labels(&self, number: u64, labels: &[String]) -> Result<()> {
+        self.add_labels(number, labels).await
+    }
+    async fn add_assignees(&self, number: u64, assignees: &[String]) -> Result<()> {
+        self.add_assignees(number, assignees).await
+    }
+    async fn get_current_user(&self) -> Result<String> {
+        self.get_current_user().await
+    }
+    async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
+        self.get_user_open_prs(username).await
+    }
+    async fn get_recent_merged_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
+        self.get_recent_merged_prs(hours, username).await
+    }
+    async fn get_recent_opened_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
+        self.get_recent_opened_prs(hours, username).await
+    }
+    async fn get_reviews_received(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        self.get_reviews_received(hours, username).await
+    }
+    async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
+        self.get_reviews_given(hours, username).await
+    }
+}
+
+impl Forge for GitLabClient {
+    async fn find_open_pr_by_head(&self, branch: &str) -> Result<Option<PrInfoWithHead>> {
+        self.find_open_pr_by_head(branch).await
+    }
+    async fn find_pr(&self, branch: &str) -> Result<Option<PrInfo>> {
+        self.find_pr(branch).await
+    }
+    async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfoWithHead>> {
+        self.list_open_prs_by_head().await
+    }
+    async fn list_open_pull_requests(&self, limit: u8) -> Result<Vec<RepoPrListItem>> {
+        self.list_open_pull_requests(limit).await
+    }
+    async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
+        self.list_open_issues(limit).await
+    }
+    async fn create_pr(
+        &self,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+        is_draft: bool,
+    ) -> Result<PrInfo> {
+        self.create_pr(head, base, title, body, is_draft).await
+    }
+    async fn get_pr(&self, number: u64) -> Result<PrInfo> {
+        self.get_pr(number).await
+    }
+    async fn get_pr_with_head(&self, number: u64) -> Result<PrInfoWithHead> {
+        self.get_pr_with_head(number).await
+    }
+    async fn update_pr_base(&self, number: u64, new_base: &str) -> Result<()> {
+        self.update_pr_base(number, new_base).await
+    }
+    async fn set_pr_draft(&self, number: u64, is_draft: bool) -> Result<()> {
+        self.set_pr_draft(number, is_draft).await
+    }
+    async fn enqueue_pr(&self, number: u64) -> Result<EnqueueResult> {
+        self.add_to_merge_train(number).await
+    }
+    async fn update_pr_branch(&self, _number: u64) -> Result<()> {
+        bail!("`stax merge --remote` is currently only supported for GitHub")
+    }
+    async fn update_pr_title(&self, number: u64, title: &str) -> Result<()> {
+        self.update_pr_title(number, title).await
+    }
+    async fn update_pr_body(&self, number: u64, body: &str) -> Result<()> {
+        self.update_pr_body(number, body).await
+    }
+    async fn get_pr_body(&self, number: u64) -> Result<String> {
+        self.get_pr_body(number).await
+    }
+    async fn update_stack_comment(&self, number: u64, stack_comment: &str) -> Result<()> {
+        self.update_stack_comment(number, stack_comment).await
+    }
+    async fn create_stack_comment(&self, number: u64, stack_comment: &str) -> Result<()> {
+        self.create_stack_comment(number, stack_comment).await
+    }
+    async fn create_issue_comment(&self, _number: u64, _body: &str) -> Result<()> {
+        bail!("creating plain PR comments is currently only supported for GitHub")
+    }
+    async fn close_pr(&self, _number: u64) -> Result<()> {
+        bail!("closing PRs from stack merge is currently only supported for GitHub")
+    }
+    async fn delete_stack_comment(&self, number: u64) -> Result<()> {
+        self.delete_stack_comment(number).await
+    }
+    async fn list_all_comments(&self, number: u64) -> Result<Vec<PrComment>> {
+        self.list_all_comments(number).await
+    }
+    async fn merge_pr(
+        &self,
+        number: u64,
+        method: MergeMethod,
+        commit_title: Option<&str>,
+        sha: Option<&str>,
+    ) -> Result<()> {
+        self.merge_pr(number, method, commit_title, sha).await
+    }
+    async fn get_pr_merge_status(&self, number: u64) -> Result<PrMergeStatus> {
+        self.get_pr_merge_status(number).await
+    }
+    async fn get_pr_review_decision(&self, number: u64) -> Result<Option<String>> {
+        self.get_pr_review_decision(number).await
+    }
+    async fn is_pr_merged(&self, number: u64) -> Result<bool> {
+        self.is_pr_merged(number).await
+    }
+    async fn get_pr_head_sha(&self, number: u64) -> Result<String> {
+        self.get_pr_head_sha(number).await
+    }
+    async fn fetch_checks(
+        &self,
+        _repo: &crate::git::GitRepo,
+        sha: &str,
+    ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
+        self.fetch_checks(sha).await
+    }
+    async fn request_reviewers(&self, _number: u64, reviewers: &[String]) -> Result<()> {
+        if !reviewers.is_empty() {
+            eprintln!(
+                "{} Requesting reviewers is not yet supported for this forge — skipping.",
+                "warn:".yellow()
+            );
+        }
+        Ok(())
+    }
+    async fn get_requested_reviewers(&self, _number: u64) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+    async fn add_labels(&self, _number: u64, labels: &[String]) -> Result<()> {
+        if !labels.is_empty() {
+            eprintln!(
+                "{} Adding labels is not yet supported for this forge — skipping.",
+                "warn:".yellow()
+            );
+        }
+        Ok(())
+    }
+    async fn add_assignees(&self, _number: u64, assignees: &[String]) -> Result<()> {
+        if !assignees.is_empty() {
+            eprintln!(
+                "{} Adding assignees is not yet supported for this forge — skipping.",
+                "warn:".yellow()
+            );
+        }
+        Ok(())
+    }
+    async fn get_current_user(&self) -> Result<String> {
+        self.get_current_user().await
+    }
+    async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
+        self.get_user_open_prs(username).await
+    }
+    async fn get_recent_merged_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
+        self.get_recent_merged_prs(hours, username).await
+    }
+    async fn get_recent_opened_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
+        self.get_recent_opened_prs(hours, username).await
+    }
+    async fn get_reviews_received(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        self.get_reviews_received(hours, username).await
+    }
+    async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
+        self.get_reviews_given(hours, username).await
+    }
+}
+
+impl Forge for GiteaClient {
+    async fn find_open_pr_by_head(&self, branch: &str) -> Result<Option<PrInfoWithHead>> {
+        self.find_open_pr_by_head(branch).await
+    }
+    async fn find_pr(&self, branch: &str) -> Result<Option<PrInfo>> {
+        self.find_pr(branch).await
+    }
+    async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfoWithHead>> {
+        self.list_open_prs_by_head().await
+    }
+    async fn list_open_pull_requests(&self, limit: u8) -> Result<Vec<RepoPrListItem>> {
+        self.list_open_pull_requests(limit).await
+    }
+    async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
+        self.list_open_issues(limit).await
+    }
+    async fn create_pr(
+        &self,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+        is_draft: bool,
+    ) -> Result<PrInfo> {
+        self.create_pr(head, base, title, body, is_draft).await
+    }
+    async fn get_pr(&self, number: u64) -> Result<PrInfo> {
+        self.get_pr(number).await
+    }
+    async fn get_pr_with_head(&self, number: u64) -> Result<PrInfoWithHead> {
+        self.get_pr_with_head(number).await
+    }
+    async fn update_pr_base(&self, number: u64, new_base: &str) -> Result<()> {
+        self.update_pr_base(number, new_base).await
+    }
+    async fn set_pr_draft(&self, number: u64, is_draft: bool) -> Result<()> {
+        self.set_pr_draft(number, is_draft).await
+    }
+    async fn enqueue_pr(&self, _number: u64) -> Result<EnqueueResult> {
+        bail!(
+            "`stax merge --queue` is not supported for Gitea/Forgejo — \
+             Gitea does not have a merge queue feature"
+        )
+    }
+    async fn update_pr_branch(&self, _number: u64) -> Result<()> {
+        bail!("`stax merge --remote` is currently only supported for GitHub")
+    }
+    async fn update_pr_title(&self, number: u64, title: &str) -> Result<()> {
+        self.update_pr_title(number, title).await
+    }
+    async fn update_pr_body(&self, number: u64, body: &str) -> Result<()> {
+        self.update_pr_body(number, body).await
+    }
+    async fn get_pr_body(&self, number: u64) -> Result<String> {
+        self.get_pr_body(number).await
+    }
+    async fn update_stack_comment(&self, number: u64, stack_comment: &str) -> Result<()> {
+        self.update_stack_comment(number, stack_comment).await
+    }
+    async fn create_stack_comment(&self, number: u64, stack_comment: &str) -> Result<()> {
+        self.create_stack_comment(number, stack_comment).await
+    }
+    async fn create_issue_comment(&self, _number: u64, _body: &str) -> Result<()> {
+        bail!("creating plain PR comments is currently only supported for GitHub")
+    }
+    async fn close_pr(&self, _number: u64) -> Result<()> {
+        bail!("closing PRs from stack merge is currently only supported for GitHub")
+    }
+    async fn delete_stack_comment(&self, number: u64) -> Result<()> {
+        self.delete_stack_comment(number).await
+    }
+    async fn list_all_comments(&self, number: u64) -> Result<Vec<PrComment>> {
+        self.list_all_comments(number).await
+    }
+    async fn merge_pr(
+        &self,
+        number: u64,
+        method: MergeMethod,
+        commit_title: Option<&str>,
+        sha: Option<&str>,
+    ) -> Result<()> {
+        self.merge_pr(number, method, commit_title, sha).await
+    }
+    async fn get_pr_merge_status(&self, number: u64) -> Result<PrMergeStatus> {
+        self.get_pr_merge_status(number).await
+    }
+    async fn get_pr_review_decision(&self, number: u64) -> Result<Option<String>> {
+        self.get_pr_review_decision(number).await
+    }
+    async fn is_pr_merged(&self, number: u64) -> Result<bool> {
+        self.is_pr_merged(number).await
+    }
+    async fn get_pr_head_sha(&self, number: u64) -> Result<String> {
+        self.get_pr_head_sha(number).await
+    }
+    async fn fetch_checks(
+        &self,
+        _repo: &crate::git::GitRepo,
+        sha: &str,
+    ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
+        self.fetch_checks(sha).await
+    }
+    async fn request_reviewers(&self, _number: u64, reviewers: &[String]) -> Result<()> {
+        if !reviewers.is_empty() {
+            eprintln!(
+                "{} Requesting reviewers is not yet supported for this forge — skipping.",
+                "warn:".yellow()
+            );
+        }
+        Ok(())
+    }
+    async fn get_requested_reviewers(&self, _number: u64) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+    async fn add_labels(&self, _number: u64, labels: &[String]) -> Result<()> {
+        if !labels.is_empty() {
+            eprintln!(
+                "{} Adding labels is not yet supported for this forge — skipping.",
+                "warn:".yellow()
+            );
+        }
+        Ok(())
+    }
+    async fn add_assignees(&self, _number: u64, assignees: &[String]) -> Result<()> {
+        if !assignees.is_empty() {
+            eprintln!(
+                "{} Adding assignees is not yet supported for this forge — skipping.",
+                "warn:".yellow()
+            );
+        }
+        Ok(())
+    }
+    async fn get_current_user(&self) -> Result<String> {
+        self.get_current_user().await
+    }
+    async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
+        self.get_user_open_prs(username).await
+    }
+    async fn get_recent_merged_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
+        self.get_recent_merged_prs(hours, username).await
+    }
+    async fn get_recent_opened_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
+        self.get_recent_opened_prs(hours, username).await
+    }
+    async fn get_reviews_received(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        self.get_reviews_received(hours, username).await
+    }
+    async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
+        self.get_reviews_given(hours, username).await
+    }
+}
+
+impl Forge for ForgeClient {
+    async fn find_open_pr_by_head(&self, branch: &str) -> Result<Option<PrInfoWithHead>> {
+        self.find_open_pr_by_head(branch).await
+    }
+    async fn find_pr(&self, branch: &str) -> Result<Option<PrInfo>> {
+        self.find_pr(branch).await
+    }
+    async fn list_open_prs_by_head(&self) -> Result<HashMap<String, PrInfoWithHead>> {
+        self.list_open_prs_by_head().await
+    }
+    async fn list_open_pull_requests(&self, limit: u8) -> Result<Vec<RepoPrListItem>> {
+        self.list_open_pull_requests(limit).await
+    }
+    async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
+        self.list_open_issues(limit).await
+    }
+    async fn create_pr(
+        &self,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+        is_draft: bool,
+    ) -> Result<PrInfo> {
+        self.create_pr(head, base, title, body, is_draft).await
+    }
+    async fn get_pr(&self, number: u64) -> Result<PrInfo> {
+        self.get_pr(number).await
+    }
+    async fn get_pr_with_head(&self, number: u64) -> Result<PrInfoWithHead> {
+        self.get_pr_with_head(number).await
+    }
+    async fn update_pr_base(&self, number: u64, new_base: &str) -> Result<()> {
+        self.update_pr_base(number, new_base).await
+    }
+    async fn set_pr_draft(&self, number: u64, is_draft: bool) -> Result<()> {
+        self.set_pr_draft(number, is_draft).await
+    }
+    async fn enqueue_pr(&self, number: u64) -> Result<EnqueueResult> {
+        self.enqueue_pr(number).await
+    }
+    async fn update_pr_branch(&self, number: u64) -> Result<()> {
+        self.update_pr_branch(number).await
+    }
+    async fn update_pr_title(&self, number: u64, title: &str) -> Result<()> {
+        self.update_pr_title(number, title).await
+    }
+    async fn update_pr_body(&self, number: u64, body: &str) -> Result<()> {
+        self.update_pr_body(number, body).await
+    }
+    async fn get_pr_body(&self, number: u64) -> Result<String> {
+        self.get_pr_body(number).await
+    }
+    async fn update_stack_comment(&self, number: u64, stack_comment: &str) -> Result<()> {
+        self.update_stack_comment(number, stack_comment).await
+    }
+    async fn create_stack_comment(&self, number: u64, stack_comment: &str) -> Result<()> {
+        self.create_stack_comment(number, stack_comment).await
+    }
+    async fn create_issue_comment(&self, number: u64, body: &str) -> Result<()> {
+        self.create_issue_comment(number, body).await
+    }
+    async fn close_pr(&self, number: u64) -> Result<()> {
+        self.close_pr(number).await
+    }
+    async fn delete_stack_comment(&self, number: u64) -> Result<()> {
+        self.delete_stack_comment(number).await
+    }
+    async fn list_all_comments(&self, number: u64) -> Result<Vec<PrComment>> {
+        self.list_all_comments(number).await
+    }
+    async fn merge_pr(
+        &self,
+        number: u64,
+        method: MergeMethod,
+        commit_title: Option<&str>,
+        sha: Option<&str>,
+    ) -> Result<()> {
+        self.merge_pr(number, method, commit_title, sha).await
+    }
+    async fn get_pr_merge_status(&self, number: u64) -> Result<PrMergeStatus> {
+        self.get_pr_merge_status(number).await
+    }
+    async fn get_pr_review_decision(&self, number: u64) -> Result<Option<String>> {
+        self.get_pr_review_decision(number).await
+    }
+    async fn is_pr_merged(&self, number: u64) -> Result<bool> {
+        self.is_pr_merged(number).await
+    }
+    async fn get_pr_head_sha(&self, number: u64) -> Result<String> {
+        self.get_pr_head_sha(number).await
+    }
+    async fn fetch_checks(
+        &self,
+        repo: &crate::git::GitRepo,
+        sha: &str,
+    ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
+        self.fetch_checks(repo, sha).await
+    }
+    async fn request_reviewers(&self, number: u64, reviewers: &[String]) -> Result<()> {
+        self.request_reviewers(number, reviewers).await
+    }
+    async fn get_requested_reviewers(&self, number: u64) -> Result<Vec<String>> {
+        self.get_requested_reviewers(number).await
+    }
+    async fn add_labels(&self, number: u64, labels: &[String]) -> Result<()> {
+        self.add_labels(number, labels).await
+    }
+    async fn add_assignees(&self, number: u64, assignees: &[String]) -> Result<()> {
+        self.add_assignees(number, assignees).await
+    }
+    async fn get_current_user(&self) -> Result<String> {
+        self.get_current_user().await
+    }
+    async fn get_user_open_prs(&self, username: &str) -> Result<Vec<OpenPrInfo>> {
+        self.get_user_open_prs(username).await
+    }
+    async fn get_recent_merged_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
+        self.get_recent_merged_prs(hours, username).await
+    }
+    async fn get_recent_opened_prs(&self, hours: i64, username: &str) -> Result<Vec<PrActivity>> {
+        self.get_recent_opened_prs(hours, username).await
+    }
+    async fn get_reviews_received(
+        &self,
+        hours: i64,
+        username: &str,
+    ) -> Result<Vec<ReviewActivity>> {
+        self.get_reviews_received(hours, username).await
+    }
+    async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>> {
+        self.get_reviews_given(hours, username).await
     }
 }
 
