@@ -40,6 +40,13 @@ pub enum VersionStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OAuthLoginStatus {
+    Available,
+    MissingOrInvalid,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeatureState {
     Unknown,
     Disabled,
@@ -118,6 +125,31 @@ fn link_command_supported(env: &[(&str, &str)]) -> bool {
                 .any(|line| line.trim_start().starts_with("link"))
         }
         Err(_) => false,
+    }
+}
+
+pub fn auth_override_env_present() -> bool {
+    AUTH_OVERRIDE_ENV_VARS
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+}
+
+pub fn oauth_login_status() -> OAuthLoginStatus {
+    oauth_login_status_with_env(&[])
+}
+
+pub fn oauth_login_status_with_path(path: &str) -> OAuthLoginStatus {
+    oauth_login_status_with_env(&[("PATH", path)])
+}
+
+fn oauth_login_status_with_env(env: &[(&str, &str)]) -> OAuthLoginStatus {
+    match gh_stack_command(env)
+        .args(["auth", "status", "--active", "--hostname", "github.com"])
+        .output()
+    {
+        Ok(output) if output.status.success() => OAuthLoginStatus::Available,
+        Ok(_) => OAuthLoginStatus::MissingOrInvalid,
+        Err(_) => OAuthLoginStatus::Unknown,
     }
 }
 
