@@ -1029,7 +1029,7 @@ fn prepared_request_verify_hooks(prepared: &PreparedSubmit) -> bool {
     prepared.verify_hooks
 }
 
-fn branches_for_submit_scope(
+pub(crate) fn branches_for_submit_scope(
     stack: &Stack,
     current_branch: &str,
     scope: SubmitScope,
@@ -1307,5 +1307,133 @@ mod tests {
 
         assert!(cleanup_observed_while_locked.get());
         assert!(second.try_begin_mutation(&request).is_ok());
+    }
+
+    fn branch_scope_test_stack() -> crate::engine::Stack {
+        use crate::engine::stack::StackBranch;
+        use std::collections::HashMap;
+
+        // main (trunk)
+        //  ├── a
+        //  │   └── a1
+        //  │       └── a2
+        //  └── b
+        let mut branches = HashMap::new();
+        branches.insert(
+            "main".to_string(),
+            StackBranch {
+                name: "main".to_string(),
+                parent: None,
+                parent_revision: None,
+                children: vec!["a".to_string(), "b".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert(
+            "a".to_string(),
+            StackBranch {
+                name: "a".to_string(),
+                parent: Some("main".to_string()),
+                parent_revision: Some("sha-main".to_string()),
+                children: vec!["a1".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert(
+            "a1".to_string(),
+            StackBranch {
+                name: "a1".to_string(),
+                parent: Some("a".to_string()),
+                parent_revision: Some("sha-a".to_string()),
+                children: vec!["a2".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert(
+            "a2".to_string(),
+            StackBranch {
+                name: "a2".to_string(),
+                parent: Some("a1".to_string()),
+                parent_revision: Some("sha-a1".to_string()),
+                children: vec![],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+        branches.insert(
+            "b".to_string(),
+            StackBranch {
+                name: "b".to_string(),
+                parent: Some("main".to_string()),
+                parent_revision: Some("sha-main".to_string()),
+                children: vec![],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+
+        crate::engine::Stack {
+            branches,
+            trunk: "main".to_string(),
+        }
+    }
+
+    #[test]
+    fn branches_for_submit_scope_stack_from_middle() {
+        let stack = branch_scope_test_stack();
+        assert_eq!(
+            super::branches_for_submit_scope(&stack, "a", super::SubmitScope::Stack),
+            vec!["a", "a1", "a2"]
+        );
+    }
+
+    #[test]
+    fn branches_for_submit_scope_downstack_from_leaf() {
+        let stack = branch_scope_test_stack();
+        assert_eq!(
+            super::branches_for_submit_scope(&stack, "a2", super::SubmitScope::Downstack),
+            vec!["a", "a1", "a2"]
+        );
+    }
+
+    #[test]
+    fn branches_for_submit_scope_upstack_from_middle() {
+        let stack = branch_scope_test_stack();
+        assert_eq!(
+            super::branches_for_submit_scope(&stack, "a1", super::SubmitScope::Upstack),
+            vec!["a1", "a2"]
+        );
+    }
+
+    #[test]
+    fn branches_for_submit_scope_single() {
+        let stack = branch_scope_test_stack();
+        assert_eq!(
+            super::branches_for_submit_scope(&stack, "a1", super::SubmitScope::Branch),
+            vec!["a1"]
+        );
+    }
+
+    #[test]
+    fn branches_for_submit_scope_branch_on_trunk() {
+        let stack = branch_scope_test_stack();
+        let empty: Vec<String> = Vec::new();
+        assert_eq!(
+            super::branches_for_submit_scope(&stack, "main", super::SubmitScope::Branch),
+            empty
+        );
     }
 }
