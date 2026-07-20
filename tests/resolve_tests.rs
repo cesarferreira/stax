@@ -194,6 +194,54 @@ printf '%s' '{"resolutions":[{"path":"conflict.txt","content":"resolved content\
 }
 
 #[test]
+fn test_resolve_retries_invalid_response_then_succeeds() {
+    let repo = TestRepo::new();
+    setup_single_conflict(&repo);
+
+    // First invocation emits invalid JSON; the marker flips the second
+    // invocation to a valid response, exercising the repair loop. The marker
+    // lives outside the repo working tree so the conflicted-only side-effect
+    // guard doesn't flag it.
+    let marker = std::env::temp_dir().join("stax-resolve-retry.marker");
+    let _ = fs::remove_file(&marker);
+    let marker_env = marker.display().to_string();
+
+    let (_bin_dir, path_env) = install_fake_codex(
+        &repo,
+        r#"#!/bin/sh
+cat >/dev/null
+if [ -f "$STAX_RETRY_MARKER" ]; then
+  printf '%s' '{"resolutions":[{"path":"conflict.txt","content":"resolved content\nline 2\nline 3\n"}]}'
+else
+  : > "$STAX_RETRY_MARKER"
+  printf '%s' 'not-json'
+fi
+"#,
+    );
+
+    let output = repo.run_stax_with_env(
+        &["resolve", "--agent", "codex", "--max-rounds", "3"],
+        &[
+            ("PATH", path_env.as_str()),
+            ("STAX_RETRY_MARKER", marker_env.as_str()),
+        ],
+    );
+    let _ = fs::remove_file(&marker);
+    output.assert_success();
+    assert!(
+        !repo.has_rebase_in_progress(),
+        "Rebase should complete after the agent repairs its response"
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("asking the agent to fix it"),
+        "Expected a repair-attempt notice, got: {}",
+        stdout
+    );
+}
+
+#[test]
 fn test_resolve_max_rounds_exhaustion() {
     let repo = TestRepo::new();
     setup_two_round_conflict(&repo);
