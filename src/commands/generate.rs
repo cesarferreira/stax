@@ -753,7 +753,24 @@ pub(crate) fn resolve_model(
     Ok(None)
 }
 
-fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
+const EDIT_CONFIG_MODEL_ITEM: &str = "Edit config file to use another model";
+
+fn model_picker_items(models: &[ModelOption]) -> Vec<String> {
+    let mut items = vec!["Default — let the agent decide".to_string()];
+    items.extend(
+        models
+            .iter()
+            .map(|m| format!("{} — {}", m.id, m.description)),
+    );
+    items.push(EDIT_CONFIG_MODEL_ITEM.to_string());
+    items
+}
+
+fn pick_model_interactive(
+    agent: &str,
+    config: &mut Config,
+    feature: &str,
+) -> Result<Option<String>> {
     let models = available_models_for(agent);
     if models.is_empty() {
         return Ok(None);
@@ -761,12 +778,7 @@ fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
 
     // "Default" is always item 0 — selecting it saves model=None so the agent
     // picks its own default rather than pinning a specific version.
-    let mut items = vec!["Default — let the agent decide".to_string()];
-    items.extend(
-        models
-            .iter()
-            .map(|m| format!("{} — {}", m.id, m.description)),
-    );
+    let items = model_picker_items(&models);
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Select model for {}", agent))
@@ -776,9 +788,78 @@ fn pick_model_interactive(agent: &str) -> Result<Option<String>> {
 
     if selection == 0 {
         Ok(None)
+    } else if selection == items.len() - 1 {
+        edit_config_for_custom_model(config, feature)?;
+        Ok(model_from_config(config, feature))
     } else {
         Ok(Some(models[selection - 1].id.clone()))
     }
+}
+
+fn edit_config_for_custom_model(config: &mut Config, feature: &str) -> Result<()> {
+    config.save()?;
+    let path = Config::path()?;
+    println!(
+        "  {} Edit {} and set `{}` to the model id you want.",
+        "Tip:".dimmed(),
+        path.display(),
+        if feature == "global" {
+            "[ai].model"
+        } else {
+            "model"
+        }
+    );
+    open_config_in_editor(&path)?;
+    *config = load_user_config_file(&path)?;
+    Ok(())
+}
+
+fn load_user_config_file(path: &Path) -> Result<Config> {
+    if !path.exists() {
+        return Ok(Config::default());
+    }
+
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read edited config {}", path.display()))?;
+    toml::from_str(&content)
+        .with_context(|| format!("Failed to parse edited config {}", path.display()))
+}
+
+fn model_from_config(config: &Config, feature: &str) -> Option<String> {
+    if feature == "global" {
+        config.ai.model.clone()
+    } else {
+        config.ai.model_for(feature).map(ToString::to_string)
+    }
+}
+
+fn open_config_in_editor(path: &Path) -> Result<()> {
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .context("$EDITOR is not set; set EDITOR to edit the stax config file")?;
+    if editor.trim().is_empty() {
+        bail!("$EDITOR is empty; set EDITOR to edit the stax config file");
+    }
+
+    let status = if cfg!(windows) {
+        Command::new("cmd")
+            .args(["/C", &format!("{} \"{}\"", editor, path.display())])
+            .status()
+    } else {
+        Command::new("sh")
+            .arg("-c")
+            .arg(format!("{} \"$1\"", editor))
+            .arg("stax-config-editor")
+            .arg(path)
+            .status()
+    }
+    .context("Failed to launch $EDITOR")?;
+
+    if !status.success() {
+        bail!("$EDITOR exited with status {}", status);
+    }
+
+    Ok(())
 }
 
 fn validate_model_soft(agent: &str, model: &str) {
@@ -835,7 +916,7 @@ pub(crate) fn prompt_for_agent_and_model(
                 "Detected AI agent:".dimmed(),
                 agent.cyan().bold()
             );
-            let model = pick_model_interactive(&agent)?;
+            let model = pick_model_interactive(&agent, config, "global")?;
             persist_prompt_selection(config, &agent, model.clone(), confirm_before_save)?;
             Ok((agent, model))
         }
@@ -859,7 +940,7 @@ pub(crate) fn prompt_for_agent_and_model(
                 .interact()?;
 
             let agent = available[selection].clone();
-            let model = pick_model_interactive(&agent)?;
+            let model = pick_model_interactive(&agent, config, "global")?;
             persist_prompt_selection(config, &agent, model.clone(), confirm_before_save)?;
             Ok((agent, model))
         }
@@ -939,7 +1020,7 @@ pub(crate) fn prompt_for_feature_ai(
         }
     };
 
-    let model = pick_model_interactive(&agent)?;
+    let model = pick_model_interactive(&agent, config, feature)?;
 
     // Persist to feature-specific config, or global if feature is "global"/unknown.
     if let Some(feat_cfg) = config.ai.feature_config_mut(feature) {
@@ -1364,6 +1445,46 @@ mod tests {
         let models = known_models_for("codex");
         assert!(models.iter().any(|m| m.id == "gpt-5.5"));
         assert!(models.iter().any(|m| m.id == "gpt-5.5-fast"));
+    }
+
+    #[test]
+    fn model_picker_includes_config_edit_entry_after_known_models() {
+        let models = vec![ModelOption {
+            id: "opencode/gpt-5.5-fast".to_string(),
+            description: "fast default".to_string(),
+        }];
+
+        let items = model_picker_items(&models);
+
+        assert_eq!(items[0], "Default — let the agent decide");
+        assert_eq!(items[1], "opencode/gpt-5.5-fast — fast default");
+        assert_eq!(
+            items.last().map(String::as_str),
+            Some(EDIT_CONFIG_MODEL_ITEM)
+        );
+    }
+
+    #[test]
+    fn model_from_config_uses_feature_override_before_global() {
+        let mut config = Config::default();
+        config.ai.model = Some("global-model".to_string());
+        config.ai.generate.model = Some("custom-generate-model".to_string());
+
+        assert_eq!(
+            model_from_config(&config, "generate"),
+            Some("custom-generate-model".to_string())
+        );
+    }
+
+    #[test]
+    fn model_from_config_reads_global_model_for_global_feature() {
+        let mut config = Config::default();
+        config.ai.model = Some("custom-global-model".to_string());
+
+        assert_eq!(
+            model_from_config(&config, "global"),
+            Some("custom-global-model".to_string())
+        );
     }
 
     #[test]

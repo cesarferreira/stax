@@ -28,6 +28,16 @@ st gen --pr-title --agent opencode
 st gen --commit-msg --agent opencode
 ```
 
+If OpenCode exposes a model that is not listed in stax's picker, choose
+`Edit config file to use another model` from the model menu and set the model
+manually, for example:
+
+```toml
+[ai.generate]
+agent = "opencode"
+model = "opencode/<model-id>"
+```
+
 ## Related
 
 - [Claude Code](claude-code.md) · [Codex](codex.md) · [Gemini CLI](gemini-cli.md)
