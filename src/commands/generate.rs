@@ -991,13 +991,39 @@ struct ModelOption {
 }
 
 fn available_models_for(agent: &str) -> Vec<ModelOption> {
-    if agent == "codex"
-        && let Ok(models) = fetch_openai_codex_models()
-        && !models.is_empty()
-    {
-        return models;
+    let live = match agent {
+        "codex" => fetch_openai_codex_models().ok(),
+        "claude" => fetch_anthropic_models().ok(),
+        _ => None,
+    };
+    match live {
+        Some(models) if !models.is_empty() => models,
+        _ => known_models_for(agent),
     }
-    known_models_for(agent)
+}
+
+/// Fetch and deserialize a models listing, applying the shared timeouts.
+///
+/// `authorize` adds whatever auth/version headers the provider requires.
+fn fetch_models_json<T: serde::de::DeserializeOwned>(
+    url: &str,
+    authorize: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+) -> Result<T> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime
+        .block_on(async {
+            let client = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(3))
+                .timeout(std::time::Duration::from_secs(5))
+                .build()?;
+            authorize(client.get(url))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<T>()
+                .await
+        })
+        .map_err(Into::into)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1017,22 +1043,64 @@ fn fetch_openai_codex_models() -> Result<Vec<ModelOption>> {
         .unwrap_or_else(|_| "https://api.openai.com".to_string());
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
 
-    let runtime = tokio::runtime::Runtime::new()?;
-    let response = runtime.block_on(async {
-        reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(3))
-            .timeout(std::time::Duration::from_secs(5))
-            .build()?
-            .get(&url)
-            .bearer_auth(api_key)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<OpenAiModelsResponse>()
-            .await
-    })?;
+    let response: OpenAiModelsResponse =
+        fetch_models_json(&url, |request| request.bearer_auth(api_key))?;
 
     Ok(filter_live_codex_models(response.data))
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicModelsResponse {
+    data: Vec<AnthropicModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicModel {
+    id: String,
+    display_name: Option<String>,
+    created_at: Option<String>,
+}
+
+fn fetch_anthropic_models() -> Result<Vec<ModelOption>> {
+    let api_key = std::env::var("ANTHROPIC_API_KEY")
+        .context("ANTHROPIC_API_KEY is not set; falling back to local claude model list")?;
+    let base_url = std::env::var("STAX_ANTHROPIC_API_BASE_URL")
+        .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+    let url = format!("{}/v1/models?limit=100", base_url.trim_end_matches('/'));
+
+    let response: AnthropicModelsResponse = fetch_models_json(&url, |request| {
+        request
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+    })?;
+
+    Ok(filter_live_anthropic_models(response.data))
+}
+
+/// Keep Claude models only, newest first. The API paginates newest-last, and
+/// `created_at` is ISO-8601 so it sorts lexicographically.
+fn filter_live_anthropic_models(models: Vec<AnthropicModel>) -> Vec<ModelOption> {
+    let mut models: Vec<AnthropicModel> = models
+        .into_iter()
+        .filter(|model| model.id.starts_with("claude-"))
+        .collect();
+
+    models.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    models
+        .into_iter()
+        .map(|model| ModelOption {
+            description: match model.display_name {
+                Some(name) => format!("{} · live via Anthropic Models API", name),
+                None => "live via Anthropic Models API".to_string(),
+            },
+            id: model.id,
+        })
+        .collect()
 }
 
 fn filter_live_codex_models(models: Vec<OpenAiModel>) -> Vec<ModelOption> {
@@ -1364,6 +1432,42 @@ mod tests {
         let models = known_models_for("codex");
         assert!(models.iter().any(|m| m.id == "gpt-5.5"));
         assert!(models.iter().any(|m| m.id == "gpt-5.5-fast"));
+    }
+
+    #[test]
+    fn known_models_include_current_claude_defaults() {
+        let models = known_models_for("claude");
+        assert!(models.iter().any(|m| m.id == "claude-opus-4-8"));
+        assert!(models.iter().any(|m| m.id == "claude-sonnet-5"));
+        assert!(models.iter().any(|m| m.id == "claude-haiku-4-5"));
+    }
+
+    #[test]
+    fn live_anthropic_model_filter_sorts_newest_first() {
+        let filtered = filter_live_anthropic_models(vec![
+            AnthropicModel {
+                id: "claude-sonnet-4-6".to_string(),
+                display_name: Some("Claude Sonnet 4.6".to_string()),
+                created_at: Some("2025-11-14T00:00:00Z".to_string()),
+            },
+            AnthropicModel {
+                id: "some-other-model".to_string(),
+                display_name: None,
+                created_at: Some("2026-06-24T00:00:00Z".to_string()),
+            },
+            AnthropicModel {
+                id: "claude-opus-4-8".to_string(),
+                display_name: Some("Claude Opus 4.8".to_string()),
+                created_at: Some("2026-04-01T00:00:00Z".to_string()),
+            },
+        ]);
+
+        let ids: Vec<&str> = filtered.iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids, vec!["claude-opus-4-8", "claude-sonnet-4-6"]);
+        assert_eq!(
+            filtered[0].description,
+            "Claude Opus 4.8 · live via Anthropic Models API"
+        );
     }
 
     #[test]
