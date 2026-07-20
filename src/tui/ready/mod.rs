@@ -21,6 +21,7 @@ use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
+use crate::tui::keys::{self, KeyScope};
 
 pub fn run(scope_mode: ReadyScopeMode) -> Result<()> {
     let scope = load_ready_scope(scope_mode)?;
@@ -59,6 +60,8 @@ fn run_app(
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
         {
+            // This TUI is a list view only, so motion bindings are all that apply.
+            let key = keys::normalize(key, KeyScope::Navigation);
             handle_key(app, key.code, scope, loader);
         }
 

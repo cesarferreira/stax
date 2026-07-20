@@ -359,7 +359,7 @@ fn render_help_dialog(f: &mut Frame) {
             "List Mode",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from("  j/k        Navigate up/down"),
+        Line::from("  j/k, Ctrl+n/p   Navigate up/down"),
         Line::from("  Space      Toggle hunk selection"),
         Line::from("  a          Toggle all hunks in file"),
         Line::from("  u          Undo last toggle"),

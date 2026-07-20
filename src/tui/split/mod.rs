@@ -1,10 +1,11 @@
 mod app;
 mod ui;
 
+use crate::tui::keys::{self, KeyScope};
 use anyhow::Result;
 use app::{SplitApp, SplitMode};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -45,7 +46,8 @@ fn run_app(
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
         {
-            handle_key(app, key.code, key.modifiers)?;
+            let key = keys::normalize(key, key_scope(&app.mode));
+            handle_key(app, key)?;
         }
 
         if app.should_quit {
@@ -61,13 +63,20 @@ fn run_app(
     Ok(())
 }
 
+fn key_scope(mode: &SplitMode) -> KeyScope {
+    match mode {
+        SplitMode::Naming => KeyScope::TextInput,
+        SplitMode::Normal | SplitMode::Confirm | SplitMode::Help => KeyScope::Navigation,
+    }
+}
+
 /// Handle a key press
-fn handle_key(app: &mut SplitApp, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
+fn handle_key(app: &mut SplitApp, key: KeyEvent) -> Result<()> {
     match &app.mode {
-        SplitMode::Normal => handle_normal_key(app, code, modifiers),
-        SplitMode::Naming => handle_naming_key(app, code),
-        SplitMode::Confirm => handle_confirm_key(app, code),
-        SplitMode::Help => handle_help_key(app, code),
+        SplitMode::Normal => handle_normal_key(app, key.code, key.modifiers),
+        SplitMode::Naming => handle_naming_key(app, key),
+        SplitMode::Confirm => handle_confirm_key(app, key.code),
+        SplitMode::Help => handle_help_key(app, key.code),
     }
 }
 
@@ -111,8 +120,8 @@ fn handle_normal_key(app: &mut SplitApp, code: KeyCode, modifiers: KeyModifiers)
     Ok(())
 }
 
-fn handle_naming_key(app: &mut SplitApp, code: KeyCode) -> Result<()> {
-    match code {
+fn handle_naming_key(app: &mut SplitApp, key: KeyEvent) -> Result<()> {
+    match key.code {
         KeyCode::Esc => {
             app.mode = SplitMode::Normal;
             app.input_buffer.clear();
@@ -129,25 +138,9 @@ fn handle_naming_key(app: &mut SplitApp, code: KeyCode) -> Result<()> {
             }
             app.input_buffer.clear();
         }
-        KeyCode::Char(c) => {
-            app.input_buffer.insert(app.input_cursor, c);
-            app.input_cursor += 1;
+        _ => {
+            keys::edit(key, &mut app.input_buffer, &mut app.input_cursor);
         }
-        KeyCode::Backspace => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-                app.input_buffer.remove(app.input_cursor);
-            }
-        }
-        KeyCode::Left => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-            }
-        }
-        KeyCode::Right if app.input_cursor < app.input_buffer.len() => {
-            app.input_cursor += 1;
-        }
-        _ => {}
     }
     Ok(())
 }

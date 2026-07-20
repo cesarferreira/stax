@@ -336,7 +336,7 @@ fn render_help(f: &mut Frame) {
     let lines = vec![
         Line::from("PR Readiness Help"),
         Line::from(""),
-        Line::from("  ↑/↓ or k/j   Move selection"),
+        Line::from("  ↑/↓, k/j, Ctrl+p/n   Move selection"),
         Line::from("  Enter / o    Open selected PR"),
         Line::from("  r            Refresh live data"),
         Line::from("  q / Esc      Quit"),
