@@ -58,7 +58,7 @@ Config is loaded as follows:
 
 [ai]
 # agent = "claude" # "codex" | "gemini" | "opencode" — global default
-# model = "claude-sonnet-4-5-20250929"
+# model = "claude-opus-4-8"
 
 # Per-feature overrides — optional, fall back to [ai] above
 [ai.generate]   # st create --ai, st gen / st generate, st submit --ai

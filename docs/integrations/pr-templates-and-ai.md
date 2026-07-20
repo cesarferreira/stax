@@ -121,7 +121,7 @@ st generate --pr-body --no-prompt
 | `--template <name>` | Use a specific PR template |
 | `--no-template` | Skip PR template |
 
-Supported agents: `claude`, `codex`, `gemini`, `opencode`. When `codex` is selected, stax tries OpenAI's live Models API first (using `OPENAI_API_KEY`) before falling back to local Codex defaults.
+Supported agents: `claude`, `codex`, `gemini`, `opencode`. When `codex` or `claude` is selected, stax tries the provider's live Models API first (using `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) before falling back to its local defaults.
 
 To forget the saved AI pairing and re-prompt:
 
@@ -143,7 +143,7 @@ stack_links = "body"   # or "both"
 
 ```bash
 st generate --pr-body --agent codex --model gpt-5.3-codex
-st generate --pr-body --agent claude --model claude-haiku-4-5-20251001
+st generate --pr-body --agent claude --model claude-haiku-4-5
 st generate --pr-body --agent gemini --model gemini-2.5-flash
 st generate --pr-body --agent opencode
 st generate --pr-body --edit
