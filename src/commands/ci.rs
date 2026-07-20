@@ -4,7 +4,6 @@ use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
-use crate::github::GitHubClient;
 use crate::github::pr::CiStatus;
 use crate::notifications::{self, BuiltInSound, Sound};
 use crate::remote::RemoteInfo;
@@ -12,8 +11,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use futures_util::{StreamExt, stream};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Serialize;
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -66,67 +64,6 @@ struct BranchTiming {
     is_complete: bool,
     /// Completion percentage (0-99) when in progress with history
     pct: Option<u8>,
-}
-
-/// Response from the check-runs API (detailed version)
-#[derive(Debug, Deserialize)]
-struct CheckRunsResponse {
-    total_count: usize,
-    check_runs: Vec<CheckRunDetail>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CheckRunDetail {
-    name: String,
-    status: String,
-    conclusion: Option<String>,
-    html_url: Option<String>,
-    started_at: Option<String>,
-    completed_at: Option<String>,
-}
-
-/// Response from the commit statuses API
-#[derive(Debug, Deserialize)]
-struct CommitStatus {
-    context: String,
-    state: String,
-    target_url: Option<String>,
-    created_at: Option<String>,
-    updated_at: Option<String>,
-}
-
-/// Deduplicate check runs by name, keeping only the most recent for each
-fn dedup_check_runs(check_runs: Vec<CheckRunInfo>) -> Vec<CheckRunInfo> {
-    let mut unique_checks: HashMap<String, CheckRunInfo> = HashMap::new();
-    for check in check_runs {
-        let should_replace = if let Some(existing) = unique_checks.get(&check.name) {
-            match (&check.started_at, &existing.started_at) {
-                (Some(new_start), Some(existing_start)) => {
-                    if let (Ok(new_time), Ok(existing_time)) = (
-                        new_start.parse::<DateTime<Utc>>(),
-                        existing_start.parse::<DateTime<Utc>>(),
-                    ) {
-                        new_time > existing_time
-                    } else {
-                        false
-                    }
-                }
-                (Some(_), None) => true,
-                (None, Some(_)) => false,
-                (None, None) => true,
-            }
-        } else {
-            true
-        };
-
-        if should_replace {
-            unique_checks.insert(check.name.clone(), check);
-        }
-    }
-
-    let mut result: Vec<CheckRunInfo> = unique_checks.into_values().collect();
-    result.sort_by(|a, b| a.name.cmp(&b.name));
-    result
 }
 
 /// Calculate overall timing for the entire branch CI run
@@ -1436,336 +1373,6 @@ pub(crate) fn update_ci_cache(repo: &GitRepo, stack: &Stack, statuses: &[BranchC
     let _ = CiCache::refresh_branches(&cache_dir, &updates, &valid_branches);
 }
 
-/// Fetch all checks (both check runs and commit statuses), deduplicated
-pub async fn fetch_github_checks(
-    repo: &GitRepo,
-    client: &crate::github::GitHubClient,
-    commit_sha: &str,
-) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
-    let (check_runs_overall, mut all_checks) = fetch_check_runs(repo, client, commit_sha).await?;
-    let (statuses_overall, status_checks) = fetch_commit_statuses(repo, client, commit_sha).await?;
-
-    all_checks.extend(status_checks);
-
-    // Deduplicate across both sources, keeping most recent per name
-    all_checks = dedup_check_runs(all_checks);
-
-    let combined_overall = match (check_runs_overall, statuses_overall) {
-        (Some(ref a), Some(ref b)) if a == "failure" || b == "failure" => {
-            Some("failure".to_string())
-        }
-        (Some(ref a), Some(ref b)) if a == "pending" || b == "pending" => {
-            Some("pending".to_string())
-        }
-        (Some(a), Some(_)) => Some(a),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-    };
-
-    Ok((combined_overall, all_checks))
-}
-
-/// Fetch commit statuses (older CI systems like Buildkite, CircleCI, etc.)
-async fn fetch_commit_statuses(
-    repo: &GitRepo,
-    client: &GitHubClient,
-    commit_sha: &str,
-) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
-    let url = format!(
-        "/repos/{}/{}/commits/{}/statuses",
-        client.owner, client.repo, commit_sha
-    );
-
-    let statuses: Vec<CommitStatus> = match client.octocrab.get(&url, None::<&()>).await {
-        Ok(s) => s,
-        Err(_) => return Ok((None, Vec::new())),
-    };
-
-    if statuses.is_empty() {
-        return Ok((None, Vec::new()));
-    }
-
-    let check_runs = normalize_commit_statuses(repo, statuses, Utc::now());
-
-    let mut has_pending = false;
-    let mut has_failure = false;
-    let mut all_success = true;
-
-    for run in &check_runs {
-        match run.status.as_str() {
-            "completed" => match run.conclusion.as_deref() {
-                Some("success") => {}
-                Some("failure") | Some("error") => {
-                    has_failure = true;
-                    all_success = false;
-                }
-                _ => {
-                    all_success = false;
-                }
-            },
-            "in_progress" | "queued" | "pending" => {
-                has_pending = true;
-                all_success = false;
-            }
-            _ => {
-                all_success = false;
-            }
-        }
-    }
-
-    let overall = if has_failure {
-        Some("failure".to_string())
-    } else if has_pending {
-        Some("pending".to_string())
-    } else if all_success && !check_runs.is_empty() {
-        Some("success".to_string())
-    } else {
-        None
-    };
-
-    Ok((overall, check_runs))
-}
-
-fn normalize_commit_statuses(
-    repo: &GitRepo,
-    statuses: Vec<CommitStatus>,
-    now: DateTime<Utc>,
-) -> Vec<CheckRunInfo> {
-    let mut by_context: HashMap<String, Vec<CommitStatus>> = HashMap::new();
-    for status in statuses {
-        by_context
-            .entry(status.context.clone())
-            .or_default()
-            .push(status);
-    }
-
-    let mut check_runs = Vec::new();
-    for (context, events) in by_context {
-        if let Some(check_run) = normalize_commit_status_context(repo, &context, &events, now) {
-            check_runs.push(check_run);
-        }
-    }
-
-    check_runs.sort_by(|a, b| a.name.cmp(&b.name));
-    check_runs
-}
-
-fn normalize_commit_status_context(
-    repo: &GitRepo,
-    context: &str,
-    events: &[CommitStatus],
-    now: DateTime<Utc>,
-) -> Option<CheckRunInfo> {
-    let latest = events
-        .iter()
-        .max_by_key(|status| commit_status_event_time(status))?;
-    let latest_time = commit_status_event_time(latest)?;
-
-    let average_secs = match history::load_check_history(repo, context) {
-        Ok(hist) => history::calculate_average(&hist),
-        Err(_) => None,
-    };
-
-    let pending_start = events
-        .iter()
-        .filter(|status| status.state == "pending")
-        .filter_map(commit_status_event_time)
-        .filter(|time| *time <= latest_time)
-        .max();
-
-    let (status, conclusion, started_at, completed_at, elapsed_secs) = match latest.state.as_str() {
-        "success" => (
-            "completed".to_string(),
-            Some("success".to_string()),
-            pending_start.map(|time| time.to_rfc3339()),
-            Some(latest_time.to_rfc3339()),
-            pending_start
-                .map(|time| latest_time.signed_duration_since(time).num_seconds().max(0) as u64),
-        ),
-        "failure" | "error" => (
-            "completed".to_string(),
-            Some("failure".to_string()),
-            pending_start.map(|time| time.to_rfc3339()),
-            Some(latest_time.to_rfc3339()),
-            pending_start
-                .map(|time| latest_time.signed_duration_since(time).num_seconds().max(0) as u64),
-        ),
-        "pending" => (
-            "in_progress".to_string(),
-            None,
-            Some(latest_time.to_rfc3339()),
-            None,
-            Some(now.signed_duration_since(latest_time).num_seconds().max(0) as u64),
-        ),
-        _ => (
-            "queued".to_string(),
-            None,
-            latest.created_at.clone(),
-            latest.updated_at.clone(),
-            None,
-        ),
-    };
-
-    let completion_percent = if status == "in_progress" {
-        if let (Some(elapsed), Some(avg)) = (elapsed_secs, average_secs) {
-            (elapsed * 100).checked_div(avg).map(|v| v.min(99) as u8)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    Some(CheckRunInfo {
-        name: context.to_string(),
-        status,
-        conclusion,
-        url: latest.target_url.clone(),
-        started_at,
-        completed_at,
-        elapsed_secs,
-        average_secs,
-        completion_percent,
-    })
-}
-
-fn commit_status_event_time(status: &CommitStatus) -> Option<DateTime<Utc>> {
-    status
-        .created_at
-        .as_deref()
-        .and_then(|value| value.parse::<DateTime<Utc>>().ok())
-        .or_else(|| {
-            status
-                .updated_at
-                .as_deref()
-                .and_then(|value| value.parse::<DateTime<Utc>>().ok())
-        })
-}
-
-async fn fetch_check_runs(
-    repo: &GitRepo,
-    client: &GitHubClient,
-    commit_sha: &str,
-) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
-    let url = format!(
-        "/repos/{}/{}/commits/{}/check-runs",
-        client.owner, client.repo, commit_sha
-    );
-
-    let response: CheckRunsResponse = client.octocrab.get(&url, None::<&()>).await?;
-
-    if response.total_count == 0 {
-        return Ok((None, Vec::new()));
-    }
-
-    let now = Utc::now();
-    let mut check_runs: Vec<CheckRunInfo> = Vec::new();
-
-    for r in response.check_runs {
-        let (elapsed_secs, completed_at_str) = if let Some(completed) = &r.completed_at {
-            if let (Some(started), Ok(completed_time)) = (
-                r.started_at
-                    .as_ref()
-                    .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
-                completed.parse::<DateTime<Utc>>(),
-            ) {
-                let duration = completed_time.signed_duration_since(started);
-                let secs = duration.num_seconds();
-                if secs >= 0 {
-                    (Some(secs as u64), Some(completed.clone()))
-                } else {
-                    (None, Some(completed.clone()))
-                }
-            } else {
-                (None, Some(completed.clone()))
-            }
-        } else if let Some(started) = &r.started_at {
-            if let Ok(started_time) = started.parse::<DateTime<Utc>>() {
-                let duration = now.signed_duration_since(started_time);
-                let secs = duration.num_seconds();
-                if secs >= 0 {
-                    (Some(secs as u64), None)
-                } else {
-                    (None, None)
-                }
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
-
-        let average_secs = match history::load_check_history(repo, &r.name) {
-            Ok(hist) => history::calculate_average(&hist),
-            Err(_) => None,
-        };
-
-        let completion_percent = if r.status == "in_progress" {
-            if let (Some(elapsed), Some(avg)) = (elapsed_secs, average_secs) {
-                (elapsed * 100).checked_div(avg).map(|v| v.min(99) as u8)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        check_runs.push(CheckRunInfo {
-            name: r.name,
-            status: r.status,
-            conclusion: r.conclusion,
-            url: r.html_url,
-            started_at: r.started_at,
-            completed_at: completed_at_str,
-            elapsed_secs,
-            average_secs,
-            completion_percent,
-        });
-    }
-
-    // Deduplicate within check runs
-    check_runs = dedup_check_runs(check_runs);
-
-    let mut has_pending = false;
-    let mut has_failure = false;
-    let mut all_success = true;
-
-    for run in &check_runs {
-        match run.status.as_str() {
-            "completed" => match run.conclusion.as_deref() {
-                Some("success") | Some("skipped") | Some("neutral") | Some("cancelled") => {}
-                Some("failure") | Some("timed_out") | Some("action_required") => {
-                    has_failure = true;
-                    all_success = false;
-                }
-                _ => {
-                    all_success = false;
-                }
-            },
-            "queued" | "in_progress" | "waiting" | "requested" | "pending" => {
-                has_pending = true;
-                all_success = false;
-            }
-            _ => {
-                all_success = false;
-            }
-        }
-    }
-
-    let overall = if has_failure {
-        Some("failure".to_string())
-    } else if has_pending {
-        Some("pending".to_string())
-    } else if all_success {
-        Some("success".to_string())
-    } else {
-        Some("pending".to_string())
-    };
-
-    Ok((overall, check_runs))
-}
-
 // --- Small helpers ---
 
 fn overall_icon_plain(status: &BranchCiStatus) -> &'static str {
@@ -1844,26 +1451,12 @@ mod tests {
     use crate::forge::ForgeClient;
     use crate::git::GitRepo;
     use crate::github::GitHubClient;
-    use chrono::TimeZone;
     use octocrab::Octocrab;
     use std::collections::HashMap;
     use std::process::Command;
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    fn init_temp_repo() -> (TempDir, GitRepo) {
-        let tempdir = TempDir::new().unwrap();
-        let status = Command::new("git")
-            .args(["init"])
-            .current_dir(tempdir.path())
-            .status()
-            .unwrap();
-        assert!(status.success());
-
-        let repo = GitRepo::open_from_path(tempdir.path()).unwrap();
-        (tempdir, repo)
-    }
 
     fn ensure_crypto_provider() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -2162,65 +1755,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dedup_check_runs_keeps_most_recent() {
-        let older = CheckRunInfo {
-            name: "build".to_string(),
-            status: "completed".to_string(),
-            conclusion: Some("success".to_string()),
-            url: None,
-            started_at: Some("2026-01-16T12:00:00Z".to_string()),
-            completed_at: Some("2026-01-16T12:02:00Z".to_string()),
-            elapsed_secs: Some(120),
-            average_secs: None,
-            completion_percent: None,
-        };
-        let newer = CheckRunInfo {
-            name: "build".to_string(),
-            status: "completed".to_string(),
-            conclusion: Some("failure".to_string()),
-            url: None,
-            started_at: Some("2026-01-16T13:00:00Z".to_string()),
-            completed_at: Some("2026-01-16T13:02:00Z".to_string()),
-            elapsed_secs: Some(120),
-            average_secs: None,
-            completion_percent: None,
-        };
-
-        let result = dedup_check_runs(vec![older, newer]);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].conclusion, Some("failure".to_string()));
-    }
-
-    #[test]
-    fn test_dedup_check_runs_different_names() {
-        let build = CheckRunInfo {
-            name: "build".to_string(),
-            status: "completed".to_string(),
-            conclusion: Some("success".to_string()),
-            url: None,
-            started_at: None,
-            completed_at: None,
-            elapsed_secs: None,
-            average_secs: None,
-            completion_percent: None,
-        };
-        let test = CheckRunInfo {
-            name: "test".to_string(),
-            status: "in_progress".to_string(),
-            conclusion: None,
-            url: None,
-            started_at: None,
-            completed_at: None,
-            elapsed_secs: None,
-            average_secs: None,
-            completion_percent: None,
-        };
-
-        let result = dedup_check_runs(vec![build, test]);
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
     fn ci_alert_resolution_prefers_cli_path_over_config() {
         let mut config = Config::default();
         config.ci.alert = true;
@@ -2406,40 +1940,6 @@ mod tests {
     }
 
     #[test]
-    fn test_check_runs_response_deserialization() {
-        let json = r#"{
-            "total_count": 2,
-            "check_runs": [
-                {"name": "build", "status": "completed", "conclusion": "success", "html_url": "https://example.com/1"},
-                {"name": "test", "status": "in_progress", "conclusion": null, "html_url": null}
-            ]
-        }"#;
-
-        let response: CheckRunsResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(response.total_count, 2);
-        assert_eq!(response.check_runs.len(), 2);
-        assert_eq!(response.check_runs[0].name, "build");
-        assert_eq!(
-            response.check_runs[0].conclusion,
-            Some("success".to_string())
-        );
-        assert_eq!(response.check_runs[1].name, "test");
-        assert_eq!(response.check_runs[1].conclusion, None);
-    }
-
-    #[test]
-    fn test_check_run_detail_deserialization() {
-        let json = r#"{"name": "lint", "status": "queued", "conclusion": null, "html_url": "https://example.com", "started_at": "2026-01-16T12:00:00Z", "completed_at": null}"#;
-
-        let detail: CheckRunDetail = serde_json::from_str(json).unwrap();
-        assert_eq!(detail.name, "lint");
-        assert_eq!(detail.status, "queued");
-        assert_eq!(detail.conclusion, None);
-        assert_eq!(detail.html_url, Some("https://example.com".to_string()));
-        assert_eq!(detail.started_at, Some("2026-01-16T12:00:00Z".to_string()));
-    }
-
-    #[test]
     fn test_format_duration_seconds() {
         assert_eq!(format_duration(0), "0s");
         assert_eq!(format_duration(30), "30s");
@@ -2515,67 +2015,6 @@ mod tests {
         let footer = format_timing_footer(&timing, Some("pending"));
         assert!(footer.contains("avg: 25m"), "footer was: {footer}");
         assert!(footer.contains("overdue"), "footer was: {footer}");
-    }
-
-    #[test]
-    fn test_normalize_commit_status_context_pending_tracks_elapsed_from_created_at() {
-        let (_tempdir, repo) = init_temp_repo();
-        history::add_timing_sample(
-            &repo,
-            "android suite",
-            1500,
-            "2026-01-16T11:00:00Z".to_string(),
-            None,
-        )
-        .unwrap();
-
-        let now = Utc.with_ymd_and_hms(2026, 1, 16, 12, 25, 0).unwrap();
-        let events = vec![CommitStatus {
-            context: "android suite".to_string(),
-            state: "pending".to_string(),
-            target_url: None,
-            created_at: Some("2026-01-16T12:00:00Z".to_string()),
-            updated_at: Some("2026-01-16T12:00:00Z".to_string()),
-        }];
-
-        let run = normalize_commit_status_context(&repo, "android suite", &events, now).unwrap();
-        assert_eq!(run.status, "in_progress");
-        assert_eq!(run.elapsed_secs, Some(1500));
-        assert_eq!(run.average_secs, Some(1500));
-        assert_eq!(run.completion_percent, Some(99));
-    }
-
-    #[test]
-    fn test_normalize_commit_status_context_uses_pending_to_success_duration() {
-        let (_tempdir, repo) = init_temp_repo();
-        let now = Utc.with_ymd_and_hms(2026, 1, 16, 12, 30, 0).unwrap();
-        let events = vec![
-            CommitStatus {
-                context: "android suite".to_string(),
-                state: "pending".to_string(),
-                target_url: Some("https://example.com/pending".to_string()),
-                created_at: Some("2026-01-16T12:00:00Z".to_string()),
-                updated_at: Some("2026-01-16T12:00:00Z".to_string()),
-            },
-            CommitStatus {
-                context: "android suite".to_string(),
-                state: "success".to_string(),
-                target_url: Some("https://example.com/success".to_string()),
-                created_at: Some("2026-01-16T12:25:00Z".to_string()),
-                updated_at: Some("2026-01-16T12:25:00Z".to_string()),
-            },
-        ];
-
-        let run = normalize_commit_status_context(&repo, "android suite", &events, now).unwrap();
-        assert_eq!(run.status, "completed");
-        assert_eq!(run.conclusion.as_deref(), Some("success"));
-        assert_eq!(run.started_at.as_deref(), Some("2026-01-16T12:00:00+00:00"));
-        assert_eq!(
-            run.completed_at.as_deref(),
-            Some("2026-01-16T12:25:00+00:00")
-        );
-        assert_eq!(run.elapsed_secs, Some(1500));
-        assert_eq!(run.url.as_deref(), Some("https://example.com/success"));
     }
 
     #[test]

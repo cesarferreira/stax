@@ -393,7 +393,7 @@ impl Forge for GitHubClient {
         repo: &crate::git::GitRepo,
         sha: &str,
     ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
-        crate::commands::ci::fetch_github_checks(repo, self, sha).await
+        self.fetch_checks(repo, sha).await
     }
     async fn request_reviewers(&self, number: u64, reviewers: &[String]) -> Result<()> {
         self.request_reviewers(number, reviewers).await

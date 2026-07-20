@@ -1,3 +1,4 @@
+pub mod checks;
 pub mod client;
 pub mod gh_stack;
 pub mod pr;
