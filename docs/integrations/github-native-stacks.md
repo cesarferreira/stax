@@ -29,7 +29,7 @@ No further setup is required — once the extension is installed, native stack r
 - GitHub CLI `gh` is installed and logged in with an **OAuth-authenticated account** (`gh auth login`). GitHub's native Stacked PRs API is in private preview and rejects Personal Access Tokens outright.
 - `github/gh-stack` extension is installed (see [Install](#install) above), and recent enough to provide the `gh stack link` command (added after `v0.0.1`). Older versions fail with `unknown flag: --base`.
 
-`st doctor` reports this status — including when the installed extension is too old to expose `gh stack link`, or missing entirely. `st doctor --fix` can install the extension when `gh` is available, or upgrade it when it is outdated.
+`st doctor` reports this status — including when the installed extension is too old to expose `gh stack link`, or missing entirely. When `GH_TOKEN` or `GITHUB_TOKEN` is set, doctor performs one token-stripped OAuth check and warns if `gh stack` would have no usable keyring login; run `gh auth login` or `gh auth switch` to repair it. Doctor skips this extra probe when neither override is set. `st doctor --fix` can install the extension when `gh` is available, or upgrade it when it is outdated.
 
 **Recommended: v0.0.6+.** Versions below v0.0.6 report Personal Access Token rejections with the same message used for a genuinely feature-disabled repo ("Stacked PRs are not enabled..."), so stax can't tell the two apart and may incorrectly cache the repo as unsupported. `st doctor` flags this with a soft warning (and `--fix` upgrades it) even though `gh stack link` itself works on any version that exposes the `link` command.
 
@@ -61,6 +61,8 @@ With `auto`, stax attempts native registration only when the extension is instal
 `gh` treats `GH_TOKEN`/`GITHUB_TOKEN` env vars as overriding whichever account you last logged in with, and native Stacked PRs reject that kind of token during private preview. If you export a PAT for other tooling (CI scripts, other CLIs), it would otherwise silently break native stack registration even though you have a perfectly good OAuth login sitting unused. stax works around this: when it shells out to `gh stack link`/`gh stack unstack`, it always strips `GH_TOKEN`/`GITHUB_TOKEN` first, so `gh` falls back to its stored OAuth-authenticated account. This has no effect on stax's own GitHub API calls (PR creation, comments, etc.), which still use your configured token normally.
 
 If no OAuth-authenticated `gh` account is available at all, native registration is skipped with a note pointing at `gh auth login` — this case is never cached as "feature disabled," since it depends on your local `gh` auth state rather than the repo/org's eligibility.
+
+`st doctor` checks this specific ambiguous setup without slowing its common path: only when `GH_TOKEN` or `GITHUB_TOKEN` is non-empty does it run one `gh auth status` probe with both overrides removed. A missing or invalid keyring login produces a soft warning; normal commands and doctor runs without token overrides perform no additional authentication probe.
 
 `stack_links_when_native = "keep"` means PR body/comment links continue to sync even when GitHub native registration succeeds.
 

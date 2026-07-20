@@ -15,10 +15,12 @@ Enables workflow assistance for stacked branch creation, submit flows, and relat
 st create --ai -a --yes
 st submit --ai
 st generate --pr-body --agent claude
-st generate --pr-body --agent claude --model claude-opus-4-5
+st generate --pr-body --agent claude --model claude-opus-4-8
 st gen --pr-title --agent claude
 st gen --commit-msg --agent claude
 ```
+
+When `claude` is selected, stax tries Anthropic's live Models API first (using `ANTHROPIC_API_KEY`) before falling back to its local Claude defaults.
 
 ## Related
 
