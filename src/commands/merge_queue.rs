@@ -5,7 +5,10 @@
 //! polls until all PRs are merged.  Finishes with auto-sync and a desktop
 //! notification — the same "land and walk away" experience as Graphite.
 
-use crate::commands::merge::{PrBaseUpdate, update_pr_base_unless_current};
+use crate::commands::merge_shared::{
+    PrBaseUpdate, calculate_scope, print_header, print_header_error, print_header_success,
+    update_pr_base_unless_current,
+};
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
@@ -15,7 +18,6 @@ use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{Confirm, theme::ColorfulTheme};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
@@ -469,7 +471,7 @@ pub fn run(
         println!("  {} #{} {}", "✓".green(), pr, branch);
     }
 
-    send_notification(
+    crate::notifications::send_desktop_notification(
         "stax merge --queue",
         &format!(
             "Merged {} {} into {}",
@@ -522,27 +524,8 @@ pub fn run(
 }
 
 fn calculate_queue_scope(stack: &Stack, current: &str, all: bool) -> (Vec<String>, String) {
-    let mut to_queue = stack.ancestors(current);
-    to_queue.reverse();
-    to_queue.retain(|b| b != &stack.trunk);
-    to_queue.push(current.to_string());
-
-    if all {
-        to_queue.extend(stack.descendants(current));
-    }
-
-    (to_queue, stack.trunk.clone())
-}
-
-fn send_notification(title: &str, message: &str) {
-    if cfg!(target_os = "macos") {
-        let script = format!(
-            r#"display notification "{}" with title "{}""#,
-            message.replace('"', "\\\""),
-            title.replace('"', "\\\""),
-        );
-        let _ = Command::new("osascript").args(["-e", &script]).output();
-    }
+    let scope = calculate_scope(stack, current, all, false);
+    (scope.to_merge, scope.trunk)
 }
 
 fn capitalize(s: &str) -> String {
@@ -553,83 +536,94 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-// --- Display helpers (same as merge_remote.rs) ---
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::stack::StackBranch;
+    use std::collections::HashMap;
 
-fn strip_ansi(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_escape = false;
-    for c in s.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-            continue;
+    fn create_test_stack() -> Stack {
+        let mut branches = HashMap::new();
+
+        branches.insert(
+            "main".to_string(),
+            StackBranch {
+                name: "main".to_string(),
+                parent: None,
+                parent_revision: None,
+                children: vec!["feature-a".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
+        );
+
+        branches.insert(
+            "feature-a".to_string(),
+            StackBranch {
+                name: "feature-a".to_string(),
+                parent: Some("main".to_string()),
+                parent_revision: None,
+                children: vec!["feature-b".to_string()],
+                needs_restack: false,
+                pr_number: Some(1),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        branches.insert(
+            "feature-b".to_string(),
+            StackBranch {
+                name: "feature-b".to_string(),
+                parent: Some("feature-a".to_string()),
+                parent_revision: None,
+                children: vec!["feature-c".to_string()],
+                needs_restack: false,
+                pr_number: Some(2),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        branches.insert(
+            "feature-c".to_string(),
+            StackBranch {
+                name: "feature-c".to_string(),
+                parent: Some("feature-b".to_string()),
+                parent_revision: None,
+                children: vec![],
+                needs_restack: false,
+                pr_number: Some(3),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        Stack {
+            branches,
+            trunk: "main".to_string(),
         }
-        if in_escape {
-            if c == 'm' {
-                in_escape = false;
-            }
-            continue;
-        }
-        result.push(c);
     }
-    result
-}
 
-fn display_width(s: &str) -> usize {
-    let stripped = strip_ansi(s);
-    stripped
-        .chars()
-        .map(|c| match c {
-            '\x00'..='\x1f' | '\x7f' => 0,
-            '\x20'..='\x7e' => 1,
-            '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╭' | '╮' | '╯'
-            | '╰' | '║' | '═' => 1,
-            '←' | '→' | '↑' | '↓' => 1,
-            '✓' | '✗' | '✔' | '✘' => 1,
-            _ => 2,
-        })
-        .sum()
-}
+    #[test]
+    fn calculate_queue_scope_defaults_to_current_and_below() {
+        let stack = create_test_stack();
 
-fn print_header(title: &str) {
-    let width: usize = 56;
-    let title_width = display_width(title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        title.bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
-}
+        let (to_queue, trunk) = calculate_queue_scope(&stack, "feature-b", false);
 
-fn print_header_success(title: &str) {
-    let width: usize = 56;
-    let full_title = format!("✓ {}", title);
-    let title_width = display_width(&full_title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        full_title.green().bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
-}
+        assert_eq!(to_queue, vec!["feature-a", "feature-b"]);
+        assert_eq!(trunk, "main");
+    }
 
-fn print_header_error(title: &str) {
-    let width: usize = 56;
-    let full_title = format!("✗ {}", title);
-    let title_width = display_width(&full_title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        full_title.red().bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
+    #[test]
+    fn calculate_queue_scope_all_includes_descendants() {
+        let stack = create_test_stack();
+
+        let (to_queue, trunk) = calculate_queue_scope(&stack, "feature-b", true);
+
+        assert_eq!(to_queue, vec!["feature-a", "feature-b", "feature-c"]);
+        assert_eq!(trunk, "main");
+    }
 }

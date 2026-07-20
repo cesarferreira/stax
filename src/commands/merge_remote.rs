@@ -2,23 +2,22 @@
 //!
 //! Dependent PR branches are updated via GitHub's "Update branch" endpoint (`PUT .../update-branch`).
 
-use crate::commands::ci::{fetch_ci_statuses, record_ci_history};
-use crate::commands::merge::{
-    PrBaseUpdate, print_native_stack_locked_note, update_pr_base_unless_current,
+use crate::commands::merge_shared::{
+    BlockedReasonStyle, PrBaseUpdate, WaitResult, calculate_scope, print_header,
+    print_header_error, print_header_success, print_native_stack_locked_note,
+    record_ci_history_for_branch, update_pr_base_unless_current, wait_for_pr_ready,
 };
 use crate::config::Config;
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
-use crate::github::pr::{MergeMethod, PrMergeStatus};
+use crate::github::pr::MergeMethod;
 use crate::progress::LiveTimer;
 use crate::remote::{ForgeType, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{Confirm, theme::ColorfulTheme};
-use std::io::Write;
-use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 struct LandBranchInfo {
@@ -36,12 +35,6 @@ struct MergeRemoteScope {
     to_merge: Vec<String>,
     remaining: Vec<String>,
     trunk: String,
-}
-
-enum WaitResult {
-    Ready,
-    Failed(String),
-    Timeout,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -255,8 +248,16 @@ pub fn run(
                 }
             }
         } else {
-            match wait_for_pr_ready(&rt, &client, pr_number, timeout, poll_interval, quiet)? {
-                WaitResult::Ready => {}
+            match wait_for_pr_ready(
+                &rt,
+                &client,
+                pr_number,
+                timeout,
+                poll_interval,
+                BlockedReasonStyle::StatusText,
+                quiet,
+            )? {
+                WaitResult::Ready(_) => {}
                 WaitResult::Failed(reason) => {
                     failed_pr = Some((branch_name, pr_number, reason));
                     break;
@@ -480,7 +481,7 @@ pub fn run(
             }
         }
 
-        send_notification(
+        crate::notifications::send_desktop_notification(
             "stax merge --remote",
             &format!(
                 "Merged {} {} into {}",
@@ -504,22 +505,11 @@ pub fn run(
 }
 
 fn calculate_merge_scope(stack: &Stack, current: &str, all: bool) -> MergeRemoteScope {
-    let mut to_merge = stack.ancestors(current);
-    to_merge.reverse();
-    to_merge.retain(|b| b != &stack.trunk);
-    to_merge.push(current.to_string());
-
-    let mut remaining = stack.descendants(current);
-
-    if all && !remaining.is_empty() {
-        to_merge.extend(remaining);
-        remaining = Vec::new();
-    }
-
+    let scope = calculate_scope(stack, current, all, false);
     MergeRemoteScope {
-        to_merge,
-        remaining,
-        trunk: stack.trunk.clone(),
+        to_merge: scope.to_merge,
+        remaining: scope.remaining,
+        trunk: scope.trunk,
     }
 }
 
@@ -558,168 +548,95 @@ fn print_remote_preview(branches: &[LandBranchInfo], trunk: &str, method: &Merge
     );
 }
 
-fn wait_for_pr_ready(
-    rt: &tokio::runtime::Runtime,
-    client: &ForgeClient,
-    pr_number: u64,
-    timeout: Duration,
-    poll_interval: Duration,
-    quiet: bool,
-) -> Result<WaitResult> {
-    let start = Instant::now();
-    let mut last_status: Option<String> = None;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::stack::StackBranch;
+    use std::collections::HashMap;
 
-    loop {
-        let status: PrMergeStatus =
-            rt.block_on(async { client.get_pr_merge_status(pr_number).await })?;
+    fn create_test_stack() -> Stack {
+        let mut branches = HashMap::new();
 
-        if status.is_ready() {
-            if !quiet && last_status.is_some() {
-                println!();
-            }
-            return Ok(WaitResult::Ready);
-        }
-
-        if status.is_blocked() {
-            if !quiet && last_status.is_some() {
-                println!();
-            }
-            return Ok(WaitResult::Failed(status.status_text().to_string()));
-        }
-
-        if start.elapsed() > timeout {
-            if !quiet && last_status.is_some() {
-                println!();
-            }
-            return Ok(WaitResult::Timeout);
-        }
-
-        if !quiet {
-            let elapsed = start.elapsed().as_secs();
-            let status_text = format!(
-                "      {} Waiting for {}... ({}s)",
-                "⏳".yellow(),
-                status.status_text().to_lowercase(),
-                elapsed
-            );
-
-            if last_status.is_some() {
-                print!("\r{}\r", " ".repeat(80));
-            }
-            print!("{}", status_text);
-            std::io::stdout().flush().ok();
-            last_status = Some(status_text);
-        }
-
-        std::thread::sleep(poll_interval);
-    }
-}
-
-fn record_ci_history_for_branch(
-    repo: &GitRepo,
-    rt: &tokio::runtime::Runtime,
-    client: &ForgeClient,
-    stack: &Stack,
-    branch: &str,
-) {
-    if repo.branch_commit(branch).is_err() {
-        return;
-    }
-
-    let branches = vec![branch.to_string()];
-    if let Ok(statuses) = fetch_ci_statuses(repo, rt, client, stack, &branches) {
-        record_ci_history(repo, &statuses);
-    }
-}
-
-fn send_notification(title: &str, message: &str) {
-    if cfg!(target_os = "macos") {
-        let script = format!(
-            r#"display notification "{}" with title "{}""#,
-            message.replace('"', "\\\""),
-            title.replace('"', "\\\""),
+        branches.insert(
+            "main".to_string(),
+            StackBranch {
+                name: "main".to_string(),
+                parent: None,
+                parent_revision: None,
+                children: vec!["feature-a".to_string()],
+                needs_restack: false,
+                pr_number: None,
+                pr_state: None,
+                pr_is_draft: None,
+            },
         );
-        let _ = Command::new("osascript").args(["-e", &script]).output();
-    }
-}
 
-fn strip_ansi(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_escape = false;
+        branches.insert(
+            "feature-a".to_string(),
+            StackBranch {
+                name: "feature-a".to_string(),
+                parent: Some("main".to_string()),
+                parent_revision: None,
+                children: vec!["feature-b".to_string()],
+                needs_restack: false,
+                pr_number: Some(1),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
 
-    for c in s.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-            continue;
+        branches.insert(
+            "feature-b".to_string(),
+            StackBranch {
+                name: "feature-b".to_string(),
+                parent: Some("feature-a".to_string()),
+                parent_revision: None,
+                children: vec!["feature-c".to_string()],
+                needs_restack: false,
+                pr_number: Some(2),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        branches.insert(
+            "feature-c".to_string(),
+            StackBranch {
+                name: "feature-c".to_string(),
+                parent: Some("feature-b".to_string()),
+                parent_revision: None,
+                children: vec![],
+                needs_restack: false,
+                pr_number: Some(3),
+                pr_state: Some("OPEN".to_string()),
+                pr_is_draft: Some(false),
+            },
+        );
+
+        Stack {
+            branches,
+            trunk: "main".to_string(),
         }
-        if in_escape {
-            if c == 'm' {
-                in_escape = false;
-            }
-            continue;
-        }
-        result.push(c);
     }
 
-    result
-}
+    #[test]
+    fn calculate_merge_scope_from_middle_keeps_descendants_remaining() {
+        let stack = create_test_stack();
 
-fn display_width(s: &str) -> usize {
-    let stripped = strip_ansi(s);
-    stripped
-        .chars()
-        .map(|c| match c {
-            '\x00'..='\x1f' | '\x7f' => 0,
-            '\x20'..='\x7e' => 1,
-            '─' | '│' | '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╭' | '╮' | '╯'
-            | '╰' | '║' | '═' => 1,
-            '←' | '→' | '↑' | '↓' => 1,
-            '✓' | '✗' | '✔' | '✘' => 1,
-            _ => 2,
-        })
-        .sum()
-}
+        let scope = calculate_merge_scope(&stack, "feature-b", false);
 
-fn print_header(title: &str) {
-    let width: usize = 56;
-    let title_width = display_width(title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        title.bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
-}
+        assert_eq!(scope.to_merge, vec!["feature-a", "feature-b"]);
+        assert_eq!(scope.remaining, vec!["feature-c"]);
+        assert_eq!(scope.trunk, "main");
+    }
 
-fn print_header_success(title: &str) {
-    let width: usize = 56;
-    let full_title = format!("✓ {}", title);
-    let title_width = display_width(&full_title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        full_title.green().bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
-}
+    #[test]
+    fn calculate_merge_scope_all_includes_descendants() {
+        let stack = create_test_stack();
 
-fn print_header_error(title: &str) {
-    let width: usize = 56;
-    let full_title = format!("✗ {}", title);
-    let title_width = display_width(&full_title);
-    let padding = width.saturating_sub(title_width) / 2;
-    println!("╭{}╮", "─".repeat(width));
-    println!(
-        "│{}{}{}│",
-        " ".repeat(padding),
-        full_title.red().bold(),
-        " ".repeat(width.saturating_sub(padding + title_width))
-    );
-    println!("╰{}╯", "─".repeat(width));
+        let scope = calculate_merge_scope(&stack, "feature-b", true);
+
+        assert_eq!(scope.to_merge, vec!["feature-a", "feature-b", "feature-c"]);
+        assert!(scope.remaining.is_empty());
+    }
 }
