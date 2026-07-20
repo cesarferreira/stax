@@ -1565,12 +1565,6 @@ Use --auto-stash-pop or stash/commit changes first.",
         Ok(RebaseOutcome { result, timings })
     }
 
-    /// Rebase current branch onto target
-    #[allow(dead_code)] // Kept for compatibility with existing APIs and future command flows
-    pub fn rebase(&self, onto: &str) -> Result<RebaseResult> {
-        self.rebase_in_path(self.workdir()?, onto)
-    }
-
     /// Rebase the target branch onto another branch, using the branch's owning worktree.
     /// If the target branch is not checked out in any worktree, it falls back to current workdir.
     pub fn rebase_branch_onto(
@@ -1828,11 +1822,7 @@ Use --auto-stash-pop or stash/commit changes first.",
         let workdir = self.workdir()?;
         let since_arg = format!("--since={} hours ago", hours);
 
-        let output = Command::new("git")
-            .args(["log", &since_arg, "--oneline", branch])
-            .current_dir(workdir)
-            .output()
-            .context("Failed to run git log")?;
+        let output = self.run_git(workdir, &["log", since_arg.as_str(), "--oneline", branch])?;
 
         if !output.status.success() {
             return Ok(None);
@@ -2156,18 +2146,17 @@ Use --auto-stash-pop or stash/commit changes first.",
 
         // Use git merge-tree to check for conflicts
         // git merge-tree --write-tree <base> <onto> <branch>
-        let output = Command::new("git")
-            .args([
+        let output = self.run_git(
+            self.workdir()?,
+            &[
                 "merge-tree",
                 "--write-tree",
                 "--no-messages",
-                &merge_base,
+                merge_base.as_str(),
                 onto,
                 branch,
-            ])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to run git merge-tree")?;
+            ],
+        )?;
 
         // If the command fails (non-zero exit), there are conflicts
         // The output will contain the conflicting files
@@ -2220,43 +2209,6 @@ Use --auto-stash-pop or stash/commit changes first.",
                 },
             )
             .collect()
-    }
-
-    /// Get files modified in a branch compared to its parent
-    #[allow(dead_code)] // Reserved for future conflict detection improvements
-    pub fn files_modified(&self, branch: &str, parent: &str) -> Result<Vec<String>> {
-        let output = Command::new("git")
-            .args(["diff", "--name-only", parent, branch])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to get modified files")?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let files = String::from_utf8_lossy(&output.stdout);
-        Ok(files.lines().map(|s| s.to_string()).collect())
-    }
-
-    /// Check for overlapping files between two branches that could cause conflicts
-    #[allow(dead_code)] // Reserved for future conflict detection improvements
-    pub fn check_overlapping_files(
-        &self,
-        branch1: &str,
-        branch2: &str,
-        common_parent: &str,
-    ) -> Result<Vec<String>> {
-        let files1 = self.files_modified(branch1, common_parent)?;
-        let files2 = self.files_modified(branch2, common_parent)?;
-
-        let files1_set: std::collections::HashSet<_> = files1.into_iter().collect();
-        let overlapping: Vec<String> = files2
-            .into_iter()
-            .filter(|f| files1_set.contains(f))
-            .collect();
-
-        Ok(overlapping)
     }
 
     /// Abort an in-progress rebase
@@ -2338,13 +2290,9 @@ Use --auto-stash-pop or stash/commit changes first.",
             return Ok(());
         }
 
-        let status = Command::new("git")
-            .arg("add")
-            .arg("--")
-            .args(paths)
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to run git add")?;
+        let mut args: Vec<&str> = vec!["add", "--"];
+        args.extend(paths.iter().map(String::as_str));
+        let status = command::status(self.workdir()?, &args)?;
 
         if !status.success() {
             anyhow::bail!("git add failed");
@@ -2387,11 +2335,7 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Resolve a refspec to an OID (git rev-parse)
     pub fn rev_parse(&self, refspec: &str) -> Result<String> {
-        let output = Command::new("git")
-            .args(["rev-parse", refspec])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to run git rev-parse")?;
+        let output = self.run_git(self.workdir()?, &["rev-parse", refspec])?;
 
         if !output.status.success() {
             anyhow::bail!("git rev-parse {} failed", refspec);
@@ -2402,11 +2346,10 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Lease-protected force push a branch to the remote.
     pub fn force_push(&self, remote: &str, branch: &str) -> Result<()> {
-        let output = Command::new("git")
-            .args(["push", "--force-with-lease", "--atomic", remote, branch])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to run git push")?;
+        let output = self.run_git(
+            self.workdir()?,
+            &["push", "--force-with-lease", "--atomic", remote, branch],
+        )?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2422,11 +2365,10 @@ Use --auto-stash-pop or stash/commit changes first.",
     }
 
     fn force_push_non_atomic(&self, remote: &str, branch: &str) -> Result<()> {
-        let status = Command::new("git")
-            .args(["push", "--force-with-lease", remote, branch])
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to run git push --force-with-lease")?;
+        let status = command::status(
+            self.workdir()?,
+            &["push", "--force-with-lease", remote, branch],
+        )?;
 
         if !status.success() {
             anyhow::bail!("git push --force-with-lease {} {} failed", remote, branch);
@@ -2441,11 +2383,7 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Enable git rerere (reuse recorded resolution) for this repository
     pub fn enable_rerere(&self) -> Result<()> {
-        let status = Command::new("git")
-            .args(["config", "rerere.enabled", "true"])
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to enable rerere")?;
+        let status = command::status(self.workdir()?, &["config", "rerere.enabled", "true"])?;
 
         if !status.success() {
             anyhow::bail!("Failed to set rerere.enabled config");
@@ -2455,11 +2393,7 @@ Use --auto-stash-pop or stash/commit changes first.",
 
     /// Check if git rerere is enabled for this repository
     pub fn rerere_enabled(&self) -> Result<bool> {
-        let output = Command::new("git")
-            .args(["config", "--get", "rerere.enabled"])
-            .current_dir(self.workdir()?)
-            .output()
-            .context("Failed to check rerere config")?;
+        let output = self.run_git(self.workdir()?, &["config", "--get", "rerere.enabled"])?;
 
         Ok(output.status.success() && output.stdout.starts_with(b"true"))
     }
