@@ -1052,9 +1052,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 );
 
             // Check if PR base needs updating (not for empty branches)
-            let needs_pr_update = if is_empty {
-                false
-            } else if is_imported {
+            let needs_pr_update = if is_empty || is_imported {
                 false
             } else if let Some(pr) = &existing_pr {
                 pr.info.base != base || needs_push
