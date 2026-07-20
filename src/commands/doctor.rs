@@ -3,7 +3,9 @@ use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge;
 use crate::git::{GitRepo, refs};
-use crate::github::gh_stack::{self, ExtensionStatus, FeatureState, VersionStatus};
+use crate::github::gh_stack::{
+    self, ExtensionStatus, FeatureState, OAuthLoginStatus, VersionStatus,
+};
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Result, bail};
 use colored::Colorize;
@@ -153,6 +155,18 @@ pub fn run(fix: bool) -> Result<()> {
                     "GitHub native stacks: gh-stack extension installed".dimmed(),
                     format!("({feature_label})").dimmed()
                 );
+                if gh_stack::auth_override_env_present()
+                    && gh_stack::oauth_login_status() == OAuthLoginStatus::MissingOrInvalid
+                {
+                    println!(
+                        "{} {}",
+                        "⚠".yellow(),
+                        "GitHub native stacks: GH_TOKEN/GITHUB_TOKEN can discover gh-stack, but \
+                         no usable OAuth-authenticated `gh` account was found (run `gh auth login` \
+                         or `gh auth switch`)"
+                            .yellow()
+                    );
+                }
                 if let VersionStatus::BelowRecommended { installed } = gh_stack::version_status() {
                     repair_plan.push(RepairAction::UpgradeGhStackExtension);
                     println!(

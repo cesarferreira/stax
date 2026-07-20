@@ -175,6 +175,14 @@ case "$1 $2" in
   "--version "*) echo "gh version 2.71.0"; exit 0 ;;
   "extension list") echo "gh-stack github/gh-stack v0.0.7"; exit 0 ;;
   "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "auth status")
+    if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+      echo "token override leaked into OAuth probe" >&2
+      exit 5
+    fi
+    echo "no active OAuth account" >&2
+    exit 1
+    ;;
 esac
 exit 1
 "#,
@@ -228,6 +236,93 @@ exit 1
     assert!(
         !stdout.contains("gh-stack extension missing"),
         "doctor must not misreport an auth failure as a missing extension, stdout was:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("no usable OAuth-authenticated `gh` account"),
+        "doctor should explain why native stack operations still cannot authenticate, stdout was:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_accepts_keyring_oauth_with_env_token_overrides() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list")
+    [ "${GH_TOKEN:-}" = "ghp_env_only" ] || exit 4
+    [ "${GITHUB_TOKEN:-}" = "github_env_only" ] || exit 4
+    echo "gh stack github/gh-stack v0.0.8"
+    exit 0
+    ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "auth status")
+    [ -z "${GH_TOKEN:-}" ] || exit 5
+    [ -z "${GITHUB_TOKEN:-}" ] || exit 5
+    exit 0
+    ;;
+esac
+exit 1
+"#,
+    );
+
+    let output = repo.run_stax_with_env(
+        &["doctor"],
+        &[
+            ("PATH", &path_with_fake_gh(fake.path())),
+            ("GH_TOKEN", "ghp_env_only"),
+            ("GITHUB_TOKEN", "github_env_only"),
+        ],
+    );
+
+    output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("gh-stack extension installed"),
+        "stdout was:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("no usable OAuth-authenticated"),
+        "valid keyring OAuth should not warn, stdout was:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_skips_oauth_probe_without_token_overrides() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list") echo "gh stack github/gh-stack v0.0.8"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "auth status") echo called > "$OAUTH_PROBE_FILE"; exit 1 ;;
+esac
+exit 1
+"#,
+    );
+    let probe_file = fake.path().join("oauth-probe.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["doctor"],
+        &[
+            ("PATH", path.as_str()),
+            ("OAUTH_PROBE_FILE", probe_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    assert!(
+        !probe_file.exists(),
+        "doctor must not add an OAuth subprocess without token overrides"
     );
 }
 
@@ -521,6 +616,100 @@ exit 1
     assert_eq!(outcome, stax::github::gh_stack::LinkOutcome::Linked);
     let dump = fs::read_to_string(env_dump_file).expect("env dump written");
     assert_eq!(dump, "GH_TOKEN=unset\nGITHUB_TOKEN=unset\n");
+}
+
+#[test]
+fn unlink_stack_strips_injected_token_env_vars_before_calling_gh() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack unstack" ]; then
+  printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "${GH_TOKEN:-unset}" "${GITHUB_TOKEN:-unset}" > "$ENV_DUMP_FILE"
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let env_dump_file = fake.path().join("unlink-env.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let outcome = stax::github::gh_stack::unlink_stack_with_env(&[
+        ("PATH", path.as_str()),
+        ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+        ("GH_TOKEN", "ghp_should_be_stripped"),
+        ("GITHUB_TOKEN", "github_should_be_stripped"),
+    ]);
+
+    assert_eq!(outcome, stax::github::gh_stack::LinkOutcome::Linked);
+    assert_eq!(
+        fs::read_to_string(env_dump_file).unwrap(),
+        "GH_TOKEN=unset\nGITHUB_TOKEN=unset\n"
+    );
+}
+
+#[test]
+fn install_extension_preserves_injected_token_env_vars() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2 $3" = "extension install github/gh-stack" ]; then
+  printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "${GH_TOKEN:-unset}" "${GITHUB_TOKEN:-unset}" > "$ENV_DUMP_FILE"
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let env_dump_file = fake.path().join("install-env.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    stax::github::gh_stack::install_extension_with_env(&[
+        ("PATH", path.as_str()),
+        ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+        ("GH_TOKEN", "ghp_install"),
+        ("GITHUB_TOKEN", "github_install"),
+    ])
+    .expect("install extension");
+
+    assert_eq!(
+        fs::read_to_string(env_dump_file).unwrap(),
+        "GH_TOKEN=ghp_install\nGITHUB_TOKEN=github_install\n"
+    );
+}
+
+#[test]
+fn upgrade_extension_preserves_injected_token_env_vars() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2 $3" = "extension upgrade gh-stack" ]; then
+  printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "${GH_TOKEN:-unset}" "${GITHUB_TOKEN:-unset}" > "$ENV_DUMP_FILE"
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let env_dump_file = fake.path().join("upgrade-env.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    stax::github::gh_stack::upgrade_extension_with_env(&[
+        ("PATH", path.as_str()),
+        ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+        ("GH_TOKEN", "ghp_upgrade"),
+        ("GITHUB_TOKEN", "github_upgrade"),
+    ])
+    .expect("upgrade extension");
+
+    assert_eq!(
+        fs::read_to_string(env_dump_file).unwrap(),
+        "GH_TOKEN=ghp_upgrade\nGITHUB_TOKEN=github_upgrade\n"
+    );
+}
+
+#[test]
+fn oauth_status_is_unknown_when_gh_cannot_execute() {
+    let empty_dir = TempDir::new().expect("empty temp dir");
+    let status = stax::github::gh_stack::oauth_login_status_with_path(
+        empty_dir.path().to_str().expect("utf8 path"),
+    );
+
+    assert_eq!(status, stax::github::gh_stack::OAuthLoginStatus::Unknown);
 }
 
 #[test]
