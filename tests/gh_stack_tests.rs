@@ -187,6 +187,82 @@ exit 1
 }
 
 #[test]
+fn doctor_detects_installed_gh_stack_with_env_only_auth() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list")
+    if [ "${GH_TOKEN:-}" != "ghp_env_only" ] || [ "${GITHUB_TOKEN:-}" != "github_env_only" ]; then
+      echo "not authenticated" >&2
+      exit 4
+    fi
+    echo "gh stack github/gh-stack v0.0.8"
+    exit 0
+    ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+esac
+exit 1
+"#,
+    );
+
+    let output = repo.run_stax_with_env(
+        &["doctor"],
+        &[
+            ("PATH", &path_with_fake_gh(fake.path())),
+            ("GH_TOKEN", "ghp_env_only"),
+            ("GITHUB_TOKEN", "github_env_only"),
+        ],
+    );
+
+    output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("gh-stack extension installed"),
+        "doctor should detect the installed extension, stdout was:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("gh-stack extension missing"),
+        "doctor must not misreport an auth failure as a missing extension, stdout was:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_detects_gh_stack_by_capability_when_extension_metadata_is_missing() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list") printf 'gh stack\t\t\n'; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+esac
+exit 1
+"#,
+    );
+
+    let output = repo.run_stax_with_env(&["doctor"], &[("PATH", &path_with_fake_gh(fake.path()))]);
+
+    output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("gh-stack extension installed"),
+        "doctor should trust the installed command's capabilities, stdout was:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("gh-stack extension missing"),
+        "missing extension metadata must not override a working command, stdout was:\n{stdout}"
+    );
+}
+
+#[test]
 fn extension_status_reports_no_gh_when_gh_binary_is_missing() {
     // An empty PATH (no `gh` anywhere) must be classified as `NoGh`, not
     // silently treated as `NoExtension` or crash/hang the caller.
