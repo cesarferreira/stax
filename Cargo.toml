@@ -27,6 +27,15 @@ repository.workspace = true
 # time; one binary links once. Disable auto-discovery so the per-file targets
 # are not also built.
 autotests = false
+# Keep the published crate small (crates.io has a 10 MB limit): exclude the
+# documentation screenshots and the mkdocs `docs/` tree, which are only used by
+# the README/website and are not needed to build or run stax. The embedded
+# `assets/*.wav` alert sounds (see `include_bytes!` in src/notifications.rs) and
+# their license files are intentionally kept.
+exclude = [
+    "assets/*.png",
+    "docs/",
+]
 
 [lib]
 name = "stax"
