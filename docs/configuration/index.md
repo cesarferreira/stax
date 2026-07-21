@@ -79,6 +79,7 @@ Config is loaded as follows:
 
 [worktree]
 # root_dir = "" # default: ~/.stax/worktrees/<repo>
+# root_dir = ".." # optional: keep lanes beside a nested trunk clone
 # reuse_slots = true
 #   Warm-slot recycling. Removing a clean, merged-equivalent worktree parks it
 #   (reset --hard trunk + `git clean -fd`, keeping gitignored deps like

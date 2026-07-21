@@ -950,6 +950,82 @@ fn wt_create_respects_explicit_repo_local_root_dir() {
 }
 
 #[test]
+fn wt_create_respects_absolute_repo_local_root_dir() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    let worktree_root = repo.path().join(".absolute-worktrees");
+    write_worktree_config(&home, &worktree_root.to_string_lossy());
+
+    let out = repo.run_stax_with_env(
+        &["wt", "c", "absolute-local-root"],
+        &[("HOME", home.as_str())],
+    );
+    out.assert_success();
+
+    assert!(worktree_root.join("absolute-local-root").is_dir());
+    assert_eq!(
+        fs::read_to_string(repo.path().join(".gitignore")).expect("read .gitignore"),
+        ".absolute-worktrees/\n"
+    );
+}
+
+#[test]
+fn wt_create_with_external_relative_root_keeps_gitignore_clean() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    let external_root = tempfile::tempdir_in(
+        repo.path()
+            .parent()
+            .expect("test repository should have a parent"),
+    )
+    .expect("create sibling worktree root");
+    let relative_root = format!(
+        "../{}",
+        external_root
+            .path()
+            .file_name()
+            .expect("sibling worktree root name")
+            .to_string_lossy()
+    );
+    write_worktree_config(&home, &relative_root);
+    repo.create_file(".gitignore", "existing-entry\n");
+    repo.commit("Track gitignore");
+
+    let out = repo.run_stax_with_env(&["wt", "c", "sibling-root"], &[("HOME", home.as_str())]);
+    out.assert_success();
+
+    assert!(
+        external_root.path().join("sibling-root").is_dir(),
+        "expected lane next to the main checkout"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.path().join(".gitignore")).expect("read tracked .gitignore"),
+        "existing-entry\n",
+        "an external worktree root must not modify .gitignore"
+    );
+    assert!(
+        TestRepo::stdout(&repo.git(&["status", "--porcelain"])).is_empty(),
+        "worktree creation should leave the main checkout clean"
+    );
+}
+
+#[test]
+fn wt_create_rejects_main_checkout_as_worktree_root() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    write_worktree_config(&home, ".");
+
+    let out = repo.run_stax_with_env(&["wt", "c", "unsafe-root"], &[("HOME", home.as_str())]);
+
+    out.assert_failure()
+        .assert_stderr_contains("Worktree root cannot be the main repository directory");
+    assert!(
+        !repo.path().join("unsafe-root").exists(),
+        "invalid worktree root must not create a lane"
+    );
+}
+
+#[test]
 fn wt_prune_cleans_stale_git_worktree_entries() {
     let repo = TestRepo::new();
     let home = repo.clean_home();

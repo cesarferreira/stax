@@ -216,6 +216,7 @@ Override in `~/.config/stax/config.toml`, or set shared project overrides in rep
 [worktree]
 # root_dir = ""             # default external root
 # root_dir = ".worktrees"   # keep worktrees inside the repo
+# root_dir = ".."           # keep lanes beside the main checkout
 
 # Warm-slot recycling: a removed worktree is parked and reused by the next lane
 # instead of being deleted, keeping built gitignored deps on disk.
@@ -236,8 +237,23 @@ pre_remove  = ""   # blocking hook before removal
 post_remove = ""   # background hook after removal
 ```
 
-- Relative `root_dir` values resolve under the main repo root.
-- Repo-local roots like `.worktrees` are added to `.gitignore` automatically.
+- Relative `root_dir` values resolve from the main repo root. Configure them
+  globally in `~/.config/stax/config.toml` to reuse the same layout across repos.
+- To keep a trunk clone and its lanes as siblings, place the trunk clone one
+  level below a plain container directory and set `root_dir = ".."` globally:
+
+  ```text
+  my-repo/
+    development/  # trunk clone
+    feature-x/    # stax-managed lane
+    feature-y/    # stax-managed lane
+  ```
+
+- Roots inside the repository, such as `.worktrees`, are added to `.gitignore`
+  automatically. Roots outside the repository, including `..`, leave
+  `.gitignore` untouched.
+- `root_dir` cannot resolve to the main repo directory itself. Use a
+  subdirectory or an external directory.
 - Warm-slot recycling (default): removing a clean, merged-equivalent worktree **parks** it instead of deleting it — stax moves it off its lane branch, resets it hard to trunk, and runs `git clean -fd`. That never uses `-x`, so gitignored dependency directories (`node_modules`, `.venv`, `vendor`, …) survive on disk.
 - The next `create` / `lane` **adopts** an idle parked slot instead of a cold `git worktree add`: it switches the slot to the fresh lane branch, resets to the base, cleans untracked files, and runs the `reconcile` hook. Adopting reuses the same directory, so the built deps are already there.
 - `reconcile` re-syncs deps after adoption (e.g. `pnpm install`, `uv sync`). It is **non-fatal** — a missing or failing command only warns and never fails the create.
