@@ -128,6 +128,20 @@ fn test_ci_refresh_flag() {
     );
 }
 
+#[test]
+fn test_ci_refresh_help_explains_live_fetch_behavior() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["ci", "--help"]);
+    let stdout = TestRepo::stdout(&output);
+
+    assert!(
+        stdout.contains("CI is always fetched live"),
+        "Expected --refresh help to explain live fetch behavior: {}",
+        stdout
+    );
+}
+
 /// Test multiple flags can be combined
 #[test]
 fn test_ci_combined_flags() {

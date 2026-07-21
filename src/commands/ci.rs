@@ -333,32 +333,42 @@ pub(crate) async fn fetch_ci_statuses_async(
     stack: &Stack,
     branches_to_check: &[String],
 ) -> Result<Vec<BranchCiStatus>> {
-    let prepared: Vec<(String, String, String, Option<u64>)> = branches_to_check
+    let prepared: Vec<(String, String, Option<u64>)> = branches_to_check
         .iter()
         .filter_map(|branch| {
             let sha = repo.branch_commit(branch).ok()?;
-            let sha_short = sha.chars().take(7).collect::<String>();
             let pr_number = stack.branches.get(branch).and_then(|b| b.pr_number);
-            Some((branch.clone(), sha, sha_short, pr_number))
+            Some((branch.clone(), sha, pr_number))
         })
         .collect();
 
     let mut statuses = stream::iter(prepared.iter().map(
-        |(branch, sha, sha_short, pr_number)| async move {
-            let check_runs_result = client.fetch_checks(repo, sha).await;
-            let (overall_status, check_runs) = match check_runs_result {
-                Ok((status, runs)) => (status, runs),
-                Err(_) => (None, Vec::new()),
-            };
-
+        |(branch, local_sha, pr_number)| async move {
             let pr_merge_status = match (client, pr_number) {
                 (ForgeClient::GitHub(_), Some(n)) => client.get_pr_merge_status(*n).await.ok(),
                 _ => None,
             };
-            let pr_live = match (pr_number, pr_merge_status.is_some()) {
-                (Some(n), false) => client.get_pr_with_head(*n).await.ok(),
-                (None, _) => None,
-                _ => None,
+            let (pr_live, fallback_head_sha) = match (pr_number, pr_merge_status.is_some()) {
+                (Some(n), false) => {
+                    let (pr, head_sha) =
+                        tokio::join!(client.get_pr_with_head(*n), client.get_pr_head_sha(*n));
+                    (pr.ok(), head_sha.ok())
+                }
+                _ => (None, None),
+            };
+            let pr_head_sha = if let Some(pr_status) = &pr_merge_status {
+                Some(pr_status.head_sha.clone())
+            } else {
+                fallback_head_sha
+            };
+            let sha = pr_head_sha
+                .filter(|head_sha| !head_sha.is_empty())
+                .unwrap_or_else(|| local_sha.clone());
+            let sha_short = sha.chars().take(7).collect::<String>();
+            let check_runs_result = client.fetch_checks(repo, &sha).await;
+            let (overall_status, check_runs) = match check_runs_result {
+                Ok((status, runs)) => (status, runs),
+                Err(_) => (None, Vec::new()),
             };
             let pr_is_draft = pr_merge_status
                 .as_ref()
@@ -382,14 +392,14 @@ pub(crate) async fn fetch_ci_statuses_async(
             };
             let overall_status = pr_merge_status
                 .as_ref()
-                .filter(|pr_status| pr_status.head_sha == sha.as_str())
+                .filter(|pr_status| pr_status.head_sha == sha)
                 .and_then(|pr_status| ci_status_to_overall_status(&pr_status.ci_status))
                 .or(overall_status);
 
             BranchCiStatus {
                 branch: branch.clone(),
-                sha: sha.clone(),
-                sha_short: sha_short.clone(),
+                sha,
+                sha_short,
                 overall_status,
                 check_runs,
                 pr_number: *pr_number,
@@ -1532,13 +1542,17 @@ mod tests {
     }
 
     fn pr_json(number: u64, is_draft: bool) -> serde_json::Value {
+        pr_json_with_head_sha(number, is_draft, "aaa")
+    }
+
+    fn pr_json_with_head_sha(number: u64, is_draft: bool, head_sha: &str) -> serde_json::Value {
         serde_json::json!({
             "url": format!("https://api.github.com/repos/test-owner/test-repo/pulls/{number}"),
             "id": number,
             "number": number,
             "state": "open",
             "draft": is_draft,
-            "head": { "ref": "head", "sha": "aaa", "label": "test-owner:head" },
+            "head": { "ref": "head", "sha": head_sha, "label": "test-owner:head" },
             "base": { "ref": "main", "sha": "bbb" }
         })
     }
@@ -1619,12 +1633,16 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/repos/test-owner/test-repo/pulls/201"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(pr_json(201, false)))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pr_json_with_head_sha(201, false, sha_b1)),
+            )
             .mount(server)
             .await;
         Mock::given(method("GET"))
             .and(path("/repos/test-owner/test-repo/pulls/202"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(pr_json(202, true)))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(pr_json_with_head_sha(202, true, sha_b2)),
+            )
             .mount(server)
             .await;
     }
@@ -2231,7 +2249,7 @@ mod tests {
     }
 
     #[test]
-    fn fetch_ci_statuses_ignores_github_pr_rollup_for_different_head_sha() {
+    fn fetch_ci_statuses_uses_github_pr_head_when_it_differs_from_local_branch() {
         ensure_crypto_provider();
         let (_td, repo, sha_b1, _sha_b2) = git_repo_with_two_branches();
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2243,6 +2261,16 @@ mod tests {
                 .respond_with(
                     ResponseTemplate::new(200)
                         .set_body_json(failed_check_runs_body("buildkite/presubmit")),
+                )
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/repos/test-owner/test-repo/commits/different-remote-head/check-runs",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(check_runs_body("buildkite/presubmit")),
                 )
                 .mount(&mock_server)
                 .await;
@@ -2278,7 +2306,47 @@ mod tests {
                 .unwrap();
 
             assert_eq!(statuses.len(), 1);
-            assert_eq!(statuses[0].overall_status.as_deref(), Some("failure"));
+            assert_eq!(statuses[0].sha, "different-remote-head");
+            assert_eq!(statuses[0].overall_status.as_deref(), Some("pending"));
+            assert_eq!(
+                statuses[0].check_runs[0].conclusion.as_deref(),
+                Some("success")
+            );
+        });
+    }
+
+    #[test]
+    fn fetch_ci_statuses_falls_back_to_local_head_when_pr_lookup_fails() {
+        ensure_crypto_provider();
+        let (_td, repo, sha_b1, _sha_b2) = git_repo_with_two_branches();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mock_server = MockServer::start().await;
+            let path_b1 = format!("/repos/test-owner/test-repo/commits/{sha_b1}/check-runs");
+            Mock::given(method("GET"))
+                .and(path(path_b1.as_str()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(check_runs_body("local-ci")))
+                .mount(&mock_server)
+                .await;
+
+            let octocrab = Octocrab::builder()
+                .base_uri(mock_server.uri())
+                .unwrap()
+                .personal_token("test-token".to_string())
+                .build()
+                .unwrap();
+            let gh = GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo");
+            let client = ForgeClient::GitHub(gh);
+            let stack = test_stack_for_ci_fetch(201, 202);
+
+            let statuses = fetch_ci_statuses_async(&repo, &client, &stack, &["b1".to_string()])
+                .await
+                .unwrap();
+
+            assert_eq!(statuses.len(), 1);
+            assert_eq!(statuses[0].sha, sha_b1);
+            assert_eq!(statuses[0].check_runs[0].name, "local-ci");
+            assert_eq!(statuses[0].overall_status.as_deref(), Some("success"));
         });
     }
 
