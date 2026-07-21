@@ -121,6 +121,16 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 # Full debuginfo makes linking the ~50 integration-test binaries dominate
 # build time (each statically links the whole stax lib + octocrab/git2/ratatui).
+# Strip symbols from released binaries. This is a no-op on macOS (release
+# binaries there are already symbol-free) but meaningfully shrinks the
+# Linux/Windows binaries users download from GitHub releases. LTO and
+# codegen-units=1 were evaluated and dropped: stax is I/O/network-bound (libgit2
+# + GitHub API), so tighter codegen gives no perceptible runtime win and only
+# slows CI release builds. `panic = "abort"` is off because src/application/ci.rs
+# relies on std::panic::catch_unwind.
+[profile.release]
+strip = true
+
 # `line-tables-only` keeps file/line numbers in panic backtraces while cutting
 # the per-binary relink from ~13s to ~5s. `unpacked` skips the dsymutil pack
 # step on macOS, which further speeds linking.
