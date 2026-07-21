@@ -40,6 +40,38 @@ fn write_worktree_config(home: &str, root_dir: &str) {
     .expect("write config.toml");
 }
 
+fn write_worktree_hook_config(home: &str, hooks: &[(&str, String)]) {
+    let config_dir = PathBuf::from(home).join(".config").join("stax");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    let mut config = String::from("[worktree.hooks]\n");
+    for (name, command) in hooks {
+        config.push_str(&format!("{name} = {command:?}\n"));
+    }
+    fs::write(config_dir.join("config.toml"), config).expect("write worktree hook config");
+}
+
+fn hook_command(log: &std::path::Path, marker: &str) -> String {
+    format!("printf '%s:%s\\n' '{marker}' \"$PWD\" >> {}", log.display())
+}
+
+fn wait_for_hook_log(log: &std::path::Path, expected: &str) {
+    for _ in 0..100 {
+        if fs::read_to_string(log)
+            .unwrap_or_default()
+            .lines()
+            .any(|line| line == expected)
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    panic!(
+        "timed out waiting for hook log entry {expected:?}; log was:\n{}",
+        fs::read_to_string(log).unwrap_or_default()
+    );
+}
+
 fn write_executable(path: &PathBuf, content: &str) {
     fs::write(path, content).expect("write executable");
     let mut perms = fs::metadata(path).expect("metadata").permissions();
@@ -249,6 +281,87 @@ fn push_remote_only_branch(repo: &TestRepo, branch: &str, file: &str, content: &
     repo.git(&["checkout", "main"]).assert_success();
     repo.git(&["branch", "-D", branch]).assert_success();
     sha
+}
+
+#[test]
+fn worktree_hooks_run_in_expected_directories() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    let log = repo.path().join("worktree-hooks.log");
+    write_worktree_hook_config(
+        &home,
+        &[
+            ("post_create", hook_command(&log, "post_create")),
+            ("post_start", hook_command(&log, "post_start")),
+            ("post_go", hook_command(&log, "post_go")),
+            ("pre_remove", hook_command(&log, "pre_remove")),
+            ("post_remove", hook_command(&log, "post_remove")),
+        ],
+    );
+
+    repo.run_stax_with_env(&["wt", "c", "hook-lane"], &[("HOME", home.as_str())])
+        .assert_success();
+    let lane = default_worktree_root(&repo, &home).join("hook-lane");
+    let lane_display = lane.to_string_lossy();
+    let repo_display = repo.path().to_string_lossy().into_owned();
+    let log_contents = fs::read_to_string(&log).expect("post-create hook log");
+    assert!(
+        log_contents
+            .lines()
+            .any(|line| line == format!("post_create:{lane_display}")),
+        "post_create should finish before worktree create returns; log was:\n{log_contents}"
+    );
+    wait_for_hook_log(&log, &format!("post_start:{lane_display}"));
+
+    repo.run_stax_with_env(
+        &["wt", "go", "hook-lane", "--shell-output"],
+        &[("HOME", home.as_str())],
+    )
+    .assert_success();
+    wait_for_hook_log(&log, &format!("post_go:{lane_display}"));
+
+    repo.run_stax_with_env(&["wt", "rm", "hook-lane"], &[("HOME", home.as_str())])
+        .assert_success();
+    wait_for_hook_log(&log, &format!("post_remove:{repo_display}"));
+    let log_contents = fs::read_to_string(&log).expect("worktree hook log");
+    assert!(
+        log_contents
+            .lines()
+            .any(|line| line == format!("pre_remove:{repo_display}")),
+        "pre_remove should run in the main worktree; log was:\n{log_contents}"
+    );
+}
+
+#[test]
+fn worktree_no_verify_skips_create_and_go_hooks() {
+    let repo = TestRepo::new();
+    let home = repo.clean_home();
+    let log = repo.path().join("worktree-hooks.log");
+    write_worktree_hook_config(
+        &home,
+        &[
+            ("post_create", hook_command(&log, "post_create")),
+            ("post_go", hook_command(&log, "post_go")),
+        ],
+    );
+
+    repo.run_stax_with_env(
+        &["wt", "c", "skip-hooks", "--no-verify"],
+        &[("HOME", home.as_str())],
+    )
+    .assert_success();
+    repo.run_stax_with_env(
+        &["wt", "go", "skip-hooks", "--no-verify", "--shell-output"],
+        &[("HOME", home.as_str())],
+    )
+    .assert_success();
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        !log.exists(),
+        "--no-verify should not launch worktree hooks; log was:\n{}",
+        fs::read_to_string(&log).unwrap_or_default()
+    );
 }
 
 #[test]
