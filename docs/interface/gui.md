@@ -49,6 +49,8 @@ The `-n` flag is part of the contract. Every `st gui [path]` invocation opens a 
 
 Launching Stax directly from Finder or the Dock supplies no repository path. In that case, and when macOS reopens the app after its last window closed, Stax automatically opens the most recently used valid repository. An explicit path always takes precedence. If the saved repository can no longer be opened, Stax shows the normal actionable repository error and keeps the folder picker available.
 
+Stax remembers the last window size across launches. If that size is larger than the display available at the next launch—for example after disconnecting an external monitor—the app reduces it to fit the current display.
+
 ## Workspace
 
 ![Stax native macOS GUI showing a stacked branch graph, changes, and branch inspector](../assets/gui.png)
