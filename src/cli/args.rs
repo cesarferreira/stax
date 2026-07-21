@@ -861,7 +861,7 @@ pub(crate) enum Commands {
         /// Output JSON for scripting
         #[arg(long)]
         json: bool,
-        /// Force refresh (bypass cache)
+        /// Re-fetch CI status (kept for compatibility; CI is always fetched live)
         #[arg(long)]
         refresh: bool,
         /// Watch CI until completion (polls periodically)

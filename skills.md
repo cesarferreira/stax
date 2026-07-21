@@ -408,7 +408,7 @@ stax freeze [branch]                # Protect branch from restacks and sync hist
 stax unfreeze [branch]              # Remove freeze protection
 stax run --parallel --jobs 4 <cmd>  # Concurrent checks; command receives STAX_RUN_BRANCH
 
-stax ci                            # CI for current branch, full per-check table (elapsed/ETA + avg from recent successful runs of the same checks)
+stax ci                            # Live CI for current PR head, full per-check table (falls back to local revision when needed)
 stax ci --stack                    # CI for current stack (defaults to the one-line-per-branch roll-up)
 stax ci --all                      # CI for all tracked branches (one-line-per-branch roll-up)
 stax ci --oneline                  # One compact line per branch across the stack (alias: -1)

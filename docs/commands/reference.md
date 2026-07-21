@@ -134,7 +134,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 
 | Command | Description |
 |---|---|
-| `st ci` | CI status for current branch — full per-check table (with elapsed/ETA learned from recent runs) |
+| `st ci` | Live CI status for the current PR head — full per-check table (with elapsed/ETA learned from recent runs) |
 | `st ci --stack` / `--all` | Scope to stack / all tracked branches; multi-branch views default to the one-line roll-up |
 | `st ci --oneline` / `-1` | One compact line per branch (icon · branch · #PR · draft/ready · title · checks + timing) |
 | `st ci --watch` | Watch modes (`--watch --strict` fail-fasts on failure) |
@@ -379,6 +379,8 @@ The GUI can search branches; check out, create, rename, delete, move, and reorde
 ### `st ci`
 
 - `--stack` / `--all` / `--oneline` (`-1`) / `--verbose` / `--watch` / `--watch --strict` / `--interval 30` / `--json`
+- For tracked PRs, CI is fetched for the forge's live PR head, so commits added remotely by formatters or other automation are reflected without moving the local branch. If the live PR revision cannot be resolved, stax falls back to the local branch revision.
+- CI status is always fetched live. `--refresh` remains accepted for compatibility but does not change the fetch behavior.
 - Three render modes: the **full per-check table** (single branch, default), grouped **summary cards** (`--verbose`/`-v`), and the **one-line roll-up** (`--oneline`/`-1`). Any multi-branch view (`--stack`/`--all`) defaults to the roll-up; `--verbose` overrides it back to cards. `--oneline` and `--verbose` cannot be combined.
 - The roll-up renders one line per branch, base→tip: CI status icon · branch · `#PR` · `draft`/`ready` · PR title · trailing check-count and timing. A bare `--oneline` defaults its scope to the current stack.
 - By default, `--watch` waits until every check is terminal, even if one check has already failed. Add `--strict` to exit as soon as any check fails.
