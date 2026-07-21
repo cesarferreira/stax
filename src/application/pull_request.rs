@@ -293,18 +293,9 @@ fn operation_error_from_source(
         || lowercase.contains("auth")
     {
         OperationErrorKind::Authentication
-    } else if lowercase.contains("timeout")
-        || lowercase.contains("connect")
-        || lowercase.contains("network")
-        || lowercase.contains("dns")
-        || lowercase.contains("request")
-        || lowercase.contains("500")
-        || lowercase.contains("502")
-        || lowercase.contains("503")
-        || lowercase.contains("504")
-    {
-        OperationErrorKind::Network
     } else {
+        // Anything else that fails while resolving a PR URL is treated as a
+        // network-class failure.
         OperationErrorKind::Network
     };
     OperationError::from_source(

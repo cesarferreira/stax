@@ -266,8 +266,7 @@ mod tests {
 
     #[test]
     fn test_rand_suffix_produces_values() {
-        let suffix = rand_suffix();
-        // Just check it produces a non-zero value
-        assert!(suffix > 0 || suffix == 0); // Always true, just testing it runs
+        // Just check it runs and produces a value.
+        let _suffix = rand_suffix();
     }
 }

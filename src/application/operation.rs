@@ -545,6 +545,7 @@ pub struct OperationError {
 
 impl OperationError {
     #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_source(
         request: OperationRequest,
         kind: OperationErrorKind,

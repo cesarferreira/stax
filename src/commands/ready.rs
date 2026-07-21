@@ -113,7 +113,7 @@ impl CiSummary {
     fn failed(count: usize) -> Self {
         Self {
             status: CiStatus::Failure,
-            text: format!("{} {}", count, if count == 1 { "failed" } else { "failed" }),
+            text: format!("{count} failed"),
         }
     }
 
@@ -915,7 +915,7 @@ mod tests {
 
     #[test]
     fn readiness_fetches_multiple_rows_per_batch() {
-        assert!(crate::parallel::IO_CONCURRENCY_LIMIT > 1);
+        const { assert!(crate::parallel::IO_CONCURRENCY_LIMIT > 1) };
     }
 
     fn run_git(path: &std::path::Path, args: &[&str]) {

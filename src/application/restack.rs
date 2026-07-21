@@ -902,6 +902,7 @@ fn open_operation_repo(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_transaction_error(
     request: &OperationRequest,
     repo: &GitRepo,
@@ -939,6 +940,7 @@ fn finish_transaction_error(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finalize_restack_failure(
     request: &OperationRequest,
     state: RestackFailureState,

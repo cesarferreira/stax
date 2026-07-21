@@ -7878,6 +7878,7 @@ mod forge_mock_tests {
             .await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gitlab_mr_fixture(
         iid: u64,
         title: &str,
@@ -7918,6 +7919,7 @@ mod forge_mock_tests {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn gitea_pull_fixture(
         number: u64,
         title: &str,

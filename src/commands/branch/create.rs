@@ -1339,6 +1339,7 @@ fn restore_after_failed_pre_branch_commit(
 /// exactly as git left them after the successful commit, so the user can retry
 /// without re-staging. With an active `--below` auto-stash, restore the original
 /// stash instead because the post-commit tree may be based on a different parent.
+#[allow(clippy::too_many_arguments)]
 fn rollback_after_commit(
     workdir: &Path,
     original_branch: &str,
@@ -1385,6 +1386,7 @@ fn rollback_after_commit(
 ///
 /// The caller owns whatever comes next — the trailing "No changes to commit"
 /// note, the stage/commit block, or the tips line.
+#[allow(clippy::too_many_arguments)]
 fn create_branch_with_banner(
     repo: &GitRepo,
     config: &Config,

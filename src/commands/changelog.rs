@@ -217,11 +217,14 @@ fn load_commits(
     parse_commits(&stdout)
 }
 
+/// Normalized `(from, to, find)` triple produced by [`normalize_find_args`].
+type NormalizedFindArgs = (Option<String>, Option<String>, Option<Option<String>>);
+
 fn normalize_find_args(
     from: Option<String>,
     to: Option<String>,
     find: Option<Option<String>>,
-) -> Result<(Option<String>, Option<String>, Option<Option<String>>)> {
+) -> Result<NormalizedFindArgs> {
     if find.is_some() {
         return Ok((from, to, find));
     }
