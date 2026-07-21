@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use fs4::FileExt;
+use gpui::{Pixels, px};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -10,6 +11,89 @@ use std::sync::Mutex;
 use tempfile::NamedTempFile;
 
 const MAX_RECENT_REPOSITORIES: usize = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WindowSize {
+    pub width: Pixels,
+    pub height: Pixels,
+}
+
+impl WindowSize {
+    pub fn normalized(self) -> Option<Self> {
+        (self.width >= px(1.0) && self.height >= px(1.0)).then_some(self)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WindowSizePreferencesFile {
+    path: PathBuf,
+}
+
+impl WindowSizePreferencesFile {
+    pub fn at(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn default_path() -> PathBuf {
+        dirs::data_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("stax/gui/window-size.json")
+    }
+
+    pub fn load(&self) -> Option<WindowSize> {
+        fs::read(&self.path)
+            .ok()
+            .and_then(|contents| serde_json::from_slice(&contents).ok())
+            .and_then(WindowSize::normalized)
+    }
+
+    pub fn save(&self, size: WindowSize) -> Result<()> {
+        let Some(size) = size.normalized() else {
+            return Ok(());
+        };
+        let parent = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create window preferences directory {}",
+                parent.display()
+            )
+        })?;
+        restrict_directory_permissions(parent)?;
+        let mut temporary = NamedTempFile::new_in(parent).with_context(|| {
+            format!(
+                "failed to create temporary window preferences in {}",
+                parent.display()
+            )
+        })?;
+        restrict_file_permissions(temporary.as_file(), temporary.path())?;
+        serde_json::to_writer_pretty(temporary.as_file_mut(), &size)
+            .context("failed to serialize window preferences")?;
+        temporary.as_file_mut().write_all(b"\n")?;
+        temporary.as_file_mut().flush()?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(&self.path)
+            .map_err(|error| error.error)
+            .with_context(|| {
+                format!(
+                    "failed to atomically replace window preferences {}",
+                    self.path.display()
+                )
+            })?;
+        sync_parent_directory(parent)?;
+        Ok(())
+    }
+}
+
+impl Default for WindowSizePreferencesFile {
+    fn default() -> Self {
+        Self::at(Self::default_path())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct RecentRepositories {
@@ -524,9 +608,10 @@ fn sync_parent_directory(parent: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PaneVisibility, PaneWidths, RecentRepositories, WorkspacePreferences,
-        WorkspacePreferencesFile,
+        PaneVisibility, PaneWidths, RecentRepositories, WindowSize, WindowSizePreferencesFile,
+        WorkspacePreferences, WorkspacePreferencesFile,
     };
+    use gpui::px;
     use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -538,6 +623,25 @@ mod tests {
     const WRITER_STORE_ENV: &str = "STAX_TEST_RECENT_WRITER_STORE";
     const WRITER_REPOSITORY_ENV: &str = "STAX_TEST_RECENT_WRITER_REPOSITORY";
     const WRITER_READY_ENV: &str = "STAX_TEST_RECENT_WRITER_READY";
+
+    #[test]
+    fn window_size_round_trips_and_rejects_invalid_saved_values() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("preferences/window-size.json");
+        let store = WindowSizePreferencesFile::at(&path);
+        let size = WindowSize {
+            width: px(1440.0),
+            height: px(900.0),
+        };
+
+        store.save(size).unwrap();
+
+        assert_eq!(store.load(), Some(size));
+        fs::write(&path, br#"{"width":0.0,"height":900.0}"#).unwrap();
+        assert_eq!(store.load(), None);
+        fs::write(&path, b"not json").unwrap();
+        assert_eq!(store.load(), None);
+    }
 
     #[test]
     fn workspace_preferences_round_trip_independently_per_repository() {

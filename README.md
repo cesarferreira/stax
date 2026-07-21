@@ -297,7 +297,7 @@ The native GUI opens a repository-scoped workspace with searchable Stack, Change
 
 When the app starts without an explicit path, it reopens the most recently used project. Use the project dropdown in the toolbar to switch between recent projects or choose **Add Project…** to open another repository. An explicit `st gui <path>` launch still opens that repository.
 
-Use `/` to search, `1`/`2`/`3` to toggle panes, and drag dividers to resize them; visibility and widths persist per canonical repository. Native menus and keyboard shortcuts dispatch the same typed actions as the buttons. Submit is always confirmed first, pushes the current stack as Draft, and does not show CLI prompts or auto-open PR pages. `st gui [path]` only launches the app.
+Use `/` to search, `1`/`2`/`3` to toggle panes, and drag dividers to resize them; visibility and widths persist per canonical repository. The app also restores its last window size and reduces it to fit the current display after a monitor change. Native menus and keyboard shortcuts dispatch the same typed actions as the buttons. Submit is always confirmed first, pushes the current stack as Draft, and does not show CLI prompts or auto-open PR pages. `st gui [path]` only launches the app.
 
 → [GUI guide](docs/interface/gui.md)
 
