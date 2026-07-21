@@ -26,7 +26,7 @@ stax gui [path]                # Launch fresh native macOS GUI preview for one r
 
 stax submit|ss                 # Submit full stack
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
-stax stack unlink              # Unstack locally tracked native stack; stax-linked stacks may need gh stack checkout <pr>
+stax stack unlink <stack-number> # Unstack a native GitHub Stack remotely; omit number for active local tracking
 stax merge                     # Merge PRs from stack bottom upward
 stax sync|rs                   # Sync trunk + clean merged branches
 stax sweep                     # Classify + optionally delete merged/gone/stale branches

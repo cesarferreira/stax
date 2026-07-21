@@ -1437,8 +1437,12 @@ pub(crate) enum StackCommands {
     /// Register the current stack as a native GitHub Stack via `gh stack`
     Link,
 
-    /// Unstack a locally tracked native GitHub Stack via `gh stack`
-    Unlink,
+    /// Unstack a native GitHub Stack via `gh stack`
+    Unlink {
+        /// Repository-scoped GitHub native stack number
+        #[arg(value_parser = clap::value_parser!(u64).range(1..))]
+        stack_number: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]

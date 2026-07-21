@@ -201,7 +201,7 @@ fn documented_cli_commands_and_aliases_resolve_from_help() {
 }
 
 #[test]
-fn docs_clarify_stack_unlink_requires_gh_stack_local_tracking() {
+fn docs_cover_numbered_remote_and_active_local_stack_unlink() {
     let docs = [
         ("README.md", include_str!("../README.md")),
         (
@@ -217,14 +217,14 @@ fn docs_clarify_stack_unlink_requires_gh_stack_local_tracking() {
 
     for (path, content) in docs {
         assert!(
-            !content.contains("Remove native GitHub Stack object")
-                && !content.contains("remove the native GitHub Stack object")
-                && !content.contains("Remove the native GitHub Stack object"),
-            "{path} should not imply `st stack unlink` directly removes every native GitHub Stack object"
+            content.contains("stack unlink <stack-number>")
+                || content.contains("stack unlink [<stack-number>]")
+                || content.contains("stack unlink 7"),
+            "{path} should document numbered remote `st stack unlink`"
         );
         assert!(
-            content.contains("gh stack checkout <pr>") || content.contains("locally tracked"),
-            "{path} should mention gh-stack local tracking or `gh stack checkout <pr>` for `st stack unlink`"
+            content.contains("locally tracked") || content.contains("active local"),
+            "{path} should retain the argument-free active local behavior"
         );
     }
 }

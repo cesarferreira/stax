@@ -225,10 +225,10 @@ That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR
 ```bash
 st ss                    # auto-links native stack when available
 st stack link            # manually re-link the current stack
-st stack unlink          # unstack a locally tracked native GitHub Stack
+st stack unlink 7        # unstack native Stack #7 remotely
 ```
 
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.0.8 as out of date, and can upgrade it with `st doctor --fix`. `st stack unlink` delegates to `gh stack unstack`, so stacks that stax registered with `gh stack link` may need `gh stack checkout <pr>` first to create gh-stack's local tracking; otherwise remove the native stack in the GitHub UI.
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.0.8 as out of date, and can upgrade it with `st doctor --fix`. `st stack unlink <stack-number>` removes a native stack remotely without local gh-stack tracking; argument-free `st stack unlink` retains the active locally tracked behavior.
 
 → [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 
