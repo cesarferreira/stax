@@ -16,6 +16,12 @@ All notable changes to this project will be documented in this file.
 - Resolve all clippy warnings ([#658](https://github.com/cesarferreira/stax/issues/658))
 - *(worktree)* Handle external relative roots ([#664](https://github.com/cesarferreira/stax/issues/664))
 - *(ci)* Use live PR head for status ([#665](https://github.com/cesarferreira/stax/issues/665))
+- Display quoted split-hunk paths correctly ([#663](https://github.com/cesarferreira/stax/issues/663))
+- Exclude docs screenshots from published crate
+
+### 💼 Other
+
+- Revamped st ready
 
 ### 🚜 Refactor
 
@@ -30,6 +36,10 @@ All notable changes to this project will be documented in this file.
 - Tighten merged branch cleanup assertion ([#653](https://github.com/cesarferreira/stax/issues/653))
 - Cover worktree hook semantics ([#661](https://github.com/cesarferreira/stax/issues/661))
 - Validate documented CLI aliases and subcommands ([#657](https://github.com/cesarferreira/stax/issues/657))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.96.7] - 2026-07-16
 
 ### 🐛 Bug Fixes
