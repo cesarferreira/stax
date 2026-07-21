@@ -2,11 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.97.0] - 2026-07-21
+
+### 🚀 Features
+
+- *(generate)* Refresh Claude models, add live Anthropic Models API fetch ([#655](https://github.com/cesarferreira/stax/issues/655))
+
+### 🐛 Bug Fixes
+
+- Describe native stack commands in help ([#639](https://github.com/cesarferreira/stax/issues/639))
+- Preserve auth for gh-stack probes ([#648](https://github.com/cesarferreira/stax/issues/648))
+- Diagnose missing gh-stack OAuth login ([#652](https://github.com/cesarferreira/stax/issues/652))
+- Resolve all clippy warnings ([#658](https://github.com/cesarferreira/stax/issues/658))
+- *(worktree)* Handle external relative roots ([#664](https://github.com/cesarferreira/stax/issues/664))
+- *(ci)* Use live PR head for status ([#665](https://github.com/cesarferreira/stax/issues/665))
+
+### 🚜 Refactor
+
+- *(forge)* Introduce Forge trait seam and neutral model module ([#642](https://github.com/cesarferreira/stax/issues/642))
+- *(merge)* Consolidate duplicated helpers across the merge family ([#643](https://github.com/cesarferreira/stax/issues/643))
+- *(ci)* Fix the CI layer inversion ([#644](https://github.com/cesarferreira/stax/issues/644))
+- *(submit)* Unify branch-selection into one canonical function ([#645](https://github.com/cesarferreira/stax/issues/645))
+- *(git)* Unify git invocation inside the git module ([#646](https://github.com/cesarferreira/stax/issues/646))
+
+### 🧪 Testing
+
+- Tighten merged branch cleanup assertion ([#653](https://github.com/cesarferreira/stax/issues/653))
+- Cover worktree hook semantics ([#661](https://github.com/cesarferreira/stax/issues/661))
+- Validate documented CLI aliases and subcommands ([#657](https://github.com/cesarferreira/stax/issues/657))
 ## [0.96.7] - 2026-07-16
 
 ### 🐛 Bug Fixes
 
 - Serialize CI test config environment
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.96.6] - 2026-07-16
 
 ### 🐛 Bug Fixes
