@@ -252,7 +252,11 @@ stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment l
 # CLI authentication, including GH_TOKEN/GITHUB_TOKEN. For known older versions,
 # stax strips those overrides before `gh stack` and falls back to a keyring OAuth
 # account. `stax doctor` always shows the installed version, marks anything below
-# v0.0.8 as out of date, and probes legacy OAuth only when token overrides exist.
+# v0.0.8 as out of date, can upgrade it with `stax doctor --fix`, and probes
+# legacy OAuth only when token overrides exist.
+# Native GitHub Stack updates are append-only. If relinking would remove or insert
+# a PR, run `stax stack unlink <stack-number>` and then `stax stack link` again.
+# stax prints the repository-scoped Stack number when gh-stack returns it.
 # Once linked, GitHub owns base-branch transitions for those PRs and rejects
 # any PATCH touching `base` ("...part of a stack"). stax treats this as
 # non-fatal in submit/merge cascade retargets (prints a note, continues);

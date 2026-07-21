@@ -47,12 +47,20 @@ pub fn run_link() -> Result<()> {
     }
 
     match gh_stack::link_stack(&pr_numbers, &stack.trunk, &remote_info.name) {
-        LinkOutcome::Linked => {
+        LinkOutcome::Linked { stack_number } => {
             gh_stack::set_feature_enabled(repo.workdir()?, true)?;
+            let stack_label = stack_number
+                .map(|number| format!(" #{}", number))
+                .unwrap_or_default();
             println!(
                 "{} {}",
                 "✓".green(),
-                format!("Linked {} PRs as a native GitHub Stack", pr_numbers.len()).dimmed()
+                format!(
+                    "Linked {} PRs as a native GitHub Stack{}",
+                    pr_numbers.len(),
+                    stack_label
+                )
+                .dimmed()
             );
             Ok(())
         }
@@ -71,6 +79,19 @@ pub fn run_link() -> Result<()> {
         }
         LinkOutcome::SinglePrValidationRejected { message } => {
             anyhow::bail!("GitHub rejected the native Stack link: {message}");
+        }
+        LinkOutcome::NonAppendUpdate {
+            message,
+            stack_number,
+        } => {
+            let unlink_command = stack_number
+                .map(|number| format!("`st stack unlink {number}`"))
+                .unwrap_or_else(|| "`st stack unlink <stack-number>`".to_string());
+            anyhow::bail!(
+                "GitHub native Stack updates are append-only. Remove the remote Stack with \
+                 {unlink_command}, then run `st stack link` again.\n\n\
+                 gh-stack said: {message}"
+            );
         }
         LinkOutcome::Failed { message } => {
             if gh_stack::is_stack_fork_conflict(&message) {
@@ -101,7 +122,7 @@ pub fn run_unlink(stack_number: Option<u64>) -> Result<()> {
     ensure_gh_stack_extension()?;
 
     match gh_stack::unlink_stack(stack_number) {
-        LinkOutcome::Linked => {
+        LinkOutcome::Linked { .. } => {
             println!("{}", "✓ Native GitHub Stack removed".green());
             Ok(())
         }
@@ -119,6 +140,9 @@ pub fn run_unlink(stack_number: Option<u64>) -> Result<()> {
         }
         LinkOutcome::SinglePrValidationRejected { message } => {
             anyhow::bail!("GitHub rejected the native Stack unlink: {message}");
+        }
+        LinkOutcome::NonAppendUpdate { message, .. } => {
+            anyhow::bail!("Failed to remove native GitHub Stack: {message}");
         }
         LinkOutcome::Failed { message } => {
             // `gh stack unstack` operates on a locally-tracked stack, but stacks
