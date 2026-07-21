@@ -129,6 +129,18 @@ fn introduced_files(repo: &TestRepo, base: &str, branch: &str) -> HashSet<String
         .collect()
 }
 
+fn introduced_path_contains(repo: &TestRepo, base: &str, branch: &str, path: &str) -> bool {
+    let output = repo.git(&["diff", "--name-only", "-z", base, branch]);
+    assert!(
+        output.status.success(),
+        "failed to diff {base} against {branch}"
+    );
+    output
+        .stdout
+        .split(|byte| *byte == b'\0')
+        .any(|entry| entry == path.as_bytes())
+}
+
 fn run_split_hunk(repo: &TestRepo, rounds: usize) {
     let script = split_hunk_script(rounds);
     let output = common::run_stax_in_script(&repo.path(), &["split", "--hunk"], &script);
@@ -267,6 +279,28 @@ fn test_split_hunk_with_new_file() {
         "brand_new.txt should be introduced by exactly one branch: split_1={:?}, original={:?}",
         s1_files,
         orig_files
+    );
+}
+
+#[test]
+fn test_split_hunk_with_c_quoted_filename_applies_cleanly() {
+    let repo = TestRepo::new();
+    repo.create_stack(&["quoted-path"]);
+    let original = repo.current_branch();
+    let quoted_path = "quote\"name.txt";
+    repo.create_file(quoted_path, "quoted content\n");
+    repo.commit("add quoted filename");
+
+    run_split_hunk(&repo, 2);
+
+    let split_1 = format!("{}_split_1", original);
+    let split_1_introduces_quoted_path =
+        introduced_path_contains(&repo, "main", &split_1, quoted_path);
+    let original_introduces_quoted_path =
+        introduced_path_contains(&repo, &split_1, &original, quoted_path);
+    assert!(
+        split_1_introduces_quoted_path ^ original_introduces_quoted_path,
+        "quoted filename should be applied by exactly one split commit"
     );
 }
 

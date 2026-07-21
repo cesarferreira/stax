@@ -53,11 +53,10 @@ pub fn parse_diff(diff_text: &str) -> Vec<DiffFile> {
                 is_new = true;
             } else if line.starts_with("deleted file mode") {
                 is_deleted = true;
-            } else if let Some(stripped) = line.strip_prefix("+++ b/") {
-                path = stripped.to_string();
-            } else if is_deleted && line.starts_with("+++ /dev/null") {
-            } else if is_deleted && let Some(stripped) = line.strip_prefix("--- a/") {
-                path = stripped.to_string();
+            } else if let Some(parsed_path) = extract_path_from_header(line, "+++ ") {
+                path = parsed_path;
+            } else if is_deleted && let Some(parsed_path) = extract_path_from_header(line, "--- ") {
+                path = parsed_path;
             }
 
             i += 1;
@@ -114,16 +113,86 @@ pub fn parse_diff(diff_text: &str) -> Vec<DiffFile> {
 
 fn extract_path_from_diff_line(line: &str) -> String {
     let rest = &line["diff --git ".len()..];
-    if let Some(b_pos) = rest.find(" b/") {
-        rest[b_pos + " b/".len()..].to_string()
-    } else {
-        let parts: Vec<&str> = rest.splitn(2, ' ').collect();
-        if parts.len() == 2 {
-            parts[1].strip_prefix("b/").unwrap_or(parts[1]).to_string()
-        } else {
-            rest.to_string()
-        }
+    let Some((_, rest)) = parse_git_path_token(rest) else {
+        return rest.to_string();
+    };
+    parse_git_path_token(rest.trim_start())
+        .map(|(path, _)| strip_diff_prefix(path))
+        .unwrap_or_else(|| rest.to_string())
+}
+
+fn extract_path_from_header(line: &str, prefix: &str) -> Option<String> {
+    let rest = line.strip_prefix(prefix)?;
+    if rest == "/dev/null" {
+        return None;
     }
+    parse_git_path_token(rest).map(|(path, _)| strip_diff_prefix(path))
+}
+
+fn strip_diff_prefix(path: String) -> String {
+    path.strip_prefix("a/")
+        .or_else(|| path.strip_prefix("b/"))
+        .unwrap_or(&path)
+        .to_string()
+}
+
+/// Parse one pathname token from Git's textual diff format.
+///
+/// Git C-quotes unusual paths in diff headers. Keep the original header text
+/// for patch reconstruction, but decode this display-only value for the TUI.
+fn parse_git_path_token(input: &str) -> Option<(String, &str)> {
+    if input.is_empty() {
+        return None;
+    }
+    if !input.starts_with('"') {
+        let end = input.find(char::is_whitespace).unwrap_or(input.len());
+        return Some((input[..end].to_string(), &input[end..]));
+    }
+
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::new();
+    let mut index = 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                let path = String::from_utf8(decoded)
+                    .unwrap_or_else(|error| String::from_utf8_lossy(&error.into_bytes()).into());
+                return Some((path, &input[index + 1..]));
+            }
+            b'\\' if index + 1 < bytes.len() => {
+                index += 1;
+                let escaped = bytes[index];
+                let byte = match escaped {
+                    b'a' => b'\x07',
+                    b'b' => b'\x08',
+                    b'f' => b'\x0c',
+                    b'n' => b'\n',
+                    b'r' => b'\r',
+                    b't' => b'\t',
+                    b'v' => b'\x0b',
+                    b'\\' | b'"' => escaped,
+                    b'0'..=b'7' => {
+                        let mut value = escaped - b'0';
+                        for _ in 0..2 {
+                            if index + 1 >= bytes.len()
+                                || !(b'0'..=b'7').contains(&bytes[index + 1])
+                            {
+                                break;
+                            }
+                            index += 1;
+                            value = value * 8 + (bytes[index] - b'0');
+                        }
+                        value
+                    }
+                    _ => escaped,
+                };
+                decoded.push(byte);
+            }
+            byte => decoded.push(byte),
+        }
+        index += 1;
+    }
+    None
 }
 
 fn parse_hunk_header(line: &str) -> (u32, u32) {
@@ -246,6 +315,21 @@ index 0000000..abc1234
 +    todo!()
 +}";
 
+    const QUOTED_PATHS: &str = r#"diff --git "a/quote\"name.txt" "b/quote\"name.txt"
+index abc1234..def5678 100644
+--- "a/quote\"name.txt"
++++ "b/quote\"name.txt"
+@@ -1 +1 @@
+-before
++after
+diff --git "a/tab\tname.txt" "b/tab\tname.txt"
+index abc1234..def5678 100644
+--- "a/tab\tname.txt"
++++ "b/tab\tname.txt"
+@@ -1 +1 @@
+-before
++after"#;
+
     #[test]
     fn test_parse_single_file_single_hunk() {
         let files = parse_diff(SINGLE_FILE_SINGLE_HUNK);
@@ -301,6 +385,19 @@ index 0000000..abc1234
         assert_eq!(file.hunks.len(), 1);
         assert_eq!(file.hunks[0].new_start, 1);
         assert_eq!(file.hunks[0].new_count, 3);
+    }
+
+    #[test]
+    fn test_parse_c_quoted_paths_for_display_without_changing_patch_headers() {
+        let files = parse_diff(QUOTED_PATHS);
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "quote\"name.txt");
+        assert_eq!(files[1].path, "tab\tname.txt");
+
+        let patch = reconstruct_full_patch(&files, &[(0, vec![0]), (1, vec![0])]);
+        assert!(patch.contains("+++ \"b/quote\\\"name.txt\""));
+        assert!(patch.contains("+++ \"b/tab\\tname.txt\""));
     }
 
     #[test]
