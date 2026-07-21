@@ -56,27 +56,27 @@ pub fn render(f: &mut Frame, app: &ReadyTuiApp) {
         .constraints([Constraint::Min(3), Constraint::Length(2)])
         .split(f.area());
 
-    let main = if chunks[0].width >= 110 {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
-            .split(chunks[0])
-    } else {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(100)])
-            .split(chunks[0])
-    };
+    let detail_lines = detail_lines(app);
+    let details_height =
+        details_pane_height(detail_lines.len()).min(chunks[0].height.saturating_sub(3));
+    let main = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(details_height)])
+        .split(chunks[0]);
 
     render_table(f, app, main[0]);
-    if main.len() > 1 {
-        render_details(f, app, main[1]);
-    }
+    render_details(f, detail_lines, main[1]);
     render_status(f, app, chunks[1]);
 
     if app.show_help {
         render_help(f);
     }
+}
+
+fn details_pane_height(content_height: usize) -> u16 {
+    u16::try_from(content_height)
+        .unwrap_or(u16::MAX)
+        .saturating_add(2)
 }
 
 fn render_table(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
@@ -224,7 +224,7 @@ fn row_line(row: &ReadyRowState, selected: bool, layout: TableLayout) -> Line<'s
     }
 }
 
-fn render_details(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
+fn render_details(f: &mut Frame, lines: Vec<Line<'static>>, area: Rect) {
     let block = Block::default()
         .title(" Details ")
         .borders(Borders::ALL)
@@ -232,7 +232,11 @@ fn render_details(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let lines = match app.selected_row() {
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+fn detail_lines(app: &ReadyTuiApp) -> Vec<Line<'static>> {
+    match app.selected_row() {
         Some(ReadyRowState::Loaded(row)) => vec![
             Line::from(vec![
                 Span::styled("Action: ", detail_label_style()),
@@ -316,9 +320,7 @@ fn render_details(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
             ]),
         ],
         None => vec![Line::from("No PRs in scope")],
-    };
-
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+    }
 }
 
 fn render_status(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
@@ -586,8 +588,31 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::ready::ReadyBranch;
+    use crate::commands::ready::{PrReadinessRow, ReadyBranch};
+    use crate::tui::ready::app::ReadyTuiUpdate;
     use ratatui::{Terminal, backend::TestBackend};
+
+    fn loaded_row() -> PrReadinessRow {
+        PrReadinessRow {
+            branch: "feature/a".to_string(),
+            pr_number: 10,
+            title: "Ready PR".to_string(),
+            updated_at: Some("2026-07-21T10:00:00Z".to_string()),
+            action: ReadyAction::Merge,
+            reason: ReadyReason::Ready,
+            review_decision: Some("APPROVED".to_string()),
+            approvals: 1,
+            changes_requested: false,
+            ci_status: "success".to_string(),
+            ci_summary: "passed".to_string(),
+            is_draft: false,
+            mergeable: Some(true),
+            mergeable_state: "clean".to_string(),
+            review_summary: "1 approval".to_string(),
+            pr_url: Some("https://example.com/pull/10".to_string()),
+            pr_state: "open".to_string(),
+        }
+    }
 
     #[test]
     fn ready_tui_action_style_uses_expected_colors() {
@@ -702,5 +727,80 @@ mod tests {
         assert!(rendered.contains("PR Readiness Help"));
         assert!(rendered.contains("Open selected PR"));
         assert!(rendered.contains("Refresh live data"));
+    }
+
+    #[test]
+    fn ready_tui_renders_loading_details_below_table_at_content_height() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let app = ReadyTuiApp::new_for_test(
+            "owner/repo",
+            "current stack",
+            vec![ReadyBranch {
+                name: "feature/a".to_string(),
+                pr_number: Some(10),
+            }],
+        );
+
+        terminal.draw(|f| render(f, &app)).expect("draw");
+        let buffer = terminal.backend().buffer();
+        let line = |y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+
+        assert!(line(0).contains("PR Readiness"));
+        assert!(!line(0).contains("Details"));
+        assert!(line(22).contains("Details"));
+        assert!(line(23).contains("Branch: feature/a"));
+    }
+
+    #[test]
+    fn ready_tui_expands_bottom_details_to_fit_a_loaded_row() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let mut app = ReadyTuiApp::new_for_test(
+            "owner/repo",
+            "current stack",
+            vec![ReadyBranch {
+                name: "feature/a".to_string(),
+                pr_number: Some(10),
+            }],
+        );
+        app.apply_update(ReadyTuiUpdate::Loaded {
+            index: 0,
+            row: loaded_row(),
+        });
+
+        terminal.draw(|f| render(f, &app)).expect("draw");
+        let buffer = terminal.backend().buffer();
+        let line = |y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+
+        assert!(line(15).contains("Details"));
+        assert!(line(16).contains("Action: ✓ merge"));
+        assert!(line(26).contains("Ready PR"));
+    }
+
+    #[test]
+    fn ready_tui_keeps_empty_details_pane_to_one_content_row() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let app = ReadyTuiApp::new_for_test("owner/repo", "current stack", Vec::new());
+
+        terminal.draw(|f| render(f, &app)).expect("draw");
+        let buffer = terminal.backend().buffer();
+        let line = |y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        };
+
+        assert!(line(25).contains("Details"));
+        assert!(line(26).contains("No PRs in scope"));
     }
 }
