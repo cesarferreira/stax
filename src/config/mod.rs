@@ -289,8 +289,8 @@ pub struct AuthConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WorktreeConfig {
-    /// Directory for stax-managed worktrees. Empty means the default external root:
-    /// ~/.stax/worktrees/<repo>.
+    /// Directory for stax-managed worktrees. Relative paths resolve from the main
+    /// checkout. Empty means the default external root: ~/.stax/worktrees/<repo>.
     #[serde(default = "default_worktree_root_dir")]
     pub root_dir: String,
     /// Recycle removed worktrees as warm slots instead of deleting them, so a new

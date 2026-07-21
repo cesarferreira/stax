@@ -135,7 +135,7 @@ fn run_named_lane(
     fs::create_dir_all(&worktrees_dir)?;
     ensure_managed_worktrees_root(repo, config, &worktrees_dir)?;
     let main_repo_workdir = repo.main_repo_workdir()?;
-    ensure_gitignore(&main_repo_workdir, &config.worktree.root_dir)?;
+    ensure_gitignore(&main_repo_workdir, &worktrees_dir)?;
     let outcome = adopt_or_create_worktree(
         repo,
         config,

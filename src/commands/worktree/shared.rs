@@ -241,18 +241,39 @@ pub fn ensure_managed_worktrees_root(
     Ok(())
 }
 
-pub fn ensure_gitignore(repo_root: &Path, worktrees_dir: &str) -> Result<()> {
-    if worktrees_dir.trim().is_empty() {
-        return Ok(());
+pub fn ensure_gitignore(repo_root: &Path, worktrees_dir: &Path) -> Result<()> {
+    let repo_root = fs::canonicalize(repo_root).with_context(|| {
+        format!(
+            "Failed to resolve repository root '{}'",
+            repo_root.display()
+        )
+    })?;
+    let worktrees_dir = fs::canonicalize(worktrees_dir).with_context(|| {
+        format!(
+            "Failed to resolve configured worktree root '{}'",
+            worktrees_dir.display()
+        )
+    })?;
+
+    if worktrees_dir == repo_root {
+        bail!(
+            "Worktree root cannot be the main repository directory '{}'. \
+             Configure a subdirectory or an external directory instead.",
+            repo_root.display()
+        );
     }
 
-    let expanded = expand_home_path(worktrees_dir)?;
-    if expanded.is_absolute() {
+    let Ok(relative_dir) = worktrees_dir.strip_prefix(&repo_root) else {
         return Ok(());
-    }
+    };
 
     let gitignore = repo_root.join(".gitignore");
-    let entry = format!("{}/", worktrees_dir.trim_end_matches('/'));
+    let relative_dir = relative_dir
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    let entry = format!("{relative_dir}/");
 
     if gitignore.exists() {
         let content = fs::read_to_string(&gitignore)?;
