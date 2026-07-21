@@ -4,16 +4,10 @@ use std::process::{Command, Output};
 
 const FEATURE_ENABLED_KEY: &str = "stax.nativeStack.enabled";
 
-/// Below this version, `gh-stack` reports Personal Access Token rejections
-/// with the same ambiguous "Stacked PRs are not enabled" message it uses for
-/// a genuinely feature-disabled repo (fixed in v0.0.6's "PAT auth warning"
-/// change, which introduced the distinct "Personal access tokens are not
-/// supported" message `auth_token_unsupported_output` matches on). Below
-/// this version, an auth-token issue can still be misclassified as
-/// `FeatureDisabled` and incorrectly cached. This is purely a `doctor`
-/// diagnostic — `gh stack link` itself still works on any version that
-/// passes `link_command_supported` (added after v0.0.1).
-const RECOMMENDED_GH_STACK_VERSION: (u32, u32, u32) = (0, 0, 6);
+/// v0.0.8 moved gh-stack to the public Stacks REST API, which supports the
+/// normal GitHub CLI authentication sources. Older link-capable versions still
+/// work, but need stax's legacy OAuth fallback when PAT overrides are present.
+const RECOMMENDED_GH_STACK_VERSION: (u32, u32, u32) = (0, 0, 8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtensionStatus {
@@ -164,7 +158,7 @@ pub fn version_status_with_path(path: &str) -> VersionStatus {
 /// Checks the installed `github/gh-stack` version against
 /// `RECOMMENDED_GH_STACK_VERSION`. Informational only — never blocks `gh
 /// stack link` from being attempted; surfaced by `stax doctor` so users on
-/// an old version know to upgrade for reliable auth-error diagnostics.
+/// an old version know to upgrade to the public Stacks REST API.
 pub fn version_status_with_env(env: &[(&str, &str)]) -> VersionStatus {
     let Some(installed) = installed_gh_stack_version(env) else {
         return VersionStatus::Unknown;
@@ -350,13 +344,13 @@ pub fn upgrade_extension() -> Result<()> {
 
 pub fn upgrade_extension_with_env(env: &[(&str, &str)]) -> Result<()> {
     let output = gh_command(env)
-        .args(["extension", "upgrade", "gh-stack"])
+        .args(["extension", "upgrade", "stack"])
         .output()
-        .context("Failed to execute `gh extension upgrade gh-stack`")?;
+        .context("Failed to execute `gh extension upgrade stack`")?;
 
     if !output.status.success() {
         bail!(
-            "`gh extension upgrade gh-stack` failed: {}",
+            "`gh extension upgrade stack` failed: {}",
             output_details(&output)
         );
     }
@@ -374,12 +368,18 @@ fn gh_command(env: &[(&str, &str)]) -> Command {
     command
 }
 
-/// GitHub's native Stacked PRs API rejects Personal Access Tokens, so remote
-/// stack operations must fall back to a keyring-stored OAuth account.
+/// gh-stack versions before v0.0.8 use private-preview endpoints that reject
+/// PAT overrides. Current and unknown versions keep the normal gh environment;
+/// known legacy versions fall back to a keyring-stored OAuth account.
 fn gh_stack_command(env: &[(&str, &str)]) -> Command {
     let mut command = gh_command(env);
-    for var in AUTH_OVERRIDE_ENV_VARS {
-        command.env_remove(var);
+    let is_known_legacy = installed_gh_stack_version(env)
+        .and_then(|version| parse_semver(&version))
+        .is_some_and(|version| version < RECOMMENDED_GH_STACK_VERSION);
+    if is_known_legacy {
+        for var in AUTH_OVERRIDE_ENV_VARS {
+            command.env_remove(var);
+        }
     }
     command
 }

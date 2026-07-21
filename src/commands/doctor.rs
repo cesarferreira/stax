@@ -149,36 +149,47 @@ pub fn run(fix: bool) -> Result<()> {
                     FeatureState::Disabled => "repo feature cache: disabled",
                     FeatureState::Unknown => "repo feature cache: unknown",
                 };
+                let version = gh_stack::version_status();
+                let version_label = match &version {
+                    VersionStatus::Unknown => "version unknown".to_string(),
+                    VersionStatus::BelowRecommended { installed } => {
+                        format!("v{installed}, out of date")
+                    }
+                    VersionStatus::MeetsRecommended { installed } => {
+                        format!("v{installed}, up to date")
+                    }
+                };
                 println!(
                     "{} {} {}",
                     "✓".green(),
                     "GitHub native stacks: gh-stack extension installed".dimmed(),
-                    format!("({feature_label})").dimmed()
+                    format!("({version_label}; {feature_label})").dimmed()
                 );
-                if gh_stack::auth_override_env_present()
-                    && gh_stack::oauth_login_status() == OAuthLoginStatus::MissingOrInvalid
-                {
-                    println!(
-                        "{} {}",
-                        "⚠".yellow(),
-                        "GitHub native stacks: GH_TOKEN/GITHUB_TOKEN can discover gh-stack, but \
-                         no usable OAuth-authenticated `gh` account was found (run `gh auth login` \
-                         or `gh auth switch`)"
-                            .yellow()
-                    );
-                }
-                if let VersionStatus::BelowRecommended { installed } = gh_stack::version_status() {
+                if let VersionStatus::BelowRecommended { installed } = version {
                     repair_plan.push(RepairAction::UpgradeGhStackExtension);
                     println!(
                         "{} {}",
                         "⚠".yellow(),
                         format!(
-                            "gh-stack v{installed} predates v0.0.6's Personal Access Token \
-                             detection — auth issues may be misreported as \"not enabled for \
-                             this repo\" (run `gh extension upgrade gh-stack`)"
+                            "gh-stack v{installed} is out of date — v0.0.8+ uses the public \
+                             Stacks API and normal GitHub CLI authentication \
+                             (run `gh extension upgrade stack`)"
                         )
                         .yellow()
                     );
+                    if gh_stack::auth_override_env_present()
+                        && gh_stack::oauth_login_status() == OAuthLoginStatus::MissingOrInvalid
+                    {
+                        println!(
+                            "{} {}",
+                            "⚠".yellow(),
+                            "GitHub native stacks: this legacy gh-stack version cannot use \
+                             GH_TOKEN/GITHUB_TOKEN, and no usable OAuth-authenticated `gh` \
+                             account was found (run `gh auth login`, `gh auth switch`, or upgrade \
+                             gh-stack)"
+                                .yellow()
+                        );
+                    }
                 }
             }
             ExtensionStatus::Outdated => {
@@ -186,7 +197,7 @@ pub fn run(fix: bool) -> Result<()> {
                 println!(
                     "{} {}",
                     "⚠".yellow(),
-                    "GitHub native stacks: gh-stack extension is outdated and lacks `gh stack link` (run `gh extension upgrade gh-stack`)".yellow()
+                    "GitHub native stacks: gh-stack extension is outdated and lacks `gh stack link` (run `gh extension upgrade stack`)".yellow()
                 );
             }
             ExtensionStatus::NoExtension => {
