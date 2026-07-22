@@ -67,6 +67,10 @@ stax ready --current           # Readiness dashboard for current stack only
 stax ready --stack             # Same as --current
 stax ready --plain             # Static readiness table for captured/non-interactive output
 stax pr list --ready           # Same readiness view under PR list
+stax draft [branch]            # Mark current or named branch PR as draft
+stax draft --stack             # Mark every PR in the current stack as draft
+stax undraft [branch]          # Mark current or named branch PR ready for review
+stax undraft --stack           # Mark every PR in the current stack ready for review
 stax ready --all               # Explicit all tracked branch PRs (default)
 stax issue list                # List open issues
 stax open                      # Open repo in browser

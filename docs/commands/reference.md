@@ -146,7 +146,9 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st pr list --ready` | Open live PR readiness for all tracked branch PRs, newest changed PR first (`--current`/`--stack` limits to the current stack, `--plain` prints a table) |
 | `st ready` | Short alias for `st pr list --ready` (`--current`, `--stack`, `--all`, `--plain`, `--json`) |
 | `st draft [branch]` | Mark the current or named branch's PR as a draft |
+| `st draft --stack` | Mark every PR in the current stack as a draft |
 | `st undraft [branch]` | Mark the current or named branch's PR as ready for review |
+| `st undraft --stack` | Mark every PR in the current stack as ready for review |
 | `st issue list` | List open issues |
 | `st comments` / `st reviews` | Show current PR comments; `--stack` or `--all` creates a review inbox, GitHub review comments include inline file/line locations, and `--json` emits a versioned machine-readable view |
 | `st copy` · `st copy --pr` | Copy branch name · PR URL |
