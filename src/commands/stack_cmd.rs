@@ -47,12 +47,20 @@ pub fn run_link() -> Result<()> {
     }
 
     match gh_stack::link_stack(&pr_numbers, &stack.trunk, &remote_info.name) {
-        LinkOutcome::Linked => {
+        LinkOutcome::Linked { stack_number } => {
             gh_stack::set_feature_enabled(repo.workdir()?, true)?;
+            let stack_label = stack_number
+                .map(|number| format!(" #{}", number))
+                .unwrap_or_default();
             println!(
                 "{} {}",
                 "✓".green(),
-                format!("Linked {} PRs as a native GitHub Stack", pr_numbers.len()).dimmed()
+                format!(
+                    "Linked {} PRs as a native GitHub Stack{}",
+                    pr_numbers.len(),
+                    stack_label
+                )
+                .dimmed()
             );
             Ok(())
         }
@@ -72,6 +80,19 @@ pub fn run_link() -> Result<()> {
         LinkOutcome::SinglePrValidationRejected { message } => {
             anyhow::bail!("GitHub rejected the native Stack link: {message}");
         }
+        LinkOutcome::NonAppendUpdate {
+            message,
+            stack_number,
+        } => {
+            let unlink_command = stack_number
+                .map(|number| format!("`st stack unlink {number}`"))
+                .unwrap_or_else(|| "`st stack unlink <stack-number>`".to_string());
+            anyhow::bail!(
+                "GitHub native Stack updates are append-only. Remove the remote Stack with \
+                 {unlink_command}, then run `st stack link` again.\n\n\
+                 gh-stack said: {message}"
+            );
+        }
         LinkOutcome::Failed { message } => {
             if gh_stack::is_stack_fork_conflict(&message) {
                 anyhow::bail!(
@@ -88,7 +109,7 @@ pub fn run_link() -> Result<()> {
     }
 }
 
-pub fn run_unlink() -> Result<()> {
+pub fn run_unlink(stack_number: Option<u64>) -> Result<()> {
     let repo = GitRepo::open()?;
     let config = Config::load()?;
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
@@ -100,8 +121,8 @@ pub fn run_unlink() -> Result<()> {
     }
     ensure_gh_stack_extension()?;
 
-    match gh_stack::unlink_stack() {
-        LinkOutcome::Linked => {
+    match gh_stack::unlink_stack(stack_number) {
+        LinkOutcome::Linked { .. } => {
             println!("{}", "✓ Native GitHub Stack removed".green());
             Ok(())
         }
@@ -120,6 +141,9 @@ pub fn run_unlink() -> Result<()> {
         LinkOutcome::SinglePrValidationRejected { message } => {
             anyhow::bail!("GitHub rejected the native Stack unlink: {message}");
         }
+        LinkOutcome::NonAppendUpdate { message, .. } => {
+            anyhow::bail!("Failed to remove native GitHub Stack: {message}");
+        }
         LinkOutcome::Failed { message } => {
             // `gh stack unstack` operates on a locally-tracked stack, but stacks
             // registered via `gh stack link` (the seam stax uses) carry no local
@@ -128,9 +152,9 @@ pub fn run_unlink() -> Result<()> {
             if message.to_lowercase().contains("not part of a stack") {
                 anyhow::bail!(
                     "No locally-tracked native stack for the current branch. Native stacks that \
-                     stax registers via `gh stack link` are not tracked locally, so `gh stack \
-                     unstack` cannot remove them. Run `gh stack checkout <pr>` to adopt the stack \
-                     locally first, or remove the stack from the GitHub PR UI."
+                     stax registers via `gh stack link` are not tracked locally. Run `st stack \
+                     unlink <stack-number>` to remove one remotely, or remove it from the GitHub \
+                     PR UI."
                 );
             }
             anyhow::bail!("Failed to remove native GitHub Stack: {message}");
@@ -143,7 +167,7 @@ fn ensure_gh_stack_extension() -> Result<()> {
         ExtensionStatus::Installed => Ok(()),
         ExtensionStatus::Outdated => {
             anyhow::bail!(
-                "`gh-stack` extension is outdated and lacks `gh stack link`. Run `gh extension upgrade gh-stack`."
+                "`gh-stack` extension is outdated and lacks `gh stack link`. Run `gh extension upgrade stack`."
             )
         }
         ExtensionStatus::NoExtension => {
@@ -718,7 +742,7 @@ fn run_test_parallel(repo: &GitRepo, branches: &[String], cmd: &str, jobs: usize
         print_captured(&result.stderr);
         if result.dirty {
             println!(
-                "  {} Command left tracked changes; preserved for recovery at {}",
+                "  {} Command left uncommitted changes; preserved for recovery at {}",
                 "WARNING".yellow(),
                 result.path.display()
             );

@@ -220,15 +220,15 @@ gh extension install github/gh-stack
 st doctor --fix
 ```
 
-That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR stacks under the hood, no extra command required. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top.
+That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR stacks under the hood, no extra command required. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top. On gh-stack v0.0.8+, stax also prints the repository-scoped Stack number returned by GitHub.
 
 ```bash
 st ss                    # auto-links native stack when available
 st stack link            # manually re-link the current stack
-st stack unlink          # unstack a locally tracked native GitHub Stack
+st stack unlink 7        # unstack native Stack #7 remotely
 ```
 
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. stax also strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before talking to `gh stack`, since GitHub's private-preview native-stack API rejects Personal Access Tokens and only accepts an OAuth-authenticated `gh` login (`gh auth login`). When either override is set, `st doctor` performs one token-stripped OAuth check and warns if `gh stack` would have no usable keyring login; it skips this extra probe when neither override is set. `st doctor` also recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics, and reports whether the extension is missing, outdated, or up to date. `st stack unlink` delegates to `gh stack unstack`, so stacks that stax registered with `gh stack link` may need `gh stack checkout <pr>` first to create gh-stack's local tracking; otherwise remove the native stack in the GitHub UI.
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.0.8 as out of date, and can upgrade it with `st doctor --fix`. Native Stack updates are append-only; to remove or insert PRs, run `st stack unlink <stack-number>` and then link again. Argument-free `st stack unlink` retains the active locally tracked behavior.
 
 → [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 
@@ -371,7 +371,7 @@ st config --set-ai
 | `st freeze` / `st unfreeze` | Protect/unprotect a tracked branch from restacks, imported-branch refreshes, and squash-merge cleanup rebases |
 | `st completions <shell>` | Generate completions for Bash, Zsh, Fish, PowerShell, or Elvish |
 | `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
-| `st draft [branch]` / `st undraft [branch]` | Toggle a PR between draft and ready-for-review |
+| `st draft [branch]` / `st draft --stack` / `st undraft [branch]` / `st undraft --stack` | Toggle one PR or every PR in the current stack between draft and ready-for-review |
 | `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · PR readiness · list issues |
 
 Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands/reference.md](docs/commands/reference.md)

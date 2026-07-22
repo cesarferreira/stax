@@ -8258,6 +8258,197 @@ mod forge_mock_tests {
         );
     }
 
+    async fn setup_two_branch_stack_with_prs(
+        home: &Path,
+        mock_server: &MockServer,
+    ) -> (TestRepo, String, String) {
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home);
+
+        let output = run_stax_with_env(&repo, home, &["bc", "draft-stack-a"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home, &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_env(&repo, home, &["bc", "draft-stack-b"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home, &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        write_branch_pr_metadata(&repo, &branch_a, "main", 701, Some(false));
+        write_branch_pr_metadata(&repo, &branch_b, &branch_a, 702, Some(false));
+
+        mount_github_pr_draft_transition(mock_server, 701, &branch_a, false, true).await;
+        mount_github_pr_draft_transition(mock_server, 702, &branch_b, false, true).await;
+
+        (repo, branch_a, branch_b)
+    }
+
+    #[tokio::test]
+    async fn test_draft_stack_marks_all_stack_prs_as_draft() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let (repo, branch_a, branch_b) =
+            setup_two_branch_stack_with_prs(home.path(), &mock_server).await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["draft", "--stack"]);
+        assert!(
+            output.status.success(),
+            "draft --stack failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            stdout.contains("PR #701"),
+            "expected parent PR output: {}",
+            stdout
+        );
+        assert!(
+            stdout.contains("PR #702"),
+            "expected child PR output: {}",
+            stdout
+        );
+        assert!(
+            stdout.contains("marked as draft"),
+            "expected draft output: {}",
+            stdout
+        );
+
+        for (branch, pr_number) in [(&branch_a, 701_u64), (&branch_b, 702_u64)] {
+            let metadata_ref = format!("refs/branch-metadata/{}", branch);
+            let metadata_output = repo.git(&["show", &metadata_ref]);
+            assert!(metadata_output.status.success());
+            let metadata: serde_json::Value =
+                serde_json::from_str(&TestRepo::stdout(&metadata_output)).unwrap();
+            assert_eq!(metadata["prInfo"]["isDraft"], true);
+            assert_eq!(metadata["prInfo"]["number"], pr_number);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_undraft_stack_marks_all_stack_prs_ready() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "undraft-stack-a"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "undraft-stack-b"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        write_branch_pr_metadata(&repo, &branch_a, "main", 711, Some(true));
+        write_branch_pr_metadata(&repo, &branch_b, &branch_a, 712, Some(true));
+
+        mount_github_pr_draft_transition(&mock_server, 711, &branch_a, true, false).await;
+        mount_github_pr_draft_transition(&mock_server, 712, &branch_b, true, false).await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["undraft", "--stack"]);
+        assert!(
+            output.status.success(),
+            "undraft --stack failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            stdout.contains("ready for review"),
+            "expected ready output: {}",
+            stdout
+        );
+        assert!(
+            stdout.contains("PR #711"),
+            "expected parent PR output: {}",
+            stdout
+        );
+        assert!(
+            stdout.contains("PR #712"),
+            "expected child PR output: {}",
+            stdout
+        );
+
+        for branch in [&branch_a, &branch_b] {
+            let metadata_ref = format!("refs/branch-metadata/{}", branch);
+            let metadata_output = repo.git(&["show", &metadata_ref]);
+            assert!(metadata_output.status.success());
+            let metadata: serde_json::Value =
+                serde_json::from_str(&TestRepo::stdout(&metadata_output)).unwrap();
+            assert_eq!(metadata["prInfo"]["isDraft"], false);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_draft_stack_skips_branches_without_prs() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = TestRepo::new();
+        let _remote_root = setup_fake_github_remote(&repo, home.path());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "draft-stack-skip-a"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "draft-stack-skip-b"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        write_branch_pr_metadata(&repo, &branch_b, &branch_a, 721, Some(false));
+        mount_github_pr_draft_transition(&mock_server, 721, &branch_b, false, true).await;
+
+        let output = run_stax_with_env(&repo, home.path(), &["draft", "--stack"]);
+        assert!(
+            output.status.success(),
+            "draft --stack failed\nstdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let stderr = TestRepo::stderr(&output);
+        assert!(
+            stderr.contains(&branch_a),
+            "expected skip notice for branch without PR, stderr: {}",
+            stderr
+        );
+        assert!(
+            TestRepo::stdout(&output).contains("PR #721"),
+            "expected child PR to be drafted"
+        );
+    }
+
     #[tokio::test]
     async fn test_submit_with_mock_pr_creation() {
         let (repo, mock_server) = setup_mock_github().await;

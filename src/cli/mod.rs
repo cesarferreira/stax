@@ -494,8 +494,8 @@ pub fn run() -> Result<()> {
             None => print_subcommand_help("issue"),
         },
         Commands::Open => commands::open::run(),
-        Commands::Draft { branch } => commands::draft::run(branch, true),
-        Commands::Undraft { branch } => commands::draft::run(branch, false),
+        Commands::Draft { branch, stack } => commands::draft::run(branch, stack, true),
+        Commands::Undraft { branch, stack } => commands::draft::run(branch, stack, false),
         Commands::Comments {
             plain,
             stack,
@@ -741,7 +741,7 @@ pub fn run() -> Result<()> {
                 submit_after.into(),
             ),
             StackCommands::Link => commands::stack_cmd::run_link(),
-            StackCommands::Unlink => commands::stack_cmd::run_unlink(),
+            StackCommands::Unlink { stack_number } => commands::stack_cmd::run_unlink(stack_number),
         },
         // Hidden shortcuts
         Commands::Bc {

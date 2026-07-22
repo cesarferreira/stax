@@ -31,11 +31,13 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 |---|---|
 | `st ss` | Submit the whole stack — open or update linked PRs |
 | `st stack link` | Register the current PR stack as a native GitHub Stack when `gh-stack` is available |
-| `st stack unlink` | Unstack a locally tracked native GitHub Stack; stax-linked stacks may require `gh stack checkout <pr>` first |
+| `st stack unlink [<stack-number>]` | Unstack a remote native Stack by number, or the active locally tracked stack when omitted |
 | `st branch submit` | Submit only the current branch; if its parent is already synced to the remote, Stax may publish a temporary rebased head without moving your local branch |
 | `st upstack submit` | Submit current branch and descendants; descendants are temporarily chained onto any temporary parent publish heads |
 | `st draft [branch]` | Convert the current (or named) branch's PR to draft |
+| `st draft --stack` | Convert every PR in the current stack to draft |
 | `st undraft [branch]` | Mark the current (or named) branch's PR as ready for review |
+| `st undraft --stack` | Mark every PR in the current stack as ready for review |
 | `st ready` | Open the interactive PR readiness dashboard for all tracked PRs: merge, ping, fix, wait, or draft |
 | `st merge` | Cascade-merge from stack bottom up to current branch |
 | `st merge --when-ready` | Wait for CI + approvals, then merge (alias: `st mwr`) |
@@ -47,7 +49,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 
 Scoped submit keeps local branch metadata unchanged when it prepares a temporary publish head. Plain `git commit` work on the branch is included; `st restack` remains the command that updates local branch tips and parent revisions.
 
-On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register the submitted PRs with GitHub via `gh stack link` when the `github/gh-stack` extension is installed. Repos without access or users without the extension keep the normal stax stack links and see no behavior change. stax strips ambient `GH_TOKEN`/`GITHUB_TOKEN` before calling `gh stack`, since the private-preview native-stack API only accepts an OAuth-authenticated `gh` login; `st doctor` recommends `gh-stack` v0.0.6+ for reliable auth-error diagnostics. `st stack unlink` delegates to `gh stack unstack`, which only works for stacks gh-stack tracks locally; if stax registered the stack, run `gh stack checkout <pr>` first or remove the native stack in the GitHub UI. See [Native GitHub Stacked PRs](../integrations/github-native-stacks.md).
+On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register the submitted PRs with GitHub via `gh stack link` when the `github/gh-stack` extension is installed. Repos without access or users without the extension keep the normal stax stack links and see no behavior change. `gh-stack` v0.0.8+ supports normal GitHub CLI authentication, including token environment variables; stax keeps its token-stripping OAuth fallback only for known older versions. `st doctor` always reports the installed version and marks versions below v0.0.8 as out of date. `st stack unlink <stack-number>` delegates to v0.0.8's remote unstack operation without requiring local tracking; omit the number to target the active locally tracked stack. See [Native GitHub Stacked PRs](../integrations/github-native-stacks.md).
 
 ## Sync, restack, update
 

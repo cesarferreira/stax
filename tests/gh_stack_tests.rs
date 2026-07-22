@@ -195,7 +195,7 @@ exit 1
 }
 
 #[test]
-fn doctor_detects_installed_gh_stack_with_env_only_auth() {
+fn doctor_reports_current_gh_stack_version_with_env_only_auth() {
     let repo = TestRepo::new_with_remote();
     repo.configure_github_like_submit_remote();
     repo.run_stax(&["init", "--trunk", "main"]).assert_success();
@@ -230,16 +230,18 @@ exit 1
     output.assert_success();
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("gh-stack extension installed"),
-        "doctor should detect the installed extension, stdout was:\n{stdout}"
+        stdout.contains("gh-stack extension installed")
+            && stdout.contains("v0.0.8")
+            && stdout.contains("up to date"),
+        "doctor should report the current installed extension, stdout was:\n{stdout}"
     );
     assert!(
         !stdout.contains("gh-stack extension missing"),
         "doctor must not misreport an auth failure as a missing extension, stdout was:\n{stdout}"
     );
     assert!(
-        stdout.contains("no usable OAuth-authenticated `gh` account"),
-        "doctor should explain why native stack operations still cannot authenticate, stdout was:\n{stdout}"
+        !stdout.contains("no usable OAuth-authenticated `gh` account"),
+        "v0.0.8 should use the env-only authentication, stdout was:\n{stdout}"
     );
 }
 
@@ -256,7 +258,7 @@ case "$1 $2" in
   "extension list")
     [ "${GH_TOKEN:-}" = "ghp_env_only" ] || exit 4
     [ "${GITHUB_TOKEN:-}" = "github_env_only" ] || exit 4
-    echo "gh stack github/gh-stack v0.0.8"
+    echo "gh stack github/gh-stack v0.0.7"
     exit 0
     ;;
   "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
@@ -282,7 +284,9 @@ exit 1
     output.assert_success();
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("gh-stack extension installed"),
+        stdout.contains("gh-stack extension installed")
+            && stdout.contains("v0.0.7")
+            && stdout.contains("out of date"),
         "stdout was:\n{stdout}"
     );
     assert!(
@@ -348,7 +352,7 @@ exit 1
     output.assert_success();
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("gh-stack extension installed"),
+        stdout.contains("gh-stack extension installed") && stdout.contains("version unknown"),
         "doctor should trust the installed command's capabilities, stdout was:\n{stdout}"
     );
     assert!(
@@ -458,28 +462,6 @@ fn version_status_flags_versions_below_recommended() {
     let fake = fake_gh_dir(
         r#"#!/bin/sh
 if [ "$1 $2" = "extension list" ]; then
-  echo "gh-stack github/gh-stack v0.0.4"
-  exit 0
-fi
-exit 1
-"#,
-    );
-
-    let status = stax::github::gh_stack::version_status_with_path(&path_with_fake_gh(fake.path()));
-
-    assert_eq!(
-        status,
-        stax::github::gh_stack::VersionStatus::BelowRecommended {
-            installed: "0.0.4".to_string()
-        }
-    );
-}
-
-#[test]
-fn version_status_accepts_recommended_or_newer_versions() {
-    let fake = fake_gh_dir(
-        r#"#!/bin/sh
-if [ "$1 $2" = "extension list" ]; then
   echo "gh-stack github/gh-stack v0.0.7"
   exit 0
 fi
@@ -491,8 +473,30 @@ exit 1
 
     assert_eq!(
         status,
-        stax::github::gh_stack::VersionStatus::MeetsRecommended {
+        stax::github::gh_stack::VersionStatus::BelowRecommended {
             installed: "0.0.7".to_string()
+        }
+    );
+}
+
+#[test]
+fn version_status_accepts_recommended_or_newer_versions() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "extension list" ]; then
+  echo "gh-stack github/gh-stack v0.0.8"
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    let status = stax::github::gh_stack::version_status_with_path(&path_with_fake_gh(fake.path()));
+
+    assert_eq!(
+        status,
+        stax::github::gh_stack::VersionStatus::MeetsRecommended {
+            installed: "0.0.8".to_string()
         }
     );
 }
@@ -524,7 +528,7 @@ fn doctor_recommends_upgrade_for_gh_stack_below_recommended_version() {
         r#"#!/bin/sh
 case "$1 $2" in
   "--version "*) echo "gh version 2.71.0"; exit 0 ;;
-  "extension list") echo "gh-stack github/gh-stack v0.0.4"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.7"; exit 0 ;;
   "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
 esac
 exit 1
@@ -547,7 +551,9 @@ exit 1
     output.assert_success();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("v0.0.4") && stdout.contains("gh extension upgrade gh-stack"),
+        stdout.contains("v0.0.7")
+            && stdout.contains("out of date")
+            && stdout.contains("gh extension upgrade stack"),
         "expected a version-upgrade recommendation, stdout was:\n{stdout}"
     );
 }
@@ -588,13 +594,16 @@ exit 1
 fn link_stack_strips_injected_token_env_vars_before_calling_gh() {
     let fake = fake_gh_dir(
         r#"#!/bin/sh
-if [ "$1 $2" = "stack link" ]; then
-  {
-    echo "GH_TOKEN=${GH_TOKEN:-unset}"
-    echo "GITHUB_TOKEN=${GITHUB_TOKEN:-unset}"
-  } > "$ENV_DUMP_FILE"
-  exit 0
-fi
+case "$1 $2" in
+  "extension list") echo "gh-stack github/gh-stack v0.0.7"; exit 0 ;;
+  "stack link")
+    {
+      echo "GH_TOKEN=${GH_TOKEN:-unset}"
+      echo "GITHUB_TOKEN=${GITHUB_TOKEN:-unset}"
+    } > "$ENV_DUMP_FILE"
+    exit 0
+    ;;
+esac
 exit 1
 "#,
     );
@@ -613,33 +622,87 @@ exit 1
         ],
     );
 
-    assert_eq!(outcome, stax::github::gh_stack::LinkOutcome::Linked);
+    assert_eq!(
+        outcome,
+        stax::github::gh_stack::LinkOutcome::Linked { stack_number: None }
+    );
     let dump = fs::read_to_string(env_dump_file).expect("env dump written");
     assert_eq!(dump, "GH_TOKEN=unset\nGITHUB_TOKEN=unset\n");
+}
+
+#[test]
+fn link_stack_preserves_injected_token_env_vars_for_v0_0_8() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "extension list") echo "gh-stack github/gh-stack v0.0.8"; exit 0 ;;
+  "stack link")
+    {
+      echo "GH_TOKEN=${GH_TOKEN:-unset}"
+      echo "GITHUB_TOKEN=${GITHUB_TOKEN:-unset}"
+    } > "$ENV_DUMP_FILE"
+    exit 0
+    ;;
+esac
+exit 1
+"#,
+    );
+    let env_dump_file = fake.path().join("current-env.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let outcome = stax::github::gh_stack::link_stack_with_env(
+        &[10, 20],
+        "main",
+        "origin",
+        &[
+            ("PATH", path.as_str()),
+            ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+            ("GH_TOKEN", "ghp_current"),
+            ("GITHUB_TOKEN", "github_current"),
+        ],
+    );
+
+    assert_eq!(
+        outcome,
+        stax::github::gh_stack::LinkOutcome::Linked { stack_number: None }
+    );
+    assert_eq!(
+        fs::read_to_string(env_dump_file).unwrap(),
+        "GH_TOKEN=ghp_current\nGITHUB_TOKEN=github_current\n"
+    );
 }
 
 #[test]
 fn unlink_stack_strips_injected_token_env_vars_before_calling_gh() {
     let fake = fake_gh_dir(
         r#"#!/bin/sh
-if [ "$1 $2" = "stack unstack" ]; then
-  printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "${GH_TOKEN:-unset}" "${GITHUB_TOKEN:-unset}" > "$ENV_DUMP_FILE"
-  exit 0
-fi
+case "$1 $2" in
+  "extension list") echo "gh-stack github/gh-stack v0.0.7"; exit 0 ;;
+  "stack unstack")
+    printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "${GH_TOKEN:-unset}" "${GITHUB_TOKEN:-unset}" > "$ENV_DUMP_FILE"
+    exit 0
+    ;;
+esac
 exit 1
 "#,
     );
     let env_dump_file = fake.path().join("unlink-env.txt");
     let path = path_with_fake_gh(fake.path());
 
-    let outcome = stax::github::gh_stack::unlink_stack_with_env(&[
-        ("PATH", path.as_str()),
-        ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
-        ("GH_TOKEN", "ghp_should_be_stripped"),
-        ("GITHUB_TOKEN", "github_should_be_stripped"),
-    ]);
+    let outcome = stax::github::gh_stack::unlink_stack_with_env(
+        None,
+        &[
+            ("PATH", path.as_str()),
+            ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+            ("GH_TOKEN", "ghp_should_be_stripped"),
+            ("GITHUB_TOKEN", "github_should_be_stripped"),
+        ],
+    );
 
-    assert_eq!(outcome, stax::github::gh_stack::LinkOutcome::Linked);
+    assert_eq!(
+        outcome,
+        stax::github::gh_stack::LinkOutcome::Linked { stack_number: None }
+    );
     assert_eq!(
         fs::read_to_string(env_dump_file).unwrap(),
         "GH_TOKEN=unset\nGITHUB_TOKEN=unset\n"
@@ -678,7 +741,7 @@ exit 1
 fn upgrade_extension_preserves_injected_token_env_vars() {
     let fake = fake_gh_dir(
         r#"#!/bin/sh
-if [ "$1 $2 $3" = "extension upgrade gh-stack" ]; then
+if [ "$1 $2 $3" = "extension upgrade stack" ]; then
   printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "${GH_TOKEN:-unset}" "${GITHUB_TOKEN:-unset}" > "$ENV_DUMP_FILE"
   exit 0
 fi
@@ -733,7 +796,10 @@ exit 0
         ],
     );
 
-    assert_eq!(outcome, stax::github::gh_stack::LinkOutcome::Linked);
+    assert_eq!(
+        outcome,
+        stax::github::gh_stack::LinkOutcome::Linked { stack_number: None }
+    );
     let args = fs::read_to_string(args_file).expect("args written");
     assert_eq!(
         args,
@@ -835,7 +901,7 @@ if [ "$1 $2" = "stack --help" ]; then
   printf 'Available Commands:\n  view  View the current stack\n'
   exit 0
 fi
-if [ "$1 $2 $3" = "extension upgrade gh-stack" ]; then
+if [ "$1 $2 $3" = "extension upgrade stack" ]; then
   echo "upgraded" >> "$GH_UPGRADE_FILE"
   exit 0
 fi
@@ -863,7 +929,7 @@ exit 1
     output.assert_success();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("outdated") && stdout.contains("gh extension upgrade gh-stack"),
+        stdout.contains("outdated") && stdout.contains("gh extension upgrade stack"),
         "doctor should report the outdated extension, stdout was:\n{stdout}"
     );
     assert!(
@@ -1049,6 +1115,90 @@ exit 1
     );
 }
 
+#[test]
+fn stack_unlink_passes_stack_number_to_gh_stack() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list") echo "gh stack github/gh-stack v0.0.8"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack unstack") printf '%s\n' "$@" > "$GH_ARGS_FILE"; exit 0 ;;
+esac
+exit 1
+"#,
+    );
+    let args_file = fake.path().join("numbered-unlink-args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["stack", "unlink", "7"],
+        &[
+            ("HOME", &home),
+            ("PATH", &path),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    assert_eq!(
+        fs::read_to_string(args_file).unwrap(),
+        "stack\nunstack\n7\n"
+    );
+}
+
+#[test]
+fn stack_unlink_without_number_keeps_active_stack_behavior() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list") echo "gh stack github/gh-stack v0.0.8"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack unstack") printf '%s\n' "$@" > "$GH_ARGS_FILE"; exit 0 ;;
+esac
+exit 1
+"#,
+    );
+    let args_file = fake.path().join("active-unlink-args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["stack", "unlink"],
+        &[
+            ("HOME", &home),
+            ("PATH", &path),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    assert_eq!(fs::read_to_string(args_file).unwrap(), "stack\nunstack\n");
+}
+
+#[test]
+fn stack_unlink_rejects_zero_stack_number_before_calling_gh() {
+    let repo = TestRepo::new();
+    let output = repo.run_stax(&["stack", "unlink", "0"]);
+
+    assert!(!output.status.success());
+    assert!(
+        TestRepo::stderr(&output).contains("0"),
+        "expected invalid stack-number diagnostic, stderr was:\n{}",
+        TestRepo::stderr(&output)
+    );
+}
+
 #[tokio::test]
 async fn submit_multi_pr_stack_succeeds_without_gh_stack_extension_installed() {
     // The most common real-world case: a user who has never installed
@@ -1224,19 +1374,17 @@ exit 1
     assert!(
         stdout.contains("gh-stack extension is outdated")
             && stdout.contains("st doctor --fix")
-            && stdout.contains("gh extension upgrade gh-stack"),
+            && stdout.contains("gh extension upgrade stack"),
         "expected an actionable outdated-extension note, stdout was:\n{stdout}"
     );
 }
 
-/// The fake `gh stack link` response gh-stack gives when a local stack has
-/// forked: another branch sharing the same ancestor PRs already anchors a
-/// native GitHub Stack, and GitHub's native Stack feature only supports one
-/// linear chain at a time.
-const FORK_CONFLICT_GH_STACK_SCRIPT: &str = r#"#!/bin/sh
+/// gh-stack v0.0.8 only permits additive updates. Omitting an existing PR is
+/// a remote-stack divergence, not proof that the local stack has forked.
+const NON_APPEND_GH_STACK_SCRIPT: &str = r#"#!/bin/sh
 case "$1 $2" in
   "--version "*) echo "gh version 2.71.0"; exit 0 ;;
-  "extension list") echo "gh-stack github/gh-stack v0.0.7"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.8"; exit 0 ;;
   "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
   "stack link")
     {
@@ -1253,7 +1401,7 @@ exit 1
 "#;
 
 #[tokio::test]
-async fn submit_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_dump() {
+async fn submit_explains_append_only_native_stack_conflict() {
     let mock_server = MockServer::start().await;
 
     let repo = TestRepo::new_with_remote();
@@ -1269,7 +1417,7 @@ async fn submit_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_du
     mock_existing_pr(&mock_server, 10, &branches[0], "main").await;
     mock_existing_pr(&mock_server, 20, &branches[1], &branches[0]).await;
 
-    let fake = fake_gh_dir(FORK_CONFLICT_GH_STACK_SCRIPT);
+    let fake = fake_gh_dir(NON_APPEND_GH_STACK_SCRIPT);
     let path = path_with_fake_gh(fake.path());
 
     let output = repo.run_stax_with_env(
@@ -1284,12 +1432,12 @@ async fn submit_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_du
     output.assert_success();
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("this stack has forked"),
-        "expected a plain-language fork-conflict note, stdout was:\n{stdout}"
+        stdout.contains("append-only") && stdout.contains("st stack unlink <stack-number>"),
+        "expected append-only recovery guidance, stdout was:\n{stdout}"
     );
     assert!(
-        !stdout.contains("Include all existing PRs"),
-        "the raw multi-line gh-stack dump should not leak to the user, stdout was:\n{stdout}"
+        !stdout.contains("this stack has forked"),
+        "append-only divergence must not be mislabeled as a fork, stdout was:\n{stdout}"
     );
 
     // Non-fatal: the fork conflict must not have blocked native-stack
@@ -1298,13 +1446,13 @@ async fn submit_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_du
     let feature_cache = repo.git(&["config", "--get", "stax.nativeStack.enabled"]);
     assert!(
         !feature_cache.status.success(),
-        "a forked-stack conflict must not be cached as feature-disabled, but got: {}",
+        "append-only divergence must not be cached as feature-disabled, but got: {}",
         TestRepo::stdout(&feature_cache)
     );
 }
 
 #[test]
-fn stack_link_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_dump() {
+fn stack_link_explains_append_only_native_stack_conflict() {
     let repo = TestRepo::new_with_remote();
     let home = repo.clean_home();
     repo.configure_github_like_submit_remote();
@@ -1313,23 +1461,86 @@ fn stack_link_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_dump
     write_branch_pr_metadata(&repo, &branches[0], "main", 10);
     write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
 
-    let fake = fake_gh_dir(FORK_CONFLICT_GH_STACK_SCRIPT);
+    let fake = fake_gh_dir(NON_APPEND_GH_STACK_SCRIPT);
     let path = path_with_fake_gh(fake.path());
 
     let output = repo.run_stax_with_env(&["stack", "link"], &[("HOME", &home), ("PATH", &path)]);
 
-    assert!(
-        !output.status.success(),
-        "linking a forked stack should fail"
-    );
+    assert!(!output.status.success(), "a non-append update should fail");
     let stderr = TestRepo::stderr(&output);
     assert!(
-        stderr.contains("shares ancestor PRs") && stderr.contains("stax stack unlink"),
-        "expected a plain-language fork-conflict explanation with unlink guidance, stderr was:\n{stderr}"
+        stderr.contains("append-only") && stderr.contains("st stack unlink <stack-number>"),
+        "expected append-only recovery guidance, stderr was:\n{stderr}"
     );
     assert!(
-        stderr.contains("would remove #999"),
-        "the underlying gh-stack detail should still be included for debugging, stderr was:\n{stderr}"
+        !stderr.contains("shares ancestor PRs"),
+        "append-only divergence must not be mislabeled as a fork, stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn stack_link_explains_append_to_top_requirement() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+    let branches = repo.create_stack(&["append-top-link-a", "append-top-link-b"]);
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list") echo "gh stack github/gh-stack v0.0.8"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack link") echo "Cannot update stack: new PRs must be added to the top of the existing stack" >&2; exit 1 ;;
+esac
+exit 1
+"#,
+    );
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(&["stack", "link"], &[("HOME", &home), ("PATH", &path)]);
+
+    assert!(!output.status.success());
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        stderr.contains("append-only") && stderr.contains("st stack unlink <stack-number>"),
+        "expected append-to-top recovery guidance, stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn stack_link_shows_stack_number_from_success_output() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+    let branches = repo.create_stack(&["number-link-a", "number-link-b"]);
+    write_branch_pr_metadata(&repo, &branches[0], "main", 10);
+    write_branch_pr_metadata(&repo, &branches[1], &branches[0], 20);
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list") echo "gh stack github/gh-stack v0.0.8"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack link") echo "Updated stack to 2 PRs (stack #7)"; exit 0 ;;
+esac
+exit 1
+"#,
+    );
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(&["stack", "link"], &[("HOME", &home), ("PATH", &path)]);
+
+    output.assert_success();
+    assert!(
+        TestRepo::stdout(&output).contains("Linked 2 PRs as a native GitHub Stack #7"),
+        "explicit link should show the stack number, stdout was:\n{}",
+        TestRepo::stdout(&output)
     );
 }
 
@@ -1337,7 +1548,7 @@ fn stack_link_explains_forked_native_stack_conflict_instead_of_raw_gh_stack_dump
 /// forked stack up front and instead attempts to reorder PRs to fit its
 /// assumed linear chain, which fails once it hits a branch it can't
 /// reparent — a real-world variant of the same forked-stack limitation as
-/// `FORK_CONFLICT_GH_STACK_SCRIPT` above, but with different wording.
+/// the former removal wording above, but this remains a distinct conflict.
 const FORK_CONFLICT_REORDER_GH_STACK_SCRIPT: &str = r#"#!/bin/sh
 case "$1 $2" in
   "--version "*) echo "gh version 2.71.0"; exit 0 ;;
@@ -1542,10 +1753,11 @@ async fn submit_auto_registers_native_stack_and_keeps_stax_links() {
         r#"#!/bin/sh
 case "$1 $2" in
   "--version "*) echo "gh version 2.71.0"; exit 0 ;;
-  "extension list") echo "gh-stack github/gh-stack v0.0.6"; exit 0 ;;
+  "extension list") echo "gh-stack github/gh-stack v0.0.8"; exit 0 ;;
   "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
   "stack link")
     printf '%s\n' "$@" >> "$GH_ARGS_FILE"
+    echo "Created stack with 2 PRs (stack #7)"
     exit 0
     ;;
 esac
@@ -1566,6 +1778,11 @@ exit 1
     );
 
     output.assert_success();
+    assert!(
+        TestRepo::stdout(&output).contains("Native GitHub Stack #7 linked"),
+        "submit should show the native stack number, stdout was:\n{}",
+        TestRepo::stdout(&output)
+    );
     let args = fs::read_to_string(&args_file).expect("gh stack link args written");
     assert_eq!(
         args,

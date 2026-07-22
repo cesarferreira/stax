@@ -4,16 +4,10 @@ use std::process::{Command, Output};
 
 const FEATURE_ENABLED_KEY: &str = "stax.nativeStack.enabled";
 
-/// Below this version, `gh-stack` reports Personal Access Token rejections
-/// with the same ambiguous "Stacked PRs are not enabled" message it uses for
-/// a genuinely feature-disabled repo (fixed in v0.0.6's "PAT auth warning"
-/// change, which introduced the distinct "Personal access tokens are not
-/// supported" message `auth_token_unsupported_output` matches on). Below
-/// this version, an auth-token issue can still be misclassified as
-/// `FeatureDisabled` and incorrectly cached. This is purely a `doctor`
-/// diagnostic — `gh stack link` itself still works on any version that
-/// passes `link_command_supported` (added after v0.0.1).
-const RECOMMENDED_GH_STACK_VERSION: (u32, u32, u32) = (0, 0, 6);
+/// v0.0.8 moved gh-stack to the public Stacks REST API, which supports the
+/// normal GitHub CLI authentication sources. Older link-capable versions still
+/// work, but need stax's legacy OAuth fallback when PAT overrides are present.
+const RECOMMENDED_GH_STACK_VERSION: (u32, u32, u32) = (0, 0, 8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtensionStatus {
@@ -55,7 +49,9 @@ pub enum FeatureState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkOutcome {
-    Linked,
+    Linked {
+        stack_number: Option<u64>,
+    },
     FeatureDisabled {
         message: String,
     },
@@ -70,6 +66,12 @@ pub enum LinkOutcome {
     },
     SinglePrValidationRejected {
         message: String,
+    },
+    /// The remote stack exists, but gh-stack v0.0.8 only permits appending new
+    /// PRs at its top. Removing or inserting PRs requires unstacking it first.
+    NonAppendUpdate {
+        message: String,
+        stack_number: Option<u64>,
     },
     Failed {
         message: String,
@@ -164,7 +166,7 @@ pub fn version_status_with_path(path: &str) -> VersionStatus {
 /// Checks the installed `github/gh-stack` version against
 /// `RECOMMENDED_GH_STACK_VERSION`. Informational only — never blocks `gh
 /// stack link` from being attempted; surfaced by `stax doctor` so users on
-/// an old version know to upgrade for reliable auth-error diagnostics.
+/// an old version know to upgrade to the public Stacks REST API.
 pub fn version_status_with_env(env: &[(&str, &str)]) -> VersionStatus {
     let Some(installed) = installed_gh_stack_version(env) else {
         return VersionStatus::Unknown;
@@ -272,7 +274,9 @@ pub fn link_stack_with_env(
     command.args(["--base", base, "--remote", remote]);
 
     match command.output() {
-        Ok(output) if output.status.success() => LinkOutcome::Linked,
+        Ok(output) if output.status.success() => LinkOutcome::Linked {
+            stack_number: stack_number_from_message(&output_details(&output)),
+        },
         // Must be checked before `feature_disabled_output`: gh-stack's PAT
         // rejection message also contains "private preview", which would
         // otherwise be misclassified as the repo/org lacking the feature.
@@ -287,6 +291,10 @@ pub fn link_stack_with_env(
                 message: command_message(&output),
             }
         }
+        Ok(output) if non_append_update_output(&output) => LinkOutcome::NonAppendUpdate {
+            stack_number: stack_number_from_message(&output_details(&output)),
+            message: command_message(&output),
+        },
         Ok(output) => LinkOutcome::Failed {
             message: command_message(&output),
         },
@@ -303,13 +311,19 @@ pub fn install_extension() -> Result<()> {
     install_extension_with_env(&[])
 }
 
-pub fn unlink_stack() -> LinkOutcome {
-    unlink_stack_with_env(&[])
+pub fn unlink_stack(stack_number: Option<u64>) -> LinkOutcome {
+    unlink_stack_with_env(stack_number, &[])
 }
 
-pub fn unlink_stack_with_env(env: &[(&str, &str)]) -> LinkOutcome {
-    match gh_stack_command(env).args(["stack", "unstack"]).output() {
-        Ok(output) if output.status.success() => LinkOutcome::Linked,
+pub fn unlink_stack_with_env(stack_number: Option<u64>, env: &[(&str, &str)]) -> LinkOutcome {
+    let mut command = gh_stack_command(env);
+    command.args(["stack", "unstack"]);
+    if let Some(stack_number) = stack_number {
+        command.arg(stack_number.to_string());
+    }
+
+    match command.output() {
+        Ok(output) if output.status.success() => LinkOutcome::Linked { stack_number: None },
         Ok(output) if auth_token_unsupported_output(&output) => LinkOutcome::AuthTokenUnsupported {
             message: command_message(&output),
         },
@@ -350,13 +364,13 @@ pub fn upgrade_extension() -> Result<()> {
 
 pub fn upgrade_extension_with_env(env: &[(&str, &str)]) -> Result<()> {
     let output = gh_command(env)
-        .args(["extension", "upgrade", "gh-stack"])
+        .args(["extension", "upgrade", "stack"])
         .output()
-        .context("Failed to execute `gh extension upgrade gh-stack`")?;
+        .context("Failed to execute `gh extension upgrade stack`")?;
 
     if !output.status.success() {
         bail!(
-            "`gh extension upgrade gh-stack` failed: {}",
+            "`gh extension upgrade stack` failed: {}",
             output_details(&output)
         );
     }
@@ -374,12 +388,18 @@ fn gh_command(env: &[(&str, &str)]) -> Command {
     command
 }
 
-/// GitHub's native Stacked PRs API rejects Personal Access Tokens, so remote
-/// stack operations must fall back to a keyring-stored OAuth account.
+/// gh-stack versions before v0.0.8 use private-preview endpoints that reject
+/// PAT overrides. Current and unknown versions keep the normal gh environment;
+/// known legacy versions fall back to a keyring-stored OAuth account.
 fn gh_stack_command(env: &[(&str, &str)]) -> Command {
     let mut command = gh_command(env);
-    for var in AUTH_OVERRIDE_ENV_VARS {
-        command.env_remove(var);
+    let is_known_legacy = installed_gh_stack_version(env)
+        .and_then(|version| parse_semver(&version))
+        .is_some_and(|version| version < RECOMMENDED_GH_STACK_VERSION);
+    if is_known_legacy {
+        for var in AUTH_OVERRIDE_ENV_VARS {
+            command.env_remove(var);
+        }
     }
     command
 }
@@ -404,19 +424,38 @@ fn auth_token_unsupported_output(output: &Output) -> bool {
 /// linear — a PR can only anchor one native-stack "tip" at a time — so this
 /// fires whenever a *local* stack forks (two branches created off the same
 /// ancestor branch each try to register their own native Stack). gh-stack
-/// surfaces this in a couple of different shapes depending on whether it
-/// detects the conflict up front or only after attempting a reorder:
-///   - `"Cannot update stack: this would remove #123 from the stack"`
-///   - `"Failed to update stack (HTTP 409): Stack contents have changed"`
-///     (seen alongside a `422 PullRequest.base is invalid` on the branch
-///     gh-stack tried to reparent to fit its assumed linear order)
-///
-/// Both are surfaced as the same plain-language note instead of the raw
-/// multi-line CLI dump.
+/// surfaces this as `"Stack contents have changed"` after attempting a
+/// reorder. Append-only update errors are classified separately because they
+/// can be recovered from by unstacking the known remote stack number.
 pub(crate) fn is_stack_fork_conflict(message: &str) -> bool {
-    let lower = message.to_lowercase();
+    message
+        .to_lowercase()
+        .contains("stack contents have changed")
+}
+
+fn non_append_update_output(output: &Output) -> bool {
+    let lower = command_message(output).to_lowercase();
     (lower.contains("would remove") && lower.contains("from the stack"))
-        || lower.contains("stack contents have changed")
+        || lower.contains("must be added to the top")
+}
+
+fn stack_number_from_message(message: &str) -> Option<u64> {
+    let lower = message.to_ascii_lowercase();
+    let mut remainder = lower.as_str();
+
+    while let Some(index) = remainder.find("stack #") {
+        let after_marker = &remainder[index + "stack #".len()..];
+        let digits: String = after_marker
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if let Ok(number) = digits.parse() {
+            return Some(number);
+        }
+        remainder = after_marker;
+    }
+
+    None
 }
 
 fn single_pr_validation_output(pr_numbers: &[u64], output: &Output) -> bool {

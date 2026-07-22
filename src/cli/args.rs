@@ -824,13 +824,21 @@ pub(crate) enum Commands {
     /// Mark the current (or named) branch's PR as a draft
     Draft {
         /// Branch to operate on (defaults to current)
+        #[arg(conflicts_with = "stack")]
         branch: Option<String>,
+        /// Apply to all PRs in the current stack
+        #[arg(long, conflicts_with = "branch")]
+        stack: bool,
     },
 
     /// Mark the current (or named) branch's PR as ready for review
     Undraft {
         /// Branch to operate on (defaults to current)
+        #[arg(conflicts_with = "stack")]
         branch: Option<String>,
+        /// Apply to all PRs in the current stack
+        #[arg(long, conflicts_with = "branch")]
+        stack: bool,
     },
 
     /// Show PR comments as a current-branch view or stack-wide review inbox
@@ -1437,8 +1445,12 @@ pub(crate) enum StackCommands {
     /// Register the current stack as a native GitHub Stack via `gh stack`
     Link,
 
-    /// Unstack a locally tracked native GitHub Stack via `gh stack`
-    Unlink,
+    /// Unstack a native GitHub Stack via `gh stack`
+    Unlink {
+        /// Repository-scoped GitHub native stack number
+        #[arg(value_parser = clap::value_parser!(u64).range(1..))]
+        stack_number: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]

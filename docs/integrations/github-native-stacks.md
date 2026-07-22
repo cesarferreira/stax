@@ -15,7 +15,7 @@ st doctor --fix
 Upgrade it the same way:
 
 ```bash
-gh extension upgrade gh-stack
+gh extension upgrade stack
 # or:
 st doctor --fix
 ```
@@ -26,12 +26,12 @@ No further setup is required — once the extension is installed, native stack r
 
 - GitHub remote.
 - Repo has GitHub native Stacked PRs enabled.
-- GitHub CLI `gh` is installed and logged in with an **OAuth-authenticated account** (`gh auth login`). GitHub's native Stacked PRs API is in private preview and rejects Personal Access Tokens outright.
+- GitHub CLI `gh` is installed and authenticated through any normal supported source (`gh auth login`, `GH_TOKEN`, or `GITHUB_TOKEN`).
 - `github/gh-stack` extension is installed (see [Install](#install) above), and recent enough to provide the `gh stack link` command (added after `v0.0.1`). Older versions fail with `unknown flag: --base`.
 
-`st doctor` reports this status — including when the installed extension is too old to expose `gh stack link`, or missing entirely. When `GH_TOKEN` or `GITHUB_TOKEN` is set, doctor performs one token-stripped OAuth check and warns if `gh stack` would have no usable keyring login; run `gh auth login` or `gh auth switch` to repair it. Doctor skips this extra probe when neither override is set. `st doctor --fix` can install the extension when `gh` is available, or upgrade it when it is outdated.
+`st doctor` reports this status — including the installed version, whether it is current, when the extension is too old to expose `gh stack link`, or when it is missing entirely. `st doctor --fix` can install the extension when `gh` is available, or upgrade it when it is outdated.
 
-**Recommended: v0.0.6+.** Versions below v0.0.6 report Personal Access Token rejections with the same message used for a genuinely feature-disabled repo ("Stacked PRs are not enabled..."), so stax can't tell the two apart and may incorrectly cache the repo as unsupported. `st doctor` flags this with a soft warning (and `--fix` upgrades it) even though `gh stack link` itself works on any version that exposes the `link` command.
+**Recommended: v0.0.8+.** v0.0.8 migrated to GitHub's public Stacks REST API, removing the old Personal Access Token restriction. `st doctor` marks earlier versions as out of date and `st doctor --fix` upgrades them, even though `gh stack link` itself remains available on older link-capable releases.
 
 ## How it works
 
@@ -41,7 +41,7 @@ stax still owns local stack management: branch creation, parent metadata, restac
 gh stack link <pr> [<next-pr> ...] --base <trunk> --remote <remote>
 ```
 
-That registers one or more already-submitted PRs as a native GitHub Stack. stax passes PR numbers in bottom-to-top order and keeps its own body/comment stack links unless you opt out.
+That registers one or more already-submitted PRs as a native GitHub Stack. stax passes PR numbers in bottom-to-top order, keeps its own body/comment stack links unless you opt out, and shows the repository-scoped Stack number when gh-stack returns it.
 
 <a id="default-behavior"></a>
 ## Default behavior
@@ -56,13 +56,13 @@ stack_links_when_native = "keep"
 
 With `auto`, stax attempts native registration only when the extension is installed, the repo is eligible, and the stack has **at least two PRs** (`gh stack link` requires two or more — a native stack is inherently multi-PR). Single-PR stacks are skipped silently; once a second PR joins the stack, the next submit registers both. If the repo is not enabled for the private preview, stax caches that result locally and stops retrying. Submit still succeeds and behaves like normal stax.
 
-### Personal Access Tokens are shadowed automatically
+### Authentication across gh-stack versions
 
-`gh` treats `GH_TOKEN`/`GITHUB_TOKEN` env vars as overriding whichever account you last logged in with, and native Stacked PRs reject that kind of token during private preview. If you export a PAT for other tooling (CI scripts, other CLIs), it would otherwise silently break native stack registration even though you have a perfectly good OAuth login sitting unused. stax works around this: when it shells out to `gh stack link`/`gh stack unstack`, it always strips `GH_TOKEN`/`GITHUB_TOKEN` first, so `gh` falls back to its stored OAuth-authenticated account. This has no effect on stax's own GitHub API calls (PR creation, comments, etc.), which still use your configured token normally.
+With gh-stack v0.0.8+, stax preserves the normal GitHub CLI environment. `GH_TOKEN` and `GITHUB_TOKEN` therefore work for native stack registration in local automation and CI, alongside keyring accounts created by `gh auth login`.
 
-If no OAuth-authenticated `gh` account is available at all, native registration is skipped with a note pointing at `gh auth login` — this case is never cached as "feature disabled," since it depends on your local `gh` auth state rather than the repo/org's eligibility.
+Known older versions still use private-preview endpoints that reject Personal Access Tokens. For those versions only, stax removes `GH_TOKEN`/`GITHUB_TOKEN` from `gh stack link` and `gh stack unstack`, allowing `gh` to fall back to its stored OAuth-authenticated account. This has no effect on stax's own GitHub API calls.
 
-`st doctor` checks this specific ambiguous setup without slowing its common path: only when `GH_TOKEN` or `GITHUB_TOKEN` is non-empty does it run one `gh auth status` probe with both overrides removed. A missing or invalid keyring login produces a soft warning; normal commands and doctor runs without token overrides perform no additional authentication probe.
+When a known legacy version and a token override are both present, `st doctor` performs one token-stripped `gh auth status` probe. A missing keyring login produces a soft warning that recommends upgrading or running `gh auth login`; v0.0.8+ needs no extra OAuth probe.
 
 `stack_links_when_native = "keep"` means PR body/comment links continue to sync even when GitHub native registration succeeds.
 
@@ -84,16 +84,27 @@ GitHub's native Stack feature can only represent a single straight line of PRs. 
 
 stax's own PR body/comment stack links (see [`stack_links`](../configuration/index.md)) have no such limitation and continue to render forked stacks correctly, with sibling branches indented at the same depth. Run `st stack unlink` on one side of the fork if you need that side registered as its own native stack.
 
+## Native Stack updates are append-only
+
+GitHub only lets `gh stack link` add new PRs at the top of an existing native Stack. An update that would remove a PR or insert one elsewhere is rejected. stax reports this separately from a forked-stack conflict and includes the recovery command:
+
+```bash
+st stack unlink <stack-number>
+st stack link
+```
+
+When gh-stack includes the Stack number in its output, stax prints that number and substitutes it into the unlink command. Automatic registration during `st submit` remains non-blocking: it prints the same recovery note, keeps the existing stax PR links, and completes the submit.
+
 ## Manual commands
 
 ```bash
 st stack link
-st stack unlink
+st stack unlink [<stack-number>]
 ```
 
 Use `st stack link` to register the current stack manually (requires at least two PRs).
 
-`st stack unlink` calls `gh stack unstack`, which only operates on a stack that gh-stack tracks locally. Because stax registers stacks with `gh stack link` (which does **not** create local tracking), `st stack unlink` cannot remove a stax-registered stack directly — it reports that the current branch is not part of a tracked stack. To remove such a stack, run `gh stack checkout <pr>` to adopt it locally first, then `gh stack unstack`, or remove it from the GitHub PR UI.
+`st stack unlink <stack-number>` calls `gh stack unstack <stack-number>` and removes that native Stack remotely from anywhere in the repository, without requiring gh-stack local tracking. The number is the repository-scoped identifier shown in GitHub's Stack UI. With no number, `st stack unlink` keeps gh-stack's active-stack behavior and requires the current branch to belong to a locally tracked stack.
 
 ## Submit overrides
 

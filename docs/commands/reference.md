@@ -21,7 +21,7 @@ st --trace status --json >/dev/null
 | `st log` | `l` | Show stack with commits and PR info |
 | `st submit` | `ss` | Submit full current stack |
 | `st stack link` | | Register the current PR stack as a native GitHub Stack via `gh stack link` |
-| `st stack unlink` | | Unstack a locally tracked native GitHub Stack via `gh stack unstack`; stax-linked stacks may require `gh stack checkout <pr>` first |
+| `st stack unlink [<stack-number>]` | | Unstack a remote native Stack by number, or the active locally tracked stack when omitted |
 | `st merge` | | Cascade-merge from bottom to current (see flags below) |
 | `st merge-when-ready` | `mwr` | Backward-compatible alias for `st merge --when-ready` |
 | `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
@@ -146,7 +146,9 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st pr list --ready` | Open live PR readiness for all tracked branch PRs, newest changed PR first (`--current`/`--stack` limits to the current stack, `--plain` prints a table) |
 | `st ready` | Short alias for `st pr list --ready` (`--current`, `--stack`, `--all`, `--plain`, `--json`) |
 | `st draft [branch]` | Mark the current or named branch's PR as a draft |
+| `st draft --stack` | Mark every PR in the current stack as a draft |
 | `st undraft [branch]` | Mark the current or named branch's PR as ready for review |
+| `st undraft --stack` | Mark every PR in the current stack as ready for review |
 | `st issue list` | List open issues |
 | `st comments` / `st reviews` | Show current PR comments; `--stack` or `--all` creates a review inbox, GitHub review comments include inline file/line locations, and `--json` emits a versioned machine-readable view |
 | `st copy` · `st copy --pr` | Copy branch name · PR URL |
@@ -373,7 +375,7 @@ The GUI can search branches; check out, create, rename, delete, move, and reorde
 - `--jobs <N>` sets the positive concurrency cap (default 8) and requires `--parallel`.
 - Each parallel command receives `STAX_RUN_BRANCH` with the original logical branch name; Git itself remains on a detached HEAD inside the temporary worktree.
 - Output is captured concurrently and printed in deterministic branch order.
-- Clean temporary worktrees are removed after success or failure. If a command leaves tracked changes, that worktree is preserved and its recovery path is printed; the branch is counted as failed.
+- Clean temporary worktrees are removed after success or failure. If a command leaves uncommitted tracked or untracked changes, that worktree is preserved and its recovery path is printed; the branch is counted as failed. Ignored artifacts do not prevent cleanup.
 - `--parallel` conflicts with `--fail-fast`, because commands may already be running concurrently.
 
 ### `st ci`

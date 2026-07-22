@@ -26,7 +26,7 @@ stax gui [path]                # Launch fresh native macOS GUI preview for one r
 
 stax submit|ss                 # Submit full stack
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
-stax stack unlink              # Unstack locally tracked native stack; stax-linked stacks may need gh stack checkout <pr>
+stax stack unlink <stack-number> # Unstack a native GitHub Stack remotely; omit number for active local tracking
 stax merge                     # Merge PRs from stack bottom upward
 stax sync|rs                   # Sync trunk + clean merged branches
 stax sweep                     # Classify + optionally delete merged/gone/stale branches
@@ -67,6 +67,10 @@ stax ready --current           # Readiness dashboard for current stack only
 stax ready --stack             # Same as --current
 stax ready --plain             # Static readiness table for captured/non-interactive output
 stax pr list --ready           # Same readiness view under PR list
+stax draft [branch]            # Mark current or named branch PR as draft
+stax draft --stack             # Mark every PR in the current stack as draft
+stax undraft [branch]          # Mark current or named branch PR ready for review
+stax undraft --stack           # Mark every PR in the current stack ready for review
 stax ready --all               # Explicit all tracked branch PRs (default)
 stax issue list                # List open issues
 stax open                      # Open repo in browser
@@ -248,12 +252,15 @@ stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment l
 # can offer `gh extension install github/gh-stack` when `gh` is installed.
 # `stax submit --native-stack` still keeps submit non-blocking, but prints an
 # actionable note when `gh`, `github/gh-stack`, or `gh stack link` support is missing.
-# Native Stacked PRs (private preview) reject Personal Access Tokens — stax
-# strips GH_TOKEN/GITHUB_TOKEN before calling `gh stack`, but you still need
-# an OAuth-authenticated `gh` account (`gh auth login`) to exist at all.
-# When either override is set, `stax doctor` performs one token-stripped OAuth
-# check and warns if no usable keyring login exists (`gh auth login` or
-# `gh auth switch`). It skips this extra probe when neither override is set.
+# gh-stack v0.0.8+ uses the public Stacks REST API and preserves normal GitHub
+# CLI authentication, including GH_TOKEN/GITHUB_TOKEN. For known older versions,
+# stax strips those overrides before `gh stack` and falls back to a keyring OAuth
+# account. `stax doctor` always shows the installed version, marks anything below
+# v0.0.8 as out of date, can upgrade it with `stax doctor --fix`, and probes
+# legacy OAuth only when token overrides exist.
+# Native GitHub Stack updates are append-only. If relinking would remove or insert
+# a PR, run `stax stack unlink <stack-number>` and then `stax stack link` again.
+# stax prints the repository-scoped Stack number when gh-stack returns it.
 # Once linked, GitHub owns base-branch transitions for those PRs and rejects
 # any PATCH touching `base` ("...part of a stack"). stax treats this as
 # non-fatal in submit/merge cascade retargets (prints a note, continues);
