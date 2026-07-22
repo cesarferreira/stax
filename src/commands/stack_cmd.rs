@@ -143,7 +143,7 @@ fn ensure_gh_stack_extension() -> Result<()> {
         ExtensionStatus::Installed => Ok(()),
         ExtensionStatus::Outdated => {
             anyhow::bail!(
-                "`gh-stack` extension is outdated and lacks `gh stack link`. Run `gh extension upgrade gh-stack`."
+                "`gh-stack` extension is outdated and lacks `gh stack link`. Run `gh extension upgrade stack`."
             )
         }
         ExtensionStatus::NoExtension => {

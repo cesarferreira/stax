@@ -2673,7 +2673,7 @@ fn print_native_stack_unavailable_note(status: ExtensionStatus) {
         }
         ExtensionStatus::Outdated => {
             "native GitHub Stack link skipped: gh-stack extension is outdated and lacks \
-             `gh stack link`. Run `st doctor --fix` or `gh extension upgrade gh-stack`, then retry."
+             `gh stack link`. Run `st doctor --fix` or `gh extension upgrade stack`, then retry."
         }
         ExtensionStatus::Installed => return,
     };

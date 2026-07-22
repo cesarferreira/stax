@@ -220,7 +220,7 @@ Use `native_stack = "off"` to disable native registration. Use `"link"` to force
 
 `stack_links_when_native = "keep"` preserves stax's body/comment stack links when native registration succeeds. Set it to `"off"` only if you want the GitHub native stack map without stax-managed PR body/comment links.
 
-`st doctor` reports whether `gh-stack` is installed and `st doctor --fix` can install it with `gh extension install github/gh-stack` after confirmation.
+`st doctor` reports the installed `gh-stack` version, marks versions below v0.0.8 as out of date, and can install or upgrade the extension after confirmation with `st doctor --fix`.
 
 ## Forge type override
 
