@@ -88,12 +88,12 @@ stax's own PR body/comment stack links (see [`stack_links`](../configuration/ind
 
 ```bash
 st stack link
-st stack unlink
+st stack unlink [<stack-number>]
 ```
 
 Use `st stack link` to register the current stack manually (requires at least two PRs).
 
-`st stack unlink` calls `gh stack unstack`, which only operates on a stack that gh-stack tracks locally. Because stax registers stacks with `gh stack link` (which does **not** create local tracking), `st stack unlink` cannot remove a stax-registered stack directly — it reports that the current branch is not part of a tracked stack. To remove such a stack, run `gh stack checkout <pr>` to adopt it locally first, then `gh stack unstack`, or remove it from the GitHub PR UI.
+`st stack unlink <stack-number>` calls `gh stack unstack <stack-number>` and removes that native Stack remotely from anywhere in the repository, without requiring gh-stack local tracking. The number is the repository-scoped identifier shown in GitHub's Stack UI. With no number, `st stack unlink` keeps gh-stack's active-stack behavior and requires the current branch to belong to a locally tracked stack.
 
 ## Submit overrides
 

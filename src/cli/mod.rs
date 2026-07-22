@@ -741,7 +741,7 @@ pub fn run() -> Result<()> {
                 submit_after.into(),
             ),
             StackCommands::Link => commands::stack_cmd::run_link(),
-            StackCommands::Unlink => commands::stack_cmd::run_unlink(),
+            StackCommands::Unlink { stack_number } => commands::stack_cmd::run_unlink(stack_number),
         },
         // Hidden shortcuts
         Commands::Bc {

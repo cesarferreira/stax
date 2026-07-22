@@ -88,7 +88,7 @@ pub fn run_link() -> Result<()> {
     }
 }
 
-pub fn run_unlink() -> Result<()> {
+pub fn run_unlink(stack_number: Option<u64>) -> Result<()> {
     let repo = GitRepo::open()?;
     let config = Config::load()?;
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
@@ -100,7 +100,7 @@ pub fn run_unlink() -> Result<()> {
     }
     ensure_gh_stack_extension()?;
 
-    match gh_stack::unlink_stack() {
+    match gh_stack::unlink_stack(stack_number) {
         LinkOutcome::Linked => {
             println!("{}", "✓ Native GitHub Stack removed".green());
             Ok(())
@@ -128,9 +128,9 @@ pub fn run_unlink() -> Result<()> {
             if message.to_lowercase().contains("not part of a stack") {
                 anyhow::bail!(
                     "No locally-tracked native stack for the current branch. Native stacks that \
-                     stax registers via `gh stack link` are not tracked locally, so `gh stack \
-                     unstack` cannot remove them. Run `gh stack checkout <pr>` to adopt the stack \
-                     locally first, or remove the stack from the GitHub PR UI."
+                     stax registers via `gh stack link` are not tracked locally. Run `st stack \
+                     unlink <stack-number>` to remove one remotely, or remove it from the GitHub \
+                     PR UI."
                 );
             }
             anyhow::bail!("Failed to remove native GitHub Stack: {message}");

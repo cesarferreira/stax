@@ -683,12 +683,15 @@ exit 1
     let env_dump_file = fake.path().join("unlink-env.txt");
     let path = path_with_fake_gh(fake.path());
 
-    let outcome = stax::github::gh_stack::unlink_stack_with_env(&[
-        ("PATH", path.as_str()),
-        ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
-        ("GH_TOKEN", "ghp_should_be_stripped"),
-        ("GITHUB_TOKEN", "github_should_be_stripped"),
-    ]);
+    let outcome = stax::github::gh_stack::unlink_stack_with_env(
+        None,
+        &[
+            ("PATH", path.as_str()),
+            ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+            ("GH_TOKEN", "ghp_should_be_stripped"),
+            ("GITHUB_TOKEN", "github_should_be_stripped"),
+        ],
+    );
 
     assert_eq!(outcome, stax::github::gh_stack::LinkOutcome::Linked);
     assert_eq!(
@@ -1097,6 +1100,90 @@ exit 1
     assert!(
         !stderr.contains("should not be called"),
         "must not shell out to gh-stack when the extension isn't installed, stderr was:\n{stderr}"
+    );
+}
+
+#[test]
+fn stack_unlink_passes_stack_number_to_gh_stack() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list") echo "gh stack github/gh-stack v0.0.8"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack unstack") printf '%s\n' "$@" > "$GH_ARGS_FILE"; exit 0 ;;
+esac
+exit 1
+"#,
+    );
+    let args_file = fake.path().join("numbered-unlink-args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["stack", "unlink", "7"],
+        &[
+            ("HOME", &home),
+            ("PATH", &path),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    assert_eq!(
+        fs::read_to_string(args_file).unwrap(),
+        "stack\nunstack\n7\n"
+    );
+}
+
+#[test]
+fn stack_unlink_without_number_keeps_active_stack_behavior() {
+    let repo = TestRepo::new_with_remote();
+    let home = repo.clean_home();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list") echo "gh stack github/gh-stack v0.0.8"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack unstack") printf '%s\n' "$@" > "$GH_ARGS_FILE"; exit 0 ;;
+esac
+exit 1
+"#,
+    );
+    let args_file = fake.path().join("active-unlink-args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let output = repo.run_stax_with_env(
+        &["stack", "unlink"],
+        &[
+            ("HOME", &home),
+            ("PATH", &path),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    assert_eq!(fs::read_to_string(args_file).unwrap(), "stack\nunstack\n");
+}
+
+#[test]
+fn stack_unlink_rejects_zero_stack_number_before_calling_gh() {
+    let repo = TestRepo::new();
+    let output = repo.run_stax(&["stack", "unlink", "0"]);
+
+    assert!(!output.status.success());
+    assert!(
+        TestRepo::stderr(&output).contains("0"),
+        "expected invalid stack-number diagnostic, stderr was:\n{}",
+        TestRepo::stderr(&output)
     );
 }
 

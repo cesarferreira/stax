@@ -297,12 +297,18 @@ pub fn install_extension() -> Result<()> {
     install_extension_with_env(&[])
 }
 
-pub fn unlink_stack() -> LinkOutcome {
-    unlink_stack_with_env(&[])
+pub fn unlink_stack(stack_number: Option<u64>) -> LinkOutcome {
+    unlink_stack_with_env(stack_number, &[])
 }
 
-pub fn unlink_stack_with_env(env: &[(&str, &str)]) -> LinkOutcome {
-    match gh_stack_command(env).args(["stack", "unstack"]).output() {
+pub fn unlink_stack_with_env(stack_number: Option<u64>, env: &[(&str, &str)]) -> LinkOutcome {
+    let mut command = gh_stack_command(env);
+    command.args(["stack", "unstack"]);
+    if let Some(stack_number) = stack_number {
+        command.arg(stack_number.to_string());
+    }
+
+    match command.output() {
         Ok(output) if output.status.success() => LinkOutcome::Linked,
         Ok(output) if auth_token_unsupported_output(&output) => LinkOutcome::AuthTokenUnsupported {
             message: command_message(&output),
