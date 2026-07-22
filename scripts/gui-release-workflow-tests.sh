@@ -47,6 +47,12 @@ do
   require_literal "$release_workflow" "$artifact"
 done
 
+require_literal "$test_workflow" "gui-quality:"
+require_literal "$test_workflow" "gui-packaging:"
+require_literal "$test_workflow" "dorny/paths-filter@v3"
+require_literal "$test_workflow" "make gui-app-test"
+require_literal "$test_workflow" "make gui-app"
 require_literal "$test_workflow" "make gui-release-test"
+require_literal "$test_workflow" "github.ref == 'refs/heads/main'"
 
 echo "GUI release workflow contract is complete."
