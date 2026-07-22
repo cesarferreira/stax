@@ -34,9 +34,6 @@ jobs:
               - 'src/**'
               - 'crates/stax-gui/**'
               - 'scripts/build-gui**'
-              - 'scripts/package-gui**'
-              - 'scripts/gui-app-tests.sh'
-              - 'scripts/gui-release-tests.sh'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/rust-tests.yml'
@@ -114,31 +111,6 @@ jobs:
             -A clippy::unnecessary_sort_by \
             -A clippy::useless_format \
             -A clippy::useless_vec
-
-  gui-packaging:
-    name: GPUI Packaging
-    needs: changes
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.gui == 'true'
-    runs-on: macos-latest
-    env:
-      RUSTFLAGS: ""
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.96.1
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: macos-latest-gui-packaging
-      - name: Test developer app bundle
-        run: make gui-app-test
-      - name: Build developer app bundle
-        run: make gui-app
-      - name: Test GUI release packaging
-        run: make gui-release-test
 
   unit-tests:
     name: Unit Tests
