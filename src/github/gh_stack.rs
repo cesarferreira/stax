@@ -49,7 +49,9 @@ pub enum FeatureState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkOutcome {
-    Linked,
+    Linked {
+        stack_number: Option<u64>,
+    },
     FeatureDisabled {
         message: String,
     },
@@ -64,6 +66,12 @@ pub enum LinkOutcome {
     },
     SinglePrValidationRejected {
         message: String,
+    },
+    /// The remote stack exists, but gh-stack v0.0.8 only permits appending new
+    /// PRs at its top. Removing or inserting PRs requires unstacking it first.
+    NonAppendUpdate {
+        message: String,
+        stack_number: Option<u64>,
     },
     Failed {
         message: String,
@@ -266,7 +274,9 @@ pub fn link_stack_with_env(
     command.args(["--base", base, "--remote", remote]);
 
     match command.output() {
-        Ok(output) if output.status.success() => LinkOutcome::Linked,
+        Ok(output) if output.status.success() => LinkOutcome::Linked {
+            stack_number: stack_number_from_message(&output_details(&output)),
+        },
         // Must be checked before `feature_disabled_output`: gh-stack's PAT
         // rejection message also contains "private preview", which would
         // otherwise be misclassified as the repo/org lacking the feature.
@@ -281,6 +291,10 @@ pub fn link_stack_with_env(
                 message: command_message(&output),
             }
         }
+        Ok(output) if non_append_update_output(&output) => LinkOutcome::NonAppendUpdate {
+            stack_number: stack_number_from_message(&output_details(&output)),
+            message: command_message(&output),
+        },
         Ok(output) => LinkOutcome::Failed {
             message: command_message(&output),
         },
@@ -309,7 +323,7 @@ pub fn unlink_stack_with_env(stack_number: Option<u64>, env: &[(&str, &str)]) ->
     }
 
     match command.output() {
-        Ok(output) if output.status.success() => LinkOutcome::Linked,
+        Ok(output) if output.status.success() => LinkOutcome::Linked { stack_number: None },
         Ok(output) if auth_token_unsupported_output(&output) => LinkOutcome::AuthTokenUnsupported {
             message: command_message(&output),
         },
@@ -410,19 +424,38 @@ fn auth_token_unsupported_output(output: &Output) -> bool {
 /// linear — a PR can only anchor one native-stack "tip" at a time — so this
 /// fires whenever a *local* stack forks (two branches created off the same
 /// ancestor branch each try to register their own native Stack). gh-stack
-/// surfaces this in a couple of different shapes depending on whether it
-/// detects the conflict up front or only after attempting a reorder:
-///   - `"Cannot update stack: this would remove #123 from the stack"`
-///   - `"Failed to update stack (HTTP 409): Stack contents have changed"`
-///     (seen alongside a `422 PullRequest.base is invalid` on the branch
-///     gh-stack tried to reparent to fit its assumed linear order)
-///
-/// Both are surfaced as the same plain-language note instead of the raw
-/// multi-line CLI dump.
+/// surfaces this as `"Stack contents have changed"` after attempting a
+/// reorder. Append-only update errors are classified separately because they
+/// can be recovered from by unstacking the known remote stack number.
 pub(crate) fn is_stack_fork_conflict(message: &str) -> bool {
-    let lower = message.to_lowercase();
+    message
+        .to_lowercase()
+        .contains("stack contents have changed")
+}
+
+fn non_append_update_output(output: &Output) -> bool {
+    let lower = command_message(output).to_lowercase();
     (lower.contains("would remove") && lower.contains("from the stack"))
-        || lower.contains("stack contents have changed")
+        || lower.contains("must be added to the top")
+}
+
+fn stack_number_from_message(message: &str) -> Option<u64> {
+    let lower = message.to_ascii_lowercase();
+    let mut remainder = lower.as_str();
+
+    while let Some(index) = remainder.find("stack #") {
+        let after_marker = &remainder[index + "stack #".len()..];
+        let digits: String = after_marker
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if let Ok(number) = digits.parse() {
+            return Some(number);
+        }
+        remainder = after_marker;
+    }
+
+    None
 }
 
 fn single_pr_validation_output(pr_numbers: &[u64], output: &Output) -> bool {

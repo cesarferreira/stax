@@ -220,7 +220,7 @@ gh extension install github/gh-stack
 st doctor --fix
 ```
 
-That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR stacks under the hood, no extra command required. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top.
+That's it — no config needed. From then on, `st ss`/`st bs` auto-link multi-PR stacks under the hood, no extra command required. Existing stax PR body/comment stack links keep working; the native GitHub stack map is added on top. On gh-stack v0.0.8+, stax also prints the repository-scoped Stack number returned by GitHub.
 
 ```bash
 st ss                    # auto-links native stack when available
@@ -228,7 +228,7 @@ st stack link            # manually re-link the current stack
 st stack unlink 7        # unstack native Stack #7 remotely
 ```
 
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.0.8 as out of date, and can upgrade it with `st doctor --fix`. `st stack unlink <stack-number>` removes a native stack remotely without local gh-stack tracking; argument-free `st stack unlink` retains the active locally tracked behavior.
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.0.8 as out of date, and can upgrade it with `st doctor --fix`. Native Stack updates are append-only; to remove or insert PRs, run `st stack unlink <stack-number>` and then link again. Argument-free `st stack unlink` retains the active locally tracked behavior.
 
 → [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 

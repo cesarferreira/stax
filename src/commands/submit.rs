@@ -2614,10 +2614,13 @@ fn maybe_link_native_stack(
     }
 
     match gh_stack::link_stack(&pr_numbers, trunk, &remote_info.name) {
-        LinkOutcome::Linked => {
+        LinkOutcome::Linked { stack_number } => {
             gh_stack::set_feature_enabled(workdir, true)?;
             if !quiet {
-                println!("{} {}", "✓".green(), "Native GitHub Stack linked".dimmed());
+                let message = stack_number
+                    .map(|number| format!("Native GitHub Stack #{number} linked"))
+                    .unwrap_or_else(|| "Native GitHub Stack linked".to_string());
+                println!("{} {}", "✓".green(), message.dimmed());
             }
             Ok(true)
         }
@@ -2642,6 +2645,22 @@ fn maybe_link_native_stack(
             Ok(false)
         }
         LinkOutcome::SinglePrValidationRejected { .. } => Ok(false),
+        LinkOutcome::NonAppendUpdate {
+            message,
+            stack_number,
+        } => {
+            if !quiet {
+                let unlink_command = stack_number
+                    .map(|number| format!("`st stack unlink {number}`"))
+                    .unwrap_or_else(|| "`st stack unlink <stack-number>`".to_string());
+                let note = format!(
+                    "native GitHub Stack link skipped: remote Stack updates are append-only. \
+                     Remove it with {unlink_command}, then retry. gh-stack said: {message}"
+                );
+                println!("  {} {}", "note:".dimmed(), note.dimmed());
+            }
+            Ok(false)
+        }
         LinkOutcome::Failed { message } => {
             if !quiet {
                 let note = if gh_stack::is_stack_fork_conflict(&message) {

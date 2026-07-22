@@ -41,7 +41,7 @@ stax still owns local stack management: branch creation, parent metadata, restac
 gh stack link <pr> [<next-pr> ...] --base <trunk> --remote <remote>
 ```
 
-That registers one or more already-submitted PRs as a native GitHub Stack. stax passes PR numbers in bottom-to-top order and keeps its own body/comment stack links unless you opt out.
+That registers one or more already-submitted PRs as a native GitHub Stack. stax passes PR numbers in bottom-to-top order, keeps its own body/comment stack links unless you opt out, and shows the repository-scoped Stack number when gh-stack returns it.
 
 <a id="default-behavior"></a>
 ## Default behavior
@@ -83,6 +83,17 @@ Where a base change to trunk is a hard precondition — merging a single PR out 
 GitHub's native Stack feature can only represent a single straight line of PRs. If a branch in your local stack has two or more children (e.g. `test-3` has both `test-4` and `test-3-1` branching off it), stax detects that fork itself and skips native registration for that submit, printing a `note:` instead — it never hands `gh stack link` a branch set that doesn't form a real linear chain. This matters because gh-stack doesn't reliably reject forked input: it sometimes does (surfacing as a `409`/`422` from GitHub), but it can also silently accept it and linearize the PRs in whatever order it was given, which would misrepresent which branch each PR actually builds on.
 
 stax's own PR body/comment stack links (see [`stack_links`](../configuration/index.md)) have no such limitation and continue to render forked stacks correctly, with sibling branches indented at the same depth. Run `st stack unlink` on one side of the fork if you need that side registered as its own native stack.
+
+## Native Stack updates are append-only
+
+GitHub only lets `gh stack link` add new PRs at the top of an existing native Stack. An update that would remove a PR or insert one elsewhere is rejected. stax reports this separately from a forked-stack conflict and includes the recovery command:
+
+```bash
+st stack unlink <stack-number>
+st stack link
+```
+
+When gh-stack includes the Stack number in its output, stax prints that number and substitutes it into the unlink command. Automatic registration during `st submit` remains non-blocking: it prints the same recovery note, keeps the existing stax PR links, and completes the submit.
 
 ## Manual commands
 
