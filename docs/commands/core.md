@@ -35,7 +35,9 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st branch submit` | Submit only the current branch; if its parent is already synced to the remote, Stax may publish a temporary rebased head without moving your local branch |
 | `st upstack submit` | Submit current branch and descendants; descendants are temporarily chained onto any temporary parent publish heads |
 | `st draft [branch]` | Convert the current (or named) branch's PR to draft |
+| `st draft --stack` | Convert every PR in the current stack to draft |
 | `st undraft [branch]` | Mark the current (or named) branch's PR as ready for review |
+| `st undraft --stack` | Mark every PR in the current stack as ready for review |
 | `st ready` | Open the interactive PR readiness dashboard for all tracked PRs: merge, ping, fix, wait, or draft |
 | `st merge` | Cascade-merge from stack bottom up to current branch |
 | `st merge --when-ready` | Wait for CI + approvals, then merge (alias: `st mwr`) |
