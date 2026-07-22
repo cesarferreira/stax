@@ -742,7 +742,7 @@ fn run_test_parallel(repo: &GitRepo, branches: &[String], cmd: &str, jobs: usize
         print_captured(&result.stderr);
         if result.dirty {
             println!(
-                "  {} Command left tracked changes; preserved for recovery at {}",
+                "  {} Command left uncommitted changes; preserved for recovery at {}",
                 "WARNING".yellow(),
                 result.path.display()
             );

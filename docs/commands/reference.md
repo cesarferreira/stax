@@ -373,7 +373,7 @@ The GUI can search branches; check out, create, rename, delete, move, and reorde
 - `--jobs <N>` sets the positive concurrency cap (default 8) and requires `--parallel`.
 - Each parallel command receives `STAX_RUN_BRANCH` with the original logical branch name; Git itself remains on a detached HEAD inside the temporary worktree.
 - Output is captured concurrently and printed in deterministic branch order.
-- Clean temporary worktrees are removed after success or failure. If a command leaves tracked changes, that worktree is preserved and its recovery path is printed; the branch is counted as failed.
+- Clean temporary worktrees are removed after success or failure. If a command leaves uncommitted tracked or untracked changes, that worktree is preserved and its recovery path is printed; the branch is counted as failed. Ignored artifacts do not prevent cleanup.
 - `--parallel` conflicts with `--fail-fast`, because commands may already be running concurrently.
 
 ### `st ci`
