@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.98.0] - 2026-07-23
+
+### 🚀 Features
+
+- *(gui)* Persist window size ([#666](https://github.com/cesarferreira/stax/issues/666))
+- Unstack native stacks by number ([#668](https://github.com/cesarferreira/stax/issues/668))
+- Add --stack to draft and undraft commands ([#676](https://github.com/cesarferreira/stax/issues/676))
+
+### 🐛 Bug Fixes
+
+- Support gh-stack v0.0.8 authentication ([#667](https://github.com/cesarferreira/stax/issues/667))
+- Handle append-only native stack updates ([#669](https://github.com/cesarferreira/stax/issues/669))
+
+### ⚡ Performance
+
+- Strip symbols from released binaries
+
+### 🧪 Testing
+
+- Cover parallel untracked worktree recovery ([#662](https://github.com/cesarferreira/stax/issues/662))
+
+### ⚙️ Miscellaneous Tasks
+
+- Split macOS GUI checks into fast PR and packaging jobs ([#677](https://github.com/cesarferreira/stax/issues/677))
+- Drop main-branch GUI packaging job ([#678](https://github.com/cesarferreira/stax/issues/678))
+## [0.97.1] - 2026-07-21
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.97.0] - 2026-07-21
 
 ### 🚀 Features
