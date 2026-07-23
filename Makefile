@@ -1,4 +1,4 @@
-.PHONY: build build-release release ensure-git-cliff install clean gui-icon gui-app gui-app-test gui-release gui-release-test install-gui-app test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
+.PHONY: build build-release release ensure-git-cliff install clean gui-icon gui-app gui-app-test gui-release gui-release-test install-gui-app install-gui-test test test-native test-native-script test-local-fast test-local-ramdisk test-image test-container-image test-docker test-container ramdisk-up ramdisk-down test-unit test-integration check fmt lint lint-fast benchmark-status all
 
 RAMDISK_NAME ?= STAXRAM
 RAMDISK_SIZE_MB ?= 2048
@@ -61,6 +61,9 @@ gui-release:
 
 gui-release-test:
 	./scripts/gui-release-tests.sh
+
+install-gui-test:
+	./scripts/install-gui-tests.sh
 
 install-gui-app:
 	./scripts/build-gui-app.sh --install

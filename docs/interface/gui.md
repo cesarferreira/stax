@@ -4,7 +4,13 @@ The native Stax GUI for macOS shares the same typed repository operations and re
 
 ## Install
 
-For Apple Silicon:
+One-liner (macOS):
+
+```bash
+curl -fsSL https://cesarferreira.com/stax/install-gui.sh | sh
+```
+
+Manual install for Apple Silicon:
 
 ```bash
 curl -fLO https://github.com/cesarferreira/stax/releases/latest/download/Stax-aarch64-apple-darwin.zip

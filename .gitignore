@@ -11,6 +11,7 @@ Cargo.lock
 .claude
 .serena
 docs/plans/
+docs/install-gui.sh
 __pycache__/
 *.pyc
 .codegraph/

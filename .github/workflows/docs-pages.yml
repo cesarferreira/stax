@@ -8,6 +8,7 @@ on:
       - mkdocs.yml
       - docs/requirements.txt
       - README.md
+      - scripts/install-gui.sh
       - .github/workflows/docs-pages.yml
   workflow_dispatch:
 
@@ -30,6 +31,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
+
+      - name: Stage GUI install script
+        run: cp scripts/install-gui.sh docs/install-gui.sh
 
       - name: Build docs
         run: uv run --with-requirements docs/requirements.txt zensical build --clean
