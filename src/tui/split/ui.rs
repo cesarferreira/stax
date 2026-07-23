@@ -259,8 +259,8 @@ fn render_help_dialog(f: &mut Frame) {
             "Navigation",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from("  j/↓    Move down"),
-        Line::from("  k/↑    Move up"),
+        Line::from("  j/↓/Ctrl+n    Move down"),
+        Line::from("  k/↑/Ctrl+p    Move up"),
         Line::from(""),
         Line::from(Span::styled(
             "Actions",
