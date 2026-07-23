@@ -163,7 +163,7 @@ stax gui                         # Launch GUI for the current directory
 stax gui /path/to/repo           # Launch GUI for an explicit repository
 ```
 
-Public GitHub Releases include `Stax-aarch64-apple-darwin.zip` and `Stax-x86_64-apple-darwin.zip`; extract the matching archive and move `Stax.app` to `/Applications`. The app is a separate artifact, not a new package, so it does not enlarge the CLI binaries. Ad-hoc-signed builds must be opened once to trigger Gatekeeper, then approved with **Privacy & Security → Open Anyway**; never disable Gatekeeper globally. The final bundle id is `com.cesarferreira.stax`. The GUI restores its most recent window size and clamps it to the active display after monitor changes.
+Public GitHub Releases include `Stax-aarch64-apple-darwin.zip` and `Stax-x86_64-apple-darwin.zip`; extract the matching archive and move `Stax.app` to `/Applications`, or run `curl -fsSL https://cesarferreira.com/stax/install-gui.sh | sh` on macOS. The app is a separate artifact, not a new package, so it does not enlarge the CLI binaries. Ad-hoc-signed builds must be opened once to trigger Gatekeeper, then approved with **Privacy & Security → Open Anyway**; never disable Gatekeeper globally. The final bundle id is `com.cesarferreira.stax`. The GUI restores its most recent window size and clamps it to the active display after monitor changes.
 
 `stax gui [path]` is macOS-only. It canonicalizes the supplied path, defaults to the current directory, and launches exactly `open -n -b com.cesarferreira.stax --args <canonical-path>`. The `-n` fresh-instance behavior is intentional: every invocation opens a new app process/window for one repository.
 

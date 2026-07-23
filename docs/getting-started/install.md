@@ -46,7 +46,13 @@ Download `stax-x86_64-pc-windows-msvc.zip` from [Releases](https://github.com/ce
 
 The native GUI is published as a separate artifact on the same GitHub Release as the CLI. It is not a new crates.io package, and installing it does not change or enlarge the `stax` and `st` CLI binaries.
 
-Apple Silicon:
+One-liner (macOS):
+
+```bash
+curl -fsSL https://cesarferreira.com/stax/install-gui.sh | sh
+```
+
+Manual install for Apple Silicon:
 
 ```bash
 curl -fLO https://github.com/cesarferreira/stax/releases/latest/download/Stax-aarch64-apple-darwin.zip

@@ -111,7 +111,13 @@ st --version
 
 ### Native macOS GUI
 
-Download the architecture-specific app from the same [GitHub Release](https://github.com/cesarferreira/stax/releases/latest) as the CLI. For Apple Silicon:
+One-liner:
+
+```bash
+curl -fsSL https://cesarferreira.com/stax/install-gui.sh | sh
+```
+
+Manual install: download the architecture-specific app from the same [GitHub Release](https://github.com/cesarferreira/stax/releases/latest) as the CLI. For Apple Silicon:
 
 ```bash
 curl -fLO https://github.com/cesarferreira/stax/releases/latest/download/Stax-aarch64-apple-darwin.zip
