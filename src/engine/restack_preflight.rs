@@ -10,6 +10,13 @@
 //! boundary is clearly worse than the current merge-base. The correction is
 //! intentionally conservative and only affects the current rebase invocation;
 //! normal restack success still refreshes metadata to the parent tip.
+//!
+//! Besides the count-based heuristic, the module also detects a *structural*
+//! signal: when the branch has already been rebased externally so that the
+//! parent tip equals the merge-base but differs from the stored boundary, the
+//! stored boundary is stale and replaying from it would re-apply commits that
+//! are already merged. In that case restack rebases from the merge-base (a
+//! no-op) rather than the stale stored boundary.
 
 use crate::config::Config;
 use crate::git::GitRepo;
@@ -39,6 +46,10 @@ pub struct RestackPreflight {
     /// `stored_revision`.
     #[allow(dead_code)]
     pub merge_base: Option<String>,
+    /// Current tip of `parent` when available. Used to detect an external
+    /// rebase that left the stored boundary stale.
+    #[allow(dead_code)]
+    pub parent_tip: Option<String>,
     pub stored_to_branch: Option<usize>,
     pub merge_base_to_branch: Option<usize>,
 }
@@ -84,11 +95,14 @@ impl RestackPreflight {
             None => None,
         };
 
+        let parent_tip = repo.branch_commit(parent).ok();
+
         Ok(Self {
             branch: branch.to_string(),
             parent: parent.to_string(),
             stored_revision: stored_revision.to_string(),
             merge_base,
+            parent_tip,
             stored_to_branch,
             merge_base_to_branch,
         })
@@ -111,10 +125,28 @@ impl RestackPreflight {
         stored > mb.saturating_mul(RANGE_RATIO) + ABSOLUTE_HEADROOM
     }
 
+    /// Structural signal: the branch has already been rebased externally so
+    /// that the parent tip equals the merge-base, but the stored boundary still
+    /// points at an older revision. Replaying from the stored boundary would
+    /// re-apply commits that are already part of the parent; rebasing from the
+    /// merge-base is a no-op that preserves the branch and repairs metadata.
+    pub fn already_rebased_externally(&self) -> bool {
+        let Some(merge_base) = self.merge_base.as_deref() else {
+            return false;
+        };
+        let Some(parent_tip) = self.parent_tip.as_deref() else {
+            return false;
+        };
+        if self.stored_revision.trim().is_empty() {
+            return false;
+        }
+        merge_base == parent_tip && self.stored_revision != parent_tip
+    }
+
     /// Whether this report has a merge-base boundary that can be used instead
     /// of the stored boundary.
     pub fn corrected_upstream(&self) -> Option<&str> {
-        if !self.is_suspicious() {
+        if !self.is_suspicious() && !self.already_rebased_externally() {
             return None;
         }
         self.merge_base.as_deref()
@@ -146,10 +178,8 @@ pub fn choose_rebase_upstream(
     if let Ok(report) = RestackPreflight::analyze(repo, branch, parent, stored_revision)
         && let Some(upstream) = report.corrected_upstream()
     {
-        return RebaseBoundaryDecision {
-            upstream: upstream.to_string(),
-            adjusted: true,
-            reason: Some(format!(
+        let reason = if report.is_suspicious() {
+            format!(
                 "'{}' stored boundary from '{}' would replay {} commit(s); using merge-base boundary ({} commit(s))",
                 report.branch,
                 report.parent,
@@ -161,7 +191,17 @@ pub fn choose_rebase_upstream(
                     .merge_base_to_branch
                     .map(|count| count.to_string())
                     .unwrap_or_else(|| "?".into())
-            )),
+            )
+        } else {
+            format!(
+                "'{}' is already based on the current '{}' tip; repairing stale stored boundary",
+                report.branch, report.parent
+            )
+        };
+        return RebaseBoundaryDecision {
+            upstream: upstream.to_string(),
+            adjusted: true,
+            reason: Some(reason),
         };
     }
 
@@ -182,8 +222,26 @@ mod tests {
             parent: "main".into(),
             stored_revision: "abc".into(),
             merge_base: Some("def".into()),
+            parent_tip: None,
             stored_to_branch: stored,
             merge_base_to_branch: mb,
+        }
+    }
+
+    /// Build a report exercising the structural (external-rebase) signal.
+    fn structural_pf(
+        stored_revision: &str,
+        merge_base: Option<&str>,
+        parent_tip: Option<&str>,
+    ) -> RestackPreflight {
+        RestackPreflight {
+            branch: "feat".into(),
+            parent: "main".into(),
+            stored_revision: stored_revision.into(),
+            merge_base: merge_base.map(|s| s.into()),
+            parent_tip: parent_tip.map(|s| s.into()),
+            stored_to_branch: None,
+            merge_base_to_branch: None,
         }
     }
 
@@ -222,5 +280,36 @@ mod tests {
     fn boundary_uses_absolute_headroom() {
         assert!(!pf(Some(MIN_STORED_RANGE_FOR_WARNING), Some(5)).is_suspicious());
         assert!(pf(Some(60), Some(0)).is_suspicious());
+    }
+
+    #[test]
+    fn already_rebased_externally_true_when_parent_tip_matches_merge_base() {
+        // Parent tip == merge-base but stored boundary is a stale, older SHA.
+        assert!(structural_pf("stale", Some("tip"), Some("tip")).already_rebased_externally());
+    }
+
+    #[test]
+    fn already_rebased_externally_false_cases() {
+        // Stored boundary already equals the parent tip → nothing stale.
+        assert!(!structural_pf("tip", Some("tip"), Some("tip")).already_rebased_externally());
+        // Merge-base differs from parent tip → branch still diverges, not a no-op.
+        assert!(!structural_pf("stale", Some("base"), Some("tip")).already_rebased_externally());
+        // Missing merge-base or parent tip.
+        assert!(!structural_pf("stale", None, Some("tip")).already_rebased_externally());
+        assert!(!structural_pf("stale", Some("tip"), None).already_rebased_externally());
+        // Empty stored revision.
+        assert!(!structural_pf("", Some("tip"), Some("tip")).already_rebased_externally());
+    }
+
+    #[test]
+    fn structural_report_uses_merge_base_as_corrected_upstream() {
+        assert_eq!(
+            structural_pf("stale", Some("tip"), Some("tip")).corrected_upstream(),
+            Some("tip")
+        );
+        assert_eq!(
+            structural_pf("tip", Some("tip"), Some("tip")).corrected_upstream(),
+            None
+        );
     }
 }
