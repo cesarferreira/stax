@@ -409,6 +409,69 @@ fn test_restack_with_non_ancestor_revision_preserves_only_feature_commits() {
 }
 
 // =============================================================================
+// Regression (#679): external rebase leaves stored boundary stale
+// =============================================================================
+
+/// Reproduces issue #679: the branch was rebased externally onto the advanced
+/// parent, so the parent tip already equals the branch merge-base, but the
+/// stored `parentBranchRevision` still points at the old parent tip. Restack
+/// must treat the stored boundary as stale, rebase from the merge-base (a
+/// no-op), leave the branch SHA untouched, and repair the metadata so no
+/// further restack is required.
+#[test]
+fn test_restack_after_external_rebase_is_noop_and_repairs_metadata() {
+    let repo = TestRepo::new();
+
+    // Feature with 2 commits.
+    repo.git(&["checkout", "-b", "count-feature"]);
+    repo.create_file("f1.txt", "file one");
+    repo.commit("Feature commit 1");
+    repo.create_file("f2.txt", "file two");
+    repo.commit("Feature commit 2");
+
+    // Advance main by one commit after capturing the old tip.
+    repo.git(&["checkout", "main"]);
+    let old_main = repo.get_commit_sha("HEAD");
+    repo.create_file("s.txt", "main advance");
+    repo.commit("Main advance commit");
+
+    // Externally rebase the feature onto the advanced main.
+    repo.git(&["checkout", "count-feature"]);
+    repo.git(&["rebase", "main"]);
+    let feature_before = repo.get_commit_sha("count-feature");
+
+    // Stored boundary is stale: still the old main tip.
+    write_branch_metadata_raw(&repo, "count-feature", "main", &old_main);
+    repo.set_trunk("main");
+
+    let output = repo.run_stax(&["restack", "--yes", "--quiet"]);
+    output.assert_success();
+    assert!(!repo.has_rebase_in_progress());
+
+    // No replay: the branch SHA is unchanged.
+    assert_eq!(
+        repo.get_commit_sha("count-feature"),
+        feature_before,
+        "restack after an external rebase must be a no-op (no commit replay)"
+    );
+
+    // Exactly the two feature commits above main, and none behind.
+    assert_eq!(rev_list_count(&repo, "main..count-feature"), 2);
+    assert_eq!(rev_list_count(&repo, "count-feature..main"), 0);
+
+    // Metadata repaired: stored parentBranchRevision now equals current main tip.
+    let main_tip = repo.get_commit_sha("main");
+    let meta_out = repo.git(&["cat-file", "-p", "refs/branch-metadata/count-feature"]);
+    assert!(meta_out.status.success(), "failed to read branch metadata");
+    let meta = String::from_utf8_lossy(&meta_out.stdout).to_string();
+    assert!(
+        meta.contains(&format!("\"parentBranchRevision\":\"{main_tip}\"")),
+        "metadata should be repaired to the current main tip so no further restack is needed;\n\
+         expected parentBranchRevision={main_tip}\nmetadata=\n{meta}"
+    );
+}
+
+// =============================================================================
 // Monorepo-style trunk churn: stale stored parent tip + linear feature branch
 // =============================================================================
 
