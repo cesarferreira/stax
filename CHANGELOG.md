@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.98.1] - 2026-07-24
+
+### 🚀 Features
+
+- Add curl-install script for the macOS GUI ([#680](https://github.com/cesarferreira/stax/issues/680))
+
+### 🐛 Bug Fixes
+
+- *(restack)* Repair stale parent metadata after external rebase ([#682](https://github.com/cesarferreira/stax/issues/682))
+
+### 💼 Other
+
+- Add bug report issue template modeled on #679 ([#681](https://github.com/cesarferreira/stax/issues/681))
 ## [0.98.0] - 2026-07-23
 
 ### 🚀 Features
@@ -27,6 +40,7 @@ All notable changes to this project will be documented in this file.
 
 - Split macOS GUI checks into fast PR and packaging jobs ([#677](https://github.com/cesarferreira/stax/issues/677))
 - Drop main-branch GUI packaging job ([#678](https://github.com/cesarferreira/stax/issues/678))
+- Release
 ## [0.97.1] - 2026-07-21
 
 ### ⚙️ Miscellaneous Tasks
