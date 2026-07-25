@@ -1,5 +1,17 @@
 # AGENTS.md
 
+## Harness: stax-dev
+
+**Goal:** Accelerate stax feature development and bug fixing via a git-native worktree → plan → implement → review → verify → (optional) benchmark → commit → draft-PR pipeline with a bounded repair loop.
+
+**Trigger:** For any code change to the stax CLI (new commands, flags, bugfixes, refactors, behavior changes), run the `/stax-dev` prompt. It orchestrates the `planner`, `codex`, `claude-reviewer`, `verifier`, `benchmarker`, and `release-manager` agents (`.pi/agents/`) via the `subagent` tool. Direct usage/architecture questions don't need the pipeline. Each task runs in its own worktree on a stacked branch; commit + draft PR are automatic on green; **merging to main is never automatic** and promoting a draft to ready-for-review is HITL-gated.
+
+**Change History:**
+| Date | Change | Target | Reason |
+|------|--------|--------|--------|
+| 2026-07-25 | Initial harness build (5 agents, 5 skills, `/stax-dev` orchestrator) | All | New harness |
+| 2026-07-25 | Git-native evolution: added `benchmarker` (optional perf gate) + `stax-benchmark` skill; worktree-per-task + stacked branch; auto commit-on-green + auto draft PR; hard "never merge to main" rule | benchmarker.md, stax-benchmark/, release-manager.md, codex.md, stax-release/, stax-dev.md | Adopt git-native workflow constraints; keep verifier as mandatory correctness gate | 
+
 ## Test Command Policy
 
 - **AI agents:** for full-suite validation always run `make test`. On macOS this routes through Docker, which is the only sane way to run the entire integration suite — `cargo test` natively will be slow, flaky, and may exhaust file handles. Default to `make test` and only fall back to native runners when explicitly told to.
