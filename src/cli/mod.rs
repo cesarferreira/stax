@@ -30,6 +30,11 @@ pub fn run() -> Result<()> {
 
     let cli = Cli::parse();
 
+    if cli.default_config {
+        print!("{}", Config::default_toml()?);
+        return Ok(());
+    }
+
     if matches!(&cli.command, Some(Commands::UpdateCheck)) {
         update::run_background_check();
         return Ok(());

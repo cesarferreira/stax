@@ -21,6 +21,10 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub(crate) trace: bool,
 
+    /// Print the default config.toml to stdout and exit
+    #[arg(long = "default-config")]
+    pub(crate) default_config: bool,
+
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,
 }
