@@ -8,7 +8,13 @@ Cargo.lock
 /.docker-cache
 /.container-cache
 .worktrees/
-.claude
+.claude/*
+!.claude/agents/
+!.claude/agents/**
+!.claude/skills/
+!.claude/skills/**
+.claude/plans/
+.claude/settings.local.json
 .serena
 docs/plans/
 docs/install-gui.sh
