@@ -227,7 +227,9 @@ fn obtain_resolutions(
     parse_agent_response(&raw_response)
         .and_then(|parsed| validate_resolutions(conflicted_files, parsed.resolutions))
         .with_context(|| {
-            format!("AI agent failed to produce a valid resolution after {MAX_PARSE_ATTEMPTS} attempts")
+            format!(
+                "AI agent failed to produce a valid resolution after {MAX_PARSE_ATTEMPTS} attempts"
+            )
         })
 }
 
@@ -243,7 +245,8 @@ fn build_repair_prompt(base_prompt: &str, previous_response: &str, error: &str) 
     prompt.push_str(previous_response.trim());
     prompt.push('\n');
     prompt.push_str("----- END PREVIOUS RESPONSE -----\n\n");
-    prompt.push_str("Return only the corrected JSON object, with no markdown and no code fences.\n");
+    prompt
+        .push_str("Return only the corrected JSON object, with no markdown and no code fences.\n");
     prompt
 }
 
