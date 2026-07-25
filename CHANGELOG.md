@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.98.2] - 2026-07-25
+
+### 🚀 Features
+
+- *(resolve)* Retry AI conflict resolution with feedback on invalid output ([#659](https://github.com/cesarferreira/stax/issues/659))
+- *(resolve)* Retry AI conflict resolution with feedback on invalid output ([#683](https://github.com/cesarferreira/stax/issues/683))
+
+### 💼 Other
+
+- Add `st --default-config` flag to print default config.toml ([#684](https://github.com/cesarferreira/stax/issues/684))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(harness)* Track stax-dev pipeline and use sonnet for implementer ([#685](https://github.com/cesarferreira/stax/issues/685))
 ## [0.98.1] - 2026-07-24
 
 ### 🚀 Features
@@ -15,6 +29,10 @@ All notable changes to this project will be documented in this file.
 ### 💼 Other
 
 - Add bug report issue template modeled on #679 ([#681](https://github.com/cesarferreira/stax/issues/681))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.98.0] - 2026-07-23
 
 ### 🚀 Features
