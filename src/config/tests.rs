@@ -748,6 +748,16 @@ fn test_default_config() {
 }
 
 #[test]
+fn test_default_toml_serializes() {
+    let s = Config::default_toml().unwrap();
+    assert!(!s.is_empty());
+    assert!(s.contains("[branch]"));
+    assert!(s.contains("[remote]"));
+    assert!(s.contains("[submit]"));
+    let _: Config = toml::from_str(&s).unwrap();
+}
+
+#[test]
 fn test_ci_alert_config_round_trip() {
     let config: Config = toml::from_str(
         r#"

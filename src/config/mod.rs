@@ -636,6 +636,11 @@ impl Config {
         Ok(base.try_into()?)
     }
 
+    /// Serialize the default config to its TOML representation (same serializer as `save()`).
+    pub fn default_toml() -> Result<String> {
+        Ok(toml::to_string_pretty(&Config::default())?)
+    }
+
     /// Save config to file
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;

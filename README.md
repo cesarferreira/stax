@@ -405,6 +405,7 @@ stax is wire-compatible with Freephite/Graphite for common stacked-branch workfl
 st config                  # open the config editor
 st config --set-ai         # pick AI agent + model
 st config --reset-ai       # clear saved AI pairing and re-prompt
+st --default-config       # print the default config.toml to stdout
 ```
 
 Config lives at `~/.config/stax/config.toml`. When `STAX_CONFIG_DIR` is unset,

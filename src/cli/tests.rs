@@ -25,6 +25,16 @@ fn parse_cli(args: &[&str]) -> Cli {
 }
 
 #[test]
+fn parses_default_config_flag() {
+    let cli = parse_cli(&["stax", "--default-config"]);
+    assert!(cli.default_config);
+    assert!(cli.command.is_none());
+
+    let bare = parse_cli(&["stax"]);
+    assert!(!bare.default_config);
+}
+
+#[test]
 fn interactive_terminal_requires_both_stdio_streams() {
     assert!(has_interactive_terminal(true, true));
     assert!(!has_interactive_terminal(true, false));

@@ -5,6 +5,7 @@ st config                     # show current configuration
 st config --set-ai            # interactively pick AI agent/model
 st config --reset-ai          # clear saved AI defaults and re-prompt
 st config --reset-ai --no-prompt
+st --default-config          # print the default config.toml to stdout
 ```
 
 Config is loaded as follows:
