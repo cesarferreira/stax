@@ -4,6 +4,7 @@ use crate::git::{GitRepo, RebaseResult};
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::IsTerminal;
@@ -18,6 +19,12 @@ struct FileResolution {
     path: String,
     content: String,
 }
+
+/// How many times to ask the agent for a schema-valid resolution within a
+/// single round before giving up. The first attempt uses the plain prompt;
+/// subsequent attempts feed the rejection reason and prior output back so the
+/// agent can self-correct malformed JSON or rule violations.
+const MAX_PARSE_ATTEMPTS: usize = 3;
 
 pub fn run(
     agent_flag: Option<String>,
@@ -59,10 +66,12 @@ Run `stax continue` or inspect `git status`."
 
         let baseline_changes: HashSet<String> = repo.changed_files()?.into_iter().collect();
         let conflicted_contents = read_conflicted_files(&repo, &conflicted_files)?;
-        let prompt = build_resolve_prompt(&conflicted_contents);
-        let raw_response = generate::invoke_ai_agent(&agent, model.as_deref(), &prompt)?;
-        let parsed = parse_agent_response(&raw_response)?;
-        let resolutions = validate_resolutions(&conflicted_files, parsed.resolutions)?;
+        let resolutions = obtain_resolutions(
+            &agent,
+            model.as_deref(),
+            &conflicted_files,
+            &conflicted_contents,
+        )?;
         apply_resolutions(&repo, &resolutions)?;
         enforce_conflicted_only_changes(&repo, &conflicted_files, &baseline_changes)?;
         repo.add_files(&conflicted_files)?;
@@ -171,6 +180,70 @@ fn build_resolve_prompt(conflicts: &[(String, String)]) -> String {
         }
         prompt.push_str("----- END CONTENT -----\n");
     }
+    prompt
+}
+
+/// Invoke the agent and coerce its output into a validated resolution map,
+/// retrying up to [`MAX_PARSE_ATTEMPTS`] times. Only schema/validation failures
+/// are retried (with the rejection reason fed back); a failed agent invocation
+/// aborts immediately, and success returns on the first valid response.
+fn obtain_resolutions(
+    agent: &str,
+    model: Option<&str>,
+    conflicted_files: &[String],
+    conflicted_contents: &[(String, String)],
+) -> Result<HashMap<String, String>> {
+    let base_prompt = build_resolve_prompt(conflicted_contents);
+    // Borrowed on the first attempt (the common path, no clone); each retry
+    // swaps in an owned repair prompt that feeds the rejection reason back.
+    let mut prompt: Cow<str> = Cow::Borrowed(&base_prompt);
+
+    for attempt in 1..MAX_PARSE_ATTEMPTS {
+        let raw_response = generate::invoke_ai_agent(agent, model, &prompt)?;
+        match parse_agent_response(&raw_response)
+            .and_then(|parsed| validate_resolutions(conflicted_files, parsed.resolutions))
+        {
+            Ok(resolved) => return Ok(resolved),
+            Err(err) => {
+                println!(
+                    "  {}",
+                    format!(
+                        "Attempt {}/{} produced an invalid response; asking the agent to fix it...",
+                        attempt, MAX_PARSE_ATTEMPTS
+                    )
+                    .yellow()
+                );
+                prompt = Cow::Owned(build_repair_prompt(
+                    &base_prompt,
+                    &raw_response,
+                    &format!("{err:#}"),
+                ));
+            }
+        }
+    }
+
+    // Final attempt: propagate the validation error instead of retrying.
+    let raw_response = generate::invoke_ai_agent(agent, model, &prompt)?;
+    parse_agent_response(&raw_response)
+        .and_then(|parsed| validate_resolutions(conflicted_files, parsed.resolutions))
+        .with_context(|| {
+            format!("AI agent failed to produce a valid resolution after {MAX_PARSE_ATTEMPTS} attempts")
+        })
+}
+
+/// Build a follow-up prompt that restates the schema, shows the agent its
+/// rejected output, and states exactly why it was rejected.
+fn build_repair_prompt(base_prompt: &str, previous_response: &str, error: &str) -> String {
+    let mut prompt = String::new();
+    prompt.push_str(base_prompt);
+    prompt.push_str("\nYour previous response was REJECTED. Return a corrected response.\n");
+    prompt.push_str(&format!("Rejection reason:\n{}\n\n", error.trim()));
+    prompt.push_str("Your previous response was:\n");
+    prompt.push_str("----- BEGIN PREVIOUS RESPONSE -----\n");
+    prompt.push_str(previous_response.trim());
+    prompt.push('\n');
+    prompt.push_str("----- END PREVIOUS RESPONSE -----\n\n");
+    prompt.push_str("Return only the corrected JSON object, with no markdown and no code fences.\n");
     prompt
 }
 
