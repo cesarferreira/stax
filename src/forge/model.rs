@@ -215,8 +215,11 @@ impl PrMergeStatus {
         if self.mergeable == Some(false) {
             return "Has conflicts";
         }
-        if self.is_waiting() {
-            return "Waiting";
+        if self.ci_status.is_pending() {
+            return "CI checks";
+        }
+        if self.mergeable.is_none() {
+            return "mergeability check";
         }
         if self.is_ready() {
             return "Ready";
