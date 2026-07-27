@@ -885,13 +885,18 @@ pub fn build_launch_spec(
 /// `opencode run`, but stax launches the top-level `opencode` command. Until
 /// that invocation path is updated (or we confirm the flag is accepted on the
 /// top-level CLI), treat opencode yolo as unsupported.
+///
+/// Note on pi: permission bypass is provided by opt-in permission-mode
+/// extensions (configured via mode cycling / settings), not a stable core CLI
+/// flag, so there is no universal yolo flag to inject; treat pi yolo as
+/// unsupported and let users pass a flag manually via `--agent-arg`.
 pub fn yolo_flag_for_agent(agent: &str) -> Option<&'static str> {
     match agent {
         "claude" => Some("--dangerously-skip-permissions"),
         "codex" => Some("--dangerously-bypass-approvals-and-sandbox"),
         "gemini" => Some("--yolo"),
-        // "opencode" intentionally unsupported until the top-level CLI accepts
-        // the flag; see function-level docstring.
+        // "opencode" and "pi" intentionally unsupported; see function-level
+        // docstring.
         _ => None,
     }
 }
@@ -908,7 +913,7 @@ pub fn build_agent_launch_spec_with_options(
 
     let mut args = Vec::new();
     match agent {
-        "claude" | "codex" | "opencode" => {
+        "claude" | "codex" | "opencode" | "pi" => {
             if let Some(ref model) = model {
                 args.extend(["--model".to_string(), model.clone()]);
             }
@@ -1605,10 +1610,43 @@ mod tests {
             Some("--dangerously-bypass-approvals-and-sandbox")
         );
         assert_eq!(yolo_flag_for_agent("gemini"), Some("--yolo"));
-        // opencode is intentionally unsupported for --yolo right now
+        // opencode and pi are intentionally unsupported for --yolo right now
         // (see yolo_flag_for_agent docstring).
         assert_eq!(yolo_flag_for_agent("opencode"), None);
+        assert_eq!(yolo_flag_for_agent("pi"), None);
         assert_eq!(yolo_flag_for_agent("unknown"), None);
+    }
+
+    #[test]
+    fn build_agent_launch_spec_pi_uses_model_flag() {
+        let launch = build_agent_launch_spec_with_options(
+            "pi",
+            Some("anthropic/claude-opus-4-8".to_string()),
+            vec!["fix flaky tests".to_string()],
+            false,
+            &[],
+        )
+        .expect("agent launch");
+
+        match launch {
+            LaunchSpec::Process {
+                program,
+                args,
+                display,
+            } => {
+                assert_eq!(program, "pi");
+                assert_eq!(
+                    args,
+                    vec![
+                        "--model".to_string(),
+                        "anthropic/claude-opus-4-8".to_string(),
+                        "fix flaky tests".to_string(),
+                    ]
+                );
+                assert_eq!(display, "pi (anthropic/claude-opus-4-8)");
+            }
+            LaunchSpec::Shell { .. } => panic!("expected process launch"),
+        }
     }
 
     #[test]

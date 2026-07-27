@@ -36,6 +36,11 @@ const SKILL_LOCATIONS: &[SkillLocation] = &[
         relative_path: ".cursor/skills/stax/SKILL.md",
         has_frontmatter: true,
     },
+    SkillLocation {
+        name: "pi",
+        relative_path: ".pi/agent/skills/stax/SKILL.md",
+        has_frontmatter: true,
+    },
 ];
 
 /// Parse `<!-- stax-skills-version: X.Y.Z -->` or `stax_version: "X.Y.Z"` from the
@@ -366,6 +371,16 @@ mod tests {
             Some(PKG_VERSION),
             "frontmatter PKG_VERSION should win over a stale body marker",
         );
+    }
+
+    #[test]
+    fn test_skill_locations_include_pi() {
+        let pi = SKILL_LOCATIONS
+            .iter()
+            .find(|loc| loc.name == "pi")
+            .expect("pi skill location should be registered");
+        assert_eq!(pi.relative_path, ".pi/agent/skills/stax/SKILL.md");
+        assert!(pi.has_frontmatter);
     }
 
     #[test]

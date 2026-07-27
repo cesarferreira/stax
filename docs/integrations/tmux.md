@@ -45,4 +45,4 @@ cesar/fix/refresh-pr-draft-on-sync [1/1] #394  running  15:12
 ## Related
 
 - [stax.tmux repository](https://github.com/cesarferreira/stax.tmux)
-- [Claude Code](claude-code.md) · [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md)
+- [Claude Code](claude-code.md) · [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md) · [pi](pi.md)

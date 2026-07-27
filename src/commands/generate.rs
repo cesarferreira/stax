@@ -35,7 +35,7 @@ fn models_file() -> &'static ModelsFile {
     })
 }
 
-const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
+const SUPPORTED_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode", "pi"];
 
 #[derive(Clone, Copy, Debug)]
 enum GenerateTarget {
@@ -697,6 +697,7 @@ fn auto_detect_agent(available: &[String]) -> Result<String> {
          - codex  (https://github.com/openai/codex)\n  \
          - gemini (https://github.com/google-gemini/gemini-cli)\n  \
          - opencode (https://opencode.ai)\n  \
+         - pi (https://pi.dev)\n  \
          Or set manually in ~/.config/stax/config.toml:\n    \
          [ai]\n    \
          agent = \"claude\"",
@@ -1342,6 +1343,12 @@ pub fn invoke_ai_agent(agent: &str, model: Option<&str>, prompt: &str) -> Result
             args.push(prompt.to_string());
             write_prompt_to_stdin = false;
         }
+        "pi" => {
+            args.push("-p".into());
+            if let Some(m) = model {
+                args.extend(["--model".into(), m.into()]);
+            }
+        }
         _ => bail!("Unsupported agent: {}", agent),
     }
 
@@ -1410,6 +1417,16 @@ mod tests {
     #[test]
     fn validate_agent_name_accepts_opencode() {
         assert!(validate_agent_name("opencode").is_ok());
+    }
+
+    #[test]
+    fn validate_agent_name_accepts_pi() {
+        assert!(validate_agent_name("pi").is_ok());
+    }
+
+    #[test]
+    fn validate_agent_name_rejects_unknown() {
+        assert!(validate_agent_name("nope").is_err());
     }
 
     #[test]

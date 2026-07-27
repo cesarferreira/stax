@@ -121,7 +121,7 @@ st generate --pr-body --no-prompt
 | `--template <name>` | Use a specific PR template |
 | `--no-template` | Skip PR template |
 
-Supported agents: `claude`, `codex`, `gemini`, `opencode`. When `codex` or `claude` is selected, stax tries the provider's live Models API first (using `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) before falling back to its local defaults.
+Supported agents: `claude`, `codex`, `gemini`, `opencode`, `pi`. When `codex` or `claude` is selected, stax tries the provider's live Models API first (using `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) before falling back to its local defaults.
 
 To forget the saved AI pairing and re-prompt:
 

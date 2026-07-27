@@ -449,6 +449,7 @@ AI and editor integration guides:
 - [Codex](docs/integrations/codex.md)
 - [Gemini CLI](docs/integrations/gemini-cli.md)
 - [OpenCode](docs/integrations/opencode.md)
+- [pi](docs/integrations/pi.md)
 - [PR templates + AI generation](docs/integrations/pr-templates-and-ai.md)
 
 Shared skill/instruction file used across agents: [skills.md](skills.md)

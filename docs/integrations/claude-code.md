@@ -24,5 +24,5 @@ When `claude` is selected, stax tries Anthropic's live Models API first (using `
 
 ## Related
 
-- [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md)
+- [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md) · [pi](pi.md)
 - [PR templates + AI](pr-templates-and-ai.md)
