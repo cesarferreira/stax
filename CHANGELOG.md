@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.100.0] - 2026-07-27
+
+### 🚀 Features
+
+- *(agents)* Support pi as an AI agent and skills install target ([#690](https://github.com/cesarferreira/stax/issues/690))
 ## [0.99.0] - 2026-07-27
 
 ### 🚀 Features
@@ -22,6 +27,7 @@ All notable changes to this project will be documented in this file.
 - *(harness)* Add git-native stax-dev multi-agent pipeline ([#686](https://github.com/cesarferreira/stax/issues/686))
 - Gitignore stax-dev harness run artifacts (_workspace, .pi-subagents)
 - *(harness)* Set cross-model matrix for stax-dev agents (opus 5 for plan/review, composer-2.5 elsewhere)
+- Release
 ## [0.98.2] - 2026-07-25
 
 ### 🚀 Features
