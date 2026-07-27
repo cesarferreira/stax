@@ -24,3 +24,7 @@ __pycache__/
 
 .playwright-mcp/
 .superpowers/
+
+# stax-dev harness run artifacts (ephemeral, per-run, machine-local)
+.pi-subagents/
+_workspace/
