@@ -1,3 +1,4 @@
+use super::keys::{self, KeyScope};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
@@ -69,6 +70,21 @@ pub enum KeyContext {
     MovePicker,
 }
 
+impl KeyContext {
+    /// Contexts where the user is typing get the line-editing shortcuts;
+    /// the rest get motion only.
+    fn key_scope(self) -> KeyScope {
+        match self {
+            KeyContext::Search | KeyContext::Input | KeyContext::MovePicker => {
+                KeyScope::TextInput
+            }
+            KeyContext::Normal | KeyContext::Confirm | KeyContext::Help | KeyContext::Reorder => {
+                KeyScope::Navigation
+            }
+        }
+    }
+}
+
 impl From<KeyEvent> for KeyAction {
     fn from(key: KeyEvent) -> Self {
         Self::from_key(key, KeyContext::Normal)
@@ -78,11 +94,13 @@ impl From<KeyEvent> for KeyAction {
 impl KeyAction {
     pub fn from_key(key: KeyEvent, context: KeyContext) -> Self {
         // Handle Ctrl+C for quit
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && let KeyCode::Char('c') = key.code
-        {
+        if keys::is_quit(key) {
             return KeyAction::Quit;
         }
+
+        // Rewrite Ctrl-key shortcuts (Ctrl+N, Ctrl+P, ...) into the plain keys
+        // the match arms below already understand.
+        let key = keys::normalize(key, context.key_scope());
 
         // Handle Shift modifiers
         if key.modifiers.contains(KeyModifiers::SHIFT)
@@ -255,6 +273,95 @@ mod tests {
                 c
             );
         }
+    }
+
+    /// Ctrl+N/Ctrl+P must reach the same actions as the arrow keys, in every
+    /// context — including the text-entry ones, where a bare `n`/`p` is text.
+    #[test]
+    fn ctrl_motion_maps_to_arrow_actions() {
+        for context in [
+            KeyContext::Normal,
+            KeyContext::Confirm,
+            KeyContext::Help,
+            KeyContext::Reorder,
+            KeyContext::Input,
+            KeyContext::Search,
+            KeyContext::MovePicker,
+        ] {
+            for (c, expected) in [
+                ('n', KeyAction::Down),
+                ('p', KeyAction::Up),
+                ('f', KeyAction::Right),
+                ('b', KeyAction::Left),
+            ] {
+                let action = KeyAction::from_key(
+                    KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL),
+                    context,
+                );
+                assert_eq!(action, expected, "Ctrl+{c} in {context:?}");
+            }
+        }
+    }
+
+    /// Ctrl+A/Ctrl+E are line motions while typing, but `a`/`e` are shortcuts
+    /// in a list view, so they stay inert there.
+    #[test]
+    fn ctrl_line_motion_is_limited_to_text_entry() {
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+                KeyContext::Input
+            ),
+            KeyAction::Home
+        );
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+                KeyContext::Input
+            ),
+            KeyAction::End
+        );
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+                KeyContext::Normal
+            ),
+            KeyAction::Char('e')
+        );
+    }
+
+    /// Ctrl+G backs out of a prompt but must never quit the dashboard the way
+    /// a bare Esc does from a list view.
+    #[test]
+    fn ctrl_g_escapes_input_but_is_inert_in_normal_mode() {
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+                KeyContext::Search
+            ),
+            KeyAction::Escape
+        );
+        assert_eq!(
+            KeyAction::from_key(
+                KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+                KeyContext::Normal
+            ),
+            KeyAction::Char('g')
+        );
+    }
+
+    /// Ctrl+P must not be swallowed by the Shift remap table on terminals that
+    /// report Ctrl+Shift, and must not reach `OpenPr` the way a bare `p` does.
+    #[test]
+    fn ctrl_motion_survives_a_stray_shift_modifier() {
+        let action = KeyAction::from_key(
+            KeyEvent::new(
+                KeyCode::Char('p'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+            KeyContext::Normal,
+        );
+        assert_eq!(action, KeyAction::Up);
     }
 
     #[test]

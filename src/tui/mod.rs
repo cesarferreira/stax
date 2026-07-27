@@ -1,4 +1,5 @@
 mod app;
+pub(crate) mod keys;
 mod event;
 pub mod ready;
 pub mod split;
@@ -10,6 +11,7 @@ pub mod worktree;
 use app::{
     App, ConfirmAction, FocusedPane, InputAction, Mode, PendingAction, PendingCommand, TuiPane,
 };
+use keys::KeyScope;
 use event::{KeyAction, KeyContext, poll_event};
 
 use crate::application::{
@@ -20,7 +22,7 @@ use crate::commands::open::open_url_in_browser;
 use crate::git::GitRepo;
 use anyhow::Result;
 use crossterm::{
-    event::{Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{Event, KeyCode, KeyEvent},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -381,10 +383,12 @@ fn handle_search_action(app: &mut App, action: KeyAction) -> Result<()> {
 /// feed the query, Up/Down navigate, Enter confirms, Esc cancels) but on
 /// Enter it queues `upstack onto <target>` instead of checkout.
 fn handle_move_picker_key(app: &mut App, key: KeyEvent) -> Result<()> {
-    if is_ctrl_c(&key) {
+    if keys::is_quit(key) {
         app.should_quit = true;
         return Ok(());
     }
+
+    let key = keys::normalize(key, KeyScope::TextInput);
 
     match key.code {
         KeyCode::Esc => {
@@ -424,10 +428,12 @@ fn handle_move_picker_key(app: &mut App, key: KeyEvent) -> Result<()> {
 }
 
 fn handle_search_key(app: &mut App, key: KeyEvent) -> Result<()> {
-    if is_ctrl_c(&key) {
+    if keys::is_quit(key) {
         app.should_quit = true;
         return Ok(());
     }
+
+    let key = keys::normalize(key, KeyScope::TextInput);
 
     match key.code {
         KeyCode::Esc => {
@@ -630,10 +636,12 @@ fn handle_input_action(app: &mut App, action: KeyAction, input_action: &InputAct
 }
 
 fn handle_input_key(app: &mut App, key: KeyEvent, input_action: &InputAction) -> Result<()> {
-    if is_ctrl_c(&key) {
+    if keys::is_quit(key) {
         app.should_quit = true;
         return Ok(());
     }
+
+    let key = keys::normalize(key, KeyScope::TextInput);
 
     match key.code {
         KeyCode::Esc => {
@@ -671,37 +679,11 @@ fn handle_input_key(app: &mut App, key: KeyEvent, input_action: &InputAction) ->
                 app.input_cursor = 0;
             }
         }
-        KeyCode::Left => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-            }
+        _ => {
+            keys::edit(key, &mut app.input_buffer, &mut app.input_cursor);
         }
-        KeyCode::Right => {
-            if app.input_cursor < app.input_buffer.len() {
-                app.input_cursor += 1;
-            }
-        }
-        KeyCode::Home => {
-            app.input_cursor = 0;
-        }
-        KeyCode::End => {
-            app.input_cursor = app.input_buffer.len();
-        }
-        KeyCode::Char(c) => {
-            app.input_buffer.insert(app.input_cursor, c);
-            app.input_cursor += 1;
-        }
-        KeyCode::Backspace if app.input_cursor > 0 => {
-            app.input_cursor -= 1;
-            app.input_buffer.remove(app.input_cursor);
-        }
-        _ => {}
     }
     Ok(())
-}
-
-fn is_ctrl_c(key: &KeyEvent) -> bool {
-    key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c'))
 }
 
 fn log_key_event(app: &App, key: &KeyEvent) {

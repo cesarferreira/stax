@@ -4,7 +4,7 @@ mod ui;
 use anyhow::{Context, Result};
 use app::{DashboardMode, PendingCommand, WorktreeApp};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -15,6 +15,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::git::GitRepo;
+use crate::tui::keys::{self, KeyScope};
 
 pub fn run() -> Result<()> {
     let mut status_message = None;
@@ -68,7 +69,8 @@ fn run_app(
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
         {
-            handle_key(app, key.code, key.modifiers)?;
+            let key = keys::normalize(key, key_scope(&app.mode));
+            handle_key(app, key)?;
         }
         app.refresh_background();
 
@@ -81,16 +83,26 @@ fn run_app(
     }
 }
 
-fn handle_key(app: &mut WorktreeApp, code: KeyCode, modifiers: KeyModifiers) -> Result<()> {
+fn key_scope(mode: &DashboardMode) -> KeyScope {
+    match mode {
+        DashboardMode::CreateInput => KeyScope::TextInput,
+        DashboardMode::Normal
+        | DashboardMode::Help
+        | DashboardMode::ConfirmDelete
+        | DashboardMode::ConfirmForceDelete => KeyScope::Navigation,
+    }
+}
+
+fn handle_key(app: &mut WorktreeApp, key: KeyEvent) -> Result<()> {
     match app.mode {
-        DashboardMode::Normal => handle_normal_key(app, code, modifiers),
+        DashboardMode::Normal => handle_normal_key(app, key.code, key.modifiers),
         DashboardMode::Help => {
             app.mode = DashboardMode::Normal;
             Ok(())
         }
-        DashboardMode::CreateInput => handle_create_key(app, code),
-        DashboardMode::ConfirmDelete => handle_delete_key(app, code),
-        DashboardMode::ConfirmForceDelete => handle_force_delete_key(app, code),
+        DashboardMode::CreateInput => handle_create_key(app, key),
+        DashboardMode::ConfirmDelete => handle_delete_key(app, key.code),
+        DashboardMode::ConfirmForceDelete => handle_force_delete_key(app, key.code),
     }
 }
 
@@ -110,37 +122,17 @@ fn handle_normal_key(app: &mut WorktreeApp, code: KeyCode, modifiers: KeyModifie
     Ok(())
 }
 
-fn handle_create_key(app: &mut WorktreeApp, code: KeyCode) -> Result<()> {
-    match code {
+fn handle_create_key(app: &mut WorktreeApp, key: KeyEvent) -> Result<()> {
+    match key.code {
         KeyCode::Esc => {
             app.mode = DashboardMode::Normal;
             app.input_buffer.clear();
             app.input_cursor = 0;
         }
         KeyCode::Enter => app.confirm_create(),
-        KeyCode::Left => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-            }
+        _ => {
+            keys::edit(key, &mut app.input_buffer, &mut app.input_cursor);
         }
-        KeyCode::Right => {
-            if app.input_cursor < app.input_buffer.len() {
-                app.input_cursor += 1;
-            }
-        }
-        KeyCode::Home => app.input_cursor = 0,
-        KeyCode::End => app.input_cursor = app.input_buffer.len(),
-        KeyCode::Backspace => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-                app.input_buffer.remove(app.input_cursor);
-            }
-        }
-        KeyCode::Char(ch) => {
-            app.input_buffer.insert(app.input_cursor, ch);
-            app.input_cursor += 1;
-        }
-        _ => {}
     }
     Ok(())
 }

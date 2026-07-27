@@ -2,10 +2,11 @@ mod app;
 mod diff_parser;
 mod ui;
 
+use crate::tui::keys::{self, KeyScope};
 use anyhow::Result;
 use app::{HunkSplitApp, HunkSplitMode};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -63,18 +64,17 @@ fn run_app(
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
         {
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                && matches!(key.code, KeyCode::Char('c'))
-            {
+            if keys::is_quit(key) {
                 return Ok(false);
             }
 
+            let key = keys::normalize(key, key_scope(&app.mode));
             let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
             match &app.mode {
                 HunkSplitMode::List => handle_list_key(app, key.code, shift),
                 HunkSplitMode::Sequential => handle_sequential_key(app, key.code, shift),
-                HunkSplitMode::Naming => handle_naming_key(app, key.code),
+                HunkSplitMode::Naming => handle_naming_key(app, key),
                 HunkSplitMode::ConfirmAbort => handle_confirm_abort_key(app, key.code),
                 HunkSplitMode::Help => handle_help_key(app, key.code),
             }
@@ -116,6 +116,16 @@ fn try_finish_round(app: &mut HunkSplitApp) {
         app.input_cursor = app.input_buffer.len();
     } else {
         app.status_message = Some("No hunks selected".to_string());
+    }
+}
+
+fn key_scope(mode: &HunkSplitMode) -> KeyScope {
+    match mode {
+        HunkSplitMode::Naming => KeyScope::TextInput,
+        HunkSplitMode::List
+        | HunkSplitMode::Sequential
+        | HunkSplitMode::ConfirmAbort
+        | HunkSplitMode::Help => KeyScope::Navigation,
     }
 }
 
@@ -165,8 +175,8 @@ fn handle_sequential_key(app: &mut HunkSplitApp, code: KeyCode, shift: bool) {
     }
 }
 
-fn handle_naming_key(app: &mut HunkSplitApp, code: KeyCode) {
-    match code {
+fn handle_naming_key(app: &mut HunkSplitApp, key: KeyEvent) {
+    match key.code {
         KeyCode::Enter => {
             let name = app.input_buffer.trim().to_string();
             match app.validate_branch_name(&name) {
@@ -183,25 +193,9 @@ fn handle_naming_key(app: &mut HunkSplitApp, code: KeyCode) {
             app.input_buffer.clear();
             app.input_cursor = 0;
         }
-        KeyCode::Char(c) => {
-            app.input_buffer.insert(app.input_cursor, c);
-            app.input_cursor += 1;
+        _ => {
+            keys::edit(key, &mut app.input_buffer, &mut app.input_cursor);
         }
-        KeyCode::Backspace => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-                app.input_buffer.remove(app.input_cursor);
-            }
-        }
-        KeyCode::Left => {
-            if app.input_cursor > 0 {
-                app.input_cursor -= 1;
-            }
-        }
-        KeyCode::Right if app.input_cursor < app.input_buffer.len() => {
-            app.input_cursor += 1;
-        }
-        _ => {}
     }
 }
 

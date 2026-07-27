@@ -325,7 +325,7 @@ fn render_help_modal(f: &mut Frame) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from("  ↑/k, ↓/j   Move selection"),
+        Line::from("  ↑/k, ↓/j, Ctrl+p/n   Move selection"),
         Line::from("  Enter      Attach/switch to tmux session for selected worktree"),
         Line::from("  c          Create a new lane, then open it in tmux"),
         Line::from("  d          Remove selected worktree (with confirmation)"),
