@@ -33,11 +33,11 @@ st --trace status --json >/dev/null
 | `st sweep --delete --force` | | Skip confirmation prompt |
 | `st sweep --stale-days <N>` | | Override stale threshold in days (default: 30) |
 | `st sweep --json` | | Machine-readable branch classification (conflicts with `--delete`) |
-| `st update` | | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack |
-| `st update --force --yes --no-prompt` | | Run the full update flow without sync or submit prompts |
-| `st update --verbose` | | Same as `st update`, with detailed sync/restack/submit timing |
+| `st refresh` | | Sync trunk without merged-branch cleanup, restack, then push and create/update PRs for the current stack (`st update` is a back-compat alias) |
+| `st refresh --force --yes --no-prompt` | | Run the full refresh flow without sync or submit prompts |
+| `st refresh --verbose` | | Same as `st refresh`, with detailed sync/restack/submit timing |
 | `st restack` | | Rebase current stack locally — auto-normalizes missing/merged parents; `--stop-here` limits scope |
-| `st cascade` | | Restack from bottom and submit updates |
+| `st cascade` | | Restack the stack and submit updates, without fetching trunk (offline-friendly) |
 | `st diff` | | Show per-branch diffs vs parent |
 | `st range-diff` | | Show range-diff for branches needing restack |
 | `st stack` | `s` | Stack command namespace for `submit` and `restack` (`st stack submit`, `st stack restack`) |
@@ -315,7 +315,7 @@ st completions elvish
 - Imported branches from `st get` are remote-delete exempt: once they are detected as merged or upstream-gone, sync may delete the local support branch and metadata, but it will not push-delete the imported remote branch.
 - The completion footer summarizes the trunk commit, file, and line delta together with non-zero merged-cleanup, imported-update, and restack counts. It reuses sync's existing results and does not perform extra network or Git work.
 - When sync itself leaves exceptional work behind, it reports skipped cleanup with its reason, trunk update failures, and cleanup-driven checkout changes. It prints one prioritized next command: a diverged trunk gets non-destructive guidance to inspect and reconcile it with its remote; other trunk failures suggest `st trunk`; blocked cleanup suggests `st sweep`. Routine restack health remains visible in `st ls` and the TUI instead of appearing after every sync.
-- When `--restack` is requested, sync fails closed if its fetch did not succeed or the local trunk did not reach the fetched remote-trunk commit. It restores any sync auto-stash and exits non-zero before imported-branch refresh, merged-branch cleanup, or restacking can rewrite feature refs. `st update` inherits this guard and exits before its submit phase, so it does not push or update PRs after either failure.
+- When `--restack` is requested, sync fails closed if its fetch did not succeed or the local trunk did not reach the fetched remote-trunk commit. It restores any sync auto-stash and exits non-zero before imported-branch refresh, merged-branch cleanup, or restacking can rewrite feature refs. `st refresh` (and `st update`) inherits this guard and exits before its submit phase, so it does not push or update PRs after either failure.
 
 ### `st restack`
 
@@ -334,6 +334,8 @@ If the excluded parent has local-only commits, scoped submit still refuses and a
 - `--agent codex --model gpt-5.3-codex --max-rounds 5`
 
 ### `st cascade`
+
+Restack the stack and submit updates, without fetching trunk (offline-friendly).
 
 - `--no-pr` / `--no-submit` / `--auto-stash-pop`
 

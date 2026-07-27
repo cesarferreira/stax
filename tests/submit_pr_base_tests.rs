@@ -188,9 +188,9 @@ async fn submit_treats_native_stack_base_lock_as_non_fatal() {
     );
 }
 
-/// `stax update` (sync + restack + submit) reuses the exact same submit
+/// `stax refresh` (sync + restack + submit) reuses the exact same submit
 /// planning/PR-update logic as `stax submit`. Regression coverage for a real
-/// user report: `st update` was surfacing the raw GitHub "part of a stack"
+/// user report: `st refresh` (via the `update` alias) was surfacing the raw GitHub "part of a stack"
 /// error as a fatal failure instead of the soft note above, even though
 /// `stax submit` alone handled it gracefully — see
 /// `submit_treats_native_stack_base_lock_as_non_fatal`.

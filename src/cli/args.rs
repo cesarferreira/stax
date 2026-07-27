@@ -500,7 +500,7 @@ pub(crate) enum Commands {
         submit_after: RestackSubmitAfter,
     },
 
-    /// Restack from the bottom and submit updates
+    /// Restack the stack and submit updates, without fetching trunk (offline-friendly)
     Cascade {
         /// Push branches to remote but skip PR creation/updates
         #[arg(long)]
@@ -514,8 +514,8 @@ pub(crate) enum Commands {
     },
 
     /// Sync trunk, restack current stack, then submit updates
-    #[command(alias = "refresh")]
-    Update {
+    #[command(visible_alias = "update")]
+    Refresh {
         /// Push branches to remote but skip PR creation/updates
         #[arg(long)]
         no_pr: bool,

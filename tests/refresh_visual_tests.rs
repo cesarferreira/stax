@@ -1,4 +1,4 @@
-//! Visual-presentation checks for `st update`'s header.
+//! Visual-presentation checks for `st refresh`'s header.
 //!
 //! The header prints before sync/submit run, so we only assert on stdout
 //! content and tolerate non-zero exit codes for the paths that would try to
@@ -9,7 +9,7 @@ use crate::common::{OutputAssertions, TestRepo};
 #[test]
 fn update_header_no_submit_uses_skip_wording() {
     let repo = TestRepo::new_with_remote();
-    let output = repo.run_stax(&["update", "--no-submit", "--force"]);
+    let output = repo.run_stax(&["refresh", "--no-submit", "--force"]);
     let stdout = TestRepo::stdout(&output);
 
     output.assert_success();
@@ -55,7 +55,7 @@ fn update_header_default_mentions_push_and_prs() {
 #[test]
 fn update_header_no_pr_mentions_push_without_prs() {
     let repo = TestRepo::new_with_remote();
-    let output = repo.run_stax(&["update", "--no-pr", "--force"]);
+    let output = repo.run_stax(&["refresh", "--no-pr", "--force"]);
     let stdout = TestRepo::stdout(&output);
 
     assert!(

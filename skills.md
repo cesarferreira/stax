@@ -31,7 +31,7 @@ stax merge                     # Merge PRs from stack bottom upward
 stax sync|rs                   # Sync trunk + clean merged branches
 stax sweep                     # Classify + optionally delete merged/gone/stale branches
 stax restack                   # Rebase branch/stack onto parents
-stax cascade                   # Restack bottom-up and submit updates
+stax cascade                   # Restack bottom-up and submit updates (no trunk fetch; offline-friendly)
 
 stax get [branch|PR]           # Sync current stack, or fetch/checkout a remote branch or PR stack
 stax checkout|co|bco           # Checkout branch (interactive by default)
@@ -325,13 +325,14 @@ stax sweep --delete --force        # Skip confirmation prompt
 stax sweep --stale-days 60         # Override stale threshold in days (default 30, or branch.stale_days config)
 stax sweep --json                  # Machine-readable branch classification (conflicts with --delete)
 
-stax update                        # Sync trunk, restack, then submit (no merged cleanup)
-stax update --no-pr                # Push only after trunk sync/restack
-stax update --no-submit            # Trunk sync/restack only
-stax update --force                # Force sync without prompts first
-stax update --force --yes --no-prompt # Full update without sync/submit prompts
-stax update --verbose              # Show detailed sync/restack/submit timings
-# update inherits sync's fetch/trunk guard and exits before its submit phase, so it does not push or update PRs after that failure.
+stax refresh                        # Sync trunk, restack, then submit (no merged cleanup)
+stax refresh --no-pr                # Push only after trunk sync/restack
+stax refresh --no-submit            # Trunk sync/restack only
+stax refresh --force                # Force sync without prompts first
+stax refresh --force --yes --no-prompt # Full refresh without sync/submit prompts
+stax refresh --verbose              # Show detailed sync/restack/submit timings
+# `stax update` remains a back-compat alias for `stax refresh`.
+# refresh inherits sync's fetch/trunk guard and exits before its submit phase, so it does not push or update PRs after that failure.
 
 stax restack                       # Restack current branch onto parent
 stax restack --all                 # Restack whole stack
@@ -341,7 +342,7 @@ stax restack --submit-after yes    # ask|yes|no
 stax restack --auto-stash-pop      # Stash/pop dirty target worktrees
 stax restack --quiet               # Also silences the preflight notice below
 
-stax cascade                       # Restack bottom-up then submit
+stax cascade                       # Restack bottom-up then submit (no trunk fetch; offline-friendly)
 stax cascade --no-pr               # Push only, skip PR updates
 stax cascade --no-submit           # Local restack only
 stax cascade --auto-stash-pop      # Stash/pop dirty target worktrees
@@ -567,7 +568,8 @@ stax merge --stack --when-ready    # GitHub stack fast-forward: selected tip CI 
 ### After Base PR Merges
 
 ```bash
-stax update
+stax refresh
+# `stax update` is a back-compat alias for `stax refresh`.
 ```
 
 ### Resolve Rebase Conflicts

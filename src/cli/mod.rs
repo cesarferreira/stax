@@ -375,7 +375,7 @@ pub fn run() -> Result<()> {
             no_submit,
             auto_stash_pop,
         } => commands::cascade::run(no_pr, no_submit, auto_stash_pop),
-        Commands::Update {
+        Commands::Refresh {
             no_pr,
             no_submit,
             force,
