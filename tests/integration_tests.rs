@@ -2176,12 +2176,12 @@ fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("Updating stack..."),
+        stdout.contains("Updating stack"),
         "Expected update banner, got: {}",
         stdout
     );
     assert!(
-        stdout.contains("1. Sync trunk"),
+        stdout.contains("Sync trunk"),
         "Expected sync step, got: {}",
         stdout
     );
@@ -2191,12 +2191,12 @@ fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
         stdout
     );
     assert!(
-        stdout.contains("2. Restack current stack onto updated parents"),
+        stdout.contains("Restack current stack onto updated parents"),
         "Expected restack step, got: {}",
         stdout
     );
     assert!(
-        stdout.contains("3. Skip push and PR updates (--no-submit)"),
+        stdout.contains("Skip push and PR updates (--no-submit)"),
         "Expected no-submit step, got: {}",
         stdout
     );
@@ -2850,7 +2850,7 @@ fn test_refresh_no_pr_pushes_current_stack() {
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("3. Push branches without updating PRs"),
+        stdout.contains("Push branches without updating PRs"),
         "Expected no-pr step, got: {}",
         stdout
     );
@@ -2890,7 +2890,7 @@ fn test_refresh_conflict_reports_restack_context() {
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("Updating stack..."),
+        stdout.contains("Updating stack"),
         "Expected update banner, got: {}",
         stdout
     );

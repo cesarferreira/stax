@@ -29,16 +29,20 @@ pub fn run(
             .collect::<Vec<_>>()
     };
 
-    println!("{}", "Updating stack...".bold());
-    println!("  1. Sync trunk");
-    println!("  2. Restack current stack onto updated parents");
-    if no_submit {
-        println!("  3. Skip push and PR updates (--no-submit)");
+    let step3 = if no_submit {
+        "Skip push and PR updates (--no-submit)"
     } else if no_pr {
-        println!("  3. Push branches without updating PRs");
+        "Push branches without updating PRs"
     } else {
-        println!("  3. Push branches and update PRs");
-    }
+        "Push branches and update PRs"
+    };
+    println!("{} {}", "▸".cyan().bold(), "Updating stack".bold());
+    println!("  {} Sync trunk", "├─".dimmed());
+    println!(
+        "  {} Restack current stack onto updated parents",
+        "├─".dimmed()
+    );
+    println!("  {} {}", "└─".dimmed(), step3);
 
     commands::sync::run(
         true,  // restack
