@@ -74,7 +74,7 @@ fn skill_path(loc: &SkillLocation) -> Option<PathBuf> {
 fn build_content(body: &str, loc: &SkillLocation) -> String {
     if loc.has_frontmatter {
         format!(
-            "---\nname: stax\ndescription: Use stax to manage stacked Git branches and PRs. Covers all commands, flags, workflows, and best practices for AI coding agents.\nstax_version: \"{PKG_VERSION}\"\nmetadata:\n  short-description: Stax stacked-branch and PR management commands\n---\n\n{body}",
+            "---\nname: stax\ndescription: Use when the user wants to create, submit, sync, restack, navigate, or merge stacked Git branches or PRs, or asks about stax commands, flags, or workflows. Covers all stax commands and best practices for AI coding agents.\nstax_version: \"{PKG_VERSION}\"\nmetadata:\n  short-description: Stax stacked-branch and PR management commands\n---\n\n{body}",
         )
     } else {
         body.to_string()
