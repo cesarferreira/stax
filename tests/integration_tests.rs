@@ -2166,10 +2166,10 @@ fn test_refresh_no_submit_keeps_original_branch_and_restacks_stack() {
     repo.run_stax(&["checkout", &middle]);
     let original = repo.current_branch();
 
-    let output = repo.run_stax(&["update", "--no-submit", "--force"]);
+    let output = repo.run_stax(&["refresh", "--no-submit", "--force"]);
     assert!(
         output.status.success(),
-        "update --no-submit failed\nstdout: {}\nstderr: {}",
+        "refresh --no-submit failed\nstdout: {}\nstderr: {}",
         TestRepo::stdout(&output),
         TestRepo::stderr(&output)
     );
@@ -2256,11 +2256,11 @@ fn test_update_aborts_before_restack_when_trunk_diverges() {
     configure_submit_remote(&repo);
     repo.run_stax(&["checkout", &feature]);
 
-    let output = repo.run_stax(&["update", "--no-pr", "--force", "--yes", "--no-prompt"]);
+    let output = repo.run_stax(&["refresh", "--no-pr", "--force", "--yes", "--no-prompt"]);
 
     assert!(
         !output.status.success(),
-        "update must fail when trunk diverges\nstdout: {}\nstderr: {}",
+        "refresh must fail when trunk diverges\nstdout: {}\nstderr: {}",
         TestRepo::stdout(&output),
         TestRepo::stderr(&output),
     );
@@ -2503,10 +2503,10 @@ fn test_update_no_submit_skips_merged_branch_cleanup() {
     assert!(push.status.success(), "failed to update remote main");
 
     repo.run_stax(&["checkout", &child]);
-    let output = repo.run_stax(&["update", "--no-submit", "--force"]);
+    let output = repo.run_stax(&["refresh", "--no-submit", "--force"]);
     assert!(
         output.status.success(),
-        "update --no-submit failed\nstdout: {}\nstderr: {}",
+        "refresh --no-submit failed\nstdout: {}\nstderr: {}",
         TestRepo::stdout(&output),
         TestRepo::stderr(&output)
     );
@@ -2563,13 +2563,13 @@ fn test_update_submit_does_not_refetch_trunk_after_sync() {
     let trace_dir = test_tempdir();
     let trace_file = trace_dir.path().join("git-trace.log");
     let output = repo.run_stax_with_env(
-        &["update", "--no-pr", "--force", "--yes", "--no-prompt"],
+        &["refresh", "--no-pr", "--force", "--yes", "--no-prompt"],
         &[("GIT_TRACE", trace_file.as_path())],
     );
 
     assert!(
         output.status.success(),
-        "update --no-pr failed\nstdout: {}\nstderr: {}",
+        "refresh --no-pr failed\nstdout: {}\nstderr: {}",
         TestRepo::stdout(&output),
         TestRepo::stderr(&output)
     );
@@ -2604,13 +2604,13 @@ fn test_update_submit_fetches_once_with_unpublished_branch() {
     let trace_dir = test_tempdir();
     let trace_file = trace_dir.path().join("git-trace.log");
     let output = repo.run_stax_with_env(
-        &["update", "--no-pr", "--force", "--yes", "--no-prompt"],
+        &["refresh", "--no-pr", "--force", "--yes", "--no-prompt"],
         &[("GIT_TRACE", trace_file.as_path())],
     );
 
     assert!(
         output.status.success(),
-        "update --no-pr failed\nstdout: {}\nstderr: {}",
+        "refresh --no-pr failed\nstdout: {}\nstderr: {}",
         TestRepo::stdout(&output),
         TestRepo::stderr(&output)
     );

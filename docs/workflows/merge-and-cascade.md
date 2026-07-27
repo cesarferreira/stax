@@ -119,7 +119,7 @@ Flow: retarget all PRs to trunk → enqueue each → poll until merged (respects
 
 ## `st cascade`
 
-Restack + push + create/update PRs in a single flow.
+Restack + push + create/update PRs in a single flow, without fetching trunk (offline-friendly).
 
 | Command | Behavior |
 |---|---|
@@ -128,15 +128,15 @@ Restack + push + create/update PRs in a single flow.
 | `st cascade --no-submit` | restack only |
 | `st cascade --auto-stash-pop` | auto stash/pop dirty worktrees |
 
-## `st update`
+## `st refresh`
 
-The "bottom PR merged, catch me up" command. Prints the plan up front, then syncs trunk without merged-branch cleanup, restacks, and submits.
+The "bottom PR merged, catch me up" command. Prints the plan up front, then syncs trunk without merged-branch cleanup, restacks, and submits. `st update` remains a back-compat alias.
 
 | Command | Behavior |
 |---|---|
-| `st update` | sync trunk → restack → push → create/update PRs |
-| `st update --no-pr` | sync trunk → restack → push |
-| `st update --no-submit` | sync trunk → restack |
-| `st update --force` | force the sync step instead of prompting |
-| `st update --force --yes --no-prompt` | run the full trunk-sync/restack/submit flow without prompts |
-| `st update --verbose` | show detailed sync/restack/submit timing |
+| `st refresh` | sync trunk → restack → push → create/update PRs |
+| `st refresh --no-pr` | sync trunk → restack → push |
+| `st refresh --no-submit` | sync trunk → restack |
+| `st refresh --force` | force the sync step instead of prompting |
+| `st refresh --force --yes --no-prompt` | run the full trunk-sync/restack/submit flow without prompts |
+| `st refresh --verbose` | show detailed sync/restack/submit timing |

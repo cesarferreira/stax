@@ -13,7 +13,7 @@ If you install with `cargo install` or `cargo binstall`, update notifications an
 All core stax features work on Windows without modification:
 
 - Stacked branches: `st create`, `st ls`, `st ll`, `st restack`
-- PR workflows: `st ss`, `st merge`, `st cascade`, `st update`, `st pr`
+- PR workflows: `st ss`, `st merge`, `st cascade`, `st refresh` (`st update` alias), `st pr`
 - Sync and cleanup: `st rs`, `st sync`
 - Undo/redo: `st undo`, `st redo`
 - Interactive TUI: bare `st`

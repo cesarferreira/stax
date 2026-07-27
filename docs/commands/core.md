@@ -45,7 +45,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st merge --stack` | Validate the selected tip PR once, retarget it to trunk, merge that PR, and let GitHub mark lower PRs merged when possible (`--full` includes descendants; GitHub only) |
 | `st merge --remote` | Merge remotely via the GitHub API while you keep working |
 | `st merge --all` | Merge the entire stack regardless of where you are |
-| `st cascade` | Restack, push, and create/update PRs in one shot |
+| `st cascade` | Restack, push, and create/update PRs in one shot (no trunk fetch; offline-friendly) |
 
 Scoped submit keeps local branch metadata unchanged when it prepares a temporary publish head. Plain `git commit` work on the branch is included; `st restack` remains the command that updates local branch tips and parent revisions.
 
@@ -59,9 +59,9 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
 | `st restack` | Rebase current stack onto parents locally (no fetch) |
-| `st update` | Sync trunk without merged-branch cleanup, restack, then push and update PRs |
-| `st update --force --yes --no-prompt` | Full update flow without sync or submit prompts |
-| `st update --verbose` | Same as `st update`, with detailed sync/restack/submit timing |
+| `st refresh` | Sync trunk without merged-branch cleanup, restack, then push and update PRs (`st update` is a back-compat alias) |
+| `st refresh --force --yes --no-prompt` | Full refresh flow without sync or submit prompts |
+| `st refresh --verbose` | Same as `st refresh`, with detailed sync/restack/submit timing |
 
 ## Branch housekeeping
 

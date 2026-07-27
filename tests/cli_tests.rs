@@ -181,7 +181,8 @@ fn test_help() {
     assert!(stdout.contains("Fast stacked Git branches and PRs"));
     assert!(stdout.contains("status"));
     assert!(stdout.contains("submit"));
-    assert!(stdout.contains("update"));
+    assert!(stdout.contains("refresh"));
+    assert!(stdout.contains("[aliases: update]"));
     assert!(stdout.contains("run"));
     assert!(stdout.contains("restack"));
     assert!(stdout.contains("resolve"));
@@ -233,7 +234,22 @@ fn test_sync_alias_rs() {
 }
 
 #[test]
-fn test_update_help() {
+fn test_refresh_help() {
+    let output = stax(&["refresh", "--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Sync trunk"));
+    assert!(stdout.contains("no-pr"));
+    assert!(stdout.contains("no-submit"));
+    assert!(stdout.contains("force"));
+    assert!(stdout.contains("safe"));
+    assert!(stdout.contains("verbose"));
+    assert!(stdout.contains("--yes"));
+    assert!(stdout.contains("--no-prompt"));
+}
+
+#[test]
+fn test_update_alias_still_works() {
     let output = stax(&["update", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -248,12 +264,12 @@ fn test_update_help() {
 }
 
 #[test]
-fn test_refresh_alias_help() {
-    let output = stax(&["refresh", "--help"]);
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Sync trunk"));
-    assert!(stdout.contains("no-submit"));
+fn test_update_typo_exits_nonzero() {
+    let output = stax(&["updatee"]);
+    assert!(
+        !output.status.success(),
+        "near-miss subcommand should not match the update alias"
+    );
 }
 
 #[test]

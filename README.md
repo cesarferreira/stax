@@ -183,7 +183,7 @@ st ls
 st ss
 
 # 4. After the bottom PR merges on GitHub…
-st update          # sync trunk, restack this stack, update PRs
+st refresh         # sync trunk, restack this stack, update PRs (`st update` is a back-compat alias)
 ```
 
 Picked the wrong trunk? Run `st trunk main` or `st init --trunk <branch>` to reconfigure.
@@ -355,11 +355,11 @@ st config --set-ai
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
 | `st sweep` | Classify all local branches (merged/gone/stale/active); `--delete` removes merged branches (including tracked merged PRs) and upstream-gone branches with no unique work |
-| `st update` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs |
-| `st update --force --yes --no-prompt` | Run update without sync or submit prompts |
-| `st update --verbose` | Include detailed sync/restack/submit timing |
+| `st refresh` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs (`st update` is a back-compat alias) |
+| `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |
+| `st refresh --verbose` | Include detailed sync/restack/submit timing |
 | `st restack` | Rebase current stack onto parents locally |
-| `st cascade` | Restack + push + open/update PRs |
+| `st cascade` | Restack + push + open/update PRs (no trunk fetch; offline-friendly) |
 | `st split` | Split a branch into stacked branches (by commit or `--hunk`) |
 | `st lane <name> "<task>"` | Spawn an AI agent on a new lane |
 | `st wt` | Open the worktree dashboard |

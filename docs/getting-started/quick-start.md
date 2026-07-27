@@ -44,8 +44,8 @@ st ss
 
 # After the bottom PR merges on GitHub, catch up in one shot:
 st rs --restack    # pull trunk, clean merged, rebase the rest
-# or: st update     # sync + restack + push/update PRs in one command
-# scripts: st update --force --yes --no-prompt
+# or: st refresh    # sync + restack + push/update PRs in one command (`st update` is a back-compat alias)
+# scripts: st refresh --force --yes --no-prompt
 ```
 
 Picked the wrong trunk? `st trunk main` or `st init --trunk <branch>` reconfigures.
