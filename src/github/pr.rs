@@ -1572,6 +1572,7 @@ mod tests {
         assert!(!status.is_ready());
         assert!(status.is_waiting());
         assert!(!status.is_blocked());
+        assert_eq!(status.status_text(), "CI checks");
     }
 
     #[test]
@@ -1593,6 +1594,7 @@ mod tests {
 
         assert!(!status.is_ready());
         assert!(status.is_waiting());
+        assert_eq!(status.status_text(), "mergeability check");
     }
 
     #[test]
