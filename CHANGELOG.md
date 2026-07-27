@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.99.0] - 2026-07-27
+
+### 🚀 Features
+
+- *(update)* Polish `st update` header with tree-glyph step rendering ([#688](https://github.com/cesarferreira/stax/issues/688))
+- *(cli)* Make `refresh` the primary name for `st update` (kept as alias) + clarify cascade help ([#689](https://github.com/cesarferreira/stax/issues/689))
+
+### 🐛 Bug Fixes
+
+- *(merge)* Show what the merge is waiting for instead of 'Waiting for waiting' ([#687](https://github.com/cesarferreira/stax/issues/687))
+
+### 💼 Other
+
+- Updated skills
+
+### ⚙️ Miscellaneous Tasks
+
+- *(harness)* Add git-native stax-dev multi-agent pipeline ([#686](https://github.com/cesarferreira/stax/issues/686))
+- Gitignore stax-dev harness run artifacts (_workspace, .pi-subagents)
+- *(harness)* Set cross-model matrix for stax-dev agents (opus 5 for plan/review, composer-2.5 elsewhere)
 ## [0.98.2] - 2026-07-25
 
 ### 🚀 Features
@@ -16,6 +36,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - *(harness)* Track stax-dev pipeline and use sonnet for implementer ([#685](https://github.com/cesarferreira/stax/issues/685))
+- Release
 ## [0.98.1] - 2026-07-24
 
 ### 🚀 Features
