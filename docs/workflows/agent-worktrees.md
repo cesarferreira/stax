@@ -86,12 +86,13 @@ tmux attach -t <lane-name>
 
 ## Agent selection
 
-Supported `--agent` values: `claude`, `codex`, `gemini`, `opencode`.
+Supported `--agent` values: `claude`, `codex`, `gemini`, `opencode`, `pi`.
 
 ```bash
 st lane api-tests   --agent gemini
 st lane api-tests   --agent opencode --model opencode/gpt-5.5-fast
 st lane review-pass --agent codex "address the open PR comments"
+st lane deep-dive   --agent pi --model anthropic/claude-opus-4-8
 ```
 
 - `--model` requires `--agent`
@@ -108,6 +109,7 @@ For well-scoped work in an isolated lane, let the agent run autonomously:
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | `gemini` | `--yolo` |
 | `opencode` | *not supported — use `--agent-arg` instead* |
+| `pi` | *not supported (permission bypass is extension-provided) — use `--agent-arg` instead* |
 
 ```bash
 st lane fix-flaky --agent claude --yolo "stabilize the flaky test suite"

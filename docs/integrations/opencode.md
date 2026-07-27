@@ -30,5 +30,5 @@ st gen --commit-msg --agent opencode
 
 ## Related
 
-- [Claude Code](claude-code.md) · [Codex](codex.md) · [Gemini CLI](gemini-cli.md)
+- [Claude Code](claude-code.md) · [Codex](codex.md) · [Gemini CLI](gemini-cli.md) · [pi](pi.md)
 - [PR templates + AI](pr-templates-and-ai.md)

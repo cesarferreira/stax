@@ -99,7 +99,7 @@ st wt c review-pass --agent codex --tmux -- "address the open PR comments"
 st wt go review-pass --agent codex --tmux
 ```
 
-- `--agent` supports `claude`, `codex`, `gemini`, `opencode`
+- `--agent` supports `claude`, `codex`, `gemini`, `opencode`, `pi`
 - `--model` requires `--agent`
 - `--run` and `--agent` are mutually exclusive
 - anything after `--` is passed through to the agent/command

@@ -58,7 +58,7 @@ Config is loaded as follows:
 # preflight_warn = true        # print a notice when that automatic repair happens
 
 [ai]
-# agent = "claude" # "codex" | "gemini" | "opencode" — global default
+# agent = "claude" # "codex" | "gemini" | "opencode" | "pi" — global default
 # model = "claude-opus-4-8"
 
 # Per-feature overrides — optional, fall back to [ai] above

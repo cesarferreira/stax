@@ -24,5 +24,5 @@ When `codex` is selected, stax tries OpenAI's live Models API first (using `OPEN
 
 ## Related
 
-- [Claude Code](claude-code.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md)
+- [Claude Code](claude-code.md) · [Gemini CLI](gemini-cli.md) · [OpenCode](opencode.md) · [pi](pi.md)
 - [PR templates + AI](pr-templates-and-ai.md)
