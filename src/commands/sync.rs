@@ -642,6 +642,16 @@ pub fn run(
                 .as_ref()
                 .expect("remote branch list when deleting merged branches"),
         )?;
+        let partially_merged_notes = find_partially_merged_notes(
+            &repo,
+            &workdir,
+            &stack,
+            &remote_name,
+            remote_branches_for_merged
+                .as_ref()
+                .expect("remote branch list when deleting merged branches"),
+            &merged,
+        )?;
         step_timings.push((
             "detect merged branches".to_string(),
             detect_merged_started_at.elapsed(),
@@ -1124,6 +1134,30 @@ pub fn run(
             }
         } else if !quiet {
             println!("    {}", "No merged branches to delete.".dimmed());
+        }
+
+        if !quiet {
+            for note in &partially_merged_notes {
+                let commit_word = if note.extra_commits == 1 {
+                    "commit"
+                } else {
+                    "commits"
+                };
+                let signal = match (note.pr_label, note.pr_number) {
+                    (PartialMergeReason::PrMerged, Some(n)) => format!("PR #{} merged", n),
+                    (PartialMergeReason::PrMerged, None) => "PR merged".to_string(),
+                    (PartialMergeReason::PrClosed, Some(n)) => format!("PR #{} closed", n),
+                    (PartialMergeReason::PrClosed, None) => "PR closed".to_string(),
+                    (PartialMergeReason::HistoryMerged, _) => {
+                        "earlier commits already merged into trunk".to_string()
+                    }
+                };
+                let detail = format!(
+                    "{}, but branch has {} additional {} not on trunk or any remote — not deleting",
+                    signal, note.extra_commits, commit_word
+                );
+                println!("    {} {}: {}", "⚠".yellow(), note.branch, detail.dimmed());
+            }
         }
 
         let delete_elapsed = delete_merged_started_at.elapsed();
@@ -2235,6 +2269,21 @@ struct MergedBranchInfo {
     merge_type: MergeType,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartialMergeReason {
+    PrMerged,
+    PrClosed,
+    HistoryMerged,
+}
+
+#[derive(Debug, Clone)]
+struct PartiallyMergedNote {
+    branch: String,
+    pr_number: Option<u64>,
+    pr_label: PartialMergeReason,
+    extra_commits: usize,
+}
+
 fn should_spare_empty_never_submitted_branch(
     workdir: &Path,
     stack: &Stack,
@@ -2529,6 +2578,115 @@ fn find_merged_branches(
     Ok(merged)
 }
 
+/// Surface tracked branches that sync deliberately spares from deletion
+/// despite a merged/closed PR (or already-integrated history) because they
+/// carry local commits not present on trunk or any remote — turning what
+/// would otherwise be a silent skip into an explicit "not deleting" note.
+fn find_partially_merged_notes(
+    repo: &GitRepo,
+    workdir: &Path,
+    stack: &Stack,
+    remote_name: &str,
+    remote_branches: &HashSet<String>,
+    merged: &[MergedBranchInfo],
+) -> Result<Vec<PartiallyMergedNote>> {
+    let mut notes = Vec::new();
+    let trunk = stack.trunk.clone();
+
+    for branch in stack.branches.keys() {
+        let branch = branch.clone();
+        if branch == trunk {
+            continue;
+        }
+        if merged.iter().any(|m| m.branch == branch) {
+            continue;
+        }
+        let Some(info) = stack.branches.get(&branch) else {
+            continue;
+        };
+
+        let mut bases: Vec<String> = vec![trunk.clone()];
+        let remote_trunk_ref = format!("{}/{}", remote_name, trunk);
+        if git_ref_exists(workdir, &remote_trunk_ref) {
+            bases.push(remote_trunk_ref);
+        }
+        let remote_branch_ref = format!("{}/{}", remote_name, branch);
+        if remote_branches.contains(&branch) || git_ref_exists(workdir, &remote_branch_ref) {
+            bases.push(remote_branch_ref);
+        }
+        let base_refs: Vec<&str> = bases.iter().map(String::as_str).collect();
+
+        let extra = count_extra_commits(workdir, &branch, &base_refs)?;
+        if extra == 0 {
+            continue;
+        }
+
+        let reason = if matches!(
+            info.pr_state.as_deref(),
+            Some(state) if state.eq_ignore_ascii_case("merged")
+        ) {
+            PartialMergeReason::PrMerged
+        } else if matches!(
+            info.pr_state.as_deref(),
+            Some(state) if state.eq_ignore_ascii_case("closed")
+        ) {
+            PartialMergeReason::PrClosed
+        } else {
+            let Ok(merge_base) = repo.merge_base(&trunk, &branch) else {
+                continue;
+            };
+            let trunk_range = format!("{}..{}", merge_base, trunk);
+            let trunk_count = match repo.rev_list_count(workdir, &trunk_range) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if trunk_count == 0 || trunk_count > GitRepo::PATCH_ID_TRUNK_COMMIT_CAP {
+                continue;
+            }
+            let trunk_patch_ids = match repo.patch_ids_for_range(workdir, &trunk_range) {
+                Ok(ids) => ids,
+                Err(_) => continue,
+            };
+            let branch_range = format!("{}..{}", merge_base, branch);
+            let branch_patch_ids = match repo.patch_ids_for_range(workdir, &branch_range) {
+                Ok(ids) => ids,
+                Err(_) => continue,
+            };
+            if branch_patch_ids.is_disjoint(&trunk_patch_ids) {
+                continue;
+            }
+            PartialMergeReason::HistoryMerged
+        };
+
+        notes.push(PartiallyMergedNote {
+            branch: branch.clone(),
+            pr_number: info.pr_number,
+            pr_label: reason,
+            extra_commits: extra,
+        });
+    }
+
+    Ok(notes)
+}
+
+fn count_extra_commits(workdir: &Path, branch: &str, bases: &[&str]) -> Result<usize> {
+    let mut args: Vec<&str> = vec!["rev-list", "--count", branch, "--not"];
+    args.extend_from_slice(bases);
+
+    let output = Command::new("git")
+        .args(&args)
+        .current_dir(workdir)
+        .output()
+        .with_context(|| format!("Failed to count extra commits for '{}'", branch))?;
+
+    if !output.status.success() {
+        return Ok(0);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.trim().parse::<usize>().unwrap_or(0))
+}
+
 fn branch_name_from_merged_output(line: &str) -> &str {
     let branch = line.trim();
     branch
@@ -2573,6 +2731,16 @@ fn local_branch_exists(workdir: &std::path::Path, branch: &str) -> bool {
     let local_ref = format!("refs/heads/{}", branch);
     Command::new("git")
         .args(["show-ref", "--verify", "--quiet", &local_ref])
+        .current_dir(workdir)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn git_ref_exists(workdir: &Path, refname: &str) -> bool {
+    let commit_ref = format!("{}^{{commit}}", refname);
+    Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", &commit_ref])
         .current_dir(workdir)
         .status()
         .map(|s| s.success())
