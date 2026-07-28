@@ -1016,10 +1016,20 @@ pub fn run(
                     continue;
                 }
 
+                // Skip the push-delete when the remote branch is already gone
+                // (e.g. the forge auto-deleted it on merge). Each `git push
+                // --delete` is a network round-trip, so probing a whole merged
+                // stack that is already gone remotely wastes seconds per branch.
+                let remote_branch_present = remote_branches_for_merged
+                    .as_ref()
+                    .is_none_or(|remotes| remotes.contains(branch));
+
                 // Imported branches are read-only remote references. Clean them
                 // up locally after merge, but never push-delete someone else's
                 // remote branch.
-                let remote_deleted = if remote_delete_exempt_imported_branches.contains(branch) {
+                let remote_deleted = if remote_delete_exempt_imported_branches.contains(branch)
+                    || !remote_branch_present
+                {
                     false
                 } else {
                     let remote_status = Command::new("git")
