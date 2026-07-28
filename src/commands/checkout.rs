@@ -625,12 +625,12 @@ fn render_presence_markers(
     if show_worktree_column {
         if has_linked_worktree {
             info_str.push_str(&render_stderr(
-                stack_palette::LINKED_WORKTREE_MARKER_PLAIN,
+                stack_palette::LINKED_WORKTREE_GLYPH,
                 stack_palette::linked_worktree_marker_console_style(),
             ));
             info_str.push(' ');
         } else {
-            info_str.push_str("    ");
+            info_str.push_str("  ");
         }
     }
 
@@ -936,11 +936,11 @@ mod tests {
     fn test_render_presence_markers_aligns_worktree_column() {
         assert_eq!(
             strip_ansi(&render_presence_markers(true, true, true)),
-            " ☁️  ⎇  "
+            " ☁️ ⎇ "
         );
         assert_eq!(
             strip_ansi(&render_presence_markers(false, true, false)),
-            "        "
+            "      "
         );
     }
 

@@ -27,21 +27,11 @@ pub(crate) fn lane_console_color(column: usize) -> ConsoleColor {
     ConsoleColor::TrueColor(r, g, b)
 }
 
-/// Padded marker so U+2387 (drawn ~half em height in most monospace fonts) reads
-/// as a badge instead of a speck beside the stack tree.
-pub(crate) const LINKED_WORKTREE_MARKER_PLAIN: &str = " ⎇ ";
-
-const LINKED_WORKTREE_MARKER_BG: (u8, u8, u8) = (28, 52, 68);
+/// Keyboard-alternate glyph for branches checked out in a linked worktree.
+pub(crate) const LINKED_WORKTREE_GLYPH: &str = "⎇";
 
 pub(crate) fn format_linked_worktree_marker() -> colored::ColoredString {
-    LINKED_WORKTREE_MARKER_PLAIN
-        .truecolor(120, 220, 255)
-        .bold()
-        .on_truecolor(
-            LINKED_WORKTREE_MARKER_BG.0,
-            LINKED_WORKTREE_MARKER_BG.1,
-            LINKED_WORKTREE_MARKER_BG.2,
-        )
+    LINKED_WORKTREE_GLYPH.bright_cyan().bold()
 }
 
 pub(crate) fn linked_worktree_marker_console_style() -> console::Style {
@@ -50,9 +40,4 @@ pub(crate) fn linked_worktree_marker_console_style() -> console::Style {
         .fg(ConsoleColor::Cyan)
         .bright()
         .bold()
-        .bg(ConsoleColor::TrueColor(
-            LINKED_WORKTREE_MARKER_BG.0,
-            LINKED_WORKTREE_MARKER_BG.1,
-            LINKED_WORKTREE_MARKER_BG.2,
-        ))
 }
