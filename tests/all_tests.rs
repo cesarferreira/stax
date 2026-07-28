@@ -90,6 +90,8 @@ mod pr_body_tests;
 mod pr_open_tests;
 #[path = "pr_template_tests.rs"]
 mod pr_template_tests;
+#[path = "ready_tests.rs"]
+mod ready_tests;
 #[path = "refresh_visual_tests.rs"]
 mod refresh_visual_tests;
 #[path = "reorder_tests.rs"]

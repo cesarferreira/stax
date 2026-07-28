@@ -87,6 +87,7 @@ pub fn run_list(
             crate::commands::ready::ReadyScopeMode::from_flags(all, current, stack),
             json,
             plain,
+            15,
         );
     }
 

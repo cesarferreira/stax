@@ -38,7 +38,7 @@ When `-m` or `--ai` derives a branch name that already exists, Stax stops instea
 | `st draft --stack` | Convert every PR in the current stack to draft |
 | `st undraft [branch]` | Mark the current (or named) branch's PR as ready for review |
 | `st undraft --stack` | Mark every PR in the current stack as ready for review |
-| `st ready` | Open the interactive PR readiness dashboard for all tracked PRs: merge, ping, fix, wait, or draft |
+| `st ready` | Live one-line CI/PR status for all tracked branches, refreshing every 15s until all checks finish (shortcut for `st ci -1 -w --all`) |
 | `st merge` | Cascade-merge from stack bottom up to current branch |
 | `st merge --when-ready` | Wait for CI + approvals, then merge (alias: `st mwr`) |
 | `st merge --downstack-only` / `--ds` | Merge ancestors below current, then rebase current branch |
@@ -89,7 +89,7 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | Command | What it does |
 |---|---|
 | `st standup` | Summarize recent activity (`--ai` for AI version, `--ai --style slack` for Slack-ready bullets) |
-| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` | Open current PR in browser · view/edit PR body · list open PRs · show stack PR readiness |
+| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` | Open current PR in browser · view/edit PR body · list open PRs · live CI/PR readiness |
 | `st issue list` | List open issues |
 | `st changelog` | Generate changelog between refs or fuzzy-find commits with `find` / `--find` |
 | `st open` | Open the repository in the browser |
@@ -99,6 +99,6 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 
 See also: [Navigation](navigation.md) · [Stack health](stack-health.md) · [Full reference](reference.md)
 
-`st ready` and `st pr list --ready` launch a TUI in an interactive terminal and default to all tracked PRs, ordered newest changed PR first. Use `--current` or `--stack` for only the current stack. Use Up/Down or `j`/`k` to move, Enter or `o` to open the selected PR, `r` to refresh, `?` for help, and `q`/Esc to quit. Use `--plain` for the static table and `--json` for machine-readable output.
+`st ready` and `st pr list --ready` display the same live one-line CI/PR roll-up as `st ci -1 -w`, defaulting to all tracked branches. Use `--current` or `--stack` to limit to the current stack. Use `--plain` for a single non-watching frame (safe for capture/pipes) and `--json` for the machine-readable readiness schema. Use `--interval <secs>` to change the poll interval (default 15s).
 
 `st gui [path]` is macOS-only and launches the installed app with bundle id `com.cesarferreira.stax`. Run `curl -fsSL https://cesarferreira.com/stax/install-gui.sh | sh`, download `Stax-aarch64-apple-darwin.zip` or `Stax-x86_64-apple-darwin.zip` from GitHub Releases and move `Stax.app` to `/Applications`, or use `make install-gui-app` for `$HOME/Applications/Stax.app`. A pathless app launch restores the most recently opened project, and the toolbar project dropdown switches among recent repositories or adds another with the folder picker. The GUI can search and inspect stacks; check out, create, rename, delete, move, and reorder local branches; restack selected/all; submit Draft PRs; Open PR without checkout; and safely undo/redo fully local receipts. Pane visibility and widths persist per repository, while visible controls, native menus, and shortcuts use the same enabled-state rules.

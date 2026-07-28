@@ -349,7 +349,7 @@ st config --set-ai
 | `st reviews --stack [--json]` | Stack-wide review/comment inbox, including inline file/line locations on GitHub (`st comments` remains the current-PR view) |
 | `st next` | Move to the next unmerged branch upstack; fork choices are deterministic |
 | `st merge` | Cascade-merge from bottom to current (`--when-ready`, `--downstack-only`/`--ds`, `--stack`, `--stack --full`, `--remote`, `--all`) |
-| `st ready` | Interactive PR readiness dashboard for all tracked PRs, newest changed PR first: merge, ping, fix, wait, or draft (`--current`/`--stack` for current stack, `--plain` for table output) |
+| `st ready` | Live one-line CI/PR status for all tracked branches, refreshing every 15s until all checks finish (shortcut for `st ci -1 -w --all`; `--current`/`--stack` for current stack, `--plain` for a single frame, `--json` for machine-readable readiness schema) |
 | `st ci` / `st ci --oneline` | Live CI status for each PR head — full per-check table, or one compact line per branch across the stack (multi-branch defaults to the roll-up) |
 | `st ci -w --alert` | Watch CI until all checks finish, then play success/error sounds |
 | `st ci -w --strict` | Watch CI but exit as soon as any check fails |
@@ -378,7 +378,7 @@ st config --set-ai
 | `st completions <shell>` | Generate completions for Bash, Zsh, Fish, PowerShell, or Elvish |
 | `st doctor --fix` | Check repo/config health and apply safe local repairs after one confirmation |
 | `st draft [branch]` / `st draft --stack` / `st undraft [branch]` / `st undraft --stack` | Toggle one PR or every PR in the current stack between draft and ready-for-review |
-| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · PR readiness · list issues |
+| `st pr` / `st pr body` / `st pr list` / `st pr list --ready` / `st issue list` | Open current PR · view/edit PR body · list PRs · live CI/PR readiness · list issues |
 
 Full reference: [docs/commands/core.md](docs/commands/core.md) · [docs/commands/reference.md](docs/commands/reference.md)
 

@@ -797,7 +797,7 @@ pub(crate) enum Commands {
         command: Option<PrCommands>,
     },
 
-    /// Open live PR readiness for tracked pull requests
+    /// Live one-line CI/PR status for all tracked branches (shortcut for `st ci -1 -w --all`)
     Ready {
         /// Show all tracked branch PRs (default)
         #[arg(long, conflicts_with_all = ["current", "stack"])]
@@ -811,9 +811,12 @@ pub(crate) enum Commands {
         /// Output JSON for scripting
         #[arg(long)]
         json: bool,
-        /// Render a static table instead of the interactive TUI
+        /// Render one static frame instead of watching
         #[arg(long, conflicts_with = "json")]
         plain: bool,
+        /// Polling interval in seconds (default: 15)
+        #[arg(long, default_value = "15")]
+        interval: u64,
     },
 
     /// Browse open issues in the current repository

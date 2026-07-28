@@ -1233,7 +1233,7 @@ fn run_watch_mode(
     alert: Option<CiAlertSounds>,
     strict: bool,
 ) -> Result<()> {
-    let poll_duration = Duration::from_secs(interval);
+    let poll_duration = Duration::from_secs(interval.max(1));
     let mut iteration = 0;
 
     println!("{}", "Watching CI status (Ctrl+C to stop)...".cyan().bold());

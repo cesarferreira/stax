@@ -7,21 +7,10 @@ use crate::git::GitRepo;
 use crate::github::pr::{CiStatus, PrMergeStatus};
 use crate::remote::RemoteInfo;
 use anyhow::{Context, Result};
-use chrono::Local;
-use console::{measure_text_width, truncate_str};
 use futures_util::{StreamExt, stream};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::IsTerminal;
-use std::path::PathBuf;
-
-const ACTION_WIDTH: usize = 7;
-const PR_WIDTH: usize = 7;
-const REVIEWS_MIN_WIDTH: usize = 7;
-const CI_MIN_WIDTH: usize = 6;
-const BRANCH_MIN_WIDTH: usize = 18;
-const BRANCH_MAX_WIDTH: usize = 52;
-const TITLE_MIN_WIDTH: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,32 +20,6 @@ pub enum ReadyAction {
     Ping,
     Wait,
     Draft,
-}
-
-impl ReadyAction {
-    fn label(self) -> &'static str {
-        match self {
-            ReadyAction::Fix => "fix",
-            ReadyAction::Merge => "merge",
-            ReadyAction::Ping => "ping",
-            ReadyAction::Wait => "wait",
-            ReadyAction::Draft => "draft",
-        }
-    }
-
-    fn symbol(self) -> &'static str {
-        match self {
-            ReadyAction::Fix => "✕",
-            ReadyAction::Merge => "✓",
-            ReadyAction::Ping => "●",
-            ReadyAction::Wait => "○",
-            ReadyAction::Draft => "◌",
-        }
-    }
-
-    pub fn display(self) -> String {
-        format!("{} {}", self.symbol(), self.label())
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -203,45 +166,6 @@ pub struct ReadyBranch {
     pub pr_number: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ReadyScope {
-    pub git_dir: PathBuf,
-    pub repo_label: String,
-    pub scope_label: String,
-    pub branches: Vec<ReadyBranch>,
-    pub remote: RemoteInfo,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReadyRowState {
-    Loading {
-        branch: ReadyBranch,
-    },
-    Loaded(PrReadinessRow),
-    Unavailable {
-        branch: ReadyBranch,
-        message: String,
-    },
-}
-
-impl ReadyRowState {
-    pub fn branch(&self) -> &str {
-        match self {
-            ReadyRowState::Loading { branch } => &branch.name,
-            ReadyRowState::Loaded(row) => &row.branch,
-            ReadyRowState::Unavailable { branch, .. } => &branch.name,
-        }
-    }
-
-    pub fn pr_number(&self) -> Option<u64> {
-        match self {
-            ReadyRowState::Loading { branch } => branch.pr_number,
-            ReadyRowState::Loaded(row) => Some(row.pr_number),
-            ReadyRowState::Unavailable { branch, .. } => branch.pr_number,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadyScopeMode {
     AllTracked,
@@ -260,28 +184,34 @@ impl ReadyScopeMode {
     fn include_all(self) -> bool {
         matches!(self, Self::AllTracked)
     }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::AllTracked => "all tracked PRs",
-            Self::CurrentStack => "current stack",
-        }
-    }
 }
 
-pub fn run(scope_mode: ReadyScopeMode, json: bool, plain: bool) -> Result<()> {
+pub fn run(scope_mode: ReadyScopeMode, json: bool, plain: bool, interval: u64) -> Result<()> {
+    // `--json` keeps the existing readiness schema so scripts don't break.
     if json {
-        return run_static(scope_mode, true);
+        return run_json(scope_mode);
     }
 
-    if !plain && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        return crate::tui::ready::run(scope_mode);
-    }
-
-    run_static(scope_mode, false)
+    // Watch only when rendering to a real terminal; `--plain` and piped
+    // output emit a single frame so captures don't spin forever.
+    let watch = !plain && std::io::stdout().is_terminal();
+    let include_all = scope_mode.include_all();
+    crate::commands::ci::run(
+        include_all,
+        !include_all,
+        false,
+        false,
+        watch,
+        None,
+        false,
+        false,
+        interval,
+        false,
+        true,
+    )
 }
 
-fn run_static(scope_mode: ReadyScopeMode, json: bool) -> Result<()> {
+fn run_json(scope_mode: ReadyScopeMode) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
@@ -298,7 +228,7 @@ fn run_static(scope_mode: ReadyScopeMode, json: bool) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let _enter = rt.enter();
     let client = ForgeClient::new(&remote)?;
-    let (mut rows, skipped) = rt.block_on(async {
+    let (mut rows, _skipped) = rt.block_on(async {
         fetch_readiness_rows(&repo, &client, &remote, &stack, &current, scope_mode).await
     })?;
     let branch_order = branch_scope(&stack, &current, scope_mode);
@@ -310,43 +240,8 @@ fn run_static(scope_mode: ReadyScopeMode, json: bool) -> Result<()> {
             .collect::<Vec<_>>(),
     );
 
-    if json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
-        return Ok(());
-    }
-
-    let repo_label = format!("{}/{}", remote.namespace, remote.repo);
-    let summary = readiness_summary(scope_mode.label(), rows.len(), skipped);
-    let width = crate::commands::github_list::terminal_width().max(80);
-    println!(
-        "{}",
-        render_ready_table(&repo_label, &summary, &rows, width)
-    );
+    println!("{}", serde_json::to_string_pretty(&rows)?);
     Ok(())
-}
-
-pub(crate) fn load_ready_scope(scope_mode: ReadyScopeMode) -> Result<ReadyScope> {
-    let repo = GitRepo::open()?;
-    let current = repo.current_branch()?;
-    let stack = Stack::load(&repo)?;
-    let config = Config::load()?;
-    let remote = RemoteInfo::from_repo(&repo, &config)?;
-
-    if forge_token(remote.forge).is_none() {
-        anyhow::bail!(
-            "{} auth not configured; live PR readiness cannot be fetched.",
-            remote.forge
-        );
-    }
-
-    let branches = branch_scope(&stack, &current, scope_mode);
-    Ok(ReadyScope {
-        git_dir: repo.git_dir()?.to_path_buf(),
-        repo_label: format!("{}/{}", remote.namespace, remote.repo),
-        scope_label: scope_mode.label().to_string(),
-        branches,
-        remote,
-    })
 }
 
 pub(crate) async fn fetch_row_for_branch(
@@ -572,128 +467,6 @@ fn sort_ready_rows(rows: &mut [PrReadinessRow], branch_order: &[&str]) {
     });
 }
 
-fn readiness_summary(scope: &str, row_count: usize, skipped: usize) -> String {
-    let now = Local::now().format("%H:%M:%S");
-    let pr_word = if row_count == 1 { "PR" } else { "PRs" };
-    let skipped_suffix = if skipped > 0 {
-        format!(" · {} skipped", skipped)
-    } else {
-        String::new()
-    };
-    format!("{scope} · fresh {now} · {row_count} {pr_word}{skipped_suffix}")
-}
-
-fn render_ready_table(
-    repo_label: &str,
-    summary: &str,
-    rows: &[PrReadinessRow],
-    width: usize,
-) -> String {
-    let mut output = String::new();
-    output.push_str(&format!("{repo_label}  {summary}\n"));
-
-    if rows.is_empty() {
-        output.push_str("No pull requests in scope.\n");
-        return output;
-    }
-
-    let review_width = rows
-        .iter()
-        .map(|row| measure_text_width(&row.review_summary))
-        .max()
-        .unwrap_or(REVIEWS_MIN_WIDTH)
-        .max("REVIEWS".len())
-        .max(REVIEWS_MIN_WIDTH);
-    let ci_width = rows
-        .iter()
-        .map(|row| measure_text_width(&row.ci_summary))
-        .max()
-        .unwrap_or(CI_MIN_WIDTH)
-        .max("CI".len())
-        .max(CI_MIN_WIDTH);
-    let branch_pref = rows
-        .iter()
-        .map(|row| measure_text_width(&row.branch))
-        .max()
-        .unwrap_or(BRANCH_MIN_WIDTH)
-        .clamp(BRANCH_MIN_WIDTH, BRANCH_MAX_WIDTH);
-
-    let fixed = ACTION_WIDTH + PR_WIDTH + review_width + ci_width + 10;
-    let flexible = width.saturating_sub(fixed);
-    let title_pref = rows
-        .iter()
-        .map(|row| measure_text_width(&row.title))
-        .max()
-        .unwrap_or(TITLE_MIN_WIDTH)
-        .max(TITLE_MIN_WIDTH);
-    let title_width = title_pref
-        .min(
-            flexible
-                .saturating_sub(BRANCH_MIN_WIDTH)
-                .max(TITLE_MIN_WIDTH),
-        )
-        .max(TITLE_MIN_WIDTH);
-    let branch_width = flexible
-        .saturating_sub(title_width)
-        .clamp(BRANCH_MIN_WIDTH, branch_pref);
-
-    output.push('\n');
-    output.push_str(&format!(
-        "{:<ACTION_WIDTH$}  {:<PR_WIDTH$}  {:<branch_width$}  {:<review_width$}  {:<ci_width$}  {}\n",
-        "ACTION",
-        "PR",
-        "BRANCH",
-        "REVIEWS",
-        "CI",
-        "TITLE"
-    ));
-    let divider_width =
-        ACTION_WIDTH + PR_WIDTH + branch_width + review_width + ci_width + title_width + 10;
-    output.push_str(&format!("{}\n", "─".repeat(divider_width.min(width))));
-
-    for row in rows {
-        output.push_str(&format!(
-            "{:<ACTION_WIDTH$}  {:<PR_WIDTH$}  {:<branch_width$}  {:<review_width$}  {:<ci_width$}  {}\n",
-            row.action.display(),
-            format!("#{}", row.pr_number),
-            fit_middle(&row.branch, branch_width),
-            fit_end(&row.review_summary, review_width),
-            fit_end(&row.ci_summary, ci_width),
-            fit_end(&row.title, title_width),
-        ));
-    }
-
-    output
-}
-
-fn fit_end(text: &str, width: usize) -> String {
-    truncate_str(text, width, "...").into_owned()
-}
-
-fn fit_middle(text: &str, width: usize) -> String {
-    if measure_text_width(text) <= width {
-        return text.to_string();
-    }
-    if width <= 3 {
-        return ".".repeat(width);
-    }
-    let chars = text.chars().collect::<Vec<_>>();
-    let keep = width.saturating_sub(3);
-    let front = keep / 2 + keep % 2;
-    let back = keep / 2;
-    let prefix = chars.iter().take(front).collect::<String>();
-    let suffix = chars
-        .iter()
-        .rev()
-        .take(back)
-        .copied()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<String>();
-    format!("{prefix}...{suffix}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,23 +647,6 @@ mod tests {
             branches,
             vec!["new-ping", "middle-merge", "old-fix", "unknown-draft"]
         );
-    }
-
-    #[test]
-    fn renders_table_with_titles_and_action_labels() {
-        let rows = vec![PrReadinessRow::from_status(
-            "feature",
-            status(|_| {}),
-            CiSummary::passed(),
-        )];
-
-        let rendered = render_ready_table("owner/repo", "current stack", &rows, 100);
-
-        assert!(rendered.contains("ACTION"));
-        assert!(rendered.contains("REVIEWS"));
-        assert!(rendered.contains("CI"));
-        assert!(rendered.contains("TITLE"));
-        assert!(rendered.contains("merge"));
     }
 
     #[test]

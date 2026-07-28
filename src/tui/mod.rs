@@ -1,6 +1,5 @@
 mod app;
 mod event;
-pub mod ready;
 pub mod split;
 pub mod split_hunk;
 pub(crate) mod ui;
