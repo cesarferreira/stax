@@ -154,7 +154,7 @@ fn status_uses_cached_repo_data_without_git_subprocess_scans() {
 
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("☁") && stdout.contains("↳"),
+        stdout.contains("☁") && stdout.contains("⎇"),
         "expected status to preserve remote and linked-worktree indicators, got:\n{}",
         stdout
     );

@@ -22,7 +22,7 @@ use std::collections::HashSet;
 use std::fmt::{self, Display};
 use std::path::Path;
 
-const LINKED_WORKTREE_GLYPH: &str = "↳";
+const LINKED_WORKTREE_GLYPH: &str = "⎇";
 const BRIGHT_BLUE: CheckoutColor = CheckoutColor::new(Color::Blue, true);
 const BRIGHT_CYAN: CheckoutColor = CheckoutColor::new(Color::Cyan, true);
 const CHECKOUT_PICKER_ITEM_SEPARATOR: char = '\u{1f}';
@@ -938,7 +938,7 @@ mod tests {
     fn test_render_presence_markers_aligns_worktree_column() {
         assert_eq!(
             strip_ansi(&render_presence_markers(true, true, true)),
-            " ☁️ ↳ "
+            " ☁️ ⎇ "
         );
         assert_eq!(
             strip_ansi(&render_presence_markers(false, true, false)),

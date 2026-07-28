@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-const LINKED_WORKTREE_GLYPH: &str = "↳";
+const LINKED_WORKTREE_GLYPH: &str = "⎇";
 
 /// Represents a branch in the display with its column position
 struct DisplayBranch {
