@@ -2,11 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.101.0] - 2026-07-28
+
+### 🚀 Features
+
+- *(ready)* Make `st ready` the `st ci -1 -w` oneline watch view over all tracked branches ([#694](https://github.com/cesarferreira/stax/issues/694))
+
+### 🐛 Bug Fixes
+
+- *(sync)* Skip push-delete for merged branches already gone from remote ([#691](https://github.com/cesarferreira/stax/issues/691))
+- *(create)* Honor -m message with explicit name; dedupe doubled user prefix ([#692](https://github.com/cesarferreira/stax/issues/692))
+- *(cli)* Allow read-only commands during an active rebase ([#696](https://github.com/cesarferreira/stax/issues/696))
+- *(ready)* Readable selection bg, live scope refresh, safe merge cleanup, draft/undraft shortcut ([#698](https://github.com/cesarferreira/stax/issues/698))
+
+### 💼 Other
+
+- Use ⎇ as the linked-worktree indicator in stack views ([#693](https://github.com/cesarferreira/stax/issues/693))
+- Warn when a merged/closed-PR branch has unpushed commits ([#695](https://github.com/cesarferreira/stax/issues/695))
 ## [0.100.0] - 2026-07-27
 
 ### 🚀 Features
 
 - *(agents)* Support pi as an AI agent and skills install target ([#690](https://github.com/cesarferreira/stax/issues/690))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.99.0] - 2026-07-27
 
 ### 🚀 Features
