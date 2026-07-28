@@ -1,4 +1,5 @@
 use crate::commands::skills;
+use crate::commands::stack_palette;
 use crate::config::Config;
 use crate::engine::{BranchMetadata, Stack};
 use crate::forge;
@@ -414,6 +415,29 @@ pub fn run(fix: bool) -> Result<()> {
                     .unwrap_or_else(|| "no version marker".to_string());
                 println!("  {} ({})", name, version_note.dimmed());
             }
+        }
+    }
+
+    // Check: linked-worktree icons may need a Nerd Font or ASCII fallback.
+    {
+        let mode = stack_palette::parse_worktree_glyph_mode(&config.display.worktree_glyph);
+        if stack_palette::uses_nerd_worktree_glyph(mode) {
+            println!(
+                "{} {}",
+                "ℹ".bright_cyan(),
+                "Linked-worktree icons use Nerd Font glyphs. Set display.worktree_glyph = \"wt\" \
+                 in config.toml (or STAX_NERD_ICONS=0) if they render as boxes."
+                    .dimmed()
+            );
+        } else if mode == stack_palette::WorktreeGlyphMode::Auto {
+            println!(
+                "{} {}",
+                "ℹ".bright_cyan(),
+                "Linked-worktree icons use ASCII fallback (display.worktree_glyph = \"auto\"). \
+                 Set display.worktree_glyph = \"tree\" or STAX_NERD_ICONS=1 with a Nerd Font \
+                 terminal for icon mode."
+                    .dimmed()
+            );
         }
     }
 

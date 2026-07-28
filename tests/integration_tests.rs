@@ -834,7 +834,12 @@ fn test_status_marks_branches_checked_out_in_linked_worktrees() {
         String::from_utf8_lossy(&git_output.stderr)
     );
 
-    let output = repo.run_stax(&["status"]);
+    let output = sanitized_stax_command()
+        .args(["status"])
+        .env("STAX_NERD_ICONS", "0")
+        .current_dir(repo.path())
+        .output()
+        .expect("Failed to execute stax status");
     assert!(
         output.status.success(),
         "Failed: {}",
@@ -847,8 +852,8 @@ fn test_status_marks_branches_checked_out_in_linked_worktrees() {
         .find(|line| line.contains(&branch_name))
         .expect("Expected branch in status output");
     assert!(
-        line.contains("↳"),
-        "Expected linked worktree glyph in status output line: {}",
+        line.contains("wt"),
+        "Expected linked worktree marker in status output line: {}",
         line
     );
 

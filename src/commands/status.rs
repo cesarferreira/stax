@@ -10,8 +10,6 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-const LINKED_WORKTREE_GLYPH: &str = "↳";
-
 /// Represents a branch in the display with its column position
 struct DisplayBranch {
     name: String,
@@ -93,6 +91,7 @@ pub fn run(
     let current = snapshot.current_branch;
     let stack = snapshot.stack;
     let config = Config::load()?;
+    let worktree_glyph = stack_palette::parse_worktree_glyph_mode(&config.display.worktree_glyph);
     let workdir = repo.workdir()?;
     let has_tracked = stack.branches.len() > 1;
     let cache_dir = repo.common_git_dir()?;
@@ -351,7 +350,10 @@ pub fn run(
         }
 
         if entry.and_then(|e| e.linked_worktree.as_ref()).is_some() {
-            info_str.push_str(&format!("{} ", LINKED_WORKTREE_GLYPH.bright_cyan()));
+            info_str.push_str(&format!(
+                "{} ",
+                stack_palette::format_linked_worktree_marker(worktree_glyph)
+            ));
         }
 
         // Color branch names to match their column in the graph
@@ -444,7 +446,10 @@ pub fn run(
         .and_then(|entry| entry.linked_worktree.as_ref())
         .is_some()
     {
-        trunk_info.push_str(&format!("{} ", LINKED_WORKTREE_GLYPH.bright_cyan()));
+        trunk_info.push_str(&format!(
+            "{} ",
+            stack_palette::format_linked_worktree_marker(worktree_glyph)
+        ));
     }
     // Color trunk name to match column 0
     if is_trunk_current {

@@ -668,7 +668,7 @@ stax wt cleanup      # bulk-remove merged/detached lanes
 ◉  feature/validation 1↑         # ◉ = current branch, 1↑ = commits ahead of parent
 ○  feature/auth 2↑ 1↓ ⟳          # ⟳ = needs restack
 ○  feature/old-base (missing parent: feature/base)
-│ ○    ☁ feature/payments PR #42 # ☁ = has remote, PR #N = open PR
+│ ○    ☁ wt feature/payments PR #42 # ☁ = has remote, wt/󰙅 = linked worktree, PR #N = open PR
 ○─┘    ☁ main                    # trunk branch
 ```
 
@@ -677,6 +677,7 @@ Symbols:
 - `◉` = current branch
 - `○` = other branch
 - `☁` = has remote tracking
+- `wt` / Nerd Font tree icon = checked out in a linked worktree (`display.worktree_glyph` in config)
 - `↑` = commits ahead of parent
 - `↓` = commits behind parent
 - `⟳` = needs restacking (parent changed)

@@ -10,7 +10,8 @@
 | Date | Change | Target | Reason |
 |------|--------|--------|--------|
 | 2026-07-25 | Initial harness build (5 agents, 5 skills, `/stax-dev` orchestrator) | All | New harness |
-| 2026-07-25 | Git-native evolution: added `benchmarker` (optional perf gate) + `stax-benchmark` skill; worktree-per-task + stacked branch; auto commit-on-green + auto draft PR; hard "never merge to main" rule | benchmarker.md, stax-benchmark/, release-manager.md, codex.md, stax-release/, stax-dev.md | Adopt git-native workflow constraints; keep verifier as mandatory correctness gate | 
+| 2026-07-25 | Git-native evolution: added `benchmarker` (optional perf gate) + `stax-benchmark` skill; worktree-per-task + stacked branch; auto commit-on-green + auto draft PR; hard "never merge to main" rule | benchmarker.md, stax-benchmark/, release-manager.md, codex.md, stax-release/, stax-dev.md | Adopt git-native workflow constraints; keep verifier as mandatory correctness gate |
+| 2026-07-28 | Added `fallbackModels: claude-bridge/claude-sonnet-4-6` to the four `cursor/composer-2.5` agents so a provider outage (quota/auth/timeout) auto-routes instead of stalling the run; codex also falls back to `openai-codex/gpt-5.6-terra`. Extended benchmarker skip rule to cover pure delegation/deletion diffs with no new local hot-path work | codex.md, verifier.md, benchmarker.md, release-manager.md | Cursor was down + OpenAI-Codex usage-limited mid-run (stax-dev-03), forcing manual model overrides; benchmarker also burned time trying to bench a no-local-compute change |
 
 ## Test Command Policy
 

@@ -20,6 +20,8 @@ pub struct Config {
     #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
+    pub display: DisplayConfig,
+    #[serde(default)]
     pub ai: AiConfig,
     #[serde(default)]
     pub auth: AuthConfig,
@@ -190,6 +192,25 @@ pub struct UiConfig {
     /// Whether to show contextual tips/suggestions (default: true)
     #[serde(default = "default_tips")]
     pub tips: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DisplayConfig {
+    /// Linked-worktree marker in stack views: "auto", "tree" (Nerd Font), or "wt" (ASCII).
+    #[serde(default = "default_worktree_glyph")]
+    pub worktree_glyph: String,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            worktree_glyph: default_worktree_glyph(),
+        }
+    }
+}
+
+fn default_worktree_glyph() -> String {
+    "auto".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
