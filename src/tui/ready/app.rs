@@ -168,6 +168,41 @@ impl ReadyTuiApp {
         self.loading = true;
     }
 
+    pub fn reconcile_scope(&mut self, branches: &[ReadyBranch]) {
+        let selected_branch = self
+            .rows
+            .get(self.selected_index)
+            .map(|row| row.branch().to_string());
+
+        let mut existing: HashMap<String, ReadyRowState> = self
+            .rows
+            .drain(..)
+            .map(|row| (row.branch().to_string(), row))
+            .collect();
+
+        self.branch_order = branches
+            .iter()
+            .enumerate()
+            .map(|(index, branch)| (branch.name.clone(), index))
+            .collect::<HashMap<_, _>>();
+
+        self.rows = branches
+            .iter()
+            .map(|branch| {
+                existing
+                    .remove(&branch.name)
+                    .unwrap_or_else(|| ReadyRowState::Loading {
+                        branch: branch.clone(),
+                    })
+            })
+            .collect();
+
+        self.selected_index = selected_branch
+            .and_then(|name| self.rows.iter().position(|row| row.branch() == name))
+            .unwrap_or(0)
+            .min(self.rows.len().saturating_sub(1));
+    }
+
     pub fn loading_count(&self) -> usize {
         self.rows
             .iter()
@@ -178,6 +213,16 @@ impl ReadyTuiApp {
     pub fn selected_pr_url(&self) -> Option<String> {
         match self.rows.get(self.selected_index) {
             Some(ReadyRowState::Loaded(row)) => row.pr_url.clone(),
+            _ => None,
+        }
+    }
+
+    /// `(pr_number, branch, is_draft)` for the selected row, if it has finished loading.
+    pub fn selected_draft_target(&self) -> Option<(u64, String, bool)> {
+        match self.rows.get(self.selected_index) {
+            Some(ReadyRowState::Loaded(row)) => {
+                Some((row.pr_number, row.branch.clone(), row.is_draft))
+            }
             _ => None,
         }
     }
@@ -300,6 +345,71 @@ mod tests {
             app.selected_pr_url(),
             Some("https://example.com/pull/10".to_string())
         );
+    }
+
+    #[test]
+    fn ready_tui_selected_draft_target_reflects_loaded_row() {
+        let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
+
+        assert_eq!(app.selected_draft_target(), None);
+
+        app.apply_update(ReadyTuiUpdate::Loaded {
+            index: 0,
+            row: loaded_row("feature/a", 10),
+        });
+
+        assert_eq!(
+            app.selected_draft_target(),
+            Some((10, "feature/a".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn ready_tui_reconcile_scope_drops_removed_branch_and_keeps_loaded_row() {
+        let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
+        app.apply_update(ReadyTuiUpdate::Loaded {
+            index: 0,
+            row: loaded_row("feature/a", 10),
+        });
+
+        app.reconcile_scope(&[ReadyBranch {
+            name: "feature/a".to_string(),
+            pr_number: Some(10),
+        }]);
+
+        assert_eq!(app.rows.len(), 1);
+        match &app.rows[0] {
+            ReadyRowState::Loaded(row) => assert_eq!(row.branch, "feature/a"),
+            other => panic!("expected loaded row, got {other:?}"),
+        }
+        assert_eq!(app.selected_index, 0);
+    }
+
+    #[test]
+    fn ready_tui_reconcile_scope_inserts_loading_row_for_new_branch() {
+        let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
+        app.apply_update(ReadyTuiUpdate::Loaded {
+            index: 0,
+            row: loaded_row("feature/a", 10),
+        });
+
+        app.reconcile_scope(&[
+            ReadyBranch {
+                name: "feature/a".to_string(),
+                pr_number: Some(10),
+            },
+            ReadyBranch {
+                name: "feature/c".to_string(),
+                pr_number: Some(12),
+            },
+        ]);
+
+        assert_eq!(app.rows.len(), 2);
+        assert!(matches!(app.rows[0], ReadyRowState::Loaded(_)));
+        match &app.rows[1] {
+            ReadyRowState::Loading { branch } => assert_eq!(branch.name, "feature/c"),
+            other => panic!("expected loading row, got {other:?}"),
+        }
     }
 
     #[test]

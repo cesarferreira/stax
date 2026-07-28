@@ -17,6 +17,11 @@ const MIN_PR_WIDTH: usize = 4;
 const MIN_REVIEW_WIDTH: usize = 6;
 const MIN_CI_WIDTH: usize = 4;
 
+// Matches the branch checkout picker's selected-row background (`48;5;236`),
+// so a selected row reads as a subtle opaque highlight instead of inverting
+// each cell's own status color (which produced illegible solid blocks).
+const SELECTED_ROW_BACKGROUND: Color = Color::Indexed(236);
+
 #[derive(Debug, Clone, Copy)]
 struct TableLayout {
     pr_width: usize,
@@ -140,101 +145,127 @@ fn render_table(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
     let mut items = vec![header];
     items.extend(app.rows.iter().enumerate().map(|(index, row)| {
         let selected = index == app.selected_index;
-        let mut item = ListItem::new(row_line(row, selected, layout));
-        if selected {
-            item = item.style(Style::default().add_modifier(Modifier::REVERSED));
-        }
-        item
+        ListItem::new(row_line(row, selected, layout))
     }));
 
     f.render_widget(List::new(items).block(block), area);
 }
 
+fn with_selection(style: Style, selected: bool) -> Style {
+    if selected {
+        style.bg(SELECTED_ROW_BACKGROUND)
+    } else {
+        style
+    }
+}
+
 fn row_line(row: &ReadyRowState, selected: bool, layout: TableLayout) -> Line<'static> {
     let indicator = if selected { "►" } else { " " };
+    let style = |s: Style| with_selection(s, selected);
     match row {
         ReadyRowState::Loading { branch } => Line::from(vec![
-            Span::raw(pad_plain(indicator, INDICATOR_WIDTH)),
-            Span::raw(COL_GAP),
+            Span::styled(
+                pad_plain(indicator, INDICATOR_WIDTH),
+                style(Style::default()),
+            ),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 pad_plain(&pr_text(branch.pr_number), layout.pr_width),
-                Style::default().fg(Color::Magenta),
+                style(Style::default().fg(Color::Magenta)),
             ),
-            Span::raw(COL_GAP),
-            Span::raw(pad_plain(
-                &trim_middle(branch.name.as_str(), layout.branch_width),
-                layout.branch_width,
-            )),
-            Span::raw(COL_GAP),
+            Span::styled(COL_GAP, style(Style::default())),
+            Span::styled(
+                pad_plain(
+                    &trim_middle(branch.name.as_str(), layout.branch_width),
+                    layout.branch_width,
+                ),
+                style(Style::default()),
+            ),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 pad_plain("…", layout.review_width),
-                Style::default().fg(Color::DarkGray),
+                style(Style::default().fg(Color::DarkGray)),
             ),
-            Span::raw(COL_GAP),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 pad_plain("…", layout.ci_width),
-                Style::default().fg(Color::DarkGray),
+                style(Style::default().fg(Color::DarkGray)),
             ),
-            Span::raw(COL_GAP),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 trim_end("loading…", layout.title_width),
-                Style::default().fg(Color::DarkGray),
+                style(Style::default().fg(Color::DarkGray)),
             ),
         ]),
         ReadyRowState::Loaded(row) => Line::from(vec![
-            Span::raw(pad_plain(indicator, INDICATOR_WIDTH)),
-            Span::raw(COL_GAP),
+            Span::styled(
+                pad_plain(indicator, INDICATOR_WIDTH),
+                style(Style::default()),
+            ),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 pad_plain(&format!("#{}", row.pr_number), layout.pr_width),
-                Style::default().fg(Color::Magenta),
+                style(Style::default().fg(Color::Magenta)),
             ),
-            Span::raw(COL_GAP),
-            Span::raw(pad_plain(
-                &trim_middle(&row.branch, layout.branch_width),
-                layout.branch_width,
-            )),
-            Span::raw(COL_GAP),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 pad_plain(
-                    &trim_end(&row.review_summary, layout.review_width),
+                    &trim_middle(&row.branch, layout.branch_width),
+                    layout.branch_width,
+                ),
+                style(Style::default()),
+            ),
+            Span::styled(COL_GAP, style(Style::default())),
+            Span::styled(
+                pad_plain(
+                    &trim_end(review_display(&row.review_summary), layout.review_width),
                     layout.review_width,
                 ),
-                review_text_style(&row.review_summary, row.reason),
+                style(review_text_style(&row.review_summary, row.reason)),
             ),
-            Span::raw(COL_GAP),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 pad_plain(&trim_end(&row.ci_summary, layout.ci_width), layout.ci_width),
-                ci_text_style(&row.ci_status, &row.ci_summary),
+                style(ci_text_style(&row.ci_status, &row.ci_summary)),
             ),
-            Span::raw(COL_GAP),
-            Span::raw(trim_end(&row.title, layout.title_width)),
+            Span::styled(COL_GAP, style(Style::default())),
+            Span::styled(
+                trim_end(&row.title, layout.title_width),
+                style(Style::default()),
+            ),
         ]),
         ReadyRowState::Unavailable { branch, message } => Line::from(vec![
-            Span::raw(pad_plain(indicator, INDICATOR_WIDTH)),
-            Span::raw(COL_GAP),
+            Span::styled(
+                pad_plain(indicator, INDICATOR_WIDTH),
+                style(Style::default()),
+            ),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 pad_plain(&pr_text(branch.pr_number), layout.pr_width),
-                Style::default().fg(Color::Magenta),
+                style(Style::default().fg(Color::Magenta)),
             ),
-            Span::raw(COL_GAP),
-            Span::raw(pad_plain(
-                &trim_middle(&branch.name, layout.branch_width),
-                layout.branch_width,
-            )),
-            Span::raw(COL_GAP),
+            Span::styled(COL_GAP, style(Style::default())),
+            Span::styled(
+                pad_plain(
+                    &trim_middle(&branch.name, layout.branch_width),
+                    layout.branch_width,
+                ),
+                style(Style::default()),
+            ),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 pad_plain("—", layout.review_width),
-                Style::default().fg(Color::DarkGray),
+                style(Style::default().fg(Color::DarkGray)),
             ),
-            Span::raw(COL_GAP),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 pad_plain("—", layout.ci_width),
-                Style::default().fg(Color::DarkGray),
+                style(Style::default().fg(Color::DarkGray)),
             ),
-            Span::raw(COL_GAP),
+            Span::styled(COL_GAP, style(Style::default())),
             Span::styled(
                 trim_end(message, layout.title_width),
-                Style::default().fg(Color::Red),
+                style(Style::default().fg(Color::Red)),
             ),
         ]),
     }
@@ -257,6 +288,7 @@ fn render_help(f: &mut Frame) {
         Line::from(""),
         Line::from("  ↑/↓ or k/j   Move selection"),
         Line::from("  Enter / o    Open selected PR"),
+        Line::from("  d            Toggle draft / ready for review"),
         Line::from("  r            Refresh live data now"),
         Line::from("  q / Esc      Quit (stays open after CI passes)"),
         Line::from("  ?            Close help"),
@@ -352,6 +384,8 @@ fn shortcut_status_line() -> Line<'static> {
         shortcut_label(" move  "),
         shortcut_key("Enter"),
         shortcut_label(" open PR  "),
+        shortcut_key("d"),
+        shortcut_label(" draft/undraft  "),
         shortcut_key("r"),
         shortcut_label(" refresh  "),
         shortcut_key("o"),
@@ -398,9 +432,15 @@ fn row_pr_number(row: &ReadyRowState) -> Option<u64> {
 fn review_cell(row: &ReadyRowState) -> &str {
     match row {
         ReadyRowState::Loading { .. } => "…",
-        ReadyRowState::Loaded(row) => row.review_summary.as_str(),
+        ReadyRowState::Loaded(row) => review_display(&row.review_summary),
         ReadyRowState::Unavailable { .. } => "—",
     }
+}
+
+/// No review decision/requested reviewers yet — render as a placeholder
+/// instead of leaving the cell visibly blank, which reads as a stuck update.
+fn review_display(summary: &str) -> &str {
+    if summary.is_empty() { "—" } else { summary }
 }
 
 fn ci_cell(row: &ReadyRowState) -> &str {
@@ -520,6 +560,36 @@ mod tests {
         assert_eq!(ci_text_style("success", "12/12").fg, Some(Color::Green));
         assert_eq!(ci_text_style("failure", "failed").fg, Some(Color::Red));
         assert_eq!(ci_text_style("pending", "running").fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn ready_tui_review_display_placeholders_empty_summary() {
+        assert_eq!(review_display(""), "—");
+        assert_eq!(review_display("approved"), "approved");
+    }
+
+    #[test]
+    fn ready_tui_renders_placeholder_for_pr_with_no_review_activity() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let mut app = ReadyTuiApp::new_for_test(
+            "owner/repo",
+            "current stack",
+            vec![ReadyBranch {
+                name: "feature/a".to_string(),
+                pr_number: Some(10),
+            }],
+        );
+        let mut row = loaded_row();
+        row.review_summary = String::new();
+        row.review_decision = None;
+        row.approvals = 0;
+        app.apply_update(ReadyTuiUpdate::Loaded { index: 0, row });
+
+        terminal.draw(|f| render(f, &app)).expect("draw");
+        let rendered = format!("{:?}", terminal.backend().buffer());
+
+        assert!(rendered.contains('—'));
     }
 
     #[test]
