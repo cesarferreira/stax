@@ -141,41 +141,40 @@ fn restack_conflict_failed_receipt_lists_only_completed_branches() {
 // =============================================================================
 
 #[test]
-fn test_status_during_rebase_gives_clear_error() {
+fn test_read_only_commands_allowed_during_rebase() {
     let repo = TestRepo::new();
     repo.create_conflict_scenario();
     let _ = repo.run_stax(&["restack", "--yes", "--quiet"]);
 
     assert!(repo.has_rebase_in_progress(), "Expected rebase in progress");
 
-    let output = repo.run_stax(&["status"]);
-
-    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
-    assert!(
-        combined.contains("rebase is in progress") || combined.contains("rebase in progress"),
-        "Expected 'rebase in progress' message, got:\n{}",
-        combined
-    );
-    output.assert_failure();
+    for args in [&["status"][..], &["log"][..], &["ready", "--plain"][..]] {
+        let output = repo.run_stax(args);
+        let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+        assert!(
+            !combined.contains("A rebase is in progress. Resolve"),
+            "{:?} should not be blocked by rebase guard, got:\n{combined}",
+            args
+        );
+    }
 
     repo.abort_rebase();
 }
 
 #[test]
-fn test_log_during_rebase_gives_clear_error() {
+fn test_mutating_commands_blocked_during_rebase() {
     let repo = TestRepo::new();
     repo.create_conflict_scenario();
     let _ = repo.run_stax(&["restack", "--yes", "--quiet"]);
 
     assert!(repo.has_rebase_in_progress(), "Expected rebase in progress");
 
-    let output = repo.run_stax(&["log"]);
+    let output = repo.run_stax(&["submit", "--no-verify"]);
 
     let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
     assert!(
-        combined.contains("rebase is in progress") || combined.contains("rebase in progress"),
-        "Expected 'rebase in progress' message, got:\n{}",
-        combined
+        combined.contains("A rebase is in progress. Resolve"),
+        "submit should be blocked by rebase guard, got:\n{combined}"
     );
     output.assert_failure();
 

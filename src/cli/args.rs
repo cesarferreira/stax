@@ -1833,6 +1833,38 @@ impl Commands {
             | Commands::Sync {
                 r#continue: true, ..
             } => CommandPolicy::RebaseSafe,
+            // Read-only commands that do not touch the in-progress rebase.
+            Commands::Status { .. }
+            | Commands::Ll { .. }
+            | Commands::Log { .. }
+            | Commands::Ready { .. }
+            | Commands::Ci { .. }
+            | Commands::Watch { .. }
+            | Commands::Diff { .. }
+            | Commands::RangeDiff { .. }
+            | Commands::Doctor { .. }
+            | Commands::Comments { .. }
+            | Commands::Open
+            | Commands::Gui(_)
+            | Commands::W
+            | Commands::Wtll { .. }
+            | Commands::Wtls => CommandPolicy::RebaseSafe,
+            Commands::Issue { command } => match command {
+                None | Some(IssueCommands::List { .. }) => CommandPolicy::RebaseSafe,
+            },
+            Commands::Pr { command } => match command {
+                None | Some(PrCommands::Open) | Some(PrCommands::List { .. }) => {
+                    CommandPolicy::RebaseSafe
+                }
+                Some(PrCommands::Body { .. }) => CommandPolicy::RequiresCleanRepoState,
+            },
+            Commands::Worktree { command } => match command {
+                None
+                | Some(WorktreeCommands::List { .. })
+                | Some(WorktreeCommands::LongList { .. })
+                | Some(WorktreeCommands::Path { .. }) => CommandPolicy::RebaseSafe,
+                Some(_) => CommandPolicy::RequiresCleanRepoState,
+            },
             _ => CommandPolicy::RequiresCleanRepoState,
         }
     }
