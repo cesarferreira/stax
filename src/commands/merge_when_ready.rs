@@ -494,13 +494,27 @@ pub fn run(
                 .map(|o| o.status.success())
                 .unwrap_or(false);
 
-            let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+            if local_deleted {
+                let _ = crate::git::refs::delete_metadata(repo.inner(), branch);
+            }
 
             if !quiet {
                 if local_deleted && remote_deleted {
                     println!("  {} {} deleted", "✓".green(), branch.dimmed());
                 } else if local_deleted {
                     println!("  {} {} deleted (local only)", "✓".green(), branch.dimmed());
+                } else if remote_deleted {
+                    println!(
+                        "  {} {} kept locally (checked out in another worktree); remote deleted, tracking metadata preserved",
+                        "warning:".yellow(),
+                        branch.dimmed()
+                    );
+                } else {
+                    println!(
+                        "  {} {} kept locally (checked out in another worktree); tracking metadata preserved",
+                        "warning:".yellow(),
+                        branch.dimmed()
+                    );
                 }
             }
         }

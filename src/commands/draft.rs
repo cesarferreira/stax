@@ -119,7 +119,12 @@ fn process_branch(
     Ok(())
 }
 
-fn update_local_pr_metadata(repo: &GitRepo, branch: &str, pr_number: u64, is_draft: bool) {
+pub(crate) fn update_local_pr_metadata(
+    repo: &GitRepo,
+    branch: &str,
+    pr_number: u64,
+    is_draft: bool,
+) {
     if let Ok(Some(mut meta)) = BranchMetadata::read(repo.inner(), branch) {
         if let Some(ref mut pr_info) = meta.pr_info {
             pr_info.is_draft = Some(is_draft);
