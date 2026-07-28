@@ -91,6 +91,7 @@ pub fn run(
     let current = snapshot.current_branch;
     let stack = snapshot.stack;
     let config = Config::load()?;
+    let worktree_glyph = stack_palette::parse_worktree_glyph_mode(&config.display.worktree_glyph);
     let workdir = repo.workdir()?;
     let has_tracked = stack.branches.len() > 1;
     let cache_dir = repo.common_git_dir()?;
@@ -351,7 +352,7 @@ pub fn run(
         if entry.and_then(|e| e.linked_worktree.as_ref()).is_some() {
             info_str.push_str(&format!(
                 "{} ",
-                stack_palette::format_linked_worktree_marker()
+                stack_palette::format_linked_worktree_marker(worktree_glyph)
             ));
         }
 
@@ -447,7 +448,7 @@ pub fn run(
     {
         trunk_info.push_str(&format!(
             "{} ",
-            stack_palette::format_linked_worktree_marker()
+            stack_palette::format_linked_worktree_marker(worktree_glyph)
         ));
     }
     // Color trunk name to match column 0

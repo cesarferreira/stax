@@ -52,6 +52,9 @@ Config is loaded as follows:
 [ui]
 # tips = true
 
+[display]
+# worktree_glyph = "auto" # "auto" | "tree" (Nerd Font) | "wt" (ASCII)
+
 [restack]
 # preflight_auto_repair = true # automatically use merge-base when stored parent
                                # boundary would replay a much larger range

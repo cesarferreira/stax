@@ -742,6 +742,7 @@ fn test_default_config() {
     assert!(config.ci.success_alert_sound.is_none());
     assert!(config.ci.error_alert_sound.is_none());
     assert!(config.ui.tips);
+    assert_eq!(config.display.worktree_glyph, "auto");
     assert!(config.auth.use_gh_cli);
     assert!(!config.auth.allow_github_token_env);
     assert!(config.auth.gh_hostname.is_none());
@@ -755,6 +756,18 @@ fn test_default_toml_serializes() {
     assert!(s.contains("[remote]"));
     assert!(s.contains("[submit]"));
     let _: Config = toml::from_str(&s).unwrap();
+}
+
+#[test]
+fn display_worktree_glyph_config_round_trip() {
+    let config: Config = toml::from_str(
+        r#"
+[display]
+worktree_glyph = "wt"
+"#,
+    )
+    .unwrap();
+    assert_eq!(config.display.worktree_glyph, "wt");
 }
 
 #[test]

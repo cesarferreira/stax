@@ -29,7 +29,7 @@ st checkout --child 1     # jump to first child
 ○        feature/validation 1↑
 ◉        feature/auth       2↑ 1↓ ⟳
 ○        feature/old-base   (missing parent: feature/base)
-│ ○    ☁ ⎇ feature/payments   PR #42
+│ ○    ☁ wt feature/payments   PR #42
 ○─┘    ☁ main
 ```
 
@@ -38,7 +38,7 @@ st checkout --child 1     # jump to first child
 | `◉` | Current branch |
 | `○` | Other tracked branch |
 | `☁` | Remote tracking exists |
-| `⎇` | Checked out in a linked worktree |
+| `wt` / `󰙅` | Checked out in a linked worktree (`wt` is the ASCII fallback; `󰙅` is the Nerd Font tree icon when supported) |
 | `1↑` | Commits ahead of parent |
 | `1↓` | Commits behind parent |
 | `⟳` | Needs restack |
