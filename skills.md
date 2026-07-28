@@ -289,11 +289,11 @@ stax merge --downstack-only        # Merge ancestors below current, then rebase 
 stax merge --ds                    # Alias for --downstack-only
 stax merge --dry-run               # Preview merge plan only
 stax merge --method squash         # squash|merge|rebase
-stax merge --stack                 # GitHub only: target selected PRs to trunk, merge the tip, preserve lower PR merged state
-stax merge --stack --method rebase # Rewrite SHAs and close lower PRs as absorbed without polling (also: squash)
+stax merge --stack                 # GitHub/GitLab only: target selected items to trunk, merge the tip, preserve merged state
+stax merge --stack --method rebase # GitHub only: rewrite SHAs and absorb lower PRs (GitLab rejects rebase/squash)
 stax merge --stack --downstack-only # Stack-merge ancestors below current; keep current open
 stax merge --stack --full          # Stack-merge full stack even from the middle
-stax merge --stack --when-ready    # Wait only for selected tip PR readiness before the one-PR stack merge
+stax merge --stack --when-ready    # Wait only for selected tip PR/MR readiness before the one-item stack merge
 stax merge --when-ready            # Wait for CI + approval before each merge
 stax merge --remote                # Merge via GitHub API only — no local checkout/rebase/push
 stax merge --remote --all          # Include full stack (GitHub only)
@@ -564,7 +564,7 @@ stax ss --rerequest-review
 ```bash
 stax ready
 stax merge --when-ready --interval 15
-stax merge --stack --when-ready    # GitHub stack merge: selected tip CI only, defaults to SHA-preserving merge
+stax merge --stack --when-ready    # GitHub/GitLab stack merge: selected tip CI only, preserving merge
 ```
 
 ### After Base PR Merges
