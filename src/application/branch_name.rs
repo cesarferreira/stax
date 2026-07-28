@@ -93,18 +93,29 @@ fn apply_format_template(template: &str, message: &str, context: &BranchNameCont
             &context.date.format(&context.date_format).to_string(),
         );
     }
+    let user = context
+        .user
+        .as_deref()
+        .map(|user| sanitize_branch_segment(user, &context.replacement))
+        .unwrap_or_default();
     if result.contains("{user}") {
-        let user = context
-            .user
-            .as_deref()
-            .map(|user| sanitize_branch_segment(user, &context.replacement))
-            .unwrap_or_default();
         result = result.replace("{user}", &user);
     }
     while result.contains("//") {
         result = result.replace("//", "/");
     }
     result = result.trim_matches('/').to_string();
+    // Dedupe a duplicated leading user segment: when the message already begins
+    // with the user prefix (e.g. `{user}/{message}` + message "cesar/foo"), the
+    // substitution above yields "cesar/cesar/foo". Collapse the leading
+    // "<user>/<user>/" back to "<user>/" so the `{user}` template stays
+    // idempotent, matching how `apply_prefix` refuses to double an explicit
+    // prefix.
+    if !user.is_empty()
+        && let Some(rest) = result.strip_prefix(&format!("{user}/{user}/"))
+    {
+        result = format!("{user}/{rest}");
+    }
     apply_prefix(result, context.prefix.as_deref())
 }
 
@@ -191,6 +202,30 @@ mod tests {
                 normalized: "César-Ferreira/Fix-GUI".into(),
             }]
         );
+    }
+
+    #[test]
+    fn format_branch_name_dedupes_leading_user_segment() {
+        let context = BranchNameContext {
+            format: Some("{user}/{message}".into()),
+            prefix: None,
+            legacy_date: false,
+            date_format: "%Y-%m-%d".into(),
+            replacement: "-".into(),
+            user: Some("cesar".into()),
+            date: chrono::NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+        };
+        // Message already leads with the user prefix — must not double it.
+        let result = format_branch_name("cesar/fix-thing", &context).unwrap();
+        assert_eq!(result.name, "cesar/fix-thing");
+        assert!(result.warnings.is_empty());
+        // A bare message still gets the single user prefix.
+        let bare = format_branch_name("fix-thing", &context).unwrap();
+        assert_eq!(bare.name, "cesar/fix-thing");
+        // A message segment that merely starts with the user text (not the
+        // full `user/` segment) is left untouched.
+        let similar = format_branch_name("cesarine", &context).unwrap();
+        assert_eq!(similar.name, "cesar/cesarine");
     }
 
     #[test]

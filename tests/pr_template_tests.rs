@@ -27,7 +27,7 @@ fn test_submit_with_single_template() {
     .unwrap();
 
     // Create a branch with stax
-    let output = repo.run_stax(&["create", "test-branch", "-m", "test commit"]);
+    let output = repo.run_stax(&["create", "test-branch"]);
     output.assert_success();
 
     // Verify branch was created
@@ -79,7 +79,7 @@ fn test_no_template_in_repo() {
     // No template created - use default repo
 
     // Create a branch with stax
-    let output = repo.run_stax(&["create", "test-branch", "-m", "test commit"]);
+    let output = repo.run_stax(&["create", "test-branch"]);
     output.assert_success();
 
     // Verify branch was created
@@ -261,7 +261,7 @@ fn test_templates_in_subdirectory() {
     fs::write(template_dir.join("default.md"), "# Default template\n").unwrap();
 
     // Create a branch
-    let output = repo.run_stax(&["create", "test-branch", "-m", "test commit"]);
+    let output = repo.run_stax(&["create", "test-branch"]);
     output.assert_success();
 
     // Verify template file exists
@@ -282,7 +282,7 @@ fn test_template_in_docs_directory() {
     .unwrap();
 
     // Create a branch
-    let output = repo.run_stax(&["create", "test-branch", "-m", "test commit"]);
+    let output = repo.run_stax(&["create", "test-branch"]);
     output.assert_success();
 
     // Verify template file exists
