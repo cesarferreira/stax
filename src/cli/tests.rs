@@ -428,8 +428,24 @@ fn sync_continue_is_marked_as_rebase_safe() {
 }
 
 #[test]
-fn status_requires_clean_repo_state() {
+fn status_is_read_only_during_rebase() {
     let cli = parse_cli(&["stax", "status"]);
+    let cmd = cli.command.expect("command");
+    assert_eq!(cmd.policy(), CommandPolicy::RebaseSafe);
+    assert!(cmd.allows_during_rebase());
+}
+
+#[test]
+fn ready_is_read_only_during_rebase() {
+    let cli = parse_cli(&["stax", "ready"]);
+    let cmd = cli.command.expect("command");
+    assert_eq!(cmd.policy(), CommandPolicy::RebaseSafe);
+    assert!(cmd.allows_during_rebase());
+}
+
+#[test]
+fn submit_requires_clean_repo_state() {
+    let cli = parse_cli(&["stax", "submit"]);
     let cmd = cli.command.expect("command");
     assert_eq!(cmd.policy(), CommandPolicy::RequiresCleanRepoState);
     assert!(!cmd.allows_during_rebase());
