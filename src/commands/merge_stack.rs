@@ -1,8 +1,8 @@
-//! Fast-forward stack merge through one GitHub PR merge.
+//! Stack merge through one GitHub PR merge.
 //!
 //! This is the serverless path from issue #293: validate the selected tip PR
-//! once, retarget that PR to trunk, merge it via GitHub's merge API, then
-//! reconcile selected lower PRs as merged or absorbed.
+//! once, prepare the selected PR bases, merge the tip via GitHub's merge API,
+//! then reconcile selected lower PRs as merged, pending, or absorbed.
 
 use crate::commands::merge_shared::{
     PrBaseUpdate, WaitResult, print_header, print_header_success,
@@ -47,6 +47,19 @@ struct ResolvedStackPr {
 struct RemainingStackBranch {
     branch: String,
     pr_number: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChangedPrBase {
+    pr_number: u64,
+    original_base: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownstackOutcome {
+    GithubMerged,
+    Pending,
+    Absorbed,
 }
 
 /// How the stack-merge confirmation should be resolved.
@@ -199,7 +212,7 @@ pub fn run(
         }
         StackMergeConfirmation::Prompt => {
             let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt("Proceed with fast-forward stack merge?")
+                .with_prompt("Proceed with stack merge?")
                 .default(false)
                 .interact()?;
 
@@ -212,7 +225,7 @@ pub fn run(
 
     if !quiet {
         println!();
-        print_header("Stack Fast-Forward Merge");
+        print_header("Stack Merge");
     }
 
     if when_ready {
@@ -241,44 +254,11 @@ pub fn run(
     verify_tip_head_matches_local(&repo, tip, &tip_status)?;
     ensure_trunk_unchanged(&repo, &remote_info, &scope.trunk, &trunk_sha)?;
 
-    let original_tip_base = tip.base.clone();
-    let retarget_timer = LiveTimer::maybe_new(
-        !quiet,
-        &format!(
-            "Retargeting selected tip PR #{} to {}...",
-            tip.pr_number, scope.trunk
-        ),
-    );
-    let retargeted =
-        match update_pr_base_unless_current(&rt, &client, tip.pr_number, &scope.trunk, &tip.branch)
-        {
-            Ok(PrBaseUpdate::Updated) => {
-                LiveTimer::maybe_finish_ok(retarget_timer, "done");
-                true
-            }
-            Ok(PrBaseUpdate::AlreadyTargeted) => {
-                LiveTimer::maybe_finish_ok(retarget_timer, "already on base");
-                false
-            }
-            Ok(PrBaseUpdate::NativeStackLocked) => {
-                LiveTimer::maybe_finish_err(retarget_timer, "locked");
-                anyhow::bail!(
-                    "PR #{} is registered in a native GitHub Stack, which locks its base branch. \
-                     Merge it via the normal stack order (`st merge`) instead of merging out of \
-                     order, or run `st stack unlink` first if you need to retarget it manually.",
-                    tip.pr_number
-                );
-            }
-            Err(e) => {
-                LiveTimer::maybe_finish_err(retarget_timer, "failed");
-                return Err(e);
-            }
-        };
+    let changed_bases =
+        prepare_selected_pr_bases(&rt, &client, &resolved, &scope.trunk, method, quiet)?;
 
     if let Err(e) = ensure_trunk_unchanged(&repo, &remote_info, &scope.trunk, &trunk_sha) {
-        if retargeted {
-            restore_tip_base(&rt, &client, tip, &original_tip_base, quiet);
-        }
+        rollback_changed_pr_bases(&rt, &client, &changed_bases, quiet);
         return Err(e);
     }
 
@@ -298,14 +278,12 @@ pub fn run(
 
     if let Err(e) = merge_result {
         LiveTimer::maybe_finish_err(merge_timer, "failed");
-        if retargeted {
-            restore_tip_base(&rt, &client, tip, &original_tip_base, quiet);
-        }
+        rollback_changed_pr_bases(&rt, &client, &changed_bases, quiet);
         return Err(e);
     }
     LiveTimer::maybe_finish_ok(merge_timer, "done");
 
-    let github_merged_downstack = absorb_downstack_prs(&rt, &client, &resolved, tip, quiet)?;
+    let downstack_outcomes = reconcile_downstack_prs(&rt, &client, &resolved, tip, method, quiet)?;
 
     rebase_remaining_branches(
         &repo,
@@ -330,26 +308,47 @@ pub fn run(
         print_header_success("Stack Merged");
         println!();
         println!(
-            "Merged {} PRs through tip #{} into {}:",
+            "Landed {} branches through selected tip PR #{} into {}:",
             resolved.len(),
             tip.pr_number,
             scope.trunk.cyan()
         );
         for pr in &resolved {
-            let action = if pr.pr_number == tip.pr_number {
-                "merged"
-            } else if github_merged_downstack.contains(&pr.pr_number) {
-                "merged by GitHub"
+            let (marker, action) = if pr.pr_number == tip.pr_number {
+                let behavior = if merge_method_preserves_commit_shas(method) {
+                    "preserves commit SHAs"
+                } else {
+                    "rewrites commit SHAs"
+                };
+                (
+                    "✓".green().to_string(),
+                    format!("merged with {} ({})", method.as_str(), behavior),
+                )
             } else {
-                "absorbed"
+                match downstack_outcomes
+                    .iter()
+                    .find(|(number, _)| *number == pr.pr_number)
+                    .map(|(_, outcome)| *outcome)
+                    .expect("every downstack PR has a reconciliation outcome")
+                {
+                    DownstackOutcome::GithubMerged => (
+                        "✓".green().to_string(),
+                        "merged indirectly by GitHub".to_string(),
+                    ),
+                    DownstackOutcome::Pending => (
+                        "○".yellow().to_string(),
+                        "pending GitHub indirect-merge detection; left open".to_string(),
+                    ),
+                    DownstackOutcome::Absorbed => (
+                        "✓".green().to_string(),
+                        format!(
+                            "closed as absorbed ({} rewrites commit SHAs)",
+                            method.as_str()
+                        ),
+                    ),
+                }
             };
-            println!(
-                "  {} #{} {} -> {}",
-                "✓".green(),
-                pr.pr_number,
-                pr.branch,
-                action
-            );
+            println!("  {} #{} {} -> {}", marker, pr.pr_number, pr.branch, action);
         }
         if !remaining.is_empty() {
             println!();
@@ -683,30 +682,85 @@ fn verify_tip_head_matches_local(
     Ok(())
 }
 
-fn restore_tip_base(
+fn merge_method_preserves_commit_shas(method: MergeMethod) -> bool {
+    matches!(method, MergeMethod::Merge)
+}
+
+fn prepare_selected_pr_bases(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
-    tip: &ResolvedStackPr,
-    original_base: &str,
+    prs: &[ResolvedStackPr],
+    trunk: &str,
+    method: MergeMethod,
+    quiet: bool,
+) -> Result<Vec<ChangedPrBase>> {
+    let first = if merge_method_preserves_commit_shas(method) {
+        0
+    } else {
+        prs.len().saturating_sub(1)
+    };
+    let mut changed = Vec::new();
+
+    for pr in &prs[first..] {
+        let timer = LiveTimer::maybe_new(
+            !quiet,
+            &format!("Retargeting PR #{} to {}...", pr.pr_number, trunk),
+        );
+        match update_pr_base_unless_current(rt, client, pr.pr_number, trunk, &pr.branch) {
+            Ok(PrBaseUpdate::Updated) => {
+                changed.push(ChangedPrBase {
+                    pr_number: pr.pr_number,
+                    original_base: pr.base.clone(),
+                });
+                LiveTimer::maybe_finish_ok(timer, "done");
+            }
+            Ok(PrBaseUpdate::AlreadyTargeted) => {
+                LiveTimer::maybe_finish_ok(timer, "already on base");
+            }
+            Ok(PrBaseUpdate::NativeStackLocked) => {
+                LiveTimer::maybe_finish_err(timer, "locked");
+                rollback_changed_pr_bases(rt, client, &changed, quiet);
+                anyhow::bail!(
+                    "PR #{} is registered in a native GitHub Stack, which locks its base branch. \
+                     Merge it via the normal stack order (`st merge`) instead of merging out of \
+                     order, or run `st stack unlink` first if you need to retarget it manually.",
+                    pr.pr_number
+                );
+            }
+            Err(e) => {
+                LiveTimer::maybe_finish_err(timer, "failed");
+                rollback_changed_pr_bases(rt, client, &changed, quiet);
+                return Err(e);
+            }
+        }
+    }
+
+    Ok(changed)
+}
+
+fn rollback_changed_pr_bases(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    changed: &[ChangedPrBase],
     quiet: bool,
 ) {
-    let timer = LiveTimer::maybe_new(
-        !quiet,
-        &format!(
-            "Restoring selected tip PR #{} base to {}...",
-            tip.pr_number, original_base
-        ),
-    );
-    match rt.block_on(async { client.update_pr_base(tip.pr_number, original_base).await }) {
-        Ok(()) => LiveTimer::maybe_finish_ok(timer, "done"),
-        Err(e) => {
-            LiveTimer::maybe_finish_err(timer, "failed");
-            if !quiet {
+    for pr in changed.iter().rev() {
+        let timer = LiveTimer::maybe_new(
+            !quiet,
+            &format!(
+                "Restoring PR #{} base to {}...",
+                pr.pr_number, pr.original_base
+            ),
+        );
+        match rt.block_on(async { client.update_pr_base(pr.pr_number, &pr.original_base).await }) {
+            Ok(()) => LiveTimer::maybe_finish_ok(timer, "done"),
+            Err(e) => {
+                LiveTimer::maybe_finish_err(timer, "failed");
                 eprintln!(
                     "{} failed to restore PR #{} base to {}: {:#}",
                     "warning:".yellow().bold(),
-                    tip.pr_number,
-                    original_base,
+                    pr.pr_number,
+                    pr.original_base,
                     e
                 );
             }
@@ -714,36 +768,65 @@ fn restore_tip_base(
     }
 }
 
-fn absorb_downstack_prs(
+fn reconcile_downstack_prs(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
     prs: &[ResolvedStackPr],
     tip: &ResolvedStackPr,
+    method: MergeMethod,
     quiet: bool,
-) -> Result<Vec<u64>> {
-    let mut github_merged = Vec::new();
+) -> Result<Vec<(u64, DownstackOutcome)>> {
+    let mut outcomes = Vec::new();
 
     for pr in prs.iter().filter(|pr| pr.pr_number != tip.pr_number) {
-        let timer = LiveTimer::maybe_new(
-            !quiet,
-            &format!(
-                "Waiting for downstack PR #{} to be marked merged...",
+        let message = if merge_method_preserves_commit_shas(method) {
+            format!(
+                "Waiting for downstack PR #{} to be marked indirectly merged...",
                 pr.pr_number
-            ),
-        );
-        if wait_for_downstack_pr_merged(rt, client, pr.pr_number)? {
-            github_merged.push(pr.pr_number);
-            LiveTimer::maybe_finish_ok(timer, "merged by GitHub");
+            )
+        } else {
+            format!(
+                "Closing downstack PR #{} as absorbed ({} rewrites commit SHAs)...",
+                pr.pr_number,
+                method.as_str()
+            )
+        };
+        let timer = LiveTimer::maybe_new(!quiet, &message);
+        if merge_method_preserves_commit_shas(method)
+            && wait_for_downstack_pr_merged(rt, client, pr.pr_number)?
+        {
+            outcomes.push((pr.pr_number, DownstackOutcome::GithubMerged));
+            LiveTimer::maybe_finish_ok(timer, "merged indirectly by GitHub");
             continue;
         }
 
-        let comment = downstack_absorbed_comment(tip.pr_number);
+        if merge_method_preserves_commit_shas(method) {
+            outcomes.push((pr.pr_number, DownstackOutcome::Pending));
+            LiveTimer::maybe_finish_err(timer, "still open; indirect merge pending");
+            if !quiet {
+                println!(
+                    "  {} PR #{} remains open; GitHub may still mark it indirectly merged asynchronously.",
+                    "warning:".yellow().bold(),
+                    pr.pr_number
+                );
+            }
+            continue;
+        }
+
+        let comment = downstack_absorbed_comment(tip.pr_number, method);
         rt.block_on(async { client.create_issue_comment(pr.pr_number, &comment).await })?;
         rt.block_on(async { client.close_pr(pr.pr_number).await })?;
-        LiveTimer::maybe_finish_ok(timer, "closed as absorbed");
+        outcomes.push((pr.pr_number, DownstackOutcome::Absorbed));
+        LiveTimer::maybe_finish_ok(
+            timer,
+            &format!(
+                "{} rewrites commit SHAs; closed as absorbed without waiting",
+                method.as_str()
+            ),
+        );
     }
 
-    Ok(github_merged)
+    Ok(outcomes)
 }
 
 fn wait_for_downstack_pr_merged(
@@ -767,7 +850,7 @@ fn wait_for_downstack_pr_merged(
 }
 
 fn downstack_merged_wait() -> Duration {
-    let seconds = std::env::var("STAX_STACK_MERGE_ABSORBED_WAIT_SECS")
+    let seconds = std::env::var("STAX_STACK_MERGE_INDIRECT_WAIT_SECS")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(20);
@@ -814,10 +897,11 @@ fn rebase_remaining_branches(
     Ok(())
 }
 
-fn downstack_absorbed_comment(tip_pr_number: u64) -> String {
+fn downstack_absorbed_comment(tip_pr_number: u64, method: MergeMethod) -> String {
     format!(
-        "Absorbed into stack merge of #{}. This PR's commits landed through the selected tip PR.",
-        tip_pr_number
+        "Absorbed into stack merge of #{}. The selected tip was merged with {}, which rewrites commit SHAs, so GitHub cannot mark this PR indirectly merged.",
+        tip_pr_number,
+        method.as_str()
     )
 }
 
@@ -899,16 +983,24 @@ fn print_stack_preview(
     when_ready: bool,
     downstack_only: bool,
 ) {
-    print_header("Stack Fast-Forward Merge");
+    print_header("Stack Merge");
     println!();
     let tip = prs
         .last()
         .expect("stack merge preview requires a selected tip PR");
-    println!(
-        "Will validate PR #{} once, retarget it to {}, then merge one PR:",
-        tip.pr_number,
-        trunk.cyan()
-    );
+    if merge_method_preserves_commit_shas(method) {
+        println!(
+            "Will validate PR #{} once, target every selected PR to {}, then merge one PR:",
+            tip.pr_number,
+            trunk.cyan()
+        );
+    } else {
+        println!(
+            "Will validate PR #{} once, retarget it to {}, then merge one PR:",
+            tip.pr_number,
+            trunk.cyan()
+        );
+    }
     if downstack_only {
         println!(
             "{}",
@@ -924,9 +1016,14 @@ fn print_stack_preview(
 
     for (idx, pr) in prs.iter().enumerate() {
         let marker = if idx + 1 == prs.len() {
-            "(tip, merged)"
+            format!("(selected tip, merged with {})", method.as_str())
+        } else if merge_method_preserves_commit_shas(method) {
+            "(targeted to trunk; indirectly merged by GitHub or left pending)".to_string()
         } else {
-            "(reconciled after tip merge)"
+            format!(
+                "(closed as absorbed; {} rewrites commit SHAs)",
+                method.as_str()
+            )
         };
         println!(
             "  {}. {} (#{}) {}",
@@ -964,10 +1061,10 @@ fn print_stack_preview(
     println!(
         "Merge method: {} {}",
         method.as_str().cyan(),
-        if matches!(method, MergeMethod::Rebase) {
-            "(default for --stack)".dimmed()
+        if merge_method_preserves_commit_shas(method) {
+            "(default for --stack; preserves commit SHAs; lower PRs may merge indirectly)".dimmed()
         } else {
-            "(explicit)".dimmed()
+            "(explicit; rewrites commit SHAs; lower PRs close as absorbed)".dimmed()
         }
     );
     if when_ready {
@@ -1200,8 +1297,19 @@ mod tests {
     #[test]
     fn downstack_comment_links_to_tip() {
         assert_eq!(
-            downstack_absorbed_comment(42),
-            "Absorbed into stack merge of #42. This PR's commits landed through the selected tip PR."
+            downstack_absorbed_comment(42, MergeMethod::Rebase),
+            "Absorbed into stack merge of #42. The selected tip was merged with rebase, which rewrites commit SHAs, so GitHub cannot mark this PR indirectly merged."
         );
+    }
+
+    #[test]
+    fn merge_method_commit_sha_behavior() {
+        for (method, preserves) in [
+            (MergeMethod::Merge, true),
+            (MergeMethod::Rebase, false),
+            (MergeMethod::Squash, false),
+        ] {
+            assert_eq!(merge_method_preserves_commit_shas(method), preserves);
+        }
     }
 }

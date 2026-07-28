@@ -7685,6 +7685,21 @@ mod forge_mock_tests {
             .unwrap_or_else(|| panic!("Did not find request {} {}", method_name, path_name))
     }
 
+    fn find_request_indices(
+        requests: &[wiremock::Request],
+        method_name: &str,
+        path_name: &str,
+    ) -> Vec<usize> {
+        requests
+            .iter()
+            .enumerate()
+            .filter(|(_, request)| {
+                request.method.as_str() == method_name && request.url.path() == path_name
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     /// Find a request to a PR/MR endpoint whose JSON payload contains a body/description key.
     /// This distinguishes body-update requests from title-update requests (both hit the same URL).
     /// Works for GitHub (PATCH + "body"), GitLab (PUT + "description"), and Gitea (PATCH + "body").
@@ -8174,6 +8189,184 @@ mod forge_mock_tests {
         run_stax_with_token_env(repo, home, "STAX_GITHUB_TOKEN", args)
     }
 
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StackMergeScenario {
+        LowerMerged,
+        LowerPending,
+        TipRetargetFails,
+        TipMergeFails,
+    }
+
+    struct ThreeBranchStackMergeFixture {
+        mock_server: MockServer,
+        home: TempDir,
+        repo: TestRepo,
+        _remote_root: TempDir,
+        branch_a: String,
+        branch_b: String,
+        tip_sha: String,
+    }
+
+    async fn setup_three_branch_stack_merge_fixture(
+        scenario: StackMergeScenario,
+    ) -> ThreeBranchStackMergeFixture {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_github_remote(&repo, home.path());
+        write_test_config(home.path(), &mock_server.uri());
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-method-a"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_a = repo.current_branch();
+        repo.create_file("parent.txt", "parent\n");
+        repo.commit("Parent commit");
+        let branch_a_sha = repo.get_commit_sha(&branch_a);
+        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
+        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-method-b"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_b = repo.current_branch();
+        repo.create_file("middle.txt", "middle\n");
+        repo.commit("Middle commit");
+        let branch_b_sha = repo.get_commit_sha(&branch_b);
+        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
+        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
+
+        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-method-c"]);
+        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
+        let branch_c = repo.current_branch();
+        repo.create_file("child.txt", "child\n");
+        repo.commit("Child commit");
+        let tip_sha = repo.get_commit_sha(&branch_c);
+        let push_c = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_c]);
+        assert!(push_c.status.success(), "{}", TestRepo::stderr(&push_c));
+
+        write_branch_pr_metadata(&repo, &branch_a, "main", 601, Some(false));
+        write_branch_pr_metadata(&repo, &branch_b, &branch_a, 602, Some(false));
+        write_branch_pr_metadata(&repo, &branch_c, &branch_b, 603, Some(false));
+
+        for (number, branch, base, sha) in [
+            (601, branch_a.as_str(), "main", branch_a_sha.as_str()),
+            (
+                602,
+                branch_b.as_str(),
+                branch_a.as_str(),
+                branch_b_sha.as_str(),
+            ),
+        ] {
+            let lower_open = github_pull_fixture(number, branch, base, sha);
+            if scenario == StackMergeScenario::LowerMerged {
+                Mock::given(method("GET"))
+                    .and(path(format!("/repos/test/repo/pulls/{}", number)))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(lower_open))
+                    .with_priority(1)
+                    .up_to_n_times(2)
+                    .mount(&mock_server)
+                    .await;
+
+                let mut lower_merged = github_pull_fixture(number, branch, "main", sha);
+                lower_merged["state"] = serde_json::json!("closed");
+                lower_merged["merged_at"] = serde_json::json!("2026-07-28T00:00:00Z");
+                Mock::given(method("GET"))
+                    .and(path(format!("/repos/test/repo/pulls/{}", number)))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(lower_merged))
+                    .with_priority(2)
+                    .mount(&mock_server)
+                    .await;
+            } else {
+                Mock::given(method("GET"))
+                    .and(path(format!("/repos/test/repo/pulls/{}", number)))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(lower_open))
+                    .mount(&mock_server)
+                    .await;
+            }
+        }
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/603"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(github_pull_fixture(603, &branch_c, &branch_b, &tip_sha)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        mount_github_merge_status_with_head(&mock_server, 601, "OPEN", "APPROVED", &branch_a_sha)
+            .await;
+        mount_github_merge_status_with_head(&mock_server, 602, "OPEN", "APPROVED", &branch_b_sha)
+            .await;
+        mount_github_merge_status_with_head(&mock_server, 603, "OPEN", "APPROVED", &tip_sha).await;
+
+        for (number, branch, sha) in [
+            (601, branch_a.as_str(), branch_a_sha.as_str()),
+            (602, branch_b.as_str(), branch_b_sha.as_str()),
+        ] {
+            Mock::given(method("PATCH"))
+                .and(path(format!("/repos/test/repo/pulls/{}", number)))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(github_pull_fixture(number, branch, "main", sha)),
+                )
+                .mount(&mock_server)
+                .await;
+        }
+
+        let tip_retarget_response = if scenario == StackMergeScenario::TipRetargetFails {
+            ResponseTemplate::new(422).set_body_json(serde_json::json!({
+                "message": "tip retarget failed"
+            }))
+        } else {
+            ResponseTemplate::new(200)
+                .set_body_json(github_pull_fixture(603, &branch_c, "main", &tip_sha))
+        };
+        Mock::given(method("PATCH"))
+            .and(path("/repos/test/repo/pulls/603"))
+            .respond_with(tip_retarget_response)
+            .mount(&mock_server)
+            .await;
+
+        let tip_merge_response = if scenario == StackMergeScenario::TipMergeFails {
+            ResponseTemplate::new(500).set_body_json(serde_json::json!({
+                "message": "tip merge failed"
+            }))
+        } else {
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "merge-c-commit",
+                "merged": true,
+                "message": "Pull Request successfully merged"
+            }))
+        };
+        Mock::given(method("PUT"))
+            .and(path("/repos/test/repo/pulls/603/merge"))
+            .respond_with(tip_merge_response)
+            .mount(&mock_server)
+            .await;
+
+        for number in [601, 602] {
+            Mock::given(method("POST"))
+                .and(path(format!("/repos/test/repo/issues/{}/comments", number)))
+                .respond_with(
+                    ResponseTemplate::new(201)
+                        .set_body_json(issue_comment_fixture(9000 + number, "absorbed")),
+                )
+                .mount(&mock_server)
+                .await;
+        }
+
+        ThreeBranchStackMergeFixture {
+            mock_server,
+            home,
+            repo,
+            _remote_root: remote_root,
+            branch_a,
+            branch_b,
+            tip_sha,
+        }
+    }
+
     fn run_stax_in_dir_with_env(cwd: &Path, home: &Path, args: &[&str]) -> Output {
         run_stax_in_dir_with_token_env(cwd, home, "STAX_GITHUB_TOKEN", args)
     }
@@ -8195,7 +8388,7 @@ mod forge_mock_tests {
             .env(token_env, "mock-token")
             .env("STAX_DISABLE_UPDATE_CHECK", "1")
             .env("STAX_TEST_DISABLE_HEAD_SYNC", "1")
-            .env("STAX_STACK_MERGE_ABSORBED_WAIT_SECS", "0");
+            .env("STAX_STACK_MERGE_INDIRECT_WAIT_SECS", "0");
         command.output().expect("Failed to execute stax")
     }
 
@@ -11758,88 +11951,11 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_stack_does_not_close_downstack_pr_when_github_marks_it_merged() {
-        ensure_crypto_provider();
-        let mock_server = MockServer::start().await;
-
-        let home = super::test_tempdir();
-        let repo = TestRepo::new();
-        let _remote_root = setup_fake_github_remote(&repo, home.path());
-        write_test_config(home.path(), &mock_server.uri());
-
-        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-ff-a"]);
-        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
-        let branch_a = repo.current_branch();
-        repo.create_file("parent.txt", "parent\n");
-        repo.commit("Parent commit");
-        let push_a = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_a]);
-        assert!(push_a.status.success(), "{}", TestRepo::stderr(&push_a));
-
-        let output = run_stax_with_env(&repo, home.path(), &["bc", "stack-ff-b"]);
-        assert!(output.status.success(), "{}", TestRepo::stderr(&output));
-        let branch_b = repo.current_branch();
-        repo.create_file("child.txt", "child\n");
-        repo.commit("Child commit");
-        let branch_b_sha = repo.get_commit_sha(&branch_b);
-        let push_b = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch_b]);
-        assert!(push_b.status.success(), "{}", TestRepo::stderr(&push_b));
-
-        write_branch_pr_metadata(&repo, &branch_a, "main", 601, Some(false));
-        write_branch_pr_metadata(&repo, &branch_b, &branch_a, 602, Some(false));
-
-        let mut merged_branch_a = github_pull_fixture(601, &branch_a, "main", "sha-a");
-        merged_branch_a["state"] = serde_json::json!("closed");
-        merged_branch_a["merged_at"] = serde_json::json!("2024-01-01T00:00:00Z");
-
-        Mock::given(method("GET"))
-            .and(path("/repos/test/repo/pulls/601"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(merged_branch_a))
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/repos/test/repo/pulls/602"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
-                    602,
-                    &branch_b,
-                    &branch_a,
-                    &branch_b_sha,
-                )),
-            )
-            .mount(&mock_server)
-            .await;
-
-        mount_github_merge_status_with_head(&mock_server, 601, "OPEN", "APPROVED", "sha-a").await;
-        mount_github_merge_status_with_head(&mock_server, 602, "OPEN", "APPROVED", &branch_b_sha)
-            .await;
-
-        Mock::given(method("PATCH"))
-            .and(path("/repos/test/repo/pulls/602"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(github_pull_fixture(
-                    602,
-                    &branch_b,
-                    "main",
-                    &branch_b_sha,
-                )),
-            )
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("PUT"))
-            .and(path("/repos/test/repo/pulls/602/merge"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "sha": "merge-b-commit",
-                "merged": true,
-                "message": "Pull Request successfully merged"
-            })))
-            .mount(&mock_server)
-            .await;
-
+    async fn test_merge_stack_default_retargets_selected_range_before_one_merge() {
+        let fixture = setup_three_branch_stack_merge_fixture(StackMergeScenario::LowerMerged).await;
         let merge_output = run_stax_with_env(
-            &repo,
-            home.path(),
+            &fixture.repo,
+            fixture.home.path(),
             &["merge", "--stack", "--yes", "--no-delete", "--no-sync"],
         );
         assert!(
@@ -11848,54 +11964,253 @@ mod forge_mock_tests {
             TestRepo::stderr(&merge_output),
             TestRepo::stdout(&merge_output)
         );
+        assert!(
+            TestRepo::stdout(&merge_output).contains("merged indirectly by GitHub"),
+            "{}",
+            TestRepo::stdout(&merge_output)
+        );
 
-        let requests = mock_server
+        let requests = fixture
+            .mock_server
             .received_requests()
             .await
             .expect("request recording enabled");
-        assert!(
-            requests.iter().all(|request| {
-                request.method.as_str() != "PUT"
-                    || request.url.path() != "/repos/test/repo/pulls/601/merge"
-            }),
-            "Expected no merge call for downstack PR #601, requests were: {:?}",
-            requests
-                .iter()
-                .map(|request| format!("{} {}", request.method, request.url.path()))
-                .collect::<Vec<_>>()
+        let merge_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/603/merge");
+        let b_patch_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/602");
+        let c_patch_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/603");
+        assert!(b_patch_idx < c_patch_idx && c_patch_idx < merge_idx);
+
+        for patch_idx in [b_patch_idx, c_patch_idx] {
+            let payload: Value = serde_json::from_slice(&requests[patch_idx].body).unwrap();
+            assert_eq!(payload["base"], "main");
+        }
+        let merge_payload: Value = serde_json::from_slice(&requests[merge_idx].body).unwrap();
+        assert_eq!(merge_payload["merge_method"], "merge");
+        assert_eq!(merge_payload["sha"], fixture.tip_sha);
+
+        for number in [601, 602] {
+            let path = format!("/repos/test/repo/pulls/{}", number);
+            let gets = find_request_indices(&requests, "GET", &path);
+            assert_eq!(gets.len(), 3, "requests: {:?}", requests);
+            assert!(gets[1] < merge_idx && merge_idx < gets[2]);
+            assert!(
+                find_request_indices(
+                    &requests,
+                    "POST",
+                    &format!("/repos/test/repo/issues/{}/comments", number)
+                )
+                .is_empty()
+            );
+            assert!(
+                find_request_indices(&requests, "PATCH", &path)
+                    .iter()
+                    .all(|index| {
+                        serde_json::from_slice::<Value>(&requests[*index].body).unwrap()["state"]
+                            != "closed"
+                    })
+            );
+        }
+        assert!(find_request_indices(&requests, "PATCH", "/repos/test/repo/pulls/601").is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_merge_stack_preserving_timeout_leaves_lower_prs_open() {
+        let fixture =
+            setup_three_branch_stack_merge_fixture(StackMergeScenario::LowerPending).await;
+        let merge_output = run_stax_with_env(
+            &fixture.repo,
+            fixture.home.path(),
+            &["merge", "--stack", "--yes", "--no-delete", "--no-sync"],
         );
         assert!(
-            requests.iter().all(|request| {
-                request.url.path() != "/repos/test/repo/issues/601/comments"
-                    && !(request.method.as_str() == "PATCH"
-                        && request.url.path() == "/repos/test/repo/pulls/601")
-            }),
-            "Expected no absorbed comment or close call once GitHub reports PR #601 merged, requests were: {:?}",
-            requests
-                .iter()
-                .map(|request| format!("{} {}", request.method, request.url.path()))
-                .collect::<Vec<_>>()
+            merge_output.status.success(),
+            "merge --stack failed: {}\n{}",
+            TestRepo::stderr(&merge_output),
+            TestRepo::stdout(&merge_output)
         );
-
-        let tip_patch_idx = find_request_index(&requests, "PATCH", "/repos/test/repo/pulls/602");
-        let merge_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/602/merge");
+        let stdout = TestRepo::stdout(&merge_output);
         assert!(
-            tip_patch_idx < merge_idx,
-            "Expected retarget -> tip merge order, requests were: {:?}",
-            requests
-                .iter()
-                .map(|request| format!("{} {}", request.method, request.url.path()))
-                .collect::<Vec<_>>()
+            stdout.contains("GitHub may still mark it indirectly merged asynchronously")
+                && stdout.contains("pending GitHub indirect-merge detection; left open"),
+            "{}",
+            stdout
         );
 
-        let tip_patch = &requests[tip_patch_idx];
-        let tip_patch_payload: Value = serde_json::from_slice(&tip_patch.body).unwrap();
-        assert_eq!(tip_patch_payload["base"], "main");
+        let requests = fixture
+            .mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        for number in [601, 602] {
+            let pull_path = format!("/repos/test/repo/pulls/{}", number);
+            assert_eq!(find_request_indices(&requests, "GET", &pull_path).len(), 3);
+            assert!(
+                find_request_indices(
+                    &requests,
+                    "POST",
+                    &format!("/repos/test/repo/issues/{}/comments", number)
+                )
+                .is_empty()
+            );
+            assert!(
+                find_request_indices(&requests, "PATCH", &pull_path)
+                    .iter()
+                    .all(|index| {
+                        serde_json::from_slice::<Value>(&requests[*index].body).unwrap()["state"]
+                            != "closed"
+                    })
+            );
+        }
+    }
 
-        let merge_request = &requests[merge_idx];
-        let merge_payload: Value = serde_json::from_slice(&merge_request.body).unwrap();
-        assert_eq!(merge_payload["merge_method"], "rebase");
-        assert_eq!(merge_payload["sha"], branch_b_sha);
+    #[tokio::test]
+    async fn test_merge_stack_rewriting_methods_close_lower_pr_without_polling() {
+        for method_name in ["rebase", "squash"] {
+            let fixture =
+                setup_three_branch_stack_merge_fixture(StackMergeScenario::LowerPending).await;
+            let args = [
+                "merge",
+                "--stack",
+                "--method",
+                method_name,
+                "--yes",
+                "--no-delete",
+                "--no-sync",
+            ];
+
+            let merge_output = run_stax_with_env(&fixture.repo, fixture.home.path(), &args);
+            assert!(
+                merge_output.status.success(),
+                "{} merge --stack failed: {}\n{}",
+                method_name,
+                TestRepo::stderr(&merge_output),
+                TestRepo::stdout(&merge_output)
+            );
+            assert!(
+                TestRepo::stdout(&merge_output).contains(&format!(
+                    "{} rewrites commit SHAs; closed as absorbed without waiting",
+                    method_name
+                )),
+                "{}",
+                TestRepo::stdout(&merge_output)
+            );
+
+            let requests = fixture
+                .mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled");
+            let merge_idx =
+                find_request_index(&requests, "PUT", "/repos/test/repo/pulls/603/merge");
+            let merge_payload: Value = serde_json::from_slice(&requests[merge_idx].body).unwrap();
+            assert_eq!(merge_payload["merge_method"], method_name);
+            assert_eq!(merge_payload["sha"], fixture.tip_sha);
+
+            for number in [601, 602] {
+                let pull_path = format!("/repos/test/repo/pulls/{}", number);
+                assert_eq!(
+                    find_request_indices(&requests, "GET", &pull_path).len(),
+                    1,
+                    "{} unexpectedly polled PR #{}: {:?}",
+                    method_name,
+                    number,
+                    requests
+                );
+                let comment_idx = find_request_index(
+                    &requests,
+                    "POST",
+                    &format!("/repos/test/repo/issues/{}/comments", number),
+                );
+                let close_idx = find_request_index(&requests, "PATCH", &pull_path);
+                assert!(merge_idx < comment_idx && comment_idx < close_idx);
+
+                let close_payload: Value =
+                    serde_json::from_slice(&requests[close_idx].body).unwrap();
+                assert_eq!(close_payload["state"], "closed");
+                let comment_payload: Value =
+                    serde_json::from_slice(&requests[comment_idx].body).unwrap();
+                assert!(comment_payload["body"].as_str().unwrap().contains(&format!(
+                    "merged with {}, which rewrites commit SHAs",
+                    method_name
+                )));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_stack_rolls_back_changed_bases_when_later_retarget_fails() {
+        let fixture =
+            setup_three_branch_stack_merge_fixture(StackMergeScenario::TipRetargetFails).await;
+        let output = run_stax_with_env(
+            &fixture.repo,
+            fixture.home.path(),
+            &["merge", "--stack", "--yes", "--no-delete", "--no-sync"],
+        );
+        let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+        assert!(!output.status.success(), "{combined}");
+        assert!(combined.contains("failed to retarget PR #603 to main"));
+
+        let requests = fixture
+            .mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        let b_patches = find_request_indices(&requests, "PATCH", "/repos/test/repo/pulls/602");
+        let c_patches = find_request_indices(&requests, "PATCH", "/repos/test/repo/pulls/603");
+        assert_eq!(b_patches.len(), 2);
+        assert_eq!(c_patches.len(), 1);
+        assert!(b_patches[0] < c_patches[0] && c_patches[0] < b_patches[1]);
+
+        let b_target: Value = serde_json::from_slice(&requests[b_patches[0]].body).unwrap();
+        let c_target: Value = serde_json::from_slice(&requests[c_patches[0]].body).unwrap();
+        let b_restore: Value = serde_json::from_slice(&requests[b_patches[1]].body).unwrap();
+        assert_eq!(b_target["base"], "main");
+        assert_eq!(c_target["base"], "main");
+        assert_eq!(b_restore["base"], fixture.branch_a);
+        assert!(
+            find_request_indices(&requests, "PUT", "/repos/test/repo/pulls/603/merge").is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_stack_rolls_back_all_changed_bases_when_tip_merge_fails() {
+        let fixture =
+            setup_three_branch_stack_merge_fixture(StackMergeScenario::TipMergeFails).await;
+        let output = run_stax_with_env(
+            &fixture.repo,
+            fixture.home.path(),
+            &["merge", "--stack", "--yes", "--no-delete", "--no-sync"],
+        );
+        let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+        assert!(!output.status.success(), "{combined}");
+        assert!(combined.contains("tip merge failed"), "{combined}");
+
+        let requests = fixture
+            .mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        let b_patches = find_request_indices(&requests, "PATCH", "/repos/test/repo/pulls/602");
+        let c_patches = find_request_indices(&requests, "PATCH", "/repos/test/repo/pulls/603");
+        let merge_idx = find_request_index(&requests, "PUT", "/repos/test/repo/pulls/603/merge");
+        assert_eq!(b_patches.len(), 2);
+        assert_eq!(c_patches.len(), 2);
+        assert!(
+            b_patches[0] < c_patches[0]
+                && c_patches[0] < merge_idx
+                && merge_idx < c_patches[1]
+                && c_patches[1] < b_patches[1]
+        );
+
+        let c_restore: Value = serde_json::from_slice(&requests[c_patches[1]].body).unwrap();
+        let b_restore: Value = serde_json::from_slice(&requests[b_patches[1]].body).unwrap();
+        assert_eq!(c_restore["base"], fixture.branch_b);
+        assert_eq!(b_restore["base"], fixture.branch_a);
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.url.path().contains("/comments"))
+        );
     }
 
     #[tokio::test]
@@ -12004,24 +12319,6 @@ mod forge_mock_tests {
                 "merged": true,
                 "message": "Pull Request successfully merged"
             })))
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/repos/test/repo/issues/611/comments"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(issue_comment_fixture(
-                9002,
-                "Absorbed into stack merge of #612. This PR's commits landed through the selected tip PR.",
-            )))
-            .mount(&mock_server)
-            .await;
-
-        Mock::given(method("PATCH"))
-            .and(path("/repos/test/repo/pulls/611"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(github_pull_fixture(611, &branch_a, "main", "sha-a")),
-            )
             .mount(&mock_server)
             .await;
 

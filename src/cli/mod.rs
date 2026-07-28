@@ -238,7 +238,7 @@ pub fn run() -> Result<()> {
             yes,
             quiet,
         } => {
-            let default_method = if stack { "rebase" } else { "squash" };
+            let default_method = if stack { "merge" } else { "squash" };
             let merge_method = method.as_deref().unwrap_or(default_method).parse()?;
             if queue {
                 commands::merge_queue::run(all, timeout, interval, no_sync, yes, quiet)
