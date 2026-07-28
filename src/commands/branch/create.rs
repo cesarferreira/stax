@@ -506,7 +506,7 @@ pub fn run(
     // skip the menu and force-stage.
     // When neither name nor message is provided, launch interactive wizard.
     let (input, commit_message, stage_mode, generated_branch_name) = if let Some(n) = &name {
-        let commit_message = ai_message;
+        let commit_message = message.clone().or(ai_message);
         let stage_mode = if commit_message.is_some() {
             if all {
                 StageMode::All

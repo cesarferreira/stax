@@ -48,6 +48,8 @@ mod create_ai_tests;
 mod create_below_tests;
 #[path = "create_insert_tests.rs"]
 mod create_insert_tests;
+#[path = "create_message_tests.rs"]
+mod create_message_tests;
 #[path = "create_rollback_tests.rs"]
 mod create_rollback_tests;
 #[path = "demo_tests.rs"]
