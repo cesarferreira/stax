@@ -313,8 +313,8 @@ fn test_ready_help_available() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("CI/PR status")
-            || stdout.contains("oneline")
+        stdout.contains("PR readiness")
+            || stdout.contains("readiness")
             || stdout.contains("tracked branches")
     );
     assert!(stdout.contains("--all"));

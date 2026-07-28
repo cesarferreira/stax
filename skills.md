@@ -62,11 +62,11 @@ stax redo [op-id]              # Redo last/specific undone operation
 stax pr                        # Open current branch PR
 stax pr body                   # Print current PR description
 stax pr body --edit            # Edit current PR description in $EDITOR
-stax ready                     # Live one-line CI/PR status for all tracked branches, refreshing every 15s until all checks finish (shortcut: st ci -1 -w --all)
-stax ready --current           # Live oneline CI/PR status for current stack only
+stax ready                     # Interactive PR readiness TUI (CI + review approval); auto-refreshes, stays open until q
+stax ready --current           # PR readiness TUI scoped to current stack only
 stax ready --stack             # Same as --current
-stax ready --plain             # Single non-watching frame for captured/non-interactive output
-stax pr list --ready           # Same live oneline view under PR list
+stax ready --plain             # Static readiness table for captured/non-interactive output
+stax pr list --ready           # Same interactive TUI under PR list
 stax draft [branch]            # Mark current or named branch PR as draft
 stax draft --stack             # Mark every PR in the current stack as draft
 stax undraft [branch]          # Mark current or named branch PR ready for review
@@ -402,13 +402,13 @@ stax range-diff                    # Range-diff branches needing restack
 
 stax pr body                       # Print current PR description
 stax pr body --edit                # Edit current PR description in $EDITOR
-stax ready                         # Live one-line CI/PR status for all tracked branches, refreshing every 15s until all checks finish (shortcut: st ci -1 -w --all)
-stax ready --current               # Live oneline CI/PR status for current stack only
-stax ready --plain                 # Single non-watching frame: status icon · branch · #PR · title · checks + timing
+stax ready                         # Interactive PR readiness TUI (CI + review approval); auto-refreshes, stays open until q
+stax ready --current               # PR readiness TUI scoped to current stack only
+stax ready --plain                 # Static readiness table: action · PR · branch · reviews · CI · title
 stax ready --all                   # Explicit all tracked branches (default)
 stax ready --json                  # Machine-readable readiness rows (existing schema: action/reason/branch/…)
-stax ready --interval 30           # Override poll interval (default 15s)
-stax pr list --ready               # Same live oneline view under PR list
+stax ready --interval 30           # Override auto-refresh interval (default 15s)
+stax pr list --ready               # Same interactive TUI under PR list
 stax issue list --limit 50 --json  # List open issues with optional limit and JSON output
 stax comments                      # Show current PR comments
 stax comments --plain              # Raw markdown output

@@ -2,18 +2,18 @@
 
 use crate::common::TestRepo;
 
-/// Help text exposes the live oneline/watch view and all expected flags.
+/// Help text exposes the interactive readiness view and all expected flags.
 #[test]
-fn test_ready_help_mentions_oneline_view() {
+fn test_ready_help_mentions_readiness_view() {
     let repo = TestRepo::new();
     let output = repo.run_stax(&["ready", "--help"]);
     assert!(output.status.success());
     let stdout = TestRepo::stdout(&output);
     assert!(
-        stdout.contains("CI/PR status")
-            || stdout.contains("oneline")
+        stdout.contains("PR readiness")
+            || stdout.contains("readiness")
             || stdout.contains("tracked branches"),
-        "help should mention the oneline CI/PR view; got: {stdout}"
+        "help should mention PR readiness; got: {stdout}"
     );
     assert!(stdout.contains("--all"), "missing --all");
     assert!(stdout.contains("--current"), "missing --current");
@@ -23,12 +23,10 @@ fn test_ready_help_mentions_oneline_view() {
     assert!(stdout.contains("--interval"), "missing --interval");
 }
 
-/// `--plain` with tracked branches must reach the ci delegation and fail with
-/// ci's auth guard, not with "No tracked branches found." This is the key
-/// delegation test: if `all`/`watch`/`oneline` bools are transposed in
-/// `ready::run`, ci.rs returns a different error or path, and this fails.
+/// `--plain` with tracked branches must reach the static readiness path and fail
+/// with the readiness auth guard, not enter the CI watch loop.
 #[test]
-fn test_ready_plain_reaches_ci_delegation() {
+fn test_ready_plain_reaches_static_readiness() {
     let repo = TestRepo::new_with_remote();
     repo.configure_github_like_submit_remote();
     repo.create_stack(&["feat-a", "feat-b"]);
@@ -37,32 +35,27 @@ fn test_ready_plain_reaches_ci_delegation() {
     let stderr = TestRepo::stderr(&output);
     let combined = format!("{stdout}{stderr}");
 
-    // Watch loop not entered in plain mode: no clear-screen escape.
     assert!(
         !combined.contains("\x1B[2J"),
         "output must not contain ANSI clear-screen escape in plain mode"
     );
 
-    // Must reach ci's auth guard, not the json-path guard.
-    // ci.rs:279 says "Set the appropriate token for your forge".
-    // ready.rs:223 says "live PR readiness cannot be fetched" (json path only).
     assert!(
         !output.status.success(),
         "expected non-zero exit when forge token is absent"
     );
     assert!(
-        stderr.contains("token") || stderr.contains("forge") || stderr.contains("auth"),
-        "expected ci auth error message; got: {stderr}"
-    );
-    assert!(
-        !stderr.contains("live PR readiness cannot be fetched"),
-        "non-json path must go through ci::run, not the json-path guard"
+        stderr.contains("live PR readiness cannot be fetched")
+            || stderr.contains("token")
+            || stderr.contains("forge")
+            || stderr.contains("auth"),
+        "expected readiness auth error message; got: {stderr}"
     );
 }
 
 /// `--json` must exit non-zero with a configuration error (missing remote,
 /// auth, or similar). This verifies the JSON path short-circuits before the
-/// ci delegation and hits the readiness schema guard.
+/// TUI and hits the readiness schema guard.
 #[test]
 fn test_ready_json_no_config_exits_nonzero() {
     let repo = TestRepo::new();
@@ -77,7 +70,8 @@ fn test_ready_json_no_config_exits_nonzero() {
             || stderr.contains("token")
             || stderr.contains("configured")
             || stderr.contains("remote")
-            || stderr.contains("Remote"),
+            || stderr.contains("Remote")
+            || stderr.contains("live PR readiness cannot be fetched"),
         "expected a configuration error; got: {stderr}"
     );
 }
@@ -103,10 +97,10 @@ fn test_pr_list_ready_help_present() {
 }
 
 /// `st ready --current` and `st ready --stack` with tracked branches reach
-/// the ci delegation — clap accepts them and they fail at auth, not at parse
-/// (exit 2 would indicate clap rejected the flags).
+/// the static readiness path — clap accepts them and they fail at auth, not at
+/// parse (exit 2 would indicate clap rejected the flags).
 #[test]
-fn test_ready_current_and_stack_flags_reach_delegation() {
+fn test_ready_current_and_stack_flags_reach_readiness() {
     let repo = TestRepo::new_with_remote();
     repo.configure_github_like_submit_remote();
     repo.create_stack(&["feat-a", "feat-b"]);
@@ -117,23 +111,28 @@ fn test_ready_current_and_stack_flags_reach_delegation() {
     assert_ne!(
         output_current.status.code(),
         Some(2),
-        "--current should be accepted by clap and reach ci delegation"
+        "--current should be accepted by clap and reach readiness path"
     );
     assert_ne!(
         output_stack.status.code(),
         Some(2),
-        "--stack should be accepted by clap and reach ci delegation"
+        "--stack should be accepted by clap and reach readiness path"
     );
 
-    // Neither should hit the json-path guard.
     let stderr_current = TestRepo::stderr(&output_current);
     let stderr_stack = TestRepo::stderr(&output_stack);
     assert!(
-        !stderr_current.contains("live PR readiness cannot be fetched"),
-        "--current must not hit the json-path guard"
+        stderr_current.contains("live PR readiness cannot be fetched")
+            || stderr_current.contains("token")
+            || stderr_current.contains("forge")
+            || stderr_current.contains("auth"),
+        "--current must reach readiness auth guard"
     );
     assert!(
-        !stderr_stack.contains("live PR readiness cannot be fetched"),
-        "--stack must not hit the json-path guard"
+        stderr_stack.contains("live PR readiness cannot be fetched")
+            || stderr_stack.contains("token")
+            || stderr_stack.contains("forge")
+            || stderr_stack.contains("auth"),
+        "--stack must reach readiness auth guard"
     );
 }

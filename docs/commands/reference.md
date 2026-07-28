@@ -143,8 +143,8 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st pr` · `st pr open` | Open current branch PR |
 | `st pr body` · `st pr body --edit` | Print or edit the current branch PR description |
 | `st pr list` | List open PRs (GitHub, GitLab, Gitea) |
-| `st pr list --ready` | Live one-line CI/PR status for all tracked branches, auto-refreshing (shortcut for `st ci -1 -w --all`; `--current`/`--stack` limits to the current stack, `--plain` for a single non-watching frame) |
-| `st ready` | Same as `st pr list --ready` — thin shortcut over `st ci -1 -w --all` (`--current`, `--stack`, `--all`, `--plain`, `--json`, `--interval`) |
+| `st pr list --ready` | Interactive PR readiness TUI for all tracked branches (`--current`/`--stack` limits to the current stack, `--plain` for a static table) |
+| `st ready` | Same as `st pr list --ready` — interactive TUI with CI, review approval, and merge state (`--current`, `--stack`, `--all`, `--plain`, `--json`, `--interval`) |
 | `st draft [branch]` | Mark the current or named branch's PR as a draft |
 | `st draft --stack` | Mark every PR in the current stack as a draft |
 | `st undraft [branch]` | Mark the current or named branch's PR as ready for review |
