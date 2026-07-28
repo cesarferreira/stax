@@ -5412,6 +5412,180 @@ fn test_sync_does_not_treat_closed_unmerged_pr_as_merged() {
 }
 
 #[test]
+fn test_sync_notes_closed_pr_with_extra_local_commits() {
+    // A branch with a closed (unmerged) PR is spared from deletion. When it
+    // also carries a local commit never pushed anywhere, sync should surface
+    // an explicit "not deleting" note instead of silently skipping it.
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "feature-closed-pr-extra"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    let main_sha = repo.get_commit_sha("main");
+    let metadata = serde_json::json!({
+        "parentBranchName": "main",
+        "parentBranchRevision": main_sha,
+        "prInfo": {
+            "number": 199,
+            "state": "CLOSED",
+            "isDraft": false
+        }
+    });
+    let metadata_json = metadata.to_string();
+
+    let mut hash_cmd = hermetic_git_command();
+    let metadata_oid_output = hash_cmd
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repo.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child
+                .stdin
+                .as_mut()
+                .expect("stdin")
+                .write_all(metadata_json.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("Failed to write metadata blob");
+    assert!(
+        metadata_oid_output.status.success(),
+        "Failed to hash metadata: {}",
+        TestRepo::stderr(&metadata_oid_output)
+    );
+    let metadata_oid = TestRepo::stdout(&metadata_oid_output).trim().to_string();
+
+    let metadata_ref = format!("refs/branch-metadata/{}", branch_name);
+    let update_ref = repo.git(&["update-ref", &metadata_ref, &metadata_oid]);
+    assert!(
+        update_ref.status.success(),
+        "Failed to update metadata ref: {}",
+        TestRepo::stderr(&update_ref)
+    );
+
+    // Add a commit AFTER the push — never published anywhere.
+    repo.create_file("extra.txt", "extra content");
+    repo.commit("Extra unpushed commit");
+
+    repo.run_stax(&["t"]);
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == &branch_name),
+        "Expected closed-but-unmerged PR branch with extra local commits to remain after sync"
+    );
+
+    let stdout = TestRepo::stdout(&output).to_lowercase();
+    assert!(
+        stdout.contains("additional commit"),
+        "Expected sync output to mention the additional commit, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("not deleting"),
+        "Expected sync output to mention 'not deleting', got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("closed"),
+        "Expected sync output to mention the closed PR, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_sync_no_note_when_branch_fully_pushed() {
+    // Regression guard: a closed-but-unmerged PR branch whose commits are all
+    // pushed to its own remote must NOT get a "not deleting" note — the note
+    // only fires when work is genuinely at risk of loss.
+    let repo = TestRepo::new_with_remote();
+
+    repo.run_stax(&["bc", "feature-closed-pr-pushed"]);
+    let branch_name = repo.current_branch();
+    repo.create_file("feature.txt", "feature content");
+    repo.commit("Feature commit");
+    repo.git(&["push", "-u", "origin", &branch_name]);
+
+    let main_sha = repo.get_commit_sha("main");
+    let metadata = serde_json::json!({
+        "parentBranchName": "main",
+        "parentBranchRevision": main_sha,
+        "prInfo": {
+            "number": 200,
+            "state": "CLOSED",
+            "isDraft": false
+        }
+    });
+    let metadata_json = metadata.to_string();
+
+    let mut hash_cmd = hermetic_git_command();
+    let metadata_oid_output = hash_cmd
+        .args(["hash-object", "-w", "--stdin"])
+        .current_dir(repo.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child
+                .stdin
+                .as_mut()
+                .expect("stdin")
+                .write_all(metadata_json.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("Failed to write metadata blob");
+    assert!(
+        metadata_oid_output.status.success(),
+        "Failed to hash metadata: {}",
+        TestRepo::stderr(&metadata_oid_output)
+    );
+    let metadata_oid = TestRepo::stdout(&metadata_oid_output).trim().to_string();
+
+    let metadata_ref = format!("refs/branch-metadata/{}", branch_name);
+    let update_ref = repo.git(&["update-ref", &metadata_ref, &metadata_oid]);
+    assert!(
+        update_ref.status.success(),
+        "Failed to update metadata ref: {}",
+        TestRepo::stderr(&update_ref)
+    );
+
+    repo.run_stax(&["t"]);
+
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        output.status.success(),
+        "Sync failed: {}",
+        TestRepo::stderr(&output)
+    );
+
+    let branches = repo.list_branches();
+    assert!(
+        branches.iter().any(|b| b == &branch_name),
+        "Expected closed-but-unmerged PR branch to remain after sync"
+    );
+
+    let stdout = TestRepo::stdout(&output).to_lowercase();
+    assert!(
+        !stdout.contains("not deleting"),
+        "Expected no 'not deleting' note for a fully-pushed branch, got: {}",
+        stdout
+    );
+}
+
+#[test]
 fn test_sync_delete_upstream_gone_deletes_untracked_local_branch() {
     let repo = TestRepo::new_with_remote();
 
