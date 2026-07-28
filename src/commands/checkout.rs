@@ -22,9 +22,7 @@ use std::collections::HashSet;
 use std::fmt::{self, Display};
 use std::path::Path;
 
-const LINKED_WORKTREE_GLYPH: &str = "⧉";
 const BRIGHT_BLUE: CheckoutColor = CheckoutColor::new(Color::Blue, true);
-const BRIGHT_CYAN: CheckoutColor = CheckoutColor::new(Color::Cyan, true);
 const CHECKOUT_PICKER_ITEM_SEPARATOR: char = '\u{1f}';
 const ACTIVE_ROW_BACKGROUND: &str = "\u{1b}[48;5;236m";
 const CHECKOUT_BRANCH_STYLE: &str = "\u{1b}[1;96m";
@@ -627,12 +625,12 @@ fn render_presence_markers(
     if show_worktree_column {
         if has_linked_worktree {
             info_str.push_str(&render_stderr(
-                LINKED_WORKTREE_GLYPH,
-                checkout_style(BRIGHT_CYAN),
+                stack_palette::LINKED_WORKTREE_MARKER_PLAIN,
+                stack_palette::linked_worktree_marker_console_style(),
             ));
             info_str.push(' ');
         } else {
-            info_str.push_str("  ");
+            info_str.push_str("    ");
         }
     }
 
@@ -938,11 +936,11 @@ mod tests {
     fn test_render_presence_markers_aligns_worktree_column() {
         assert_eq!(
             strip_ansi(&render_presence_markers(true, true, true)),
-            " ☁️ ⧉ "
+            " ☁️  ⎇  "
         );
         assert_eq!(
             strip_ansi(&render_presence_markers(false, true, false)),
-            "      "
+            "        "
         );
     }
 
