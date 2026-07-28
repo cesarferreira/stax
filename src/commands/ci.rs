@@ -427,6 +427,32 @@ fn ci_status_to_overall_status(status: &CiStatus) -> Option<String> {
     }
 }
 
+/// Compact CI counts for roll-up views (`st ci -1`, `st ready`).
+pub(crate) fn compact_ci_status(
+    check_runs: &[CheckRunInfo],
+    overall_status: Option<&str>,
+) -> (CiStatus, String) {
+    let branch = BranchCiStatus {
+        branch: String::new(),
+        sha: String::new(),
+        sha_short: String::new(),
+        overall_status: overall_status.map(str::to_string),
+        check_runs: check_runs.to_vec(),
+        pr_number: None,
+        pr_is_draft: None,
+        pr_title: None,
+        pr_review_decision: None,
+    };
+    let text = oneline_check_summary(&branch);
+    let status = match ci_rollup(&branch) {
+        CiRollup::NoCi => CiStatus::NoCi,
+        CiRollup::Pending | CiRollup::Running { .. } => CiStatus::Pending,
+        CiRollup::Failing(_) => CiStatus::Failure,
+        CiRollup::Passing(_) => CiStatus::Success,
+    };
+    (status, text)
+}
+
 /// Fetch CI statuses for all branches
 pub fn fetch_ci_statuses(
     repo: &GitRepo,
@@ -858,14 +884,14 @@ fn ci_rollup(status: &BranchCiStatus) -> CiRollup {
 
 /// One-line counts summary for the `--oneline` view.
 ///
-/// Returns `"no CI"`, `"<n> failing"`, `"<done>/<total> running"`, or `"<n> checks"`.
+/// Returns `"no CI"`, `"<n> failing"`, `"<done>/<total> running"`, or `"<n>/<n>"`.
 fn oneline_check_summary(status: &BranchCiStatus) -> String {
     match ci_rollup(status) {
         CiRollup::NoCi => "no CI".to_string(),
         CiRollup::Pending => "pending".to_string(),
         CiRollup::Failing(n) => format!("{} failing", n),
         CiRollup::Running { done, total } => format!("{}/{} running", done, total),
-        CiRollup::Passing(n) => format!("{} checks", n),
+        CiRollup::Passing(n) => format!("{}/{}", n, n),
     }
 }
 
@@ -1233,7 +1259,7 @@ fn run_watch_mode(
     alert: Option<CiAlertSounds>,
     strict: bool,
 ) -> Result<()> {
-    let poll_duration = Duration::from_secs(interval);
+    let poll_duration = Duration::from_secs(interval.max(1));
     let mut iteration = 0;
 
     println!("{}", "Watching CI status (Ctrl+C to stop)...".cyan().bold());
@@ -2359,7 +2385,7 @@ mod tests {
                 test_check("test", "completed", Some("success")),
             ],
         );
-        assert_eq!(oneline_check_summary(&status), "2 checks");
+        assert_eq!(oneline_check_summary(&status), "2/2");
     }
 
     #[test]
@@ -2452,7 +2478,7 @@ mod tests {
         assert!(row.contains("feature")); // branch name is "feature"
         assert!(row.contains("#123"));
         assert!(row.contains("Add the feature"));
-        assert!(row.contains("1 checks"));
+        assert!(row.contains("1/1"));
         assert!(row.contains("4m"));
     }
 

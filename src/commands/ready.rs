@@ -40,7 +40,7 @@ impl ReadyAction {
             ReadyAction::Merge => "merge",
             ReadyAction::Ping => "ping",
             ReadyAction::Wait => "wait",
-            ReadyAction::Draft => "draft",
+            ReadyAction::Draft => "undraft",
         }
     }
 
@@ -82,25 +82,23 @@ pub struct CiSummary {
 
 impl CiSummary {
     fn from_checks(status: CiStatus, checks: &[CheckRunInfo]) -> Self {
-        match status {
-            CiStatus::Failure => {
-                let failed = checks
-                    .iter()
-                    .filter(|check| {
-                        check.status == "completed"
-                            && matches!(
-                                check.conclusion.as_deref(),
-                                Some("failure") | Some("timed_out") | Some("action_required")
-                            )
-                    })
-                    .count()
-                    .max(1);
-                Self::failed(failed)
-            }
-            CiStatus::Pending => Self::running(),
-            CiStatus::Success => Self::passed(),
-            CiStatus::NoCi => Self::no_ci(),
+        if checks.is_empty() {
+            return match status {
+                CiStatus::Failure => Self::failed(1),
+                CiStatus::Pending => Self::running(),
+                CiStatus::Success => Self::passed(),
+                CiStatus::NoCi => Self::no_ci(),
+            };
         }
+
+        let overall = match status {
+            CiStatus::Pending => Some("pending"),
+            CiStatus::Success => Some("success"),
+            CiStatus::Failure => Some("failure"),
+            CiStatus::NoCi => None,
+        };
+        let (status, text) = crate::commands::ci::compact_ci_status(checks, overall);
+        Self { status, text }
     }
 
     fn passed() -> Self {
@@ -232,14 +230,6 @@ impl ReadyRowState {
             ReadyRowState::Unavailable { branch, .. } => &branch.name,
         }
     }
-
-    pub fn pr_number(&self) -> Option<u64> {
-        match self {
-            ReadyRowState::Loading { branch } => branch.pr_number,
-            ReadyRowState::Loaded(row) => Some(row.pr_number),
-            ReadyRowState::Unavailable { branch, .. } => branch.pr_number,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,13 +259,13 @@ impl ReadyScopeMode {
     }
 }
 
-pub fn run(scope_mode: ReadyScopeMode, json: bool, plain: bool) -> Result<()> {
+pub fn run(scope_mode: ReadyScopeMode, json: bool, plain: bool, interval: u64) -> Result<()> {
     if json {
         return run_static(scope_mode, true);
     }
 
     if !plain && std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-        return crate::tui::ready::run(scope_mode);
+        return crate::tui::ready::run(scope_mode, interval);
     }
 
     run_static(scope_mode, false)
@@ -366,7 +356,12 @@ pub(crate) async fn fetch_row_for_branch(
         .with_context(|| format!("Failed to fetch live readiness for PR #{}", pr_number))?;
 
     let ci_revision = status.head_sha.clone();
-    let ci_summary = CiSummary::from_checks(status.ci_status.clone(), &[]);
+    let check_runs = client
+        .fetch_checks(repo, &ci_revision)
+        .await
+        .map(|(_, runs)| runs)
+        .unwrap_or_default();
+    let ci_summary = CiSummary::from_checks(status.ci_status.clone(), &check_runs);
     let mut row = PrReadinessRow::from_status(&branch.name, status, ci_summary);
     row.pr_url = Some(remote.pr_url(pr_number));
     let _ = warm_caches_for_ready_row(repo, &row, &ci_revision);
@@ -534,21 +529,15 @@ fn review_summary(status: &PrMergeStatus) -> String {
         return "draft".to_string();
     }
     if status.changes_requested || status.review_decision.as_deref() == Some("CHANGES_REQUESTED") {
-        return "changes requested".to_string();
+        return "changes".to_string();
     }
     if status.review_decision.as_deref() == Some("REVIEW_REQUIRED") {
-        return "missing review".to_string();
+        return "review".to_string();
     }
-    if status.approvals == 1 {
-        return "1 approval".to_string();
+    if status.review_decision.as_deref() == Some("APPROVED") || status.approvals > 0 {
+        return "approved".to_string();
     }
-    if status.approvals > 1 {
-        return format!("{} approvals", status.approvals);
-    }
-    if status.review_decision.is_none() {
-        return "not required".to_string();
-    }
-    "unknown".to_string()
+    String::new()
 }
 
 fn sort_ready_rows(rows: &mut [PrReadinessRow], branch_order: &[&str]) {
@@ -730,7 +719,7 @@ mod tests {
 
         assert_eq!(row.action, ReadyAction::Merge);
         assert_eq!(row.reason, ReadyReason::Ready);
-        assert_eq!(row.review_summary, "1 approval");
+        assert_eq!(row.review_summary, "approved");
         assert_eq!(row.ci_summary, "passed");
     }
 
@@ -747,7 +736,7 @@ mod tests {
 
         assert_eq!(row.action, ReadyAction::Ping);
         assert_eq!(row.reason, ReadyReason::ReviewRequired);
-        assert_eq!(row.review_summary, "missing review");
+        assert_eq!(row.review_summary, "review");
     }
 
     #[test]
@@ -763,7 +752,28 @@ mod tests {
 
         assert_eq!(row.action, ReadyAction::Merge);
         assert_eq!(row.reason, ReadyReason::Ready);
-        assert_eq!(row.review_summary, "not required");
+        assert_eq!(row.review_summary, "");
+    }
+
+    #[test]
+    fn ci_summary_uses_check_fraction_when_runs_available() {
+        let checks = (0..12)
+            .map(|i| CheckRunInfo {
+                name: format!("check-{i}"),
+                status: "completed".to_string(),
+                conclusion: Some("success".to_string()),
+                url: None,
+                started_at: None,
+                completed_at: None,
+                elapsed_secs: None,
+                average_secs: None,
+                completion_percent: None,
+            })
+            .collect::<Vec<_>>();
+
+        let summary = CiSummary::from_checks(CiStatus::Success, &checks);
+
+        assert_eq!(summary.text, "12/12");
     }
 
     #[test]
@@ -792,7 +802,7 @@ mod tests {
 
         assert_eq!(row.action, ReadyAction::Fix);
         assert_eq!(row.reason, ReadyReason::ChangesRequested);
-        assert_eq!(row.review_summary, "changes requested");
+        assert_eq!(row.review_summary, "changes");
     }
 
     #[test]

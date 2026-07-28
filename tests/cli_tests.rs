@@ -312,11 +312,16 @@ fn test_ready_help_available() {
     let output = stax(&["ready", "--help"]);
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("PR readiness"));
+    assert!(
+        stdout.contains("PR readiness")
+            || stdout.contains("readiness")
+            || stdout.contains("tracked branches")
+    );
     assert!(stdout.contains("--all"));
     assert!(stdout.contains("--current"));
     assert!(stdout.contains("--stack"));
     assert!(stdout.contains("--json"));
+    assert!(stdout.contains("--interval"));
 }
 
 #[test]

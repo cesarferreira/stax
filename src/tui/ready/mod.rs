@@ -13,7 +13,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::commands::open::open_url_in_browser;
 use crate::commands::ready::{ReadyScope, ReadyScopeMode, fetch_row_for_branch, load_ready_scope};
@@ -22,7 +22,8 @@ use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::RemoteInfo;
 
-pub fn run(scope_mode: ReadyScopeMode) -> Result<()> {
+pub fn run(scope_mode: ReadyScopeMode, interval: u64) -> Result<()> {
+    let poll_interval = Duration::from_secs(interval.max(1));
     let scope = load_ready_scope(scope_mode)?;
     let mut app = ReadyTuiApp::from_parts(
         scope.repo_label.clone(),
@@ -30,6 +31,7 @@ pub fn run(scope_mode: ReadyScopeMode) -> Result<()> {
         scope.branches.clone(),
     );
     let mut loader = Some(spawn_loader(scope.clone()));
+    let mut last_refresh = Instant::now();
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -37,7 +39,14 @@ pub fn run(scope_mode: ReadyScopeMode) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, &mut app, &scope, &mut loader);
+    let result = run_app(
+        &mut terminal,
+        &mut app,
+        &scope,
+        &mut loader,
+        poll_interval,
+        &mut last_refresh,
+    );
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -51,15 +60,18 @@ fn run_app(
     app: &mut ReadyTuiApp,
     scope: &ReadyScope,
     loader: &mut Option<Receiver<ReadyTuiUpdate>>,
+    poll_interval: Duration,
+    last_refresh: &mut Instant,
 ) -> Result<()> {
     loop {
         poll_loader(app, loader);
+        maybe_auto_refresh(app, scope, loader, poll_interval, last_refresh);
         terminal.draw(|f| ui::render(f, app))?;
 
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
         {
-            handle_key(app, key.code, scope, loader);
+            handle_key(app, key.code, scope, loader, last_refresh);
         }
 
         if app.should_quit {
@@ -68,11 +80,31 @@ fn run_app(
     }
 }
 
+fn maybe_auto_refresh(
+    app: &mut ReadyTuiApp,
+    scope: &ReadyScope,
+    loader: &mut Option<Receiver<ReadyTuiUpdate>>,
+    poll_interval: Duration,
+    last_refresh: &mut Instant,
+) {
+    if loader.is_some() || app.loading {
+        return;
+    }
+    if last_refresh.elapsed() < poll_interval {
+        return;
+    }
+
+    app.begin_refresh();
+    *loader = Some(spawn_loader(scope.clone()));
+    *last_refresh = Instant::now();
+}
+
 fn handle_key(
     app: &mut ReadyTuiApp,
     code: KeyCode,
     scope: &ReadyScope,
     loader: &mut Option<Receiver<ReadyTuiUpdate>>,
+    last_refresh: &mut Instant,
 ) {
     if app.show_help {
         app.show_help = false;
@@ -85,8 +117,9 @@ fn handle_key(
         KeyCode::Down | KeyCode::Char('j') => app.select_next(),
         KeyCode::Char('?') => app.show_help = true,
         KeyCode::Char('r') => {
-            app.reset_for_refresh();
+            app.begin_refresh();
             *loader = Some(spawn_loader(scope.clone()));
+            *last_refresh = Instant::now();
         }
         KeyCode::Enter | KeyCode::Char('o') => {
             if let Some(url) = app.selected_pr_url() {
@@ -124,6 +157,7 @@ fn poll_loader(app: &mut ReadyTuiApp, loader: &mut Option<Receiver<ReadyTuiUpdat
         app.apply_update(update);
         if done {
             *loader = None;
+            app.status_message = None;
         }
     }
 }

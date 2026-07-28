@@ -1,5 +1,6 @@
-use crate::commands::ready::{ReadyAction, ReadyReason, ReadyRowState};
+use crate::commands::ready::{ReadyReason, ReadyRowState};
 use crate::tui::ready::app::ReadyTuiApp;
+use console::{measure_text_width, truncate_str};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -9,44 +10,67 @@ use ratatui::{
 };
 
 const INDICATOR_WIDTH: usize = 2;
-const ACTION_WIDTH: usize = 8;
-const PR_WIDTH: usize = 9;
-const REVIEWS_WIDTH: usize = 17;
-const CI_WIDTH: usize = 9;
+const COL_GAP: &str = "  ";
 const MIN_BRANCH_WIDTH: usize = 18;
 const MIN_TITLE_WIDTH: usize = 16;
+const MIN_PR_WIDTH: usize = 4;
+const MIN_REVIEW_WIDTH: usize = 6;
+const MIN_CI_WIDTH: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
 struct TableLayout {
+    pr_width: usize,
     branch_width: usize,
+    review_width: usize,
+    ci_width: usize,
     title_width: usize,
 }
 
 impl TableLayout {
     fn for_rows(rows: &[ReadyRowState], inner_width: usize) -> Self {
-        let fixed_width = INDICATOR_WIDTH + ACTION_WIDTH + PR_WIDTH + REVIEWS_WIDTH + CI_WIDTH;
-        let available = inner_width.saturating_sub(fixed_width);
-        let needed_branch_width = rows
+        let pr_width = rows
             .iter()
-            .map(|row| row.branch().chars().count())
+            .map(|row| measure_text_width(&pr_text(row_pr_number(row))))
             .max()
-            .unwrap_or("BRANCH".len())
-            .max("BRANCH".len())
-            + 2;
-        let branch_budget = available
-            .saturating_sub(MIN_TITLE_WIDTH)
-            .max(MIN_BRANCH_WIDTH.min(available));
-        let branch_width = needed_branch_width.min(branch_budget);
+            .unwrap_or(MIN_PR_WIDTH)
+            .max(measure_text_width("PR"))
+            .max(MIN_PR_WIDTH);
+        let review_width = rows
+            .iter()
+            .map(|row| measure_text_width(review_cell(row)))
+            .max()
+            .unwrap_or(MIN_REVIEW_WIDTH)
+            .max(measure_text_width("REVIEW"))
+            .max(MIN_REVIEW_WIDTH);
+        let ci_width = rows
+            .iter()
+            .map(|row| measure_text_width(ci_cell(row)))
+            .max()
+            .unwrap_or(MIN_CI_WIDTH)
+            .max(measure_text_width("CI"))
+            .max(MIN_CI_WIDTH);
+        let branch_pref = rows
+            .iter()
+            .map(|row| measure_text_width(row.branch()))
+            .max()
+            .unwrap_or(MIN_BRANCH_WIDTH)
+            .max(measure_text_width("BRANCH"))
+            .clamp(MIN_BRANCH_WIDTH, 52);
+
+        let gap_count = COL_GAP.len() * 5;
+        let fixed = INDICATOR_WIDTH + pr_width + review_width + ci_width + gap_count;
+        let available = inner_width.saturating_sub(fixed);
+        let title_min = MIN_TITLE_WIDTH.min(available.max(1));
+        let branch_width = branch_pref.min(available.saturating_sub(title_min).max(1));
         let title_width = available.saturating_sub(branch_width).max(1);
 
         Self {
+            pr_width,
             branch_width,
+            review_width,
+            ci_width,
             title_width,
         }
-    }
-
-    fn branch_text_width(self) -> usize {
-        self.branch_width.saturating_sub(2).max(1)
     }
 }
 
@@ -56,16 +80,7 @@ pub fn render(f: &mut Frame, app: &ReadyTuiApp) {
         .constraints([Constraint::Min(3), Constraint::Length(2)])
         .split(f.area());
 
-    let detail_lines = detail_lines(app);
-    let details_height =
-        details_pane_height(detail_lines.len()).min(chunks[0].height.saturating_sub(3));
-    let main = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(details_height)])
-        .split(chunks[0]);
-
-    render_table(f, app, main[0]);
-    render_details(f, detail_lines, main[1]);
+    render_table(f, app, chunks[0]);
     render_status(f, app, chunks[1]);
 
     if app.show_help {
@@ -73,24 +88,23 @@ pub fn render(f: &mut Frame, app: &ReadyTuiApp) {
     }
 }
 
-fn details_pane_height(content_height: usize) -> u16 {
-    u16::try_from(content_height)
-        .unwrap_or(u16::MAX)
-        .saturating_add(2)
-}
-
 fn render_table(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
     let layout = TableLayout::for_rows(&app.rows, area.width.saturating_sub(2) as usize);
+    let status_suffix = if app.loading {
+        if app.loading_count() == app.rows.len() {
+            format!(" · loading {}", app.loading_count())
+        } else {
+            " · refreshing".to_string()
+        }
+    } else {
+        String::new()
+    };
     let title = format!(
         " PR Readiness  {} · {} · {} PRs{} ",
         app.repo_label,
         app.scope_label,
         app.rows.len(),
-        if app.loading_count() > 0 {
-            format!(" · loading {}", app.loading_count())
-        } else {
-            String::new()
-        }
+        status_suffix,
     );
     let block = Block::default()
         .title(title)
@@ -98,17 +112,28 @@ fn render_table(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
         .border_style(Style::default().fg(Color::Blue));
 
     let header = ListItem::new(Line::from(vec![
-        Span::styled("  ACTION  ", Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled("PR       ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(pad_plain("", INDICATOR_WIDTH)),
+        Span::raw(COL_GAP),
         Span::styled(
-            format!("{:<width$}", "BRANCH", width = layout.branch_width),
+            pad_plain("PR", layout.pr_width),
             Style::default().add_modifier(Modifier::BOLD),
         ),
+        Span::raw(COL_GAP),
         Span::styled(
-            "REVIEWS          ",
+            pad_plain("BRANCH", layout.branch_width),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::styled("CI       ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(COL_GAP),
+        Span::styled(
+            pad_plain("REVIEW", layout.review_width),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(COL_GAP),
+        Span::styled(
+            pad_plain("CI", layout.ci_width),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(COL_GAP),
         Span::styled("TITLE", Style::default().add_modifier(Modifier::BOLD)),
     ]));
 
@@ -126,200 +151,92 @@ fn render_table(f: &mut Frame, app: &ReadyTuiApp, area: Rect) {
 }
 
 fn row_line(row: &ReadyRowState, selected: bool, layout: TableLayout) -> Line<'static> {
-    let indicator = if selected { "► " } else { "  " };
+    let indicator = if selected { "►" } else { " " };
     match row {
         ReadyRowState::Loading { branch } => Line::from(vec![
-            Span::raw(indicator.to_string()),
+            Span::raw(pad_plain(indicator, INDICATOR_WIDTH)),
+            Span::raw(COL_GAP),
             Span::styled(
-                format!("{:<width$}", "○ wait", width = ACTION_WIDTH),
-                action_style(ReadyAction::Wait),
-            ),
-            Span::styled(
-                format!("{:<width$}", pr_text(branch.pr_number), width = PR_WIDTH),
+                pad_plain(&pr_text(branch.pr_number), layout.pr_width),
                 Style::default().fg(Color::Magenta),
             ),
-            Span::raw(format!(
-                "{:<width$}",
-                trim_middle(&branch.name, layout.branch_text_width()),
-                width = layout.branch_width
+            Span::raw(COL_GAP),
+            Span::raw(pad_plain(
+                &trim_middle(branch.name.as_str(), layout.branch_width),
+                layout.branch_width,
             )),
+            Span::raw(COL_GAP),
             Span::styled(
-                format!("{:<width$}", "loading...", width = REVIEWS_WIDTH),
+                pad_plain("…", layout.review_width),
                 Style::default().fg(Color::DarkGray),
             ),
+            Span::raw(COL_GAP),
             Span::styled(
-                format!("{:<width$}", "loading", width = CI_WIDTH),
+                pad_plain("…", layout.ci_width),
                 Style::default().fg(Color::DarkGray),
             ),
+            Span::raw(COL_GAP),
             Span::styled(
-                trim_end("loading...", layout.title_width),
+                trim_end("loading…", layout.title_width),
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
         ReadyRowState::Loaded(row) => Line::from(vec![
-            Span::raw(indicator.to_string()),
+            Span::raw(pad_plain(indicator, INDICATOR_WIDTH)),
+            Span::raw(COL_GAP),
             Span::styled(
-                format!("{:<width$}", row.action.display(), width = ACTION_WIDTH),
-                action_style(row.action),
-            ),
-            Span::styled(
-                format!(
-                    "{:<width$}",
-                    format!("#{}", row.pr_number),
-                    width = PR_WIDTH
-                ),
+                pad_plain(&format!("#{}", row.pr_number), layout.pr_width),
                 Style::default().fg(Color::Magenta),
             ),
-            Span::raw(format!(
-                "{:<width$}",
-                trim_middle(&row.branch, layout.branch_text_width()),
-                width = layout.branch_width
+            Span::raw(COL_GAP),
+            Span::raw(pad_plain(
+                &trim_middle(&row.branch, layout.branch_width),
+                layout.branch_width,
             )),
+            Span::raw(COL_GAP),
             Span::styled(
-                format!(
-                    "{:<width$}",
-                    trim_end(&row.review_summary, REVIEWS_WIDTH.saturating_sub(2)),
-                    width = REVIEWS_WIDTH
+                pad_plain(
+                    &trim_end(&row.review_summary, layout.review_width),
+                    layout.review_width,
                 ),
                 review_text_style(&row.review_summary, row.reason),
             ),
+            Span::raw(COL_GAP),
             Span::styled(
-                format!(
-                    "{:<width$}",
-                    trim_end(&row.ci_summary, CI_WIDTH.saturating_sub(2)),
-                    width = CI_WIDTH
-                ),
+                pad_plain(&trim_end(&row.ci_summary, layout.ci_width), layout.ci_width),
                 ci_text_style(&row.ci_status, &row.ci_summary),
             ),
+            Span::raw(COL_GAP),
             Span::raw(trim_end(&row.title, layout.title_width)),
         ]),
         ReadyRowState::Unavailable { branch, message } => Line::from(vec![
-            Span::raw(indicator.to_string()),
+            Span::raw(pad_plain(indicator, INDICATOR_WIDTH)),
+            Span::raw(COL_GAP),
             Span::styled(
-                format!("{:<width$}", "○ wait", width = ACTION_WIDTH),
-                action_style(ReadyAction::Wait),
-            ),
-            Span::styled(
-                format!("{:<width$}", pr_text(branch.pr_number), width = PR_WIDTH),
+                pad_plain(&pr_text(branch.pr_number), layout.pr_width),
                 Style::default().fg(Color::Magenta),
             ),
-            Span::raw(format!(
-                "{:<width$}",
-                trim_middle(&branch.name, layout.branch_text_width()),
-                width = layout.branch_width
+            Span::raw(COL_GAP),
+            Span::raw(pad_plain(
+                &trim_middle(&branch.name, layout.branch_width),
+                layout.branch_width,
             )),
+            Span::raw(COL_GAP),
             Span::styled(
-                format!("{:<width$}", "unknown", width = REVIEWS_WIDTH),
+                pad_plain("—", layout.review_width),
                 Style::default().fg(Color::DarkGray),
             ),
+            Span::raw(COL_GAP),
             Span::styled(
-                format!("{:<width$}", "unknown", width = CI_WIDTH),
+                pad_plain("—", layout.ci_width),
                 Style::default().fg(Color::DarkGray),
             ),
+            Span::raw(COL_GAP),
             Span::styled(
                 trim_end(message, layout.title_width),
                 Style::default().fg(Color::Red),
             ),
         ]),
-    }
-}
-
-fn render_details(f: &mut Frame, lines: Vec<Line<'static>>, area: Rect) {
-    let block = Block::default()
-        .title(" Details ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
-}
-
-fn detail_lines(app: &ReadyTuiApp) -> Vec<Line<'static>> {
-    match app.selected_row() {
-        Some(ReadyRowState::Loaded(row)) => vec![
-            Line::from(vec![
-                Span::styled("Action: ", detail_label_style()),
-                Span::styled(row.action.display(), action_style(row.action)),
-            ]),
-            Line::from(vec![
-                Span::styled("Reason: ", detail_label_style()),
-                Span::styled(format!("{:?}", row.reason), reason_detail_style(row.reason)),
-            ]),
-            Line::from(vec![
-                Span::styled("Reviews: ", detail_label_style()),
-                Span::styled(
-                    row.review_summary.clone(),
-                    review_text_style(&row.review_summary, row.reason),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("CI: ", detail_label_style()),
-                Span::styled(
-                    row.ci_summary.clone(),
-                    ci_text_style(&row.ci_status, &row.ci_summary),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Mergeable: ", detail_label_style()),
-                Span::styled(
-                    mergeable_detail_label(row.mergeable).to_string(),
-                    mergeable_detail_style(row.mergeable),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("State: ", detail_label_style()),
-                Span::styled(
-                    row.mergeable_state.clone(),
-                    merge_state_detail_style(&row.mergeable_state),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("PR: ", detail_label_style()),
-                Span::styled(format!("#{}", row.pr_number), metadata_detail_style()),
-            ]),
-            Line::from(vec![
-                Span::styled("Branch: ", detail_label_style()),
-                Span::styled(row.branch.clone(), branch_detail_style()),
-            ]),
-            Line::from(vec![
-                Span::styled("URL: ", detail_label_style()),
-                Span::styled(row.pr_url.clone().unwrap_or_default(), url_detail_style()),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(row.title.clone(), title_detail_style())),
-        ],
-        Some(ReadyRowState::Loading { branch }) => vec![
-            Line::from(vec![
-                Span::styled("Branch: ", detail_label_style()),
-                Span::styled(branch.name.clone(), branch_detail_style()),
-            ]),
-            Line::from(vec![
-                Span::styled("PR: ", detail_label_style()),
-                Span::styled(pr_text(branch.pr_number), metadata_detail_style()),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Loading live PR readiness...",
-                Style::default().fg(Color::Yellow),
-            )),
-        ],
-        Some(ReadyRowState::Unavailable { branch, message }) => vec![
-            Line::from(vec![
-                Span::styled("Branch: ", detail_label_style()),
-                Span::styled(branch.name.clone(), branch_detail_style()),
-            ]),
-            Line::from(vec![
-                Span::styled("PR: ", detail_label_style()),
-                Span::styled(pr_text(branch.pr_number), metadata_detail_style()),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Error: ", detail_label_style()),
-                Span::styled(message.clone(), Style::default().fg(Color::Red)),
-            ]),
-        ],
-        None => vec![Line::from("No PRs in scope")],
     }
 }
 
@@ -340,8 +257,8 @@ fn render_help(f: &mut Frame) {
         Line::from(""),
         Line::from("  ↑/↓ or k/j   Move selection"),
         Line::from("  Enter / o    Open selected PR"),
-        Line::from("  r            Refresh live data"),
-        Line::from("  q / Esc      Quit"),
+        Line::from("  r            Refresh live data now"),
+        Line::from("  q / Esc      Quit (stays open after CI passes)"),
         Line::from("  ?            Close help"),
     ];
     f.render_widget(
@@ -350,20 +267,6 @@ fn render_help(f: &mut Frame) {
             .wrap(Wrap { trim: true }),
         area,
     );
-}
-
-pub(crate) fn action_style(action: ReadyAction) -> Style {
-    match action {
-        ReadyAction::Merge => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        ReadyAction::Ping => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-        ReadyAction::Fix => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ReadyAction::Wait => Style::default().fg(Color::Blue),
-        ReadyAction::Draft => Style::default().fg(Color::DarkGray),
-    }
 }
 
 fn reason_tone(reason: ReadyReason) -> Style {
@@ -382,13 +285,21 @@ fn reason_tone(reason: ReadyReason) -> Style {
 
 fn review_text_style(summary: &str, reason: ReadyReason) -> Style {
     let normalized = summary.to_ascii_lowercase();
-    if normalized.contains("approval") {
+    if normalized == "approved" || normalized.contains("approval") {
         return Style::default()
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD);
     }
-    if normalized.contains("changes requested") || matches!(reason, ReadyReason::ChangesRequested) {
+    if normalized == "changes" || normalized.contains("changes requested") {
         return Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+    }
+    if normalized == "review" {
+        return Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
+    }
+    if normalized == "draft" || matches!(reason, ReadyReason::Draft) {
+        return Style::default().fg(Color::DarkGray);
     }
 
     match reason {
@@ -396,7 +307,6 @@ fn review_text_style(summary: &str, reason: ReadyReason) -> Style {
         ReadyReason::ReviewRequired => Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
-        ReadyReason::Draft => Style::default().fg(Color::DarkGray),
         ReadyReason::Unknown => Style::default().fg(Color::DarkGray),
         _ => reason_tone(reason),
     }
@@ -408,6 +318,15 @@ fn ci_text_style(status: &str, summary: &str) -> Style {
         status.to_ascii_lowercase(),
         summary.to_ascii_lowercase()
     );
+    if normalized.contains('/')
+        && !normalized.contains("fail")
+        && !normalized.contains("running")
+        && !normalized.contains("pending")
+    {
+        return Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD);
+    }
     if normalized.contains("success") || normalized.contains("passed") {
         Style::default()
             .fg(Color::Green)
@@ -425,69 +344,6 @@ fn ci_text_style(status: &str, summary: &str) -> Style {
     } else {
         Style::default().fg(Color::DarkGray)
     }
-}
-
-fn detail_label_style() -> Style {
-    Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD)
-}
-
-fn reason_detail_style(reason: ReadyReason) -> Style {
-    reason_tone(reason).add_modifier(Modifier::BOLD)
-}
-
-fn mergeable_detail_style(mergeable: Option<bool>) -> Style {
-    match mergeable {
-        Some(true) => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-        Some(false) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        None => Style::default().fg(Color::Yellow),
-    }
-}
-
-fn mergeable_detail_label(mergeable: Option<bool>) -> &'static str {
-    match mergeable {
-        Some(true) => "yes",
-        Some(false) => "no",
-        None => "checking…",
-    }
-}
-
-fn merge_state_detail_style(state: &str) -> Style {
-    let normalized = state.to_ascii_lowercase();
-    if normalized == "clean" || normalized == "has_hooks" {
-        Style::default().fg(Color::Green)
-    } else if normalized.contains("dirty")
-        || normalized.contains("blocked")
-        || normalized.contains("unknown")
-        || normalized.contains("unstable")
-    {
-        Style::default().fg(Color::Red)
-    } else {
-        Style::default().fg(Color::Yellow)
-    }
-}
-
-fn metadata_detail_style() -> Style {
-    Style::default()
-        .fg(Color::Magenta)
-        .add_modifier(Modifier::BOLD)
-}
-
-fn branch_detail_style() -> Style {
-    Style::default().fg(Color::Cyan)
-}
-
-fn url_detail_style() -> Style {
-    Style::default().fg(Color::Blue)
-}
-
-fn title_detail_style() -> Style {
-    Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD)
 }
 
 fn shortcut_status_line() -> Line<'static> {
@@ -531,39 +387,72 @@ fn pr_text(number: Option<u64>) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
-fn trim_end(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        text.to_string()
-    } else if width <= 3 {
-        ".".repeat(width)
-    } else {
-        format!("{}...", text.chars().take(width - 3).collect::<String>())
+fn row_pr_number(row: &ReadyRowState) -> Option<u64> {
+    match row {
+        ReadyRowState::Loading { branch } => branch.pr_number,
+        ReadyRowState::Loaded(row) => Some(row.pr_number),
+        ReadyRowState::Unavailable { branch, .. } => branch.pr_number,
     }
 }
 
+fn review_cell(row: &ReadyRowState) -> &str {
+    match row {
+        ReadyRowState::Loading { .. } => "…",
+        ReadyRowState::Loaded(row) => row.review_summary.as_str(),
+        ReadyRowState::Unavailable { .. } => "—",
+    }
+}
+
+fn ci_cell(row: &ReadyRowState) -> &str {
+    match row {
+        ReadyRowState::Loading { .. } => "…",
+        ReadyRowState::Loaded(row) => row.ci_summary.as_str(),
+        ReadyRowState::Unavailable { .. } => "—",
+    }
+}
+
+fn pad_plain(text: &str, width: usize) -> String {
+    let padding = width.saturating_sub(measure_text_width(text));
+    format!("{text}{}", " ".repeat(padding))
+}
+
+fn trim_end(text: &str, width: usize) -> String {
+    if measure_text_width(text) <= width {
+        return text.to_string();
+    }
+    truncate_str(text, width, "...").into_owned()
+}
+
 fn trim_middle(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
+    if measure_text_width(text) <= width {
         return text.to_string();
     }
     if width <= 3 {
         return ".".repeat(width);
     }
-    let keep = width - 3;
+    let chars: Vec<char> = text.chars().collect();
+    let keep = width.saturating_sub(3);
     let front = keep / 2 + keep % 2;
     let back = keep / 2;
-    let suffix = text
-        .chars()
+    let suffix = chars
+        .iter()
         .rev()
         .take(back)
+        .copied()
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
         .collect::<String>();
-    format!(
+    let candidate = format!(
         "{}...{}",
-        text.chars().take(front).collect::<String>(),
+        chars.iter().take(front).collect::<String>(),
         suffix
-    )
+    );
+    if measure_text_width(&candidate) <= width {
+        candidate
+    } else {
+        truncate_str(text, width, "...").into_owned()
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
@@ -588,7 +477,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::ready::{PrReadinessRow, ReadyBranch};
+    use crate::commands::ready::{PrReadinessRow, ReadyAction, ReadyBranch};
     use crate::tui::ready::app::ReadyTuiUpdate;
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -608,55 +497,55 @@ mod tests {
             is_draft: false,
             mergeable: Some(true),
             mergeable_state: "clean".to_string(),
-            review_summary: "1 approval".to_string(),
+            review_summary: "approved".to_string(),
             pr_url: Some("https://example.com/pull/10".to_string()),
             pr_state: "open".to_string(),
         }
     }
 
     #[test]
-    fn ready_tui_action_style_uses_expected_colors() {
-        assert_eq!(action_style(ReadyAction::Merge).fg, Some(Color::Green));
-        assert_eq!(action_style(ReadyAction::Ping).fg, Some(Color::Yellow));
-        assert_eq!(action_style(ReadyAction::Fix).fg, Some(Color::Red));
-        assert_eq!(action_style(ReadyAction::Draft).fg, Some(Color::DarkGray));
-    }
-
-    #[test]
     fn ready_tui_status_styles_color_reviews_and_ci() {
         assert_eq!(
-            review_text_style("1 approval", ReadyReason::Ready).fg,
+            review_text_style("approved", ReadyReason::Ready).fg,
             Some(Color::Green)
         );
         assert_eq!(
-            review_text_style("missing review", ReadyReason::ReviewRequired).fg,
+            review_text_style("review", ReadyReason::ReviewRequired).fg,
             Some(Color::Yellow)
         );
         assert_eq!(
             review_text_style("draft", ReadyReason::Draft).fg,
             Some(Color::DarkGray)
         );
-        assert_eq!(ci_text_style("success", "passed").fg, Some(Color::Green));
+        assert_eq!(ci_text_style("success", "12/12").fg, Some(Color::Green));
         assert_eq!(ci_text_style("failure", "failed").fg, Some(Color::Red));
         assert_eq!(ci_text_style("pending", "running").fg, Some(Color::Yellow));
     }
 
     #[test]
-    fn ready_tui_detail_styles_use_semantic_colors() {
-        assert_eq!(detail_label_style().fg, Some(Color::Cyan));
-        assert_eq!(
-            reason_detail_style(ReadyReason::Closed).fg,
-            Some(Color::Red)
+    fn ready_tui_renders_table_without_details_pane() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let mut app = ReadyTuiApp::new_for_test(
+            "owner/repo",
+            "current stack",
+            vec![ReadyBranch {
+                name: "feature/a".to_string(),
+                pr_number: Some(10),
+            }],
         );
-        assert_eq!(mergeable_detail_style(Some(true)).fg, Some(Color::Green));
-        assert_eq!(mergeable_detail_style(Some(false)).fg, Some(Color::Red));
-        assert_eq!(mergeable_detail_style(None).fg, Some(Color::Yellow));
-        assert_eq!(mergeable_detail_label(Some(true)), "yes");
-        assert_eq!(mergeable_detail_label(Some(false)), "no");
-        assert_eq!(mergeable_detail_label(None), "checking…");
-        assert_eq!(metadata_detail_style().fg, Some(Color::Magenta));
-        assert_eq!(url_detail_style().fg, Some(Color::Blue));
-        assert_eq!(title_detail_style().fg, Some(Color::White));
+        app.apply_update(ReadyTuiUpdate::Loaded {
+            index: 0,
+            row: loaded_row(),
+        });
+
+        terminal.draw(|f| render(f, &app)).expect("draw");
+        let rendered = format!("{:?}", terminal.backend().buffer());
+
+        assert!(rendered.contains("PR Readiness"));
+        assert!(!rendered.contains("Details"));
+        assert!(!rendered.contains("ACTION"));
+        assert!(rendered.contains("approved"));
     }
 
     #[test]
@@ -727,80 +616,5 @@ mod tests {
         assert!(rendered.contains("PR Readiness Help"));
         assert!(rendered.contains("Open selected PR"));
         assert!(rendered.contains("Refresh live data"));
-    }
-
-    #[test]
-    fn ready_tui_renders_loading_details_below_table_at_content_height() {
-        let backend = TestBackend::new(120, 30);
-        let mut terminal = Terminal::new(backend).expect("test terminal");
-        let app = ReadyTuiApp::new_for_test(
-            "owner/repo",
-            "current stack",
-            vec![ReadyBranch {
-                name: "feature/a".to_string(),
-                pr_number: Some(10),
-            }],
-        );
-
-        terminal.draw(|f| render(f, &app)).expect("draw");
-        let buffer = terminal.backend().buffer();
-        let line = |y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect::<String>()
-        };
-
-        assert!(line(0).contains("PR Readiness"));
-        assert!(!line(0).contains("Details"));
-        assert!(line(22).contains("Details"));
-        assert!(line(23).contains("Branch: feature/a"));
-    }
-
-    #[test]
-    fn ready_tui_expands_bottom_details_to_fit_a_loaded_row() {
-        let backend = TestBackend::new(120, 30);
-        let mut terminal = Terminal::new(backend).expect("test terminal");
-        let mut app = ReadyTuiApp::new_for_test(
-            "owner/repo",
-            "current stack",
-            vec![ReadyBranch {
-                name: "feature/a".to_string(),
-                pr_number: Some(10),
-            }],
-        );
-        app.apply_update(ReadyTuiUpdate::Loaded {
-            index: 0,
-            row: loaded_row(),
-        });
-
-        terminal.draw(|f| render(f, &app)).expect("draw");
-        let buffer = terminal.backend().buffer();
-        let line = |y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect::<String>()
-        };
-
-        assert!(line(15).contains("Details"));
-        assert!(line(16).contains("Action: ✓ merge"));
-        assert!(line(26).contains("Ready PR"));
-    }
-
-    #[test]
-    fn ready_tui_keeps_empty_details_pane_to_one_content_row() {
-        let backend = TestBackend::new(120, 30);
-        let mut terminal = Terminal::new(backend).expect("test terminal");
-        let app = ReadyTuiApp::new_for_test("owner/repo", "current stack", Vec::new());
-
-        terminal.draw(|f| render(f, &app)).expect("draw");
-        let buffer = terminal.backend().buffer();
-        let line = |y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect::<String>()
-        };
-
-        assert!(line(25).contains("Details"));
-        assert!(line(26).contains("No PRs in scope"));
     }
 }

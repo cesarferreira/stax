@@ -75,7 +75,9 @@ impl ReadyTuiApp {
                 if let Some(slot) = self.row_slot_mut(index, &row.branch) {
                     *slot = ReadyRowState::Loaded(row);
                 }
-                self.sort_rows_by_updated_at();
+                if self.should_resort_rows() {
+                    self.sort_rows_by_updated_at();
+                }
             }
             ReadyTuiUpdate::Unavailable {
                 index,
@@ -86,12 +88,23 @@ impl ReadyTuiApp {
                 if let Some(slot) = self.row_slot_mut(index, &branch_name) {
                     *slot = ReadyRowState::Unavailable { branch, message };
                 }
-                self.sort_rows_by_updated_at();
+                if self.should_resort_rows() {
+                    self.sort_rows_by_updated_at();
+                }
             }
             ReadyTuiUpdate::Done => {
                 self.loading = false;
+                self.sort_rows_by_updated_at();
             }
         }
+    }
+
+    fn should_resort_rows(&self) -> bool {
+        !self.loading
+            || self
+                .rows
+                .iter()
+                .all(|row| matches!(row, ReadyRowState::Loading { .. }))
     }
 
     fn row_slot_mut(&mut self, fallback_index: usize, branch: &str) -> Option<&mut ReadyRowState> {
@@ -151,19 +164,8 @@ impl ReadyTuiApp {
         }
     }
 
-    pub fn reset_for_refresh(&mut self) {
-        self.rows = self
-            .rows
-            .iter()
-            .map(|row| ReadyRowState::Loading {
-                branch: ReadyBranch {
-                    name: row.branch().to_string(),
-                    pr_number: row.pr_number(),
-                },
-            })
-            .collect();
+    pub fn begin_refresh(&mut self) {
         self.loading = true;
-        self.status_message = Some("Refreshing PR readiness...".to_string());
     }
 
     pub fn loading_count(&self) -> usize {
@@ -178,10 +180,6 @@ impl ReadyTuiApp {
             Some(ReadyRowState::Loaded(row)) => row.pr_url.clone(),
             _ => None,
         }
-    }
-
-    pub fn selected_row(&self) -> Option<&ReadyRowState> {
-        self.rows.get(self.selected_index)
     }
 }
 
@@ -221,7 +219,7 @@ mod tests {
             is_draft: false,
             mergeable: Some(true),
             mergeable_state: "clean".to_string(),
-            review_summary: "1 approval".to_string(),
+            review_summary: "approved".to_string(),
             pr_url: Some(format!("https://example.com/pull/{pr_number}")),
             pr_state: "open".to_string(),
         }
@@ -284,6 +282,7 @@ mod tests {
             index: 1,
             row: newer,
         });
+        app.apply_update(ReadyTuiUpdate::Done);
 
         assert_eq!(app.rows[0].branch(), "feature/b");
         assert_eq!(app.rows[1].branch(), "feature/a");
@@ -304,19 +303,17 @@ mod tests {
     }
 
     #[test]
-    fn ready_tui_refresh_resets_rows_to_loading() {
+    fn ready_tui_refresh_keeps_loaded_rows_visible() {
         let mut app = ReadyTuiApp::new_for_test("owner/repo", "current stack", branches());
         app.apply_update(ReadyTuiUpdate::Loaded {
             index: 0,
             row: loaded_row("feature/a", 10),
         });
+        app.loading = false;
 
-        app.reset_for_refresh();
+        app.begin_refresh();
 
-        assert!(
-            app.rows
-                .iter()
-                .all(|row| matches!(row, ReadyRowState::Loading { .. }))
-        );
+        assert!(app.loading);
+        assert!(matches!(app.rows[0], ReadyRowState::Loaded(_)));
     }
 }

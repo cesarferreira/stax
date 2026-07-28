@@ -489,10 +489,12 @@ pub fn run() -> Result<()> {
             stack,
             json,
             plain,
+            interval,
         } => commands::ready::run(
             commands::ready::ReadyScopeMode::from_flags(all, current, stack),
             json,
             plain,
+            interval,
         ),
         Commands::Issue { command } => match command {
             Some(IssueCommands::List { limit, json }) => commands::issue::run_list(limit, json),
