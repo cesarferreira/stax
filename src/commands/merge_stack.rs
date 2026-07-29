@@ -1,8 +1,8 @@
-//! Stack merge through one GitHub PR merge.
+//! Stack merge through one forge pull/merge request.
 //!
-//! This is the serverless path from issue #293: validate the selected tip PR
-//! once, prepare the selected PR bases, merge the tip via GitHub's merge API,
-//! then reconcile selected lower PRs as merged, pending, or absorbed.
+//! Validate the selected tip once, prepare the selected item bases, merge the
+//! tip through the forge API, then reconcile selected lower items as merged,
+//! pending, or (on GitHub rewriting methods) absorbed.
 
 use crate::commands::merge_shared::{
     PrBaseUpdate, WaitResult, print_header, print_header_success,
@@ -57,7 +57,7 @@ struct ChangedPrBase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DownstackOutcome {
-    GithubMerged,
+    IndirectlyMerged,
     Pending,
     Absorbed,
 }
@@ -84,6 +84,21 @@ fn stack_merge_confirmation(yes: bool, quiet: bool, is_terminal: bool) -> StackM
         StackMergeConfirmation::RequireYes
     } else {
         StackMergeConfirmation::Prompt
+    }
+}
+
+fn forge_name(forge: ForgeType) -> &'static str {
+    match forge {
+        ForgeType::GitHub => "GitHub",
+        ForgeType::GitLab => "GitLab",
+        ForgeType::Gitea => "Gitea/Forgejo",
+    }
+}
+
+fn item_label(forge: ForgeType, number: u64) -> String {
+    match forge {
+        ForgeType::GitLab => format!("MR !{}", number),
+        ForgeType::GitHub | ForgeType::Gitea => format!("PR #{}", number),
     }
 }
 
@@ -131,12 +146,13 @@ pub fn run(
     }
 
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
-    if remote_info.forge != ForgeType::GitHub {
+    if remote_info.forge == ForgeType::Gitea {
         anyhow::bail!(
-            "`stax merge --stack` is only supported for GitHub remotes (found {})",
-            remote_info.forge
+            "`stax merge --stack` is supported for GitHub and GitLab, not {}",
+            forge_name(remote_info.forge)
         );
     }
+    let forge = remote_info.forge;
 
     let scope = calculate_stack_merge_scope(&repo, &stack, &current, full, downstack_only)?;
     if scope.to_merge.is_empty() {
@@ -158,14 +174,14 @@ pub fn run(
 
     verify_linear_stack(&repo, &scope)?;
 
-    let pr_timer = LiveTimer::maybe_new(!quiet, "Fetching stack PRs...");
-    let resolved = resolve_stack_prs(&rt, &client, &scope)?;
+    let pr_timer = LiveTimer::maybe_new(!quiet, "Fetching stack pull/merge requests...");
+    let resolved = resolve_stack_prs(&rt, &client, &scope, forge)?;
     let remaining = resolve_remaining_branches(&rt, &client, &scope.remaining)?;
     LiveTimer::maybe_finish_ok(pr_timer, "done");
 
     let status_timer = LiveTimer::maybe_new(!quiet, "Checking stack eligibility...");
     let statuses = fetch_stack_statuses(&rt, &client, &resolved)?;
-    check_downstack_eligibility(&resolved, &statuses)?;
+    check_downstack_eligibility(&resolved, &statuses, forge)?;
     LiveTimer::maybe_finish_ok(status_timer, "done");
 
     let tip = resolved.last().context("stack merge scope is empty")?;
@@ -173,8 +189,8 @@ pub fn run(
 
     if !when_ready && let Some(reason) = tip_blocker(&tip_status) {
         anyhow::bail!(
-            "Selected tip PR #{} ({}) is not ready: {}.\n\nRun `stax merge --stack --when-ready` to wait.",
-            tip.pr_number,
+            "Selected tip {} ({}) is not ready: {}.\n\nRun `stax merge --stack --when-ready` to wait.",
+            item_label(forge, tip.pr_number),
             tip.branch,
             reason
         );
@@ -189,6 +205,7 @@ pub fn run(
             method,
             when_ready,
             scope.downstack_only,
+            forge,
         );
     }
 
@@ -231,42 +248,51 @@ pub fn run(
     if when_ready {
         let timeout = Duration::from_secs(timeout_mins * 60);
         let poll_interval = Duration::from_secs(interval_secs);
-        match wait_for_tip_ready(&rt, &client, tip.pr_number, timeout, poll_interval, quiet)? {
+        match wait_for_tip_ready(
+            &rt,
+            &client,
+            tip.pr_number,
+            timeout,
+            poll_interval,
+            quiet,
+            forge,
+        )? {
             WaitResult::Ready(status) => tip_status = status,
             WaitResult::Failed(reason) => {
                 anyhow::bail!(
-                    "Selected tip PR #{} ({}) is not ready: {}",
-                    tip.pr_number,
+                    "Selected tip {} ({}) is not ready: {}",
+                    item_label(forge, tip.pr_number),
                     tip.branch,
                     reason
                 )
             }
             WaitResult::Timeout => {
                 anyhow::bail!(
-                    "Timed out waiting for selected tip PR #{} ({}) to become ready",
-                    tip.pr_number,
+                    "Timed out waiting for selected tip {} ({}) to become ready",
+                    item_label(forge, tip.pr_number),
                     tip.branch
                 )
             }
         }
     }
 
-    verify_tip_head_matches_local(&repo, tip, &tip_status)?;
+    verify_tip_head_matches_local(&repo, tip, &tip_status, forge)?;
     ensure_trunk_unchanged(&repo, &remote_info, &scope.trunk, &trunk_sha)?;
+    rt.block_on(async { client.preflight_stack_merge(method).await })?;
 
     let changed_bases =
-        prepare_selected_pr_bases(&rt, &client, &resolved, &scope.trunk, method, quiet)?;
+        prepare_selected_pr_bases(&rt, &client, &resolved, &scope.trunk, method, quiet, forge)?;
 
     if let Err(e) = ensure_trunk_unchanged(&repo, &remote_info, &scope.trunk, &trunk_sha) {
-        rollback_changed_pr_bases(&rt, &client, &changed_bases, quiet);
+        rollback_changed_pr_bases(&rt, &client, &changed_bases, quiet, forge);
         return Err(e);
     }
 
     let merge_timer = LiveTimer::maybe_new(
         !quiet,
         &format!(
-            "Merging selected tip PR #{} ({})...",
-            tip.pr_number,
+            "Merging selected tip {} ({})...",
+            item_label(forge, tip.pr_number),
             method.as_str()
         ),
     );
@@ -278,12 +304,13 @@ pub fn run(
 
     if let Err(e) = merge_result {
         LiveTimer::maybe_finish_err(merge_timer, "failed");
-        rollback_changed_pr_bases(&rt, &client, &changed_bases, quiet);
+        rollback_changed_pr_bases(&rt, &client, &changed_bases, quiet, forge);
         return Err(e);
     }
     LiveTimer::maybe_finish_ok(merge_timer, "done");
 
-    let downstack_outcomes = reconcile_downstack_prs(&rt, &client, &resolved, tip, method, quiet)?;
+    let downstack_outcomes =
+        reconcile_downstack_prs(&rt, &client, &resolved, tip, method, quiet, forge)?;
 
     rebase_remaining_branches(
         &repo,
@@ -308,9 +335,9 @@ pub fn run(
         print_header_success("Stack Merged");
         println!();
         println!(
-            "Landed {} branches through selected tip PR #{} into {}:",
+            "Landed {} branches through selected tip {} into {}:",
             resolved.len(),
-            tip.pr_number,
+            item_label(forge, tip.pr_number),
             scope.trunk.cyan()
         );
         for pr in &resolved {
@@ -329,15 +356,18 @@ pub fn run(
                     .iter()
                     .find(|(number, _)| *number == pr.pr_number)
                     .map(|(_, outcome)| *outcome)
-                    .expect("every downstack PR has a reconciliation outcome")
+                    .expect("every downstack item has a reconciliation outcome")
                 {
-                    DownstackOutcome::GithubMerged => (
+                    DownstackOutcome::IndirectlyMerged => (
                         "✓".green().to_string(),
-                        "merged indirectly by GitHub".to_string(),
+                        format!("merged indirectly by {}", forge_name(forge)),
                     ),
                     DownstackOutcome::Pending => (
                         "○".yellow().to_string(),
-                        "pending GitHub indirect-merge detection; left open".to_string(),
+                        format!(
+                            "pending {} indirect-merge detection; left open",
+                            forge_name(forge)
+                        ),
                     ),
                     DownstackOutcome::Absorbed => (
                         "✓".green().to_string(),
@@ -348,14 +378,25 @@ pub fn run(
                     ),
                 }
             };
-            println!("  {} #{} {} -> {}", marker, pr.pr_number, pr.branch, action);
+            println!(
+                "  {} {} {} -> {}",
+                marker,
+                item_label(forge, pr.pr_number),
+                pr.branch,
+                action
+            );
         }
         if !remaining.is_empty() {
             println!();
             println!("Remaining in stack (rebased onto {}):", scope.trunk.cyan());
             for branch in &remaining {
                 if let Some(pr_number) = branch.pr_number {
-                    println!("  {} #{} {}", "○".dimmed(), pr_number, branch.branch);
+                    println!(
+                        "  {} {} {}",
+                        "○".dimmed(),
+                        item_label(forge, pr_number),
+                        branch.branch
+                    );
                 } else {
                     println!("  {} {}", "○".dimmed(), branch.branch);
                 }
@@ -483,6 +524,7 @@ fn resolve_stack_prs(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
     scope: &StackMergeScope,
+    forge: ForgeType,
 ) -> Result<Vec<ResolvedStackPr>> {
     let mut resolved = Vec::with_capacity(scope.to_merge.len());
 
@@ -494,7 +536,7 @@ fn resolve_stack_prs(
                 .map(|pr| pr.number)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Branch '{}' has no PR. Run 'stax submit' first.",
+                        "Branch '{}' has no pull/merge request. Run 'stax submit' first.",
                         branch.branch
                     )
                 })?,
@@ -503,8 +545,8 @@ fn resolve_stack_prs(
         let pr = rt.block_on(async { client.get_pr_with_head(pr_number).await })?;
         if pr.head != branch.branch {
             anyhow::bail!(
-                "PR #{} is for head branch '{}', expected '{}'",
-                pr_number,
+                "{} is for head branch '{}', expected '{}'",
+                item_label(forge, pr_number),
                 pr.head,
                 branch.branch
             );
@@ -553,7 +595,11 @@ fn fetch_stack_statuses(
         .collect()
 }
 
-fn check_downstack_eligibility(prs: &[ResolvedStackPr], statuses: &[PrMergeStatus]) -> Result<()> {
+fn check_downstack_eligibility(
+    prs: &[ResolvedStackPr],
+    statuses: &[PrMergeStatus],
+    forge: ForgeType,
+) -> Result<()> {
     for (pr, status) in prs
         .iter()
         .zip(statuses.iter())
@@ -561,8 +607,8 @@ fn check_downstack_eligibility(prs: &[ResolvedStackPr], statuses: &[PrMergeStatu
     {
         if let Some(reason) = downstack_blocker(status) {
             anyhow::bail!(
-                "Downstack PR #{} ({}) is not eligible for stack merge: {}",
-                pr.pr_number,
+                "Downstack {} ({}) is not eligible for stack merge: {}",
+                item_label(forge, pr.pr_number),
                 pr.branch,
                 reason
             );
@@ -574,10 +620,10 @@ fn check_downstack_eligibility(prs: &[ResolvedStackPr], statuses: &[PrMergeStatu
 
 fn downstack_blocker(status: &PrMergeStatus) -> Option<&'static str> {
     if status.state.to_lowercase() != "open" {
-        return Some("PR is closed");
+        return Some("item is closed");
     }
     if status.is_draft {
-        return Some("PR is draft");
+        return Some("item is draft");
     }
     if status.changes_requested {
         return Some("changes requested");
@@ -612,6 +658,7 @@ fn wait_for_tip_ready(
     timeout: Duration,
     poll_interval: Duration,
     quiet: bool,
+    forge: ForgeType,
 ) -> Result<WaitResult> {
     let start = Instant::now();
     let mut last_status: Option<String> = None;
@@ -633,8 +680,9 @@ fn wait_for_tip_ready(
                 if !quiet {
                     let elapsed = start.elapsed().as_secs();
                     let status_text = format!(
-                        "      {} Waiting for selected tip PR: {}... ({}s)",
+                        "      {} Waiting for selected tip {}: {}... ({}s)",
                         "⏳".yellow(),
+                        item_label(forge, pr_number),
                         reason,
                         elapsed
                     );
@@ -667,12 +715,13 @@ fn verify_tip_head_matches_local(
     repo: &GitRepo,
     tip: &ResolvedStackPr,
     tip_status: &PrMergeStatus,
+    forge: ForgeType,
 ) -> Result<()> {
     let local_sha = repo.rev_parse(&tip.branch)?;
     if local_sha != tip_status.head_sha {
         anyhow::bail!(
-            "Selected tip PR #{} head SHA ({}) does not match local branch '{}' ({}). Run `stax submit` or fetch the branch before stack merging.",
-            tip.pr_number,
+            "Selected tip {} head SHA ({}) does not match local branch '{}' ({}). Run `stax submit` or fetch the branch before stack merging.",
+            item_label(forge, tip.pr_number),
             tip_status.head_sha,
             tip.branch,
             local_sha
@@ -693,6 +742,7 @@ fn prepare_selected_pr_bases(
     trunk: &str,
     method: MergeMethod,
     quiet: bool,
+    forge: ForgeType,
 ) -> Result<Vec<ChangedPrBase>> {
     let first = if merge_method_preserves_commit_shas(method) {
         0
@@ -704,7 +754,11 @@ fn prepare_selected_pr_bases(
     for pr in &prs[first..] {
         let timer = LiveTimer::maybe_new(
             !quiet,
-            &format!("Retargeting PR #{} to {}...", pr.pr_number, trunk),
+            &format!(
+                "Retargeting {} to {}...",
+                item_label(forge, pr.pr_number),
+                trunk
+            ),
         );
         match update_pr_base_unless_current(rt, client, pr.pr_number, trunk, &pr.branch) {
             Ok(PrBaseUpdate::Updated) => {
@@ -719,7 +773,7 @@ fn prepare_selected_pr_bases(
             }
             Ok(PrBaseUpdate::NativeStackLocked) => {
                 LiveTimer::maybe_finish_err(timer, "locked");
-                rollback_changed_pr_bases(rt, client, &changed, quiet);
+                rollback_changed_pr_bases(rt, client, &changed, quiet, forge);
                 anyhow::bail!(
                     "PR #{} is registered in a native GitHub Stack, which locks its base branch. \
                      Merge it via the normal stack order (`st merge`) instead of merging out of \
@@ -729,7 +783,7 @@ fn prepare_selected_pr_bases(
             }
             Err(e) => {
                 LiveTimer::maybe_finish_err(timer, "failed");
-                rollback_changed_pr_bases(rt, client, &changed, quiet);
+                rollback_changed_pr_bases(rt, client, &changed, quiet, forge);
                 return Err(e);
             }
         }
@@ -743,13 +797,15 @@ fn rollback_changed_pr_bases(
     client: &ForgeClient,
     changed: &[ChangedPrBase],
     quiet: bool,
+    forge: ForgeType,
 ) {
     for pr in changed.iter().rev() {
         let timer = LiveTimer::maybe_new(
             !quiet,
             &format!(
-                "Restoring PR #{} base to {}...",
-                pr.pr_number, pr.original_base
+                "Restoring {} base to {}...",
+                item_label(forge, pr.pr_number),
+                pr.original_base
             ),
         );
         match rt.block_on(async { client.update_pr_base(pr.pr_number, &pr.original_base).await }) {
@@ -757,9 +813,9 @@ fn rollback_changed_pr_bases(
             Err(e) => {
                 LiveTimer::maybe_finish_err(timer, "failed");
                 eprintln!(
-                    "{} failed to restore PR #{} base to {}: {:#}",
+                    "{} failed to restore {} base to {}: {:#}",
                     "warning:".yellow().bold(),
-                    pr.pr_number,
+                    item_label(forge, pr.pr_number),
                     pr.original_base,
                     e
                 );
@@ -775,44 +831,58 @@ fn reconcile_downstack_prs(
     tip: &ResolvedStackPr,
     method: MergeMethod,
     quiet: bool,
+    forge: ForgeType,
 ) -> Result<Vec<(u64, DownstackOutcome)>> {
     let mut outcomes = Vec::new();
 
     for pr in prs.iter().filter(|pr| pr.pr_number != tip.pr_number) {
         let message = if merge_method_preserves_commit_shas(method) {
             format!(
-                "Waiting for downstack PR #{} to be marked indirectly merged...",
-                pr.pr_number
+                "Waiting for downstack {} to be marked indirectly merged...",
+                item_label(forge, pr.pr_number)
             )
         } else {
             format!(
-                "Closing downstack PR #{} as absorbed ({} rewrites commit SHAs)...",
-                pr.pr_number,
+                "Closing downstack {} as absorbed ({} rewrites commit SHAs)...",
+                item_label(forge, pr.pr_number),
                 method.as_str()
             )
         };
         let timer = LiveTimer::maybe_new(!quiet, &message);
-        if merge_method_preserves_commit_shas(method)
-            && wait_for_downstack_pr_merged(rt, client, pr.pr_number)?
-        {
-            outcomes.push((pr.pr_number, DownstackOutcome::GithubMerged));
-            LiveTimer::maybe_finish_ok(timer, "merged indirectly by GitHub");
-            continue;
-        }
-
         if merge_method_preserves_commit_shas(method) {
-            outcomes.push((pr.pr_number, DownstackOutcome::Pending));
-            LiveTimer::maybe_finish_err(timer, "still open; indirect merge pending");
-            if !quiet {
-                println!(
-                    "  {} PR #{} remains open; GitHub may still mark it indirectly merged asynchronously.",
-                    "warning:".yellow().bold(),
-                    pr.pr_number
-                );
+            match wait_for_downstack_pr_state(rt, client, pr.pr_number)? {
+                DownstackPrState::Merged => {
+                    outcomes.push((pr.pr_number, DownstackOutcome::IndirectlyMerged));
+                    LiveTimer::maybe_finish_ok(
+                        timer,
+                        &format!("merged indirectly by {}", forge_name(forge)),
+                    );
+                }
+                DownstackPrState::Open => {
+                    outcomes.push((pr.pr_number, DownstackOutcome::Pending));
+                    LiveTimer::maybe_finish_err(timer, "still open; indirect merge pending");
+                    if !quiet {
+                        println!(
+                            "  {} {} remains open; {} may still mark it indirectly merged asynchronously.",
+                            "warning:".yellow().bold(),
+                            item_label(forge, pr.pr_number),
+                            forge_name(forge)
+                        );
+                    }
+                }
+                DownstackPrState::Closed => {
+                    LiveTimer::maybe_finish_err(timer, "closed without being merged");
+                    anyhow::bail!(
+                        "Downstack {} is closed without being merged; {} cannot mark a closed item indirectly merged",
+                        item_label(forge, pr.pr_number),
+                        forge_name(forge)
+                    );
+                }
             }
             continue;
         }
 
+        debug_assert_eq!(forge, ForgeType::GitHub);
         let comment = downstack_absorbed_comment(tip.pr_number, method);
         rt.block_on(async { client.create_issue_comment(pr.pr_number, &comment).await })?;
         rt.block_on(async { client.close_pr(pr.pr_number).await })?;
@@ -829,21 +899,39 @@ fn reconcile_downstack_prs(
     Ok(outcomes)
 }
 
-fn wait_for_downstack_pr_merged(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownstackPrState {
+    Merged,
+    Open,
+    Closed,
+}
+
+fn wait_for_downstack_pr_state(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
     pr_number: u64,
-) -> Result<bool> {
+) -> Result<DownstackPrState> {
     let timeout = downstack_merged_wait();
     let interval = Duration::from_secs(2);
     let start = Instant::now();
 
     loop {
-        if rt.block_on(async { client.is_pr_merged(pr_number).await })? {
-            return Ok(true);
+        let state = rt.block_on(async { client.get_pr(pr_number).await })?.state;
+        if state.eq_ignore_ascii_case("merged") {
+            return Ok(DownstackPrState::Merged);
+        }
+        if state.eq_ignore_ascii_case("closed") {
+            return Ok(DownstackPrState::Closed);
+        }
+        if !state.eq_ignore_ascii_case("open") {
+            anyhow::bail!(
+                "Downstack PR/MR #{} returned unexpected state `{}`",
+                pr_number,
+                state
+            );
         }
         if start.elapsed() >= timeout {
-            return Ok(false);
+            return Ok(DownstackPrState::Open);
         }
         std::thread::sleep(interval);
     }
@@ -982,22 +1070,23 @@ fn print_stack_preview(
     method: MergeMethod,
     when_ready: bool,
     downstack_only: bool,
+    forge: ForgeType,
 ) {
     print_header("Stack Merge");
     println!();
     let tip = prs
         .last()
-        .expect("stack merge preview requires a selected tip PR");
+        .expect("stack merge preview requires a selected tip item");
     if merge_method_preserves_commit_shas(method) {
         println!(
-            "Will validate PR #{} once, target every selected PR to {}, then merge one PR:",
-            tip.pr_number,
+            "Will validate {} once, target every selected item to {}, then merge it:",
+            item_label(forge, tip.pr_number),
             trunk.cyan()
         );
     } else {
         println!(
-            "Will validate PR #{} once, retarget it to {}, then merge one PR:",
-            tip.pr_number,
+            "Will validate {} once, retarget it to {}, then merge it:",
+            item_label(forge, tip.pr_number),
             trunk.cyan()
         );
     }
@@ -1018,7 +1107,10 @@ fn print_stack_preview(
         let marker = if idx + 1 == prs.len() {
             format!("(selected tip, merged with {})", method.as_str())
         } else if merge_method_preserves_commit_shas(method) {
-            "(targeted to trunk; indirectly merged by GitHub or left pending)".to_string()
+            format!(
+                "(targeted to trunk; indirectly merged by {} or left pending)",
+                forge_name(forge)
+            )
         } else {
             format!(
                 "(closed as absorbed; {} rewrites commit SHAs)",
@@ -1026,10 +1118,10 @@ fn print_stack_preview(
             )
         };
         println!(
-            "  {}. {} (#{}) {}",
+            "  {}. {} ({}) {}",
             (idx + 1).to_string().bold(),
             pr.branch.bold(),
-            pr.pr_number,
+            item_label(forge, pr.pr_number),
             marker.dimmed()
         );
     }
@@ -1045,7 +1137,7 @@ fn print_stack_preview(
             };
             let pr_text = branch
                 .pr_number
-                .map(|number| format!(" (#{})", number))
+                .map(|number| format!(" ({})", item_label(forge, number)))
                 .unwrap_or_default();
             println!(
                 "  {} {}{} -> {}",
@@ -1062,7 +1154,8 @@ fn print_stack_preview(
         "Merge method: {} {}",
         method.as_str().cyan(),
         if merge_method_preserves_commit_shas(method) {
-            "(default for --stack; preserves commit SHAs; lower PRs may merge indirectly)".dimmed()
+            "(default for --stack; preserves commit SHAs; lower items may merge indirectly)"
+                .dimmed()
         } else {
             "(explicit; rewrites commit SHAs; lower PRs close as absorbed)".dimmed()
         }
@@ -1070,13 +1163,13 @@ fn print_stack_preview(
     if when_ready {
         println!(
             "{}",
-            "Will wait only for the selected tip PR's CI and mergeability; downstack PRs are checked for review blockers."
+            "Will wait only for the selected tip item's CI and mergeability; downstack items are checked for review blockers."
                 .dimmed()
         );
     } else {
         println!(
             "{}",
-            "Requires the selected tip PR to already be green; downstack PRs are checked for review blockers."
+            "Requires the selected tip item to already be green; downstack items are checked for review blockers."
                 .dimmed()
         );
     }
