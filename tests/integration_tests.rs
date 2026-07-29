@@ -15497,8 +15497,8 @@ mod forge_mock_tests {
             .mount(&mock_server)
             .await;
 
-        // Use `stax ci` which fetches PR state — verify it shows merged, not closed
-        let output = run_stax_with_env(&repo, home.path(), &["sync"]);
+        // Run sync without deleting — this test only verifies MERGED state mapping.
+        let output = run_stax_with_env(&repo, home.path(), &["sync", "--no-delete"]);
         assert!(
             output.status.success(),
             "sync failed: {}\n{}",
