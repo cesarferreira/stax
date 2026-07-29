@@ -26,7 +26,7 @@ st merge --method squash|merge|rebase
 st merge --stack                           # validate current PR once, land through current
 st merge --stack --downstack-only          # land ancestors below current through one PR
 st merge --stack --full                    # land the full stack even from the middle
-st merge --stack --when-ready              # wait only for the selected tip PR, then land
+st merge --stack --when-ready              # wait only for the selected tip PR/MR, then land
 st merge --when-ready                       # wait for readiness explicitly
 st merge --when-ready --interval 10
 st merge --no-wait --no-delete --no-sync
@@ -37,7 +37,7 @@ st merge --timeout 60 --yes
 
 `--full` is only valid with `--stack`; it includes descendants above the current branch in the selected stack merge.
 
-`--when-ready` is incompatible with `--dry-run`, `--no-wait`, `--remote`, and `--queue`. With `--stack`, it waits only for the selected tip PR.
+`--when-ready` is incompatible with `--dry-run`, `--no-wait`, `--remote`, and `--queue`. With `--stack`, it waits only for the selected tip PR/MR.
 
 ### Partial stack merge
 
@@ -63,9 +63,9 @@ st merge --ds
 
 Merges `auth` and `auth-api`; `auth-ui` is rebased onto `main`, and `auth-tests` remains stacked on `auth-ui`.
 
-## `st merge --stack` (GitHub only)
+## `st merge --stack` (GitHub and GitLab)
 
-Lands the selected stack range through one GitHub PR merge. By default the selected range is stack bottom through the current branch:
+Lands the selected stack range through one SHA-preserving tip PR/MR merge. By default the selected range is stack bottom through the current branch:
 
 ```bash
 st merge --stack
@@ -75,13 +75,15 @@ st merge --stack --full
 st merge --stack --dry-run
 ```
 
-For `main ← A ← B ← C` while checked out on `B`, stax checks that local `main` matches `origin/main`, verifies the local stack is linear, checks `A` for review blockers, and validates CI/mergeability on selected tip PR `B`. With the default `merge` method, Stax targets both `A` and `B` to `main` before merging only `B`. Preserving the existing commit SHAs and making them reachable from `main` lets GitHub mark `A` indirectly merged. PR `C` remains open and is rebased/retargeted onto `main`.
+For `main ← A ← B ← C` while checked out on `B`, stax checks that local `main` matches `origin/main`, verifies the local stack is linear, checks `A` for review blockers, and validates CI/mergeability on selected tip `B`. With the default `merge` method, Stax targets both `A` and `B` to `main` before merging only `B`. Preserving the existing commit SHAs and making them reachable from `main` lets GitHub or GitLab mark `A` indirectly merged. `C` remains open and is rebased/retargeted onto `main`.
 
-Use `st merge --stack --downstack-only` to exclude the checked-out branch from the selected range. Use `st merge --stack --full` to include descendants above the current branch and land the full stack through the actual stack tip. The default merge method for `--stack` is `merge`. Explicit `--method rebase` and `--method squash` rewrite commit SHAs, so Stax comments on and closes lower PRs as absorbed immediately instead of polling for an impossible indirect merge.
+Use `st merge --stack --downstack-only` to exclude the checked-out branch from the selected range. Use `st merge --stack --full` to include descendants above the current branch and land the full stack through the actual stack tip. The default merge method for `--stack` is `merge`. On GitLab, Stax first checks that the project uses `merge`, `rebase_merge`, or `ff` and does not require squashing, then sends `squash: false`; explicit stack `rebase` and `squash` are rejected before mutation. On GitHub, those explicit rewriting methods still comment on and close lower PRs as absorbed without polling.
 
 This avoids re-running CI for every lower PR because the selected tip already contains that range. The post-merge sync updates trunk and PR metadata without running generic merged-branch deletion; branch cleanup stays scoped to the stack range that was just landed. If trunk moves before the merge, stax aborts and asks you to restack and wait for fresh selected-tip CI.
 
-GitHub's indirect-merge detection is asynchronous. If a lower PR is still open after Stax's bounded poll under the default `merge` method, Stax leaves it open and reports it as pending so GitHub can mark it merged later. Any base changes are restored if retargeting, the final trunk check, or the selected-tip merge fails.
+Indirect-merge detection is asynchronous. Stax requires GitLab's authoritative `state: merged` (a merely closed MR does not count). If a lower PR/MR is still open after the bounded poll, Stax leaves it open and reports it as pending so the forge can reconcile it later. Any base changes are restored if retargeting, the final trunk check, or the selected-tip merge fails.
+
+Gitea/Forgejo does not support `st merge --stack`.
 
 For the no-extra-CI behavior, GitHub branch protection should require status checks but should not require branches to be up to date before merging. If GitHub requires up-to-date branches, it can force another revalidation at merge time.
 

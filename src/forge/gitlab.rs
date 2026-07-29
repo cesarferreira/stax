@@ -42,6 +42,12 @@ struct GitLabMr {
 }
 
 #[derive(Debug, Deserialize)]
+struct GitLabProjectSettings {
+    merge_method: String,
+    squash_option: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct GitLabPipeline {
     status: Option<String>,
 }
@@ -156,6 +162,33 @@ impl GitLabClient {
             "{}/projects/{}{}",
             self.api_base_url, self.project_id, suffix
         )
+    }
+
+    pub async fn preflight_stack_merge(&self, method: MergeMethod) -> Result<()> {
+        if !matches!(method, MergeMethod::Merge) {
+            bail!(
+                "GitLab stack merge only supports the SHA-preserving default method `merge`; explicit `{}` rewrites commits",
+                method.as_str()
+            );
+        }
+
+        let settings: GitLabProjectSettings = get_json(&self.client, &self.project_url("")).await?;
+        if settings.squash_option == "always" {
+            bail!(
+                "GitLab project requires squashing (`squash_option: always`), which cannot preserve reviewed commit SHAs for `stax merge --stack`"
+            );
+        }
+        if !matches!(
+            settings.merge_method.as_str(),
+            "merge" | "rebase_merge" | "ff"
+        ) {
+            bail!(
+                "GitLab project merge method `{}` is not supported for SHA-preserving stack merge; use merge, rebase_merge, or ff",
+                settings.merge_method
+            );
+        }
+
+        Ok(())
     }
 
     pub async fn find_open_pr_by_head(&self, branch: &str) -> Result<Option<PrInfoWithHead>> {
@@ -787,6 +820,79 @@ mod tests {
             base_url: "https://gitlab.example.com".to_string(),
             api_base_url: Some(server.uri()),
         }
+    }
+
+    #[tokio::test]
+    async fn stack_merge_preflight_accepts_preserving_project_methods() {
+        ensure_crypto_provider();
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
+
+        for merge_method in ["merge", "rebase_merge", "ff"] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/projects/group%2Fsubgroup%2Frepo"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "merge_method": merge_method,
+                    "squash_option": "default_off"
+                })))
+                .mount(&server)
+                .await;
+
+            GitLabClient::new(&remote_info(&server))
+                .unwrap()
+                .preflight_stack_merge(MergeMethod::Merge)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn stack_merge_preflight_rejects_required_squashing() {
+        ensure_crypto_provider();
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/projects/group%2Fsubgroup%2Frepo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "merge_method": "merge",
+                "squash_option": "always"
+            })))
+            .mount(&server)
+            .await;
+
+        let error = GitLabClient::new(&remote_info(&server))
+            .unwrap()
+            .preflight_stack_merge(MergeMethod::Merge)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("requires squashing"));
+    }
+
+    #[tokio::test]
+    async fn merge_pr_rebase_retains_non_stack_behavior() {
+        ensure_crypto_provider();
+        unsafe { std::env::set_var("STAX_GITLAB_TOKEN", "test-token") };
+        let server = MockServer::start().await;
+
+        Mock::given(method("PUT"))
+            .and(path(
+                "/projects/group%2Fsubgroup%2Frepo/merge_requests/7/merge",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        GitLabClient::new(&remote_info(&server))
+            .unwrap()
+            .merge_pr(7, MergeMethod::Rebase, None, Some("abc123"))
+            .await
+            .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(payload["sha"], "abc123");
+        assert_eq!(payload["squash"], false);
     }
 
     #[tokio::test]

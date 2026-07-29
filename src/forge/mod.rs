@@ -98,6 +98,14 @@ impl ForgeClient {
         }
     }
 
+    pub async fn preflight_stack_merge(&self, method: MergeMethod) -> Result<()> {
+        match self {
+            Self::GitHub(_) => Ok(()),
+            Self::GitLab(client) => client.preflight_stack_merge(method).await,
+            Self::Gitea(_) => bail!("`stax merge --stack` is not supported on Gitea/Forgejo"),
+        }
+    }
+
     /// Find an open PR by head branch.
     ///
     /// GitHub uses the stored owner for fork-aware lookup; other forges

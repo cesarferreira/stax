@@ -47,7 +47,7 @@ st --trace status --json >/dev/null
 - `st merge` — local cascade merge with provenance-aware descendant rebases, then `st rs --force` unless `--no-sync`
 - `st merge --when-ready` — wait for CI + approvals + mergeability; incompatible with `--dry-run`, `--no-wait`, `--remote`, and `--queue`
 - `st merge --downstack-only` / `--ds` — merge ancestors below the current branch, then rebase the current branch onto trunk; composes with `--stack`, and is incompatible with `--all`, `--full`, `--remote`, and `--queue`
-- `st merge --stack` — GitHub-only stack merge: target every selected PR to trunk, merge only the selected tip with SHA-preserving `merge`, and let GitHub mark lower PRs indirectly merged; timed-out lower PRs stay open, while explicit `rebase`/`squash` closes them as absorbed without waiting
+- `st merge --stack` — GitHub/GitLab stack merge: target every selected PR/MR to trunk, merge only the selected tip with SHA-preserving `merge`, and poll lower items for authoritative merged state; timed-out items stay open. GitLab first verifies project merge settings, sends `squash: false`, and rejects explicit `rebase`/`squash`; GitHub retains absorbed closure for those rewriting methods. Gitea/Forgejo is unsupported
 - `st merge --stack --full` — include descendants above the current branch and land the full stack through the actual stack tip
 - `st merge --remote` — merge entirely via GitHub API, no local git operations (GitHub only)
 - `st merge --queue` — enqueue PRs into GitHub merge queue / GitLab merge trains

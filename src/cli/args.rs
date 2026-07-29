@@ -350,10 +350,10 @@ pub(crate) enum Commands {
         dry_run: bool,
         /// Merge method: squash, merge, rebase (default: squash; merge with --stack).
         ///
-        /// With --stack, merge targets the selected PRs to trunk and preserves commit
-        /// SHAs so GitHub may mark lower PRs indirectly merged. Timed-out lower PRs
-        /// stay open. Rebase and squash rewrite SHAs, so Stax closes lower PRs as
-        /// absorbed without waiting.
+        /// With --stack, merge targets selected PRs/MRs to trunk and preserves commit
+        /// SHAs so GitHub or GitLab may mark lower items indirectly merged. Timed-out
+        /// items stay open. GitLab rejects explicit rebase/squash; on GitHub those
+        /// methods rewrite SHAs and close lower PRs as absorbed without waiting.
         #[arg(long)]
         method: Option<String>,
         /// Keep branches after merge (don't delete)
@@ -371,7 +371,7 @@ pub(crate) enum Commands {
         /// Merge via GitHub API only (no local checkout/rebase/push); GitHub updates branches remotely
         #[arg(long, conflicts_with_all = ["dry_run", "no_wait", "when_ready", "queue", "stack"])]
         remote: bool,
-        /// Prepare selected PR bases, validate the tip once, and merge the selected stack range once
+        /// Prepare selected PR/MR bases and merge the selected stack range once (GitHub/GitLab)
         #[arg(long, conflicts_with_all = ["no_wait", "remote", "queue"])]
         stack: bool,
         /// Enqueue PRs into the forge's merge queue instead of merging one-by-one.
