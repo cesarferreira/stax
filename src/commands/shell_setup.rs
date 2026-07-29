@@ -948,6 +948,38 @@ mod tests {
     use std::{fs, io::ErrorKind, path::Path, process::Command};
     use tempfile::tempdir;
 
+    #[cfg(unix)]
+    fn zsh_available_with_flags(flags: &str) -> bool {
+        let mut cmd = Command::new("zsh");
+        for flag in flags.split_whitespace() {
+            cmd.arg(flag);
+        }
+        cmd.arg("exit").arg("0");
+        match cmd.output() {
+            Ok(output) => output.status.success(),
+            Err(err) if err.kind() == ErrorKind::NotFound => false,
+            Err(err) => panic!("failed to probe zsh: {err}"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn zsh_posix_snippet_preamble(snippet_path: &Path, fake_stax: &Path) -> String {
+        format!(
+            "source \"{}\"; __STAX_BIN=\"{}\"",
+            snippet_path.display(),
+            fake_stax.display(),
+        )
+    }
+
+    #[cfg(unix)]
+    fn zsh_posix_snippet_path_preamble(snippet_path: &Path, bin_dir: &Path) -> String {
+        format!(
+            "export PATH=\"{}:$PATH\"; source \"{}\"",
+            bin_dir.display(),
+            snippet_path.display(),
+        )
+    }
+
     #[test]
     fn posix_shell_snippet_clears_aliases_before_function_definitions() {
         let snippet = shell_snippet(ShellKind::Posix);
@@ -996,11 +1028,8 @@ mod tests {
     fn posix_shell_snippet_wraps_worktree_promote_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1018,13 +1047,13 @@ mod tests {
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st wt promote", snippet_path.display());
+        let command = format!(
+            "{}; st wt promote",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax)
+        );
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .output()
             .expect("run zsh shell snippet");
 
@@ -1046,11 +1075,8 @@ mod tests {
     fn posix_shell_snippet_relocates_after_successful_promote_only() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-lc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1075,17 +1101,14 @@ mod tests {
 
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
         let command = format!(
-            "source \"{}\"; cd \"{}\"; st wt promote; printf 'cwd:%s\\n' \"$PWD\"",
-            snippet_path.display(),
+            "{}; cd \"{}\"; st wt promote; printf 'cwd:%s\\n' \"$PWD\"",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax),
             source.display()
         );
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
-            .env("PATH", &path_env)
             .env("PROMOTE_TARGET", &target)
             .output()
             .expect("run successful promote wrapper");
@@ -1100,14 +1123,13 @@ mod tests {
         )
         .expect("write failing fake stax");
         let command = format!(
-            "source \"{}\"; cd \"{}\"; st wt promote || true; printf 'cwd:%s\\n' \"$PWD\"",
-            snippet_path.display(),
+            "{}; cd \"{}\"; st wt promote || true; printf 'cwd:%s\\n' \"$PWD\"",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax),
             source.display()
         );
         let output = Command::new("zsh")
-            .arg("-lc")
+            .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .env("PROMOTE_TARGET", &target)
             .output()
             .expect("run failing promote wrapper");
@@ -1122,11 +1144,8 @@ mod tests {
     fn posix_shell_snippet_resolves_real_binary_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-dfc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1148,13 +1167,13 @@ mod tests {
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st config", snippet_path.display());
+        let command = format!(
+            "{}; st config",
+            zsh_posix_snippet_path_preamble(&snippet_path, &bin_dir)
+        );
         let output = Command::new("zsh")
             .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .output()
             .expect("run zsh shell snippet");
 
@@ -1183,11 +1202,8 @@ mod tests {
     fn posix_shell_snippet_keeps_path_for_worktree_shell_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-dfc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1209,13 +1225,13 @@ mod tests {
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st wtgo demo-lane", snippet_path.display());
+        let command = format!(
+            "{}; st wtgo demo-lane",
+            zsh_posix_snippet_path_preamble(&snippet_path, &bin_dir)
+        );
         let output = Command::new("zsh")
             .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .output()
             .expect("run zsh shell snippet");
 
@@ -1244,11 +1260,8 @@ mod tests {
     fn posix_shell_snippet_wraps_lane_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-dfc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1270,13 +1283,13 @@ mod tests {
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st lane review-pass", snippet_path.display());
+        let command = format!(
+            "{}; st lane review-pass",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax)
+        );
         let output = Command::new("zsh")
             .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .output()
             .expect("run zsh shell snippet");
 
@@ -1305,11 +1318,8 @@ mod tests {
     fn posix_shell_snippet_wraps_checkout_commands_in_zsh() {
         use std::os::unix::fs::PermissionsExt;
 
-        if let Err(err) = Command::new("zsh").arg("-dfc").arg("exit 0").output() {
-            if err.kind() == ErrorKind::NotFound {
-                return;
-            }
-            panic!("failed to probe zsh: {err}");
+        if !zsh_available_with_flags("-dfc") {
+            return;
         }
 
         let dir = tempdir().expect("tempdir");
@@ -1331,13 +1341,13 @@ mod tests {
         let snippet_path = dir.path().join("shell-setup.sh");
         fs::write(&snippet_path, shell_snippet(ShellKind::Posix)).expect("write snippet");
 
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        let path_env = format!("{}:{original_path}", bin_dir.display());
-        let command = format!("source \"{}\"; st bco feature", snippet_path.display());
+        let command = format!(
+            "{}; st bco feature",
+            zsh_posix_snippet_preamble(&snippet_path, &fake_stax)
+        );
         let output = Command::new("zsh")
             .arg("-dfc")
             .arg(&command)
-            .env("PATH", path_env)
             .output()
             .expect("run zsh shell snippet");
 
