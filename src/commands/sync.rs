@@ -186,7 +186,7 @@ pub fn run(
     let mut stats = SyncStats::default();
 
     let repo = GitRepo::open()?;
-    let stack = Stack::load(&repo)?;
+    let mut stack = Stack::load(&repo)?;
     let current = repo.current_branch()?;
     let workdir = repo.workdir()?.to_path_buf();
     let reopen_repo_path = repo.git_dir()?.to_path_buf();
@@ -627,6 +627,14 @@ pub fn run(
             "update imported branches".to_string(),
             imported_update_started_at.elapsed(),
         ));
+    }
+
+    // Refresh live PR state before merged-branch detection so squash-merged PRs
+    // (missed by `git branch --merged` when the remote branch still exists) are
+    // visible via Method 2 on the first sync after merge.
+    if let Some(pr_refresh_elapsed) = refresh_pr_draft_states(&repo, &config, quiet) {
+        step_timings.push(("refresh PR metadata".to_string(), pr_refresh_elapsed));
+        stack = Stack::load(&repo)?;
     }
 
     // 3. Delete merged branches
@@ -1901,10 +1909,6 @@ pub fn run(
 
     stats.cleanup_skips.sort_by(|a, b| a.branch.cmp(&b.branch));
 
-    if let Some(pr_refresh_elapsed) = refresh_pr_draft_states(&repo, &config, quiet) {
-        step_timings.push(("refresh PR metadata".to_string(), pr_refresh_elapsed));
-    }
-
     if verbose && !quiet {
         println!();
         println!("{}", "Sync timing summary:".bold());
@@ -1942,8 +1946,9 @@ pub fn run(
 }
 
 /// Fetch live PR state from the forge for all tracked branches and update
-/// both branch metadata and CiCache. Called at end of sync so that operations
-/// like `gh pr ready`, `gh pr merge`, or `gh pr edit --base` are reflected.
+/// both branch metadata and CiCache. Called before merged-branch detection
+/// during sync so that operations like `gh pr ready`, `gh pr merge`, or
+/// `gh pr edit --base` are reflected in time for cleanup.
 fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Option<Duration> {
     let started_at = Instant::now();
     let stack = match Stack::load(repo) {

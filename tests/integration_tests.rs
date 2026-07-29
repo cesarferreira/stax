@@ -8170,6 +8170,35 @@ mod forge_mock_tests {
         run_remote_git(&["push", "origin", "--delete", branch]);
     }
 
+    fn squash_merge_branch_on_fake_remote_keep_branch(remote_root: &TempDir, branch: &str) {
+        let remote_repo = remote_root.path().join("test").join("repo.git");
+        let clone_dir = super::test_tempdir();
+
+        let run_remote_git = |args: &[&str]| {
+            let output = hermetic_git_command()
+                .args(args)
+                .current_dir(clone_dir.path())
+                .output()
+                .expect("Failed to run git in fake remote clone");
+            assert!(
+                output.status.success(),
+                "git {:?} failed\nstdout: {}\nstderr: {}",
+                args,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        run_remote_git(&["clone", remote_repo.to_str().unwrap(), "."]);
+        run_remote_git(&["checkout", "-B", "main", "origin/main"]);
+        run_remote_git(&["config", "user.email", "merger@test.com"]);
+        run_remote_git(&["config", "user.name", "Merger"]);
+        run_remote_git(&["fetch", "origin", branch]);
+        run_remote_git(&["merge", "--squash", &format!("origin/{}", branch)]);
+        run_remote_git(&["commit", "-m", &format!("Squash merge {}", branch)]);
+        run_remote_git(&["push", "origin", "main"]);
+    }
+
     fn run_stax_with_env(repo: &TestRepo, home: &Path, args: &[&str]) -> Output {
         run_stax_with_token_env(repo, home, "STAX_GITHUB_TOKEN", args)
     }
@@ -15176,7 +15205,7 @@ mod forge_mock_tests {
             .await;
 
         // Run sync — it should refresh PR state in metadata
-        let output = run_stax_with_env(&repo, home.path(), &["sync"]);
+        let output = run_stax_with_env(&repo, home.path(), &["sync", "--force"]);
         assert!(
             output.status.success(),
             "Sync failed: {}\n{}",
@@ -15197,6 +15226,84 @@ mod forge_mock_tests {
             );
         }
         // If metadata ref was deleted (sync cleaned up the merged branch), that's also correct
+    }
+
+    /// Squash-merged PR with stale OPEN metadata and a surviving remote branch
+    /// must be detected for cleanup on the first sync (not only after metadata
+    /// refresh on a second run).
+    #[tokio::test]
+    async fn test_sync_deletes_squash_merged_branch_on_first_sync_with_stale_pr_metadata() {
+        ensure_crypto_provider();
+        let mock_server = MockServer::start().await;
+        let home = super::test_tempdir();
+        write_test_config(home.path(), &mock_server.uri());
+        let repo = TestRepo::new();
+        let remote_root = setup_fake_remote(
+            &repo,
+            home.path(),
+            "https://github.com/test/repo.git",
+            "https://github.com/",
+        );
+
+        let output = run_stax_with_token_env(
+            &repo,
+            home.path(),
+            "STAX_GITHUB_TOKEN",
+            &["bc", "feature-squash-stale-pr"],
+        );
+        assert!(
+            output.status.success(),
+            "Failed to create branch: {}",
+            TestRepo::stderr(&output)
+        );
+        let branch = repo.current_branch();
+        repo.create_file("feature.txt", "feature content\n");
+        repo.commit("Feature commit");
+        let push = git_with_env(&repo, home.path(), &["push", "-u", "origin", &branch]);
+        assert!(
+            push.status.success(),
+            "Failed to push branch: {}",
+            TestRepo::stderr(&push)
+        );
+        write_branch_pr_metadata(&repo, &branch, "main", 501, Some(false));
+
+        squash_merge_branch_on_fake_remote_keep_branch(&remote_root, &branch);
+        let _ = remote_root.keep();
+
+        let mut merged_pr = github_pull_fixture(501, &branch, "main", "aaaa");
+        merged_pr["state"] = serde_json::json!("closed");
+        merged_pr["merged_at"] = serde_json::json!("2026-05-20T10:00:00Z");
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test/repo/pulls/501"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(merged_pr))
+            .mount(&mock_server)
+            .await;
+
+        let merged_output = repo.git(&["branch", "--merged", "main"]);
+        let merged_str = String::from_utf8_lossy(&merged_output.stdout);
+        assert!(
+            !merged_str.contains(&branch),
+            "fixture must use squash merge (branch not an ancestor of main), got: {merged_str}"
+        );
+
+        let output = run_stax_with_env(&repo, home.path(), &["sync", "--force"]);
+        assert!(
+            output.status.success(),
+            "Sync failed: {}\n{}",
+            TestRepo::stderr(&output),
+            TestRepo::stdout(&output)
+        );
+
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            stdout.contains("Found 1 merged branch"),
+            "Expected first sync to detect squash-merged branch, got:\n{stdout}"
+        );
+        assert!(
+            !repo.list_branches().contains(&branch),
+            "Expected squash-merged branch to be deleted on first sync"
+        );
     }
 
     #[tokio::test]
