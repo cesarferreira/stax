@@ -292,9 +292,10 @@ If the stash cannot apply cleanly while committing below, Stax restores the orig
 - `--template <name>` / `--no-template` / `--edit`
 - `--rerequest-review` / `--update-title`
 - `--native-stack` force-attempt native GitHub Stack registration for this submit; `--no-native-stack` skips it
+- `--fork` if the upstream push is denied for lack of write access, fall back to submitting the branch from a fork (single branch, GitHub only)
 - `--yes` / `--no-prompt`
 
-Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` and `native_stack = "auto" | "off" | "link"` in `~/.config/stax/config.toml`.
+Config: `[submit] stack_links = "comment" | "body" | "both" | "off"` and `native_stack = "auto" | "off" | "link"`; `[remote] auto_fork` and `[remote] fork_remote` control the fork fallback — see [Configuration → Fork fallback for submit](../configuration/index.md#fork-fallback-for-submit).
 
 ### `st completions`
 

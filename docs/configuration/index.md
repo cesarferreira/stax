@@ -45,6 +45,8 @@ single_stack = "on"    # "on" | "off"
 # base_url = "https://github.com"
 # api_base_url = "https://github.company.com/api/v3"
 # forge = "github" # "github" | "gitlab" | "gitea" — override auto-detection
+# auto_fork = false # always fall back to submitting from a fork when the upstream push is denied
+# fork_remote = "fork" # name of a pre-configured git remote for the fork (skip auto-detect)
 
 [submit]
 # stack_links = "comment" # "comment" | "body" | "both" | "off"
@@ -296,6 +298,27 @@ forge = "gitlab"
 Accepted values: `"github"`, `"gitlab"`, `"gitea"`, `"forgejo"` (Forgejo is treated as Gitea).
 
 Auto-detection fallback: hostnames containing `gitlab` → GitLab, `gitea`/`forgejo` → Gitea, otherwise → GitHub.
+
+## Fork fallback for submit
+
+When `stax branch submit` pushes to an upstream you lack write access to, GitHub rejects the push. Opt in to a fork-based fallback so stax re-runs the push against your fork instead:
+
+```toml
+[remote]
+auto_fork = true          # always fall back to a fork on permission-denied push
+fork_remote = "fork"      # optional: reuse an existing git remote you added yourself
+```
+
+Or use `stax branch submit --fork` for a one-off. When enabled:
+
+- stax reuses a pushable fork under your GitHub login, or creates one via the GitHub API when none exists.
+- the branch is pushed with `--force-with-lease` (no bare `--force`); a diverged fork branch fails actionably rather than silently overwriting it.
+- the PR is opened with head `<fork_owner>:<branch>` and `maintainer_can_modify = true`.
+- an existing git remote named `fork` is never silently repointed; the run fails if its URL conflicts.
+
+Supported forges: GitHub only. Fork fallback rejects GitLab/Gitea cleanly.
+Scope: single branch only. A multi-branch stack cannot be submitted from a fork because a stacked child PR's base branch cannot live in the upstream repo.
+The base branch must already exist upstream.
 
 ### Automatic CI hydration trust
 

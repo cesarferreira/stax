@@ -703,10 +703,17 @@ pub(crate) fn push_failure_details(stdout: &str, stderr: &str) -> String {
 /// "pre-receive hook declined" alone can be a server-side policy rejection
 /// unrelated to permissions (e.g. a commit message or lint check), so it
 /// only counts here alongside an explicit permission/authorization phrase.
+///
+/// The message embeds the raw push stdout/stderr, which includes branch names
+/// and commit SHAs, so a bare "403" substring is not safe to match: a
+/// non-fast-forward rejection on a branch named `fix-403` would look like a
+/// permission denial. Match the full transport phrases instead.
 pub fn push_error_indicates_no_write_access(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
     if lower.contains("permission to")
-        || lower.contains("403")
+        || lower.contains("returned error: 403")
+        || lower.contains("403 forbidden")
+        || lower.contains("write access to repository not granted")
         || lower.contains("denied to")
         || lower.contains("not authorized")
     {
@@ -714,6 +721,14 @@ pub fn push_error_indicates_no_write_access(msg: &str) -> bool {
     }
     lower.contains("pre-receive hook declined")
         && (lower.contains("permission") || lower.contains("not authorized"))
+}
+
+/// True when a `push_branches` failure message indicates git rejected the push
+/// because the remote ref advanced beyond the lease's expected OID, i.e. the
+/// fork/upstream branch has diverged from what we last saw.
+pub fn push_error_indicates_stale_lease(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("stale info") || lower.contains("(stale info)")
 }
 
 fn execute_prepared_submit_inner(
@@ -1488,5 +1503,23 @@ mod tests {
     fn push_error_indicates_no_write_access_rejects_stale_info() {
         let msg = "Failed to push branches feature: rejected feature\n! [rejected]        feature -> feature (stale info)";
         assert!(!super::push_error_indicates_no_write_access(msg));
+    }
+
+    #[test]
+    fn push_error_indicates_no_write_access_rejects_non_fast_forward_on_403_named_branch() {
+        let msg = "Failed to push branches fix-403: rejected fix-403\n! [rejected]        fix-403 -> fix-403 (fetch first)\nerror: failed to push some refs to 'https://github.com/owner/repo.git'";
+        assert!(!super::push_error_indicates_no_write_access(msg));
+    }
+
+    #[test]
+    fn push_error_indicates_no_write_access_matches_permission_denial_on_403_named_branch() {
+        let msg = "Failed to push branches fix-403:\nremote: Permission to owner/repo.git denied to someuser.\nfatal: unable to access 'https://github.com/owner/repo.git/': The requested URL returned error: 403";
+        assert!(super::push_error_indicates_no_write_access(msg));
+    }
+
+    #[test]
+    fn push_error_indicates_no_write_access_matches_write_access_not_granted() {
+        let msg = "remote: Write access to repository not granted.\nfatal: unable to access 'https://github.com/owner/repo.git/'";
+        assert!(super::push_error_indicates_no_write_access(msg));
     }
 }

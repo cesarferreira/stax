@@ -1,3 +1,6 @@
+use crate::common::github_mock::{
+    mount_current_user, mount_pr_create_and_refresh, write_stax_config,
+};
 use crate::common::{OutputAssertions, TestRepo};
 use std::fs;
 use std::path::Path;
@@ -16,23 +19,11 @@ mod unix {
         let hook = bare_repo_path.join("hooks").join("pre-receive");
         fs::write(
             &hook,
-            "#!/bin/sh\necho 'Permission to test-owner/test-repo.git denied to test-user.' >&2\nexit 1\n",
+            "#!/bin/sh\necho 'Permission to test-owner/test-repo.git denied to contributor.' >&2\nexit 1\n",
         )
         .expect("write pre-receive hook");
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o755))
             .expect("chmod pre-receive hook");
-    }
-
-    fn write_test_config(home: &Path, api_base_url: &str) {
-        let config_dir = home.join(".config").join("stax");
-        fs::create_dir_all(&config_dir).expect("failed to create test config dir");
-        fs::write(
-            config_dir.join("config.toml"),
-            format!(
-                "[remote]\napi_base_url = \"{api_base_url}\"\n\n[submit]\nstack_links = \"off\"\n"
-            ),
-        )
-        .expect("failed to write test config");
     }
 
     /// Redirect a fake `https://github.com/...` fork URL to a local bare repo,
@@ -51,33 +42,6 @@ mod unix {
             "fork insteadOf config failed: {}",
             TestRepo::stderr(&out)
         );
-    }
-
-    async fn mock_get_current_user(mock_server: &MockServer, login: &str) {
-        Mock::given(method("GET"))
-            .and(path("/user"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "login": login,
-                "id": 1,
-                "node_id": "u1",
-                "avatar_url": "https://example.com/avatar",
-                "gravatar_id": "",
-                "url": format!("https://api.github.com/users/{login}"),
-                "html_url": format!("https://github.com/{login}"),
-                "followers_url": format!("https://api.github.com/users/{login}/followers"),
-                "following_url": format!("https://api.github.com/users/{login}/following"),
-                "gists_url": format!("https://api.github.com/users/{login}/gists"),
-                "starred_url": format!("https://api.github.com/users/{login}/starred"),
-                "subscriptions_url": format!("https://api.github.com/users/{login}/subscriptions"),
-                "organizations_url": format!("https://api.github.com/users/{login}/orgs"),
-                "repos_url": format!("https://api.github.com/users/{login}/repos"),
-                "events_url": format!("https://api.github.com/users/{login}/events"),
-                "received_events_url": format!("https://api.github.com/users/{login}/received_events"),
-                "type": "User",
-                "site_admin": false
-            })))
-            .mount(mock_server)
-            .await;
     }
 
     async fn mock_no_existing_fork(mock_server: &MockServer, login: &str) {
@@ -110,70 +74,33 @@ mod unix {
             .await;
     }
 
-    async fn mock_pr_create_and_refresh(mock_server: &MockServer) {
-        Mock::given(method("GET"))
-            .and(path("/repos/test-owner/test-repo/pulls"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
-            .mount(mock_server)
-            .await;
-
-        Mock::given(method("POST"))
-            .and(path("/repos/test-owner/test-repo/pulls"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/42",
-                "id": 42,
-                "number": 42,
-                "state": "open",
-                "title": "created",
-                "body": "",
-                "draft": false,
-                "head": { "ref": "created", "sha": "aaaa", "label": "test-owner:created" },
-                "base": { "ref": "main", "sha": "bbbb" },
-                "html_url": "https://github.com/test-owner/test-repo/pull/42"
-            })))
-            .mount(mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/repos/test-owner/test-repo/issues/42/comments"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
-            .mount(mock_server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/repos/test-owner/test-repo/pulls/42"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "url": "https://api.github.com/repos/test-owner/test-repo/pulls/42",
-                "id": 42,
-                "number": 42,
-                "state": "open",
-                "title": "created",
-                "body": "",
-                "draft": false,
-                "head": { "ref": "created", "sha": "aaaa", "label": "test-owner:created" },
-                "base": { "ref": "main", "sha": "bbbb" },
-                "html_url": "https://github.com/test-owner/test-repo/pull/42"
-            })))
-            .mount(mock_server)
-            .await;
-    }
-
     #[tokio::test]
     async fn branch_submit_fork_pushes_branch_and_opens_pr_from_fork() {
         let mock_server = MockServer::start().await;
-        mock_get_current_user(&mock_server, "test-owner").await;
-        mock_no_existing_fork(&mock_server, "test-owner").await;
+        // The authenticated user is a contributor who is NOT the upstream
+        // owner — that is the only realistic setup for fork submit.
+        mount_current_user(&mock_server, "contributor").await;
+        mock_no_existing_fork(&mock_server, "contributor").await;
 
         let fork_bare = tempfile::tempdir().expect("fork bare tempdir");
-        let fork_https_url = "https://github.com/test-owner/test-repo-fork.git";
-        let fork_ssh_url = "git@github.com:test-owner/test-repo-fork.git";
+        let fork_https_url = "https://github.com/contributor/test-repo.git";
+        let fork_ssh_url = "git@github.com:contributor/test-repo.git";
         hermetic_git_init_bare(fork_bare.path());
-        mock_create_fork(&mock_server, "test-owner", fork_ssh_url, fork_https_url).await;
-        mock_pr_create_and_refresh(&mock_server).await;
+        mock_create_fork(&mock_server, "contributor", fork_ssh_url, fork_https_url).await;
+        mount_pr_create_and_refresh(
+            &mock_server,
+            "test-owner",
+            "test-repo",
+            42,
+            "fork-fallback-branch",
+            "main",
+            "contributor",
+        )
+        .await;
 
         let repo = TestRepo::new_with_remote();
         let home = repo.clean_home();
-        write_test_config(Path::new(&home), &mock_server.uri());
+        write_stax_config(Path::new(&home), &mock_server.uri(), "");
         repo.configure_github_like_submit_remote();
         configure_fork_insteadof(&repo, fork_bare.path(), fork_https_url);
 
@@ -230,8 +157,8 @@ mod unix {
 
         assert_eq!(
             pr_payload["head"],
-            format!("test-owner:{branch}"),
-            "PR head should be qualified with the fork owner: {pr_payload}"
+            format!("contributor:{branch}"),
+            "PR head should be qualified with the fork owner, not the upstream owner: {pr_payload}"
         );
         assert_eq!(pr_payload["base"], "main");
     }
@@ -268,14 +195,13 @@ mod unix {
         install_permission_denying_pre_receive_hook(&remote_path);
 
         let branches = repo.create_stack(&["fork-stack-a", "fork-stack-b"]);
-        // Checkout the bottom of the stack so `upstack submit` covers both
-        // branches. `Stack` scope + `--no-pr` would route through the legacy
-        // `run_application_default_submit` path (out of scope here), so use
-        // `Upstack` scope instead to stay on the live fork-fallback code path.
         repo.run_stax(&["checkout", &branches[0]]).assert_success();
 
+        // Now that the default-submit router honours `--fork`, `Stack` scope +
+        // `--no-pr` + `--fork` reaches the fork-fallback code path directly and
+        // the multi-branch guard fires with a single-branch error.
         repo.run_stax(&[
-            "upstack",
+            "stack",
             "submit",
             "--fork",
             "--no-pr",
@@ -290,6 +216,57 @@ mod unix {
         assert!(
             !TestRepo::stdout(&remotes).lines().any(|r| r == "fork"),
             "no fork remote should be created for a multi-branch permission error"
+        );
+    }
+
+    #[test]
+    fn branch_submit_fork_conflicting_existing_fork_remote_fails() {
+        let repo = TestRepo::new_with_remote();
+        let home = repo.clean_home();
+        // No live wiremock server needed — the conflict check fires before
+        // any API call.
+        write_stax_config(Path::new(&home), "http://127.0.0.1:1", "");
+        repo.configure_github_like_submit_remote();
+        // Pre-existing `fork` remote pointing at an unrelated URL that should
+        // NOT be silently overwritten.
+        repo.git(&[
+            "remote",
+            "add",
+            "fork",
+            "https://github.com/someone-else/unrelated.git",
+        ])
+        .assert_success();
+        let remote_path = repo.remote_path().expect("origin bare path");
+        install_permission_denying_pre_receive_hook(&remote_path);
+
+        repo.run_stax(&["bc", "conflicting-fork-branch"])
+            .assert_success();
+        repo.create_file("conflict.txt", "content");
+        repo.commit("Commit for conflicting-fork-branch");
+
+        // No `remote.fork_remote` set → stax will try to auto-detect and hit
+        // the `find_pushable_fork` API. Without a live server that fails, but
+        // the point of this test is that the pre-existing `fork` remote's URL
+        // is still what it was.
+        let _ = repo.run_stax_with_env(
+            &[
+                "branch",
+                "submit",
+                "--fork",
+                "--yes",
+                "--no-prompt",
+                "--publish",
+                "--no-template",
+            ],
+            &[("STAX_GITHUB_TOKEN", "test-token")],
+        );
+
+        let after = repo.git(&["config", "--local", "--get", "remote.fork.url"]);
+        after.assert_success();
+        assert_eq!(
+            TestRepo::stdout(&after).trim(),
+            "https://github.com/someone-else/unrelated.git",
+            "stax must not silently repoint a pre-existing `fork` remote"
         );
     }
 }

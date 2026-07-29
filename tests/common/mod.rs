@@ -6,6 +6,7 @@
 //! - Assertion utilities for test output
 
 mod git_fixture;
+pub(crate) mod github_mock;
 pub(crate) use git_fixture::{commit_all, init_test_repo};
 
 use serde_json::Value;

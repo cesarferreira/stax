@@ -2078,18 +2078,14 @@ Use --auto-stash-pop or stash/commit changes first.",
         Ok(())
     }
 
-    /// Push `branch` to `remote`, force (no lease). Used for fork-fallback
-    /// submit: the fork is owned by the caller, and a freshly created fork's
-    /// branch has no shared history to race with, so a plain force push is
-    /// safe and also covers a diverged branch on re-submit.
-    pub fn push_branch_to_fork(&self, remote: &str, branch: &str) -> Result<()> {
-        let output = self.run_git(self.workdir()?, &["push", "--force", remote, branch])?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("git push --force {} {} failed: {}", remote, branch, stderr);
+    /// URL configured for a given git remote, or `None` if it does not exist.
+    pub fn remote_url(&self, name: &str) -> Result<Option<String>> {
+        match self.repo.find_remote(name) {
+            Ok(remote) => Ok(remote.url().ok().map(str::to_string)),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(e) => Err(anyhow::anyhow!(e))
+                .with_context(|| format!("Failed to look up remote '{name}'")),
         }
-        Ok(())
     }
 
     /// Return all branch names under `refs/remotes/<remote>/` as a set.
