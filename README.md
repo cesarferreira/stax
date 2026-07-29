@@ -246,11 +246,15 @@ Merge from the bottom of the stack up to your current branch, with CI and readin
 st merge                  # local cascade merge
 st merge --when-ready     # wait/poll until PRs are mergeable
 st merge --ds             # merge ancestors, rebase current branch
-st merge --stack          # target selected PRs to trunk; preserve lower PR merged state by default
+st merge --stack          # GitHub/GitLab: preserve lower PR/MR merged state through one tip merge
 st merge --stack --full   # stack-merge the full stack even from the middle
 st merge --remote         # merge remotely on GitHub while you keep working
 st merge --all            # merge the whole stack regardless of position
 ```
+
+GitLab stack merge checks project merge settings first, sends `squash: false`,
+and accepts only the default preserving method; explicit stack `rebase` or
+`squash` is rejected. Gitea/Forgejo stack merge is not supported.
 
 → [Merge and cascade](docs/workflows/merge-and-cascade.md)
 
