@@ -91,16 +91,7 @@ struct CheckRun {
     conclusion: Option<String>,
 }
 
-pub use crate::forge::OpenPrInfo;
-
-/// A fork of the upstream repo that stax can push a branch to when the
-/// caller lacks write access to the upstream itself.
-#[derive(Debug, Clone)]
-pub struct ForkTarget {
-    pub owner: String,
-    pub ssh_url: String,
-    pub https_url: String,
-}
+pub use crate::forge::{ForkTarget, OpenPrInfo};
 
 /// Minimal shape of a GitHub repository response, covering only the fields
 /// fork resolution needs. Deserialized by hand (rather than via octocrab's

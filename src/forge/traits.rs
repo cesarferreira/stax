@@ -65,6 +65,11 @@ pub trait Forge {
     async fn get_reviews_received(&self, hours: i64, username: &str)
     -> Result<Vec<ReviewActivity>>;
     async fn get_reviews_given(&self, hours: i64, username: &str) -> Result<Vec<ReviewActivity>>;
+    /// Look up a fork of this repo owned by `login` that stax can push to,
+    /// for fork-fallback submit. Return `None` when no pushable fork exists.
+    async fn find_pushable_fork(&self, login: &str) -> Result<Option<ForkTarget>>;
+    /// Fork this repo under the authenticated user's account.
+    async fn create_fork(&self) -> Result<ForkTarget>;
 }
 
 #[cfg(test)]
@@ -224,6 +229,12 @@ pub(crate) mod tests {
             _hours: i64,
             _username: &str,
         ) -> Result<Vec<ReviewActivity>> {
+            anyhow::bail!("unused in fake")
+        }
+        async fn find_pushable_fork(&self, _login: &str) -> Result<Option<ForkTarget>> {
+            anyhow::bail!("unused in fake")
+        }
+        async fn create_fork(&self) -> Result<ForkTarget> {
             anyhow::bail!("unused in fake")
         }
     }

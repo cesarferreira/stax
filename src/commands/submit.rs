@@ -1,7 +1,7 @@
 pub(crate) use crate::application::SubmitScope;
 use crate::application::submit::{
     PushSpec, TemporaryPublishRefs, TemporarySubmitWorktree, push_branches,
-    push_error_indicates_no_write_access,
+    push_error_indicates_no_write_access, push_error_indicates_stale_lease,
 };
 use crate::commands::open::open_url_in_browser;
 use crate::config::{
@@ -463,7 +463,10 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         return super::submit_plan::run(scope, &options);
     }
 
-    if uses_application_default_submit(scope, &options) {
+    let config = Config::load()?;
+    let fork_enabled = options.fork || config.auto_fork();
+
+    if uses_application_default_submit(scope, &options, fork_enabled) {
         return run_application_default_submit(scope, &options);
     }
 
@@ -510,7 +513,6 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let repo = GitRepo::open()?;
     let current = repo.current_branch()?;
     let stack = Stack::load(&repo)?;
-    let config = Config::load()?;
     let stack_links_mode = config.submit.stack_links;
     let single_stack_mode = config.submit.single_stack;
     let stack_links_when_native = config.submit.stack_links_when_native;
@@ -765,7 +767,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     let mut full_scan_fallbacks = 0usize;
 
     let mut plans: Vec<PrPlan> = Vec::new();
-    let mut rt: Option<tokio::runtime::Runtime> = None;
+    let rt: Option<tokio::runtime::Runtime>;
     let client: Option<ForgeClient>;
 
     if no_pr {
@@ -904,6 +906,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 is_imported,
             });
         }
+        rt = runtime;
     } else {
         let runtime = tokio::runtime::Runtime::new()?;
         let _enter = runtime.enter();
@@ -1618,15 +1621,48 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     );
                 }
 
-                let fork_rt = tokio::runtime::Runtime::new()?;
+                // Reuse the planning runtime/client when available; only build a
+                // second pair if planning skipped them (e.g. --no-pr had them fail
+                // silently).
+                let owned_rt: Option<tokio::runtime::Runtime> = if rt.is_none() {
+                    Some(tokio::runtime::Runtime::new()?)
+                } else {
+                    None
+                };
+                let fork_rt: &tokio::runtime::Runtime = if let Some(r) = &rt {
+                    r
+                } else {
+                    owned_rt.as_ref().expect("owned_rt initialized above")
+                };
                 let _fork_rt_enter = fork_rt.enter();
-                let fork_client = ForgeClient::new(&remote_info)?;
+                let owned_fork_client: Option<ForgeClient> = if client.is_none() {
+                    Some(ForgeClient::new(&remote_info)?)
+                } else {
+                    None
+                };
+                let fork_client: &ForgeClient = if let Some(c) = &client {
+                    c
+                } else {
+                    owned_fork_client
+                        .as_ref()
+                        .expect("owned_fork_client initialized above")
+                };
                 let login = fork_rt.block_on(async { fork_client.get_current_user().await })?;
 
                 let (fork_remote_name, resolved_owner, fork_freshly_created) = if let Some(name) =
                     config.fork_remote().filter(|name| repo.remote_exists(name))
                 {
-                    (name.to_string(), login.clone(), false)
+                    // Trust the user-configured fork remote's URL for the owner
+                    // rather than assuming the authenticated login: a fork under
+                    // an org would otherwise be qualified with the wrong owner in
+                    // `owner:branch`.
+                    let configured_url = remote::get_remote_url(repo.workdir()?, name)?;
+                    let owner_from_url = remote::parse_remote_url(&configured_url)
+                        .ok()
+                        .and_then(|(_, path)| path.split('/').next().map(str::to_string))
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| login.clone());
+                    (name.to_string(), owner_from_url, false)
                 } else {
                     let existing =
                         fork_rt.block_on(async { fork_client.find_pushable_fork(&login).await })?;
@@ -1645,33 +1681,75 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                     } else {
                         target.ssh_url.clone()
                     };
+                    // Don't silently repoint an existing `fork` remote at a
+                    // different URL — that could send commits to the wrong repo.
+                    if let Some(existing_url) = repo.remote_url("fork")?
+                        && existing_url != fork_url
+                    {
+                        anyhow::bail!(
+                            "A git remote named `fork` already exists and points at {existing_url}, \
+                             but the auto-detected fork URL is {fork_url}. \
+                             Remove or re-point the existing `fork` remote, or set \
+                             `remote.fork_remote` to the name of an existing remote."
+                        );
+                    }
                     repo.ensure_remote("fork", &fork_url)?;
                     ("fork".to_string(), target.owner, freshly_created)
                 };
 
-                let fork_spec = &pushed_branches[0];
+                // Reuse `push_branches` so the fork push honours `source_ref`
+                // (temporary publish ref for restacked branches), `--no-verify`,
+                // and per-branch `--force-with-lease` — never a bare `--force`,
+                // which would silently overwrite work that another tool advanced.
+                let fork_workdir = repo.workdir()?.to_path_buf();
+                let fork_spec_template = pushed_branches[0].clone();
                 let mut attempt = 0;
                 loop {
                     attempt += 1;
-                    match repo.push_branch_to_fork(&fork_remote_name, &fork_spec.branch) {
+                    let fork_heads = remote::ls_remote_head_oids(&fork_workdir, &fork_remote_name)
+                        .unwrap_or_default();
+                    let expected = fork_heads.get(&fork_spec_template.branch).cloned();
+                    let fork_spec = PushSpec {
+                        expected_remote_oid: expected,
+                        ..fork_spec_template.clone()
+                    };
+                    match push_branches(
+                        &fork_workdir,
+                        &fork_remote_name,
+                        std::slice::from_ref(&fork_spec),
+                        no_verify,
+                    ) {
                         Ok(()) => break,
-                        Err(_) if fork_freshly_created && attempt < 3 => {
+                        Err(err) if fork_freshly_created && attempt < 3 => {
                             eprintln!(
-                                "  {} waiting 2s before retrying push to fork...",
+                                "  {} waiting 2s before retrying push to fork ({err})...",
                                 "!".yellow()
                             );
                             std::thread::sleep(Duration::from_secs(2));
                         }
                         Err(push_err) => {
                             LiveTimer::maybe_finish_err(push_timer, "failed");
+                            let wrapped = if push_error_indicates_stale_lease(&push_err.to_string())
+                            {
+                                anyhow::anyhow!(
+                                    "Push to fork remote `{}` was rejected: the fork branch \
+                                     `{}` has diverged from the local branch. Inspect the fork \
+                                     branch and delete or reset it, or point `remote.fork_remote` \
+                                     at a different remote.\n{push_err}",
+                                    fork_remote_name,
+                                    fork_spec_template.branch,
+                                )
+                            } else {
+                                push_err
+                            };
                             if let Some(tx) = tx {
                                 tx.finish_err(
-                                    &format!("Fork push failed: {}", push_err),
+                                    &format!("Fork push failed: {}", wrapped),
                                     Some("push"),
                                     None,
                                 )?;
                             }
-                            return Err(push_err);
+                            return Err(wrapped);
                         }
                     }
                 }
@@ -2188,7 +2266,11 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
     Ok(())
 }
 
-fn uses_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> bool {
+fn uses_application_default_submit(
+    scope: SubmitScope,
+    options: &SubmitOptions,
+    fork_enabled: bool,
+) -> bool {
     matches!(scope, SubmitScope::Stack)
         && options.no_pr
         && !options.dry_run
@@ -2202,6 +2284,7 @@ fn uses_application_default_submit(scope: SubmitScope, options: &SubmitOptions) 
         && !options.no_template
         && options.template.is_none()
         && !options.update_title
+        && !fork_enabled
 }
 
 fn run_application_default_submit(scope: SubmitScope, options: &SubmitOptions) -> Result<()> {
@@ -4700,6 +4783,38 @@ mod tests {
         assert!(!prompt.contains("\"title\""));
         assert!(prompt.contains("Use this PR template as the body structure"));
         assert!(prompt.contains("## Summary"));
+    }
+
+    #[test]
+    fn uses_application_default_submit_declines_stack_no_pr_when_fork_enabled() {
+        let options = SubmitOptions {
+            no_pr: true,
+            ..SubmitOptions::default()
+        };
+        assert!(super::uses_application_default_submit(
+            SubmitScope::Stack,
+            &options,
+            false,
+        ));
+        assert!(!super::uses_application_default_submit(
+            SubmitScope::Stack,
+            &options,
+            true,
+        ));
+    }
+
+    #[test]
+    fn uses_application_default_submit_declines_stack_no_pr_with_fork_flag_set() {
+        let options = SubmitOptions {
+            no_pr: true,
+            fork: true,
+            ..SubmitOptions::default()
+        };
+        assert!(!super::uses_application_default_submit(
+            SubmitScope::Stack,
+            &options,
+            options.fork,
+        ));
     }
 
     #[test]

@@ -1,10 +1,10 @@
+use crate::common::github_mock::{mount_pr_create_and_refresh, write_stax_config};
 use crate::common::{OutputAssertions, TestRepo};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::MockServer;
 
 struct BranchSnapshot {
     name: String,
@@ -153,62 +153,17 @@ fn assert_no_temporary_submit_worktrees(repo: &TestRepo) {
     );
 }
 
-fn write_test_config(home: &Path, api_base_url: &str) {
-    let config_dir = home.join(".config").join("stax");
-    fs::create_dir_all(&config_dir).expect("failed to create test config dir");
-    fs::write(
-        config_dir.join("config.toml"),
-        format!("[remote]\napi_base_url = \"{api_base_url}\"\n\n[submit]\nstack_links = \"off\"\n"),
-    )
-    .expect("failed to write test config");
-}
-
 async fn mock_github_pr_create(mock_server: &MockServer) {
-    Mock::given(method("GET"))
-        .and(path("/repos/test-owner/test-repo/pulls"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
-        .mount(mock_server)
-        .await;
-
-    Mock::given(method("POST"))
-        .and(path("/repos/test-owner/test-repo/pulls"))
-        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
-            "url": "https://api.github.com/repos/test-owner/test-repo/pulls/42",
-            "id": 42,
-            "number": 42,
-            "state": "open",
-            "title": "created",
-            "body": "",
-            "draft": false,
-            "head": { "ref": "created", "sha": "aaaa", "label": "test-owner:created" },
-            "base": { "ref": "main", "sha": "bbbb" },
-            "html_url": "https://github.com/test-owner/test-repo/pull/42"
-        })))
-        .mount(mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/repos/test-owner/test-repo/issues/42/comments"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
-        .mount(mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/repos/test-owner/test-repo/pulls/42"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "url": "https://api.github.com/repos/test-owner/test-repo/pulls/42",
-            "id": 42,
-            "number": 42,
-            "state": "open",
-            "title": "created",
-            "body": "",
-            "draft": false,
-            "head": { "ref": "created", "sha": "aaaa", "label": "test-owner:created" },
-            "base": { "ref": "main", "sha": "bbbb" },
-            "html_url": "https://github.com/test-owner/test-repo/pull/42"
-        })))
-        .mount(mock_server)
-        .await;
+    mount_pr_create_and_refresh(
+        mock_server,
+        "test-owner",
+        "test-repo",
+        42,
+        "created",
+        "main",
+        "test-owner",
+    )
+    .await;
 }
 
 #[test]
@@ -263,7 +218,7 @@ async fn upstack_submit_pr_defaults_exclude_parent_commits_from_temporary_parent
 
     let repo = TestRepo::new_with_remote();
     let home = repo.clean_home();
-    write_test_config(Path::new(&home), &mock_server.uri());
+    write_stax_config(Path::new(&home), &mock_server.uri(), "");
     repo.configure_github_like_submit_remote();
 
     let stack =
@@ -329,7 +284,7 @@ async fn stack_submit_pr_defaults_exclude_rewritten_parent_commits() {
 
     let repo = TestRepo::new_with_remote();
     let home = repo.clean_home();
-    write_test_config(Path::new(&home), &mock_server.uri());
+    write_stax_config(Path::new(&home), &mock_server.uri(), "");
     repo.configure_github_like_submit_remote();
 
     let branches = repo.create_stack(&["rewrite-parent", "rewrite-child"]);
@@ -383,7 +338,7 @@ async fn branch_submit_pr_defaults_exclude_imported_parent_commits_after_tempora
 
     let repo = TestRepo::new_with_remote();
     let home = repo.clean_home();
-    write_test_config(Path::new(&home), &mock_server.uri());
+    write_stax_config(Path::new(&home), &mock_server.uri(), "");
     repo.configure_github_like_submit_remote();
 
     push_remote_only_branch(
