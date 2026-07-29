@@ -65,7 +65,7 @@ Merges `auth` and `auth-api`; `auth-ui` is rebased onto `main`, and `auth-tests`
 
 ## `st merge --stack` (GitHub only)
 
-Fast-forwards the selected stack range through one GitHub PR merge. By default the selected range is stack bottom through the current branch:
+Lands the selected stack range through one GitHub PR merge. By default the selected range is stack bottom through the current branch:
 
 ```bash
 st merge --stack
@@ -75,13 +75,13 @@ st merge --stack --full
 st merge --stack --dry-run
 ```
 
-For `main ← A ← B ← C` while checked out on `B`, stax checks that local `main` matches `origin/main`, verifies the local stack is linear, checks `A` for review blockers, validates CI/mergeability on selected tip PR `B`, retargets `B` to `main`, and merges only `B` through GitHub's merge API. Stax then waits briefly for GitHub to mark PR `A` merged; if GitHub does not, Stax marks `A` as absorbed with a comment pointing at `B`. PR `C` remains open and is rebased/retargeted onto `main`.
+For `main ← A ← B ← C` while checked out on `B`, stax checks that local `main` matches `origin/main`, verifies the local stack is linear, checks `A` for review blockers, and validates CI/mergeability on selected tip PR `B`. With the default `merge` method, Stax targets both `A` and `B` to `main` before merging only `B`. Preserving the existing commit SHAs and making them reachable from `main` lets GitHub mark `A` indirectly merged. PR `C` remains open and is rebased/retargeted onto `main`.
 
-Use `st merge --stack --downstack-only` to exclude the checked-out branch from the selected range. Use `st merge --stack --full` to include descendants above the current branch and land the full stack through the actual stack tip. The default merge method for `--stack` is `rebase`; pass `--method squash` only when you explicitly want GitHub to squash the selected range into one commit.
+Use `st merge --stack --downstack-only` to exclude the checked-out branch from the selected range. Use `st merge --stack --full` to include descendants above the current branch and land the full stack through the actual stack tip. The default merge method for `--stack` is `merge`. Explicit `--method rebase` and `--method squash` rewrite commit SHAs, so Stax comments on and closes lower PRs as absorbed immediately instead of polling for an impossible indirect merge.
 
 This avoids re-running CI for every lower PR because the selected tip already contains that range. The post-merge sync updates trunk and PR metadata without running generic merged-branch deletion; branch cleanup stays scoped to the stack range that was just landed. If trunk moves before the merge, stax aborts and asks you to restack and wait for fresh selected-tip CI.
 
-GitHub may still display an absorbed lower PR as closed rather than merged if its background merge detection does not fire. In that fallback, Stax leaves an explicit absorbed-by comment so the closure is intentional and traceable.
+GitHub's indirect-merge detection is asynchronous. If a lower PR is still open after Stax's bounded poll under the default `merge` method, Stax leaves it open and reports it as pending so GitHub can mark it merged later. Any base changes are restored if retargeting, the final trunk check, or the selected-tip merge fails.
 
 For the no-extra-CI behavior, GitHub branch protection should require status checks but should not require branches to be up to date before merging. If GitHub requires up-to-date branches, it can force another revalidation at merge time.
 
