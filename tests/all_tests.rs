@@ -118,6 +118,8 @@ mod staging_menu_tests;
 mod status_tests;
 #[path = "submit_fetch_failure_tests.rs"]
 mod submit_fetch_failure_tests;
+#[path = "submit_fork_fallback_tests.rs"]
+mod submit_fork_fallback_tests;
 #[path = "submit_no_verify_tests.rs"]
 mod submit_no_verify_tests;
 #[path = "submit_plan_completions_tests.rs"]

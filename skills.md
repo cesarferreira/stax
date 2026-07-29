@@ -238,6 +238,7 @@ stax submit --ai --yes             # Accept generated new-PR details
 stax submit --rerequest-review     # Re-request existing reviewers on update
 stax submit --native-stack         # Force-attempt native GitHub Stack registration for this run
 stax submit --no-native-stack      # Skip native GitHub Stack registration for this run
+stax submit --fork                 # Fall back to fork on permission-denied push (single branch, GitHub only)
 stax completions zsh               # Generate completions: bash|zsh|fish|powershell|elvish
 
 # ~/.config/stax/config.toml; repo-root stax.toml overlays shared values
@@ -246,6 +247,10 @@ stack_links = "body"               # "comment" | "body" | "both" | "off"
 single_stack = "on"                # "on" | "off" — when "off", skip stack-link sync while only one PR exists; populates on all PRs as soon as the stack reaches 2
 native_stack = "auto"              # "auto" | "off" | "link" — auto-register native GitHub Stacked PRs when gh-stack + repo access are available
 stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment links when native registration succeeds
+
+[remote]
+auto_fork = false                  # always fall back to `--fork` when the upstream push is denied for lack of write access
+fork_remote = "fork"               # name of a pre-configured git remote for the fork (skip auto-detect)
 
 # Native GitHub Stacked PRs are additive. Repos/users without access or without
 # `github/gh-stack` installed behave exactly as normal stax. `stax doctor --fix`

@@ -1953,6 +1953,41 @@ Use --auto-stash-pop or stash/commit changes first.",
             .is_ok()
     }
 
+    /// Check if a remote named `name` is configured for this repository.
+    pub fn remote_exists(&self, name: &str) -> bool {
+        self.repo.find_remote(name).is_ok()
+    }
+
+    /// Add a remote named `name` pointing at `url`, or update its URL if it
+    /// already exists and points somewhere else.
+    pub fn ensure_remote(&self, name: &str, url: &str) -> Result<()> {
+        match self.repo.find_remote(name) {
+            Ok(remote) => {
+                if remote.url().ok() != Some(url) {
+                    self.repo
+                        .remote_set_url(name, url)
+                        .with_context(|| format!("Failed to update remote '{name}' URL"))?;
+                }
+            }
+            Err(_) => {
+                self.repo
+                    .remote(name, url)
+                    .with_context(|| format!("Failed to add remote '{name}'"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// URL configured for a given git remote, or `None` if it does not exist.
+    pub fn remote_url(&self, name: &str) -> Result<Option<String>> {
+        match self.repo.find_remote(name) {
+            Ok(remote) => Ok(remote.url().ok().map(str::to_string)),
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(e) => Err(anyhow::anyhow!(e))
+                .with_context(|| format!("Failed to look up remote '{name}'")),
+        }
+    }
+
     /// Return all branch names under `refs/remotes/<remote>/` as a set.
     /// One libgit2 ref-glob instead of one subprocess per branch.
     pub fn remote_branch_names(&self, remote: &str) -> Result<HashSet<String>> {

@@ -405,7 +405,7 @@ pub fn fetch_remote_refs(workdir: &Path, remote: &str, branches: &[String]) -> R
     );
 }
 
-fn parse_remote_url(url: &str) -> Result<(String, String)> {
+pub(crate) fn parse_remote_url(url: &str) -> Result<(String, String)> {
     if url.contains("://") {
         let parsed = reqwest::Url::parse(url).context("Invalid remote URL")?;
         if !matches!(parsed.scheme(), "ssh" | "http" | "https") {
