@@ -154,11 +154,18 @@ pub fn run_stax_in_script_with_env(
     fs::write(&transcript_path, "").expect("create TUI transcript");
     let quoted_transcript = sh_quote(&transcript_path.to_string_lossy());
     let quoted_input_status = sh_quote(&input_status_path.to_string_lossy());
-    let command = std::iter::once(stax_bin.to_string_lossy().into_owned())
+    let stax_command = std::iter::once(stax_bin.to_string_lossy().into_owned())
         .chain(args.iter().map(|arg| (*arg).to_string()))
         .map(|part| sh_quote(&part))
         .collect::<Vec<_>>()
         .join(" ");
+    // Linux `script -qefc` can re-import PATH from system init files after startup,
+    // so re-export test PATH overrides inside the recorded command shell.
+    let command = env
+        .iter()
+        .find(|(key, _)| *key == "PATH")
+        .map(|(_, path)| format!("export PATH={}; {stax_command}", sh_quote(path)))
+        .unwrap_or(stax_command);
 
     let input_with_readiness = format!(
         r#"set -e
