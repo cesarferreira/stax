@@ -93,6 +93,49 @@ struct CheckRun {
 
 pub use crate::forge::OpenPrInfo;
 
+/// A fork of the upstream repo that stax can push a branch to when the
+/// caller lacks write access to the upstream itself.
+#[derive(Debug, Clone)]
+pub struct ForkTarget {
+    pub owner: String,
+    pub ssh_url: String,
+    pub https_url: String,
+}
+
+/// Minimal shape of a GitHub repository response, covering only the fields
+/// fork resolution needs. Deserialized by hand (rather than via octocrab's
+/// full `models::Repository`) so responses only need these few fields.
+#[derive(Debug, Deserialize)]
+struct ForkRepoResponse {
+    #[serde(default)]
+    fork: bool,
+    owner: RepoListUser,
+    ssh_url: String,
+    clone_url: String,
+    parent: Option<ForkParentRepo>,
+    permissions: Option<ForkRepoPermissions>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ForkParentRepo {
+    full_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ForkRepoPermissions {
+    push: bool,
+}
+
+impl From<ForkRepoResponse> for ForkTarget {
+    fn from(repo: ForkRepoResponse) -> Self {
+        Self {
+            owner: repo.owner.login,
+            ssh_url: repo.ssh_url,
+            https_url: repo.clone_url,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ReviewUser {
     login: String,
@@ -355,6 +398,54 @@ impl GitHubClient {
     pub async fn get_current_user(&self) -> Result<String> {
         let user = self.octocrab.current().user().await?;
         Ok(user.login)
+    }
+
+    /// Find an existing fork of this repo owned by `login` that stax can
+    /// push to, so fork-fallback submit reuses it instead of creating a
+    /// duplicate. Returns `None` when no such repo exists (404) or when it
+    /// exists but isn't a pushable fork of this exact upstream.
+    pub async fn find_pushable_fork(&self, login: &str) -> Result<Option<ForkTarget>> {
+        self.record_api_call("repos.get_fork_candidate");
+        let url = format!("/repos/{}/{}", login, self.repo);
+        let repo: ForkRepoResponse = match self.octocrab.get(&url, None::<&()>).await {
+            Ok(repo) => repo,
+            Err(octocrab::Error::GitHub { source, .. }) if source.status_code.as_u16() == 404 => {
+                return Ok(None);
+            }
+            Err(e) => {
+                return Err(self.enrich_api_error(
+                    anyhow::Error::new(e).context("Failed to look up fork candidate"),
+                ));
+            }
+        };
+
+        let upstream = format!("{}/{}", self.owner, self.repo);
+        let is_pushable_fork = repo.fork
+            && repo.parent.as_ref().map(|parent| parent.full_name.as_str())
+                == Some(upstream.as_str())
+            && repo.permissions.as_ref().is_some_and(|p| p.push);
+
+        if is_pushable_fork {
+            Ok(Some(repo.into()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Fork this repo under the authenticated user's account.
+    pub async fn create_fork(&self) -> Result<ForkTarget> {
+        self.record_api_call("repos.create_fork");
+        let url = format!("/repos/{}/{}/forks", self.owner, self.repo);
+        let repo: ForkRepoResponse = match self
+            .octocrab
+            .post(&url, None::<&()>)
+            .await
+            .context("Failed to create fork")
+        {
+            Ok(repo) => repo,
+            Err(e) => return Err(self.enrich_api_error(e)),
+        };
+        Ok(repo.into())
     }
 
     /// Get PRs merged by the user in the last N hours
@@ -1330,6 +1421,123 @@ mod tests {
             err_msg.contains("token is expired or lacks access"),
             "Expected auth hint in 404 error, got: {}",
             err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_find_pushable_fork_returns_none_on_404() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/some-login/test-repo"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found",
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.find_pushable_fork("some-login").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_pushable_fork_returns_target_when_pushable_fork_of_this_repo() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/some-login/test-repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "fork": true,
+                "owner": { "login": "some-login" },
+                "ssh_url": "git@github.com:some-login/test-repo.git",
+                "clone_url": "https://github.com/some-login/test-repo.git",
+                "parent": { "full_name": "test-owner/test-repo" },
+                "permissions": { "push": true }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let target = client
+            .find_pushable_fork("some-login")
+            .await
+            .unwrap()
+            .expect("expected a pushable fork");
+        assert_eq!(target.owner, "some-login");
+        assert_eq!(target.ssh_url, "git@github.com:some-login/test-repo.git");
+        assert_eq!(
+            target.https_url,
+            "https://github.com/some-login/test-repo.git"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_find_pushable_fork_ignores_repo_not_forked_from_this_upstream() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/some-login/test-repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "fork": true,
+                "owner": { "login": "some-login" },
+                "ssh_url": "git@github.com:some-login/test-repo.git",
+                "clone_url": "https://github.com/some-login/test-repo.git",
+                "parent": { "full_name": "someone-else/unrelated-repo" },
+                "permissions": { "push": true }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.find_pushable_fork("some-login").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_pushable_fork_ignores_fork_without_push_access() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/some-login/test-repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "fork": true,
+                "owner": { "login": "some-login" },
+                "ssh_url": "git@github.com:some-login/test-repo.git",
+                "clone_url": "https://github.com/some-login/test-repo.git",
+                "parent": { "full_name": "test-owner/test-repo" },
+                "permissions": { "push": false }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.find_pushable_fork("some-login").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_create_fork_returns_target() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/repos/test-owner/test-repo/forks"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "fork": true,
+                "owner": { "login": "some-login" },
+                "ssh_url": "git@github.com:some-login/test-repo.git",
+                "clone_url": "https://github.com/some-login/test-repo.git"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let target = client.create_fork().await.unwrap();
+        assert_eq!(target.owner, "some-login");
+        assert_eq!(target.ssh_url, "git@github.com:some-login/test-repo.git");
+        assert_eq!(
+            target.https_url,
+            "https://github.com/some-login/test-repo.git"
         );
     }
 }

@@ -517,6 +517,7 @@ impl GitHubClient {
             .create(title, branch, base)
             .body(body)
             .draft(Some(draft))
+            .maintainer_can_modify(true)
             .send()
             .await
             .context("Failed to create PR")?;

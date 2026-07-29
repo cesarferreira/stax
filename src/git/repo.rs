@@ -1953,6 +1953,45 @@ Use --auto-stash-pop or stash/commit changes first.",
             .is_ok()
     }
 
+    /// Check if a remote named `name` is configured for this repository.
+    pub fn remote_exists(&self, name: &str) -> bool {
+        self.repo.find_remote(name).is_ok()
+    }
+
+    /// Add a remote named `name` pointing at `url`, or update its URL if it
+    /// already exists and points somewhere else.
+    pub fn ensure_remote(&self, name: &str, url: &str) -> Result<()> {
+        match self.repo.find_remote(name) {
+            Ok(remote) => {
+                if remote.url().ok() != Some(url) {
+                    self.repo
+                        .remote_set_url(name, url)
+                        .with_context(|| format!("Failed to update remote '{name}' URL"))?;
+                }
+            }
+            Err(_) => {
+                self.repo
+                    .remote(name, url)
+                    .with_context(|| format!("Failed to add remote '{name}'"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Push `branch` to `remote`, force (no lease). Used for fork-fallback
+    /// submit: the fork is owned by the caller, and a freshly created fork's
+    /// branch has no shared history to race with, so a plain force push is
+    /// safe and also covers a diverged branch on re-submit.
+    pub fn push_branch_to_fork(&self, remote: &str, branch: &str) -> Result<()> {
+        let output = self.run_git(self.workdir()?, &["push", "--force", remote, branch])?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("git push --force {} {} failed: {}", remote, branch, stderr);
+        }
+        Ok(())
+    }
+
     /// Return all branch names under `refs/remotes/<remote>/` as a set.
     /// One libgit2 ref-glob instead of one subprocess per branch.
     pub fn remote_branch_names(&self, remote: &str) -> Result<HashSet<String>> {

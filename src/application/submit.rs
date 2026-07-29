@@ -693,6 +693,29 @@ pub(crate) fn push_failure_details(stdout: &str, stderr: &str) -> String {
     }
 }
 
+/// True when a `push_branches` failure message indicates the remote rejected
+/// the push for lack of write access, as opposed to a normal non-fast-forward
+/// or stale-ref rejection. Misreading the latter as a permission error would
+/// silently divert a legitimate push to a fork, so this matches only on
+/// git/GitHub's specific permission-denial vocabulary rather than the
+/// generic "rejected" wording shared by every kind of push failure.
+///
+/// "pre-receive hook declined" alone can be a server-side policy rejection
+/// unrelated to permissions (e.g. a commit message or lint check), so it
+/// only counts here alongside an explicit permission/authorization phrase.
+pub fn push_error_indicates_no_write_access(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    if lower.contains("permission to")
+        || lower.contains("403")
+        || lower.contains("denied to")
+        || lower.contains("not authorized")
+    {
+        return true;
+    }
+    lower.contains("pre-receive hook declined")
+        && (lower.contains("permission") || lower.contains("not authorized"))
+}
+
 fn execute_prepared_submit_inner(
     session: &RepositorySession,
     prepared: PreparedSubmit,
@@ -1435,5 +1458,35 @@ mod tests {
             super::branches_for_submit_scope(&stack, "main", super::SubmitScope::Branch),
             empty
         );
+    }
+
+    #[test]
+    fn push_error_indicates_no_write_access_matches_https_permission_denial() {
+        let msg = "Failed to push branches feature:\nremote: Permission to owner/repo.git denied to someuser.\nfatal: unable to access 'https://github.com/owner/repo.git/': The requested URL returned error: 403";
+        assert!(super::push_error_indicates_no_write_access(msg));
+    }
+
+    #[test]
+    fn push_error_indicates_no_write_access_matches_ssh_permission_denial() {
+        let msg = "ERROR: Permission to owner/repo.git denied to deploy-key.\nfatal: Could not read from remote repository.";
+        assert!(super::push_error_indicates_no_write_access(msg));
+    }
+
+    #[test]
+    fn push_error_indicates_no_write_access_matches_bare_403() {
+        let msg = "fatal: unable to access 'https://github.com/owner/repo.git/': The requested URL returned error: 403";
+        assert!(super::push_error_indicates_no_write_access(msg));
+    }
+
+    #[test]
+    fn push_error_indicates_no_write_access_rejects_non_fast_forward() {
+        let msg = "Failed to push branches feature: rejected feature\n! [rejected]        feature -> feature (fetch first)\nerror: failed to push some refs\nhint: Updates were rejected because the remote contains work that you do not have locally.";
+        assert!(!super::push_error_indicates_no_write_access(msg));
+    }
+
+    #[test]
+    fn push_error_indicates_no_write_access_rejects_stale_info() {
+        let msg = "Failed to push branches feature: rejected feature\n! [rejected]        feature -> feature (stale info)";
+        assert!(!super::push_error_indicates_no_write_access(msg));
     }
 }

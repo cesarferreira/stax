@@ -118,6 +118,10 @@ pub(crate) struct SubmitOptions {
     /// Update existing PR titles when the tip commit subject has changed
     #[arg(long)]
     pub(crate) update_title: bool,
+    /// If the push is rejected for lack of write access, submit from a fork
+    /// of the upstream repo instead (single branch only)
+    #[arg(long)]
+    pub(crate) fork: bool,
 }
 
 impl From<SubmitOptions> for commands::submit::SubmitOptions {
@@ -156,6 +160,7 @@ impl From<SubmitOptions> for commands::submit::SubmitOptions {
             },
             squash: submit.squash,
             update_title: submit.update_title,
+            fork: submit.fork,
         }
     }
 }

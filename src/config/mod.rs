@@ -117,6 +117,15 @@ pub struct RemoteConfig {
     /// When set, skips auto-detection from the remote hostname.
     #[serde(default)]
     pub forge: Option<ForgeType>,
+    /// Automatically fall back to submitting from a fork when a push to the
+    /// upstream remote is rejected for lack of write access. Equivalent to
+    /// always passing `--fork` to `stax submit`.
+    #[serde(default)]
+    pub auto_fork: bool,
+    /// Name of an existing Git remote pointing at the user's fork, to reuse
+    /// instead of auto-detecting/creating one via the GitHub API.
+    #[serde(default)]
+    pub fork_remote: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -442,6 +451,8 @@ impl Default for RemoteConfig {
             base_url: default_remote_base_url(),
             api_base_url: None,
             forge: None,
+            auto_fork: false,
+            fork_remote: None,
         }
     }
 }
@@ -1073,6 +1084,14 @@ impl Config {
 
     pub fn remote_forge_override(&self) -> Option<ForgeType> {
         self.remote.forge
+    }
+
+    pub fn auto_fork(&self) -> bool {
+        self.remote.auto_fork
+    }
+
+    pub fn fork_remote(&self) -> Option<&str> {
+        self.remote.fork_remote.as_deref()
     }
 }
 
