@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::ci::CheckRunInfo;
 use crate::config::Config;
-use crate::github::client::GitHubClient;
+use crate::github::client::{ForkTarget, GitHubClient};
 use crate::remote::{ForgeType, RemoteInfo, TrustedRemoteInfo};
 
 mod gitea;
@@ -103,6 +103,29 @@ impl ForgeClient {
             Self::GitHub(_) => Ok(()),
             Self::GitLab(client) => client.preflight_stack_merge(method).await,
             Self::Gitea(_) => bail!("`stax merge --stack` is not supported on Gitea/Forgejo"),
+        }
+    }
+
+    /// Find an existing fork of this repo owned by `login` that stax can
+    /// push to. GitHub-only: fork-fallback submit is not supported on other
+    /// forges yet.
+    pub async fn find_pushable_fork(&self, login: &str) -> Result<Option<ForkTarget>> {
+        match self {
+            Self::GitHub(client) => client.find_pushable_fork(login).await,
+            Self::GitLab(_) | Self::Gitea(_) => {
+                bail!("Fork fallback for submit is currently only supported on GitHub")
+            }
+        }
+    }
+
+    /// Fork this repo under the authenticated user's account. GitHub-only:
+    /// fork-fallback submit is not supported on other forges yet.
+    pub async fn create_fork(&self) -> Result<ForkTarget> {
+        match self {
+            Self::GitHub(client) => client.create_fork().await,
+            Self::GitLab(_) | Self::Gitea(_) => {
+                bail!("Fork fallback for submit is currently only supported on GitHub")
+            }
         }
     }
 

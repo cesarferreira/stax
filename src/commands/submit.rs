@@ -1,6 +1,7 @@
 pub(crate) use crate::application::SubmitScope;
 use crate::application::submit::{
     PushSpec, TemporaryPublishRefs, TemporarySubmitWorktree, push_branches,
+    push_error_indicates_no_write_access,
 };
 use crate::commands::open::open_url_in_browser;
 use crate::config::{
@@ -60,6 +61,9 @@ pub struct SubmitOptions {
     pub native_stack_override: Option<NativeStackMode>,
     pub squash: bool,
     pub update_title: bool,
+    /// Fall back to submitting from a fork when the push is rejected for
+    /// lack of write access to the upstream remote.
+    pub fork: bool,
 }
 
 struct PrPlan {
@@ -491,6 +495,7 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         native_stack_override,
         squash,
         update_title,
+        fork,
     } = options;
 
     let ai_targets = resolve_ai_targets(ai, ai_title, body_scope, update_title)?;
@@ -1502,6 +1507,8 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         None
     };
 
+    let mut fork_owner: Option<String> = None;
+
     if !branches_needing_push.is_empty() {
         if !quiet {
             println!();
@@ -1564,11 +1571,128 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 LiveTimer::maybe_finish_ok(push_timer, "done");
             }
             Err(e) => {
-                LiveTimer::maybe_finish_err(push_timer, "failed");
-                if let Some(tx) = tx {
-                    tx.finish_err(&format!("Push failed: {}", e), Some("push"), None)?;
+                if !push_error_indicates_no_write_access(&e.to_string()) {
+                    LiveTimer::maybe_finish_err(push_timer, "failed");
+                    if let Some(tx) = tx {
+                        tx.finish_err(&format!("Push failed: {}", e), Some("push"), None)?;
+                    }
+                    return Err(e);
                 }
-                return Err(e);
+
+                if !(fork || config.auto_fork()) {
+                    LiveTimer::maybe_finish_err(push_timer, "failed");
+                    if let Some(tx) = tx {
+                        tx.finish_err(&format!("Push failed: {}", e), Some("push"), None)?;
+                    }
+                    anyhow::bail!(
+                        "No push access to {}/{}. Re-run with `--fork` (or set `remote.auto_fork = true`) \
+                         to open the PR from a fork.\n{e}",
+                        remote_info.owner(),
+                        remote_info.repo,
+                    );
+                }
+
+                if pushed_branches.len() != 1 {
+                    LiveTimer::maybe_finish_err(push_timer, "failed");
+                    if let Some(tx) = tx {
+                        tx.finish_err(&format!("Push failed: {}", e), Some("push"), None)?;
+                    }
+                    anyhow::bail!(
+                        "fork submit supports a single branch; stacked PRs against an upstream you can't push to aren't supported."
+                    );
+                }
+
+                let fork_branch_parent = branches_needing_push[0].parent.clone();
+                if !remote_branches.contains(&fork_branch_parent) {
+                    LiveTimer::maybe_finish_err(push_timer, "failed");
+                    if let Some(tx) = tx {
+                        tx.finish_err(&format!("Push failed: {}", e), Some("push"), None)?;
+                    }
+                    anyhow::bail!(
+                        "Cannot submit from a fork: base branch '{}' does not exist on {}.",
+                        fork_branch_parent,
+                        remote_info.name,
+                    );
+                }
+
+                if !quiet {
+                    println!(
+                        "  {} No push access to {}/{} — retrying from a fork...",
+                        "!".yellow(),
+                        remote_info.owner(),
+                        remote_info.repo,
+                    );
+                }
+
+                let fork_rt = tokio::runtime::Runtime::new()?;
+                let _fork_rt_enter = fork_rt.enter();
+                let fork_client = ForgeClient::new(&remote_info)?;
+                let login = fork_rt.block_on(async { fork_client.get_current_user().await })?;
+
+                let (fork_remote_name, resolved_owner, fork_freshly_created) = if let Some(name) =
+                    config.fork_remote().filter(|name| repo.remote_exists(name))
+                {
+                    (name.to_string(), login.clone(), false)
+                } else {
+                    let existing =
+                        fork_rt.block_on(async { fork_client.find_pushable_fork(&login).await })?;
+                    let (target, freshly_created) = match existing {
+                        Some(target) => (target, false),
+                        None => (
+                            fork_rt.block_on(async { fork_client.create_fork().await })?,
+                            true,
+                        ),
+                    };
+                    let origin_url = remote::get_remote_url(repo.workdir()?, &remote_info.name)?;
+                    let is_https =
+                        origin_url.starts_with("http://") || origin_url.starts_with("https://");
+                    let fork_url = if is_https {
+                        target.https_url.clone()
+                    } else {
+                        target.ssh_url.clone()
+                    };
+                    repo.ensure_remote("fork", &fork_url)?;
+                    ("fork".to_string(), target.owner, freshly_created)
+                };
+
+                let fork_spec = &pushed_branches[0];
+                let mut attempt = 0;
+                loop {
+                    attempt += 1;
+                    match repo.push_branch_to_fork(&fork_remote_name, &fork_spec.branch) {
+                        Ok(()) => break,
+                        Err(_) if fork_freshly_created && attempt < 3 => {
+                            eprintln!(
+                                "  {} waiting 2s before retrying push to fork...",
+                                "!".yellow()
+                            );
+                            std::thread::sleep(Duration::from_secs(2));
+                        }
+                        Err(push_err) => {
+                            LiveTimer::maybe_finish_err(push_timer, "failed");
+                            if let Some(tx) = tx {
+                                tx.finish_err(
+                                    &format!("Fork push failed: {}", push_err),
+                                    Some("push"),
+                                    None,
+                                )?;
+                            }
+                            return Err(push_err);
+                        }
+                    }
+                }
+
+                for spec in &pushed_branches {
+                    if let Some(ref mut tx) = tx {
+                        let _ = tx.record_after(&repo, &spec.branch);
+                        if let Some(oid) = &spec.oid {
+                            tx.record_remote_after(&fork_remote_name, &spec.branch, oid);
+                        }
+                    }
+                }
+                LiveTimer::maybe_finish_ok(push_timer, "done (via fork)");
+
+                fork_owner = Some(resolved_owner);
             }
         }
     }
@@ -1858,8 +1982,12 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
                 let create_timer =
                     LiveTimer::maybe_new(!quiet, &format!("Creating {}...", plan.branch));
 
+                let head = match &fork_owner {
+                    Some(owner) => format!("{owner}:{}", plan.branch),
+                    None => plan.branch.clone(),
+                };
                 let pr = match client
-                    .create_pr(&plan.branch, &plan.parent, title, body, is_draft)
+                    .create_pr(&head, &plan.parent, title, body, is_draft)
                     .await
                 {
                     Ok(pr) => {
