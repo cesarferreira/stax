@@ -298,6 +298,7 @@ struct SyncContext {
     stash_policy: StashPolicy,
     json: bool,
     auto_confirm: bool,
+    skip_interactive_plan: bool,
     sync_extra_fetch_refs: Vec<String>,
     imported_branches: Vec<String>,
     remote_delete_exempt_imported_branches: HashSet<String>,
@@ -337,6 +338,7 @@ impl SyncContext {
         stash_policy: StashPolicy,
         json: bool,
         extra_fetch_refs: &[String],
+        skip_interactive_plan: bool,
     ) -> Result<(Self, GitRepo)> {
         let repo = GitRepo::open()?;
         let stack = Stack::load(&repo)?;
@@ -377,6 +379,7 @@ impl SyncContext {
                 stash_policy,
                 json,
                 auto_confirm,
+                skip_interactive_plan,
                 sync_extra_fetch_refs,
                 imported_branches,
                 remote_delete_exempt_imported_branches,
@@ -914,10 +917,41 @@ impl SyncContext {
         Ok(())
     }
 
+    /// Branches in restack order for the stack we started on (trunk excluded, frozen skipped).
+    fn unfrozen_restack_scope(&self, repo: &GitRepo) -> Result<Vec<String>> {
+        let scope_order: Vec<String> = if self.current != self.stack.trunk
+            && self.stack.branches.contains_key(&self.current)
+        {
+            self.stack.current_stack(&self.current)
+        } else {
+            Vec::new()
+        };
+        Ok(scope_order
+            .into_iter()
+            .filter(|branch| !BranchMetadata::is_frozen(repo.inner(), branch).unwrap_or(false))
+            .collect())
+    }
+
+    /// Branches that will be rebased during restack: from the first stale branch through
+    /// the stack tip (each rebase moves the parent pointer for branches above it).
+    fn planned_restack_branches(&self, repo: &GitRepo) -> Result<Vec<String>> {
+        let scope = self.unfrozen_restack_scope(repo)?;
+        let Some(first_stale) = scope.iter().position(|branch| {
+            self.stack
+                .branches
+                .get(branch)
+                .map(|info| info.needs_restack)
+                .unwrap_or(false)
+        }) else {
+            return Ok(Vec::new());
+        };
+        Ok(scope[first_stale..].to_vec())
+    }
+
     /// Interactive-only: show a consolidated plan after fetch and before trunk
     /// updates or deletions. Cancelling here leaves no transaction snapshot.
     fn confirm_sync_plan(&mut self, repo: &GitRepo) -> Result<SyncFlow> {
-        if self.quiet || self.auto_confirm || self.json {
+        if self.quiet || self.auto_confirm || self.json || self.skip_interactive_plan {
             return Ok(SyncFlow::Continue);
         }
 
@@ -956,29 +990,14 @@ impl SyncContext {
 
         let mut restack_candidates: Vec<String> = Vec::new();
         if self.restack {
-            let scope = if self.current != self.stack.trunk
-                && self.stack.branches.contains_key(&self.current)
-            {
-                self.stack.current_stack(&self.current)
-            } else {
-                Vec::new()
-            };
-            for branch in scope {
-                if BranchMetadata::is_frozen(repo.inner(), &branch).unwrap_or(false) {
-                    continue;
-                }
-                if let Some(info) = self.stack.branches.get(&branch)
-                    && info.needs_restack
-                {
-                    restack_candidates.push(branch);
-                }
-            }
+            restack_candidates = self.planned_restack_branches(repo)?;
         }
 
-        let needs_confirm = trunk_would_move
-            || !merged_branch_names.is_empty()
-            || !upstream_gone_deletable.is_empty()
-            || !restack_candidates.is_empty();
+        let has_deletion_candidates =
+            !merged_branch_names.is_empty() || !upstream_gone_deletable.is_empty();
+
+        let needs_confirm =
+            trunk_would_move || has_deletion_candidates || !restack_candidates.is_empty();
 
         if !needs_confirm {
             return Ok(SyncFlow::Continue);
@@ -1033,9 +1052,6 @@ impl SyncContext {
             println!();
         }
 
-        let has_deletion_candidates =
-            !merged_branch_names.is_empty() || !upstream_gone_deletable.is_empty();
-
         let selected = if has_deletion_candidates {
             let options = [
                 "Continue — delete all listed branches",
@@ -1048,7 +1064,11 @@ impl SyncContext {
                 .default(0)
                 .interact()?
         } else {
-            let options = ["Continue sync", "Cancel sync"];
+            let options = if !restack_candidates.is_empty() {
+                ["Proceed with restack", "Cancel"]
+            } else {
+                ["Continue sync", "Cancel sync"]
+            };
             Select::with_theme(&ColorfulTheme::default())
                 .with_prompt("How should sync proceed?")
                 .items(options)
@@ -2532,6 +2552,7 @@ pub fn run(
     stash_policy: StashPolicy,
     json: bool,
     extra_fetch_refs: &[String],
+    skip_interactive_plan: bool,
 ) -> Result<()> {
     let sync_started_at = Instant::now();
     let (mut ctx, repo) = SyncContext::new(
@@ -2548,6 +2569,7 @@ pub fn run(
         stash_policy,
         json,
         extra_fetch_refs,
+        skip_interactive_plan,
     )?;
 
     if r#continue {

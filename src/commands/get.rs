@@ -60,6 +60,7 @@ pub fn run(options: GetOptions) -> Result<()> {
             crate::commands::sync::StashPolicy::Prompt,
             false, // json
             &[],
+            false,
         );
     };
 
