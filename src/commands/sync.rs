@@ -1007,10 +1007,14 @@ impl SyncContext {
         }
 
         if !merged_branch_names.is_empty() {
-            print_cleanup_candidates("merged", &merged_branch_names);
+            print_cleanup_candidates_with_stack("merged", &merged_branch_names, Some(&self.stack));
         }
         if !upstream_gone_deletable.is_empty() {
-            print_cleanup_candidates("upstream-gone", &upstream_gone_deletable);
+            print_cleanup_candidates_with_stack(
+                "upstream-gone",
+                &upstream_gone_deletable,
+                Some(&self.stack),
+            );
         }
         if !restack_candidates.is_empty() {
             let word = if restack_candidates.len() == 1 {
@@ -1029,25 +1033,44 @@ impl SyncContext {
             println!();
         }
 
-        let options = [
-            "Continue — delete all listed branches",
-            "Choose action for each branch",
-            "Cancel sync",
-        ];
-        let selected = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("How should sync proceed?")
-            .items(options)
-            .default(0)
-            .interact()?;
+        let has_deletion_candidates =
+            !merged_branch_names.is_empty() || !upstream_gone_deletable.is_empty();
 
-        match selected {
-            0 => {
-                self.delete_confirm_strategy = DeleteConfirmStrategy::BulkNonBlocking;
-                Ok(SyncFlow::Continue)
+        let selected = if has_deletion_candidates {
+            let options = [
+                "Continue — delete all listed branches",
+                "Choose action for each branch",
+                "Cancel sync",
+            ];
+            Select::with_theme(&ColorfulTheme::default())
+                .with_prompt("How should sync proceed?")
+                .items(options)
+                .default(0)
+                .interact()?
+        } else {
+            let options = ["Continue sync", "Cancel sync"];
+            Select::with_theme(&ColorfulTheme::default())
+                .with_prompt("How should sync proceed?")
+                .items(options)
+                .default(0)
+                .interact()?
+        };
+
+        if has_deletion_candidates {
+            match selected {
+                0 => {
+                    self.delete_confirm_strategy = DeleteConfirmStrategy::BulkNonBlocking;
+                    Ok(SyncFlow::Continue)
+                }
+                1 => Ok(SyncFlow::Continue),
+                2 => Ok(SyncFlow::Stop),
+                _ => Ok(SyncFlow::Continue),
             }
-            1 => Ok(SyncFlow::Continue),
-            2 => Ok(SyncFlow::Stop),
-            _ => Ok(SyncFlow::Continue),
+        } else {
+            match selected {
+                1 => Ok(SyncFlow::Stop),
+                _ => Ok(SyncFlow::Continue),
+            }
         }
     }
 
@@ -2605,6 +2628,9 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
 
     ctx.fetch_remote(&repo)?;
 
+    // Match dry-run / cleanup: refresh live PR state before merged detection in the plan.
+    ctx.refresh_pr_states(&repo)?;
+
     if ctx.confirm_sync_plan(&repo)? == SyncFlow::Stop {
         if !ctx.quiet {
             println!("Aborted.");
@@ -3500,6 +3526,14 @@ fn print_metadata_kept_note() {
 }
 
 pub(super) fn print_cleanup_candidates(kind: &str, branch_names: &[String]) {
+    print_cleanup_candidates_with_stack(kind, branch_names, None);
+}
+
+pub(super) fn print_cleanup_candidates_with_stack(
+    kind: &str,
+    branch_names: &[String],
+    stack: Option<&Stack>,
+) {
     let branch_word = if branch_names.len() == 1 {
         "branch"
     } else {
@@ -3512,7 +3546,18 @@ pub(super) fn print_cleanup_candidates(kind: &str, branch_names: &[String]) {
         branch_word
     );
     for name in branch_names {
-        println!("      {} {}", "▸".bright_black(), name);
+        print_cleanup_candidate_branch(name, stack);
+    }
+    println!();
+}
+
+fn print_cleanup_candidate_branch(name: &str, stack: Option<&Stack>) {
+    print!("      {} {}", "▸".bright_black(), name);
+    if let Some(stack) = stack
+        && let Some(info) = stack.branches.get(name)
+        && let Some(pr) = info.pr_number
+    {
+        print!("  {}", format!("PR #{pr}").dimmed());
     }
     println!();
 }

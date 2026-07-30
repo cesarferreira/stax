@@ -85,6 +85,10 @@ fn sync_confirm_bulk_deletes_merged_branch_without_per_branch_prompt() {
     );
     let stdout = TestRepo::stdout(&out);
     assert!(stdout.contains("Sync plan"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("Found") && stdout.contains("merged"),
+        "plan should list merged branches before the delete prompt; stdout: {stdout}"
+    );
 }
 
 #[test]

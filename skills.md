@@ -314,7 +314,7 @@ stax sync --json --force           # Same as --json but also auto-confirms branc
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
-# Interactive Sync plan (after fetch): one prompt when merged/upstream-gone deletions or --restack preview need confirmation — bulk delete all (0), per-branch prompts (1), or cancel (2, prints Aborted., no receipt). Skipped with --force, --quiet, or --json.
+# Interactive Sync plan (after fetch + PR metadata refresh): lists trunk moves and merged/upstream-gone branches (with PR # when known), then one prompt — bulk delete all, per-branch prompts, or cancel; trunk/restack-only plans use Continue sync / Cancel sync instead; skipped with --force, --quiet, or --json.
 stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead
 stax sync --full                   # Fetch all remote branches with --prune (slower; default is trunk-only fetch + ls-remote)
 stax sync --no-delete              # Keep merged branches
