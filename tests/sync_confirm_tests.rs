@@ -111,6 +111,26 @@ fn sync_confirm_per_branch_mode_still_allows_skip() {
 }
 
 #[test]
+fn sync_does_not_prompt_when_only_trunk_moves() {
+    let repo = TestRepo::new_with_remote();
+    repo.git(&["push", "-u", "origin", "main"]);
+    // Advance origin/main only — nothing to delete, nothing to restack.
+    repo.simulate_remote_commit("upstream.txt", "content", "Upstream commit");
+
+    let out = repo.run_stax(&["sync"]);
+    assert!(
+        out.status.success(),
+        "sync failed: {}",
+        TestRepo::stderr(&out)
+    );
+    let stdout = TestRepo::stdout(&out);
+    assert!(
+        !stdout.contains("Sync plan") && !stdout.contains("How should sync proceed?"),
+        "a plain trunk fast-forward must not prompt: {stdout}"
+    );
+}
+
+#[test]
 fn sync_force_skips_interactive_sync_plan() {
     let (repo, feature) = repo_with_merged_feature("feat-plan-force");
 
