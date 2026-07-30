@@ -957,7 +957,6 @@ impl SyncContext {
 
         let local_trunk = self.local_trunk_before_sync.as_deref();
         let remote_trunk = self.remote_trunk_after_fetch.as_deref();
-        let trunk_would_move = matches!((local_trunk, remote_trunk), (Some(l), Some(r)) if l != r);
 
         let mut merged_branch_names: Vec<String> = Vec::new();
         if self.delete_merged
@@ -996,8 +995,9 @@ impl SyncContext {
         let has_deletion_candidates =
             !merged_branch_names.is_empty() || !upstream_gone_deletable.is_empty();
 
-        let needs_confirm =
-            trunk_would_move || has_deletion_candidates || !restack_candidates.is_empty();
+        // A trunk fast-forward is what `stax sync` is *for* — don't ask about it on its own.
+        // Only branch deletions and history-rewriting restacks are worth a prompt.
+        let needs_confirm = has_deletion_candidates || !restack_candidates.is_empty();
 
         if !needs_confirm {
             return Ok(SyncFlow::Continue);
