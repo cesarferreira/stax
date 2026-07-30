@@ -234,7 +234,7 @@ st stack link            # manually re-link the current stack
 st stack unlink 7        # unstack native Stack #7 remotely
 ```
 
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.0.8 as out of date, and can upgrade it with `st doctor --fix`. Native Stack updates are append-only; to remove or insert PRs, run `st stack unlink <stack-number>` and then link again. Argument-free `st stack unlink` retains the active locally tracked behavior.
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. To turn off gh-stack registration entirely, set `native_stack = "off"` under `[submit]` in `~/.config/stax/config.toml`, or pass `st submit --no-native-stack` for a single run (see [config reference](docs/configuration/index.md#native-github-stacked-prs-gh-stack)). `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.0.8 as out of date, and can upgrade it with `st doctor --fix`. Native Stack updates are append-only; to remove or insert PRs, run `st stack unlink <stack-number>` and then link again. Argument-free `st stack unlink` retains the active locally tracked behavior.
 
 → [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 
@@ -409,7 +409,7 @@ stax is wire-compatible with Freephite/Graphite for common stacked-branch workfl
 st config                  # open the config editor
 st config --set-ai         # pick AI agent + model
 st config --reset-ai       # clear saved AI pairing and re-prompt
-st --default-config       # print the default config.toml to stdout
+st --default-config       # print annotated config template (options + allowed values)
 ```
 
 Config lives at `~/.config/stax/config.toml`. When `STAX_CONFIG_DIR` is unset,

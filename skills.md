@@ -241,14 +241,15 @@ stax submit --no-native-stack      # Skip native GitHub Stack registration for t
 stax completions zsh               # Generate completions: bash|zsh|fish|powershell|elvish
 
 # ~/.config/stax/config.toml; repo-root stax.toml overlays shared values
+# stax --default-config  # print full annotated template (all sections + allowed values)
 [submit]
 stack_links = "body"               # "comment" | "body" | "both" | "off"
 single_stack = "on"                # "on" | "off" — when "off", skip stack-link sync while only one PR exists; populates on all PRs as soon as the stack reaches 2
-native_stack = "auto"              # "auto" | "off" | "link" — auto-register native GitHub Stacked PRs when gh-stack + repo access are available
+native_stack = "auto"              # "auto" | "off" | "link" — gh-stack on submit; use "off" to disable
 stack_links_when_native = "keep"   # "keep" | "off" — keep stax body/comment links when native registration succeeds
 
-# Native GitHub Stacked PRs are additive. Repos/users without access or without
-# `github/gh-stack` installed behave exactly as normal stax. `stax doctor --fix`
+# Native GitHub Stacked PRs are additive. Disable with native_stack = "off" or st submit --no-native-stack.
+# Repos/users without access or without `github/gh-stack` installed behave exactly as normal stax. `stax doctor --fix`
 # can offer `gh extension install github/gh-stack` when `gh` is installed.
 # `stax submit --native-stack` still keeps submit non-blocking, but prints an
 # actionable note when `gh`, `github/gh-stack`, or `gh stack link` support is missing.

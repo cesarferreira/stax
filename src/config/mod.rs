@@ -657,9 +657,9 @@ impl Config {
         Ok(base.try_into()?)
     }
 
-    /// Serialize the default config to its TOML representation (same serializer as `save()`).
+    /// Annotated default config template (commented keys and allowed values).
     pub fn default_toml() -> Result<String> {
-        Ok(toml::to_string_pretty(&Config::default())?)
+        Ok(include_str!("default_config.toml").to_string())
     }
 
     /// Save config to file
