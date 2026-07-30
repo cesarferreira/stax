@@ -368,6 +368,7 @@ pub fn run() -> Result<()> {
                     stash_policy,
                     json,
                     &[],
+                    false,
                 )
             }
         }

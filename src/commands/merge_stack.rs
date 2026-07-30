@@ -1049,6 +1049,7 @@ fn run_post_merge_sync(quiet: bool) {
         crate::commands::sync::StashPolicy::Prompt,
         false, // json
         &[],
+        false,
     ) && !quiet
     {
         println!();

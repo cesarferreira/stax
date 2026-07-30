@@ -637,6 +637,7 @@ pub fn run(
                 crate::commands::sync::StashPolicy::Prompt,
                 false, // json
                 &[],
+                false,
             ) && !quiet
             {
                 println!();

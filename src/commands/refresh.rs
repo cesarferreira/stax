@@ -58,6 +58,7 @@ pub fn run(
         commands::sync::StashPolicy::Prompt,
         false, // json
         &submit_fetch_refs,
+        true, // refresh/update is an explicit workflow — no Sync plan prompt
     )?;
 
     if repo.rebase_in_progress()? {

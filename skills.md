@@ -314,6 +314,7 @@ stax sync --json --force           # Same as --json but also auto-confirms branc
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
+# Interactive Sync plan: stax sync/rs only (not refresh/update). After fetch + PR metadata refresh; lists trunk, deletions, restack cascade; skipped with --force, --quiet, or --json.
 stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead
 stax sync --full                   # Fetch all remote branches with --prune (slower; default is trunk-only fetch + ls-remote)
 stax sync --no-delete              # Keep merged branches
@@ -321,7 +322,6 @@ stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the
 stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time
 stax sync --no-stash               # Fail on a dirty working tree; overrides --force; conflicts with --stash at parse time
 # sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
-# Imported support branches may still be deleted locally after merge/gone, but their remotes are never push-deleted.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
 # Conditional attention lines name blocked cleanup, trunk failures, and checkout changes, followed by one prioritized next command. For a diverged trunk, inspect and reconcile it with its remote instead of treating `st trunk` as a repair; other trunk failures use `st trunk`. Routine restack health stays in stax ls and the TUI.
 # When --restack is requested, a failed fetch or trunk that did not reach the fetched remote commit stops sync before imported refresh, merged cleanup, or feature-branch rebases. Any sync auto-stash is restored first.
@@ -338,7 +338,7 @@ stax sweep --delete --force        # Skip confirmation prompt
 stax sweep --stale-days 60         # Override stale threshold in days (default 30, or branch.stale_days config)
 stax sweep --json                  # Machine-readable branch classification (conflicts with --delete)
 
-stax refresh                        # Sync trunk, restack, then submit (no merged cleanup)
+stax refresh                        # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
 stax refresh --no-pr                # Push only after trunk sync/restack
 stax refresh --no-submit            # Trunk sync/restack only
 stax refresh --force                # Force sync without prompts first
