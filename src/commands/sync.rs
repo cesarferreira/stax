@@ -489,132 +489,18 @@ impl SyncContext {
             let update_timer =
                 LiveTimer::maybe_new(!self.quiet, &format!("Update {}", self.stack.trunk));
 
-            let output = Command::new("git")
-                .args(["merge", "--ff-only", &self.remote_trunk_ref])
-                .current_dir(&self.workdir)
-                .output()
-                .context("Failed to fast-forward trunk")?;
-
-            if output.status.success() {
-                LiveTimer::maybe_finish_timed(update_timer);
-                if !self.quiet && self.verbose {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    if !stdout.trim().is_empty() {
-                        for line in stdout.lines() {
-                            println!("    {}", line.dimmed());
-                        }
-                    }
-                }
-            } else if self.safe {
-                LiveTimer::maybe_finish_warn(update_timer, "failed (safe mode, no reset)");
-                if !self.quiet && self.verbose {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stderr.trim().is_empty() {
-                        for line in stderr.lines() {
-                            println!("    {}", line.dimmed());
-                        }
-                    }
-                }
-            } else if !is_ancestor(&self.workdir, &self.stack.trunk, &self.remote_trunk_ref) {
-                // Local trunk has diverged from remote (has local-only commits).
-                // Refuse to reset to avoid silently losing those commits.
-                LiveTimer::maybe_finish_warn(
-                    update_timer,
-                    "diverged (local has commits not on remote; rebase or reset trunk manually)",
-                );
-            } else {
-                // Local is ancestor of remote -- safe to reset (equivalent to fast-forward)
-                let reset_output = Command::new("git")
-                    .args(["reset", "--hard", &self.remote_trunk_ref])
-                    .current_dir(&self.workdir)
-                    .output()
-                    .context("Failed to reset trunk")?;
-
-                if reset_output.status.success() {
-                    LiveTimer::maybe_finish_warn(update_timer, "reset to remote");
-                } else {
-                    LiveTimer::maybe_finish_err(update_timer, "failed");
-                    if !self.quiet && self.verbose {
-                        let stderr = String::from_utf8_lossy(&reset_output.stderr);
-                        if !stderr.trim().is_empty() {
-                            for line in stderr.lines() {
-                                println!("    {}", line.dimmed());
-                            }
-                        }
-                    }
-                }
-            }
+            self.fast_forward_trunk_in(&self.workdir, update_timer, false)?;
         } else {
             let update_timer =
                 LiveTimer::maybe_new(!self.quiet, &format!("Update {}", self.stack.trunk));
 
             if let Some(trunk_worktree_path) = repo.branch_worktree_path(&self.stack.trunk)? {
-                let output = Command::new("git")
-                    .args(["merge", "--ff-only", &self.remote_trunk_ref])
-                    .current_dir(&trunk_worktree_path)
-                    .output()
-                    .context("Failed to fast-forward trunk in its worktree")?;
-
-                if output.status.success() {
-                    LiveTimer::maybe_finish_timed(update_timer);
-                } else if self.safe {
-                    LiveTimer::maybe_finish_warn(update_timer, "failed (safe mode, no reset)");
-                    if !self.quiet && self.verbose {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        if !stderr.trim().is_empty() {
-                            for line in stderr.lines() {
-                                println!("    {}", line.dimmed());
-                            }
-                        }
-                    }
-                } else if !is_ancestor(
-                    &trunk_worktree_path,
-                    &self.stack.trunk,
-                    &self.remote_trunk_ref,
-                ) {
-                    LiveTimer::maybe_finish_warn(
-                        update_timer,
-                        "diverged (local has commits not on remote; rebase or reset trunk manually)",
-                    );
-                } else {
-                    let reset_output = Command::new("git")
-                        .args(["reset", "--hard", &self.remote_trunk_ref])
-                        .current_dir(&trunk_worktree_path)
-                        .output()
-                        .context("Failed to reset trunk in its worktree")?;
-
-                    if reset_output.status.success() {
-                        LiveTimer::maybe_finish_warn(update_timer, "reset to remote");
-                    } else {
-                        LiveTimer::maybe_finish_err(update_timer, "failed");
-                        if !self.quiet && self.verbose {
-                            let stderr = String::from_utf8_lossy(&reset_output.stderr);
-                            if !stderr.trim().is_empty() {
-                                for line in stderr.lines() {
-                                    println!("    {}", line.dimmed());
-                                }
-                            }
-                        }
-                    }
-                }
+                self.fast_forward_trunk_in(&trunk_worktree_path, update_timer, true)?;
             } else {
                 // Trunk isn't checked out in any worktree.
                 // Resolve the two SHAs so we can give an accurate status message.
-                let local_sha = Command::new("git")
-                    .args(["rev-parse", &self.stack.trunk])
-                    .current_dir(&self.workdir)
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-
-                let remote_sha = Command::new("git")
-                    .args(["rev-parse", &self.remote_trunk_ref])
-                    .current_dir(&self.workdir)
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+                let local_sha = resolve_ref_oid(&self.workdir, &self.stack.trunk);
+                let remote_sha = resolve_ref_oid(&self.workdir, &self.remote_trunk_ref);
 
                 match (local_sha, remote_sha) {
                     (Some(ref local), Some(ref remote)) if local == remote => {
@@ -623,17 +509,8 @@ impl SyncContext {
                     }
                     (Some(_), Some(_)) => {
                         // Check if a fast-forward is safe (local trunk is an ancestor of remote).
-                        let ff_possible = Command::new("git")
-                            .args([
-                                "merge-base",
-                                "--is-ancestor",
-                                &self.stack.trunk,
-                                &self.remote_trunk_ref,
-                            ])
-                            .current_dir(&self.workdir)
-                            .status()
-                            .map(|s| s.success())
-                            .unwrap_or(false);
+                        let ff_possible =
+                            is_ancestor(&self.workdir, &self.stack.trunk, &self.remote_trunk_ref);
 
                         if ff_possible {
                             let output = Command::new("git")
@@ -685,6 +562,75 @@ impl SyncContext {
             format!("update {}", self.stack.trunk),
             update_trunk_started_at.elapsed(),
         ));
+        Ok(())
+    }
+
+    fn fast_forward_trunk_in(
+        &self,
+        dir: &Path,
+        timer: Option<LiveTimer>,
+        in_linked_worktree: bool,
+    ) -> Result<()> {
+        let output = Command::new("git")
+            .args(["merge", "--ff-only", &self.remote_trunk_ref])
+            .current_dir(dir)
+            .output()
+            .context(if in_linked_worktree {
+                "Failed to fast-forward trunk in its worktree"
+            } else {
+                "Failed to fast-forward trunk"
+            })?;
+
+        if output.status.success() {
+            LiveTimer::maybe_finish_timed(timer);
+            if !in_linked_worktree && !self.quiet && self.verbose {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !stdout.trim().is_empty() {
+                    for line in stdout.lines() {
+                        println!("    {}", line.dimmed());
+                    }
+                }
+            }
+        } else if self.safe {
+            LiveTimer::maybe_finish_warn(timer, "failed (safe mode, no reset)");
+            if !self.quiet && self.verbose {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.trim().is_empty() {
+                    for line in stderr.lines() {
+                        println!("    {}", line.dimmed());
+                    }
+                }
+            }
+        } else if !is_ancestor(dir, &self.stack.trunk, &self.remote_trunk_ref) {
+            LiveTimer::maybe_finish_warn(
+                timer,
+                "diverged (local has commits not on remote; rebase or reset trunk manually)",
+            );
+        } else {
+            let reset_output = Command::new("git")
+                .args(["reset", "--hard", &self.remote_trunk_ref])
+                .current_dir(dir)
+                .output()
+                .context(if in_linked_worktree {
+                    "Failed to reset trunk in its worktree"
+                } else {
+                    "Failed to reset trunk"
+                })?;
+
+            if reset_output.status.success() {
+                LiveTimer::maybe_finish_warn(timer, "reset to remote");
+            } else {
+                LiveTimer::maybe_finish_err(timer, "failed");
+                if !self.quiet && self.verbose {
+                    let stderr = String::from_utf8_lossy(&reset_output.stderr);
+                    if !stderr.trim().is_empty() {
+                        for line in stderr.lines() {
+                            println!("    {}", line.dimmed());
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1662,59 +1608,7 @@ impl SyncContext {
             let deferred_timer =
                 LiveTimer::maybe_new(!self.quiet, &format!("Update {}", self.stack.trunk));
 
-            let output = Command::new("git")
-                .args(["merge", "--ff-only", &self.remote_trunk_ref])
-                .current_dir(&self.workdir)
-                .output()
-                .context("Failed to fast-forward trunk")?;
-
-            if output.status.success() {
-                LiveTimer::maybe_finish_timed(deferred_timer);
-                if !self.quiet && self.verbose {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    if !stdout.trim().is_empty() {
-                        for line in stdout.lines() {
-                            println!("    {}", line.dimmed());
-                        }
-                    }
-                }
-            } else if self.safe {
-                LiveTimer::maybe_finish_warn(deferred_timer, "failed (safe mode, no reset)");
-                if !self.quiet && self.verbose {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stderr.trim().is_empty() {
-                        for line in stderr.lines() {
-                            println!("    {}", line.dimmed());
-                        }
-                    }
-                }
-            } else if !is_ancestor(&self.workdir, &self.stack.trunk, &self.remote_trunk_ref) {
-                LiveTimer::maybe_finish_warn(
-                    deferred_timer,
-                    "diverged (local has commits not on remote; rebase or reset trunk manually)",
-                );
-            } else {
-                // Local is ancestor of remote -- safe to reset
-                let reset_output = Command::new("git")
-                    .args(["reset", "--hard", &self.remote_trunk_ref])
-                    .current_dir(&self.workdir)
-                    .output()
-                    .context("Failed to reset trunk")?;
-
-                if reset_output.status.success() {
-                    LiveTimer::maybe_finish_warn(deferred_timer, "reset to remote");
-                } else {
-                    LiveTimer::maybe_finish_err(deferred_timer, "failed");
-                    if !self.quiet && self.verbose {
-                        let stderr = String::from_utf8_lossy(&reset_output.stderr);
-                        if !stderr.trim().is_empty() {
-                            for line in stderr.lines() {
-                                println!("    {}", line.dimmed());
-                            }
-                        }
-                    }
-                }
-            }
+            self.fast_forward_trunk_in(&self.workdir, deferred_timer, false)?;
 
             self.step_timings.push((
                 format!("retry update {}", self.stack.trunk),
