@@ -128,6 +128,8 @@ mod submit_pr_base_tests;
 mod sweep_tests;
 #[path = "sync_dry_run_tests.rs"]
 mod sync_dry_run_tests;
+#[path = "sync_json_tests.rs"]
+mod sync_json_tests;
 #[path = "sync_undo_tests.rs"]
 mod sync_undo_tests;
 #[path = "track_all_prs_tests.rs"]

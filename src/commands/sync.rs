@@ -8,7 +8,7 @@ use crate::commands::worktree::{
 use crate::config::Config;
 use crate::engine::branch_detect::has_unique_commits_since_any_base;
 use crate::engine::{BranchMetadata, PrInfo, Stack};
-use crate::errors::ConflictStopped;
+use crate::errors::{ConflictStopped, DirtyWorkingTree, SilentExit, exit_codes};
 use crate::forge::ForgeClient;
 use crate::git::repo::{BranchDeleteResolution, BranchDeleteSwitchTarget};
 use crate::git::{GitRepo, RebaseResult, RebaseTimings};
@@ -29,39 +29,66 @@ use std::time::{Duration, Instant};
 const PR_METADATA_REFRESH_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Default)]
-struct SyncStats {
-    trunk: Option<TrunkSummary>,
-    merged_branches_cleaned: usize,
-    restacked_branches: usize,
-    imported_branches_updated: usize,
-    trunk_not_updated: Option<TrunkNotUpdated>,
-    cleanup_skips: Vec<CleanupSkip>,
-    checkout_change: Option<CheckoutChange>,
+pub(super) struct SyncStats {
+    pub(super) trunk: Option<TrunkSummary>,
+    pub(super) merged_branches_cleaned: usize,
+    pub(super) deleted_branches: Vec<DeletedBranchRecord>,
+    pub(super) restacked_branches: Vec<String>,
+    pub(super) imported_branches_updated: Vec<String>,
+    pub(super) partially_merged: Vec<PartialMergeRecord>,
+    pub(super) protected_branches: Vec<String>,
+    pub(super) trunk_not_updated: Option<TrunkNotUpdated>,
+    pub(super) cleanup_skips: Vec<CleanupSkip>,
+    pub(super) checkout_change: Option<CheckoutChange>,
+    pub(super) stash: StashOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct DeletedBranchRecord {
+    pub(super) branch: String,
+    pub(super) category: &'static str,
+    pub(super) scope: &'static str,
+    pub(super) tip: Option<String>,
+    pub(super) metadata_deleted: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PartialMergeRecord {
+    pub(super) branch: String,
+    pub(super) reason: &'static str,
+    pub(super) pr_number: Option<u64>,
+    pub(super) extra_commits: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct StashOutcome {
+    pub(super) stashed: bool,
+    pub(super) restored: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TrunkNotUpdated {
-    branch: String,
-    remote_ref: String,
-    failure: TrunkUpdateFailure,
+pub(super) struct TrunkNotUpdated {
+    pub(super) branch: String,
+    pub(super) remote_ref: String,
+    pub(super) failure: TrunkUpdateFailure,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TrunkUpdateFailure {
+pub(super) enum TrunkUpdateFailure {
     Diverged,
     Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CleanupSkip {
-    branch: String,
-    reason: String,
+pub(super) struct CleanupSkip {
+    pub(super) branch: String,
+    pub(super) reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CheckoutChange {
-    from: String,
-    to: String,
+pub(super) struct CheckoutChange {
+    pub(super) from: String,
+    pub(super) to: String,
 }
 
 impl SyncStats {
@@ -90,7 +117,7 @@ impl RestackBranchTiming {
 }
 
 #[derive(Debug)]
-enum TrunkSummary {
+pub(super) enum TrunkSummary {
     UpToDate {
         branch: String,
     },
@@ -230,6 +257,7 @@ struct SyncContext {
     quiet: bool,
     verbose: bool,
     auto_stash_pop: bool,
+    json: bool,
     auto_confirm: bool,
     sync_extra_fetch_refs: Vec<String>,
     imported_branches: Vec<String>,
@@ -239,6 +267,7 @@ struct SyncContext {
     remote_trunk_after_fetch: Option<String>,
     updated_imported_branches: Vec<String>,
     stashed: bool,
+    stash_restored: bool,
     stash_guard: StashGuard,
     stale_stack_warning_shown: bool,
     trunk_update_deferred: bool,
@@ -265,6 +294,7 @@ impl SyncContext {
         quiet: bool,
         verbose: bool,
         auto_stash_pop: bool,
+        json: bool,
         extra_fetch_refs: &[String],
     ) -> Result<(Self, GitRepo)> {
         let repo = GitRepo::open()?;
@@ -284,6 +314,7 @@ impl SyncContext {
         }
         let auto_confirm = force;
         let current_after_deletions = current.clone();
+        let effective_quiet = quiet || json;
         Ok((
             Self {
                 workdir,
@@ -299,9 +330,10 @@ impl SyncContext {
                 delete_upstream_gone,
                 force,
                 safe,
-                quiet,
+                quiet: effective_quiet,
                 verbose,
                 auto_stash_pop,
+                json,
                 auto_confirm,
                 sync_extra_fetch_refs,
                 imported_branches,
@@ -311,6 +343,7 @@ impl SyncContext {
                 remote_trunk_after_fetch: None,
                 updated_imported_branches: Vec::new(),
                 stashed: false,
+                stash_restored: false,
                 stash_guard: StashGuard::new(),
                 stale_stack_warning_shown: false,
                 trunk_update_deferred: false,
@@ -328,7 +361,7 @@ impl SyncContext {
     fn handle_dirty_tree(&mut self, repo: &GitRepo) -> Result<SyncFlow> {
         if repo.is_dirty()? {
             if self.quiet {
-                anyhow::bail!("Working tree is dirty. Please stash or commit changes first.");
+                return Err(DirtyWorkingTree.into());
             }
 
             let stash = if self.auto_confirm {
@@ -353,7 +386,9 @@ impl SyncContext {
                     println!("{}", "✓ Stashed working tree changes.".green());
                 }
             } else {
-                println!("{}", "Aborted.".red());
+                if !self.json {
+                    println!("{}", "Aborted.".red());
+                }
                 return Ok(SyncFlow::Stop);
             }
         }
@@ -792,7 +827,7 @@ impl SyncContext {
             self.quiet,
             self.verbose,
         )?;
-        self.stats.imported_branches_updated = self.updated_imported_branches.len();
+        self.stats.imported_branches_updated = self.updated_imported_branches.clone();
         if !self.imported_branches.is_empty() {
             self.step_timings.push((
                 "update imported branches".to_string(),
@@ -945,10 +980,14 @@ impl SyncContext {
             Err(e) => {
                 self.stats
                     .record_cleanup_skip(branch, "metadata cleanup failed");
-                println!(
-                    "{}",
-                    format!("Warning: failed to delete metadata for '{}': {}", branch, e).yellow()
-                );
+                let msg = format!("Warning: failed to delete metadata for '{}': {}", branch, e)
+                    .yellow()
+                    .to_string();
+                if self.json {
+                    eprintln!("{}", msg);
+                } else {
+                    println!("{}", msg);
+                }
                 false
             }
         }
@@ -1370,6 +1409,23 @@ impl SyncContext {
                         self.stats.merged_branches_cleaned += 1;
                     }
 
+                    // Record JSON stat for deleted branch (outside !quiet gate)
+                    if local_deleted || remote_deleted {
+                        let scope = match (local_deleted, remote_deleted) {
+                            (true, true) => "both",
+                            (true, false) => "local",
+                            (false, true) => "remote",
+                            _ => "local",
+                        };
+                        self.stats.deleted_branches.push(DeletedBranchRecord {
+                            branch: branch.clone(),
+                            category: "merged",
+                            scope,
+                            tip: tip_before_delete.clone(),
+                            metadata_deleted,
+                        });
+                    }
+
                     if !local_deleted && local_still_exists {
                         self.record_local_branch_kept_skip(
                             branch,
@@ -1419,6 +1475,21 @@ impl SyncContext {
                 }
             } else if !self.quiet {
                 println!("    {}", "No merged branches to delete.".dimmed());
+            }
+
+            // Record partially-merged notes OUTSIDE !quiet gate for JSON stats
+            for note in &partially_merged_notes {
+                let reason = match note.pr_label {
+                    PartialMergeReason::PrMerged => "pr_merged",
+                    PartialMergeReason::PrClosed => "pr_closed",
+                    PartialMergeReason::HistoryMerged => "history_merged",
+                };
+                self.stats.partially_merged.push(PartialMergeRecord {
+                    branch: note.branch.clone(),
+                    reason,
+                    pr_number: note.pr_number,
+                    extra_commits: note.extra_commits,
+                });
             }
 
             if !self.quiet {
@@ -1493,6 +1564,11 @@ impl SyncContext {
                 detect_gone_started_at.elapsed(),
             ));
             LiveTimer::maybe_finish_timed(detect_timer);
+
+            // Record protected-gone branches OUTSIDE !quiet gate for JSON stats
+            self.stats
+                .protected_branches
+                .extend(protected_gone.iter().cloned());
 
             if !self.quiet && !protected_gone.is_empty() {
                 let branch_word = if protected_gone.len() == 1 {
@@ -1675,6 +1751,17 @@ impl SyncContext {
 
                     self.record_deletion_after(branch, local_still_exists, &gone_reparented);
 
+                    // Record JSON stat for upstream-gone deleted branch (outside !quiet gate)
+                    if local_deleted {
+                        self.stats.deleted_branches.push(DeletedBranchRecord {
+                            branch: branch.clone(),
+                            category: "upstream_gone",
+                            scope: "local",
+                            tip: tip_before_delete.clone(),
+                            metadata_deleted,
+                        });
+                    }
+
                     if !local_deleted && local_still_exists {
                         self.record_local_branch_kept_skip(
                             branch,
@@ -1855,7 +1942,7 @@ impl SyncContext {
                 tx.snapshot()?;
 
                 let mut summary: Vec<(String, String)> = Vec::new();
-                let mut restacked_branches = 0usize;
+                let mut restacked_branches: Vec<String> = Vec::new();
 
                 for (index, branch) in restack_scope_order.iter().enumerate() {
                     let needs_restack = live_stack
@@ -1957,7 +2044,7 @@ impl SyncContext {
                             }
 
                             LiveTimer::maybe_finish_timed(restack_timer);
-                            restacked_branches += 1;
+                            restacked_branches.push(branch.clone());
                             summary.push((branch.clone(), "ok".to_string()));
                         }
                         RebaseResult::Conflict => {
@@ -1976,22 +2063,26 @@ impl SyncContext {
                                 .map(|(name, _)| name.clone())
                                 .collect();
                             let conflict_stack = live_stack.current_stack(branch);
-                            print_restack_conflict(
-                                repo,
-                                &RestackConflictContext {
-                                    branch,
-                                    parent_branch: &parent_branch_name,
-                                    completed_branches: &completed_branches,
-                                    remaining_branches: scope_order.len().saturating_sub(index + 1),
-                                    continue_commands: &[
-                                        "stax resolve",
-                                        "stax continue",
-                                        "stax sync --continue",
-                                    ],
-                                    stack_branches: &conflict_stack,
-                                },
-                            );
-                            if self.stashed {
+                            if !self.json {
+                                print_restack_conflict(
+                                    repo,
+                                    &RestackConflictContext {
+                                        branch,
+                                        parent_branch: &parent_branch_name,
+                                        completed_branches: &completed_branches,
+                                        remaining_branches: scope_order
+                                            .len()
+                                            .saturating_sub(index + 1),
+                                        continue_commands: &[
+                                            "stax resolve",
+                                            "stax continue",
+                                            "stax sync --continue",
+                                        ],
+                                        stack_branches: &conflict_stack,
+                                    },
+                                );
+                            }
+                            if self.stashed && !self.json {
                                 println!(
                                     "{}",
                                     "Stash kept to avoid conflicts. Run `git stash pop` after resolving.".yellow()
@@ -2035,6 +2126,7 @@ impl SyncContext {
             let stash_pop_started_at = Instant::now();
             repo.stash_pop()?;
             self.stash_guard.disarm();
+            self.stash_restored = true;
             self.step_timings
                 .push(("restore stash".to_string(), stash_pop_started_at.elapsed()));
             if !self.quiet {
@@ -2207,6 +2299,7 @@ pub fn run(
     quiet: bool,
     verbose: bool,
     auto_stash_pop: bool,
+    json: bool,
     extra_fetch_refs: &[String],
 ) -> Result<()> {
     let sync_started_at = Instant::now();
@@ -2221,6 +2314,7 @@ pub fn run(
         quiet,
         verbose,
         auto_stash_pop,
+        json,
         extra_fetch_refs,
     )?;
 
@@ -2231,10 +2325,69 @@ pub fn run(
         }
     }
 
-    if ctx.handle_dirty_tree(&repo)? == SyncFlow::Stop {
-        return Ok(());
-    }
+    if json {
+        if verbose {
+            eprintln!(
+                "{}",
+                "warning: --verbose is ignored by --json (output is machine-readable)".yellow()
+            );
+        }
+        let phase_result = match ctx.handle_dirty_tree(&repo) {
+            Err(e) => Err(e),
+            Ok(SyncFlow::Stop) => Ok(()),
+            Ok(SyncFlow::Continue) => run_sync_phases(&mut ctx, repo),
+        };
 
+        ctx.stats.stash = StashOutcome {
+            stashed: ctx.stashed,
+            restored: ctx.stash_restored,
+        };
+
+        let duration = sync_started_at.elapsed();
+        let trunk_branch = ctx.stack.trunk.clone();
+        let remote_trunk_ref = ctx.remote_trunk_ref.clone();
+
+        match phase_result {
+            Ok(()) => {
+                let output = crate::commands::sync_json::build(
+                    &trunk_branch,
+                    &remote_trunk_ref,
+                    &ctx.stats,
+                    false,
+                    duration,
+                    None,
+                );
+                println!("{}", crate::commands::sync_json::emit(&output));
+                Ok(())
+            }
+            Err(e) => {
+                let is_conflict = e.downcast_ref::<ConflictStopped>().is_some();
+                let err_json = crate::commands::sync_json::classify_error(&e);
+                let output = crate::commands::sync_json::build(
+                    &trunk_branch,
+                    &remote_trunk_ref,
+                    &ctx.stats,
+                    false,
+                    duration,
+                    Some(err_json),
+                );
+                println!("{}", crate::commands::sync_json::emit(&output));
+                if is_conflict {
+                    Err(ConflictStopped.into())
+                } else {
+                    Err(SilentExit(exit_codes::GENERAL).into())
+                }
+            }
+        }
+    } else {
+        if ctx.handle_dirty_tree(&repo)? == SyncFlow::Stop {
+            return Ok(());
+        }
+        run_sync_phases(&mut ctx, repo)
+    }
+}
+
+fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
     ctx.begin_transaction(&repo)?;
 
     if !ctx.quiet {
@@ -3751,19 +3904,19 @@ fn render_sync_footer(stats: &SyncStats, total_duration: Duration) -> String {
         ));
     }
 
-    if stats.restacked_branches > 0 {
+    if !stats.restacked_branches.is_empty() {
         parts.push(format!(
             "{} {}",
             "restacked".dimmed(),
-            stats.restacked_branches.to_string().cyan().bold()
+            stats.restacked_branches.len().to_string().cyan().bold()
         ));
     }
 
-    if stats.imported_branches_updated > 0 {
+    if !stats.imported_branches_updated.is_empty() {
         parts.push(format!(
             "{} {}",
             "updated".dimmed(),
-            format!("{} imported", stats.imported_branches_updated)
+            format!("{} imported", stats.imported_branches_updated.len())
                 .cyan()
                 .bold()
         ));
@@ -4029,8 +4182,8 @@ mod tests {
                     deletions: 22,
                 }),
                 merged_branches_cleaned: 2,
-                restacked_branches: 1,
-                imported_branches_updated: 1,
+                restacked_branches: vec!["feat".to_string()],
+                imported_branches_updated: vec!["base".to_string()],
                 ..SyncStats::default()
             },
             Duration::from_millis(14_022),
@@ -4061,8 +4214,8 @@ mod tests {
                     branch: "main".to_string(),
                 }),
                 merged_branches_cleaned: 0,
-                restacked_branches: 0,
-                imported_branches_updated: 0,
+                restacked_branches: vec![],
+                imported_branches_updated: vec![],
                 ..SyncStats::default()
             },
             Duration::from_secs(2),

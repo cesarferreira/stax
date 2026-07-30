@@ -331,6 +331,7 @@ pub fn run() -> Result<()> {
             verbose,
             auto_stash_pop,
             dry_run,
+            json,
         } => {
             if dry_run {
                 commands::sync_plan::run(commands::sync_plan::SyncPlanOptions {
@@ -343,6 +344,7 @@ pub fn run() -> Result<()> {
                     quiet,
                     verbose,
                     auto_stash_pop,
+                    json,
                 })
             } else {
                 commands::sync::run(
@@ -357,6 +359,7 @@ pub fn run() -> Result<()> {
                     quiet,
                     verbose,
                     auto_stash_pop,
+                    json,
                     &[],
                 )
             }
