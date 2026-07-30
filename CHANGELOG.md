@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.102.0] - 2026-07-30
+
+### 🚀 Features
+
+- *(sync)* Warn on leaked auto-stash, stale stack fallback, and show deleted tip SHAs ([#714](https://github.com/cesarferreira/stax/issues/714))
+- *(sync)* Make sync undoable and add GitRepo::refresh() ([#715](https://github.com/cesarferreira/stax/issues/715))
+- *(sync)* Add --dry-run/--plan preview to stax sync ([#716](https://github.com/cesarferreira/stax/issues/716))
+- *(sync)* Add --json machine-readable output ([#717](https://github.com/cesarferreira/stax/issues/717))
+- *(sync)* Add --stash/--no-stash, actionable dirty-tree error, deprecate --prune ([#718](https://github.com/cesarferreira/stax/issues/718))
+- *(sync)* Show one interactive Sync plan before trunk update and deletions ([#719](https://github.com/cesarferreira/stax/issues/719))
+
+### 🐛 Bug Fixes
+
+- *(track)* Stop --all-prs flattening stacked PRs onto trunk ([#721](https://github.com/cesarferreira/stax/issues/721))
+- *(sync)* Don't prompt when the only change is a trunk fast-forward ([#723](https://github.com/cesarferreira/stax/issues/723))
+- *(track)* Set upstream on branches fetched by --all-prs ([#724](https://github.com/cesarferreira/stax/issues/724))
+
+### 💼 Other
+
+- Improve --default-config ([#722](https://github.com/cesarferreira/stax/issues/722))
+- Reuse sync plan merged detection after trunk update ([#725](https://github.com/cesarferreira/stax/issues/725))
+
+### 🚜 Refactor
+
+- *(sync)* Extract SyncContext and split run() into phase methods ([#711](https://github.com/cesarferreira/stax/issues/711))
+- *(sync)* Dedupe trunk fast-forward ladders into one helper ([#712](https://github.com/cesarferreira/stax/issues/712))
+- *(sync)* Dedupe merged and upstream-gone cleanup pipelines ([#713](https://github.com/cesarferreira/stax/issues/713))
 ## [0.101.1] - 2026-07-30
 
 ### 🚀 Features
@@ -13,6 +40,10 @@ All notable changes to this project will be documented in this file.
 - *(sync)* Detect squash-merged branches on first rs ([#702](https://github.com/cesarferreira/stax/issues/702))
 - Preserve stacked PR merged state ([#699](https://github.com/cesarferreira/stax/issues/699))
 - *(test)* Make native tests resilient to PATH clobbering ([#710](https://github.com/cesarferreira/stax/issues/710))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.101.0] - 2026-07-28
 
 ### 🚀 Features
