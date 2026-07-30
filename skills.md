@@ -56,7 +56,7 @@ stax split                     # Interactive branch split into stack
 
 stax continue|cont             # Continue after conflict resolution
 stax abort                     # Abort in-progress rebase/conflict flow
-stax undo [op-id]              # Undo last/specific operation
+stax undo [op-id]              # Undo last/specific operation — covers restack, submit, sync (trunk ff + deletions + reparents + restack phase)
 stax redo [op-id]              # Redo last/specific undone operation
 
 stax pr                        # Open current branch PR
@@ -321,6 +321,7 @@ stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
 # When --restack is requested, a failed fetch or trunk that did not reach the fetched remote commit stops sync before imported refresh, merged cleanup, or feature-branch rebases. Any sync auto-stash is restored first.
 # Deletion lines for locally deleted branches (merged or upstream-gone) show the branch tip SHA (7 chars, dimmed) for traceability.
 # If sync auto-stashed your working tree and fails on an error path that cannot restore it, stderr names the stash ("stax auto-stash") with instructions to run `git stash pop`.
+# sync is transactional: trunk fast-forwards, merged/gone branch deletions, reparented-child metadata, and the optional restack phase are all covered by one receipt. A no-op sync writes no receipt so the previous undoable operation remains on the undo stack. Recover any sync run with `stax undo`.
 
 stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
 stax sweep --delete                # Delete merged/tracked-merged PRs + upstream-gone branches with no unique work after confirmation

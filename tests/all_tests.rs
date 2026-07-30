@@ -126,6 +126,8 @@ mod submit_plan_completions_tests;
 mod submit_pr_base_tests;
 #[path = "sweep_tests.rs"]
 mod sweep_tests;
+#[path = "sync_undo_tests.rs"]
+mod sync_undo_tests;
 #[path = "track_all_prs_tests.rs"]
 mod track_all_prs_tests;
 #[path = "track_merge_base_tests.rs"]

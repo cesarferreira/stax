@@ -25,6 +25,7 @@ pub enum OpKind {
     Restack,
     UpstackRestack,
     SyncRestack,
+    Sync,
     Submit,
     Reorder,
     Split,
@@ -44,6 +45,7 @@ impl OpKind {
             OpKind::Restack => "restack",
             OpKind::UpstackRestack => "upstack restack",
             OpKind::SyncRestack => "sync --restack",
+            OpKind::Sync => "sync",
             OpKind::Submit => "submit",
             OpKind::Reorder => "reorder",
             OpKind::Split => "split",
@@ -175,8 +177,16 @@ impl OpReceipt {
         }
     }
 
-    /// Add a local ref to track
+    /// Add a local ref to track.
+    ///
+    /// Idempotent by label: if an entry with the same `branch` name already
+    /// exists, the call is a no-op, preserving the earliest `oid_before`
+    /// snapshot.  This prevents duplicate receipt entries when planning code
+    /// (e.g. `plan_trunk_move` + `plan_branches`) touches the same ref twice.
     pub fn add_local_ref(&mut self, branch: &str, oid_before: Option<&str>) {
+        if self.local_refs.iter().any(|e| e.branch == branch) {
+            return;
+        }
         self.local_refs.push(LocalRefEntry {
             branch: branch.to_string(),
             refname: format!("refs/heads/{}", branch),
@@ -192,9 +202,16 @@ impl OpReceipt {
     /// The label gets a `@meta` suffix so it doesn't collide with the
     /// matching `add_local_ref(branch, ...)` entry — both can coexist for
     /// one branch, which `fold` relies on.
+    ///
+    /// Idempotent by label: if the `<branch>@meta` entry already exists the
+    /// call is a no-op, preserving the earliest `oid_before` snapshot.
     pub fn add_metadata_ref(&mut self, branch: &str, oid_before: Option<&str>) {
+        let label = format!("{}{}", branch, super::tx::METADATA_REF_LABEL_SUFFIX);
+        if self.local_refs.iter().any(|e| e.branch == label) {
+            return;
+        }
         self.local_refs.push(LocalRefEntry {
-            branch: format!("{}{}", branch, super::tx::METADATA_REF_LABEL_SUFFIX),
+            branch: label,
             refname: crate::git::refs::metadata_refname(branch),
             existed_before: oid_before.is_some(),
             oid_before: oid_before.map(|s| s.to_string()),
@@ -503,8 +520,18 @@ mod tests {
         assert_eq!(OpKind::Restack.display_name(), "restack");
         assert_eq!(OpKind::UpstackRestack.display_name(), "upstack restack");
         assert_eq!(OpKind::SyncRestack.display_name(), "sync --restack");
+        assert_eq!(OpKind::Sync.display_name(), "sync");
         assert_eq!(OpKind::Submit.display_name(), "submit");
         assert_eq!(OpKind::Reorder.display_name(), "reorder");
+    }
+
+    #[test]
+    fn sync_op_kind_roundtrips_as_snake_case() {
+        let kind = OpKind::Sync;
+        let json = serde_json::to_string(&kind).expect("serialize");
+        assert_eq!(json, "\"sync\"");
+        let loaded: OpKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(loaded, OpKind::Sync);
     }
 
     #[test]

@@ -277,7 +277,7 @@ one-line notice. Silence the notice with `[restack] preflight_warn = false` or
 
 ### Undo / redo
 
-`restack`, `submit`, and `reorder` each snapshot branch state before they touch anything. Recovery is one command away.
+`restack`, `submit`, `sync`, and `reorder` each snapshot branch state before they touch anything. Recovery is one command away.
 
 ```bash
 st restack

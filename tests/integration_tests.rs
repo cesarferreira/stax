@@ -5290,33 +5290,39 @@ fn test_sync_restack_creates_receipt() {
     let git_dir = repo.path().join(".git");
     let stax_ops_dir = git_dir.join("stax").join("ops");
 
-    if stax_ops_dir.exists() {
-        let ops: Vec<_> = std::fs::read_dir(&stax_ops_dir)
-            .expect("Failed to read stax ops dir")
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|ext| ext == "json")
-                    .unwrap_or(false)
-            })
-            .collect();
+    assert!(
+        stax_ops_dir.exists(),
+        "Expected .git/stax/ops directory to exist after sync"
+    );
 
-        // Find the sync_restack receipt
-        let _sync_receipt = ops.iter().find(|op| {
-            let content = std::fs::read_to_string(op.path()).unwrap_or_default();
-            content.contains("sync_restack")
-        });
+    let ops: Vec<_> = std::fs::read_dir(&stax_ops_dir)
+        .expect("Failed to read stax ops dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "json")
+                .unwrap_or(false)
+        })
+        .collect();
 
-        // May not have a receipt if nothing needed restacking
-        if !ops.is_empty() {
-            // At least verify the ops directory structure
-            assert!(
-                ops.iter()
-                    .all(|op| op.path().extension().map(|e| e == "json").unwrap_or(false))
-            );
-        }
-    }
+    assert!(
+        !ops.is_empty(),
+        "Expected at least one receipt after sync --restack"
+    );
+
+    // Find the sync receipt and assert its kind is "sync".
+    let sync_receipt = ops.iter().find(|op| {
+        let content = std::fs::read_to_string(op.path()).unwrap_or_default();
+        let v: serde_json::Value =
+            serde_json::from_str(&content).unwrap_or(serde_json::Value::Null);
+        v["kind"].as_str() == Some("sync")
+    });
+
+    assert!(
+        sync_receipt.is_some(),
+        "Expected a receipt with kind == \"sync\" after sync --restack"
+    );
 }
 
 #[test]

@@ -52,7 +52,7 @@ pub(crate) fn latest_failed_restack_receipt(repo: &GitRepo) -> Result<Option<OpR
     Ok(OpReceipt::load_latest(git_dir)?.filter(|receipt| {
         matches!(
             receipt.kind,
-            OpKind::Restack | OpKind::SyncRestack | OpKind::UpstackRestack
+            OpKind::Restack | OpKind::SyncRestack | OpKind::UpstackRestack | OpKind::Sync
         ) && receipt.status == OpStatus::Failed
             && receipt.repo_workdir == workdir
     }))
