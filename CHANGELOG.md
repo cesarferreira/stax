@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.101.1] - 2026-07-30
+
+### 🚀 Features
+
+- Support GitLab stack merges ([#701](https://github.com/cesarferreira/stax/issues/701))
+
+### 🐛 Bug Fixes
+
+- *(sync)* Detect squash-merged branches on first rs ([#702](https://github.com/cesarferreira/stax/issues/702))
+- Preserve stacked PR merged state ([#699](https://github.com/cesarferreira/stax/issues/699))
+- *(test)* Make native tests resilient to PATH clobbering ([#710](https://github.com/cesarferreira/stax/issues/710))
 ## [0.101.0] - 2026-07-28
 
 ### 🚀 Features
@@ -19,6 +30,10 @@ All notable changes to this project will be documented in this file.
 
 - Use ⎇ as the linked-worktree indicator in stack views ([#693](https://github.com/cesarferreira/stax/issues/693))
 - Warn when a merged/closed-PR branch has unpushed commits ([#695](https://github.com/cesarferreira/stax/issues/695))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.100.0] - 2026-07-27
 
 ### 🚀 Features
