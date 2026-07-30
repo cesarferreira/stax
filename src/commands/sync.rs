@@ -964,6 +964,9 @@ impl SyncContext {
                 Vec::new()
             };
             for branch in scope {
+                if BranchMetadata::is_frozen(repo.inner(), &branch).unwrap_or(false) {
+                    continue;
+                }
                 if let Some(info) = self.stack.branches.get(&branch)
                     && info.needs_restack
                 {
