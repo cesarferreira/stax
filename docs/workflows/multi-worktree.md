@@ -28,7 +28,7 @@ st upstack restack --auto-stash-pop
 st sync --restack --auto-stash-pop
 ```
 
-If a conflict occurs, the stash entry is preserved so nothing is lost.
+If a conflict occurs, the stash entry is preserved so nothing is lost. When `st sync` auto-stashes your working tree and fails on an unrecoverable error path (for example, when restoring the stash itself conflicts with an updated trunk), it prints a warning to stderr naming the stash "stax auto-stash" with instructions to run `git stash pop` to restore your changes.
 
 ## Related
 

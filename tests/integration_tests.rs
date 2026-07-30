@@ -2482,6 +2482,81 @@ fn test_sync_restack_aborts_and_restores_stash_when_fetch_fails() {
 }
 
 #[test]
+fn test_sync_warns_when_dirty_worktree_failure_leaves_stash_behind() {
+    let repo = TestRepo::new_with_remote();
+
+    // Commit shared.txt on main and push to the test remote.
+    repo.create_file("shared.txt", "line one\nline two\nline three\n");
+    repo.commit("Add shared.txt");
+    repo.git(&["push", "origin", "main"]);
+
+    // From a second clone, rewrite all 3 lines and push to remote/main.
+    let remote_path = repo.remote_path().expect("No remote configured");
+    let clone_dir = test_tempdir();
+    let run_remote_git = |args: &[&str]| {
+        let output = hermetic_git_command()
+            .args(args)
+            .current_dir(clone_dir.path())
+            .output()
+            .expect("Failed to run git in remote clone");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout: {}\nstderr: {}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_remote_git(&["clone", remote_path.to_str().unwrap(), "."]);
+    run_remote_git(&["checkout", "-B", "main", "origin/main"]);
+    run_remote_git(&["config", "user.email", "pusher@test.com"]);
+    run_remote_git(&["config", "user.name", "Pusher"]);
+    fs::write(clone_dir.path().join("shared.txt"), "alpha\nbeta\ngamma\n")
+        .expect("write shared.txt in remote clone");
+    run_remote_git(&["add", "shared.txt"]);
+    run_remote_git(&["commit", "-m", "Rewrite shared.txt on remote"]);
+    run_remote_git(&["push", "origin", "main"]);
+
+    // Dirty the same lines locally in the test repo (without fetching).
+    repo.create_file("shared.txt", "delta\nepsilon\nzeta\n");
+
+    // Run sync --force. Sync auto-stashes shared.txt (StashGuard armed), then
+    // fast-forwards trunk to the remote HEAD. The final git stash pop fails
+    // because the stash content conflicts with the rewritten trunk; the guard
+    // fires on that failure path and prints the recovery hint to stderr.
+    let output = repo.run_stax(&["sync", "--force"]);
+    assert!(
+        !output.status.success(),
+        "sync must fail when stash pop conflicts\nstdout: {}\nstderr: {}",
+        TestRepo::stdout(&output),
+        TestRepo::stderr(&output)
+    );
+
+    let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+    assert!(
+        combined.contains(r#"still stashed as "stax auto-stash""#),
+        "output must name the stash: {combined}"
+    );
+    assert!(
+        combined.contains("git stash pop"),
+        "output must tell user how to restore: {combined}"
+    );
+
+    // Stash must still exist (guard never pops on failure).
+    let stash_list = repo.git(&["stash", "list"]);
+    assert!(stash_list.status.success());
+    let stash_out = TestRepo::stdout(&stash_list);
+    assert!(
+        !stash_out.trim().is_empty(),
+        "expected leftover stash entry after guard fired"
+    );
+    assert!(
+        stash_out.contains("stax auto-stash"),
+        "stash entry must be named 'stax auto-stash': {stash_out}"
+    );
+}
+
+#[test]
 fn test_update_no_submit_skips_merged_branch_cleanup() {
     let repo = TestRepo::new_with_remote();
 
@@ -3556,6 +3631,9 @@ fn test_sync_deletes_merged_branches() {
         "expected {feature_branch} to be merged into main before sync, got: {merged_str}"
     );
 
+    // Capture tip SHA before sync deletes the branch.
+    let feature_sha = repo.get_commit_sha(&feature_branch);
+
     // `--force` auto-confirms deletion of tracked branches merged into trunk.
     let output = repo.run_stax(&["sync", "--force"]);
     assert!(
@@ -3568,6 +3646,17 @@ fn test_sync_deletes_merged_branches() {
         "sync --force should delete the merged tracked branch {feature_branch}\nstdout:\n{}\nstderr:\n{}",
         TestRepo::stdout(&output),
         TestRepo::stderr(&output)
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let deletion_line = stdout
+        .lines()
+        .find(|l| l.contains("deleted (local"))
+        .unwrap_or_else(|| panic!("expected a 'deleted (local' line in output: {stdout}"));
+    assert!(
+        deletion_line.contains(&feature_sha[..7]),
+        "deletion line must contain tip SHA {}: {deletion_line}",
+        &feature_sha[..7]
     );
 }
 
@@ -5605,6 +5694,9 @@ fn test_sync_delete_upstream_gone_deletes_untracked_local_branch() {
 
     repo.git(&["push", "origin", "--delete", "manual-upstream-gone"]);
 
+    // Capture tip SHA before sync deletes the branch.
+    let sha = repo.get_commit_sha("manual-upstream-gone");
+
     let output = repo.run_stax(&["sync", "--force", "--delete-upstream-gone"]);
     assert!(
         output.status.success(),
@@ -5616,6 +5708,17 @@ fn test_sync_delete_upstream_gone_deletes_untracked_local_branch() {
     assert!(
         !branches.iter().any(|b| b == "manual-upstream-gone"),
         "Expected --delete-upstream-gone to delete the stale local branch"
+    );
+
+    let stdout = TestRepo::stdout(&output);
+    let deletion_line = stdout
+        .lines()
+        .find(|l| l.contains("deleted (local"))
+        .unwrap_or_else(|| panic!("expected a 'deleted (local' line in output: {stdout}"));
+    assert!(
+        deletion_line.contains(&sha[..7]),
+        "deletion line must contain tip SHA {}: {deletion_line}",
+        &sha[..7]
     );
 }
 
