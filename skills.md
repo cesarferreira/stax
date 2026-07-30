@@ -308,6 +308,9 @@ stax merge-when-ready              # Backward-compatible alias
 stax rs                            # Sync trunk + clean merged branches
 stax rs --restack                  # Sync then restack
 stax sync --dry-run                # Preview sync plan (read-only — no fetch, no stash, no ref writes); alias: --plan
+stax sync --dry-run --json         # Same as --dry-run but emits a single JSON doc (kind:"sync_plan", schema_version:1, dry_run:true); always exits 0; no receipt written
+stax sync --json                   # Run sync and emit result as JSON (kind:"sync", schema_version:1); implies non-interactive (quiet); does NOT imply --force; failures emit JSON + non-zero exit
+stax sync --json --force           # Same as --json but also auto-confirms branch deletions (scripting entry point)
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
@@ -323,6 +326,8 @@ stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
 # Deletion lines for locally deleted branches (merged or upstream-gone) show the branch tip SHA (7 chars, dimmed) for traceability.
 # If sync auto-stashed your working tree and fails on an error path that cannot restore it, stderr names the stash ("stax auto-stash") with instructions to run `git stash pop`.
 # sync is transactional: trunk fast-forwards, merged/gone branch deletions, reparented-child metadata, and the optional restack phase are all covered by one receipt. A no-op sync writes no receipt so the previous undoable operation remains on the undo stack. Recover any sync run with `stax undo`.
+# --json scripting entry points: stax sync --json --force (delete all merged); stax sync --json (skip deletions needing confirmation); stax sync --dry-run --json (read-only plan); dirty tree → success:false, error.kind:dirty_working_tree, non-zero exit; --json conflicts with --continue.
+# trunk.action values: up_to_date · fast_forwarded · reset · diverged · failed · unknown. On early-bail paths (dirty tree, non-interactive) trunk.action is "unknown" because finalize never runs — intended.
 
 stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
 stax sweep --delete                # Delete merged/tracked-merged PRs + upstream-gone branches with no unique work after confirmation

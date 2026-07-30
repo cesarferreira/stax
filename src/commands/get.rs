@@ -58,6 +58,7 @@ pub fn run(options: GetOptions) -> Result<()> {
             false,
             false,
             false,
+            false, // json
             &[],
         );
     };

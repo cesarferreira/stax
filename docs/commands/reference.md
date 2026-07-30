@@ -28,6 +28,8 @@ st --trace status --json >/dev/null
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
 | `st sync --dry-run` / `st sync --plan` | | Preview what sync would do — ls-remote only, no fetch/stash/ref-writes/push/metadata writes; always exits 0; composes with `--restack`, `--delete-upstream-gone`, `--safe`; `--force`, `--auto-stash-pop`, `--full`, and `--verbose` emit a warning and are otherwise ignored; `--continue` is rejected |
+| `st sync --dry-run --json` | | Same as `--dry-run` but emits a single JSON document (`kind: "sync_plan"`, `schema_version: 1`, `dry_run: true`) instead of human text |
+| `st sync --json` | | Emit the sync result as a single JSON document (`kind: "sync"`, `schema_version: 1`); implies non-interactive; failures emit JSON + non-zero exit; conflicts with `--continue` |
 | `st sweep` | | Classify all local branches as merged / upstream-gone / stale / active (read-only by default) |
 | `st sweep --delete` | | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation |
 | `st sweep --delete --include-stale` | | Also delete stale branches (older than `--stale-days` / `branch.stale_days` config key) |
@@ -314,6 +316,65 @@ st completions elvish
 - `--delete-upstream-gone`
 - `--force` / `--safe` / `--continue` / `--quiet` / `--verbose`
 - `--dry-run` (alias `--plan`) — read-only preview: probes the remote with ls-remote (no fetch, no FETCH_HEAD write), patches PR states in-memory, classifies the trunk transition, reports merged/upstream-gone candidates and per-branch disposition, previews the restack scope with conflict predictions; always exits 0. `--force`, `--auto-stash-pop`, `--full`, and `--verbose` are accepted but ignored (stderr warning emitted for each). `--continue` conflicts and is rejected by clap.
+- `--json` — emit the sync result as a single JSON document on stdout (schema version 1). Implies non-interactive (`quiet=true`); does **not** imply `--force` (branches that need confirmation are recorded in `skipped_branches` and left intact). Conflicts with `--continue` (rejected by clap). Failures still emit the JSON envelope with `success: false` and exit non-zero. `--verbose` is ignored (stderr warning emitted). `--dry-run --json` emits `kind: "sync_plan"` with `dry_run: true` and always exits 0.
+- JSON schema (`kind: "sync"`, `schema_version: 1`; action/kind strings are extensible — consumers should treat unknown values as forwards-compatible additions):
+
+| Field | Type | Notes |
+|---|---|---|
+| `schema_version` | `number` | Always `1` |
+| `kind` | `string` | `"sync"` (run) · `"sync_plan"` (dry-run) |
+| `success` | `bool` | `false` on any error |
+| `dry_run` | `bool` | `true` for `--dry-run --json` |
+| `duration_ms` | `number` | Wall-clock time in milliseconds |
+| `trunk.branch` | `string` | Local trunk name |
+| `trunk.remote_ref` | `string` | Remote-tracking ref (e.g. `origin/main`) |
+| `trunk.action` | `string` | `up_to_date` · `fast_forwarded` · `reset` · `diverged` · `failed` · `unknown` |
+| `trunk.commits?` | `number` | Present on `fast_forwarded` |
+| `trunk.files?` | `number` | Present on `fast_forwarded` |
+| `trunk.additions?` | `number` | Present on `fast_forwarded` |
+| `trunk.deletions?` | `number` | Present on `fast_forwarded` |
+| `deleted_branches[]` | `array` | Absent when empty |
+| `deleted_branches[].name` | `string` | Branch name |
+| `deleted_branches[].category` | `string` | `merged` · `upstream_gone` |
+| `deleted_branches[].scope` | `string` | `both` · `local` · `remote` |
+| `deleted_branches[].tip?` | `string` | Tip SHA at deletion time |
+| `deleted_branches[].metadata_deleted` | `bool` | Whether the metadata ref was also deleted |
+| `skipped_branches[]` | `array` | Absent when empty; branches that needed confirmation but `--force` was not given |
+| `skipped_branches[].name` | `string` | Branch name |
+| `skipped_branches[].reason` | `string` | Why deletion was skipped (e.g. `"not confirmed"`) |
+| `protected_branches[]` | `array` | Absent when empty; upstream-gone branches skipped due to unique local commits |
+| `partially_merged[]` | `array` | Absent when empty; branches with a signal of merging but with uncommitted local commits |
+| `partially_merged[].name` | `string` | Branch name |
+| `partially_merged[].reason` | `string` | `pr_merged` · `pr_closed` · `history_merged` |
+| `partially_merged[].pr_number?` | `number` | Present when a PR was detected |
+| `partially_merged[].extra_commits` | `number` | Number of local commits beyond what was merged |
+| `restacked_branches[]` | `array` | Absent when empty |
+| `imported_branches_updated[]` | `array` | Absent when empty |
+| `checkout_change?` | `object` | Present when the current branch changed during sync; `{from, to}` |
+| `stash.stashed` | `bool` | Whether working tree was auto-stashed |
+| `stash.restored` | `bool` | Whether the stash was successfully restored |
+| `stash.left_stashed` | `bool` | `stashed && !restored` |
+| `merged_candidates[]` | `array` | **`sync_plan` only.** Absent when empty; per-branch disposition for merged-branch candidates |
+| `merged_candidates[].name` | `string` | Branch name |
+| `merged_candidates[].disposition` | `string` | `would_delete` · `would_prompt_then_delete` · `would_keep_worktree` · `would_skip` · `would_rebase_children` |
+| `merged_candidates[].scope?` | `string` | `both` · `local`; present when disposition is `would_delete` or `would_prompt_then_delete` |
+| `merged_candidates[].keep_reason?` | `string` | Human-readable reason; present when disposition is `would_keep_worktree` or `would_skip` |
+| `merged_candidates[].children?` | `array` | Child branch names; present when disposition is `would_rebase_children` |
+| `upstream_gone_protected[]` | `array` | **`sync_plan` only.** Absent when empty; upstream-gone branches protected because they have unique local commits |
+| `upstream_gone_deletable[]` | `array` | **`sync_plan` only.** Absent when empty; upstream-gone branches that would be deleted |
+| `upstream_gone_deletable[].name` | `string` | Branch name |
+| `upstream_gone_deletable[].disposition` | `string` | `would_delete` (with `--force`) or `would_prompt_then_delete` |
+| `frozen_branches[]` | `array` | **`sync_plan` only.** Absent when empty; branches skipped because they are frozen |
+| `branches_to_restack[]` | `array` | **`sync_plan` only.** Absent when empty; branches that would be restacked |
+| `predicted_conflicts[]` | `array` | **`sync_plan` only.** Absent when empty; branches predicted to have merge conflicts during restack |
+| `predicted_conflicts[].branch` | `string` | Branch that would conflict |
+| `predicted_conflicts[].onto` | `string` | Parent branch it would rebase onto |
+| `predicted_conflicts[].files` | `array` | Files predicted to conflict |
+| `would_stash` | `bool` | **`sync_plan` only.** Whether the working tree is dirty (real sync would auto-stash) |
+| `error?` | `object` | Present on failure; `{kind, message}` |
+| `error.kind` | `string` | `dirty_working_tree` · `restack_conflict` · `error` |
+
+- On early-bail paths (e.g. dirty working tree in non-interactive mode) and on restack-conflict paths where finalize never runs, `trunk.action` is `"unknown"` — this is intentional.
 - Sync is transactional and undoable via `st undo`. A single receipt covers trunk fast-forwards, deleted branch heads, deleted metadata refs, reparented children's metadata, and the optional restack phase. A no-op sync (nothing changed) writes no receipt so the previous undoable operation remains on the undo stack.
 - Imported branches from `st get` are remote-delete exempt: once they are detected as merged or upstream-gone, sync may delete the local support branch and metadata, but it will not push-delete the imported remote branch.
 - The completion footer summarizes the trunk commit, file, and line delta together with non-zero merged-cleanup, imported-update, and restack counts. It reuses sync's existing results and does not perform extra network or Git work.

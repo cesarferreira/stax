@@ -458,6 +458,9 @@ pub(crate) enum Commands {
         /// Auto-stash and auto-pop dirty target worktrees during restack operations
         #[arg(long)]
         auto_stash_pop: bool,
+        /// Output the sync result as JSON (implies non-interactive; exits non-zero on failure)
+        #[arg(long, conflicts_with = "continue")]
+        json: bool,
     },
 
     /// List and optionally clean up local branches (merged, upstream-gone, stale)

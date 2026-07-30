@@ -120,3 +120,21 @@ impl std::fmt::Display for SilentExit {
 }
 
 impl std::error::Error for SilentExit {}
+
+/// Sentinel error returned when sync detects a dirty working tree and cannot
+/// proceed (quiet/json mode — no prompt available). The Display text is
+/// byte-identical to the historic `bail!` message so the JSON `error.message`
+/// field stays stable.
+#[derive(Debug)]
+pub struct DirtyWorkingTree;
+
+impl std::fmt::Display for DirtyWorkingTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Working tree is dirty. Please stash or commit changes first."
+        )
+    }
+}
+
+impl std::error::Error for DirtyWorkingTree {}

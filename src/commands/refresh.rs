@@ -56,6 +56,7 @@ pub fn run(
         false, // quiet
         verbose,
         auto_stash_pop,
+        false, // json
         &submit_fetch_refs,
     )?;
 

@@ -27,6 +27,7 @@ pub struct SyncPlanOptions {
     pub quiet: bool,
     pub verbose: bool,
     pub auto_stash_pop: bool,
+    pub json: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -308,13 +309,20 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         delete_upstream_gone,
         force,
         safe,
-        quiet,
+        mut quiet,
         verbose,
         auto_stash_pop,
+        json,
     } = options;
+
+    // --json suppresses all human stdout (machine-readable output replaces it)
+    if json {
+        quiet = true;
+    }
 
     let repo = GitRepo::open()?;
     let workdir = repo.workdir()?.to_path_buf();
+    let sync_started_at = std::time::Instant::now();
     let config = Config::load()?;
     let remote_name = config.remote_name().to_string();
     let trunk = repo.trunk_branch()?;
@@ -433,6 +441,18 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         );
     }
 
+    // Accumulator for JSON plan output (populated always; consumed only when json=true).
+    let mut plan_data = crate::commands::sync_json::SyncPlanData {
+        merged_candidates: Vec::new(),
+        partially_merged: Vec::new(),
+        upstream_gone_protected: Vec::new(),
+        upstream_gone_deletable: Vec::new(),
+        frozen_branches: Vec::new(),
+        branches_to_restack: Vec::new(),
+        predicted_conflicts: Vec::new(),
+        would_stash: dirty,
+    };
+
     // --- Dirty tree section ---
     if dirty && !quiet {
         println!();
@@ -471,6 +491,23 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
             &merged,
         )?;
 
+        // Collect partially_merged for JSON (always, outside !quiet gate).
+        for note in &partially_merged_notes {
+            let reason = match note.pr_label {
+                PartialMergeReason::PrMerged => "pr_merged",
+                PartialMergeReason::PrClosed => "pr_closed",
+                PartialMergeReason::HistoryMerged => "history_merged",
+            };
+            plan_data
+                .partially_merged
+                .push(crate::commands::sync_json::PartiallyMergedJson {
+                    name: note.branch.clone(),
+                    reason,
+                    pr_number: note.pr_number,
+                    extra_commits: note.extra_commits,
+                });
+        }
+
         if merged.is_empty() {
             if !quiet {
                 println!("  {}", "No merged branches detected.".dimmed());
@@ -481,20 +518,35 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
 
             if !quiet {
                 print_cleanup_candidates("merged", &merged_names);
+            }
 
-                for merged_info in &merged {
-                    let branch = &merged_info.branch;
-                    let is_current = *branch == current;
-                    let blocking =
-                        plan_blocking_worktree_cleanup(&repo, branch, force).unwrap_or(None);
-                    let (fallback_parent, _) = resolve_fallback_parent_skipping_doomed(
-                        &workdir,
-                        &stack,
-                        branch,
-                        &merged_names,
-                    );
-                    let parent_exists = local_branch_exists(&workdir, &fallback_parent);
+            // Collect disposition + render per branch (always collect; render only when !quiet).
+            for merged_info in &merged {
+                let branch = &merged_info.branch;
+                let is_current = *branch == current;
+                let blocking = plan_blocking_worktree_cleanup(&repo, branch, force).unwrap_or(None);
+                let (fallback_parent, _) = resolve_fallback_parent_skipping_doomed(
+                    &workdir,
+                    &stack,
+                    branch,
+                    &merged_names,
+                );
+                let parent_exists = local_branch_exists(&workdir, &fallback_parent);
 
+                // Always collect for JSON.
+                plan_data.merged_candidates.push(classify_merged_candidate(
+                    branch,
+                    merged_info,
+                    blocking.as_ref(),
+                    &fallback_parent,
+                    parent_exists,
+                    force,
+                    &stack,
+                    &exempt_imported,
+                    &remote_branch_set,
+                ));
+
+                if !quiet {
                     render_merged_branch_plan(
                         branch,
                         merged_info,
@@ -582,14 +634,31 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
                 }
             }
 
-            if !protected.is_empty() && !quiet {
-                for b in &protected {
-                    println!(
-                        "  {} {} {}",
-                        "↷".yellow(),
-                        b.cyan(),
-                        "(upstream-gone; protected — has unique commits)".dimmed()
-                    );
+            // Collect for JSON (always, before the rendering blocks).
+            plan_data.upstream_gone_protected = protected.clone();
+            for b in &deletable {
+                plan_data.upstream_gone_deletable.push(
+                    crate::commands::sync_json::UpstreamGoneDeleteJson {
+                        name: b.clone(),
+                        disposition: if force {
+                            "would_delete"
+                        } else {
+                            "would_prompt_then_delete"
+                        },
+                    },
+                );
+            }
+
+            if !protected.is_empty() {
+                if !quiet {
+                    for b in &protected {
+                        println!(
+                            "  {} {} {}",
+                            "↷".yellow(),
+                            b.cyan(),
+                            "(upstream-gone; protected — has unique commits)".dimmed()
+                        );
+                    }
                 }
                 gone_protected_count = protected.len();
             }
@@ -651,6 +720,9 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
             .cloned()
             .collect();
 
+        // Always collect frozen branches for JSON.
+        plan_data.frozen_branches = frozen_branches.clone();
+
         if !frozen_branches.is_empty() && !quiet {
             println!(
                 "  {} Skipping frozen {}: {}",
@@ -691,20 +763,35 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         } else {
             restack_count = branches_to_restack.len();
 
+            // Always collect restack data for JSON.
+            plan_data.branches_to_restack = branches_to_restack.clone();
+
+            let branch_parent_pairs: Vec<(String, String)> = branches_to_restack
+                .iter()
+                .filter_map(|branch| {
+                    stack
+                        .branches
+                        .get(branch.as_str())
+                        .and_then(|br| br.parent.clone().map(|p| (branch.clone(), p)))
+                })
+                .collect();
+
+            // Conflict prediction runs always (for JSON accumulation); spinner only when !quiet.
+            let timer = LiveTimer::maybe_new(!quiet, "Checking for conflicts...");
+            let predictions = repo.predict_restack_conflicts(&branch_parent_pairs);
+
+            // Always collect predicted conflicts for JSON.
+            for prediction in &predictions {
+                plan_data.predicted_conflicts.push(
+                    crate::commands::sync_json::PredictedConflictJson {
+                        branch: prediction.branch.clone(),
+                        onto: prediction.onto.clone(),
+                        files: prediction.conflicting_files.clone(),
+                    },
+                );
+            }
+
             if !quiet {
-                let branch_parent_pairs: Vec<(String, String)> = branches_to_restack
-                    .iter()
-                    .filter_map(|branch| {
-                        stack
-                            .branches
-                            .get(branch.as_str())
-                            .and_then(|br| br.parent.clone().map(|p| (branch.clone(), p)))
-                    })
-                    .collect();
-
-                let timer = LiveTimer::maybe_new(!quiet, "Checking for conflicts...");
-                let predictions = repo.predict_restack_conflicts(&branch_parent_pairs);
-
                 if predictions.is_empty() {
                     LiveTimer::maybe_finish_ok(timer, "no conflicts predicted");
                 } else {
@@ -764,6 +851,18 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
             "Plan complete — no changes made.".green().bold(),
             format!("({})", summary).dimmed()
         );
+    }
+
+    if json {
+        let duration = sync_started_at.elapsed();
+        let output = crate::commands::sync_json::build_plan(
+            &trunk,
+            &remote_trunk_ref,
+            &trunk_plan,
+            plan_data,
+            duration,
+        );
+        println!("{}", crate::commands::sync_json::emit(&output));
     }
 
     Ok(())
@@ -869,6 +968,82 @@ fn render_merged_branch_plan(
             branch.bright_black(),
             format!(" — would prompt, then delete{} if confirmed", scope_suffix).dimmed()
         );
+    }
+}
+
+/// Classify a merged branch's dry-run disposition for JSON output.
+/// Mirrors the decision tree in `render_merged_branch_plan` without producing any output.
+#[allow(clippy::too_many_arguments)]
+fn classify_merged_candidate(
+    branch: &str,
+    merged_info: &MergedBranchInfo,
+    blocking: Option<&BlockingWorktreeCleanup>,
+    fallback_parent: &str,
+    parent_exists: bool,
+    force: bool,
+    stack: &Stack,
+    exempt_imported: &HashSet<String>,
+    remote_branches: &HashSet<String>,
+) -> crate::commands::sync_json::MergedCandidateJson {
+    use crate::commands::sync_json::MergedCandidateJson;
+
+    if let Some(blocker) = blocking
+        && let Some(reason) = blocker.blocker_summary()
+    {
+        return MergedCandidateJson {
+            name: branch.to_string(),
+            disposition: "would_keep_worktree",
+            scope: None,
+            keep_reason: Some(reason),
+            children: vec![],
+        };
+    }
+
+    if !parent_exists && fallback_parent != stack.trunk {
+        return MergedCandidateJson {
+            name: branch.to_string(),
+            disposition: "would_skip",
+            scope: None,
+            keep_reason: Some(format!("parent '{}' not found locally", fallback_parent)),
+            children: vec![],
+        };
+    }
+
+    if matches!(merged_info.merge_type, MergeType::SquashMerge) {
+        let children: Vec<String> = stack
+            .branches
+            .values()
+            .filter(|info| info.parent.as_deref() == Some(branch))
+            .map(|info| info.name.clone())
+            .collect();
+        if !children.is_empty() {
+            return MergedCandidateJson {
+                name: branch.to_string(),
+                disposition: "would_rebase_children",
+                scope: None,
+                keep_reason: None,
+                children,
+            };
+        }
+    }
+
+    let remote_still_exists = remote_branches.contains(branch);
+    let scope = if exempt_imported.contains(branch) || remote_still_exists {
+        Some("local")
+    } else {
+        Some("both")
+    };
+
+    MergedCandidateJson {
+        name: branch.to_string(),
+        disposition: if force {
+            "would_delete"
+        } else {
+            "would_prompt_then_delete"
+        },
+        scope,
+        keep_reason: None,
+        children: vec![],
     }
 }
 

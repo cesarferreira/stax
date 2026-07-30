@@ -504,6 +504,7 @@ pub fn run(
             quiet,
             false, // verbose
             false, // auto_stash_pop
+            false, // json
             &[],
         ) && !quiet
         {

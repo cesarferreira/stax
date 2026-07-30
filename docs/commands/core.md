@@ -59,6 +59,9 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
 | `st rs --dry-run` / `st rs --plan` | Preview what sync would do — no fetch, no stash, no ref writes (read-only) |
+| `st rs --dry-run --json` | Same as `--dry-run` but emits a single JSON document (`kind: "sync_plan"`) instead of human text |
+| `st rs --json` | Run sync and emit the result as a versioned JSON document (`kind: "sync"`, schema version 1); implies non-interactive; failures still emit JSON and exit non-zero |
+| `st rs --json --force` | Same as `--json` but also auto-confirms branch deletions |
 | `st restack` | Rebase current stack onto parents locally (no fetch) |
 | `st refresh` | Sync trunk without merged-branch cleanup, restack, then push and update PRs (`st update` is a back-compat alias) |
 | `st refresh --force --yes --no-prompt` | Full refresh flow without sync or submit prompts |

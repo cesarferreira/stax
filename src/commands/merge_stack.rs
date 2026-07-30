@@ -1047,6 +1047,7 @@ fn run_post_merge_sync(quiet: bool) {
         quiet,
         false, // verbose
         false, // auto_stash_pop
+        false, // json
         &[],
     ) && !quiet
     {
