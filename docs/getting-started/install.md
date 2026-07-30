@@ -90,7 +90,8 @@ cargo install --path . --locked --features vendored-openssl
 
 ```bash
 stax --version
-st setup --yes       # shell integration, AI skills, and auth from gh (if available)
+st setup --yes       # shell integration; skills for detected agents only; auth from gh (if available)
+st setup --yes --skills all   # install skills for every known harness (previous default)
 st cli upgrade       # later, upgrade via the install method you used
 ```
 

@@ -121,7 +121,9 @@ stax worktree cleanup          # Prune stale bookkeeping + bulk-remove merged/de
 stax worktree restack          # Restack all stax-managed worktrees
 stax setup                     # Install shell integration, then optionally offer AI agent skills + auth onboarding
 stax setup --yes               # Accept shell setup defaults, install skills, and import auth from gh when available
-stax setup --install-skills    # Install shell integration and accept the skills install automatically
+stax setup --install-skills    # Install shell integration and skills for all harnesses (non-interactive)
+stax setup --install-skills --skills claude,cursor   # Only selected harnesses
+stax setup --yes               # Skills for detected harnesses only
 stax setup --skip-skills       # Install shell integration without the skills prompt
 stax setup --auth-from-gh      # Install shell integration and import GitHub auth from gh without prompting
 stax setup --skip-auth         # Install shell integration without the auth onboarding step
@@ -619,8 +621,9 @@ stax fix --yes
 ```bash
 # One-time shell integration (enables transparent cd)
 stax setup
-stax setup --yes               # Shell integration + skills + auth import from gh when available
-stax setup --install-skills    # Non-interactive onboarding: shell integration + AI agent skills
+stax setup --yes               # Shell integration + skills for detected agents + auth import from gh when available
+stax setup --install-skills    # Non-interactive: shell integration + skills for all harnesses
+stax skills update --all         # Update every harness, ignoring configured selection
 
 # Create a worktree for an existing local branch
 stax worktree create feature/payments-api

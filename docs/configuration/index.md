@@ -73,6 +73,10 @@ single_stack = "on"    # "on" | "off"
                                # boundary would replay a much larger range
 # preflight_warn = true        # print a notice when that automatic repair happens
 
+[skills]
+# harnesses = ["claude", "codex"] # agent harnesses that receive skill files
+#   valid ids: claude, codex, cursor, opencode, pi. Unset = auto (detected + already installed).
+
 [ai]
 # agent = "claude" # "codex" | "gemini" | "opencode" | "pi" — global default
 # model = "claude-opus-4-8"

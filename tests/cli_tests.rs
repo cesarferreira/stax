@@ -606,6 +606,7 @@ fn test_shell_setup_help_uses_static_install_language() {
     assert!(stdout.contains("~/.config/stax"));
     assert!(stdout.contains("--skip-skills"));
     assert!(stdout.contains("--install-skills"));
+    assert!(stdout.contains("--skills"));
     assert!(stdout.contains("--skip-auth"));
     assert!(stdout.contains("--auth-from-gh"));
     assert!(stdout.contains("--yes"));
@@ -1048,6 +1049,7 @@ async fn test_shell_setup_yes_installs_skills_and_imports_auth_from_gh() {
     ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = tempdir().expect("temp home");
+    std::fs::create_dir_all(home.path().join(".codex")).expect("simulate detected codex");
     let _snippet_path = configure_existing_shell_setup(home.path(), TEST_SHELL);
     let fake_gh_bin = write_fake_gh(home.path(), "gh-imported-token");
 
@@ -1082,7 +1084,11 @@ async fn test_shell_setup_yes_installs_skills_and_imports_auth_from_gh() {
     assert_eq!(saved.trim(), "gh-imported-token");
     assert!(
         home.path().join(".codex/skills/stax/SKILL.md").exists(),
-        "expected skills to be installed"
+        "expected skills to be installed for detected codex harness"
+    );
+    assert!(
+        !home.path().join(".cursor/skills/stax/SKILL.md").exists(),
+        "setup --yes should not install skills for undetected harnesses"
     );
 }
 

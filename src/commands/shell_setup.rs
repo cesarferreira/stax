@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
-use dialoguer::{Confirm, theme::ColorfulTheme};
+use dialoguer::{Confirm, MultiSelect, theme::ColorfulTheme};
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -29,11 +29,12 @@ pub enum AuthSetupMode {
     ImportFromGh,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SetupOptions {
     pub auto_accept: bool,
     pub skill_install_mode: SkillInstallMode,
     pub auth_setup_mode: AuthSetupMode,
+    pub skill_selection: Option<crate::commands::skills::HarnessSelection>,
 }
 
 /// The shell function block that users source in their shell config.
@@ -402,8 +403,8 @@ pub fn run(print: bool, refresh: bool, options: SetupOptions) -> Result<()> {
     // Always enable rerere when in a git repo (unless we're just printing)
     if shell_setup_completed && !print {
         enable_rerere_if_in_repo()?;
-        maybe_install_skills(options)?;
-        maybe_setup_auth(options)?;
+        maybe_install_skills(&options)?;
+        maybe_setup_auth(&options)?;
     }
 
     Ok(())
@@ -548,28 +549,64 @@ fn install_to_shell_config(auto_accept: bool) -> Result<bool> {
     Ok(true)
 }
 
-fn maybe_install_skills(options: SetupOptions) -> Result<()> {
-    let should_install = match options.skill_install_mode {
-        SkillInstallMode::Install => true,
-        SkillInstallMode::Skip => false,
-        SkillInstallMode::Ask => {
-            if options.auto_accept {
-                true
-            } else {
-                prompt_for_skill_install()?
-            }
-        }
-    };
+fn maybe_install_skills(options: &SetupOptions) -> Result<()> {
+    use crate::commands::skills::{self, HarnessSelection};
 
-    if !should_install {
+    if matches!(options.skill_install_mode, SkillInstallMode::Skip) {
         return Ok(());
     }
 
+    let selection = if let Some(sel) = &options.skill_selection {
+        sel.clone()
+    } else {
+        match options.skill_install_mode {
+            SkillInstallMode::Install => {
+                if can_prompt() {
+                    prompt_for_harness_selection()?
+                } else {
+                    HarnessSelection::All
+                }
+            }
+            SkillInstallMode::Ask => {
+                if options.auto_accept {
+                    HarnessSelection::Detected
+                } else if !can_prompt() {
+                    return Ok(());
+                } else if !prompt_for_skill_install()? {
+                    return Ok(());
+                } else {
+                    prompt_for_harness_selection()?
+                }
+            }
+            SkillInstallMode::Skip => return Ok(()),
+        }
+    };
+
+    let ids = skills::resolve_ids(&selection);
+    if ids.is_empty() {
+        println!(
+            "{}",
+            "No agent harnesses selected — skipping skills install.".dimmed()
+        );
+        return Ok(());
+    }
+
+    if let Err(err) = crate::config::Config::set_skill_harnesses(&ids) {
+        eprintln!(
+            "{}",
+            format!("Warning: could not save skills harness selection: {err}").yellow()
+        );
+    }
+
     println!();
-    crate::commands::skills::run_update(false)
+    skills::run_update_with(
+        false,
+        &HarnessSelection::Only(ids),
+        skills::SkillsUpdateOrigin::Setup,
+    )
 }
 
-fn maybe_setup_auth(options: SetupOptions) -> Result<()> {
+fn maybe_setup_auth(options: &SetupOptions) -> Result<()> {
     let status = crate::config::Config::github_auth_status();
     if has_non_gh_auth(&status) {
         return Ok(());
@@ -633,6 +670,54 @@ fn prompt_for_skill_install() -> Result<bool> {
         .with_prompt("Install stax AI agent skills too?")
         .default(true)
         .interact()?)
+}
+
+fn prompt_for_harness_selection() -> Result<crate::commands::skills::HarnessSelection> {
+    use crate::commands::skills::{self, HarnessSelection};
+
+    if !can_prompt() {
+        return Ok(HarnessSelection::Detected);
+    }
+
+    let harnesses = skills::harnesses();
+    let items: Vec<String> = harnesses
+        .iter()
+        .map(|h| {
+            let path = harness_detect_path(h.id);
+            if h.detected {
+                format!("{}  ~/{} (detected)", h.name, path)
+            } else {
+                format!("{}  ~/{}", h.name, path)
+            }
+        })
+        .collect();
+    let defaults: Vec<bool> = harnesses.iter().map(|h| h.detected).collect();
+
+    eprintln!();
+    let selected = MultiSelect::with_theme(&ColorfulTheme::default())
+        .with_prompt(
+            "Which agent harnesses should get stax skills? (space toggles, enter confirms)",
+        )
+        .items(&items)
+        .defaults(&defaults)
+        .interact()?;
+
+    let ids: Vec<String> = selected
+        .into_iter()
+        .map(|idx| harnesses[idx].id.to_string())
+        .collect();
+    Ok(HarnessSelection::Only(ids))
+}
+
+fn harness_detect_path(id: &str) -> &'static str {
+    match id {
+        "codex" => ".codex/skills/stax/SKILL.md",
+        "opencode" => ".config/opencode/skills/stax/SKILL.md",
+        "claude" => ".claude/skills/stax/SKILL.md",
+        "cursor" => ".cursor/skills/stax/SKILL.md",
+        "pi" => ".pi/agent/skills/stax/SKILL.md",
+        _ => "",
+    }
 }
 
 fn prompt_for_gh_auth_import() -> Result<bool> {

@@ -1281,6 +1281,13 @@ pub(crate) enum Commands {
         /// Install AI agent skills without prompting
         #[arg(long, conflicts_with_all = ["skip_skills", "print", "refresh"])]
         install_skills: bool,
+        /// Which agent harnesses get skills: all | detected | auto | none | comma-separated ids (claude,codex,cursor,opencode,pi)
+        #[arg(
+            long,
+            value_name = "LIST",
+            conflicts_with_all = ["skip_skills", "print", "refresh"]
+        )]
+        skills: Option<String>,
         /// Skip the optional GitHub auth onboarding step
         #[arg(long, conflicts_with_all = ["auth_from_gh", "print", "refresh"])]
         skip_auth: bool,
@@ -1685,11 +1692,17 @@ pub(crate) enum SkillsCommands {
     /// List installed AI agent skill files and their version status
     List,
 
-    /// Download the latest skills from GitHub and update all installed skill files
+    /// Download the latest skills from GitHub and update installed skill files
     Update {
         /// Preview what would be updated without writing any files
         #[arg(long)]
         dry_run: bool,
+        /// Update every known harness, ignoring the configured selection
+        #[arg(long)]
+        all: bool,
+        /// Limit this run to specific harnesses: all | detected | auto | none | comma-separated ids
+        #[arg(long, value_name = "LIST", conflicts_with = "all")]
+        skills: Option<String>,
     },
 }
 
