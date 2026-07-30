@@ -170,6 +170,49 @@ enum SyncFlow {
     Stop,
 }
 
+struct StashGuard {
+    armed: bool,
+}
+
+impl StashGuard {
+    fn new() -> Self {
+        Self { armed: false }
+    }
+
+    fn arm(&mut self) {
+        self.armed = true;
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StashGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            eprintln!("{}", stash_left_behind_warning());
+        }
+    }
+}
+
+fn stash_left_behind_warning() -> String {
+    format!(
+        "{}\n  {}",
+        r#"⚠ Your changes are still stashed as "stax auto-stash"."#.yellow(),
+        "Run `git stash pop` to restore them (`git stash list` to inspect).".dimmed()
+    )
+}
+
+fn stale_stack_warning(consequence: &str, error: &anyhow::Error) -> String {
+    format!(
+        "⚠ Could not reload stack metadata; {} ({})",
+        consequence, error
+    )
+    .yellow()
+    .to_string()
+}
+
 struct SyncContext {
     workdir: PathBuf,
     reopen_repo_path: PathBuf,
@@ -197,6 +240,8 @@ struct SyncContext {
     remote_trunk_after_fetch: Option<String>,
     updated_imported_branches: Vec<String>,
     stashed: bool,
+    stash_guard: StashGuard,
+    stale_stack_warning_shown: bool,
     trunk_update_deferred: bool,
     sync_started_at: Instant,
     step_timings: Vec<(String, Duration)>,
@@ -265,6 +310,8 @@ impl SyncContext {
                 remote_trunk_after_fetch: None,
                 updated_imported_branches: Vec::new(),
                 stashed: false,
+                stash_guard: StashGuard::new(),
+                stale_stack_warning_shown: false,
                 trunk_update_deferred: false,
                 sync_started_at,
                 step_timings: Vec::new(),
@@ -294,6 +341,9 @@ impl SyncContext {
                 let stash_started_at = Instant::now();
                 self.stashed = repo.stash_push()?;
                 self.auto_stash_pop = true;
+                if self.stashed {
+                    self.stash_guard.arm();
+                }
                 self.step_timings
                     .push(("stash working tree".to_string(), stash_started_at.elapsed()));
                 if !self.quiet {
@@ -446,6 +496,7 @@ impl SyncContext {
 
         if self.restack && !fetch_succeeded {
             restore_stashed_changes(repo, self.stashed, self.quiet)?;
+            self.stash_guard.disarm();
             anyhow::bail!(
                 "Cannot restack because fetching {} did not succeed.\n\
              Restore access to {}, then retry.",
@@ -634,7 +685,7 @@ impl SyncContext {
         Ok(())
     }
 
-    fn ensure_trunk_ready_for_restack(&self, repo: &GitRepo) -> Result<()> {
+    fn ensure_trunk_ready_for_restack(&mut self, repo: &GitRepo) -> Result<()> {
         // Restack is a history-rewriting operation, so fail closed before imported-branch
         // refresh or merged-branch cleanup can move any feature refs. Keep the later check
         // as a second boundary in case cleanup itself changes trunk state.
@@ -646,6 +697,7 @@ impl SyncContext {
             )
         {
             restore_stashed_changes(repo, self.stashed, self.quiet)?;
+            self.stash_guard.disarm();
             anyhow::bail!(
                 "Cannot restack because {} did not reach {}.\n\
              Inspect and reconcile {} with {}, then retry.",
@@ -1145,6 +1197,7 @@ impl SyncContext {
                         self.quiet,
                     )?;
 
+                    let tip_before_delete = repo.branch_commit(branch).ok();
                     let local_delete = self.delete_local_branch(
                         &repo,
                         branch,
@@ -1218,15 +1271,17 @@ impl SyncContext {
                     if !self.quiet {
                         if local_deleted && remote_deleted {
                             println!(
-                                "    {} {}",
+                                "    {} {}{}",
                                 branch.bright_black(),
-                                "deleted (local + remote)".green()
+                                "deleted (local + remote)".green(),
+                                deleted_tip_suffix(tip_before_delete.as_deref())
                             );
                         } else if local_deleted {
                             println!(
-                                "    {} {}",
+                                "    {} {}{}",
                                 branch.bright_black(),
-                                "deleted (local only)".green()
+                                "deleted (local only)".green(),
+                                deleted_tip_suffix(tip_before_delete.as_deref())
                             );
                         } else if remote_deleted {
                             println!(
@@ -1363,7 +1418,13 @@ impl SyncContext {
                 // reflected before we resolve upstream-gone branches. Fall back to
                 // the snapshot captured at the top of sync() if the reload fails,
                 // to degrade gracefully rather than aborting a mid-sync run.
-                let mut live_stack = Stack::load(repo).unwrap_or_else(|_| self.stack.clone());
+                let mut live_stack = match Stack::load(repo) {
+                    Ok(s) => s,
+                    Err(ref e) => {
+                        self.warn_stale_stack_fallback(e);
+                        self.stack.clone()
+                    }
+                };
 
                 // Initialize forge client once up-front for any PR base updates below.
                 let forge_client = init_forge_client(repo, &self.config);
@@ -1476,10 +1537,12 @@ impl SyncContext {
                     // just-reparented children under the new parent (preventing a
                     // later iteration from bouncing them again). Fall back to the
                     // current live_stack if the reload fails.
-                    if let Ok(refreshed) = Stack::load(repo) {
-                        live_stack = refreshed;
+                    match Stack::load(repo) {
+                        Ok(refreshed) => live_stack = refreshed,
+                        Err(ref e) => self.warn_stale_stack_fallback(e),
                     }
 
+                    let tip_before_delete = repo.branch_commit(branch).ok();
                     let local_delete = self.delete_local_branch(
                         repo,
                         branch,
@@ -1505,9 +1568,10 @@ impl SyncContext {
                     if !self.quiet {
                         if local_deleted {
                             println!(
-                                "    {} {}",
+                                "    {} {}{}",
                                 branch.bright_black(),
-                                "deleted (local only)".green()
+                                "deleted (local only)".green(),
+                                deleted_tip_suffix(tip_before_delete.as_deref())
                             );
                         } else {
                             print_blocked_or_skipped(
@@ -1805,7 +1869,11 @@ impl SyncContext {
                                 },
                             );
                             if self.stashed {
-                                println!("{}", "Stash kept to avoid conflicts.".yellow());
+                                println!(
+                                    "{}",
+                                    "Stash kept to avoid conflicts. Run `git stash pop` after resolving.".yellow()
+                                );
+                                self.stash_guard.disarm();
                             }
                             summary.push((branch.clone(), "conflict".to_string()));
 
@@ -1843,6 +1911,7 @@ impl SyncContext {
         if self.stashed {
             let stash_pop_started_at = Instant::now();
             repo.stash_pop()?;
+            self.stash_guard.disarm();
             self.step_timings
                 .push(("restore stash".to_string(), stash_pop_started_at.elapsed()));
             if !self.quiet {
@@ -1850,6 +1919,17 @@ impl SyncContext {
             }
         }
         Ok(())
+    }
+
+    fn warn_stale_stack_fallback(&mut self, error: &anyhow::Error) {
+        if self.quiet || self.stale_stack_warning_shown {
+            return;
+        }
+        self.stale_stack_warning_shown = true;
+        eprintln!(
+            "{}",
+            stale_stack_warning("using snapshot from sync start", error)
+        );
     }
 
     fn finalize(
@@ -2013,7 +2093,12 @@ fn refresh_pr_draft_states(repo: &GitRepo, config: &Config, quiet: bool) -> Opti
     let started_at = Instant::now();
     let stack = match Stack::load(repo) {
         Ok(s) => s,
-        Err(_) => return None,
+        Err(ref e) => {
+            if !quiet {
+                eprintln!("{}", stale_stack_warning("skipping PR metadata refresh", e));
+            }
+            return None;
+        }
     };
     let tracked_pr_branches: Vec<(String, u64)> = stack
         .branches
@@ -2807,8 +2892,8 @@ fn git_ref_exists(workdir: &Path, refname: &str) -> bool {
     Command::new("git")
         .args(["rev-parse", "--verify", "--quiet", &commit_ref])
         .current_dir(workdir)
-        .status()
-        .map(|s| s.success())
+        .output()
+        .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
@@ -3589,6 +3674,15 @@ fn trunk_reached_remote(workdir: &Path, trunk: &str, remote_oid: Option<&str>) -
     remote_oid.is_some_and(|remote| resolve_ref_oid(workdir, trunk).as_deref() == Some(remote))
 }
 
+fn deleted_tip_suffix(tip: Option<&str>) -> String {
+    match tip {
+        Some(sha) if !sha.is_empty() => format!(" · {}", &sha[..sha.len().min(7)])
+            .dimmed()
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
 fn restore_stashed_changes(repo: &GitRepo, stashed: bool, quiet: bool) -> Result<()> {
     if stashed {
         repo.stash_pop()?;
@@ -3984,6 +4078,57 @@ mod tests {
                 action,
                 SyncBranchDeleteAction::RemoveWorktree { .. }
             ))
+        );
+    }
+
+    #[test]
+    fn deleted_tip_suffix_renders_seven_char_short_sha() {
+        colored::control::set_override(false);
+        let sha = "abcdef1234567890";
+        let suffix = deleted_tip_suffix(Some(sha));
+        assert!(
+            suffix.contains("abcdef1"),
+            "expected 7-char sha in: {suffix}"
+        );
+        assert!(suffix.contains(" · "), "expected separator in: {suffix}");
+        assert!(
+            !suffix.contains("234567"),
+            "suffix must not exceed 7 chars of sha: {suffix}"
+        );
+    }
+
+    #[test]
+    fn deleted_tip_suffix_is_empty_without_a_tip() {
+        colored::control::set_override(false);
+        assert_eq!(deleted_tip_suffix(None), "");
+        assert_eq!(deleted_tip_suffix(Some("")), "");
+    }
+
+    #[test]
+    fn stale_stack_warning_names_consequence_and_error() {
+        colored::control::set_override(false);
+        let error = anyhow::anyhow!("metadata ref not found");
+        let msg = stale_stack_warning("using snapshot from sync start", &error);
+        assert!(msg.contains("using snapshot from sync start"));
+        assert!(msg.contains("metadata ref not found"));
+        assert!(msg.contains("⚠"));
+    }
+
+    #[test]
+    fn stash_left_behind_warning_tells_user_how_to_recover() {
+        colored::control::set_override(false);
+        let msg = stash_left_behind_warning();
+        assert!(
+            msg.contains("stax auto-stash"),
+            "must name the stash: {msg}"
+        );
+        assert!(
+            msg.contains("git stash pop"),
+            "must tell user how to restore: {msg}"
+        );
+        assert!(
+            msg.contains("git stash list"),
+            "must tell user how to inspect: {msg}"
         );
     }
 }

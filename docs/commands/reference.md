@@ -316,6 +316,8 @@ st completions elvish
 - The completion footer summarizes the trunk commit, file, and line delta together with non-zero merged-cleanup, imported-update, and restack counts. It reuses sync's existing results and does not perform extra network or Git work.
 - When sync itself leaves exceptional work behind, it reports skipped cleanup with its reason, trunk update failures, and cleanup-driven checkout changes. It prints one prioritized next command: a diverged trunk gets non-destructive guidance to inspect and reconcile it with its remote; other trunk failures suggest `st trunk`; blocked cleanup suggests `st sweep`. Routine restack health remains visible in `st ls` and the TUI instead of appearing after every sync.
 - When `--restack` is requested, sync fails closed if its fetch did not succeed or the local trunk did not reach the fetched remote-trunk commit. It restores any sync auto-stash and exits non-zero before imported-branch refresh, merged-branch cleanup, or restacking can rewrite feature refs. `st refresh` (and `st update`) inherits this guard and exits before its submit phase, so it does not push or update PRs after either failure.
+- Deletion output lines for locally deleted branches (merged or upstream-gone) append the branch's tip SHA (first 7 characters, dimmed) so you can reference the exact commit that was removed.
+- If sync auto-stashed your working tree and then fails on an error path that cannot restore the stash, it prints a warning to stderr naming the stash "stax auto-stash" with instructions to run `git stash pop` to restore your changes.
 
 ### `st restack`
 

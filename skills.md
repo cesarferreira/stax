@@ -319,6 +319,8 @@ stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
 # Conditional attention lines name blocked cleanup, trunk failures, and checkout changes, followed by one prioritized next command. For a diverged trunk, inspect and reconcile it with its remote instead of treating `st trunk` as a repair; other trunk failures use `st trunk`. Routine restack health stays in stax ls and the TUI.
 # When --restack is requested, a failed fetch or trunk that did not reach the fetched remote commit stops sync before imported refresh, merged cleanup, or feature-branch rebases. Any sync auto-stash is restored first.
+# Deletion lines for locally deleted branches (merged or upstream-gone) show the branch tip SHA (7 chars, dimmed) for traceability.
+# If sync auto-stashed your working tree and fails on an error path that cannot restore it, stderr names the stash ("stax auto-stash") with instructions to run `git stash pop`.
 
 stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only
 stax sweep --delete                # Delete merged/tracked-merged PRs + upstream-gone branches with no unique work after confirmation
