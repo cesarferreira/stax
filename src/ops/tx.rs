@@ -30,12 +30,15 @@ pub struct Transaction {
     receipt: OpReceipt,
     git_dir: PathBuf,
     workdir: PathBuf,
-    /// Whether snapshot() has been called
+    /// Whether snapshot() has been called at least once
     snapshotted: bool,
     /// Whether the transaction has been finished
     finished: bool,
     /// Whether to print status messages
     quiet: bool,
+    /// Number of `local_refs` entries that have already been backed up.
+    /// Incremental snapshot() backs up only entries at index >= this value.
+    backed_up: usize,
 }
 
 pub(crate) struct ReceiptFinalization {
@@ -67,6 +70,7 @@ impl Transaction {
             snapshotted: false,
             finished: false,
             quiet,
+            backed_up: 0,
         })
     }
 
@@ -127,29 +131,56 @@ impl Transaction {
         self.receipt.completed_branches.push(branch.to_string());
     }
 
-    /// Create backup refs and write the in-progress receipt
+    /// Create backup refs and write the in-progress receipt.
+    ///
+    /// Incremental: each call backs up only the `local_refs` entries that were
+    /// added since the previous call.  The snapshot message is printed only on
+    /// the first call.  Callers may therefore `plan_branch` → `snapshot` →
+    /// `plan_branch` → `snapshot` in a loop; each call is a no-op when no new
+    /// entries have been added.
     pub fn snapshot(&mut self) -> Result<()> {
-        if self.snapshotted {
-            return Ok(());
+        let first_snapshot = !self.snapshotted;
+
+        // Back up any entries that were planned since the last snapshot.
+        let entries_to_back_up: Vec<(String, String)> = self.receipt.local_refs[self.backed_up..]
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .oid_before
+                    .as_ref()
+                    .map(|oid| (entry.branch.clone(), oid.clone()))
+            })
+            .collect();
+
+        for (branch, oid) in entries_to_back_up {
+            super::create_backup_ref(&self.workdir, &self.receipt.op_id, &branch, &oid)?;
         }
 
-        // Create backup refs for all planned branches
-        for entry in &self.receipt.local_refs {
-            if let Some(oid) = &entry.oid_before {
-                super::create_backup_ref(&self.workdir, &self.receipt.op_id, &entry.branch, oid)?;
-            }
-        }
+        self.backed_up = self.receipt.local_refs.len();
 
         // Write the in-progress receipt
         self.receipt.save(&self.git_dir)?;
 
-        self.snapshotted = true;
-
-        if !self.quiet {
-            self.print_snapshot_info();
+        if first_snapshot {
+            self.snapshotted = true;
+            if !self.quiet {
+                self.print_snapshot_info();
+            }
         }
 
         Ok(())
+    }
+
+    /// Plan a branch + its metadata ref, then immediately snapshot both.
+    ///
+    /// Convenience helper for sync's per-branch lazy snapshot pattern: each
+    /// branch is snapshotted right before it is mutated so that a partial sync
+    /// (interrupted by an error or conflict) only records the branches it
+    /// actually touched.
+    pub fn snapshot_branch_with_metadata(&mut self, repo: &GitRepo, branch: &str) -> Result<()> {
+        self.plan_branch(repo, branch)?;
+        self.plan_metadata_ref(repo, branch)?;
+        self.snapshot()
     }
 
     /// Print snapshot information
@@ -205,6 +236,23 @@ impl Transaction {
         self.receipt
             .update_metadata_ref_after(branch, oid.as_deref());
         Ok(())
+    }
+
+    /// Record a known after-OID for a branch ref without querying the repo.
+    ///
+    /// Sync resolves after-OIDs via a git subprocess (`resolve_ref_oid`) rather
+    /// than libgit2, because libgit2's cached refdb may not see refs written by
+    /// subprocesses (e.g. `git update-ref`, `git push`, `git branch -D`).
+    /// Call this after resolving the OID yourself; pass `None` to record
+    /// explicit deletion.
+    pub fn record_known_after(&mut self, branch: &str, oid: Option<&str>) {
+        self.receipt.update_local_ref_after_optional(branch, oid);
+    }
+
+    /// Record a known after-OID for a branch-metadata ref without querying the
+    /// repo.  Same subprocess-vs-libgit2 rationale as `record_known_after`.
+    pub fn record_known_metadata_after(&mut self, branch: &str, oid: Option<&str>) {
+        self.receipt.update_metadata_ref_after(branch, oid);
     }
 
     /// Record after-OIDs for all planned branches
@@ -312,7 +360,6 @@ impl Transaction {
     }
 
     /// Check if the transaction has been snapshotted
-    #[allow(dead_code)]
     pub fn is_snapshotted(&self) -> bool {
         self.snapshotted
     }
@@ -383,6 +430,7 @@ mod tests {
             snapshotted: false,
             finished: false,
             quiet: true,
+            backed_up: 0,
         }
     }
 
@@ -457,6 +505,7 @@ mod tests {
             snapshotted: true,
             finished: false,
             quiet: true,
+            backed_up: 0,
         };
 
         let finalized = transaction.finish_ok_preserving_receipt();
@@ -465,6 +514,74 @@ mod tests {
         let persistence_error = finalized.persistence_error.unwrap();
         let io_error = persistence_error.downcast_ref::<std::io::Error>().unwrap();
         assert_eq!(io_error.kind(), std::io::ErrorKind::IsADirectory);
+    }
+
+    #[test]
+    fn snapshot_backs_up_branches_planned_after_the_first_snapshot() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        // Minimal git repo with two commits so we have real OIDs.
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "a").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "first"]);
+        run(&["branch", "branch-a"]);
+        std::fs::write(path.join("f.txt"), "b").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "second"]);
+        run(&["branch", "branch-b"]);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        let ops_dir = path.join(".git/stax/ops");
+        std::fs::create_dir_all(&ops_dir).unwrap();
+
+        let mut tx = Transaction::begin(OpKind::Sync, &repo, true).unwrap();
+        tx.plan_branch(&repo, "branch-a").unwrap();
+        tx.snapshot().unwrap();
+
+        // First snapshot: only branch-a is backed up (plan_branch adds 1 entry).
+        assert_eq!(tx.backed_up, 1);
+        let backed_up_after_first = tx.backed_up;
+
+        tx.plan_branch(&repo, "branch-b").unwrap();
+        assert!(tx.receipt.local_refs.len() > backed_up_after_first);
+
+        tx.snapshot().unwrap();
+        // After second snapshot, backed_up catches up.
+        assert_eq!(tx.backed_up, tx.receipt.local_refs.len());
+
+        // Both backup refs must exist as git refs.
+        let op_id = tx.receipt.op_id.clone();
+        let ref_a = format!("refs/stax/backups/{}/branch-a", op_id);
+        let ref_b = format!("refs/stax/backups/{}/branch-b", op_id);
+        let ok_a = Command::new("git")
+            .args(["rev-parse", "--verify", &ref_a])
+            .current_dir(path)
+            .output()
+            .expect("git")
+            .status
+            .success();
+        let ok_b = Command::new("git")
+            .args(["rev-parse", "--verify", &ref_b])
+            .current_dir(path)
+            .output()
+            .expect("git")
+            .status
+            .success();
+        assert!(ok_a, "backup ref for branch-a should exist");
+        assert!(ok_b, "backup ref for branch-b should exist");
     }
 
     #[test]
@@ -483,6 +600,7 @@ mod tests {
             snapshotted: true,
             finished: false,
             quiet: true,
+            backed_up: 0,
         };
 
         let receipt = transaction

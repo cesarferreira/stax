@@ -215,7 +215,6 @@ fn stale_stack_warning(consequence: &str, error: &anyhow::Error) -> String {
 
 struct SyncContext {
     workdir: PathBuf,
-    reopen_repo_path: PathBuf,
     config: Config,
     remote_name: String,
     remote_trunk_ref: String,
@@ -247,6 +246,10 @@ struct SyncContext {
     step_timings: Vec<(String, Duration)>,
     restack_branch_timings: Vec<RestackBranchTiming>,
     stats: SyncStats,
+    /// Sync-wide undo transaction; lazily snapshotted — None until begin_transaction is called.
+    tx: Option<Transaction>,
+    /// Whether trunk has already been planned in the sync transaction.
+    trunk_planned: bool,
 }
 
 impl SyncContext {
@@ -268,7 +271,6 @@ impl SyncContext {
         let stack = Stack::load(&repo)?;
         let current = repo.current_branch()?;
         let workdir = repo.workdir()?.to_path_buf();
-        let reopen_repo_path = repo.git_dir()?.to_path_buf();
         let config = Config::load()?;
         let remote_name = config.remote_name().to_string();
         let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
@@ -285,7 +287,6 @@ impl SyncContext {
         Ok((
             Self {
                 workdir,
-                reopen_repo_path,
                 config,
                 remote_name,
                 remote_trunk_ref,
@@ -317,6 +318,8 @@ impl SyncContext {
                 step_timings: Vec::new(),
                 restack_branch_timings: Vec::new(),
                 stats: SyncStats::default(),
+                tx: None,
+                trunk_planned: false,
             },
             repo,
         ))
@@ -355,6 +358,30 @@ impl SyncContext {
             }
         }
         Ok(SyncFlow::Continue)
+    }
+
+    fn begin_transaction(&mut self, repo: &GitRepo) -> Result<()> {
+        let tx = Transaction::begin(OpKind::Sync, repo, self.quiet)?;
+        self.tx = Some(tx);
+        Ok(())
+    }
+
+    /// Close the sync-wide transaction.
+    ///
+    /// A no-op sync (nothing was snapshotted) leaves NO receipt so the previous
+    /// undoable receipt stays on top of the undo stack.  When the transaction
+    /// was snapshotted at least once we record the final head branch and
+    /// auto-stash state before writing the success receipt.
+    fn finish_transaction(&mut self, current_after: &str) -> Result<()> {
+        let Some(mut tx) = self.tx.take() else {
+            return Ok(());
+        };
+        if !tx.is_snapshotted() {
+            return Ok(());
+        }
+        tx.set_auto_stash_pop(self.auto_stash_pop);
+        tx.set_head_branch_after(current_after);
+        tx.finish_ok()
     }
 
     fn fetch_remote(&mut self, repo: &GitRepo) -> Result<()> {
@@ -540,13 +567,14 @@ impl SyncContext {
             let update_timer =
                 LiveTimer::maybe_new(!self.quiet, &format!("Update {}", self.stack.trunk));
 
-            self.fast_forward_trunk_in(&self.workdir, update_timer, false)?;
+            let workdir = self.workdir.clone();
+            self.fast_forward_trunk_in(repo, &workdir, update_timer, false)?;
         } else {
             let update_timer =
                 LiveTimer::maybe_new(!self.quiet, &format!("Update {}", self.stack.trunk));
 
             if let Some(trunk_worktree_path) = repo.branch_worktree_path(&self.stack.trunk)? {
-                self.fast_forward_trunk_in(&trunk_worktree_path, update_timer, true)?;
+                self.fast_forward_trunk_in(repo, &trunk_worktree_path, update_timer, true)?;
             } else {
                 // Trunk isn't checked out in any worktree.
                 // Resolve the two SHAs so we can give an accurate status message.
@@ -564,6 +592,8 @@ impl SyncContext {
                             is_ancestor(&self.workdir, &self.stack.trunk, &self.remote_trunk_ref);
 
                         if ff_possible {
+                            let workdir = self.workdir.clone();
+                            self.plan_trunk_move(repo, &workdir)?;
                             let output = Command::new("git")
                                 .args([
                                     "update-ref",
@@ -579,6 +609,14 @@ impl SyncContext {
 
                             if output.status.success() {
                                 LiveTimer::maybe_finish_timed(update_timer);
+                                let workdir = self.workdir.clone();
+                                if let Some(ref mut tx) = self.tx {
+                                    let trunk_after = resolve_ref_oid(&workdir, &self.stack.trunk);
+                                    tx.record_known_after(
+                                        &self.stack.trunk.clone(),
+                                        trunk_after.as_deref(),
+                                    );
+                                }
                             } else {
                                 self.trunk_update_deferred = true;
                                 LiveTimer::maybe_finish_skipped(
@@ -616,12 +654,37 @@ impl SyncContext {
         Ok(())
     }
 
+    /// Snapshot the trunk branch in the sync transaction before we touch it.
+    ///
+    /// Idempotent: returns immediately if already planned, or if local and
+    /// remote already agree (nothing will change).
+    fn plan_trunk_move(&mut self, repo: &GitRepo, dir: &Path) -> Result<()> {
+        if self.trunk_planned {
+            return Ok(());
+        }
+        let trunk_name = self.stack.trunk.clone();
+        let remote_trunk_ref = self.remote_trunk_ref.clone();
+        let local_oid = resolve_ref_oid(dir, &trunk_name);
+        let remote_oid = resolve_ref_oid(dir, &remote_trunk_ref);
+        if local_oid.is_some() && local_oid == remote_oid {
+            return Ok(());
+        }
+        if let Some(ref mut tx) = self.tx {
+            tx.plan_branch(repo, &trunk_name)?;
+            tx.snapshot()?;
+        }
+        self.trunk_planned = true;
+        Ok(())
+    }
+
     fn fast_forward_trunk_in(
-        &self,
+        &mut self,
+        repo: &GitRepo,
         dir: &Path,
         timer: Option<LiveTimer>,
         in_linked_worktree: bool,
     ) -> Result<()> {
+        self.plan_trunk_move(repo, dir)?;
         let output = Command::new("git")
             .args(["merge", "--ff-only", &self.remote_trunk_ref])
             .current_dir(dir)
@@ -634,6 +697,10 @@ impl SyncContext {
 
         if output.status.success() {
             LiveTimer::maybe_finish_timed(timer);
+            if let Some(ref mut tx) = self.tx {
+                let trunk_after = resolve_ref_oid(dir, &self.stack.trunk);
+                tx.record_known_after(&self.stack.trunk.clone(), trunk_after.as_deref());
+            }
             if !in_linked_worktree && !self.quiet && self.verbose {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 if !stdout.trim().is_empty() {
@@ -670,6 +737,10 @@ impl SyncContext {
 
             if reset_output.status.success() {
                 LiveTimer::maybe_finish_warn(timer, "reset to remote");
+                if let Some(ref mut tx) = self.tx {
+                    let trunk_after = resolve_ref_oid(dir, &self.stack.trunk);
+                    tx.record_known_after(&self.stack.trunk.clone(), trunk_after.as_deref());
+                }
             } else {
                 LiveTimer::maybe_finish_err(timer, "failed");
                 if !self.quiet && self.verbose {
@@ -924,8 +995,7 @@ impl SyncContext {
             LiveTimer::maybe_finish_timed(detect_timer);
 
             let delete_merged_started_at = Instant::now();
-            drop(repo);
-            let repo = GitRepo::open_from_path(&self.reopen_repo_path)?;
+            let repo = repo.refresh()?;
 
             // Initialize forge client once up-front for any PR base updates below.
             let forge_client = init_forge_client(&repo, &self.config);
@@ -1099,6 +1169,11 @@ impl SyncContext {
                                     continue;
                                 }
 
+                                // Snapshot child head+metadata before rebase so undo can restore.
+                                if let Some(ref mut tx) = self.tx {
+                                    tx.snapshot_branch_with_metadata(&repo, child)?;
+                                }
+
                                 // Use existing provenance-aware rebase
                                 match repo.rebase_branch_onto_with_provenance(
                                     child,
@@ -1115,6 +1190,26 @@ impl SyncContext {
                                             metadata.parent_branch_revision =
                                                 repo.rev_parse(&self.stack.trunk)?;
                                             metadata.write(repo.inner(), child)?;
+                                        }
+
+                                        // Record after-OIDs so redo can replay the rebase.
+                                        if let Some(ref mut tx) = self.tx {
+                                            let child_head_after = resolve_ref_oid(
+                                                &self.workdir,
+                                                &format!("refs/heads/{}", child),
+                                            );
+                                            tx.record_known_after(
+                                                child,
+                                                child_head_after.as_deref(),
+                                            );
+                                            let child_meta_after = resolve_ref_oid(
+                                                &self.workdir,
+                                                &format!("refs/branch-metadata/{}", child),
+                                            );
+                                            tx.record_known_metadata_after(
+                                                child,
+                                                child_meta_after.as_deref(),
+                                            );
                                         }
 
                                         if !self.quiet {
@@ -1185,6 +1280,12 @@ impl SyncContext {
                         }
                     }
 
+                    // Snapshot the deleted branch + reparented children BEFORE the
+                    // reparent so we capture the original metadata for undo.
+                    let reparented_for_tx =
+                        children_to_reparent(&self.stack, branch, &confirmed_deletions);
+                    self.snapshot_deletion(&repo, branch, &reparented_for_tx)?;
+
                     // Reparent tracked children onto the surviving parent before
                     // deleting, preserving the old-parent boundary for later restack.
                     reparent_children_for_deletion(
@@ -1235,27 +1336,35 @@ impl SyncContext {
                     // Imported branches are read-only remote references. Clean them
                     // up locally after merge, but never push-delete someone else's
                     // remote branch.
-                    let remote_deleted =
-                        if self.remote_delete_exempt_imported_branches.contains(branch)
-                            || !remote_branch_present
-                        {
-                            false
-                        } else {
-                            let remote_status = Command::new("git")
-                                .args(["push", &self.remote_name, "--delete", branch])
-                                .current_dir(&self.workdir)
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::null())
-                                .status();
+                    let will_push_delete =
+                        !self.remote_delete_exempt_imported_branches.contains(branch)
+                            && remote_branch_present;
+                    if will_push_delete {
+                        let remote_name = self.remote_name.clone();
+                        if let Some(ref mut tx) = self.tx {
+                            tx.plan_remote_branch(&repo, &remote_name, branch)?;
+                        }
+                    }
+                    let remote_deleted = if will_push_delete {
+                        let remote_status = Command::new("git")
+                            .args(["push", &self.remote_name, "--delete", branch])
+                            .current_dir(&self.workdir)
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status();
 
-                            remote_status.map(|s| s.success()).unwrap_or(false)
-                        };
+                        remote_status.map(|s| s.success()).unwrap_or(false)
+                    } else {
+                        false
+                    };
 
                     // Only delete metadata if branch no longer exists locally.
                     let local_still_exists = local_branch_exists(&self.workdir, branch);
 
                     let metadata_deleted =
                         self.delete_branch_metadata(&repo, branch, local_still_exists);
+
+                    self.record_deletion_after(branch, local_still_exists, &reparented_for_tx);
 
                     if metadata_deleted {
                         self.stats.merged_branches_cleaned += 1;
@@ -1520,6 +1629,12 @@ impl SyncContext {
                         }
                     }
 
+                    // Snapshot the deleted branch + reparented children BEFORE the
+                    // reparent so we capture the original metadata for undo.
+                    let gone_reparented =
+                        children_to_reparent(&live_stack, branch, &gone_deletions);
+                    self.snapshot_deletion(repo, branch, &gone_reparented)?;
+
                     // Reparent tracked children to the fallback parent before
                     // deleting. The shared helper also mirrors the merged-branch
                     // path's ancestor-check rationale from issue #120.
@@ -1557,6 +1672,8 @@ impl SyncContext {
 
                     let metadata_deleted =
                         self.delete_branch_metadata(repo, branch, local_still_exists);
+
+                    self.record_deletion_after(branch, local_still_exists, &gone_reparented);
 
                     if !local_deleted && local_still_exists {
                         self.record_local_branch_kept_skip(
@@ -1606,13 +1723,14 @@ impl SyncContext {
 
     // If we deferred trunk update (refspec fetch failed while not on trunk) and we're
     // now on trunk after branch deletions, retry with git pull which is more reliable
-    fn retry_deferred_trunk_update(&mut self) -> Result<()> {
+    fn retry_deferred_trunk_update(&mut self, repo: &GitRepo) -> Result<()> {
         if self.trunk_update_deferred && self.current_after_deletions == self.stack.trunk {
             let deferred_update_started_at = Instant::now();
             let deferred_timer =
                 LiveTimer::maybe_new(!self.quiet, &format!("Update {}", self.stack.trunk));
 
-            self.fast_forward_trunk_in(&self.workdir, deferred_timer, false)?;
+            let workdir = self.workdir.clone();
+            self.fast_forward_trunk_in(repo, &workdir, deferred_timer, false)?;
 
             self.step_timings.push((
                 format!("retry update {}", self.stack.trunk),
@@ -1709,8 +1827,13 @@ impl SyncContext {
                     );
                 }
             } else {
-                // Begin transaction for restack phase
-                let mut tx = Transaction::begin(OpKind::SyncRestack, repo, self.quiet)?;
+                // Take the sync-wide transaction for the restack phase.  Using take()
+                // avoids a borrow conflict: &mut self.tx cannot coexist with the
+                // &mut self that all subsequent method calls on self need.
+                let mut tx = self
+                    .tx
+                    .take()
+                    .context("sync transaction was already finished")?;
                 tx.plan_branches(repo, &restack_scope_order)?;
                 let restack_count = branches_to_restack.len();
                 let summary = PlanSummary {
@@ -1887,8 +2010,8 @@ impl SyncContext {
 
                 repo.checkout(&self.current_after_deletions)?;
 
-                // Finish transaction successfully
-                tx.finish_ok()?;
+                // Return the transaction to SyncContext so finish_transaction can close it.
+                self.tx = Some(tx);
                 self.stats.restacked_branches = restacked_branches;
 
                 if !self.quiet && !summary.is_empty() {
@@ -1919,6 +2042,68 @@ impl SyncContext {
             }
         }
         Ok(())
+    }
+
+    /// Snapshot a branch (head + metadata) that is about to be deleted, together
+    /// with the metadata of each child that will be reparented.
+    ///
+    /// Must be called BEFORE the reparent so the original metadata is captured.
+    fn snapshot_deletion(
+        &mut self,
+        repo: &GitRepo,
+        branch: &str,
+        reparented: &[String],
+    ) -> Result<()> {
+        if let Some(ref mut tx) = self.tx {
+            tx.plan_branch(repo, branch)?;
+            tx.plan_metadata_ref(repo, branch)?;
+            for child in reparented {
+                let child = child.clone();
+                tx.plan_branch(repo, &child)?;
+                tx.plan_metadata_ref(repo, &child)?;
+            }
+            tx.snapshot()?;
+        }
+        Ok(())
+    }
+
+    /// Record the after-states for a deleted branch and its reparented children.
+    ///
+    /// After-OIDs are resolved via `resolve_ref_oid` (git subprocess) so that
+    /// libgit2's cached refdb — which may not see subprocess-written refs — is
+    /// never used for absent refs.
+    fn record_deletion_after(
+        &mut self,
+        branch: &str,
+        local_still_exists: bool,
+        reparented: &[String],
+    ) {
+        if let Some(ref mut tx) = self.tx {
+            // Branch head: None when deleted, existing OID when still present.
+            let branch_after = if local_still_exists {
+                resolve_ref_oid(&self.workdir, &format!("refs/heads/{}", branch))
+            } else {
+                None
+            };
+            tx.record_known_after(branch, branch_after.as_deref());
+
+            // Metadata ref: same absence logic.
+            let meta_after = if local_still_exists {
+                resolve_ref_oid(&self.workdir, &format!("refs/branch-metadata/{}", branch))
+            } else {
+                None
+            };
+            tx.record_known_metadata_after(branch, meta_after.as_deref());
+
+            // Reparented children — their head did not move but their metadata did.
+            for child in reparented {
+                let head_after = resolve_ref_oid(&self.workdir, &format!("refs/heads/{}", child));
+                tx.record_known_after(child, head_after.as_deref());
+                let child_meta_after =
+                    resolve_ref_oid(&self.workdir, &format!("refs/branch-metadata/{}", child));
+                tx.record_known_metadata_after(child, child_meta_after.as_deref());
+            }
+        }
     }
 
     fn warn_stale_stack_fallback(&mut self, error: &anyhow::Error) {
@@ -2050,6 +2235,8 @@ pub fn run(
         return Ok(());
     }
 
+    ctx.begin_transaction(&repo)?;
+
     if !ctx.quiet {
         println!("{}", "Syncing repository...".bold());
     }
@@ -2072,13 +2259,16 @@ pub fn run(
 
     ctx.cleanup_upstream_gone(&repo)?;
 
-    ctx.retry_deferred_trunk_update()?;
+    ctx.retry_deferred_trunk_update(&repo)?;
 
     ctx.ensure_trunk_ready_for_restack(&repo)?;
 
     ctx.restack_phase(&repo)?;
 
     ctx.restore_stash(&repo)?;
+
+    let current_after = ctx.current_after_deletions.clone();
+    ctx.finish_transaction(&current_after)?;
 
     ctx.finalize(trunk_stats_worker)?;
 
@@ -3328,6 +3518,22 @@ fn resolve_fallback_parent_skipping_doomed(
 /// updates the PR base on the forge when a child has a tracked PR.
 ///
 /// Used by both the merged-branch and upstream-gone cleanup paths.
+/// Return the names of children that will be reparented when `branch` is deleted.
+/// Excludes any child whose name appears in `skipped_deletions` (i.e. also being deleted).
+fn children_to_reparent(
+    stack_snapshot: &Stack,
+    branch: &str,
+    skipped_deletions: &HashSet<String>,
+) -> Vec<String> {
+    stack_snapshot
+        .branches
+        .iter()
+        .filter(|(_, info)| info.parent.as_deref() == Some(branch))
+        .map(|(name, _)| name.clone())
+        .filter(|name| !skipped_deletions.contains(name))
+        .collect()
+}
+
 fn reparent_children_for_deletion(
     repo: &GitRepo,
     stack_snapshot: &Stack,
@@ -3337,13 +3543,7 @@ fn reparent_children_for_deletion(
     forge_client: Option<&(tokio::runtime::Runtime, ForgeClient)>,
     quiet: bool,
 ) -> Result<()> {
-    let children: Vec<String> = stack_snapshot
-        .branches
-        .iter()
-        .filter(|(_, info)| info.parent.as_deref() == Some(branch))
-        .map(|(name, _)| name.clone())
-        .filter(|name| !skipped_children.contains(name))
-        .collect();
+    let children: Vec<String> = children_to_reparent(stack_snapshot, branch, skipped_children);
     let doomed_tip = repo.branch_commit(branch).ok();
 
     for child in &children {

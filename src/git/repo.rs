@@ -273,6 +273,18 @@ impl GitRepo {
         Ok(Self { repo })
     }
 
+    /// Re-open this repository from scratch, returning a new `GitRepo` with a fresh libgit2
+    /// handle.
+    ///
+    /// libgit2's refdb caches ref-OIDs in memory for the lifetime of the `Repository` object.
+    /// Any branch created, moved, or deleted by a git subprocess (e.g. `git update-ref`, `git
+    /// fetch`, or `git push`) will not be visible through the stale handle.  Call `refresh()`
+    /// after subprocess-driven ref mutations to obtain a handle that sees the current on-disk
+    /// state.
+    pub fn refresh(&self) -> Result<Self> {
+        Self::open_from_path(self.repo.path())
+    }
+
     /// Get the repository root path
     pub fn workdir(&self) -> Result<&Path> {
         self.repo
@@ -2546,6 +2558,31 @@ mod tests {
             std::fs::canonicalize(repo.workdir().expect("repo workdir"))
                 .expect("canonical workdir"),
             std::fs::canonicalize(path).expect("canonical temp repo path")
+        );
+    }
+
+    #[test]
+    fn refresh_sees_a_branch_created_by_a_subprocess() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+
+        // Create a branch via subprocess — the original handle's refdb cache will not see it.
+        run_git(path, &["branch", "new-branch"]);
+
+        let refreshed = repo.refresh().expect("refresh");
+        let oid = refreshed.rev_parse("new-branch");
+        assert!(
+            oid.is_ok(),
+            "refreshed repo should see subprocess-created branch"
         );
     }
 

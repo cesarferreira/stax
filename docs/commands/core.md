@@ -55,7 +55,7 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 
 | Command | What it does |
 |---|---|
-| `st rs` | Pull trunk, clean merged branches, reparent children |
+| `st rs` | Pull trunk, clean merged branches, reparent children — undoable via `st undo` |
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
 | `st restack` | Rebase current stack onto parents locally (no fetch) |
