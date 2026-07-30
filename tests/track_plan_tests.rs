@@ -3,7 +3,8 @@
 //! `topological_order`, `plan_fetches`, and `resolve_parent` directly.
 
 use stax::application::{
-    ParentSource, RepoFacts, TrackCandidate, plan_fetches, resolve_parent, topological_order,
+    ParentSource, RepoFacts, TrackCandidate, branches_needing_upstream, newly_created_branches,
+    parse_branches_with_upstream, plan_fetches, resolve_parent, topological_order,
 };
 use std::collections::HashSet;
 
@@ -195,4 +196,54 @@ fn plan_fetches_already_local_branches_appear_in_neither_list() {
 
     assert!(plan.required.is_empty());
     assert!(plan.optional.is_empty());
+}
+
+#[test]
+fn newly_created_branches_excludes_preexisting_locals() {
+    let fetched = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let local_before = set(&["a"]);
+    let local_after = set(&["a", "b", "c"]);
+
+    let result = newly_created_branches(&fetched, &local_before, &local_after);
+
+    assert_eq!(result, vec!["b".to_string(), "c".to_string()]);
+}
+
+#[test]
+fn newly_created_branches_excludes_failed_fetches() {
+    let fetched = vec!["a".to_string(), "b".to_string()];
+    let local_before = set(&[]);
+    let local_after = set(&["a"]);
+
+    let result = newly_created_branches(&fetched, &local_before, &local_after);
+
+    assert_eq!(result, vec!["a".to_string()]);
+}
+
+#[test]
+fn parse_branches_with_upstream_handles_dotted_and_slashed_names() {
+    let output = "branch.feat/x.remote origin\nbranch.release.1.x.remote upstream\n";
+
+    let result = parse_branches_with_upstream(output);
+
+    assert_eq!(result, set(&["feat/x", "release.1.x"]));
+}
+
+#[test]
+fn parse_branches_with_upstream_ignores_unrelated_keys() {
+    let output = "branch.a.merge refs/heads/a\nremote.origin.url git@x\n\n";
+
+    let result = parse_branches_with_upstream(output);
+
+    assert!(result.is_empty());
+}
+
+#[test]
+fn branches_needing_upstream_skips_already_configured() {
+    let newly_created = vec!["a".to_string(), "b".to_string()];
+    let already_configured = set(&["a"]);
+
+    let result = branches_needing_upstream(&newly_created, &already_configured);
+
+    assert_eq!(result, vec!["b".to_string()]);
 }

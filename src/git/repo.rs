@@ -1772,6 +1772,58 @@ Use --auto-stash-pop or stash/commit changes first.",
             .filter(|value| !value.trim().is_empty())
     }
 
+    /// Branch names that already have an upstream remote configured
+    /// (`branch.<name>.remote` set). Used to avoid overwriting an upstream a
+    /// pre-existing local branch may have intentionally pointed at a fork or a
+    /// different remote. Exit code 1 from `git config --get-regexp` means "no
+    /// matches" in a repo with no branch config yet — that is not an error, it
+    /// is the normal case, so it maps to an empty set rather than propagating.
+    pub fn branches_with_configured_upstream(&self) -> Result<HashSet<String>> {
+        let output = self.run_git(
+            self.workdir()?,
+            &["config", "--local", "--get-regexp", r"^branch\..*\.remote$"],
+        )?;
+        if !output.status.success() {
+            return Ok(HashSet::new());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(crate::application::parse_branches_with_upstream(&stdout))
+    }
+
+    /// Configure `branch` to pull from and push to `remote`. Writes
+    /// `branch.<branch>.merge` before `branch.<branch>.remote` deliberately: if
+    /// the second write fails, git defaults an unset `branch.<name>.remote` to
+    /// `origin`, so the partial state still usually works. The reverse order
+    /// would leave `git pull` erroring with "did not specify a branch".
+    ///
+    /// Uses `--local` rather than `--worktree` because branch upstream config
+    /// is shared across linked worktrees.
+    pub fn set_branch_upstream(&self, branch: &str, remote: &str) -> Result<()> {
+        let workdir = self.workdir()?;
+        let merge_key = format!("branch.{}.merge", branch);
+        let merge_value = format!("refs/heads/{}", branch);
+        let output = self.run_git(workdir, &["config", "--local", &merge_key, &merge_value])?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to set '{}': {}",
+                merge_key,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let remote_key = format!("branch.{}.remote", branch);
+        let output = self.run_git(workdir, &["config", "--local", &remote_key, remote])?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "Failed to set '{}': {}",
+                remote_key,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        Ok(())
+    }
+
     /// Get underlying repository (for advanced operations)
     pub fn inner(&self) -> &Repository {
         &self.repo
@@ -2494,6 +2546,19 @@ mod tests {
         );
     }
 
+    /// Run git and return stdout, tolerating a non-zero exit. Callers assert on the
+    /// value, not the status: `git config --get <key>` exits 1 when the key is unset,
+    /// which is a legitimate "no value" answer (and exactly what the upstream tests
+    /// assert before configuring one).
+    fn run_git_capture(path: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("failed to run git");
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
+
     #[test]
     fn test_format_duration_just_now() {
         assert_eq!(format_duration(0), "just now");
@@ -2818,5 +2883,106 @@ mod tests {
         ]);
 
         assert_eq!(names, vec!["main", "00cb/stax", "073a/stax"]);
+    }
+
+    #[test]
+    fn set_branch_upstream_configures_pull_target() {
+        let remote_dir = TempDir::new().expect("tempdir");
+        run_git(remote_dir.path(), &["init", "--bare", "-b", "main"]);
+
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(
+            path,
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote_dir.path().to_str().expect("utf8 path"),
+            ],
+        );
+        run_git(path, &["push", "origin", "main"]);
+
+        // Mirror how `stax branch track --all-prs` creates a local branch: a
+        // refspec fetch from a remote that already has it, not `git branch`.
+        run_git(path, &["switch", "-c", "copied"]);
+        fs::write(path.join("copied.txt"), "copied\n").expect("write copied");
+        run_git(path, &["add", "copied.txt"]);
+        run_git(path, &["commit", "-m", "Copied commit"]);
+        run_git(path, &["push", "origin", "copied"]);
+        run_git(path, &["switch", "main"]);
+        run_git(path, &["branch", "-D", "copied"]);
+        run_git(path, &["fetch", "--no-tags", "origin", "copied:copied"]);
+
+        let before = run_git_capture(
+            path,
+            &["config", "--local", "--get", "branch.copied.remote"],
+        );
+        assert!(
+            before.trim().is_empty(),
+            "upstream should be unset before configuring it"
+        );
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        repo.set_branch_upstream("copied", "origin")
+            .expect("set upstream");
+
+        let remote_value = run_git_capture(
+            path,
+            &["config", "--local", "--get", "branch.copied.remote"],
+        );
+        assert_eq!(remote_value.trim(), "origin");
+        let merge_value =
+            run_git_capture(path, &["config", "--local", "--get", "branch.copied.merge"]);
+        assert_eq!(merge_value.trim(), "refs/heads/copied");
+
+        let upstream = run_git_capture(path, &["rev-parse", "--abbrev-ref", "copied@{upstream}"]);
+        assert_eq!(upstream.trim(), "origin/copied");
+    }
+
+    #[test]
+    fn set_branch_upstream_is_readable_by_branches_with_configured_upstream() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+        run_git(path, &["branch", "copied"]);
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        repo.set_branch_upstream("copied", "origin")
+            .expect("set upstream");
+
+        let configured = repo
+            .branches_with_configured_upstream()
+            .expect("read configured upstreams");
+        assert!(configured.contains("copied"));
+    }
+
+    #[test]
+    fn branches_with_configured_upstream_is_empty_when_no_branch_config() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path();
+        run_git(path, &["init", "-b", "main"]);
+        run_git(path, &["config", "user.email", "test@example.com"]);
+        run_git(path, &["config", "user.name", "Test User"]);
+        fs::write(path.join("README.md"), "base\n").expect("write readme");
+        run_git(path, &["add", "README.md"]);
+        run_git(path, &["commit", "-m", "Initial commit"]);
+
+        let repo = GitRepo::open_from_path(path).expect("open repo");
+        let configured = repo
+            .branches_with_configured_upstream()
+            .expect("no branch config should not be an error");
+        assert!(configured.is_empty());
     }
 }

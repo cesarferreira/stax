@@ -84,7 +84,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st rename` | | Rename current branch |
 | `st move [target]` | `mv` | Move the current branch and descendants onto a new parent (`st upstack onto` parity alias; picker when omitted) |
 | `st branch track` | | Track an existing branch |
-| `st branch track --all-prs` | | Track all open PRs (GitHub, GitLab, Gitea) |
+| `st branch track --all-prs` | | Track all open PRs (GitHub, GitLab, Gitea); sets upstream on branches it fetches |
 | `st branch untrack` | `ut` | Remove stax metadata |
 | `st branch reparent` | | Change parent |
 | `st branch submit` | `bs` | Submit current branch only; can temporarily restack the publish head when the excluded parent is remote-synced |
