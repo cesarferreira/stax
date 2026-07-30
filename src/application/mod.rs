@@ -13,6 +13,7 @@ mod reorder;
 mod repository;
 mod restack;
 pub(crate) mod submit;
+mod track_plan;
 
 pub(crate) use branch_name::{
     BranchNameContext, BranchNameError, BranchNameResult, format_branch_name,
@@ -34,4 +35,8 @@ pub(crate) use restack::RestackExecutionOptions;
 pub(crate) use submit::{
     PreparedSubmit, SubmitConfigSources, SubmitOptions, SubmitPreferences, SubmitPromptAnswer,
     SubmitPromptRequest, SubmitScope,
+};
+pub use track_plan::{
+    FetchPlan, ParentDecision, ParentSource, RepoFacts, TrackCandidate, plan_fetches,
+    resolve_parent, topological_order,
 };
