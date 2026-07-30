@@ -5,7 +5,7 @@ st config                     # show current configuration
 st config --set-ai            # interactively pick AI agent/model
 st config --reset-ai          # clear saved AI defaults and re-prompt
 st config --reset-ai --no-prompt
-st --default-config          # print the default config.toml to stdout
+st --default-config          # print annotated config template (all options + allowed values)
 ```
 
 Config is loaded as follows:
@@ -15,6 +15,19 @@ Config is loaded as follows:
 3. If present, `stax.toml` at the current git repository root overlays only the values it sets.
 
 ## Example config
+
+Run `st --default-config` for the full annotated template (every section, with allowed values in comments). Copy the output to `~/.config/stax/config.toml` and uncomment only the keys you want to override.
+
+Common overrides:
+
+```toml
+[submit]
+stack_links = "body"   # "comment" | "body" | "both" | "off"
+single_stack = "on"    # "on" | "off"
+```
+
+<details>
+<summary>Full template (same as <code>st --default-config</code>)</summary>
 
 ```toml
 [branch]
@@ -36,8 +49,8 @@ Config is loaded as follows:
 [submit]
 # stack_links = "comment" # "comment" | "body" | "both" | "off"
 # single_stack = "on"     # "on" | "off" — when "off", skip stack-link sync while the stack has only one PR
-# native_stack = "auto"   # "auto" | "off" | "link" — auto-register native GitHub Stacked PRs when available
-# stack_links_when_native = "keep" # "keep" | "off" — keep stax body/comment links even when native registration succeeds
+# native_stack = "auto"   # "auto" | "off" | "link" — GitHub gh-stack registration; use "off" to disable entirely
+# stack_links_when_native = "keep" # "keep" | "off" — stax PR links when native registration succeeds
 
 [ci]
 # alert = false
@@ -108,6 +121,8 @@ Config is loaded as follows:
 #   post_start = "code --add ."
 #   post_go    = "code --add ."
 ```
+
+</details>
 
 ## AI configuration
 
@@ -210,7 +225,7 @@ Stack-link entries use compact PR/MR references and mark the PR being rendered w
 
 `single_stack` controls whether stack links are written when the stack contains only one PR. With the default `"on"`, links are always synced per `stack_links`. With `"off"`, stax skips link sync — and removes any stale links left over from a previous `"on"` setting — while the stack has a single PR. As soon as a second PR is submitted on the same stack, links populate on every PR (including the original) automatically.
 
-## Native GitHub Stacked PRs
+## Native GitHub Stacked PRs (gh-stack)
 
 ```toml
 [submit]
@@ -220,11 +235,24 @@ stack_links_when_native = "keep"   # "keep" | "off"
 
 `native_stack = "auto"` is the default. On GitHub remotes, stax checks for the `github/gh-stack` extension and tries to register submitted multi-PR stacks with GitHub's native Stacked PRs feature. If the extension is missing, the repo does not have private-preview access, or the remote is not GitHub, submit silently keeps the existing stax behavior.
 
-Use `native_stack = "off"` to disable native registration. Use `"link"` to force an attempt even when the repo's feature cache is unknown or disabled. Per run, `st submit --native-stack` forces an attempt and `st submit --no-native-stack` skips it.
+### Disable gh-stack registration
+
+To stop stax from calling `gh stack link` on submit (while keeping normal stax submit and PR body/comment stack links):
+
+```toml
+[submit]
+native_stack = "off"
+```
+
+Per run only: `st submit --no-native-stack`. To force registration once: `st submit --native-stack`.
+
+Use `native_stack = "link"` to always attempt registration even when the repo's feature cache says the feature is disabled.
 
 `stack_links_when_native = "keep"` preserves stax's body/comment stack links when native registration succeeds. Set it to `"off"` only if you want the GitHub native stack map without stax-managed PR body/comment links.
 
 `st doctor` reports the installed `gh-stack` version, marks versions below v0.0.8 as out of date, and can install or upgrade the extension after confirmation with `st doctor --fix`.
+
+→ [Native GitHub Stacks guide](../integrations/github-native-stacks.md)
 
 ## Forge type override
 

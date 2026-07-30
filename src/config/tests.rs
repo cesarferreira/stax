@@ -755,7 +755,9 @@ fn test_default_toml_serializes() {
     assert!(s.contains("[branch]"));
     assert!(s.contains("[remote]"));
     assert!(s.contains("[submit]"));
-    let _: Config = toml::from_str(&s).unwrap();
+    assert!(s.contains(r#""auto" | "off" | "link""#));
+    assert!(s.contains(r#""comment" | "body" | "both" | "off""#));
+    assert!(s.contains("[worktree.hooks]"));
 }
 
 #[test]

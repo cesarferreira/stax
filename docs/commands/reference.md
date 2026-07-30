@@ -168,7 +168,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st config` | Show current configuration |
 | `st config --set-ai` | Interactively set AI agent/model (global or per-feature) |
 | `st config --reset-ai` | Clear saved AI defaults and re-prompt (`--no-prompt` to clear only) |
-| `st --default-config` | Print the default config.toml to stdout |
+| `st --default-config` | Print annotated config template (all options and allowed values) |
 | `st init` | Initialize stax or reconfigure trunk (`--trunk <branch>`) |
 | `st cli upgrade` | Detect install method and run the matching upgrade |
 | `st doctor` | Check repo health |

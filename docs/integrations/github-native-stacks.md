@@ -116,3 +116,18 @@ st submit --no-native-stack  # skip native registration for this run
 These only affect native GitHub registration. PR creation, branch pushes, and stax-managed stack links continue to follow the normal submit options.
 
 `--native-stack` is intentionally more talkative than `auto`: if `gh` is unavailable, `github/gh-stack` is missing, or the extension is too old to expose `gh stack link`, submit still succeeds but prints an actionable `note:` pointing at `st doctor --fix` and the relevant `gh extension` command. In default `auto` mode, those setup gaps stay quiet so ordinary submits are not noisy.
+
+## Disable native stacks (gh-stack)
+
+If you do not want stax to register PRs with GitHub's native Stack feature, set:
+
+```toml
+[submit]
+native_stack = "off"
+```
+
+in `~/.config/stax/config.toml` (or repo-root `stax.toml` for submit-only overrides). stax will still submit PRs and sync its own stack links per `stack_links`; it simply skips `gh stack link`.
+
+One-off: `st submit --no-native-stack`.
+
+→ [Configuration: native_stack](../configuration/index.md#native-github-stacked-prs-gh-stack)
