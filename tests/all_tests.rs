@@ -130,6 +130,8 @@ mod sweep_tests;
 mod track_all_prs_tests;
 #[path = "track_merge_base_tests.rs"]
 mod track_merge_base_tests;
+#[path = "track_plan_tests.rs"]
+mod track_plan_tests;
 #[path = "tui_commands_tests.rs"]
 mod tui_commands_tests;
 #[path = "upstack_onto_tests.rs"]

@@ -1,11 +1,17 @@
+use crate::application::{
+    ParentSource, RepoFacts, TrackCandidate, plan_fetches, resolve_parent, topological_order,
+};
 use crate::config::Config;
 use crate::engine::{BranchMetadata, PrInfo};
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
+use crate::progress::LiveTimer;
 use crate::remote::{self, RemoteInfo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use dialoguer::{FuzzySelect, theme::ColorfulTheme};
+use std::collections::HashSet;
+use std::path::Path;
 use std::process::Command;
 
 pub fn run(parent: Option<String>, all_prs: bool) -> Result<()> {
@@ -165,12 +171,10 @@ fn run_track_all_prs() -> Result<()> {
         username.cyan()
     );
 
-    let mut tracked_count = 0;
-    let mut skipped_count = 0;
-    let mut fetched_count = 0;
-
+    // Phase 0 — partition into already-tracked vs. untracked candidates.
+    let mut untracked = Vec::new();
+    let mut skipped_count = 0usize;
     for pr in open_prs {
-        // Skip if already tracked
         if BranchMetadata::read(repo.inner(), &pr.head_branch)?.is_some() {
             println!(
                 "  {} {} (already tracked)",
@@ -180,42 +184,124 @@ fn run_track_all_prs() -> Result<()> {
             skipped_count += 1;
             continue;
         }
+        untracked.push(pr);
+    }
 
-        // Check if branch exists locally
-        let branch_exists = repo.branch_commit(&pr.head_branch).is_ok();
+    let candidates: Vec<TrackCandidate> = untracked
+        .iter()
+        .map(|pr| TrackCandidate {
+            number: pr.number,
+            head: pr.head_branch.clone(),
+            base: pr.base_branch.clone(),
+        })
+        .collect();
 
-        if !branch_exists {
-            // Fetch branch from remote
-            print!("  {} Fetching {}...", "↓".blue(), pr.head_branch.cyan());
-            std::io::Write::flush(&mut std::io::stdout()).ok();
+    // Phase 1 — fetch everything up front, in one batch where possible.
+    let local_before = local_branch_names(workdir)?;
+    let plan = plan_fetches(&candidates, &trunk, &local_before);
+    let to_fetch: Vec<String> = plan
+        .required
+        .iter()
+        .chain(plan.optional.iter())
+        .cloned()
+        .collect();
 
-            match fetch_branch_from_remote(workdir, remote_name, &pr.head_branch) {
-                Ok(_) => {
-                    println!(" {}", "done".green());
-                    fetched_count += 1;
-                }
-                Err(e) => {
-                    println!(" {}", "failed".red());
-                    eprintln!("    Error: {}", e);
-                    continue;
+    if !to_fetch.is_empty() {
+        let timer = LiveTimer::maybe_new(
+            true,
+            &format!(
+                "Fetching {} branch(es) from {}...",
+                to_fetch.len(),
+                remote_name
+            ),
+        );
+        let batch = fetch_branches_batch(workdir, remote_name, &to_fetch);
+        drop(timer);
+        if let Err(e) = batch {
+            println!(
+                "  {} batch fetch incomplete, retrying individually: {}",
+                "!".yellow(),
+                e
+            );
+        }
+    }
+
+    let mut local_after = local_branch_names(workdir)?;
+    let mut failed_heads: HashSet<String> = HashSet::new();
+    for b in &to_fetch {
+        if local_after.contains(b) {
+            continue;
+        }
+        print!("  {} Fetching {}...", "↓".blue(), b.cyan());
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        match fetch_branch_from_remote(workdir, remote_name, b) {
+            Ok(()) => {
+                println!(" {}", "done".green());
+                local_after.insert(b.clone());
+            }
+            Err(e) => {
+                println!(" {}", "failed".red());
+                eprintln!("    Error: {}", e);
+                if plan.required.contains(b) {
+                    failed_heads.insert(b.clone());
                 }
             }
         }
+    }
 
-        // Validate parent branch exists
-        let parent_branch = if repo.branch_commit(&pr.base_branch).is_ok() {
-            pr.base_branch.clone()
-        } else {
-            // Fall back to trunk if base doesn't exist locally
-            trunk.clone()
+    let fetched_count = to_fetch
+        .iter()
+        .filter(|b| local_after.contains(*b) && !local_before.contains(*b))
+        .count();
+
+    let remote_branches: HashSet<String> = remote::get_remote_branches(workdir, remote_name)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    // Phase 2 — resolve parents and write metadata in dependency order, so a
+    // stacked PR's base is always tracked before its dependent is resolved.
+    let mut tracked_count = 0usize;
+    for i in topological_order(&candidates) {
+        let pr = &untracked[i];
+        if failed_heads.contains(&pr.head_branch) {
+            continue;
+        }
+
+        let facts = RepoFacts {
+            trunk: &trunk,
+            remote: remote_name,
+            local_branches: &local_after,
+            remote_branches: &remote_branches,
         };
+        let decision = resolve_parent(&candidates[i], &facts);
+
+        match &decision.source {
+            ParentSource::TrunkFallback { unresolved_base } => println!(
+                "{}",
+                format!(
+                    "  ! PR #{}: base '{}' was not found locally or on '{}' — parenting '{}' onto trunk '{}'. This branch will appear as a direct child of trunk, not stacked.",
+                    pr.number, unresolved_base, remote_name, pr.head_branch, trunk
+                )
+                .yellow()
+            ),
+            ParentSource::RemoteOnly => println!(
+                "{}",
+                format!(
+                    "  ! PR #{}: parent '{}' exists only as '{}/{}'; fetch it locally before restacking.",
+                    pr.number, decision.parent, remote_name, decision.parent
+                )
+                .yellow()
+            ),
+            _ => {}
+        }
 
         // Use the divergence point (merge-base) rather than the parent's current tip.
         // Matches freephite's `trackBranch`: store `getMergeBase(branch, parent)` so
         // that `git rebase --onto` scopes the replay to only the branch's own commits.
         let parent_rev = match repo
-            .merge_base(&parent_branch, &pr.head_branch)
-            .or_else(|_| repo.branch_commit(&parent_branch))
+            .merge_base_refs(&decision.parent_rev_ref, &pr.head_branch)
+            .or_else(|_| repo.rev_parse(&decision.parent_rev_ref))
         {
             Ok(rev) => rev,
             Err(_) => {
@@ -230,7 +316,7 @@ fn run_track_all_prs() -> Result<()> {
 
         // Create metadata with PR info
         let meta = BranchMetadata {
-            parent_branch_name: parent_branch.clone(),
+            parent_branch_name: decision.parent.clone(),
             parent_branch_revision: parent_rev,
             source_remote: None,
             frozen: false,
@@ -242,6 +328,7 @@ fn run_track_all_prs() -> Result<()> {
         };
 
         meta.write(repo.inner(), &pr.head_branch)?;
+        local_after.insert(pr.head_branch.clone());
 
         let draft_indicator = if pr.is_draft { " (draft)" } else { "" };
         println!(
@@ -250,7 +337,7 @@ fn run_track_all_prs() -> Result<()> {
             pr.head_branch.green(),
             pr.number.to_string().yellow(),
             draft_indicator.dimmed(),
-            parent_branch.blue()
+            decision.parent.blue()
         );
         tracked_count += 1;
     }
@@ -266,21 +353,73 @@ fn run_track_all_prs() -> Result<()> {
     Ok(())
 }
 
-/// Fetch a single branch from remote and create local tracking branch
-fn fetch_branch_from_remote(workdir: &std::path::Path, remote: &str, branch: &str) -> Result<()> {
-    let status = Command::new("git")
-        .args(["fetch", remote, &format!("{}:{}", branch, branch)])
+/// Fetch several branches from `remote` in one invocation, creating local
+/// branches of the same name. Errors carry git's stderr so callers can report it.
+fn fetch_branches_batch(workdir: &Path, remote: &str, branches: &[String]) -> Result<()> {
+    if branches.is_empty() {
+        return Ok(());
+    }
+    let mut cmd = Command::new("git");
+    cmd.args(["fetch", "--no-tags", remote]);
+    for b in branches {
+        cmd.arg(format!("{}:{}", b, b));
+    }
+    let output = cmd
         .current_dir(workdir)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .output()
+        .context("Failed to run git fetch")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git fetch {} failed ({}): {}",
+            remote,
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Local branch names read straight from git, so refs created by a subprocess
+/// `git fetch` are always visible (bypasses any libgit2 ref caching).
+fn local_branch_names(workdir: &Path) -> Result<HashSet<String>> {
+    let output = Command::new("git")
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+        .current_dir(workdir)
+        .output()
+        .context("Failed to list local branches")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git for-each-ref failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
+/// Fetch a single branch from remote and create local tracking branch
+fn fetch_branch_from_remote(workdir: &Path, remote: &str, branch: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args([
+            "fetch",
+            "--no-tags",
+            remote,
+            &format!("{}:{}", branch, branch),
+        ])
+        .current_dir(workdir)
+        .output()
         .context("Failed to run git fetch")?;
 
-    if !status.success() {
+    if !output.status.success() {
         anyhow::bail!(
-            "Failed to fetch branch '{}' from remote '{}'",
+            "Failed to fetch branch '{}' from remote '{}' ({}): {}",
             branch,
-            remote
+            remote,
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
         );
     }
 
