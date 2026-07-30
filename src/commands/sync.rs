@@ -691,6 +691,157 @@ impl SyncContext {
         Ok(())
     }
 
+    fn plan_delete_blocker(
+        &self,
+        repo: &GitRepo,
+        branch: &str,
+        is_current_branch: bool,
+    ) -> Result<Option<BlockingWorktreeCleanup>> {
+        if is_current_branch {
+            Ok(None)
+        } else {
+            plan_blocking_worktree_cleanup(repo, branch, self.force)
+        }
+    }
+
+    fn decide_delete_action(
+        &self,
+        branch: &str,
+        prompt: String,
+        blocking: Option<&BlockingWorktreeCleanup>,
+    ) -> Result<SyncBranchDeleteAction> {
+        if self.auto_confirm {
+            if blocking.is_some() {
+                Ok(SyncBranchDeleteAction::PreserveWorktree)
+            } else {
+                Ok(SyncBranchDeleteAction::DeleteOnly)
+            }
+        } else if self.quiet {
+            Ok(SyncBranchDeleteAction::Skip)
+        } else if let Some(cleanup) = blocking {
+            choose_linked_worktree_delete_action(branch, cleanup)
+        } else {
+            let confirm = Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt(prompt)
+                .default(true)
+                .interact()?;
+            if !confirm {
+                Ok(SyncBranchDeleteAction::Skip)
+            } else {
+                Ok(SyncBranchDeleteAction::DeleteOnly)
+            }
+        }
+    }
+
+    fn record_unconfirmed_skip(&mut self, branch: &str) {
+        self.stats.record_cleanup_skip(branch, "not confirmed");
+        if !self.quiet {
+            println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+        }
+    }
+
+    /// Returns `true` if the worktree was preserved (or failed with a skip recorded).
+    /// Returns `false` when the resolution was missing (caller should `continue`).
+    fn preserve_blocking_worktree(
+        &mut self,
+        repo: &GitRepo,
+        branch: &str,
+        blocking: Option<&BlockingWorktreeCleanup>,
+    ) -> bool {
+        let Some(cleanup) = blocking else {
+            self.stats
+                .record_cleanup_skip(branch, "worktree resolution missing");
+            return false;
+        };
+        if let Err(error) = preserve_worktree_for_sync(repo, cleanup, self.quiet) {
+            self.stats.record_cleanup_skip(
+                branch,
+                format!("couldn't preserve linked worktree: {}", error),
+            );
+            if !self.quiet {
+                println!(
+                    "    {} couldn't preserve linked worktree '{}': {}",
+                    "↷".yellow(),
+                    cleanup.resolution.worktree.name,
+                    error
+                );
+            }
+            return false;
+        }
+        true
+    }
+
+    fn record_checkout_failure_skip(&mut self, branch: &str, target: &str, error: String) {
+        self.stats.record_cleanup_skip(branch, "checkout failed");
+        if !self.quiet {
+            println!(
+                "    {} {}",
+                branch.bright_black(),
+                format!("failed to checkout '{}': {}, skipping", target, error).red()
+            );
+        }
+    }
+
+    fn delete_local_branch(
+        &self,
+        repo: &GitRepo,
+        branch: &str,
+        action: SyncBranchDeleteAction,
+        blocking: Option<&BlockingWorktreeCleanup>,
+    ) -> Result<LocalBranchDeleteOutcome> {
+        delete_local_branch_for_sync(
+            repo,
+            &self.config,
+            &self.workdir,
+            branch,
+            if matches!(action, SyncBranchDeleteAction::RemoveWorktree { .. }) {
+                blocking
+            } else {
+                None
+            },
+            matches!(
+                action,
+                SyncBranchDeleteAction::RemoveWorktree { force: true }
+            ),
+            self.quiet,
+        )
+    }
+
+    /// Returns `true` if metadata was deleted; unconditional warning on error.
+    fn delete_branch_metadata(
+        &mut self,
+        repo: &GitRepo,
+        branch: &str,
+        local_still_exists: bool,
+    ) -> bool {
+        if local_still_exists {
+            return false;
+        }
+        match crate::git::refs::delete_metadata(repo.inner(), branch) {
+            Ok(()) => true,
+            Err(e) => {
+                self.stats
+                    .record_cleanup_skip(branch, "metadata cleanup failed");
+                println!(
+                    "{}",
+                    format!("Warning: failed to delete metadata for '{}': {}", branch, e).yellow()
+                );
+                false
+            }
+        }
+    }
+
+    fn record_local_branch_kept_skip(
+        &mut self,
+        branch: &str,
+        blocking: Option<&BlockingWorktreeCleanup>,
+    ) {
+        let reason = blocking
+            .and_then(BlockingWorktreeCleanup::blocker_summary)
+            .unwrap_or_else(|| "local branch kept".to_string());
+        self.stats.record_cleanup_skip(branch, reason);
+    }
+
     fn cleanup_merged_branches(&mut self, repo: GitRepo) -> Result<GitRepo> {
         if self.delete_merged {
             let detect_merged_started_at = Instant::now();
@@ -725,63 +876,34 @@ impl SyncContext {
             let repo = GitRepo::open_from_path(&self.reopen_repo_path)?;
 
             // Initialize forge client once up-front for any PR base updates below.
-            let forge_client: Option<(tokio::runtime::Runtime, ForgeClient)> = {
-                let remote_info = RemoteInfo::from_repo(&repo, &self.config).ok();
-
-                if let Some(info) = remote_info {
-                    tokio::runtime::Runtime::new().ok().and_then(|rt| {
-                        let _enter = rt.enter();
-                        ForgeClient::new(&info).ok().map(|client| (rt, client))
-                    })
-                } else {
-                    None
-                }
-            };
+            let forge_client = init_forge_client(&repo, &self.config);
 
             if !merged.is_empty() {
+                let merged_branch_names: Vec<String> =
+                    merged.iter().map(|m| m.branch.clone()).collect();
+
                 if !self.quiet {
-                    let branch_word = if merged.len() == 1 {
-                        "branch"
-                    } else {
-                        "branches"
-                    };
-                    println!(
-                        "    Found {} merged {}:",
-                        merged.len().to_string().cyan(),
-                        branch_word
-                    );
-                    for info in &merged {
-                        println!("      {} {}", "▸".bright_black(), info.branch);
-                    }
-                    println!();
+                    print_cleanup_candidates("merged", &merged_branch_names);
                 }
 
                 // Record CI history for merged branches before deleting them
                 if let Some((ref rt, ref client)) = forge_client {
-                    let branch_names: Vec<String> =
-                        merged.iter().map(|m| m.branch.clone()).collect();
                     record_ci_history_for_merged(
                         &repo,
                         rt,
                         client,
-                        &branch_names,
+                        &merged_branch_names,
                         &self.stack,
                         self.quiet,
                     );
                 }
-
-                let merged_branch_names: Vec<String> =
-                    merged.iter().map(|m| m.branch.clone()).collect();
                 let mut deletion_decisions = Vec::new();
                 for merged_info in &merged {
                     let branch = &merged_info.branch;
                     let is_current_branch = branch == &self.current;
 
-                    let blocking_worktree_cleanup = if is_current_branch {
-                        None
-                    } else {
-                        plan_blocking_worktree_cleanup(&repo, branch, self.force)?
-                    };
+                    let blocking_worktree_cleanup =
+                        self.plan_delete_blocker(&repo, branch, is_current_branch)?;
 
                     // For the prompt we use merged_branch_names (all detected merges) as
                     // the doomed set — an approximation, since the user hasn't confirmed
@@ -812,27 +934,11 @@ impl SyncContext {
                         blocking_worktree_cleanup.as_ref(),
                     );
 
-                    let action = if self.auto_confirm {
-                        if blocking_worktree_cleanup.is_some() {
-                            SyncBranchDeleteAction::PreserveWorktree
-                        } else {
-                            SyncBranchDeleteAction::DeleteOnly
-                        }
-                    } else if self.quiet {
-                        SyncBranchDeleteAction::Skip
-                    } else if let Some(cleanup) = blocking_worktree_cleanup.as_ref() {
-                        choose_linked_worktree_delete_action(branch, cleanup)?
-                    } else {
-                        let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                            .with_prompt(prompt)
-                            .default(true)
-                            .interact()?;
-                        if !confirm {
-                            SyncBranchDeleteAction::Skip
-                        } else {
-                            SyncBranchDeleteAction::DeleteOnly
-                        }
-                    };
+                    let action = self.decide_delete_action(
+                        branch,
+                        prompt,
+                        blocking_worktree_cleanup.as_ref(),
+                    )?;
 
                     if action != SyncBranchDeleteAction::Skip {
                         deletion_decisions.push((
@@ -841,10 +947,7 @@ impl SyncContext {
                             action,
                         ));
                     } else {
-                        self.stats.record_cleanup_skip(branch, "not confirmed");
-                        if !self.quiet {
-                            println!("    {} {}", branch.bright_black(), "skipped".dimmed());
-                        }
+                        self.record_unconfirmed_skip(branch);
                     }
                 }
 
@@ -901,27 +1004,14 @@ impl SyncContext {
                         continue;
                     }
 
-                    if action == SyncBranchDeleteAction::PreserveWorktree {
-                        let Some(cleanup) = blocking_worktree_cleanup.as_ref() else {
-                            self.stats
-                                .record_cleanup_skip(branch, "worktree resolution missing");
-                            continue;
-                        };
-                        if let Err(error) = preserve_worktree_for_sync(&repo, cleanup, self.quiet) {
-                            self.stats.record_cleanup_skip(
-                                branch,
-                                format!("couldn't preserve linked worktree: {}", error),
-                            );
-                            if !self.quiet {
-                                println!(
-                                    "    {} couldn't preserve linked worktree '{}': {}",
-                                    "↷".yellow(),
-                                    cleanup.resolution.worktree.name,
-                                    error
-                                );
-                            }
-                            continue;
-                        }
+                    if action == SyncBranchDeleteAction::PreserveWorktree
+                        && !self.preserve_blocking_worktree(
+                            &repo,
+                            branch,
+                            blocking_worktree_cleanup.as_ref(),
+                        )
+                    {
+                        continue;
                     }
 
                     // Handle squash-merged branches with surviving children.
@@ -1033,18 +1123,11 @@ impl SyncContext {
                                 }
                             }
                             Err(checkout_error) => {
-                                self.stats.record_cleanup_skip(branch, "checkout failed");
-                                if !self.quiet {
-                                    println!(
-                                        "    {} {}",
-                                        branch.bright_black(),
-                                        format!(
-                                            "failed to checkout '{}': {}, skipping",
-                                            parent_branch, checkout_error
-                                        )
-                                        .red()
-                                    );
-                                }
+                                self.record_checkout_failure_skip(
+                                    branch,
+                                    &parent_branch,
+                                    checkout_error,
+                                );
                                 continue;
                             }
                         }
@@ -1062,45 +1145,27 @@ impl SyncContext {
                         self.quiet,
                     )?;
 
-                    let local_delete = delete_local_branch_for_sync(
+                    let local_delete = self.delete_local_branch(
                         &repo,
-                        &self.config,
-                        &self.workdir,
                         branch,
-                        if matches!(action, SyncBranchDeleteAction::RemoveWorktree { .. }) {
-                            blocking_worktree_cleanup.as_ref()
-                        } else {
-                            None
-                        },
-                        matches!(
-                            action,
-                            SyncBranchDeleteAction::RemoveWorktree { force: true }
-                        ),
-                        self.quiet,
+                        action,
+                        blocking_worktree_cleanup.as_ref(),
                     )?;
                     let local_deleted = local_delete.deleted;
                     let local_worktree_blocked = local_delete.worktree_blocked;
 
                     if !local_deleted && local_branch_exists(&self.workdir, branch) {
-                        let reason = blocking_worktree_cleanup
-                            .as_ref()
-                            .and_then(BlockingWorktreeCleanup::blocker_summary)
-                            .unwrap_or_else(|| "local branch kept".to_string());
-                        self.stats.record_cleanup_skip(branch, reason);
+                        self.record_local_branch_kept_skip(
+                            branch,
+                            blocking_worktree_cleanup.as_ref(),
+                        );
                         if !self.quiet {
-                            if local_worktree_blocked {
-                                print_blocked_branch_delete_recovery(
-                                    branch,
-                                    blocking_worktree_cleanup.as_ref(),
-                                );
-                            } else {
-                                println!("    {} {}", branch.bright_black(), "skipped".dimmed());
-                            }
-                            println!(
-                                "    {} {}",
-                                "↷".yellow(),
-                                "metadata kept because local branch still exists".dimmed()
+                            print_blocked_or_skipped(
+                                branch,
+                                blocking_worktree_cleanup.as_ref(),
+                                local_worktree_blocked,
                             );
+                            print_metadata_kept_note();
                         }
                         continue;
                     }
@@ -1136,37 +1201,18 @@ impl SyncContext {
                     // Only delete metadata if branch no longer exists locally.
                     let local_still_exists = local_branch_exists(&self.workdir, branch);
 
-                    let metadata_deleted = if !local_still_exists {
-                        match crate::git::refs::delete_metadata(repo.inner(), branch) {
-                            Ok(()) => true,
-                            Err(e) => {
-                                self.stats
-                                    .record_cleanup_skip(branch, "metadata cleanup failed");
-                                println!(
-                                    "{}",
-                                    format!(
-                                        "Warning: failed to delete metadata for '{}': {}",
-                                        branch, e
-                                    )
-                                    .yellow()
-                                );
-                                false
-                            }
-                        }
-                    } else {
-                        false
-                    };
+                    let metadata_deleted =
+                        self.delete_branch_metadata(&repo, branch, local_still_exists);
 
                     if metadata_deleted {
                         self.stats.merged_branches_cleaned += 1;
                     }
 
                     if !local_deleted && local_still_exists {
-                        let reason = blocking_worktree_cleanup
-                            .as_ref()
-                            .and_then(BlockingWorktreeCleanup::blocker_summary)
-                            .unwrap_or_else(|| "local branch kept".to_string());
-                        self.stats.record_cleanup_skip(branch, reason);
+                        self.record_local_branch_kept_skip(
+                            branch,
+                            blocking_worktree_cleanup.as_ref(),
+                        );
                     }
 
                     if !self.quiet {
@@ -1196,20 +1242,13 @@ impl SyncContext {
                                 );
                             }
                         } else {
-                            if local_worktree_blocked {
-                                print_blocked_branch_delete_recovery(
-                                    branch,
-                                    blocking_worktree_cleanup.as_ref(),
-                                );
-                            } else {
-                                println!("    {} {}", branch.bright_black(), "skipped".dimmed());
-                            }
+                            print_blocked_or_skipped(
+                                branch,
+                                blocking_worktree_cleanup.as_ref(),
+                                local_worktree_blocked,
+                            );
                             if !metadata_deleted {
-                                println!(
-                                    "    {} {}",
-                                    "↷".yellow(),
-                                    "metadata kept because local branch still exists".dimmed()
-                                );
+                                print_metadata_kept_note();
                             }
                         }
                     }
@@ -1317,20 +1356,7 @@ impl SyncContext {
 
             if !gone.is_empty() {
                 if !self.quiet {
-                    let branch_word = if gone.len() == 1 {
-                        "branch"
-                    } else {
-                        "branches"
-                    };
-                    println!(
-                        "    Found {} upstream-gone {}:",
-                        gone.len().to_string().cyan(),
-                        branch_word
-                    );
-                    for branch in &gone {
-                        println!("      {} {}", "▸".bright_black(), branch);
-                    }
-                    println!();
+                    print_cleanup_candidates("upstream-gone", &gone);
                 }
 
                 // Reload the stack so the merged-branch path's reparenting is
@@ -1340,17 +1366,7 @@ impl SyncContext {
                 let mut live_stack = Stack::load(repo).unwrap_or_else(|_| self.stack.clone());
 
                 // Initialize forge client once up-front for any PR base updates below.
-                let forge_client: Option<(tokio::runtime::Runtime, ForgeClient)> = {
-                    let remote_info = RemoteInfo::from_repo(repo, &self.config).ok();
-                    if let Some(info) = remote_info {
-                        tokio::runtime::Runtime::new().ok().and_then(|rt| {
-                            let _enter = rt.enter();
-                            ForgeClient::new(&info).ok().map(|client| (rt, client))
-                        })
-                    } else {
-                        None
-                    }
-                };
+                let forge_client = init_forge_client(repo, &self.config);
 
                 let gone_deletions: HashSet<String> = gone.iter().cloned().collect();
                 for branch in &gone {
@@ -1359,11 +1375,8 @@ impl SyncContext {
                     }
 
                     let is_current_branch = branch == &self.current_after_deletions;
-                    let blocking_worktree_cleanup = if is_current_branch {
-                        None
-                    } else {
-                        plan_blocking_worktree_cleanup(repo, branch, self.force)?
-                    };
+                    let blocking_worktree_cleanup =
+                        self.plan_delete_blocker(repo, branch, is_current_branch)?;
 
                     // Resolve the parent children will be reparented to. Walks up
                     // the recorded-parent chain skipping any branch that is itself
@@ -1402,57 +1415,25 @@ impl SyncContext {
                         blocking_worktree_cleanup.as_ref(),
                     );
 
-                    let action = if self.auto_confirm {
-                        if blocking_worktree_cleanup.is_some() {
-                            SyncBranchDeleteAction::PreserveWorktree
-                        } else {
-                            SyncBranchDeleteAction::DeleteOnly
-                        }
-                    } else if self.quiet {
-                        SyncBranchDeleteAction::Skip
-                    } else if let Some(cleanup) = blocking_worktree_cleanup.as_ref() {
-                        choose_linked_worktree_delete_action(branch, cleanup)?
-                    } else {
-                        let confirm = Confirm::with_theme(&ColorfulTheme::default())
-                            .with_prompt(prompt)
-                            .default(true)
-                            .interact()?;
-                        if !confirm {
-                            SyncBranchDeleteAction::Skip
-                        } else {
-                            SyncBranchDeleteAction::DeleteOnly
-                        }
-                    };
+                    let action = self.decide_delete_action(
+                        branch,
+                        prompt,
+                        blocking_worktree_cleanup.as_ref(),
+                    )?;
 
                     if action == SyncBranchDeleteAction::Skip {
-                        self.stats.record_cleanup_skip(branch, "not confirmed");
-                        if !self.quiet {
-                            println!("    {} {}", branch.bright_black(), "skipped".dimmed());
-                        }
+                        self.record_unconfirmed_skip(branch);
                         continue;
                     }
 
-                    if action == SyncBranchDeleteAction::PreserveWorktree {
-                        let Some(cleanup) = blocking_worktree_cleanup.as_ref() else {
-                            self.stats
-                                .record_cleanup_skip(branch, "worktree resolution missing");
-                            continue;
-                        };
-                        if let Err(error) = preserve_worktree_for_sync(repo, cleanup, self.quiet) {
-                            self.stats.record_cleanup_skip(
-                                branch,
-                                format!("couldn't preserve linked worktree: {}", error),
-                            );
-                            if !self.quiet {
-                                println!(
-                                    "    {} couldn't preserve linked worktree '{}': {}",
-                                    "↷".yellow(),
-                                    cleanup.resolution.worktree.name,
-                                    error
-                                );
-                            }
-                            continue;
-                        }
+                    if action == SyncBranchDeleteAction::PreserveWorktree
+                        && !self.preserve_blocking_worktree(
+                            repo,
+                            branch,
+                            blocking_worktree_cleanup.as_ref(),
+                        )
+                    {
+                        continue;
                     }
 
                     if is_current_branch {
@@ -1468,18 +1449,11 @@ impl SyncContext {
                                 }
                             }
                             Err(checkout_error) => {
-                                self.stats.record_cleanup_skip(branch, "checkout failed");
-                                if !self.quiet {
-                                    println!(
-                                        "    {} {}",
-                                        branch.bright_black(),
-                                        format!(
-                                            "failed to checkout '{}': {}, skipping",
-                                            fallback_parent, checkout_error
-                                        )
-                                        .red()
-                                    );
-                                }
+                                self.record_checkout_failure_skip(
+                                    branch,
+                                    &fallback_parent,
+                                    checkout_error,
+                                );
                                 continue;
                             }
                         }
@@ -1506,21 +1480,11 @@ impl SyncContext {
                         live_stack = refreshed;
                     }
 
-                    let local_delete = delete_local_branch_for_sync(
+                    let local_delete = self.delete_local_branch(
                         repo,
-                        &self.config,
-                        &self.workdir,
                         branch,
-                        if matches!(action, SyncBranchDeleteAction::RemoveWorktree { .. }) {
-                            blocking_worktree_cleanup.as_ref()
-                        } else {
-                            None
-                        },
-                        matches!(
-                            action,
-                            SyncBranchDeleteAction::RemoveWorktree { force: true }
-                        ),
-                        self.quiet,
+                        action,
+                        blocking_worktree_cleanup.as_ref(),
                     )?;
                     let local_deleted = local_delete.deleted;
                     let local_worktree_blocked = local_delete.worktree_blocked;
@@ -1528,33 +1492,14 @@ impl SyncContext {
                     // Only delete metadata if branch no longer exists locally.
                     let local_still_exists = local_branch_exists(&self.workdir, branch);
 
-                    let metadata_deleted = if !local_still_exists {
-                        match crate::git::refs::delete_metadata(repo.inner(), branch) {
-                            Ok(()) => true,
-                            Err(e) => {
-                                self.stats
-                                    .record_cleanup_skip(branch, "metadata cleanup failed");
-                                println!(
-                                    "{}",
-                                    format!(
-                                        "Warning: failed to delete metadata for '{}': {}",
-                                        branch, e
-                                    )
-                                    .yellow()
-                                );
-                                false
-                            }
-                        }
-                    } else {
-                        false
-                    };
+                    let metadata_deleted =
+                        self.delete_branch_metadata(repo, branch, local_still_exists);
 
                     if !local_deleted && local_still_exists {
-                        let reason = blocking_worktree_cleanup
-                            .as_ref()
-                            .and_then(BlockingWorktreeCleanup::blocker_summary)
-                            .unwrap_or_else(|| "local branch kept".to_string());
-                        self.stats.record_cleanup_skip(branch, reason);
+                        self.record_local_branch_kept_skip(
+                            branch,
+                            blocking_worktree_cleanup.as_ref(),
+                        );
                     }
 
                     if !self.quiet {
@@ -1564,21 +1509,16 @@ impl SyncContext {
                                 branch.bright_black(),
                                 "deleted (local only)".green()
                             );
-                        } else if local_worktree_blocked {
-                            print_blocked_branch_delete_recovery(
+                        } else {
+                            print_blocked_or_skipped(
                                 branch,
                                 blocking_worktree_cleanup.as_ref(),
+                                local_worktree_blocked,
                             );
-                        } else {
-                            println!("    {} {}", branch.bright_black(), "skipped".dimmed());
                         }
 
                         if !metadata_deleted && local_still_exists {
-                            println!(
-                                "    {} {}",
-                                "↷".yellow(),
-                                "metadata kept because local branch still exists".dimmed()
-                            );
+                            print_metadata_kept_note();
                         }
                     }
                 }
@@ -2870,6 +2810,59 @@ fn git_ref_exists(workdir: &Path, refname: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+fn init_forge_client(
+    repo: &GitRepo,
+    config: &Config,
+) -> Option<(tokio::runtime::Runtime, ForgeClient)> {
+    let remote_info = RemoteInfo::from_repo(repo, config).ok();
+    if let Some(info) = remote_info {
+        tokio::runtime::Runtime::new().ok().and_then(|rt| {
+            let _enter = rt.enter();
+            ForgeClient::new(&info).ok().map(|client| (rt, client))
+        })
+    } else {
+        None
+    }
+}
+
+fn print_blocked_or_skipped(
+    branch: &str,
+    blocking_worktree_cleanup: Option<&BlockingWorktreeCleanup>,
+    local_worktree_blocked: bool,
+) {
+    if local_worktree_blocked {
+        print_blocked_branch_delete_recovery(branch, blocking_worktree_cleanup);
+    } else {
+        println!("    {} {}", branch.bright_black(), "skipped".dimmed());
+    }
+}
+
+fn print_metadata_kept_note() {
+    println!(
+        "    {} {}",
+        "↷".yellow(),
+        "metadata kept because local branch still exists".dimmed()
+    );
+}
+
+fn print_cleanup_candidates(kind: &str, branch_names: &[String]) {
+    let branch_word = if branch_names.len() == 1 {
+        "branch"
+    } else {
+        "branches"
+    };
+    println!(
+        "    Found {} {} {}:",
+        branch_names.len().to_string().cyan(),
+        kind,
+        branch_word
+    );
+    for name in branch_names {
+        println!("      {} {}", "▸".bright_black(), name);
+    }
+    println!();
 }
 
 fn plan_blocking_worktree_cleanup(
