@@ -314,10 +314,12 @@ stax sync --json --force           # Same as --json but also auto-confirms branc
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
-stax sync --prune                  # No-op: kept for CLI compatibility (use --full to fetch --prune all remote-tracking refs)
+stax sync --prune                  # Deprecated: accepted for compatibility, emits a stderr warning; use --full instead
 stax sync --full                   # Fetch all remote branches with --prune (slower; default is trunk-only fetch + ls-remote)
 stax sync --no-delete              # Keep merged branches
-stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
+stax sync --auto-stash-pop         # Stash/pop dirty target worktrees during the restack phase
+stax sync --stash                  # Stash the current working tree before sync starts without prompting; works with --quiet/--json; does NOT auto-confirm branch deletions; conflicts with --no-stash at parse time
+stax sync --no-stash               # Fail on a dirty working tree; overrides --force; conflicts with --stash at parse time
 # sync cleanup switches/detaches linked worktrees before deleting merged/gone branches; interactive removal remains explicit.
 # Imported support branches may still be deleted locally after merge/gone, but their remotes are never push-deleted.
 # The sync footer reports trunk commits/files/line changes plus non-zero cleanup/imported/restack counts.
@@ -326,7 +328,7 @@ stax sync --auto-stash-pop         # Stash/pop dirty target worktrees
 # Deletion lines for locally deleted branches (merged or upstream-gone) show the branch tip SHA (7 chars, dimmed) for traceability.
 # If sync auto-stashed your working tree and fails on an error path that cannot restore it, stderr names the stash ("stax auto-stash") with instructions to run `git stash pop`.
 # sync is transactional: trunk fast-forwards, merged/gone branch deletions, reparented-child metadata, and the optional restack phase are all covered by one receipt. A no-op sync writes no receipt so the previous undoable operation remains on the undo stack. Recover any sync run with `stax undo`.
-# --json scripting entry points: stax sync --json --force (delete all merged); stax sync --json (skip deletions needing confirmation); stax sync --dry-run --json (read-only plan); dirty tree → success:false, error.kind:dirty_working_tree, non-zero exit; --json conflicts with --continue.
+# --json scripting entry points: stax sync --json --force (delete all merged); stax sync --json (skip deletions needing confirmation); stax sync --dry-run --json (read-only plan); dirty tree → success:false, error.kind:dirty_working_tree, non-zero exit; error message names --stash; stax sync --json --stash succeeds on a dirty tree (stashes before sync, restores after); --json conflicts with --continue.
 # trunk.action values: up_to_date · fast_forwarded · reset · diverged · failed · unknown. On early-bail paths (dirty tree, non-interactive) trunk.action is "unknown" because finalize never runs — intended.
 
 stax sweep                         # Classify ALL local branches (merged/gone/stale/active) — read-only

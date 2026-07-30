@@ -1,5 +1,5 @@
 use crate::commands::sync::{
-    BlockingWorktreeCleanup, MergeType, MergedBranchInfo, PartialMergeReason,
+    BlockingWorktreeCleanup, MergeType, MergedBranchInfo, PartialMergeReason, StashPolicy,
     count_commits_between, diff_line_stats_between, find_merged_branches,
     find_partially_merged_notes, find_upstream_gone_branches, imported_branches_for_cleanup,
     init_forge_client, is_ancestor, local_branch_exists, plan_blocking_worktree_cleanup,
@@ -27,6 +27,7 @@ pub struct SyncPlanOptions {
     pub quiet: bool,
     pub verbose: bool,
     pub auto_stash_pop: bool,
+    pub stash_policy: StashPolicy,
     pub json: bool,
 }
 
@@ -312,6 +313,7 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         mut quiet,
         verbose,
         auto_stash_pop,
+        stash_policy,
         json,
     } = options;
 
@@ -351,6 +353,19 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
         eprintln!(
             "{}",
             "warning: --verbose is ignored by --dry-run (output detail is fixed)".yellow()
+        );
+    }
+    if matches!(stash_policy, StashPolicy::Always) {
+        eprintln!(
+            "{}",
+            "warning: --stash is ignored by --dry-run (no stash operations are performed)".yellow()
+        );
+    }
+    if matches!(stash_policy, StashPolicy::Never) {
+        eprintln!(
+            "{}",
+            "warning: --no-stash is ignored by --dry-run (no stash operations are performed)"
+                .yellow()
         );
     }
 

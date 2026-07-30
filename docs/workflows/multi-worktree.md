@@ -28,6 +28,8 @@ st upstack restack --auto-stash-pop
 st sync --restack --auto-stash-pop
 ```
 
+`--stash` and `--no-stash` control the **current** working tree before sync starts, not the linked target worktrees. `--stash` auto-stashes the current tree without prompting (works with `--quiet`/`--json`; does NOT auto-confirm branch deletions); `--no-stash` makes sync fail immediately on a dirty current tree, overriding `--force`. In contrast, `--auto-stash-pop` acts during the restack phase on each **linked target** worktree as branches are rebased. The two mechanisms are orthogonal: you can combine `--stash --restack --auto-stash-pop` to handle both the current tree and any linked worktrees in a single `st rs` invocation.
+
 If a conflict occurs, the stash entry is preserved so nothing is lost. When `st sync` auto-stashes your working tree and fails on an unrecoverable error path (for example, when restoring the stash itself conflicts with an updated trunk), it prints a warning to stderr naming the stash "stax auto-stash" with instructions to run `git stash pop` to restore your changes.
 
 ## Related

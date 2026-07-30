@@ -494,7 +494,6 @@ pub fn run(
 
         if let Err(err) = crate::commands::sync::run(
             false, // restack
-            false, // prune
             false, // full
             true,  // delete merged branches
             false, // delete upstream-gone
@@ -504,6 +503,7 @@ pub fn run(
             quiet,
             false, // verbose
             false, // auto_stash_pop
+            crate::commands::sync::StashPolicy::Prompt,
             false, // json
             &[],
         ) && !quiet

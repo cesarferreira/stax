@@ -330,9 +330,15 @@ pub fn run() -> Result<()> {
             quiet,
             verbose,
             auto_stash_pop,
+            stash,
+            no_stash,
             dry_run,
             json,
         } => {
+            if prune {
+                eprintln!("{}", commands::sync::prune_deprecation_warning());
+            }
+            let stash_policy = commands::sync::StashPolicy::from_flags(stash, no_stash);
             if dry_run {
                 commands::sync_plan::run(commands::sync_plan::SyncPlanOptions {
                     restack,
@@ -344,12 +350,12 @@ pub fn run() -> Result<()> {
                     quiet,
                     verbose,
                     auto_stash_pop,
+                    stash_policy,
                     json,
                 })
             } else {
                 commands::sync::run(
                     restack,
-                    prune,
                     full,
                     !no_delete,
                     delete_upstream_gone,
@@ -359,6 +365,7 @@ pub fn run() -> Result<()> {
                     quiet,
                     verbose,
                     auto_stash_pop,
+                    stash_policy,
                     json,
                     &[],
                 )

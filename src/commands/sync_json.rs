@@ -426,7 +426,7 @@ mod tests {
         let stats = make_default_stats();
         let err = ErrorJson {
             kind: "dirty_working_tree",
-            message: "Working tree is dirty. Please stash or commit changes first.".to_string(),
+            message: "Working tree is dirty. Commit or stash your changes, or re-run with --stash to stash them automatically.".to_string(),
         };
         let output = build(
             "main",

@@ -48,16 +48,16 @@ pub fn run(options: GetOptions) -> Result<()> {
     let Some(requested) = options.branch.as_deref() else {
         return crate::commands::sync::run(
             !options.no_restack,
-            false,
-            false,
-            true,
-            false,
+            false, // full
+            true,  // delete_merged
+            false, // delete_upstream_gone
             options.force,
-            false,
-            false,
-            false,
-            false,
-            false,
+            false, // safe
+            false, // continue
+            false, // quiet
+            false, // verbose
+            false, // auto_stash_pop
+            crate::commands::sync::StashPolicy::Prompt,
             false, // json
             &[],
         );
