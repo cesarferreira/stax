@@ -164,3 +164,57 @@ pub fn resolve_parent(candidate: &TrackCandidate, facts: &RepoFacts<'_>) -> Pare
         },
     }
 }
+
+/// Branches this run actually created via fetch: present in `fetched`, absent
+/// from `local_before`, present in `local_after`. A pre-existing local branch
+/// may intentionally track a fork or a different remote, so it is excluded —
+/// only a branch that had no prior local existence is safe to touch. Order
+/// follows `fetched`, deduped.
+pub fn newly_created_branches(
+    fetched: &[String],
+    local_before: &HashSet<String>,
+    local_after: &HashSet<String>,
+) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for b in fetched {
+        if !local_before.contains(b) && local_after.contains(b) && seen.insert(b.as_str()) {
+            result.push(b.clone());
+        }
+    }
+    result
+}
+
+/// Parse `git config --local --get-regexp '^branch\..*\.remote$'` output into
+/// the set of branch names that already have an upstream remote configured.
+/// Splitting on the first space (rather than `.`) keeps dotted branch names
+/// like `release.1.x` intact.
+pub fn parse_branches_with_upstream(config_output: &str) -> HashSet<String> {
+    let mut result = HashSet::new();
+    for line in config_output.lines() {
+        let key = match line.split_once(' ') {
+            Some((k, _)) => k,
+            None => line,
+        };
+        if let Some(rest) = key.strip_prefix("branch.")
+            && let Some(name) = rest.strip_suffix(".remote")
+            && !name.is_empty()
+        {
+            result.insert(name.to_string());
+        }
+    }
+    result
+}
+
+/// Filter `newly_created` down to the branches that still need an upstream
+/// configured, preserving input order.
+pub fn branches_needing_upstream(
+    newly_created: &[String],
+    already_configured: &HashSet<String>,
+) -> Vec<String> {
+    newly_created
+        .iter()
+        .filter(|b| !already_configured.contains(b.as_str()))
+        .cloned()
+        .collect()
+}

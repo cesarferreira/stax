@@ -1,5 +1,6 @@
 use crate::application::{
-    ParentSource, RepoFacts, TrackCandidate, plan_fetches, resolve_parent, topological_order,
+    ParentSource, RepoFacts, TrackCandidate, branches_needing_upstream, newly_created_branches,
+    plan_fetches, resolve_parent, topological_order,
 };
 use crate::config::Config;
 use crate::engine::{BranchMetadata, PrInfo};
@@ -249,10 +250,46 @@ fn run_track_all_prs() -> Result<()> {
         }
     }
 
-    let fetched_count = to_fetch
-        .iter()
-        .filter(|b| local_after.contains(*b) && !local_before.contains(*b))
-        .count();
+    let newly_fetched = newly_created_branches(&to_fetch, &local_before, &local_after);
+    let fetched_count = newly_fetched.len();
+
+    // A refspec fetch (`<b>:<b>`) creates the local branch but configures no
+    // upstream, so a later plain `git pull` on it fails with "There is no
+    // tracking information for the current branch". Set it here, but only for
+    // branches this run created — never rewrite an upstream the user chose.
+    let already_configured = repo.branches_with_configured_upstream().unwrap_or_default();
+    let mut upstream_set = 0usize;
+    let mut upstream_failed: Vec<String> = Vec::new();
+    for b in branches_needing_upstream(&newly_fetched, &already_configured) {
+        match repo.set_branch_upstream(&b, remote_name) {
+            Ok(()) => upstream_set += 1,
+            Err(_) => upstream_failed.push(b),
+        }
+    }
+    if !upstream_failed.is_empty() {
+        let shown = upstream_failed
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = if upstream_failed.len() > 5 {
+            format!(" and {} more", upstream_failed.len() - 5)
+        } else {
+            String::new()
+        };
+        println!(
+            "{}",
+            format!(
+                "  ! Could not set upstream for {} branch(es): {}{}. Run `git branch --set-upstream-to={}/<branch> <branch>` if `git pull` fails there.",
+                upstream_failed.len(),
+                shown,
+                more,
+                remote_name
+            )
+            .yellow()
+        );
+    }
 
     let remote_branches: HashSet<String> = remote::get_remote_branches(workdir, remote_name)
         .unwrap_or_default()
@@ -342,12 +379,21 @@ fn run_track_all_prs() -> Result<()> {
         tracked_count += 1;
     }
 
+    let upstream_note = if upstream_set > 0 {
+        format!(
+            " Set upstream to '{}' on {} newly fetched branch(es).",
+            remote_name, upstream_set
+        )
+    } else {
+        String::new()
+    };
     println!();
     println!(
-        "Tracked {} branch(es), fetched {}, skipped {} (already tracked).",
+        "Tracked {} branch(es), fetched {}, skipped {} (already tracked).{}",
         tracked_count.to_string().green(),
         fetched_count.to_string().blue(),
-        skipped_count.to_string().dimmed()
+        skipped_count.to_string().dimmed(),
+        upstream_note.dimmed()
     );
 
     Ok(())

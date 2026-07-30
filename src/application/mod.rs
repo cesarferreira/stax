@@ -37,6 +37,7 @@ pub(crate) use submit::{
     SubmitPromptRequest, SubmitScope,
 };
 pub use track_plan::{
-    FetchPlan, ParentDecision, ParentSource, RepoFacts, TrackCandidate, plan_fetches,
-    resolve_parent, topological_order,
+    FetchPlan, ParentDecision, ParentSource, RepoFacts, TrackCandidate, branches_needing_upstream,
+    newly_created_branches, parse_branches_with_upstream, plan_fetches, resolve_parent,
+    topological_order,
 };
