@@ -330,20 +330,37 @@ pub fn run() -> Result<()> {
             quiet,
             verbose,
             auto_stash_pop,
-        } => commands::sync::run(
-            restack,
-            prune,
-            full,
-            !no_delete,
-            delete_upstream_gone,
-            force,
-            safe,
-            r#continue,
-            quiet,
-            verbose,
-            auto_stash_pop,
-            &[],
-        ),
+            dry_run,
+        } => {
+            if dry_run {
+                commands::sync_plan::run(commands::sync_plan::SyncPlanOptions {
+                    restack,
+                    full,
+                    delete_merged: !no_delete,
+                    delete_upstream_gone,
+                    force,
+                    safe,
+                    quiet,
+                    verbose,
+                    auto_stash_pop,
+                })
+            } else {
+                commands::sync::run(
+                    restack,
+                    prune,
+                    full,
+                    !no_delete,
+                    delete_upstream_gone,
+                    force,
+                    safe,
+                    r#continue,
+                    quiet,
+                    verbose,
+                    auto_stash_pop,
+                    &[],
+                )
+            }
+        }
         Commands::Sweep {
             delete,
             include_stale,

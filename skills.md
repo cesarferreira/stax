@@ -307,6 +307,7 @@ stax merge-when-ready              # Backward-compatible alias
 
 stax rs                            # Sync trunk + clean merged branches
 stax rs --restack                  # Sync then restack
+stax sync --dry-run                # Preview sync plan (read-only — no fetch, no stash, no ref writes); alias: --plan
 stax sync --continue               # Continue after resolved sync conflicts
 stax sync --safe                   # Avoid hard reset on trunk update
 stax sync --force                  # Force sync without prompts; preserve linked worktrees during cleanup
@@ -343,6 +344,7 @@ stax restack                       # Restack current branch onto parent
 stax restack --all                 # Restack whole stack
 stax restack --continue            # Continue after conflicts
 stax restack --dry-run             # Predict conflicts only
+# Preview commands (read-only, always exit 0): stax sync --dry-run · stax restack --dry-run · stax submit --dry-run · stax merge --dry-run
 stax restack --submit-after yes    # ask|yes|no
 stax restack --auto-stash-pop      # Stash/pop dirty target worktrees
 stax restack --quiet               # Also silences the preflight notice below

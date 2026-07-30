@@ -58,6 +58,7 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st rs` | Pull trunk, clean merged branches, reparent children — undoable via `st undo` |
 | `st rs --restack` | `rs` **plus** rebase the current stack onto updated trunk |
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
+| `st rs --dry-run` / `st rs --plan` | Preview what sync would do — no fetch, no stash, no ref writes (read-only) |
 | `st restack` | Rebase current stack onto parents locally (no fetch) |
 | `st refresh` | Sync trunk without merged-branch cleanup, restack, then push and update PRs (`st update` is a back-compat alias) |
 | `st refresh --force --yes --no-prompt` | Full refresh flow without sync or submit prompts |
