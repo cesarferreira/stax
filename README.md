@@ -142,7 +142,7 @@ The bundle id is `com.cesarferreira.stax`. `st gui [path]` is macOS-only; it can
 <a id="quickstart"></a>
 ## Quickstart
 
-`st setup` handles shell integration, AI agent skills, and GitHub auth in a single step:
+`st setup` handles shell integration, AI agent skills, and GitHub auth in a single step. When you install skills interactively (or with `--yes`), stax asks which agent harnesses should receive the skill file, pre-checking the ones it detects on disk. Use `--skills all|detected|<ids>` for non-interactive control.
 
 ```bash
 st setup --yes

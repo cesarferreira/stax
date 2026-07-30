@@ -177,8 +177,8 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 | `st init` | Initialize stax or reconfigure trunk (`--trunk <branch>`) |
 | `st cli upgrade` | Detect install method and run the matching upgrade |
 | `st doctor` | Check repo health |
-| `st doctor --fix` | Apply safe local repairs after one confirmation (recommended Git config, stale AI skills, and optional `gh-stack` install) |
-| `st skills` | Manage installed AI agent skill files (`list`, `update`, `update --dry-run`) |
+| `st doctor --fix` | Apply safe local repairs after one confirmation (recommended Git config, stale AI skills for selected harnesses, and optional `gh-stack` install) |
+| `st skills` | Manage installed AI agent skill files (`list`, `update`, `update --all`, `update --skills <list>`, `update --dry-run`) |
 | `st continue` | Continue after conflicts |
 | `st open` | Open repository in browser |
 | `st demo` | Interactive tutorial — no auth or repo required |
@@ -216,6 +216,7 @@ Full guide: [Worktrees](../worktrees/index.md) · [AI lanes](../workflows/agent-
 | `st setup` | One-shot onboarding: shell integration + optional skills + auth |
 | `st setup --yes` | Accept defaults, install skills, import auth from `gh` when available |
 | `st setup --install-skills` / `--skip-skills` | Control AI agent skills prompt |
+| `st setup --skills <list>` | Choose harnesses (`all`, `detected`, `auto`, `none`, or comma-separated ids) |
 | `st setup --auth-from-gh` / `--skip-auth` | Control auth onboarding |
 | `st setup --print` | Print shell integration snippet for manual install |
 

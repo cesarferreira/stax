@@ -106,6 +106,8 @@ mod restack_provenance_tests;
 mod runtime_safety_tests;
 #[path = "scoped_submit_tests.rs"]
 mod scoped_submit_tests;
+#[path = "skills_selection_tests.rs"]
+mod skills_selection_tests;
 #[path = "split_hunk_tests.rs"]
 mod split_hunk_tests;
 #[path = "split_tests.rs"]

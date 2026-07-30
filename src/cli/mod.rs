@@ -55,12 +55,25 @@ pub fn run() -> Result<()> {
         skip_auth,
         auth_from_gh,
         yes,
+        skills,
     }) = &cli.command
     {
-        let skill_install_mode = if *install_skills {
-            commands::shell_setup::SkillInstallMode::Install
-        } else if *skip_skills {
+        let skill_selection = skills
+            .as_deref()
+            .map(commands::skills::parse_harness_selection)
+            .transpose()?;
+        let skill_install_mode = if *skip_skills
+            || matches!(
+                skill_selection.as_ref(),
+                Some(commands::skills::HarnessSelection::Only(ids)) if ids.is_empty()
+            ) {
             commands::shell_setup::SkillInstallMode::Skip
+        } else if *install_skills
+            || skill_selection
+                .as_ref()
+                .is_some_and(|sel| !matches!(sel, commands::skills::HarnessSelection::Only(ids) if ids.is_empty()))
+        {
+            commands::shell_setup::SkillInstallMode::Install
         } else {
             commands::shell_setup::SkillInstallMode::Ask
         };
@@ -75,6 +88,7 @@ pub fn run() -> Result<()> {
             auto_accept: *yes,
             skill_install_mode,
             auth_setup_mode,
+            skill_selection,
         };
         let result = commands::shell_setup::run(*print, *refresh, setup_options);
         update::show_update_notification();
@@ -168,7 +182,28 @@ pub fn run() -> Result<()> {
         Commands::Skills { command } => {
             let result = match command {
                 None | Some(SkillsCommands::List) => commands::skills::run_list(),
-                Some(SkillsCommands::Update { dry_run }) => commands::skills::run_update(*dry_run),
+                Some(SkillsCommands::Update {
+                    dry_run,
+                    all,
+                    skills,
+                }) => {
+                    let (sel, origin) = if *all {
+                        (
+                            commands::skills::HarnessSelection::All,
+                            commands::skills::SkillsUpdateOrigin::AllFlag,
+                        )
+                    } else if let Some(spec) = skills.as_deref() {
+                        (
+                            commands::skills::parse_harness_selection(spec)?,
+                            commands::skills::SkillsUpdateOrigin::Cli {
+                                spec: spec.to_string(),
+                            },
+                        )
+                    } else {
+                        commands::skills::configured_selection_with_origin()
+                    };
+                    commands::skills::run_update_with(*dry_run, &sel, origin)
+                }
             };
             update::show_update_notification();
             return result;

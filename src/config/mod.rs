@@ -31,6 +31,17 @@ pub struct Config {
     pub git: GitConfig,
     #[serde(default)]
     pub restack: RestackConfig,
+    #[serde(default)]
+    pub skills: SkillsConfig,
+}
+
+/// Which agent harnesses receive stax skill files.
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct SkillsConfig {
+    /// Harness ids to manage (`claude`, `codex`, `cursor`, `opencode`, `pi`).
+    /// Unset = auto (detected harnesses plus any that already have a skill file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harnesses: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -671,6 +682,14 @@ impl Config {
         let content = toml::to_string_pretty(self)?;
         fs::write(&path, content)?;
         Ok(())
+    }
+
+    /// Persist which agent harnesses should receive skill files (global config only).
+    pub fn set_skill_harnesses(harnesses: &[String]) -> Result<()> {
+        let path = Self::path()?;
+        let mut config = Self::load_path_or_default(&path)?;
+        config.skills.harnesses = Some(harnesses.to_vec());
+        config.save()
     }
 
     /// Clear any saved AI agent/model defaults so interactive commands can re-prompt.
