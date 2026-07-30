@@ -320,6 +320,15 @@ struct SyncContext {
     /// Whether trunk has already been planned in the sync transaction.
     trunk_planned: bool,
     delete_confirm_strategy: DeleteConfirmStrategy,
+    /// Merged-branch detection from the interactive sync plan (pre-trunk-update).
+    /// Reused after trunk moves to avoid a second full patch-id scan of the stack.
+    planned_merged_detection: Option<PlannedMergedDetection>,
+}
+
+#[derive(Debug, Clone)]
+struct PlannedMergedDetection {
+    merged: Vec<MergedBranchInfo>,
+    partially_merged: Vec<PartiallyMergedNote>,
 }
 
 impl SyncContext {
@@ -399,6 +408,7 @@ impl SyncContext {
                 tx: None,
                 trunk_planned: false,
                 delete_confirm_strategy: DeleteConfirmStrategy::PerBranch,
+                planned_merged_detection: None,
             },
             repo,
         ))
@@ -968,7 +978,20 @@ impl SyncContext {
                 &self.stack,
                 &self.remote_name,
                 remote_branches,
+                false,
             )?;
+            let partially_merged_notes = find_partially_merged_notes(
+                repo,
+                &self.workdir,
+                &self.stack,
+                &self.remote_name,
+                remote_branches,
+                &merged,
+            )?;
+            self.planned_merged_detection = Some(PlannedMergedDetection {
+                merged: merged.clone(),
+                partially_merged: partially_merged_notes,
+            });
             merged_branch_names = merged.into_iter().map(|m| m.branch).collect();
         }
 
@@ -1259,25 +1282,46 @@ impl SyncContext {
         if self.delete_merged {
             let detect_merged_started_at = Instant::now();
             let detect_timer = LiveTimer::maybe_new(!self.quiet, "Detect merged branches");
-            let merged = find_merged_branches(
-                &repo,
-                &self.workdir,
-                &self.stack,
-                &self.remote_name,
-                self.remote_branches_for_merged
-                    .as_ref()
-                    .expect("remote branch list when deleting merged branches"),
-            )?;
-            let partially_merged_notes = find_partially_merged_notes(
-                &repo,
-                &self.workdir,
-                &self.stack,
-                &self.remote_name,
-                self.remote_branches_for_merged
-                    .as_ref()
-                    .expect("remote branch list when deleting merged branches"),
-                &merged,
-            )?;
+            let remote_branches = self
+                .remote_branches_for_merged
+                .as_ref()
+                .expect("remote branch list when deleting merged branches");
+            let (merged, partially_merged_notes) =
+                if let Some(planned) = self.planned_merged_detection.take() {
+                    let fresh = find_merged_branches(
+                        &repo,
+                        &self.workdir,
+                        &self.stack,
+                        &self.remote_name,
+                        remote_branches,
+                        true,
+                    )?;
+                    let merged = merge_planned_merged_detection(planned.merged, fresh);
+                    let partially_merged_notes: Vec<PartiallyMergedNote> = planned
+                        .partially_merged
+                        .into_iter()
+                        .filter(|note| !merged.iter().any(|m| m.branch == note.branch))
+                        .collect();
+                    (merged, partially_merged_notes)
+                } else {
+                    let merged = find_merged_branches(
+                        &repo,
+                        &self.workdir,
+                        &self.stack,
+                        &self.remote_name,
+                        remote_branches,
+                        false,
+                    )?;
+                    let partially_merged_notes = find_partially_merged_notes(
+                        &repo,
+                        &self.workdir,
+                        &self.stack,
+                        &self.remote_name,
+                        remote_branches,
+                        &merged,
+                    )?;
+                    (merged, partially_merged_notes)
+                };
             self.step_timings.push((
                 "detect merged branches".to_string(),
                 detect_merged_started_at.elapsed(),
@@ -3072,12 +3116,30 @@ fn should_spare_empty_never_submitted_branch(
     )?)
 }
 
+/// Union planned merged branches with a post-trunk fast re-scan. Planned entries
+/// cover squash merges found via patch-id before trunk moved; `fresh` picks up
+/// any branch that became an ancestor after the fast-forward.
+fn merge_planned_merged_detection(
+    planned: Vec<MergedBranchInfo>,
+    fresh: Vec<MergedBranchInfo>,
+) -> Vec<MergedBranchInfo> {
+    let mut by_branch: HashMap<String, MergedBranchInfo> = fresh
+        .into_iter()
+        .map(|info| (info.branch.clone(), info))
+        .collect();
+    for info in planned {
+        by_branch.entry(info.branch.clone()).or_insert(info);
+    }
+    by_branch.into_values().collect()
+}
+
 pub(super) fn find_merged_branches(
     repo: &GitRepo,
     workdir: &std::path::Path,
     stack: &Stack,
     remote_name: &str,
     remote_branches: &HashSet<String>,
+    skip_patch_id_provenance: bool,
 ) -> Result<Vec<MergedBranchInfo>> {
     let mut merged = Vec::new();
     let remote_trunk_ref = format!("{}/{}", remote_name, stack.trunk);
@@ -3234,6 +3296,10 @@ pub(super) fn find_merged_branches(
     // when trunk has advanced past the merge point (where a simple tree diff
     // would show false negatives). Run this last so cheaper signals resolve
     // most cases before the provenance path touches more refs.
+    if skip_patch_id_provenance {
+        return Ok(merged);
+    }
+
     let trunk = stack.trunk.as_str();
     let mut need_patch_id: Vec<(String, String)> = Vec::new();
 
@@ -4795,6 +4861,22 @@ mod tests {
     fn stash_policy_from_flags_no_stash_takes_precedence() {
         // clap enforces conflicts_with, but belt-and-suspenders: Never when no_stash=true
         assert_eq!(StashPolicy::from_flags(false, true), StashPolicy::Never);
+    }
+
+    #[test]
+    fn merge_planned_merged_detection_unions_planned_and_fresh() {
+        let planned = vec![MergedBranchInfo {
+            branch: "squash-only".to_string(),
+            merge_type: MergeType::SquashMerge,
+        }];
+        let fresh = vec![MergedBranchInfo {
+            branch: "ancestor".to_string(),
+            merge_type: MergeType::Ancestor,
+        }];
+        let merged = super::merge_planned_merged_detection(planned, fresh);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|m| m.branch == "squash-only"));
+        assert!(merged.iter().any(|m| m.branch == "ancestor"));
     }
 
     #[test]
