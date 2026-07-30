@@ -197,6 +197,14 @@ enum SyncFlow {
     Stop,
 }
 
+/// How interactive sync confirms branch deletions after the upfront plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum DeleteConfirmStrategy {
+    #[default]
+    PerBranch,
+    BulkNonBlocking,
+}
+
 /// Controls how sync handles a dirty working tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StashPolicy {
@@ -310,6 +318,7 @@ struct SyncContext {
     tx: Option<Transaction>,
     /// Whether trunk has already been planned in the sync transaction.
     trunk_planned: bool,
+    delete_confirm_strategy: DeleteConfirmStrategy,
 }
 
 impl SyncContext {
@@ -386,6 +395,7 @@ impl SyncContext {
                 stats: SyncStats::default(),
                 tx: None,
                 trunk_planned: false,
+                delete_confirm_strategy: DeleteConfirmStrategy::PerBranch,
             },
             repo,
         ))
@@ -904,6 +914,140 @@ impl SyncContext {
         Ok(())
     }
 
+    /// Interactive-only: show a consolidated plan after fetch and before trunk
+    /// updates or deletions. Cancelling here leaves no transaction snapshot.
+    fn confirm_sync_plan(&mut self, repo: &GitRepo) -> Result<SyncFlow> {
+        if self.quiet || self.auto_confirm || self.json {
+            return Ok(SyncFlow::Continue);
+        }
+
+        let local_trunk = self.local_trunk_before_sync.as_deref();
+        let remote_trunk = self.remote_trunk_after_fetch.as_deref();
+        let trunk_would_move = matches!((local_trunk, remote_trunk), (Some(l), Some(r)) if l != r);
+
+        let mut merged_branch_names: Vec<String> = Vec::new();
+        if self.delete_merged
+            && let Some(remote_branches) = self.remote_branches_for_merged.as_ref()
+        {
+            let merged = find_merged_branches(
+                repo,
+                &self.workdir,
+                &self.stack,
+                &self.remote_name,
+                remote_branches,
+            )?;
+            merged_branch_names = merged.into_iter().map(|m| m.branch).collect();
+        }
+
+        let mut upstream_gone_deletable: Vec<String> = Vec::new();
+        if self.delete_upstream_gone {
+            let detected = find_upstream_gone_branches(&self.workdir, &self.stack.trunk)?;
+            for branch in detected {
+                if has_unique_commits_since_any_base(
+                    &self.workdir,
+                    &branch,
+                    &[self.stack.trunk.as_str(), self.remote_trunk_ref.as_str()],
+                )? {
+                    continue;
+                }
+                upstream_gone_deletable.push(branch);
+            }
+        }
+
+        let mut restack_candidates: Vec<String> = Vec::new();
+        if self.restack {
+            let scope = if self.current != self.stack.trunk
+                && self.stack.branches.contains_key(&self.current)
+            {
+                self.stack.current_stack(&self.current)
+            } else {
+                Vec::new()
+            };
+            for branch in scope {
+                if let Some(info) = self.stack.branches.get(&branch)
+                    && info.needs_restack
+                {
+                    restack_candidates.push(branch);
+                }
+            }
+        }
+
+        let needs_confirm = trunk_would_move
+            || !merged_branch_names.is_empty()
+            || !upstream_gone_deletable.is_empty()
+            || !restack_candidates.is_empty();
+
+        if !needs_confirm {
+            return Ok(SyncFlow::Continue);
+        }
+
+        println!();
+        println!("{}", "Sync plan".bold());
+        println!("  {} Trunk {}:", "▸".dimmed(), self.stack.trunk.cyan());
+        match (local_trunk, remote_trunk) {
+            (Some(l), Some(r)) if l == r => {
+                println!(
+                    "      Already up to date with {}",
+                    self.remote_trunk_ref.dimmed()
+                );
+            }
+            (Some(_), Some(_)) => {
+                println!(
+                    "      Would update {} to match {}",
+                    self.stack.trunk.cyan(),
+                    self.remote_trunk_ref.dimmed()
+                );
+            }
+            _ => {
+                println!("      Remote trunk state unavailable (offline?)");
+            }
+        }
+
+        if !merged_branch_names.is_empty() {
+            print_cleanup_candidates("merged", &merged_branch_names);
+        }
+        if !upstream_gone_deletable.is_empty() {
+            print_cleanup_candidates("upstream-gone", &upstream_gone_deletable);
+        }
+        if !restack_candidates.is_empty() {
+            let word = if restack_candidates.len() == 1 {
+                "branch"
+            } else {
+                "branches"
+            };
+            println!(
+                "    Would restack {} {}:",
+                restack_candidates.len().to_string().cyan(),
+                word
+            );
+            for branch in &restack_candidates {
+                println!("      {} {}", "▸".bright_black(), branch);
+            }
+            println!();
+        }
+
+        let options = [
+            "Continue — delete all listed branches",
+            "Choose action for each branch",
+            "Cancel sync",
+        ];
+        let selected = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("How should sync proceed?")
+            .items(options)
+            .default(0)
+            .interact()?;
+
+        match selected {
+            0 => {
+                self.delete_confirm_strategy = DeleteConfirmStrategy::BulkNonBlocking;
+                Ok(SyncFlow::Continue)
+            }
+            1 => Ok(SyncFlow::Continue),
+            2 => Ok(SyncFlow::Stop),
+            _ => Ok(SyncFlow::Continue),
+        }
+    }
+
     fn plan_delete_blocker(
         &self,
         repo: &GitRepo,
@@ -926,6 +1070,12 @@ impl SyncContext {
         if self.auto_confirm {
             if blocking.is_some() {
                 Ok(SyncBranchDeleteAction::PreserveWorktree)
+            } else {
+                Ok(SyncBranchDeleteAction::DeleteOnly)
+            }
+        } else if self.delete_confirm_strategy == DeleteConfirmStrategy::BulkNonBlocking {
+            if let Some(cleanup) = blocking {
+                choose_linked_worktree_delete_action(branch, cleanup)
             } else {
                 Ok(SyncBranchDeleteAction::DeleteOnly)
             }
@@ -2451,6 +2601,15 @@ fn run_sync_phases(ctx: &mut SyncContext, repo: GitRepo) -> Result<()> {
     }
 
     ctx.fetch_remote(&repo)?;
+
+    if ctx.confirm_sync_plan(&repo)? == SyncFlow::Stop {
+        if !ctx.quiet {
+            println!("Aborted.");
+        }
+        ctx.restore_stash(&repo)?;
+        ctx.tx = None;
+        return Ok(());
+    }
 
     let trunk_stats_worker = ctx.spawn_trunk_summary_worker();
 

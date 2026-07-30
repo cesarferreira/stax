@@ -126,6 +126,8 @@ mod submit_plan_completions_tests;
 mod submit_pr_base_tests;
 #[path = "sweep_tests.rs"]
 mod sweep_tests;
+#[path = "sync_confirm_tests.rs"]
+mod sync_confirm_tests;
 #[path = "sync_dry_run_tests.rs"]
 mod sync_dry_run_tests;
 #[path = "sync_json_tests.rs"]

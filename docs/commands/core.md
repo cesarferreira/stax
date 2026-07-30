@@ -60,6 +60,7 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 | `st rs --delete-upstream-gone` | Also delete local branches whose upstream is gone |
 | `st rs --stash` | Stash the current working tree before sync starts, without prompting; works with `--quiet`/`--json`; does NOT auto-confirm branch deletions |
 | `st rs --no-stash` | Fail on a dirty working tree; overrides `--force`; conflicts with `--stash` at parse time |
+| `st rs` (interactive) | After fetch, one **Sync plan** when deletions or `--restack` need confirmation; bulk delete all, per-branch prompts, or cancel (`Aborted.`); skipped with `--force`, `--quiet`, or `--json` |
 | `st rs --dry-run` / `st rs --plan` | Preview what sync would do — no fetch, no stash, no ref writes (read-only) |
 | `st rs --dry-run --json` | Same as `--dry-run` but emits a single JSON document (`kind: "sync_plan"`) instead of human text |
 | `st rs --json` | Run sync and emit the result as a versioned JSON document (`kind: "sync"`, schema version 1); implies non-interactive; failures still emit JSON and exit non-zero |
