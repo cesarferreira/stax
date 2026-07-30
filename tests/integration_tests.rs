@@ -3755,7 +3755,7 @@ fn test_sync_interactive_removes_linked_worktree() {
     let output = crate::common::run_stax_in_script(
         &repo.path(),
         &["sync"],
-        "wait_for_tui_text \"What should stax do?\"; printf '\\033[B\\n'",
+        "wait_for_tui_text \"How should sync proceed?\"; printf '\\033[B\\n'; wait_for_tui_text \"What should stax do?\"; printf '\\033[B\\n'",
     );
     assert!(
         output.status.success(),
@@ -3806,7 +3806,7 @@ fn test_sync_interactive_skips_linked_worktree_cleanup() {
     let output = crate::common::run_stax_in_script(
         &repo.path(),
         &["sync"],
-        "wait_for_tui_text \"What should stax do?\"; printf '\\033[B\\033[B\\n'",
+        "wait_for_tui_text \"How should sync proceed?\"; printf '\\033[B\\n'; wait_for_tui_text \"What should stax do?\"; printf '\\033[B\\033[B\\n'",
     );
     assert!(
         output.status.success(),
@@ -3864,7 +3864,7 @@ fn test_sync_failed_explicit_removal_keeps_all_refs() {
     let output = crate::common::run_stax_in_script_with_env(
         &repo.path(),
         &["sync"],
-        "wait_for_tui_text \"What should stax do?\"; printf '\\033[B\\n'",
+        "wait_for_tui_text \"How should sync proceed?\"; printf '\\033[B\\n'; wait_for_tui_text \"What should stax do?\"; printf '\\033[B\\n'",
         &[("STAX_CONFIG_DIR", config_dir_value.as_str())],
     );
     assert!(
