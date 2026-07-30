@@ -494,8 +494,14 @@ pub fn run(options: SyncPlanOptions) -> Result<()> {
             );
         }
     } else {
-        let merged =
-            find_merged_branches(&repo, &workdir, &stack, &remote_name, &remote_branch_set)?;
+        let merged = find_merged_branches(
+            &repo,
+            &workdir,
+            &stack,
+            &remote_name,
+            &remote_branch_set,
+            false,
+        )?;
         let exempt_imported = imported_branches_for_cleanup(&repo, &stack)?;
         let partially_merged_notes = find_partially_merged_notes(
             &repo,
