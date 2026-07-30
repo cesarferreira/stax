@@ -197,6 +197,36 @@ enum SyncFlow {
     Stop,
 }
 
+/// Controls how sync handles a dirty working tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StashPolicy {
+    /// Prompt the user (default). In quiet/json mode, bail.
+    Prompt,
+    /// Stash automatically without prompting (--stash).
+    Always,
+    /// Never stash; bail if dirty (--no-stash). Wins over --force.
+    Never,
+}
+
+impl StashPolicy {
+    pub(crate) fn from_flags(stash: bool, no_stash: bool) -> Self {
+        if no_stash {
+            StashPolicy::Never
+        } else if stash {
+            StashPolicy::Always
+        } else {
+            StashPolicy::Prompt
+        }
+    }
+}
+
+pub(crate) fn prune_deprecation_warning() -> String {
+    format!(
+        "{}",
+        "warning: --prune is deprecated and has no effect. Use --full for fetch --prune of all remote-tracking refs.".yellow()
+    )
+}
+
 struct StashGuard {
     armed: bool,
 }
@@ -257,6 +287,7 @@ struct SyncContext {
     quiet: bool,
     verbose: bool,
     auto_stash_pop: bool,
+    stash_policy: StashPolicy,
     json: bool,
     auto_confirm: bool,
     sync_extra_fetch_refs: Vec<String>,
@@ -294,6 +325,7 @@ impl SyncContext {
         quiet: bool,
         verbose: bool,
         auto_stash_pop: bool,
+        stash_policy: StashPolicy,
         json: bool,
         extra_fetch_refs: &[String],
     ) -> Result<(Self, GitRepo)> {
@@ -333,6 +365,7 @@ impl SyncContext {
                 quiet: effective_quiet,
                 verbose,
                 auto_stash_pop,
+                stash_policy,
                 json,
                 auto_confirm,
                 sync_extra_fetch_refs,
@@ -360,36 +393,58 @@ impl SyncContext {
 
     fn handle_dirty_tree(&mut self, repo: &GitRepo) -> Result<SyncFlow> {
         if repo.is_dirty()? {
-            if self.quiet {
-                return Err(DirtyWorkingTree.into());
-            }
+            match self.stash_policy {
+                StashPolicy::Never => {
+                    return Err(DirtyWorkingTree.into());
+                }
+                StashPolicy::Always => {
+                    let stash_started_at = Instant::now();
+                    self.stashed = repo.stash_push()?;
+                    self.auto_stash_pop = true;
+                    if self.stashed {
+                        self.stash_guard.arm();
+                    }
+                    self.step_timings
+                        .push(("stash working tree".to_string(), stash_started_at.elapsed()));
+                    if !self.quiet {
+                        println!("{}", "✓ Stashed working tree changes.".green());
+                    }
+                }
+                StashPolicy::Prompt => {
+                    if self.quiet {
+                        return Err(DirtyWorkingTree.into());
+                    }
 
-            let stash = if self.auto_confirm {
-                true
-            } else {
-                Confirm::with_theme(&ColorfulTheme::default())
-                    .with_prompt("Working tree has uncommitted changes. Stash them before sync?")
-                    .default(true)
-                    .interact()?
-            };
+                    let stash = if self.auto_confirm {
+                        true
+                    } else {
+                        Confirm::with_theme(&ColorfulTheme::default())
+                            .with_prompt(
+                                "Working tree has uncommitted changes. Stash them before sync?",
+                            )
+                            .default(true)
+                            .interact()?
+                    };
 
-            if stash {
-                let stash_started_at = Instant::now();
-                self.stashed = repo.stash_push()?;
-                self.auto_stash_pop = true;
-                if self.stashed {
-                    self.stash_guard.arm();
+                    if stash {
+                        let stash_started_at = Instant::now();
+                        self.stashed = repo.stash_push()?;
+                        self.auto_stash_pop = true;
+                        if self.stashed {
+                            self.stash_guard.arm();
+                        }
+                        self.step_timings
+                            .push(("stash working tree".to_string(), stash_started_at.elapsed()));
+                        if !self.quiet {
+                            println!("{}", "✓ Stashed working tree changes.".green());
+                        }
+                    } else {
+                        if !self.json {
+                            println!("{}", "Aborted.".red());
+                        }
+                        return Ok(SyncFlow::Stop);
+                    }
                 }
-                self.step_timings
-                    .push(("stash working tree".to_string(), stash_started_at.elapsed()));
-                if !self.quiet {
-                    println!("{}", "✓ Stashed working tree changes.".green());
-                }
-            } else {
-                if !self.json {
-                    println!("{}", "Aborted.".red());
-                }
-                return Ok(SyncFlow::Stop);
             }
         }
         Ok(SyncFlow::Continue)
@@ -2289,7 +2344,6 @@ impl SyncContext {
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     restack: bool,
-    #[allow(unused_variables)] prune: bool,
     full: bool,
     delete_merged: bool,
     delete_upstream_gone: bool,
@@ -2299,6 +2353,7 @@ pub fn run(
     quiet: bool,
     verbose: bool,
     auto_stash_pop: bool,
+    stash_policy: StashPolicy,
     json: bool,
     extra_fetch_refs: &[String],
 ) -> Result<()> {
@@ -2314,6 +2369,7 @@ pub fn run(
         quiet,
         verbose,
         auto_stash_pop,
+        stash_policy,
         json,
         extra_fetch_refs,
     )?;
@@ -4489,5 +4545,34 @@ mod tests {
             msg.contains("git stash list"),
             "must tell user how to inspect: {msg}"
         );
+    }
+
+    #[test]
+    fn stash_policy_from_flags_returns_never_when_no_stash() {
+        assert_eq!(StashPolicy::from_flags(false, true), StashPolicy::Never);
+    }
+
+    #[test]
+    fn stash_policy_from_flags_returns_always_when_stash() {
+        assert_eq!(StashPolicy::from_flags(true, false), StashPolicy::Always);
+    }
+
+    #[test]
+    fn stash_policy_from_flags_returns_prompt_when_neither() {
+        assert_eq!(StashPolicy::from_flags(false, false), StashPolicy::Prompt);
+    }
+
+    #[test]
+    fn stash_policy_from_flags_no_stash_takes_precedence() {
+        // clap enforces conflicts_with, but belt-and-suspenders: Never when no_stash=true
+        assert_eq!(StashPolicy::from_flags(false, true), StashPolicy::Never);
+    }
+
+    #[test]
+    fn prune_deprecation_warning_names_both_flags() {
+        colored::control::set_override(false);
+        let msg = prune_deprecation_warning();
+        assert!(msg.contains("--prune"), "must name --prune: {msg}");
+        assert!(msg.contains("--full"), "must name --full: {msg}");
     }
 }

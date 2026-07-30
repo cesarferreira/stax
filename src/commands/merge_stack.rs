@@ -1037,7 +1037,6 @@ fn run_post_merge_sync(quiet: bool) {
 
     if let Err(err) = crate::commands::sync::run(
         false, // restack
-        false, // prune
         false, // full
         false, // keep branch cleanup scoped to this stack merge
         false, // delete upstream-gone branches
@@ -1047,6 +1046,7 @@ fn run_post_merge_sync(quiet: bool) {
         quiet,
         false, // verbose
         false, // auto_stash_pop
+        crate::commands::sync::StashPolicy::Prompt,
         false, // json
         &[],
     ) && !quiet

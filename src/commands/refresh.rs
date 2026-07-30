@@ -46,7 +46,6 @@ pub fn run(
 
     commands::sync::run(
         true,  // restack
-        false, // prune
         false, // full
         false, // delete_merged
         false, // delete_upstream_gone
@@ -56,6 +55,7 @@ pub fn run(
         false, // quiet
         verbose,
         auto_stash_pop,
+        commands::sync::StashPolicy::Prompt,
         false, // json
         &submit_fetch_refs,
     )?;

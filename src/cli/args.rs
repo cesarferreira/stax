@@ -428,7 +428,7 @@ pub(crate) enum Commands {
         /// Also restack branches after syncing
         #[arg(short, long)]
         restack: bool,
-        /// No-op: kept for CLI compatibility (use `--full` for fetch --prune of all remote-tracking refs)
+        /// Deprecated no-op, accepted for compatibility (use `--full` for fetch --prune of all remote-tracking refs)
         #[arg(long)]
         prune: bool,
         /// Fetch all remote branches with `--prune` (slower; default is trunk-only fetch + ls-remote)
@@ -458,6 +458,12 @@ pub(crate) enum Commands {
         /// Auto-stash and auto-pop dirty target worktrees during restack operations
         #[arg(long)]
         auto_stash_pop: bool,
+        /// Automatically stash uncommitted changes before sync and restore them after
+        #[arg(long, conflicts_with = "no_stash")]
+        stash: bool,
+        /// Never stash uncommitted changes; bail if the working tree is dirty (wins over --force)
+        #[arg(long, conflicts_with = "stash")]
+        no_stash: bool,
         /// Output the sync result as JSON (implies non-interactive; exits non-zero on failure)
         #[arg(long, conflicts_with = "continue")]
         json: bool,

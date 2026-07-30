@@ -265,6 +265,13 @@ fn json_dirty_tree_emits_error_envelope_and_exits_nonzero() {
             .contains("dirty"),
         "error message must mention 'dirty'"
     );
+    assert!(
+        parsed["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("--stash"),
+        "error message must mention '--stash' so the user knows how to resolve"
+    );
 
     // stderr must be empty (no duplicated "Error:" line from anyhow propagation)
     let stderr = TestRepo::stderr(&out);
