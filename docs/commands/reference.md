@@ -27,6 +27,7 @@ st --trace status --json >/dev/null
 | `st sync` | `rs` | Pull trunk, delete merged branches (incl. squash merges), reparent children |
 | `st sync --restack` | `rs --restack` | `sync` **plus** rebase current stack onto updated parents |
 | `st sync --delete-upstream-gone` | | Also delete local branches whose upstream tracking ref is gone |
+| `st sync --dry-run` / `st sync --plan` | | Preview what sync would do — ls-remote only, no fetch/stash/ref-writes/push/metadata writes; always exits 0; composes with `--restack`, `--delete-upstream-gone`, `--safe`; `--force`, `--auto-stash-pop`, `--full`, and `--verbose` emit a warning and are otherwise ignored; `--continue` is rejected |
 | `st sweep` | | Classify all local branches as merged / upstream-gone / stale / active (read-only by default) |
 | `st sweep --delete` | | Delete merged branches (including tracked merged PRs) and upstream-gone branches with no unique work after confirmation |
 | `st sweep --delete --include-stale` | | Also delete stale branches (older than `--stale-days` / `branch.stale_days` config key) |
@@ -312,6 +313,7 @@ st completions elvish
 - `--restack` · `--restack --auto-stash-pop`
 - `--delete-upstream-gone`
 - `--force` / `--safe` / `--continue` / `--quiet` / `--verbose`
+- `--dry-run` (alias `--plan`) — read-only preview: probes the remote with ls-remote (no fetch, no FETCH_HEAD write), patches PR states in-memory, classifies the trunk transition, reports merged/upstream-gone candidates and per-branch disposition, previews the restack scope with conflict predictions; always exits 0. `--force`, `--auto-stash-pop`, `--full`, and `--verbose` are accepted but ignored (stderr warning emitted for each). `--continue` conflicts and is rejected by clap.
 - Sync is transactional and undoable via `st undo`. A single receipt covers trunk fast-forwards, deleted branch heads, deleted metadata refs, reparented children's metadata, and the optional restack phase. A no-op sync (nothing changed) writes no receipt so the previous undoable operation remains on the undo stack.
 - Imported branches from `st get` are remote-delete exempt: once they are detected as merged or upstream-gone, sync may delete the local support branch and metadata, but it will not push-delete the imported remote branch.
 - The completion footer summarizes the trunk commit, file, and line delta together with non-zero merged-cleanup, imported-update, and restack counts. It reuses sync's existing results and does not perform extra network or Git work.

@@ -422,6 +422,9 @@ pub(crate) enum Commands {
     /// Sync repo - pull trunk, delete merged branches
     #[command(visible_alias = "rs")]
     Sync {
+        /// Show what sync would do without making any changes (ls-remote only — no fetch, no stash, no ref writes)
+        #[arg(long = "dry-run", visible_alias = "plan", conflicts_with = "continue")]
+        dry_run: bool,
         /// Also restack branches after syncing
         #[arg(short, long)]
         restack: bool,
@@ -1835,6 +1838,7 @@ impl Commands {
                 CommandPolicy::RebaseControl
             }
             Commands::Undo { .. } | Commands::Redo { .. } => CommandPolicy::RebaseSafe,
+            Commands::Sync { dry_run: true, .. } => CommandPolicy::RebaseSafe,
             Commands::Restack {
                 r#continue: true, ..
             }

@@ -58,6 +58,7 @@ pub mod submit;
 pub(crate) mod submit_plan;
 pub mod sweep;
 pub mod sync;
+pub mod sync_plan;
 pub mod tmux;
 pub mod undo;
 pub mod upstack;

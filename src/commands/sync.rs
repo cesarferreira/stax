@@ -107,9 +107,9 @@ enum TrunkSummary {
 }
 
 #[derive(Debug, Clone)]
-struct BlockingWorktreeCleanup {
-    resolution: BranchDeleteResolution,
-    blockers: Vec<&'static str>,
+pub(super) struct BlockingWorktreeCleanup {
+    pub(super) resolution: BranchDeleteResolution,
+    pub(super) blockers: Vec<&'static str>,
 }
 
 impl BlockingWorktreeCleanup {
@@ -123,7 +123,7 @@ impl BlockingWorktreeCleanup {
             && self.blockers.iter().all(|blocker| *blocker == "dirty")
     }
 
-    fn blocker_summary(&self) -> Option<String> {
+    pub(super) fn blocker_summary(&self) -> Option<String> {
         if self.resolution.worktree.is_main {
             return Some("it is the main worktree".to_string());
         }
@@ -2445,7 +2445,10 @@ fn imported_branches_for_remote(
     Ok(imported)
 }
 
-fn imported_branches_for_cleanup(repo: &GitRepo, stack: &Stack) -> Result<HashSet<String>> {
+pub(super) fn imported_branches_for_cleanup(
+    repo: &GitRepo,
+    stack: &Stack,
+) -> Result<HashSet<String>> {
     let mut imported = HashSet::new();
     for branch in stack.branches.keys() {
         if branch == &stack.trunk {
@@ -2598,30 +2601,30 @@ fn prune_stale_remote_tracking_refs(
 }
 
 #[derive(Debug, Clone)]
-enum MergeType {
+pub(super) enum MergeType {
     Ancestor,    // Detected via git branch --merged
     SquashMerge, // Detected via patch-ID matching
 }
 
 #[derive(Debug, Clone)]
-struct MergedBranchInfo {
-    branch: String,
-    merge_type: MergeType,
+pub(super) struct MergedBranchInfo {
+    pub(super) branch: String,
+    pub(super) merge_type: MergeType,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PartialMergeReason {
+pub(super) enum PartialMergeReason {
     PrMerged,
     PrClosed,
     HistoryMerged,
 }
 
 #[derive(Debug, Clone)]
-struct PartiallyMergedNote {
-    branch: String,
-    pr_number: Option<u64>,
-    pr_label: PartialMergeReason,
-    extra_commits: usize,
+pub(super) struct PartiallyMergedNote {
+    pub(super) branch: String,
+    pub(super) pr_number: Option<u64>,
+    pub(super) pr_label: PartialMergeReason,
+    pub(super) extra_commits: usize,
 }
 
 fn should_spare_empty_never_submitted_branch(
@@ -2650,7 +2653,7 @@ fn should_spare_empty_never_submitted_branch(
     )?)
 }
 
-fn find_merged_branches(
+pub(super) fn find_merged_branches(
     repo: &GitRepo,
     workdir: &std::path::Path,
     stack: &Stack,
@@ -2922,7 +2925,7 @@ fn find_merged_branches(
 /// despite a merged/closed PR (or already-integrated history) because they
 /// carry local commits not present on trunk or any remote — turning what
 /// would otherwise be a silent skip into an explicit "not deleting" note.
-fn find_partially_merged_notes(
+pub(super) fn find_partially_merged_notes(
     repo: &GitRepo,
     workdir: &Path,
     stack: &Stack,
@@ -3035,7 +3038,10 @@ fn branch_name_from_merged_output(line: &str) -> &str {
         .unwrap_or(branch)
 }
 
-fn find_upstream_gone_branches(workdir: &std::path::Path, trunk: &str) -> Result<Vec<String>> {
+pub(super) fn find_upstream_gone_branches(
+    workdir: &std::path::Path,
+    trunk: &str,
+) -> Result<Vec<String>> {
     let output = Command::new("git")
         .args([
             "for-each-ref",
@@ -3067,7 +3073,7 @@ fn find_upstream_gone_branches(workdir: &std::path::Path, trunk: &str) -> Result
     Ok(branches.into_iter().collect())
 }
 
-fn local_branch_exists(workdir: &std::path::Path, branch: &str) -> bool {
+pub(super) fn local_branch_exists(workdir: &std::path::Path, branch: &str) -> bool {
     let local_ref = format!("refs/heads/{}", branch);
     Command::new("git")
         .args(["show-ref", "--verify", "--quiet", &local_ref])
@@ -3087,7 +3093,7 @@ fn git_ref_exists(workdir: &Path, refname: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn init_forge_client(
+pub(super) fn init_forge_client(
     repo: &GitRepo,
     config: &Config,
 ) -> Option<(tokio::runtime::Runtime, ForgeClient)> {
@@ -3122,7 +3128,7 @@ fn print_metadata_kept_note() {
     );
 }
 
-fn print_cleanup_candidates(kind: &str, branch_names: &[String]) {
+pub(super) fn print_cleanup_candidates(kind: &str, branch_names: &[String]) {
     let branch_word = if branch_names.len() == 1 {
         "branch"
     } else {
@@ -3140,7 +3146,7 @@ fn print_cleanup_candidates(kind: &str, branch_names: &[String]) {
     println!();
 }
 
-fn plan_blocking_worktree_cleanup(
+pub(super) fn plan_blocking_worktree_cleanup(
     repo: &GitRepo,
     branch: &str,
     force: bool,
@@ -3469,7 +3475,7 @@ fn checkout_branch_for_cleanup(
 /// ancestor that is not doomed and still exists locally, falling back to trunk.
 /// This prevents reparenting children onto a branch that is about to be deleted
 /// when multiple branches in the same stack have their upstream gone.
-fn resolve_fallback_parent_skipping_doomed(
+pub(super) fn resolve_fallback_parent_skipping_doomed(
     workdir: &std::path::Path,
     stack: &Stack,
     branch: &str,
@@ -3856,7 +3862,7 @@ fn summarize_trunk_transition(
     Ok(None)
 }
 
-fn resolve_ref_oid(workdir: &Path, reference: &str) -> Option<String> {
+pub(super) fn resolve_ref_oid(workdir: &Path, reference: &str) -> Option<String> {
     let output = Command::new("git")
         .args(["rev-parse", reference])
         .current_dir(workdir)
@@ -3893,7 +3899,7 @@ fn restore_stashed_changes(repo: &GitRepo, stashed: bool, quiet: bool) -> Result
     Ok(())
 }
 
-fn is_ancestor(workdir: &Path, ancestor: &str, descendant: &str) -> bool {
+pub(super) fn is_ancestor(workdir: &Path, ancestor: &str, descendant: &str) -> bool {
     Command::new("git")
         .args(["merge-base", "--is-ancestor", ancestor, descendant])
         .current_dir(workdir)
@@ -3902,7 +3908,7 @@ fn is_ancestor(workdir: &Path, ancestor: &str, descendant: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn count_commits_between(workdir: &Path, base: &str, head: &str) -> Result<usize> {
+pub(super) fn count_commits_between(workdir: &Path, base: &str, head: &str) -> Result<usize> {
     let output = Command::new("git")
         .args(["rev-list", "--count", &format!("{}..{}", base, head)])
         .current_dir(workdir)
@@ -3923,7 +3929,7 @@ fn count_commits_between(workdir: &Path, base: &str, head: &str) -> Result<usize
         .context("Failed to parse fetched trunk commit count")
 }
 
-fn diff_line_stats_between(
+pub(super) fn diff_line_stats_between(
     workdir: &Path,
     base: &str,
     head: &str,
