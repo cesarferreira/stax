@@ -1161,7 +1161,7 @@ impl GitRepo {
     }
 
     fn rebase_in_path(&self, cwd: &Path, onto: &str) -> Result<RebaseResult> {
-        self.rebase_with_args_in_path(cwd, &["rebase", onto])
+        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", onto])
     }
 
     fn rebase_onto_upstream_in_path(
@@ -1170,7 +1170,7 @@ impl GitRepo {
         onto: &str,
         upstream: &str,
     ) -> Result<RebaseResult> {
-        self.rebase_with_args_in_path(cwd, &["rebase", "--onto", onto, upstream])
+        self.rebase_with_args_in_path(cwd, &["rebase", "--empty=drop", "--onto", onto, upstream])
     }
 
     fn reset_hard_in_path(&self, cwd: &Path, target: &str) -> Result<()> {
@@ -1588,22 +1588,54 @@ Use --auto-stash-pop or stash/commit changes first.",
         self.rebase_branch_onto_with_provenance(branch, onto, "", auto_stash_pop)
     }
 
-    /// Continue a rebase after resolving conflicts
+    /// Continue a rebase after resolving conflicts.
+    ///
+    /// If `git rebase --continue` stops again because the next commit became
+    /// empty (not because of real conflicts), automatically `--skip` it and
+    /// keep going, so users aren't stuck on commits stax should have dropped.
     pub fn rebase_continue(&self) -> Result<RebaseResult> {
-        let status = Command::new("git")
-            .args(["rebase", "--continue"])
-            .env("GIT_EDITOR", "true")
-            .current_dir(self.workdir()?)
-            .status()
-            .context("Failed to run git rebase --continue")?;
+        let workdir = self.workdir()?.to_path_buf();
 
-        if status.success() {
-            Ok(RebaseResult::Success)
-        } else if self.rebase_in_progress()? {
-            Ok(RebaseResult::Conflict)
-        } else {
-            anyhow::bail!("git rebase --continue failed")
+        for _ in 0..1000 {
+            let output = Command::new("git")
+                .args(["rebase", "--continue"])
+                .env("GIT_EDITOR", "true")
+                .current_dir(&workdir)
+                .output()
+                .context("Failed to run git rebase --continue")?;
+
+            if output.status.success() {
+                return Ok(RebaseResult::Success);
+            }
+
+            if !self.rebase_in_progress()? {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                anyhow::bail!("git rebase --continue failed: {}", stderr);
+            }
+
+            if self.has_conflicts_in(&workdir)? {
+                return Ok(RebaseResult::Conflict);
+            }
+
+            let skip_output = Command::new("git")
+                .args(["rebase", "--skip"])
+                .env("GIT_EDITOR", "true")
+                .current_dir(&workdir)
+                .output()
+                .context("Failed to run git rebase --skip")?;
+
+            if !skip_output.status.success() && self.rebase_in_progress()? {
+                if self.has_conflicts_in(&workdir)? {
+                    return Ok(RebaseResult::Conflict);
+                }
+                let stderr = String::from_utf8_lossy(&skip_output.stderr)
+                    .trim()
+                    .to_string();
+                anyhow::bail!("git rebase --skip failed: {}", stderr);
+            }
         }
+
+        anyhow::bail!("git rebase --continue did not converge after 1000 iterations")
     }
 
     /// Check if a rebase is in progress
