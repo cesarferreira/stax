@@ -396,3 +396,89 @@ fn test_restack_continue_completes_remaining_branches() {
         stdout
     );
 }
+
+// =============================================================================
+// Bug 4: restack should drop become-empty commits instead of stopping
+// =============================================================================
+
+/// Build a two-commit feature branch off main where the first commit's change
+/// duplicates a change that later lands on main, so it becomes empty on rebase,
+/// while the second commit does not. Returns (feat_branch, upstream_sha, new_main_sha).
+fn create_empty_commit_scenario(repo: &TestRepo) -> (String, String, String) {
+    repo.create_file("fileA.txt", "content X\n");
+    repo.commit("Add fileA");
+
+    repo.run_stax(&["bc", "feat"]);
+    let feat_branch = repo.current_branch();
+    let upstream_sha = {
+        let output = repo.git(&["merge-base", "main", &feat_branch]);
+        TestRepo::stdout(&output).trim().to_string()
+    };
+
+    repo.create_file("fileB.txt", "content Y\n");
+    repo.commit("Add fileB");
+
+    repo.create_file("fileC.txt", "content Z\n");
+    repo.commit("Add fileC");
+
+    repo.run_stax(&["checkout", "main"]);
+    repo.create_file("fileB.txt", "content Y\n");
+    repo.commit("Add fileB on main");
+    let new_main_sha = {
+        let output = repo.git(&["rev-parse", "main"]);
+        TestRepo::stdout(&output).trim().to_string()
+    };
+
+    repo.run_stax(&["checkout", &feat_branch]);
+
+    (feat_branch, upstream_sha, new_main_sha)
+}
+
+#[test]
+fn test_restack_drops_empty_commit_instead_of_stopping() {
+    let repo = TestRepo::new();
+    let (_feat_branch, _upstream_sha, _new_main_sha) = create_empty_commit_scenario(&repo);
+
+    let output = repo.run_stax(&["restack", "--yes", "--quiet"]);
+    output.assert_success();
+
+    assert!(
+        !repo.has_rebase_in_progress(),
+        "Expected no rebase in progress after restack, output: {}",
+        TestRepo::stdout(&output)
+    );
+
+    let file_c = std::fs::read_to_string(repo.path().join("fileC.txt"))
+        .expect("fileC.txt should exist on feat after restack");
+    assert_eq!(file_c, "content Z\n");
+}
+
+#[test]
+fn test_continue_auto_skips_empty_commit() {
+    let repo = TestRepo::new();
+    let (feat_branch, upstream_sha, new_main_sha) = create_empty_commit_scenario(&repo);
+
+    let rebase_output = repo.git(&[
+        "rebase",
+        "--empty=stop",
+        "--onto",
+        &new_main_sha,
+        &upstream_sha,
+        &feat_branch,
+    ]);
+    let _ = rebase_output;
+
+    assert!(
+        repo.has_rebase_in_progress(),
+        "Expected rebase to stop on the become-empty commit"
+    );
+
+    let output = repo.run_stax(&["continue"]);
+
+    assert!(
+        !repo.has_rebase_in_progress(),
+        "Expected `st continue` to auto-skip the empty commit and finish, output: {}",
+        TestRepo::stdout(&output)
+    );
+    output.assert_success();
+}
