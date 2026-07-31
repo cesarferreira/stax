@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.102.1] - 2026-07-31
+
+### 💼 Other
+
+- Let setup and skills update target selected agent harnesses only. ([#727](https://github.com/cesarferreira/stax/issues/727))
 ## [0.102.0] - 2026-07-30
 
 ### 🚀 Features
@@ -29,6 +34,10 @@ All notable changes to this project will be documented in this file.
 - *(sync)* Extract SyncContext and split run() into phase methods ([#711](https://github.com/cesarferreira/stax/issues/711))
 - *(sync)* Dedupe trunk fast-forward ladders into one helper ([#712](https://github.com/cesarferreira/stax/issues/712))
 - *(sync)* Dedupe merged and upstream-gone cleanup pipelines ([#713](https://github.com/cesarferreira/stax/issues/713))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.101.1] - 2026-07-30
 
 ### 🚀 Features
