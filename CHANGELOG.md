@@ -2,11 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.102.2] - 2026-07-31
+
+### 🐛 Bug Fixes
+
+- *(restack)* Drop become-empty commits instead of erroring ([#728](https://github.com/cesarferreira/stax/issues/728))
 ## [0.102.1] - 2026-07-31
 
 ### 💼 Other
 
 - Let setup and skills update target selected agent harnesses only. ([#727](https://github.com/cesarferreira/stax/issues/727))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.102.0] - 2026-07-30
 
 ### 🚀 Features
