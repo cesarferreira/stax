@@ -246,6 +246,7 @@ fn test_refresh_help() {
     assert!(stdout.contains("verbose"));
     assert!(stdout.contains("--yes"));
     assert!(stdout.contains("--no-prompt"));
+    assert!(stdout.contains("--all-stacks"));
 }
 
 #[test]
