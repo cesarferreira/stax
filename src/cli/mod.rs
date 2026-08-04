@@ -447,6 +447,7 @@ pub fn run() -> Result<()> {
             yes,
             no_prompt,
             auto_stash_pop,
+            all_stacks,
         } => commands::refresh::run(
             no_pr,
             no_submit,
@@ -456,6 +457,7 @@ pub fn run() -> Result<()> {
             yes,
             no_prompt,
             auto_stash_pop,
+            all_stacks,
         ),
         Commands::Checkout {
             branch,

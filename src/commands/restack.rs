@@ -101,6 +101,31 @@ pub(crate) fn resume_after_rebase(
     )
 }
 
+pub(crate) fn run_stack_containing(
+    repo: &GitRepo,
+    branch: &str,
+    quiet: bool,
+    auto_stash_pop: bool,
+) -> Result<()> {
+    let session = RepositorySession::open(repo.workdir()?)?;
+    let options = RestackExecutionOptions {
+        scope: RestackScope::StackContaining(branch.to_string()),
+        auto_stash: auto_stash_pop,
+        restore_branch: None,
+        completed_from_receipt: HashSet::new(),
+    };
+    let receipt = match session.restack_with_options(options, &mut NoopOperationReporter) {
+        Ok(receipt) => receipt,
+        Err(error) if error.kind == OperationErrorKind::RebaseConflict => {
+            render_restack_error(repo, &error, quiet);
+            return Err(ConflictStopped.into());
+        }
+        Err(error) => return Err(operation_error(error)),
+    };
+    render_restack_receipt(&receipt, quiet);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_adapter(
     repo: &GitRepo,

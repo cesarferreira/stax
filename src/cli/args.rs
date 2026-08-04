@@ -557,6 +557,9 @@ pub(crate) enum Commands {
         /// Auto-stash and auto-pop dirty target worktrees during sync/restack
         #[arg(long)]
         auto_stash_pop: bool,
+        /// Refresh every stack in the repo, not just the current one
+        #[arg(long)]
+        all_stacks: bool,
     },
 
     /// Checkout a branch in the stack
