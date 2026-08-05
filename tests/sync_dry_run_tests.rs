@@ -42,6 +42,28 @@ fn stash_count(repo: &TestRepo) -> usize {
         .count()
 }
 
+/// Snapshot remote-tracking refs as refname/OID pairs so dry-run tests can
+/// verify that probing origin did not update local remote state.
+fn remote_tracking_refs(repo: &TestRepo) -> String {
+    let out = repo.git(&[
+        "for-each-ref",
+        "--format=%(refname) %(objectname)",
+        "refs/remotes/origin",
+    ]);
+    assert!(
+        out.status.success(),
+        "failed to snapshot remote-tracking refs: {}",
+        TestRepo::stderr(&out)
+    );
+    TestRepo::stdout(&out)
+}
+
+/// Snapshot FETCH_HEAD, preserving both its bytes and whether Git has created
+/// it yet. `git ls-remote` must not change either state.
+fn fetch_head(repo: &TestRepo) -> Option<Vec<u8>> {
+    std::fs::read(repo.path().join(".git/FETCH_HEAD")).ok()
+}
+
 // ─── Test (a) ────────────────────────────────────────────────────────────────
 // --dry-run reports a merged branch but deletes nothing: branch still exists,
 // metadata ref still resolves, no receipt written, git status unchanged.
@@ -131,6 +153,46 @@ fn dry_run_clean_repo_says_no_changes() {
         !stdout.contains("would delete"),
         "--dry-run clean repo should not say 'would delete'; stdout:\n{stdout}"
     );
+}
+
+// ─── Test (b.1) ──────────────────────────────────────────────────────────────
+// Remote discovery must use ls-remote, not fetch: both text and JSON plans leave
+// FETCH_HEAD and remote-tracking refs untouched even when origin/main advances.
+
+#[test]
+fn dry_run_remote_probe_does_not_update_fetch_head_or_tracking_refs() {
+    let repo = TestRepo::new_with_remote();
+    let tracking_before = remote_tracking_refs(&repo);
+    let fetch_head_before = fetch_head(&repo);
+
+    // Advance origin without fetching locally. A fetch-based implementation
+    // would update origin/main and FETCH_HEAD here.
+    repo.simulate_remote_commit("remote-only.txt", "remote", "remote-only commit");
+
+    for args in [
+        ["sync", "--dry-run"].as_slice(),
+        ["sync", "--dry-run", "--json"].as_slice(),
+    ] {
+        let out = repo.run_stax(args);
+        assert!(
+            out.status.success(),
+            "{} should succeed: {}",
+            args.join(" "),
+            TestRepo::stderr(&out)
+        );
+        assert_eq!(
+            fetch_head(&repo),
+            fetch_head_before,
+            "{} must not modify .git/FETCH_HEAD",
+            args.join(" ")
+        );
+        assert_eq!(
+            remote_tracking_refs(&repo),
+            tracking_before,
+            "{} must not update refs/remotes/origin/*",
+            args.join(" ")
+        );
+    }
 }
 
 // ─── Test (c) ────────────────────────────────────────────────────────────────
