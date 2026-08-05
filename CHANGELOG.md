@@ -2,11 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.103.0] - 2026-08-05
+
+### 🚀 Features
+
+- *(refresh)* Add --all-stacks to refresh every stack in one pass ([#730](https://github.com/cesarferreira/stax/issues/730))
+
+### 🧪 Testing
+
+- Lock down sync dry-run no-fetch guarantee ([#732](https://github.com/cesarferreira/stax/issues/732))
 ## [0.102.2] - 2026-07-31
 
 ### 🐛 Bug Fixes
 
 - *(restack)* Drop become-empty commits instead of erroring ([#728](https://github.com/cesarferreira/stax/issues/728))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.102.1] - 2026-07-31
 
 ### 💼 Other
