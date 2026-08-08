@@ -7809,7 +7809,7 @@ mod forge_mock_tests {
             .collect()
     }
 
-    fn assert_no_gitlab_absorb_mutations(requests: &[wiremock::Request]) {
+    fn assert_no_gitlab_comment_or_close_mutations(requests: &[wiremock::Request]) {
         assert!(
             requests.iter().all(|request| {
                 !request.url.path().contains("/notes")
@@ -8572,17 +8572,6 @@ mod forge_mock_tests {
             .respond_with(tip_merge_response)
             .mount(mock_server)
             .await;
-
-        for number in [601, 602] {
-            Mock::given(method("POST"))
-                .and(path(format!("/repos/test/repo/issues/{}/comments", number)))
-                .respond_with(
-                    ResponseTemplate::new(201)
-                        .set_body_json(issue_comment_fixture(9000 + number, "absorbed")),
-                )
-                .mount(mock_server)
-                .await;
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -12360,7 +12349,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_stack_default_retargets_selected_range_before_one_merge() {
+    async fn test_merge_stack_default_preserves_github_merged_state() {
         let fixture = setup_three_branch_stack_merge_fixture(
             StackMergeForge::GitHub,
             StackMergeScenario::LowerMerged,
@@ -12427,6 +12416,112 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
+    async fn test_merge_stack_rejects_github_rewriting_methods_before_mutation() {
+        for (method_name, range_flag) in [("rebase", "--when-ready"), ("squash", "--full")] {
+            let fixture = setup_three_branch_stack_merge_fixture(
+                StackMergeForge::GitHub,
+                StackMergeScenario::LowerPending,
+            )
+            .await;
+            let output = run_stax_with_env(
+                &fixture.repo,
+                fixture.home.path(),
+                &[
+                    "merge",
+                    "--stack",
+                    "--method",
+                    method_name,
+                    range_flag,
+                    "--yes",
+                    "--no-delete",
+                    "--no-sync",
+                ],
+            );
+            let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+            assert!(!output.status.success(), "{combined}");
+            assert!(combined.contains(method_name), "{combined}");
+            assert!(
+                combined
+                    .contains("lower PRs in a multi-PR range cannot reach genuine merged state"),
+                "{combined}"
+            );
+            assert!(
+                combined.contains("stax merge --stack")
+                    && combined.contains("stax merge --stack --method merge"),
+                "{combined}"
+            );
+
+            let requests = fixture.mock_server.received_requests().await.unwrap();
+            assert!(
+                requests.iter().all(|request| {
+                    !matches!(request.method.as_str(), "PATCH" | "POST" | "PUT" | "DELETE")
+                }),
+                "requests: {:?}",
+                requests
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_stack_allows_single_github_rewriting_merge() {
+        let fixture = setup_three_branch_stack_merge_fixture(
+            StackMergeForge::GitHub,
+            StackMergeScenario::LowerPending,
+        )
+        .await;
+        let branch = fixture.repo.current_branch();
+        write_branch_pr_metadata(&fixture.repo, &branch, "main", 603, Some(false));
+
+        let output = run_stax_with_env(
+            &fixture.repo,
+            fixture.home.path(),
+            &[
+                "merge",
+                "--stack",
+                "--method",
+                "rebase",
+                "--yes",
+                "--no-delete",
+                "--no-sync",
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "{}{}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+
+        let requests = fixture.mock_server.received_requests().await.unwrap();
+        let merges = find_request_indices(&requests, "PUT", "/repos/test/repo/pulls/603/merge");
+        assert_eq!(merges.len(), 1, "requests: {:?}", requests);
+        let payload: Value = serde_json::from_slice(&requests[merges[0]].body).unwrap();
+        assert_eq!(payload["merge_method"], "rebase");
+        for number in [601, 602] {
+            assert!(
+                find_request_indices(
+                    &requests,
+                    "POST",
+                    &format!("/repos/test/repo/issues/{}/comments", number)
+                )
+                .is_empty()
+            );
+            assert!(
+                find_request_indices(
+                    &requests,
+                    "PATCH",
+                    &format!("/repos/test/repo/pulls/{}", number)
+                )
+                .iter()
+                .all(|index| {
+                    serde_json::from_slice::<Value>(&requests[*index].body).unwrap()["state"]
+                        != "closed"
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_merge_stack_preserving_timeout_leaves_lower_prs_open() {
         let fixture = setup_three_branch_stack_merge_fixture(
             StackMergeForge::GitHub,
@@ -12476,83 +12571,6 @@ mod forge_mock_tests {
                             != "closed"
                     })
             );
-        }
-    }
-
-    #[tokio::test]
-    async fn test_merge_stack_rewriting_methods_close_lower_pr_without_polling() {
-        for method_name in ["rebase", "squash"] {
-            let fixture = setup_three_branch_stack_merge_fixture(
-                StackMergeForge::GitHub,
-                StackMergeScenario::LowerPending,
-            )
-            .await;
-            let args = [
-                "merge",
-                "--stack",
-                "--method",
-                method_name,
-                "--yes",
-                "--no-delete",
-                "--no-sync",
-            ];
-
-            let merge_output = run_stax_with_env(&fixture.repo, fixture.home.path(), &args);
-            assert!(
-                merge_output.status.success(),
-                "{} merge --stack failed: {}\n{}",
-                method_name,
-                TestRepo::stderr(&merge_output),
-                TestRepo::stdout(&merge_output)
-            );
-            assert!(
-                TestRepo::stdout(&merge_output).contains(&format!(
-                    "{} rewrites commit SHAs; closed as absorbed without waiting",
-                    method_name
-                )),
-                "{}",
-                TestRepo::stdout(&merge_output)
-            );
-
-            let requests = fixture
-                .mock_server
-                .received_requests()
-                .await
-                .expect("request recording enabled");
-            let merge_idx =
-                find_request_index(&requests, "PUT", "/repos/test/repo/pulls/603/merge");
-            let merge_payload: Value = serde_json::from_slice(&requests[merge_idx].body).unwrap();
-            assert_eq!(merge_payload["merge_method"], method_name);
-            assert_eq!(merge_payload["sha"], fixture.tip_sha);
-
-            for number in [601, 602] {
-                let pull_path = format!("/repos/test/repo/pulls/{}", number);
-                assert_eq!(
-                    find_request_indices(&requests, "GET", &pull_path).len(),
-                    1,
-                    "{} unexpectedly polled PR #{}: {:?}",
-                    method_name,
-                    number,
-                    requests
-                );
-                let comment_idx = find_request_index(
-                    &requests,
-                    "POST",
-                    &format!("/repos/test/repo/issues/{}/comments", number),
-                );
-                let close_idx = find_request_index(&requests, "PATCH", &pull_path);
-                assert!(merge_idx < comment_idx && comment_idx < close_idx);
-
-                let close_payload: Value =
-                    serde_json::from_slice(&requests[close_idx].body).unwrap();
-                assert_eq!(close_payload["state"], "closed");
-                let comment_payload: Value =
-                    serde_json::from_slice(&requests[comment_idx].body).unwrap();
-                assert!(comment_payload["body"].as_str().unwrap().contains(&format!(
-                    "merged with {}, which rewrites commit SHAs",
-                    method_name
-                )));
-            }
         }
     }
 
@@ -12639,7 +12657,7 @@ mod forge_mock_tests {
     }
 
     #[tokio::test]
-    async fn test_merge_stack_gitlab_retargets_range_and_merges_only_tip() {
+    async fn test_merge_stack_default_preserves_gitlab_merged_state() {
         let fixture = setup_three_branch_stack_merge_fixture(
             StackMergeForge::GitLab,
             StackMergeScenario::LowerMerged,
@@ -12702,7 +12720,7 @@ mod forge_mock_tests {
             assert_eq!(gets.len(), 4, "requests: {:?}", requests);
             assert!(gets[2] < merge_idx && merge_idx < gets[3]);
         }
-        assert_no_gitlab_absorb_mutations(&requests);
+        assert_no_gitlab_comment_or_close_mutations(&requests);
     }
 
     #[tokio::test]
@@ -12732,7 +12750,7 @@ mod forge_mock_tests {
         );
 
         let requests = fixture.mock_server.received_requests().await.unwrap();
-        assert_no_gitlab_absorb_mutations(&requests);
+        assert_no_gitlab_comment_or_close_mutations(&requests);
     }
 
     #[tokio::test]
@@ -12764,7 +12782,7 @@ mod forge_mock_tests {
             .len(),
             1
         );
-        assert_no_gitlab_absorb_mutations(&requests);
+        assert_no_gitlab_comment_or_close_mutations(&requests);
     }
 
     #[tokio::test]

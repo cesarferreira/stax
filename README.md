@@ -254,7 +254,10 @@ st merge --all            # merge the whole stack regardless of position
 
 GitLab stack merge checks project merge settings first, sends `squash: false`,
 and accepts only the default preserving method; explicit stack `rebase` or
-`squash` is rejected. Gitea/Forgejo stack merge is not supported.
+`squash` is rejected. GitHub also rejects those rewriting methods for multi-PR
+stack ranges before mutation because lower PRs could not reach merged state; a
+single selected GitHub PR may still use them. Gitea/Forgejo stack merge is not
+supported.
 
 → [Merge and cascade](docs/workflows/merge-and-cascade.md)
 

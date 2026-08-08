@@ -1,8 +1,8 @@
 //! Stack merge through one forge pull/merge request.
 //!
 //! Validate the selected tip once, prepare the selected item bases, merge the
-//! tip through the forge API, then reconcile selected lower items as merged,
-//! pending, or (on GitHub rewriting methods) absorbed.
+//! tip through the forge API, then reconcile selected lower items as merged or
+//! pending.
 
 use crate::commands::merge_shared::{
     PrBaseUpdate, WaitResult, print_header, print_header_success,
@@ -59,7 +59,6 @@ struct ChangedPrBase {
 enum DownstackOutcome {
     IndirectlyMerged,
     Pending,
-    Absorbed,
 }
 
 /// How the stack-merge confirmation should be resolved.
@@ -160,6 +159,16 @@ pub fn run(
             println!("{}", "No branches to stack merge.".yellow());
         }
         return Ok(());
+    }
+
+    if forge == ForgeType::GitHub
+        && scope.to_merge.len() > 1
+        && !merge_method_preserves_commit_shas(method)
+    {
+        anyhow::bail!(
+            "GitHub stack merge method '{}' rewrites commit SHAs, so lower PRs in a multi-PR range cannot reach genuine merged state.\n\nUse `stax merge --stack` or `stax merge --stack --method merge`.",
+            method.as_str()
+        );
     }
 
     let rt = tokio::runtime::Runtime::new()?;
@@ -281,7 +290,7 @@ pub fn run(
     rt.block_on(async { client.preflight_stack_merge(method).await })?;
 
     let changed_bases =
-        prepare_selected_pr_bases(&rt, &client, &resolved, &scope.trunk, method, quiet, forge)?;
+        prepare_selected_pr_bases(&rt, &client, &resolved, &scope.trunk, quiet, forge)?;
 
     if let Err(e) = ensure_trunk_unchanged(&repo, &remote_info, &scope.trunk, &trunk_sha) {
         rollback_changed_pr_bases(&rt, &client, &changed_bases, quiet, forge);
@@ -309,8 +318,7 @@ pub fn run(
     }
     LiveTimer::maybe_finish_ok(merge_timer, "done");
 
-    let downstack_outcomes =
-        reconcile_downstack_prs(&rt, &client, &resolved, tip, method, quiet, forge)?;
+    let downstack_outcomes = reconcile_downstack_prs(&rt, &client, &resolved, quiet, forge)?;
 
     rebase_remaining_branches(
         &repo,
@@ -367,13 +375,6 @@ pub fn run(
                         format!(
                             "pending {} indirect-merge detection; left open",
                             forge_name(forge)
-                        ),
-                    ),
-                    DownstackOutcome::Absorbed => (
-                        "✓".green().to_string(),
-                        format!(
-                            "closed as absorbed ({} rewrites commit SHAs)",
-                            method.as_str()
                         ),
                     ),
                 }
@@ -740,18 +741,12 @@ fn prepare_selected_pr_bases(
     client: &ForgeClient,
     prs: &[ResolvedStackPr],
     trunk: &str,
-    method: MergeMethod,
     quiet: bool,
     forge: ForgeType,
 ) -> Result<Vec<ChangedPrBase>> {
-    let first = if merge_method_preserves_commit_shas(method) {
-        0
-    } else {
-        prs.len().saturating_sub(1)
-    };
     let mut changed = Vec::new();
 
-    for pr in &prs[first..] {
+    for pr in prs {
         let timer = LiveTimer::maybe_new(
             !quiet,
             &format!(
@@ -828,72 +823,46 @@ fn reconcile_downstack_prs(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
     prs: &[ResolvedStackPr],
-    tip: &ResolvedStackPr,
-    method: MergeMethod,
     quiet: bool,
     forge: ForgeType,
 ) -> Result<Vec<(u64, DownstackOutcome)>> {
     let mut outcomes = Vec::new();
 
-    for pr in prs.iter().filter(|pr| pr.pr_number != tip.pr_number) {
-        let message = if merge_method_preserves_commit_shas(method) {
-            format!(
-                "Waiting for downstack {} to be marked indirectly merged...",
-                item_label(forge, pr.pr_number)
-            )
-        } else {
-            format!(
-                "Closing downstack {} as absorbed ({} rewrites commit SHAs)...",
-                item_label(forge, pr.pr_number),
-                method.as_str()
-            )
-        };
+    for pr in prs.iter().take(prs.len().saturating_sub(1)) {
+        let message = format!(
+            "Waiting for downstack {} to be marked indirectly merged...",
+            item_label(forge, pr.pr_number)
+        );
         let timer = LiveTimer::maybe_new(!quiet, &message);
-        if merge_method_preserves_commit_shas(method) {
-            match wait_for_downstack_pr_state(rt, client, pr.pr_number)? {
-                DownstackPrState::Merged => {
-                    outcomes.push((pr.pr_number, DownstackOutcome::IndirectlyMerged));
-                    LiveTimer::maybe_finish_ok(
-                        timer,
-                        &format!("merged indirectly by {}", forge_name(forge)),
-                    );
-                }
-                DownstackPrState::Open => {
-                    outcomes.push((pr.pr_number, DownstackOutcome::Pending));
-                    LiveTimer::maybe_finish_err(timer, "still open; indirect merge pending");
-                    if !quiet {
-                        println!(
-                            "  {} {} remains open; {} may still mark it indirectly merged asynchronously.",
-                            "warning:".yellow().bold(),
-                            item_label(forge, pr.pr_number),
-                            forge_name(forge)
-                        );
-                    }
-                }
-                DownstackPrState::Closed => {
-                    LiveTimer::maybe_finish_err(timer, "closed without being merged");
-                    anyhow::bail!(
-                        "Downstack {} is closed without being merged; {} cannot mark a closed item indirectly merged",
+        match wait_for_downstack_pr_state(rt, client, pr.pr_number)? {
+            DownstackPrState::Merged => {
+                outcomes.push((pr.pr_number, DownstackOutcome::IndirectlyMerged));
+                LiveTimer::maybe_finish_ok(
+                    timer,
+                    &format!("merged indirectly by {}", forge_name(forge)),
+                );
+            }
+            DownstackPrState::Open => {
+                outcomes.push((pr.pr_number, DownstackOutcome::Pending));
+                LiveTimer::maybe_finish_err(timer, "still open; indirect merge pending");
+                if !quiet {
+                    println!(
+                        "  {} {} remains open; {} may still mark it indirectly merged asynchronously.",
+                        "warning:".yellow().bold(),
                         item_label(forge, pr.pr_number),
                         forge_name(forge)
                     );
                 }
             }
-            continue;
+            DownstackPrState::Closed => {
+                LiveTimer::maybe_finish_err(timer, "closed without being merged");
+                anyhow::bail!(
+                    "Downstack {} is closed without being merged; {} cannot mark a closed item indirectly merged",
+                    item_label(forge, pr.pr_number),
+                    forge_name(forge)
+                );
+            }
         }
-
-        debug_assert_eq!(forge, ForgeType::GitHub);
-        let comment = downstack_absorbed_comment(tip.pr_number, method);
-        rt.block_on(async { client.create_issue_comment(pr.pr_number, &comment).await })?;
-        rt.block_on(async { client.close_pr(pr.pr_number).await })?;
-        outcomes.push((pr.pr_number, DownstackOutcome::Absorbed));
-        LiveTimer::maybe_finish_ok(
-            timer,
-            &format!(
-                "{} rewrites commit SHAs; closed as absorbed without waiting",
-                method.as_str()
-            ),
-        );
     }
 
     Ok(outcomes)
@@ -983,14 +952,6 @@ fn rebase_remaining_branches(
     }
 
     Ok(())
-}
-
-fn downstack_absorbed_comment(tip_pr_number: u64, method: MergeMethod) -> String {
-    format!(
-        "Absorbed into stack merge of #{}. The selected tip was merged with {}, which rewrites commit SHAs, so GitHub cannot mark this PR indirectly merged.",
-        tip_pr_number,
-        method.as_str()
-    )
 }
 
 fn cleanup_local_stack(repo: &GitRepo, scope: &StackMergeScope, quiet: bool) -> Result<()> {
@@ -1108,15 +1069,10 @@ fn print_stack_preview(
     for (idx, pr) in prs.iter().enumerate() {
         let marker = if idx + 1 == prs.len() {
             format!("(selected tip, merged with {})", method.as_str())
-        } else if merge_method_preserves_commit_shas(method) {
+        } else {
             format!(
                 "(targeted to trunk; indirectly merged by {} or left pending)",
                 forge_name(forge)
-            )
-        } else {
-            format!(
-                "(closed as absorbed; {} rewrites commit SHAs)",
-                method.as_str()
             )
         };
         println!(
@@ -1159,7 +1115,7 @@ fn print_stack_preview(
             "(default for --stack; preserves commit SHAs; lower items may merge indirectly)"
                 .dimmed()
         } else {
-            "(explicit; rewrites commit SHAs; lower PRs close as absorbed)".dimmed()
+            "(explicit; rewrites commit SHAs)".dimmed()
         }
     );
     if when_ready {
@@ -1387,14 +1343,6 @@ mod tests {
         );
         assert_eq!(tip_blocker(&status(CiStatus::Failure)), Some("CI failed"));
         assert_eq!(tip_blocker(&status(CiStatus::Success)), None);
-    }
-
-    #[test]
-    fn downstack_comment_links_to_tip() {
-        assert_eq!(
-            downstack_absorbed_comment(42, MergeMethod::Rebase),
-            "Absorbed into stack merge of #42. The selected tip was merged with rebase, which rewrites commit SHAs, so GitHub cannot mark this PR indirectly merged."
-        );
     }
 
     #[test]
