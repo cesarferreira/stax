@@ -73,6 +73,24 @@ fn plain_refresh_leaves_other_stacks_untouched() {
 }
 
 #[test]
+fn all_stacks_submits_every_independent_stack_without_prs() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+    let (stack_a, stack_b) = build_two_stacks(&repo);
+
+    repo.run_stax(&["refresh", "--all-stacks", "--no-pr", "--force", "--yes"])
+        .assert_success();
+
+    let remote_branches = repo.list_remote_branches();
+    for branch in stack_a.iter().chain(stack_b.iter()) {
+        assert!(
+            remote_branches.contains(branch),
+            "expected {branch} to be submitted; remote branches: {remote_branches:?}"
+        );
+    }
+}
+
+#[test]
 fn all_stacks_restores_original_branch() {
     let repo = TestRepo::new_with_remote();
     let (stack_a, _stack_b) = build_two_stacks(&repo);
