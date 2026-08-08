@@ -293,7 +293,7 @@ stax merge --ds                    # Alias for --downstack-only
 stax merge --dry-run               # Preview merge plan only
 stax merge --method squash         # squash|merge|rebase
 stax merge --stack                 # GitHub/GitLab only: target selected items to trunk, merge the tip, preserve merged state
-stax merge --stack --method rebase # GitHub only: rewrite SHAs and absorb lower PRs (GitLab rejects rebase/squash)
+stax merge --stack --method rebase # Single-PR GitHub only; multi-PR GitHub and all GitLab ranges reject rewriting methods
 stax merge --stack --downstack-only # Stack-merge ancestors below current; keep current open
 stax merge --stack --full          # Stack-merge full stack even from the middle
 stax merge --stack --when-ready    # Wait only for selected tip PR/MR readiness before the one-item stack merge
