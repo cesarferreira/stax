@@ -553,7 +553,8 @@ impl GitHubClient {
             .octocrab
             .get(&url, None::<&()>)
             .await
-            .context("Failed to list pull requests")?;
+            .context("Failed to list pull requests")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         Ok(response
             .into_iter()
@@ -592,7 +593,8 @@ impl GitHubClient {
                 .octocrab
                 .get(&url, None::<&()>)
                 .await
-                .context("Failed to list issues")?;
+                .context("Failed to list issues")
+                .map_err(|e| self.enrich_api_error(e))?;
 
             let fetched = response.len();
 
@@ -1329,6 +1331,66 @@ mod tests {
         assert!(
             err_msg.contains("token is expired or lacks access"),
             "Expected auth hint in 404 error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_open_pull_requests_404_gives_auth_hint() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/pulls"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found",
+                "documentation_url": "https://docs.github.com/rest"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.list_open_pull_requests(30).await;
+
+        assert!(result.is_err(), "Expected error on 404");
+        let err_msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            err_msg.contains("token is expired or lacks access"),
+            "Expected auth hint in 404 error, got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("stax auth --from-gh"),
+            "Expected auth remediation hint in 404 error, got: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_open_issues_404_gives_auth_hint() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found",
+                "documentation_url": "https://docs.github.com/rest"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.list_open_issues(30).await;
+
+        assert!(result.is_err(), "Expected error on 404");
+        let err_msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            err_msg.contains("token is expired or lacks access"),
+            "Expected auth hint in 404 error, got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("stax auth --from-gh"),
+            "Expected auth remediation hint in 404 error, got: {}",
             err_msg
         );
     }

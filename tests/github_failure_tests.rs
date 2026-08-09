@@ -68,6 +68,12 @@ async fn pr_list_surfaces_rate_limit_error() {
     output
         .assert_failure()
         .assert_stderr_contains("API rate limit exceeded");
+    let stderr = TestRepo::stderr(&output);
+    assert!(
+        !stderr.contains("token is expired or lacks access"),
+        "Rate-limit (403) errors should not get the auth hint, got: {}",
+        stderr
+    );
 }
 
 #[tokio::test]
@@ -90,7 +96,34 @@ async fn pr_list_surfaces_missing_repository() {
     output
         .assert_failure()
         .assert_stderr_contains("Failed to list pull requests")
-        .assert_stderr_contains("Not Found");
+        .assert_stderr_contains("Not Found")
+        .assert_stderr_contains("token is expired or lacks access")
+        .assert_stderr_contains("stax auth --from-gh");
+}
+
+#[tokio::test]
+async fn issue_list_surfaces_missing_repository() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = TempDir::new().unwrap();
+    let repo = setup_repo(home.path(), &mock_server.uri());
+
+    Mock::given(method("GET"))
+        .and(path("/repos/test/repo/issues"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "message": "Not Found",
+            "documentation_url": "https://docs.github.com/rest"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let output = repo.run_stax_with_env(&["issue", "list"], &env_with_auth(&home));
+    output
+        .assert_failure()
+        .assert_stderr_contains("Failed to list issues")
+        .assert_stderr_contains("Not Found")
+        .assert_stderr_contains("token is expired or lacks access")
+        .assert_stderr_contains("stax auth --from-gh");
 }
 
 #[tokio::test]
