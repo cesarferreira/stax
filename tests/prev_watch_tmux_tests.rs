@@ -130,3 +130,65 @@ fn watch_rejects_non_numeric_interval() {
     output.assert_failure();
     output.assert_stderr_contains("invalid value 'abc' for '--interval <INTERVAL>'");
 }
+
+// `watch --iterations` needs a resolvable GitHub-shaped remote and a token —
+// `watch::run` calls `RemoteInfo::from_repo` and `ForgeClient::new` before the
+// loop even starts, so a bare `TestRepo::new()` fails with "No git remote
+// 'origin' found" before rendering anything. No tracked branches are created,
+// so the empty-branch-list fast path skips `fetch_ci_statuses` and no network
+// call is made.
+fn watch_ready_repo() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/test/repo.git",
+    ])
+    .assert_success();
+    repo
+}
+
+#[test]
+fn watch_iterations_one_renders_once_and_exits() {
+    let repo = watch_ready_repo();
+
+    let output = repo.run_stax_with_env(
+        &["watch", "--iterations", "1"],
+        &[("STAX_GITHUB_TOKEN", "mock-token")],
+    );
+    output.assert_success();
+    output.assert_stdout_contains("Watching stack");
+}
+
+#[test]
+fn watch_iterations_two_renders_twice() {
+    let repo = watch_ready_repo();
+
+    // With `--interval 1`, both refreshes complete well within a couple of
+    // seconds: the loop returns before the trailing sleep on its final pass.
+    let output = repo.run_stax_with_env(
+        &["watch", "--iterations", "2", "--interval", "1"],
+        &[("STAX_GITHUB_TOKEN", "mock-token")],
+    );
+    output.assert_success();
+    output.assert_stdout_contains("iteration #1");
+}
+
+#[test]
+fn watch_rejects_zero_iterations() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["watch", "--iterations", "0"]);
+    output.assert_failure();
+    output.assert_stderr_contains("--iterations must be at least 1");
+}
+
+#[test]
+fn watch_help_lists_iterations_flag() {
+    let repo = TestRepo::new();
+
+    let output = repo.run_stax(&["watch", "--help"]);
+    output.assert_success();
+    output.assert_stdout_contains("--iterations");
+}

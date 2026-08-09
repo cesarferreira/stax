@@ -5,7 +5,7 @@ use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
 use crate::remote::{self, RemoteInfo};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::Local;
 use colored::Colorize;
 use std::collections::HashSet;
@@ -16,7 +16,11 @@ const DEFAULT_INTERVAL_ACTIVE: u64 = 15;
 const DEFAULT_INTERVAL_IDLE: u64 = 60;
 const DEFAULT_INTERVAL_QUIET: u64 = 120;
 
-pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
+pub fn run(current_only: bool, interval: Option<u64>, max_iterations: Option<usize>) -> Result<()> {
+    if max_iterations == Some(0) {
+        bail!("--iterations must be at least 1");
+    }
+
     let repo = GitRepo::open()?;
     let config = Config::load()?;
     let remote_info = RemoteInfo::from_repo(&repo, &config)?;
@@ -99,6 +103,12 @@ pub fn run(current_only: bool, interval: Option<u64>) -> Result<()> {
                 &ci_statuses,
                 &remote_branches,
             );
+        }
+
+        // Bounded mode: stop after the requested number of refreshes. Returns before
+        // the trailing sleep so the final iteration exits immediately.
+        if max_iterations.is_some_and(|max| iteration >= max) {
+            return Ok(());
         }
 
         // Decide next interval
