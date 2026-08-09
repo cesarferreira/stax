@@ -2,6 +2,24 @@
 
 use crate::common;
 use common::{OutputAssertions, TestRepo};
+use std::fs;
+use std::path::Path;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn ensure_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+fn write_test_config(home: &Path, api_base_url: &str) {
+    let config_dir = home.join(".config").join("stax");
+    fs::create_dir_all(&config_dir).expect("Failed to create config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        format!("[remote]\napi_base_url = \"{api_base_url}\"\n"),
+    )
+    .expect("Failed to write config");
+}
 
 /// Test that --all-prs flag is recognized by the CLI
 #[test]
@@ -66,6 +84,148 @@ fn test_track_all_prs_no_token() {
         stdout,
         stderr
     );
+}
+
+/// A successful import must create local branches which work with plain
+/// `git pull`, and preserve the dependency between a root PR and its child.
+#[tokio::test]
+async fn track_all_prs_fetches_stacked_branches_sets_upstreams_and_parents() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+    let home = repo.clean_home();
+    write_test_config(Path::new(&home), &mock_server.uri());
+
+    repo.git(&["checkout", "-b", "root-pr"]).assert_success();
+    repo.create_file("root.txt", "root\n");
+    repo.commit("Root PR");
+    repo.git(&["push", "origin", "root-pr"]).assert_success();
+
+    repo.git(&["checkout", "-b", "child-pr"]).assert_success();
+    repo.create_file("child.txt", "child\n");
+    repo.commit("Child PR");
+    repo.git(&["push", "origin", "child-pr"]).assert_success();
+    repo.git(&["checkout", "main"]).assert_success();
+    repo.git(&["branch", "-D", "root-pr"]).assert_success();
+    repo.git(&["branch", "-D", "child-pr"]).assert_success();
+
+    Mock::given(method("GET"))
+        .and(path("/user"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "login": "test-user",
+            "id": 1,
+            "node_id": "MDQ6VXNlcjE=",
+            "avatar_url": "https://example.test/avatar",
+            "gravatar_id": "",
+            "url": "https://api.github.test/users/test-user",
+            "html_url": "https://github.test/test-user",
+            "followers_url": "https://api.github.test/users/test-user/followers",
+            "following_url": "https://api.github.test/users/test-user/following{/other_user}",
+            "gists_url": "https://api.github.test/users/test-user/gists{/gist_id}",
+            "starred_url": "https://api.github.test/users/test-user/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.test/users/test-user/subscriptions",
+            "organizations_url": "https://api.github.test/users/test-user/orgs",
+            "repos_url": "https://api.github.test/users/test-user/repos",
+            "events_url": "https://api.github.test/users/test-user/events{/privacy}",
+            "received_events_url": "https://api.github.test/users/test-user/received_events",
+            "type": "User",
+            "site_admin": false,
+            "name": null,
+            "company": null,
+            "blog": null,
+            "location": null,
+            "email": null,
+            "hireable": null,
+            "bio": null,
+            "twitter_username": null,
+            "public_repos": 1,
+            "public_gists": 0,
+            "followers": 0,
+            "following": 0,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        })))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/search/issues"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "total_count": 2,
+            "incomplete_results": false,
+            "items": [
+                {
+                    "number": 101,
+                    "title": "Root PR",
+                    "html_url": "https://github.test/test-owner/test-repo/pull/101",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "closed_at": null
+                },
+                {
+                    "number": 102,
+                    "title": "Child PR",
+                    "html_url": "https://github.test/test-owner/test-repo/pull/102",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "closed_at": null
+                }
+            ]
+        })))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/test-owner/test-repo/pulls/101"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "number": 101,
+            "head": { "ref": "root-pr", "sha": "1111111111111111111111111111111111111111" },
+            "base": { "ref": "main", "sha": "0000000000000000000000000000000000000000" },
+            "draft": false
+        })))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/test-owner/test-repo/pulls/102"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "number": 102,
+            "head": { "ref": "child-pr", "sha": "2222222222222222222222222222222222222222" },
+            "base": { "ref": "root-pr", "sha": "1111111111111111111111111111111111111111" },
+            "draft": true
+        })))
+        .mount(&mock_server)
+        .await;
+
+    repo.run_stax_with_env(
+        &["branch", "track", "--all-prs"],
+        &[("STAX_GITHUB_TOKEN", "mock-token")],
+    )
+    .assert_success()
+    .assert_stdout_contains("Tracked 2 branch(es), fetched 2")
+    .assert_stdout_contains("Set upstream to 'origin' on 2 newly fetched branch(es)");
+
+    for branch in ["root-pr", "child-pr"] {
+        repo.git(&["rev-parse", "--verify", branch])
+            .assert_success();
+        let remote = repo.git(&["config", "--get", &format!("branch.{branch}.remote")]);
+        assert_eq!(TestRepo::stdout(&remote).trim(), "origin");
+        let merge = repo.git(&["config", "--get", &format!("branch.{branch}.merge")]);
+        assert_eq!(
+            TestRepo::stdout(&merge).trim(),
+            format!("refs/heads/{branch}")
+        );
+    }
+
+    let status = repo.get_status_json();
+    let branches = status["branches"]
+        .as_array()
+        .expect("Expected branches array");
+    let parent_of = |branch: &str| {
+        branches
+            .iter()
+            .find(|entry| entry["name"].as_str() == Some(branch))
+            .and_then(|entry| entry["parent"].as_str())
+            .unwrap_or_else(|| panic!("{branch} should be tracked"))
+    };
+    assert_eq!(parent_of("root-pr"), "main");
+    assert_eq!(parent_of("child-pr"), "root-pr");
 }
 
 /// Test help text includes --all-prs
