@@ -118,6 +118,8 @@ mod split_tests;
 mod stack_test_tests;
 #[path = "staging_menu_tests.rs"]
 mod staging_menu_tests;
+#[path = "standup_tests.rs"]
+mod standup_tests;
 #[path = "status_tests.rs"]
 mod status_tests;
 #[path = "submit_fetch_failure_tests.rs"]
