@@ -602,7 +602,11 @@ pub fn run() -> Result<()> {
             verbose,
             oneline,
         ),
-        Commands::Watch { current, interval } => commands::watch::run(current, interval),
+        Commands::Watch {
+            current,
+            interval,
+            iterations,
+        } => commands::watch::run(current, interval, iterations),
         Commands::Tmux { command } => commands::tmux::run(command),
         Commands::Split {
             hunk,

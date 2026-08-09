@@ -938,6 +938,9 @@ pub(crate) enum Commands {
         /// Polling interval in seconds (overrides adaptive default)
         #[arg(long, short)]
         interval: Option<u64>,
+        /// Stop after N refreshes instead of running until interrupted
+        #[arg(long, value_name = "N")]
+        iterations: Option<usize>,
     },
 
     /// tmux integration: status bar string and popup viewer
