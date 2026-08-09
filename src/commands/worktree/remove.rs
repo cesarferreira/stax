@@ -47,13 +47,7 @@ pub(crate) fn remove_worktree_with_hooks(
     Ok(display_name)
 }
 
-pub(crate) fn retire_worktree(
-    repo: &GitRepo,
-    config: &Config,
-    worktree: &WorktreeInfo,
-    force: bool,
-    mode: RemovalMode,
-) -> Result<String> {
+fn ensure_removable_worktree(worktree: &WorktreeInfo) -> Result<()> {
     if worktree.is_main {
         bail!("Cannot remove the main worktree.");
     }
@@ -64,6 +58,18 @@ pub(crate) fn retire_worktree(
             worktree.path.display()
         );
     }
+
+    Ok(())
+}
+
+pub(crate) fn retire_worktree(
+    repo: &GitRepo,
+    config: &Config,
+    worktree: &WorktreeInfo,
+    force: bool,
+    mode: RemovalMode,
+) -> Result<String> {
+    ensure_removable_worktree(worktree)?;
 
     let display_name = worktree
         .branch
@@ -199,16 +205,7 @@ fn run_with_mode(
         None => find_current_worktree(&repo)?,
     };
 
-    if worktree.is_main {
-        bail!("Cannot remove the main worktree.");
-    }
-
-    if !worktree.path.exists() {
-        bail!(
-            "Worktree path '{}' no longer exists. Run `stax worktree prune`.",
-            worktree.path.display()
-        );
-    }
+    ensure_removable_worktree(&worktree)?;
 
     let mut confirmed_dirty_removal = false;
     if !force && repo.is_dirty_at(&worktree.path)? {
@@ -274,7 +271,9 @@ fn run_with_mode(
 
 #[cfg(test)]
 mod tests {
-    use super::effective_remove_force;
+    use super::{effective_remove_force, ensure_removable_worktree};
+    use crate::git::repo::WorktreeInfo;
+    use std::path::PathBuf;
 
     #[test]
     fn confirmed_dirty_removal_upgrades_to_force() {
@@ -289,5 +288,39 @@ mod tests {
     #[test]
     fn clean_non_forced_removal_stays_non_forced() {
         assert!(!effective_remove_force(false, false));
+    }
+
+    fn sample_worktree(is_main: bool, path: PathBuf) -> WorktreeInfo {
+        WorktreeInfo {
+            name: "review-pass".to_string(),
+            path,
+            branch: Some("cesar/review-pass".to_string()),
+            is_main,
+            is_current: false,
+            is_locked: false,
+            lock_reason: None,
+            is_prunable: false,
+            prunable_reason: None,
+        }
+    }
+
+    #[test]
+    fn ensure_removable_rejects_main_worktree() {
+        let worktree = sample_worktree(true, std::env::temp_dir());
+        let err = ensure_removable_worktree(&worktree).unwrap_err();
+        assert!(err.to_string().contains("Cannot remove the main worktree."));
+    }
+
+    #[test]
+    fn ensure_removable_rejects_missing_path() {
+        let worktree = sample_worktree(false, PathBuf::from("/nonexistent/stax-test-path-xyz"));
+        let err = ensure_removable_worktree(&worktree).unwrap_err();
+        assert!(err.to_string().contains("no longer exists"));
+    }
+
+    #[test]
+    fn ensure_removable_accepts_linked_worktree() {
+        let worktree = sample_worktree(false, std::env::temp_dir());
+        ensure_removable_worktree(&worktree).unwrap();
     }
 }

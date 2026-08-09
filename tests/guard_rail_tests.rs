@@ -100,12 +100,23 @@ fn worktree_remove_refuses_current_main_worktree() {
         .assert_stderr_contains("Cannot remove the main worktree");
 }
 
-// `run_with_mode` (src/commands/worktree/remove.rs:202-204) checks
-// `worktree.is_main` before ever calling `retire_worktree`, for both the
-// implicit-current and explicit-by-name paths — so `retire_worktree`'s own
-// identical guard at remove.rs:58 is unreachable from `stax worktree remove`.
-// This test therefore exercises the same observable error/site as
-// `worktree_remove_refuses_current_main_worktree`, just via an explicit name.
+// `run_with_mode` (src/commands/worktree/remove.rs) checks `worktree.is_main`
+// via `ensure_removable_worktree` before ever calling `retire_worktree`, for
+// both the implicit-current and explicit-by-name paths — so
+// `retire_worktree`'s own call to that same guard is unreachable from
+// `stax worktree remove`. This test therefore exercises the same observable
+// error/site as `worktree_remove_refuses_current_main_worktree`, just via an
+// explicit name.
+//
+// `retire_worktree`'s guard IS reachable from the other three callers of
+// `remove_worktree_with_hooks`/`retire_worktree`: the CLI path itself
+// (remove.rs:240), the sync engine (sync.rs:3722), the TUI worktree panel
+// (tui/worktree/app.rs:619), and branch promotion (promote.rs:74). Rather than
+// stand up each of those subsystems in an integration test, `ensure_removable_worktree`
+// is unit-tested directly in src/commands/worktree/remove.rs
+// (`ensure_removable_rejects_main_worktree`,
+// `ensure_removable_rejects_missing_path`,
+// `ensure_removable_accepts_linked_worktree`).
 #[test]
 fn worktree_remove_by_name_refuses_main_worktree() {
     let repo = TestRepo::new();
