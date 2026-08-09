@@ -270,20 +270,17 @@ impl GitHubClient {
             .octocrab
             .repos(&self.owner, &self.repo)
             .combined_status_for_ref(&Reference::Branch(commit_sha.to_string()))
-            .await
-            .ok();
+            .await?;
 
         // Then, check GitHub Actions check runs
-        let check_runs_status = self.get_check_runs_status(commit_sha).await.ok().flatten();
+        let check_runs_status = self.get_check_runs_status(commit_sha).await?;
 
         // Combine results: prioritize check runs (more common), fall back to commit status
-        match (check_runs_status, commit_status) {
+        match check_runs_status {
             // If we have check runs, use that status
-            (Some(cr_status), _) => Ok(Some(cr_status)),
+            Some(cr_status) => Ok(Some(cr_status)),
             // Fall back to commit status
-            (None, Some(status)) => Ok(Some(format!("{:?}", status.state).to_lowercase())),
-            // No CI at all
-            (None, None) => Ok(None),
+            None => Ok(Some(format!("{:?}", commit_status.state).to_lowercase())),
         }
     }
 

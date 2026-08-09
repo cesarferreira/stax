@@ -161,7 +161,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
-    use wiremock::matchers::method;
+    use wiremock::matchers::{method, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -707,10 +707,17 @@ mod tests {
         let server = runtime.block_on(MockServer::start());
         runtime.block_on(
             Mock::given(method("GET"))
+                .and(path_regex(r"check-runs$"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "total_count": 0,
                     "check_runs": []
                 })))
+                .mount(&server),
+        );
+        runtime.block_on(
+            Mock::given(method("GET"))
+                .and(path_regex(r"statuses$"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
                 .mount(&server),
         );
 

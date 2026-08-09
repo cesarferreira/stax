@@ -4,7 +4,7 @@ use common::{OutputAssertions, TestRepo};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn ensure_crypto_provider() {
@@ -145,6 +145,94 @@ async fn pr_list_surfaces_server_conflict() {
     output
         .assert_failure()
         .assert_stderr_contains("Conflict: repository is empty.");
+}
+
+#[tokio::test]
+async fn ci_surfaces_expired_token_instead_of_no_ci() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = TempDir::new().unwrap();
+    let repo = setup_repo(home.path(), &mock_server.uri());
+
+    Mock::given(method("GET"))
+        .and(path_regex(
+            r"^/repos/test/repo/commits/[0-9a-f]+/check-runs$",
+        ))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "message": "Bad credentials"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let output = repo.run_stax_with_env(&["ci"], &env_with_auth(&home));
+    output
+        .assert_failure()
+        .assert_stderr_contains("Failed to fetch CI checks")
+        .assert_stderr_contains("token is expired or lacks access");
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        !stdout.contains("no CI"),
+        "Auth failures must not be reported as 'no CI', got stdout: {}",
+        stdout
+    );
+}
+
+#[tokio::test]
+async fn ci_surfaces_missing_checks_permission_on_statuses_endpoint() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = TempDir::new().unwrap();
+    let repo = setup_repo(home.path(), &mock_server.uri());
+
+    Mock::given(method("GET"))
+        .and(path_regex(
+            r"^/repos/test/repo/commits/[0-9a-f]+/check-runs$",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "total_count": 0, "check_runs": [] })),
+        )
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/repos/test/repo/commits/[0-9a-f]+/statuses$"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "message": "Resource not accessible by personal access token"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let output = repo.run_stax_with_env(&["ci"], &env_with_auth(&home));
+    output
+        .assert_failure()
+        .assert_stderr_contains("Failed to fetch commit statuses");
+}
+
+#[tokio::test]
+async fn ci_reports_no_ci_when_repo_has_no_checks() {
+    ensure_crypto_provider();
+    let mock_server = MockServer::start().await;
+    let home = TempDir::new().unwrap();
+    let repo = setup_repo(home.path(), &mock_server.uri());
+
+    Mock::given(method("GET"))
+        .and(path_regex(
+            r"^/repos/test/repo/commits/[0-9a-f]+/check-runs$",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "total_count": 0, "check_runs": [] })),
+        )
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^/repos/test/repo/commits/[0-9a-f]+/statuses$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&mock_server)
+        .await;
+
+    let output = repo.run_stax_with_env(&["ci"], &env_with_auth(&home));
+    output.assert_success().assert_stdout_contains("no CI");
 }
 
 #[tokio::test]
