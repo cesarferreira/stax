@@ -610,4 +610,414 @@ mod tests {
         assert_eq!(receipt.summary_status(), &OpStatus::Failed);
         assert_eq!(receipt.error.unwrap().message, "conflict");
     }
+
+    #[test]
+    fn dropping_a_snapshotted_transaction_marks_the_receipt_failed() {
+        let temp = tempfile::tempdir().unwrap();
+        let op_id = "drop-snapshotted".to_string();
+        let receipt = OpReceipt::new(
+            op_id.clone(),
+            OpKind::Restack,
+            temp.path().display().to_string(),
+            "main".into(),
+            "feature".into(),
+        );
+        let transaction = Transaction {
+            receipt,
+            git_dir: temp.path().to_path_buf(),
+            workdir: temp.path().to_path_buf(),
+            snapshotted: true,
+            finished: false,
+            quiet: true,
+            backed_up: 0,
+        };
+
+        drop(transaction);
+
+        let reloaded = OpReceipt::load(temp.path(), &op_id).unwrap();
+        assert_eq!(reloaded.status, OpStatus::Failed);
+        assert_eq!(
+            reloaded.error.unwrap().message,
+            "Transaction dropped without finishing"
+        );
+    }
+
+    #[test]
+    fn dropping_an_unsnapshotted_transaction_leaves_no_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let op_id = "drop-unsnapshotted".to_string();
+        let receipt = OpReceipt::new(
+            op_id.clone(),
+            OpKind::Restack,
+            temp.path().display().to_string(),
+            "main".into(),
+            "feature".into(),
+        );
+        let transaction = transaction_for_receipt(
+            receipt,
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+        );
+
+        drop(transaction);
+
+        assert!(OpReceipt::load(temp.path(), &op_id).is_err());
+    }
+
+    #[test]
+    fn plan_metadata_ref_and_record_metadata_ref_after_round_trip() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "a").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "first"]);
+        run(&["branch", "branch-a"]);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        refs::write_metadata(repo.inner(), "branch-a", "{\"before\":true}").unwrap();
+
+        let mut tx = Transaction::begin(OpKind::Fold, &repo, true).unwrap();
+        tx.plan_metadata_ref(&repo, "branch-a").unwrap();
+
+        let oid_before = tx
+            .receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "branch-a@meta")
+            .and_then(|e| e.oid_before.clone())
+            .expect("metadata ref should have a before-OID");
+
+        refs::write_metadata(repo.inner(), "branch-a", "{\"after\":true}").unwrap();
+        tx.record_metadata_ref_after(&repo, "branch-a").unwrap();
+
+        let finalized = tx.finish_ok_preserving_receipt();
+        let entry = finalized
+            .receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "branch-a@meta")
+            .unwrap();
+
+        assert!(entry.after_recorded);
+        assert!(entry.oid_after.is_some());
+        assert_ne!(entry.oid_after, Some(oid_before));
+    }
+
+    #[test]
+    fn record_known_after_records_deletion_as_none() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut receipt = OpReceipt::new(
+            "delete-known".into(),
+            OpKind::Delete,
+            temp.path().display().to_string(),
+            "main".into(),
+            "main".into(),
+        );
+        receipt.add_local_ref("feature", Some("before-oid"));
+        let mut transaction = transaction_for_receipt(
+            receipt,
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+        );
+
+        transaction.record_known_after("feature", None);
+        let finalized = transaction.finish_ok_preserving_receipt();
+
+        let entry = &finalized.receipt.local_refs[0];
+        assert!(entry.after_recorded);
+        assert_eq!(entry.oid_after, None);
+    }
+
+    #[test]
+    fn record_known_metadata_after_records_deletion_as_none() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut receipt = OpReceipt::new(
+            "delete-known-meta".into(),
+            OpKind::Fold,
+            temp.path().display().to_string(),
+            "main".into(),
+            "main".into(),
+        );
+        receipt.add_metadata_ref("feature", Some("before-oid"));
+        let mut transaction = transaction_for_receipt(
+            receipt,
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+        );
+
+        transaction.record_known_metadata_after("feature", None);
+        let finalized = transaction.finish_ok_preserving_receipt();
+
+        let entry = &finalized.receipt.local_refs[0];
+        assert_eq!(entry.branch, "feature@meta");
+        assert!(entry.after_recorded);
+        assert_eq!(entry.oid_after, None);
+    }
+
+    #[test]
+    fn plan_remote_branch_and_record_remote_after_round_trip() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+        };
+        let rev_parse = |rev: &str| -> String {
+            let output = Command::new("git")
+                .args(["rev-parse", rev])
+                .current_dir(path)
+                .output()
+                .expect("git");
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "a").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "first"]);
+        run(&["branch", "branch-a"]);
+        let oid_before = rev_parse("branch-a");
+
+        run(&["checkout", "branch-a"]);
+        std::fs::write(path.join("f.txt"), "b").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "second"]);
+        let oid_after = rev_parse("branch-a");
+        assert_ne!(oid_before, oid_after);
+
+        run(&["update-ref", "refs/remotes/origin/branch-a", &oid_before]);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        let mut tx = Transaction::begin(OpKind::Submit, &repo, true).unwrap();
+        tx.plan_remote_branch(&repo, "origin", "branch-a").unwrap();
+        tx.record_remote_after("origin", "branch-a", &oid_after);
+
+        let finalized = tx.finish_ok_preserving_receipt();
+        let entry = &finalized.receipt.remote_refs[0];
+        assert_eq!(entry.remote, "origin");
+        assert_eq!(entry.branch, "branch-a");
+        assert_eq!(entry.oid_before, Some(oid_before));
+        assert_eq!(entry.oid_after, Some(oid_after));
+    }
+
+    #[test]
+    fn record_all_after_updates_every_planned_branch() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "a").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "first"]);
+        run(&["branch", "branch-a"]);
+        run(&["branch", "branch-b"]);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        let mut tx = Transaction::begin(OpKind::Restack, &repo, true).unwrap();
+        tx.plan_branch(&repo, "branch-a").unwrap();
+        tx.plan_branch(&repo, "branch-b").unwrap();
+
+        run(&["checkout", "branch-a"]);
+        std::fs::write(path.join("f.txt"), "b").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "advance-a"]);
+
+        run(&["checkout", "branch-b"]);
+        std::fs::write(path.join("f.txt"), "c").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "advance-b"]);
+
+        tx.record_all_after(&repo).unwrap();
+
+        let finalized = tx.finish_ok_preserving_receipt();
+        let entry_a = finalized
+            .receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "branch-a")
+            .unwrap();
+        let entry_b = finalized
+            .receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "branch-b")
+            .unwrap();
+
+        assert!(entry_a.after_recorded);
+        assert!(entry_b.after_recorded);
+        assert_ne!(entry_a.oid_before, entry_a.oid_after);
+        assert_ne!(entry_b.oid_before, entry_b.oid_after);
+        assert_ne!(entry_a.oid_after, entry_b.oid_after);
+    }
+
+    #[test]
+    fn snapshot_branch_with_metadata_plans_branch_and_metadata() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(path)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(path.join("f.txt"), "a").unwrap();
+        run(&["add", "f.txt"]);
+        run(&["commit", "-m", "first"]);
+        run(&["branch", "branch-a"]);
+
+        let repo = GitRepo::open_from_path(path).unwrap();
+        refs::write_metadata(repo.inner(), "branch-a", "{\"parent\":\"main\"}").unwrap();
+
+        let mut tx = Transaction::begin(OpKind::Fold, &repo, true).unwrap();
+        tx.snapshot_branch_with_metadata(&repo, "branch-a").unwrap();
+
+        assert_eq!(tx.receipt.local_refs.len(), 2);
+        let branch_entry = tx
+            .receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "branch-a")
+            .unwrap();
+        let meta_entry = tx
+            .receipt
+            .local_refs
+            .iter()
+            .find(|e| e.branch == "branch-a@meta")
+            .unwrap();
+        assert!(branch_entry.oid_before.is_some());
+        assert!(meta_entry.oid_before.is_some());
+
+        let op_id = tx.receipt.op_id.clone();
+        let git_dir = repo.git_dir().unwrap().to_path_buf();
+        let reloaded = OpReceipt::load(&git_dir, &op_id).unwrap();
+        assert_eq!(reloaded.local_refs.len(), 2);
+
+        let backup_branch_ref = format!("refs/stax/backups/{}/branch-a", op_id);
+        let backup_meta_ref = format!("refs/stax/backups/{}/branch-a@meta", op_id);
+        let ok_branch = Command::new("git")
+            .args(["rev-parse", "--verify", &backup_branch_ref])
+            .current_dir(path)
+            .output()
+            .expect("git")
+            .status
+            .success();
+        let ok_meta = Command::new("git")
+            .args(["rev-parse", "--verify", &backup_meta_ref])
+            .current_dir(path)
+            .output()
+            .expect("git")
+            .status
+            .success();
+        assert!(ok_branch, "backup ref for branch-a should exist");
+        assert!(ok_meta, "backup ref for branch-a@meta should exist");
+    }
+
+    #[test]
+    fn set_plan_summary_and_auto_stash_pop_persist_into_the_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let op_id = "plan-summary-and-stash".to_string();
+        let receipt = OpReceipt::new(
+            op_id.clone(),
+            OpKind::Sync,
+            temp.path().display().to_string(),
+            "main".into(),
+            "feature".into(),
+        );
+        let mut transaction = transaction_for_receipt(
+            receipt,
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+        );
+
+        transaction.set_plan_summary(PlanSummary {
+            branches_to_rebase: 3,
+            branches_to_push: 2,
+            description: vec!["rebase feature onto main".to_string()],
+        });
+        transaction.set_auto_stash_pop(true);
+        let finalized = transaction.finish_ok_preserving_receipt();
+        assert!(finalized.persistence_error.is_none());
+
+        let reloaded = OpReceipt::load(temp.path(), &op_id).unwrap();
+        assert_eq!(reloaded.plan_summary.branches_to_rebase, 3);
+        assert_eq!(reloaded.plan_summary.branches_to_push, 2);
+        assert_eq!(
+            reloaded.plan_summary.description,
+            vec!["rebase feature onto main".to_string()]
+        );
+        assert!(reloaded.auto_stash_pop);
+    }
+
+    #[test]
+    fn push_completed_branch_accumulates_in_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let op_id = "completed-branches".to_string();
+        let receipt = OpReceipt::new(
+            op_id.clone(),
+            OpKind::Sync,
+            temp.path().display().to_string(),
+            "main".into(),
+            "feature".into(),
+        );
+        let mut transaction = transaction_for_receipt(
+            receipt,
+            temp.path().to_path_buf(),
+            temp.path().to_path_buf(),
+        );
+
+        transaction.push_completed_branch("a");
+        transaction.push_completed_branch("b");
+        transaction.push_completed_branch("c");
+        let finalized = transaction.finish_ok_preserving_receipt();
+
+        assert_eq!(
+            finalized.receipt.completed_branches,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+
+        let reloaded = OpReceipt::load(temp.path(), &op_id).unwrap();
+        assert_eq!(
+            reloaded.completed_branches,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+    }
 }
