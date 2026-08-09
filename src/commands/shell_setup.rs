@@ -570,11 +570,14 @@ fn maybe_install_skills(options: &SetupOptions) -> Result<()> {
             SkillInstallMode::Ask => {
                 if options.auto_accept {
                     HarnessSelection::Detected
-                } else if !can_prompt() {
-                    return Ok(());
-                } else if !prompt_for_skill_install()? {
-                    return Ok(());
                 } else {
+                    // A non-interactive shell and an explicit "no" are distinct
+                    // reasons that share one outcome: skip the skills install.
+                    // `&&` short-circuits, so we only prompt when we can prompt.
+                    let opted_in = can_prompt() && prompt_for_skill_install()?;
+                    if !opted_in {
+                        return Ok(());
+                    }
                     prompt_for_harness_selection()?
                 }
             }
