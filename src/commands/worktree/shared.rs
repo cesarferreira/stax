@@ -1784,6 +1784,55 @@ mod tests {
     }
 
     #[test]
+    fn build_launch_spec_rejects_agent_with_run() {
+        let config = Config::default();
+        let err = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                agent: Some("claude".to_string()),
+                run: Some("npm test".to_string()),
+                ..LaunchOptions::default()
+            },
+            "session",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--agent and --run cannot be used together")
+        );
+    }
+
+    #[test]
+    fn build_launch_spec_rejects_model_without_agent() {
+        let config = Config::default();
+        let err = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                model: Some("gpt-5".to_string()),
+                ..LaunchOptions::default()
+            },
+            "session",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--model requires --agent"));
+    }
+
+    #[test]
+    fn build_launch_spec_rejects_tmux_session_without_tmux() {
+        let config = Config::default();
+        let err = build_launch_spec(
+            &config,
+            &LaunchOptions {
+                tmux_session: Some("my-session".to_string()),
+                ..LaunchOptions::default()
+            },
+            "session",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--tmux-session requires --tmux"));
+    }
+
+    #[test]
     fn build_launch_spec_ignores_configured_model_for_worktree_agents() {
         let mut config = Config::default();
         config.ai.model = Some("gpt-5.4".to_string());
