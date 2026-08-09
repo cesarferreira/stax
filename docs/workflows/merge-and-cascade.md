@@ -139,6 +139,7 @@ The "bottom PR merged, catch me up" command. Prints the plan up front, then sync
 | `st refresh` | sync trunk → restack → push → create/update PRs |
 | `st refresh --no-pr` | sync trunk → restack → push |
 | `st refresh --no-submit` | sync trunk → restack |
+| `st refresh --all-stacks` | sync trunk once → restack and submit every independent stack; needs a clean tree unless `--auto-stash-pop` is set; stops at the first conflict |
 | `st refresh --force` | force the sync step instead of prompting |
 | `st refresh --force --yes --no-prompt` | run the full trunk-sync/restack/submit flow without prompts |
 | `st refresh --verbose` | show detailed sync/restack/submit timing |
