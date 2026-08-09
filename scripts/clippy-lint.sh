@@ -24,7 +24,6 @@ esac
   -A clippy::assertions_on_constants \
   -A clippy::bool_assert_comparison \
   -A clippy::double_comparisons \
-  -A clippy::if_same_then_else \
   -A clippy::items_after_test_module \
   -A clippy::len_zero \
   -A clippy::needless_lifetimes \
