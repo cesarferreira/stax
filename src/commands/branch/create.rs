@@ -1463,6 +1463,16 @@ fn create_branch_with_banner(
     Ok(())
 }
 
+fn validate_placement_flags(from: Option<&str>, insert: bool, below: bool) -> Result<()> {
+    if insert && below {
+        bail!("`--insert` and `--below` cannot be used together");
+    }
+    if below && from.is_some() {
+        bail!("`--below` cannot be used with `--from`");
+    }
+    Ok(())
+}
+
 fn resolve_create_placement(
     repo: &GitRepo,
     current: &str,
@@ -1470,12 +1480,7 @@ fn resolve_create_placement(
     insert: bool,
     below: bool,
 ) -> Result<CreatePlacement> {
-    if insert && below {
-        bail!("`--insert` and `--below` cannot be used together");
-    }
-    if below && from.is_some() {
-        bail!("`--below` cannot be used with `--from`");
-    }
+    validate_placement_flags(from.as_deref(), insert, below)?;
 
     if below {
         let meta = resolve_below_current_metadata(repo, current)?;
@@ -1886,5 +1891,33 @@ mod tests {
         assert!(!prompt.contains("\"branch\" and \"message\""));
         assert!(prompt.contains("The command will stage all changes before committing."));
         assert!(prompt.contains("diff --git"));
+    }
+
+    #[test]
+    fn placement_flags_reject_insert_with_below() {
+        let err = validate_placement_flags(None, true, true).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("`--insert` and `--below` cannot be used together")
+        );
+    }
+
+    #[test]
+    fn placement_flags_reject_below_with_from() {
+        let err = validate_placement_flags(Some("main"), false, true).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("`--below` cannot be used with `--from`")
+        );
+    }
+
+    #[test]
+    fn placement_flags_accept_below_alone() {
+        validate_placement_flags(None, false, true).unwrap();
+    }
+
+    #[test]
+    fn placement_flags_accept_from_alone() {
+        validate_placement_flags(Some("main"), false, false).unwrap();
     }
 }
