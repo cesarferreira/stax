@@ -352,7 +352,13 @@ impl GitHubClient {
     /// Get the authenticated user's login name
     pub async fn get_current_user(&self) -> Result<String> {
         self.record_api_call("users.current");
-        let user = self.octocrab.current().user().await?;
+        let user = self
+            .octocrab
+            .current()
+            .user()
+            .await
+            .context("Failed to look up the authenticated user")
+            .map_err(|e| self.enrich_api_error(e))?;
         Ok(user.login)
     }
 
@@ -654,6 +660,27 @@ mod tests {
             .unwrap();
 
         GitHubClient::with_octocrab(octocrab, "test-owner", "test-repo")
+    }
+
+    #[tokio::test]
+    async fn test_get_current_user_404_gives_auth_hint() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "message": "Not Found"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let error = client.get_current_user().await.unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains("Failed to look up the authenticated user"));
+        assert!(message.contains("token is expired or lacks access"));
+        assert!(message.contains("stax auth --from-gh"));
     }
 
     #[tokio::test]
