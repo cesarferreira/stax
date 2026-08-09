@@ -286,6 +286,7 @@ impl GitHubClient {
 
     /// Get status from GitHub Actions check runs
     async fn get_check_runs_status(&self, commit_sha: &str) -> Result<Option<String>> {
+        self.record_api_call("checks.check_runs");
         let url = format!(
             "/repos/{}/{}/commits/{}/check-runs",
             self.owner, self.repo, commit_sha
@@ -350,6 +351,7 @@ impl GitHubClient {
 
     /// Get the authenticated user's login name
     pub async fn get_current_user(&self) -> Result<String> {
+        self.record_api_call("users.current");
         let user = self.octocrab.current().user().await?;
         Ok(user.login)
     }
@@ -362,6 +364,7 @@ impl GitHubClient {
     ) -> Result<Vec<PrActivity>> {
         let since = Utc::now() - chrono::Duration::hours(hours);
         // Use search API to find only user's merged PRs - much faster than listing all
+        self.record_api_call("search.issues");
         let url = format!(
             "/search/issues?q=repo:{}/{}+author:{}+is:pr+is:merged&sort=updated&order=desc&per_page=30",
             self.owner, self.repo, username
@@ -398,6 +401,7 @@ impl GitHubClient {
     ) -> Result<Vec<PrActivity>> {
         let since = Utc::now() - chrono::Duration::hours(hours);
         // Use search API to find only user's created PRs
+        self.record_api_call("search.issues");
         let url = format!(
             "/search/issues?q=repo:{}/{}+author:{}+is:pr&sort=created&order=desc&per_page=30",
             self.owner, self.repo, username
@@ -434,6 +438,7 @@ impl GitHubClient {
             "/search/issues?q=repo:{}/{}+author:{}+is:pr+is:open&per_page=20",
             self.owner, self.repo, username
         );
+        self.record_api_call("search.issues");
         let response: SearchIssuesResponse = self.octocrab.get(&url, None::<&()>).await?;
 
         let mut reviews = Vec::new();
@@ -444,6 +449,7 @@ impl GitHubClient {
                 "/repos/{}/{}/pulls/{}/reviews",
                 self.owner, self.repo, issue.number
             );
+            self.record_api_call("pulls.reviews.list");
             let pr_reviews: Vec<Review> = self
                 .octocrab
                 .get(&reviews_url, None::<&()>)
@@ -496,6 +502,7 @@ impl GitHubClient {
             self.owner, self.repo, username
         );
 
+        self.record_api_call("search.issues");
         let response: SearchIssuesResponse = self
             .octocrab
             .get(&url, None::<&()>)
@@ -507,6 +514,7 @@ impl GitHubClient {
         let mut results = Vec::new();
         for issue in response.items {
             // Fetch full PR details to get branch info
+            self.record_api_call("pulls.get");
             let pr = self
                 .octocrab
                 .pulls(&self.owner, &self.repo)
@@ -575,7 +583,6 @@ impl GitHubClient {
     /// GitHub's issues endpoint includes pull requests, so we filter them client-side and
     /// paginate until we have `limit` real issues or the API has no more pages.
     pub async fn list_open_issues(&self, limit: u8) -> Result<Vec<RepoIssueListItem>> {
-        self.record_api_call("issues.list");
         let want = limit.clamp(1, 100) as usize;
         let mut collected: Vec<RepoIssueListItem> = Vec::with_capacity(want);
         let mut page = 1u32;
@@ -586,6 +593,7 @@ impl GitHubClient {
                 self.owner, self.repo, page
             );
 
+            self.record_api_call("issues.list");
             let response: Vec<RepoListIssue> = self
                 .octocrab
                 .get(&url, None::<&()>)
@@ -1216,6 +1224,65 @@ mod tests {
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].number, 10);
         assert_eq!(issues[1].number, 11);
+    }
+
+    #[tokio::test]
+    async fn test_list_open_issues_counts_every_page() {
+        let mock_server = MockServer::start().await;
+
+        // Page 1: 100 items, all PRs — filtered out, so nothing satisfies `want` yet
+        let pr_items: Vec<serde_json::Value> = (1u32..=100)
+            .map(|n| {
+                serde_json::json!({
+                    "number": n,
+                    "title": format!("PR {n}"),
+                    "html_url": format!("https://github.com/test-owner/test-repo/pull/{n}"),
+                    "user": { "login": "u" },
+                    "labels": [],
+                    "updated_at": "2026-03-15T12:00:00Z",
+                    "pull_request": {
+                        "url": format!("https://api.github.com/repos/test-owner/test-repo/pulls/{n}")
+                    }
+                })
+            })
+            .collect();
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!(pr_items)))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/repos/test-owner/test-repo/issues"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "number": 10,
+                    "title": "Real issue A",
+                    "html_url": "https://github.com/test-owner/test-repo/issues/10",
+                    "user": { "login": "u" },
+                    "labels": [],
+                    "updated_at": "2026-03-14T10:00:00Z"
+                }
+            ])))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let issues = client.list_open_issues(1).await.unwrap();
+        assert_eq!(issues.len(), 1);
+
+        let stats = client.api_call_stats();
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "issues.list" && *count == 2),
+            "expected issues.list to be recorded once per page, got: {:?}",
+            stats.by_operation
+        );
     }
 
     #[tokio::test]

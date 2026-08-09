@@ -59,6 +59,7 @@ impl GitHubClient {
         repo: &GitRepo,
         commit_sha: &str,
     ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
+        self.record_api_call("checks.commit_statuses");
         let url = format!(
             "/repos/{}/{}/commits/{}/statuses",
             self.owner, self.repo, commit_sha
@@ -121,6 +122,7 @@ impl GitHubClient {
         repo: &GitRepo,
         commit_sha: &str,
     ) -> Result<(Option<String>, Vec<CheckRunInfo>)> {
+        self.record_api_call("checks.check_runs");
         let url = format!(
             "/repos/{}/{}/commits/{}/check-runs",
             self.owner, self.repo, commit_sha
