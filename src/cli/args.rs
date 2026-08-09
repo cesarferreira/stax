@@ -347,8 +347,8 @@ pub(crate) enum Commands {
         ///
         /// With --stack, merge targets selected PRs/MRs to trunk and preserves commit
         /// SHAs so GitHub or GitLab may mark lower items indirectly merged. Timed-out
-        /// items stay open. GitLab rejects explicit rebase/squash; on GitHub those
-        /// methods rewrite SHAs and close lower PRs as absorbed without waiting.
+        /// items stay open. GitHub and GitLab reject rewriting methods for multi-item
+        /// ranges; a single GitHub PR may still use rebase or squash.
         #[arg(long)]
         method: Option<String>,
         /// Keep branches after merge (don't delete)
