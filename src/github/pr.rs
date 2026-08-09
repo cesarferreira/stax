@@ -860,6 +860,7 @@ impl GitHubClient {
         commit_message: Option<String>,
         sha: Option<String>,
     ) -> Result<()> {
+        self.record_api_call("pulls.merge");
         let merge_method = match method {
             MergeMethod::Squash => octocrab::params::pulls::MergeMethod::Squash,
             MergeMethod::Merge => octocrab::params::pulls::MergeMethod::Merge,
@@ -987,6 +988,7 @@ impl GitHubClient {
 
     /// Get PR review information using GraphQL API
     async fn get_pr_reviews(&self, pr_number: u64) -> Result<(Option<String>, usize, bool)> {
+        self.record_api_call("graphql.pr_reviews");
         let query = format!(
             r#"
             query {{
@@ -1029,6 +1031,7 @@ impl GitHubClient {
 
     /// Get the GraphQL node ID for a PR (needed for mutations like enqueuePullRequest).
     async fn get_pr_node_id(&self, pr_number: u64) -> Result<String> {
+        self.record_api_call("graphql.pr_node_id");
         let query = format!(
             r#"
             query {{
@@ -1060,6 +1063,7 @@ impl GitHubClient {
     pub async fn enqueue_pr(&self, pr_number: u64) -> Result<EnqueueResult> {
         let node_id = self.get_pr_node_id(pr_number).await?;
 
+        self.record_api_call("graphql.enqueue_pr");
         let mutation = format!(
             r#"
             mutation {{
@@ -1084,6 +1088,7 @@ impl GitHubClient {
 
     /// Check if a PR is already merged
     pub async fn is_pr_merged(&self, pr_number: u64) -> Result<bool> {
+        self.record_api_call("pulls.is_merged");
         let pr = self
             .octocrab
             .pulls(&self.owner, &self.repo)
@@ -1110,6 +1115,7 @@ impl GitHubClient {
 
     /// List all issue comments (conversation comments) on a PR
     pub async fn list_issue_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>> {
+        self.record_api_call("issues.comments.list");
         let url = format!(
             "/repos/{}/{}/issues/{}/comments",
             self.owner, self.repo, pr_number
@@ -1133,6 +1139,7 @@ impl GitHubClient {
 
     /// List all review comments (inline code comments) on a PR
     pub async fn list_review_comments(&self, pr_number: u64) -> Result<Vec<ReviewComment>> {
+        self.record_api_call("pulls.comments.list");
         let url = format!(
             "/repos/{}/{}/pulls/{}/comments",
             self.owner, self.repo, pr_number
@@ -1391,7 +1398,7 @@ pub fn remove_stack_links_from_body(existing_body: &str) -> String {
 mod tests {
     use super::*;
     use octocrab::Octocrab;
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{body_string_contains, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -3012,6 +3019,90 @@ mod tests {
                 .by_operation
                 .iter()
                 .any(|(op, count)| op == "pulls.get" && *count == 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_pr_records_api_call() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("PUT"))
+            .and(path("/repos/test-owner/test-repo/pulls/11/merge"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "sha": "abc123",
+                "merged": true,
+                "message": "Pull Request successfully merged"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        client
+            .merge_pr(11, MergeMethod::Squash, None, None, None)
+            .await
+            .unwrap();
+
+        let stats = client.api_call_stats();
+        assert_eq!(stats.total_requests, 1);
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "pulls.merge" && *count == 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_pr_records_node_id_and_mutation() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("repository(owner"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "repository": {
+                        "pullRequest": { "id": "PR_kwABC" }
+                    }
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("enqueuePullRequest"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "enqueuePullRequest": {
+                        "mergeQueueEntry": { "position": 1 }
+                    }
+                }
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = create_test_client(&mock_server).await;
+        let result = client.enqueue_pr(20).await.unwrap();
+
+        assert_eq!(
+            result.merge_queue_entry.and_then(|entry| entry.position),
+            Some(1)
+        );
+
+        let stats = client.api_call_stats();
+        assert_eq!(stats.total_requests, 2);
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "graphql.pr_node_id" && *count == 1)
+        );
+        assert!(
+            stats
+                .by_operation
+                .iter()
+                .any(|(op, count)| op == "graphql.enqueue_pr" && *count == 1)
         );
     }
 
