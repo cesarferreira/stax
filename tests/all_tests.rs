@@ -78,6 +78,8 @@ mod get_tests;
 mod gh_stack_tests;
 #[path = "github_list_tests.rs"]
 mod github_list_tests;
+#[path = "guard_rail_tests.rs"]
+mod guard_rail_tests;
 #[path = "gui_command_tests.rs"]
 mod gui_command_tests;
 #[path = "integration_tests.rs"]
