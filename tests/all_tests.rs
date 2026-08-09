@@ -76,6 +76,8 @@ mod freeze_tests;
 mod get_tests;
 #[path = "gh_stack_tests.rs"]
 mod gh_stack_tests;
+#[path = "github_failure_tests.rs"]
+mod github_failure_tests;
 #[path = "github_list_tests.rs"]
 mod github_list_tests;
 #[path = "guard_rail_tests.rs"]
