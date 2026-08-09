@@ -669,6 +669,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_harness_selection_rejects_empty_spec() {
+        let err = parse_harness_selection("   ").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("--skills requires a value"));
+    }
+
+    #[test]
+    fn parse_harness_selection_rejects_comma_only_spec() {
+        let err = parse_harness_selection(",,,").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("--skills requires at least one harness id"));
+    }
+
+    #[test]
     fn test_format_update_command_line_shows_flags() {
         assert_eq!(
             format_update_command_line(false, &SkillsUpdateOrigin::AllFlag),

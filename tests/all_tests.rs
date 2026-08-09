@@ -66,6 +66,8 @@ mod edge_cases_tests;
 mod edit_tests;
 #[path = "fix_tests.rs"]
 mod fix_tests;
+#[path = "flag_validation_tests.rs"]
+mod flag_validation_tests;
 #[path = "fold_tests.rs"]
 mod fold_tests;
 #[path = "freeze_tests.rs"]
