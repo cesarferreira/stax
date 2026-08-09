@@ -287,3 +287,98 @@ fn adaptive_interval(ci_statuses: &[BranchCiStatus], stack: &Stack, branches: &[
     // Nothing active — back off
     DEFAULT_INTERVAL_QUIET
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ci::CheckRunInfo;
+    use crate::engine::stack::StackBranch;
+    use std::collections::HashMap;
+
+    fn empty_stack() -> Stack {
+        Stack {
+            branches: HashMap::new(),
+            trunk: "main".to_string(),
+        }
+    }
+
+    fn ci_status_with_check(branch: &str, status: &str) -> BranchCiStatus {
+        BranchCiStatus {
+            branch: branch.to_string(),
+            sha: "abc123".to_string(),
+            sha_short: "abc123".to_string(),
+            overall_status: None,
+            check_runs: vec![CheckRunInfo {
+                name: "build".to_string(),
+                status: status.to_string(),
+                conclusion: None,
+                url: None,
+                started_at: None,
+                completed_at: None,
+                elapsed_secs: None,
+                average_secs: None,
+                completion_percent: None,
+            }],
+            pr_number: None,
+            pr_is_draft: None,
+            pr_title: None,
+            pr_review_decision: None,
+        }
+    }
+
+    fn branch_with_pr_state(name: &str, pr_state: Option<&str>) -> StackBranch {
+        StackBranch {
+            name: name.to_string(),
+            parent: Some("main".to_string()),
+            parent_revision: Some("abc123".to_string()),
+            children: Vec::new(),
+            needs_restack: false,
+            pr_number: Some(1),
+            pr_state: pr_state.map(|s| s.to_string()),
+            pr_is_draft: None,
+        }
+    }
+
+    #[test]
+    fn adaptive_interval_polls_fast_when_checks_running() {
+        let stack = empty_stack();
+        let ci_statuses = vec![ci_status_with_check("feature", "in_progress")];
+        let branches = vec!["feature".to_string()];
+
+        assert_eq!(
+            adaptive_interval(&ci_statuses, &stack, &branches),
+            DEFAULT_INTERVAL_ACTIVE
+        );
+    }
+
+    #[test]
+    fn adaptive_interval_uses_idle_interval_with_open_prs() {
+        let mut stack = empty_stack();
+        stack.branches.insert(
+            "feature".to_string(),
+            branch_with_pr_state("feature", Some("open")),
+        );
+        let ci_statuses: Vec<BranchCiStatus> = vec![];
+        let branches = vec!["feature".to_string()];
+
+        assert_eq!(
+            adaptive_interval(&ci_statuses, &stack, &branches),
+            DEFAULT_INTERVAL_IDLE
+        );
+    }
+
+    #[test]
+    fn adaptive_interval_backs_off_when_nothing_is_active() {
+        let mut stack = empty_stack();
+        stack
+            .branches
+            .insert("feature".to_string(), branch_with_pr_state("feature", None));
+        let ci_statuses: Vec<BranchCiStatus> = vec![];
+        let branches = vec!["feature".to_string()];
+
+        assert_eq!(
+            adaptive_interval(&ci_statuses, &stack, &branches),
+            DEFAULT_INTERVAL_QUIET
+        );
+    }
+}
