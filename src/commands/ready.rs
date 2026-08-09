@@ -359,8 +359,8 @@ pub(crate) async fn fetch_row_for_branch(
     let check_runs = client
         .fetch_checks(repo, &ci_revision)
         .await
-        .map(|(_, runs)| runs)
-        .unwrap_or_default();
+        .with_context(|| format!("Failed to fetch CI checks for PR #{}", pr_number))
+        .map(|(_, runs)| runs)?;
     let ci_summary = CiSummary::from_checks(status.ci_status.clone(), &check_runs);
     let mut row = PrReadinessRow::from_status(&branch.name, status, ci_summary);
     row.pr_url = Some(remote.pr_url(pr_number));

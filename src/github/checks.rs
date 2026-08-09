@@ -1,7 +1,7 @@
 use super::client::GitHubClient;
 use crate::ci::{CheckRunInfo, history, normalize};
 use crate::git::GitRepo;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
@@ -64,11 +64,12 @@ impl GitHubClient {
             self.owner, self.repo, commit_sha
         );
 
-        let statuses: Vec<normalize::CommitStatus> =
-            match self.octocrab.get(&url, None::<&()>).await {
-                Ok(s) => s,
-                Err(_) => return Ok((None, Vec::new())),
-            };
+        let statuses: Vec<normalize::CommitStatus> = self
+            .octocrab
+            .get(&url, None::<&()>)
+            .await
+            .context("Failed to fetch commit statuses")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         if statuses.is_empty() {
             return Ok((None, Vec::new()));
@@ -125,7 +126,12 @@ impl GitHubClient {
             self.owner, self.repo, commit_sha
         );
 
-        let response: CheckRunsResponse = self.octocrab.get(&url, None::<&()>).await?;
+        let response: CheckRunsResponse = self
+            .octocrab
+            .get(&url, None::<&()>)
+            .await
+            .context("Failed to fetch check runs")
+            .map_err(|e| self.enrich_api_error(e))?;
 
         if response.total_count == 0 {
             return Ok((None, Vec::new()));
