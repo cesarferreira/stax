@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.104.0] - 2026-08-10
+## [0.104.1] - 2026-08-10
 
 ### 🚀 Features
 
@@ -13,6 +13,11 @@ All notable changes to this project will be documented in this file.
 - Remove the last if_same_then_else site and enforce the lint ([#750](https://github.com/cesarferreira/stax/issues/750))
 - Surface the token-permissions hint on pr list and issue list ([#751](https://github.com/cesarferreira/stax/issues/751))
 - Stop stax ci and stax ready reporting "no CI" when the API call failed ([#754](https://github.com/cesarferreira/stax/issues/754))
+- Enrich authenticated-user lookup errors ([#760](https://github.com/cesarferreira/stax/issues/760))
+
+### 📚 Documentation
+
+- Document refresh --all-stacks workflow ([#753](https://github.com/cesarferreira/stax/issues/753))
 
 ### 🧪 Testing
 
@@ -22,10 +27,14 @@ All notable changes to this project will be documented in this file.
 - Cover stax prev, tmux popup guard, and watch interval selection ([#746](https://github.com/cesarferreira/stax/issues/746))
 - Cover Transaction rollback-on-drop and the unexercised tx API ([#747](https://github.com/cesarferreira/stax/issues/747))
 - Make the CLI-unreachable guards reachable instead of deleting them ([#752](https://github.com/cesarferreira/stax/issues/752))
+- Add standup output contracts ([#742](https://github.com/cesarferreira/stax/issues/742))
+- Cover branch track --all-prs import workflow ([#759](https://github.com/cesarferreira/stax/issues/759))
+- Cover refresh --all-stacks conflict recovery ([#758](https://github.com/cesarferreira/stax/issues/758))
 
 ### ⚙️ Miscellaneous Tasks
 
 - Close the gaps in forge API call accounting ([#755](https://github.com/cesarferreira/stax/issues/755))
+- Release
 ## [0.103.1] - 2026-08-09
 
 ### 🐛 Bug Fixes
