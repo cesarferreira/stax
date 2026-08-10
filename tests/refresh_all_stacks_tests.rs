@@ -113,3 +113,73 @@ fn all_stacks_rejects_dirty_tree_without_auto_stash_pop() {
     output.assert_failure();
     output.assert_stderr_contains("--auto-stash-pop");
 }
+
+#[test]
+fn all_stacks_stops_at_conflict_and_retry_finishes_remaining_stacks() {
+    let repo = TestRepo::new_with_remote();
+
+    let stack_a = repo.create_stack(&["refresh-a"]);
+    repo.git(&["checkout", "main"]).assert_success();
+
+    let stack_b = repo.create_stack(&["refresh-b"]);
+    repo.create_file("conflict.txt", "branch version\n");
+    repo.commit("Prepare refresh conflict");
+
+    repo.git(&["checkout", "main"]).assert_success();
+    let stack_c = repo.create_stack(&["refresh-c"]);
+    let stack_c_before = repo.get_commit_sha(&stack_c[0]);
+
+    repo.simulate_remote_commit(
+        "conflict.txt",
+        "trunk version\n",
+        "Advance trunk with conflict",
+    );
+    repo.git(&["checkout", &stack_a[0]]).assert_success();
+
+    let output = repo.run_stax(&["refresh", "--all-stacks", "--no-submit", "--force", "--yes"]);
+    output.assert_failure();
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains(&format!("Stopped at '{}'", stack_b[0])),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("Done: {}", stack_a[0])),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("Remaining: {}", stack_c[0])),
+        "{stdout}"
+    );
+    assert!(
+        repo.has_rebase_in_progress(),
+        "expected conflict after refresh: {stdout}"
+    );
+    assert_eq!(
+        repo.get_commit_sha(&stack_c[0]),
+        stack_c_before,
+        "the stack after the conflict must not be restacked"
+    );
+    let stack_a_after_first_run = repo.get_commit_sha(&stack_a[0]);
+
+    repo.resolve_conflicts_ours();
+    repo.run_stax(&["continue"]).assert_success();
+    repo.run_stax(&["refresh", "--all-stacks", "--no-submit", "--force", "--yes"])
+        .assert_success();
+
+    assert_eq!(repo.current_branch(), stack_b[0]);
+    assert_eq!(
+        repo.get_commit_sha(&stack_a[0]),
+        stack_a_after_first_run,
+        "the completed stack must be a no-op on retry"
+    );
+    for branch in stack_a.iter().chain(stack_b.iter()).chain(stack_c.iter()) {
+        repo.git(&["merge-base", "--is-ancestor", "main", branch])
+            .assert_success();
+    }
+    assert_ne!(
+        repo.get_commit_sha(&stack_c[0]),
+        stack_c_before,
+        "the remaining stack should be restacked on retry"
+    );
+}
