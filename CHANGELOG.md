@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.104.0] - 2026-08-10
+
+### 🚀 Features
+
+- Add stax watch --iterations to bound the refresh loop ([#748](https://github.com/cesarferreira/stax/issues/748))
+
+### 🐛 Bug Fixes
+
+- Remove the last if_same_then_else site and enforce the lint ([#750](https://github.com/cesarferreira/stax/issues/750))
+- Surface the token-permissions hint on pr list and issue list ([#751](https://github.com/cesarferreira/stax/issues/751))
+- Stop stax ci and stax ready reporting "no CI" when the API call failed ([#754](https://github.com/cesarferreira/stax/issues/754))
+
+### 🧪 Testing
+
+- Cover mutually-exclusive flag validation across 8 commands ([#743](https://github.com/cesarferreira/stax/issues/743))
+- Cover dirty-working-tree and main-worktree guard rails ([#744](https://github.com/cesarferreira/stax/issues/744))
+- Cover GitHub API failure modes (403, 404, 409, unreachable host) ([#745](https://github.com/cesarferreira/stax/issues/745))
+- Cover stax prev, tmux popup guard, and watch interval selection ([#746](https://github.com/cesarferreira/stax/issues/746))
+- Cover Transaction rollback-on-drop and the unexercised tx API ([#747](https://github.com/cesarferreira/stax/issues/747))
+- Make the CLI-unreachable guards reachable instead of deleting them ([#752](https://github.com/cesarferreira/stax/issues/752))
+
+### ⚙️ Miscellaneous Tasks
+
+- Close the gaps in forge API call accounting ([#755](https://github.com/cesarferreira/stax/issues/755))
 ## [0.103.1] - 2026-08-09
 
 ### 🐛 Bug Fixes
@@ -11,6 +35,10 @@ All notable changes to this project will be documented in this file.
 ### 🧪 Testing
 
 - Cover refresh --all-stacks submission ([#740](https://github.com/cesarferreira/stax/issues/740))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.103.0] - 2026-08-05
 
 ### 🚀 Features
@@ -1878,46 +1906,13 @@ All notable changes to this project will be documented in this file.
 - Now when stax rs deletes a merged branch, it will:
 ## [0.3.0] - 2025-12-27
 
-### 💼 Other
-
-- Clearer message when deleting merged branches
-- Updated comments on PRs
-- Rename branch command
-- New-readme
-- Re-added screenshot
-- Updated readme
-- Added tests to rename
-- Tui
-- Reorder panes
-- Edit works properly
-- Details view
-- Updated SS
-- Remote comparisons
-- Stack reorder
-- Reordering preview
-- Updated readme
-- Updated readme
-- Added screenshots
-## [0.2.1] - 2025-12-27
-
-### 🐛 Bug Fixes
-
-- Fix release
-- Fixed pipeline
-
-### 💼 Other
-
-- Improved test accuracy
-- Workflow trigger
-- Added locked openssl for cross compilation
-- Bumped octocrab
-## [0.2.0] - 2025-12-26
-
 ### 🐛 Bug Fixes
 
 - Fix tracking
 - Fixing bco
 - Fix for icon in remote branches
+- Fix release
+- Fixed pipeline
 
 ### 💼 Other
 
@@ -2003,6 +1998,28 @@ All notable changes to this project will be documented in this file.
 - Improved bco
 - Tags publish
 - Bumped version
+- Improved test accuracy
+- Workflow trigger
+- Added locked openssl for cross compilation
+- Bumped octocrab
+- Clearer message when deleting merged branches
+- Updated comments on PRs
+- Rename branch command
+- New-readme
+- Re-added screenshot
+- Updated readme
+- Added tests to rename
+- Tui
+- Reorder panes
+- Edit works properly
+- Details view
+- Updated SS
+- Remote comparisons
+- Stack reorder
+- Reordering preview
+- Updated readme
+- Updated readme
+- Added screenshots
 
 ### 📚 Documentation
 
