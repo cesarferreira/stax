@@ -363,6 +363,7 @@ st config --set-ai
 | `st rs` / `st rs --restack` | Sync trunk, clean merged branches, optionally rebase |
 | `st sweep` | Classify all local branches (merged/gone/stale/active); `--delete` removes merged branches (including tracked merged PRs) and upstream-gone branches with no unique work |
 | `st refresh` | Sync trunk without merged-branch cleanup, restack current stack, then push/update PRs (`st update` is a back-compat alias) |
+| `st refresh --all-stacks` | Sync trunk once, then restack and submit every independent stack; needs a clean tree unless `--auto-stash-pop` is set and stops at the first conflict |
 | `st refresh --force --yes --no-prompt` | Run refresh without sync or submit prompts |
 | `st refresh --verbose` | Include detailed sync/restack/submit timing |
 | `st restack` | Rebase current stack onto parents locally |

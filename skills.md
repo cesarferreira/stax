@@ -343,6 +343,8 @@ stax sweep --json                  # Machine-readable branch classification (con
 stax refresh                        # Sync trunk, restack, then submit (no merged cleanup; no Sync plan prompt)
 stax refresh --no-pr                # Push only after trunk sync/restack
 stax refresh --no-submit            # Trunk sync/restack only
+stax refresh --all-stacks           # Sync trunk once, then restack/submit every independent stack; needs a clean tree unless --auto-stash-pop; stops at first conflict
+stax refresh --all-stacks --auto-stash-pop # Stash/pop dirty worktrees while refreshing every stack
 stax refresh --force                # Force sync without prompts first
 stax refresh --force --yes --no-prompt # Full refresh without sync/submit prompts
 stax refresh --verbose              # Show detailed sync/restack/submit timings
