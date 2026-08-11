@@ -28,10 +28,20 @@ fn parse_cli(args: &[&str]) -> Cli {
 fn parses_default_config_flag() {
     let cli = parse_cli(&["stax", "--default-config"]);
     assert!(cli.default_config);
+    assert!(!cli.skill);
     assert!(cli.command.is_none());
 
     let bare = parse_cli(&["stax"]);
     assert!(!bare.default_config);
+    assert!(!bare.skill);
+}
+
+#[test]
+fn parses_skill_flag() {
+    let cli = parse_cli(&["stax", "--skill"]);
+    assert!(cli.skill);
+    assert!(!cli.default_config);
+    assert!(cli.command.is_none());
 }
 
 #[test]

@@ -22,8 +22,12 @@ pub(crate) struct Cli {
     pub(crate) trace: bool,
 
     /// Print an annotated default config.toml (commented options and allowed values) and exit
-    #[arg(long = "default-config")]
+    #[arg(long = "default-config", conflicts_with = "skill")]
     pub(crate) default_config: bool,
+
+    /// Print the bundled AI agent skill (SKILL.md format) and exit
+    #[arg(long = "skill", conflicts_with = "default_config")]
+    pub(crate) skill: bool,
 
     #[command(subcommand)]
     pub(crate) command: Option<Commands>,

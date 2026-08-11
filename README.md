@@ -414,6 +414,7 @@ st config                  # open the config editor
 st config --set-ai         # pick AI agent + model
 st config --reset-ai       # clear saved AI pairing and re-prompt
 st --default-config       # print annotated config template (options + allowed values)
+st --skill                 # print bundled AI agent skill (SKILL.md format)
 ```
 
 Config lives at `~/.config/stax/config.toml`. When `STAX_CONFIG_DIR` is unset,
@@ -460,7 +461,7 @@ AI and editor integration guides:
 - [pi](docs/integrations/pi.md)
 - [PR templates + AI generation](docs/integrations/pr-templates-and-ai.md)
 
-Shared skill/instruction file used across agents: [skills.md](skills.md)
+Shared skill/instruction file used across agents: [skills.md](skills.md). Print the version bundled with your install: `st --skill`.
 
 `st changelog` can generate notes between refs, and `st changelog find [query]`
 or `st changelog --find [query]` fuzzy-finds commits in the selected range.

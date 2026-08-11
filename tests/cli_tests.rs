@@ -589,6 +589,26 @@ fn test_config_command() {
 }
 
 #[test]
+fn test_skill_flag_prints_bundled_agent_skill() {
+    let output = stax(&["--skill"]);
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("---\n"), "expected YAML frontmatter");
+    assert!(stdout.contains("name: stax"));
+    assert!(stdout.contains("stax_version:"));
+    assert!(stdout.contains("# Stax Skills"));
+    assert!(stdout.is_empty() || stdout.ends_with('\n'));
+}
+
+#[test]
+fn test_help_includes_skill_flag() {
+    let output = stax(&["--help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--skill"));
+}
+
+#[test]
 fn test_config_help_includes_reset_ai_flag() {
     let output = stax(&["config", "--help"]);
     assert!(output.status.success());

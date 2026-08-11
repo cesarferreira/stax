@@ -11,7 +11,10 @@ curl -fsSL https://opencode.ai/install | bash
 ## 2. Add the stax skill
 
 ```bash
+st setup --install-skills --skills opencode   # recommended
 mkdir -p ~/.config/opencode/skills/stax
+st --skill > ~/.config/opencode/skills/stax/SKILL.md
+# or fetch the markdown body only from GitHub:
 curl -o ~/.config/opencode/skills/stax/SKILL.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
 ```
 

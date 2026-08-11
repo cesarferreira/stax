@@ -3,7 +3,10 @@
 Install the stax skill file so Claude Code can drive stax workflows correctly.
 
 ```bash
-mkdir -p ~/.claude/skills
+st setup --install-skills --skills claude   # recommended
+mkdir -p ~/.claude/skills/stax
+st --skill > ~/.claude/skills/stax/SKILL.md
+# or fetch the markdown body only from GitHub:
 curl -o ~/.claude/skills/stax.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
 ```
 

@@ -3,7 +3,7 @@
 
 This document teaches AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, OpenCode, pi) how to use `stax` to manage stacked Git branches and PRs.
 
-> Installing this skill: run `stax skills update` (or `st setup --install-skills`). Per-agent setup details live in `docs/integrations/`.
+> Installing this skill: run `stax skills update` (or `st setup --install-skills`). To print the bundled skill (SKILL.md format): `st --skill`. Per-agent setup details live in `docs/integrations/`.
 
 ## What is Stax?
 
@@ -105,6 +105,7 @@ stax skills                    # List installed AI agent skill files + version s
 stax skills list               # Same as above
 stax skills update             # Download latest skills from GitHub and update all installed files
 stax skills update --dry-run   # Preview what would be updated without writing
+st --skill                     # Print bundled agent skill (SKILL.md format) to stdout
 
 stax lane [name] [prompt]      # Open interactive lane picker, or start/resume named AI lane
 stax absorb                    # Absorb staged changes into correct stack branches
@@ -244,6 +245,7 @@ stax completions zsh               # Generate completions: bash|zsh|fish|powersh
 
 # ~/.config/stax/config.toml; repo-root stax.toml overlays shared values
 # stax --default-config  # print full annotated template (all sections + allowed values)
+# st --skill             # print bundled AI agent skill (SKILL.md format)
 [submit]
 stack_links = "body"               # "comment" | "body" | "both" | "off"
 single_stack = "on"                # "on" | "off" — when "off", skip stack-link sync while only one PR exists; populates on all PRs as soon as the stack reaches 2

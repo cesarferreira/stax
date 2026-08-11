@@ -35,6 +35,10 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
+    if cli.skill {
+        return commands::skills::run_print_skill();
+    }
+
     if matches!(&cli.command, Some(Commands::UpdateCheck)) {
         update::run_background_check();
         return Ok(());

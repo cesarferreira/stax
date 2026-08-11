@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 const PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const REMOTE_URL: &str = "https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md";
+/// Skill body shipped with this binary (same source as `skills update` writes into harness files).
+const BUNDLED_SKILL_BODY: &str = include_str!("../../skills.md");
 
 /// Known agent skill file locations (relative to `$HOME`).
 pub struct SkillLocation {
@@ -257,6 +259,17 @@ fn skill_path(loc: &SkillLocation) -> Option<PathBuf> {
 /// For `has_frontmatter = true` files we prepend a minimal YAML front-matter so
 /// agent skill runners can load them.  For plain markdown files we write the body
 /// as-is (it already contains the `<!-- stax-skills-version: … -->` marker).
+/// Full agent skill document for the canonical SKILL.md format (YAML frontmatter + body).
+pub fn bundled_agent_skill_markdown() -> String {
+    build_content(BUNDLED_SKILL_BODY, &SKILL_LOCATIONS[0])
+}
+
+/// Print the bundled agent skill to stdout (for `st --skill`).
+pub fn run_print_skill() -> Result<()> {
+    print!("{}", bundled_agent_skill_markdown());
+    Ok(())
+}
+
 fn build_content(body: &str, loc: &SkillLocation) -> String {
     if loc.has_frontmatter {
         format!(
@@ -562,6 +575,15 @@ mod tests {
     fn test_extract_missing_returns_none() {
         let content = "# Stax Skills\nNo version here.\n";
         assert_eq!(extract_skills_version(content), None);
+    }
+
+    #[test]
+    fn test_bundled_agent_skill_has_frontmatter_and_pkg_version() {
+        let content = bundled_agent_skill_markdown();
+        assert!(content.starts_with("---\n"));
+        assert!(content.contains("name: stax"));
+        assert!(content.contains(&format!("stax_version: \"{PKG_VERSION}\"")));
+        assert!(content.contains("# Stax Skills"));
     }
 
     #[test]

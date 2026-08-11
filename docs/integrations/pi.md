@@ -18,6 +18,8 @@ This writes the skill to `~/.pi/agent/skills/stax/SKILL.md` (alongside the other
 
 ```bash
 mkdir -p ~/.pi/agent/skills/stax
+st --skill > ~/.pi/agent/skills/stax/SKILL.md
+# or fetch the markdown body only from GitHub:
 curl -o ~/.pi/agent/skills/stax/SKILL.md https://raw.githubusercontent.com/cesarferreira/stax/main/skills.md
 ```
 
