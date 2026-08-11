@@ -1,6 +1,7 @@
 //! End-to-end contracts for `st standup` machine-readable output.
 
 use crate::common::{OutputAssertions, TestRepo};
+use chrono::{Duration, Utc};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -47,6 +48,11 @@ fn env_with_auth(home: &TempDir) -> [(&str, &str); 2] {
 }
 
 async fn mount_populated_activity(server: &MockServer) {
+    let now = Utc::now();
+    let created_at = (now - Duration::hours(6)).to_rfc3339();
+    let closed_at = (now - Duration::hours(5)).to_rfc3339();
+    let reviewed_at = (now - Duration::hours(4)).to_rfc3339();
+
     Mock::given(method("GET"))
         .and(path("/user"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -95,8 +101,8 @@ async fn mount_populated_activity(server: &MockServer) {
                 "number": 42,
                 "title": "Mocked standup activity",
                 "html_url": "https://github.com/test/repo/pull/42",
-                "created_at": "2026-08-08T12:00:00Z",
-                "closed_at": "2026-08-08T13:00:00Z"
+                "created_at": created_at,
+                "closed_at": closed_at
             }]
         })))
         .mount(server)
@@ -107,7 +113,7 @@ async fn mount_populated_activity(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "state": "APPROVED",
-                "submitted_at": "2026-08-08T14:00:00Z",
+                "submitted_at": reviewed_at,
                 "user": { "login": "reviewer" }
             }
         ])))
