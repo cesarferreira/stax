@@ -226,7 +226,8 @@ fn format_harness_selection_summary(ids: &[String], origin: &SkillsUpdateOrigin)
     format!("Harnesses ({source}): {id_list}")
 }
 
-/// Parse `<!-- stax-skills-version: X.Y.Z -->` or `stax_version: "X.Y.Z"` from the
+/// Parse `<!-- stax-skills-version: X.Y.Z -->` or a quoted/unquoted
+/// `stax_version: X.Y.Z` YAML scalar from the
 /// first 40 lines of a skill file's content.
 pub fn extract_skills_version(content: &str) -> Option<String> {
     for line in content.lines().take(40) {

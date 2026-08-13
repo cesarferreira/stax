@@ -949,8 +949,9 @@ async fn test_skills_update_rewrites_when_pkg_version_advances_past_stale_marker
     );
 }
 
-/// Happy path: when the installed skill file already matches `PKG_VERSION`,
-/// `skills update` should skip it (independent of what the upstream marker says).
+/// Regression: a single-quoted YAML `stax_version` equal to `PKG_VERSION` is
+/// current. `skills update` must skip it (independent of what the upstream
+/// marker says), and `skills list` must not report it as stale.
 #[tokio::test]
 async fn test_skills_update_skips_when_already_at_pkg_version() {
     ensure_crypto_provider();
@@ -972,7 +973,7 @@ async fn test_skills_update_skips_when_already_at_pkg_version() {
     fs::write(
         &codex_skill,
         format!(
-            "---\nname: stax\nstax_version: \"{pkg_version}\"\n---\n\n<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n",
+            "---\nname: stax\nstax_version: '{pkg_version}'\n---\n\n<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n",
         ),
     )
     .expect("seed up-to-date codex skill");
@@ -1008,6 +1009,26 @@ async fn test_skills_update_skips_when_already_at_pkg_version() {
     assert_eq!(
         mtime_before, mtime_after,
         "file at PKG_VERSION must not be rewritten",
+    );
+
+    let list_output = Command::new(stax_bin())
+        .args(["skills", "list"])
+        .env("HOME", home.path())
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .expect("run stax skills list");
+    assert!(list_output.status.success(), "{:?}", list_output);
+
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(
+        list_stdout.contains("Codex") && list_stdout.contains(&format!("(v{pkg_version})")),
+        "list must show the single-quoted Codex skill at PKG_VERSION:\n{}",
+        list_stdout
+    );
+    assert!(
+        !list_stdout.contains("→ v"),
+        "list must not show a stale-version arrow for the single-quoted skill:\n{}",
+        list_stdout
     );
 }
 
