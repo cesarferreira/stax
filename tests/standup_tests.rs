@@ -40,6 +40,22 @@ fn setup_repo(home: &TempDir, api_base_url: &str) -> TestRepo {
     repo
 }
 
+#[test]
+fn standup_rejects_non_positive_hours() {
+    let repo = TestRepo::new();
+
+    for hours in ["--hours=-1", "--hours=0"] {
+        let output = repo.run_stax(&["standup", "--json", hours]);
+        output.assert_failure();
+
+        let stderr = TestRepo::stderr(&output);
+        assert!(
+            stderr.contains("value must be greater than zero"),
+            "expected positive-hours validation for {hours}, got: {stderr}"
+        );
+    }
+}
+
 fn env_with_auth(home: &TempDir) -> [(&str, &str); 2] {
     [
         ("HOME", home.path().to_str().expect("UTF-8 home path")),

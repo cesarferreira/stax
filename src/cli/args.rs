@@ -12,6 +12,14 @@ fn parse_positive_usize(value: &str) -> Result<usize, String> {
         .ok_or_else(|| "value must be greater than zero".to_string())
 }
 
+fn parse_positive_i64(value: &str) -> Result<i64, String> {
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "value must be greater than zero".to_string())
+}
+
 #[derive(Parser)]
 #[command(name = "stax")]
 #[command(version)]
@@ -1127,7 +1135,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         all: bool,
         /// Time window in hours (default: 24)
-        #[arg(long, default_value = "24")]
+        #[arg(long, default_value = "24", value_parser = parse_positive_i64)]
         hours: i64,
         /// Summarize standup using AI
         #[arg(long)]
