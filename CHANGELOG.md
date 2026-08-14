@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.104.6] - 2026-08-14
+
+### 🐛 Bug Fixes
+
+- Stop the Windows CI check-runs mock from losing responses ([#769](https://github.com/cesarferreira/stax/issues/769))
+
+### 💼 Other
+
+- Bump version
+- Bump version
+## [0.104.4] - 2026-08-14
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.104.3] - 2026-08-14
 
 ### 💼 Other
