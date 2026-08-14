@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.104.2] - 2026-08-14
+
+### 💼 Other
+
+- --skill feature
+- Fix standup forge mock timestamps so they stay within --hours window.
+
+### 🧪 Testing
+
+- Cover single-quoted skill versions ([#767](https://github.com/cesarferreira/stax/issues/767))
 ## [0.104.1] - 2026-08-10
 
 ### 🚀 Features
@@ -34,6 +44,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - Close the gaps in forge API call accounting ([#755](https://github.com/cesarferreira/stax/issues/755))
+- Release
 - Release
 ## [0.103.1] - 2026-08-09
 
