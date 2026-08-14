@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.104.2] - 2026-08-14
+## [0.104.3] - 2026-08-14
 
 ### 💼 Other
 
@@ -12,6 +12,10 @@ All notable changes to this project will be documented in this file.
 ### 🧪 Testing
 
 - Cover single-quoted skill versions ([#767](https://github.com/cesarferreira/stax/issues/767))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.104.1] - 2026-08-10
 
 ### 🚀 Features
