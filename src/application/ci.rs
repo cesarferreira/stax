@@ -57,19 +57,24 @@ impl RepositorySession {
         let repo_ref = &repo;
         let sha_ref = sha.as_str();
         let (overall_status, checks) = run_in_tokio_runtime_with(
-            || tokio::runtime::Runtime::new().map_err(Into::into),
+            || {
+                tokio::runtime::Runtime::new().with_context(|| {
+                    format!(
+                        "Failed to start an async runtime while loading CI for branch '{branch}'"
+                    )
+                })
+            },
             || {
                 let client = ForgeClient::new_for_trusted_remote(&trusted_remote, &config)
-                    .map_err(|error| provider_error(branch, forge, &error))?;
+                    .map_err(|error| provider_error(branch, forge, error))?;
                 Ok(async move {
                     client
                         .fetch_checks(repo_ref, sha_ref)
                         .await
-                        .map_err(|error| provider_error(branch, forge, &error))
+                        .map_err(|error| provider_error(branch, forge, error))
                 })
             },
-        )
-        .with_context(|| format!("Failed to load CI for branch '{branch}'"))?;
+        )?;
 
         let average_secs = history::estimate_run_average(&repo, &checks)
             .or_else(|| checks.iter().filter_map(|check| check.average_secs).max());
@@ -106,52 +111,60 @@ where
     })
 }
 
+/// Wraps a provider failure in actionable guidance while keeping the original
+/// error as the source, so `{:#}` still reports the technical root cause.
+///
+/// Classification reads the whole cause chain because callers wrap transport and
+/// decode failures in their own context, which hides the diagnosable text from
+/// the outermost message.
 fn provider_error(
     branch: &str,
     forge: crate::remote::ForgeType,
-    error: &anyhow::Error,
+    error: anyhow::Error,
 ) -> anyhow::Error {
-    let message = error.to_string().to_ascii_lowercase();
-    if message.contains("auth")
-        || message.contains("token")
-        || message.contains("unauthorized")
-        || message.contains("401")
-        || message.contains("403")
-        || message.contains("bad credentials")
+    let chain = format!("{error:#}").to_ascii_lowercase();
+    let guidance = if chain.contains("auth")
+        || chain.contains("token")
+        || chain.contains("unauthorized")
+        || chain.contains("401")
+        || chain.contains("403")
+        || chain.contains("bad credentials")
     {
-        anyhow!(
+        format!(
             "{forge} authentication failed while loading CI for branch '{branch}'; \
              run `stax auth` or refresh the configured provider credentials"
         )
-    } else if message.contains("timeout")
-        || message.contains("connect")
-        || message.contains("network")
-        || message.contains("dns")
-        || message.contains("request")
+    } else if chain.contains("timeout")
+        || chain.contains("connect")
+        || chain.contains("network")
+        || chain.contains("dns")
+        || chain.contains("request")
     {
-        anyhow!(
+        format!(
             "Could not reach {forge} while loading CI for branch '{branch}'; \
              check the network connection and provider URL"
         )
     } else {
-        anyhow!(
+        format!(
             "{forge} could not load CI for branch '{branch}'; \
              verify the provider configuration and credentials"
         )
-    }
+    };
+    error.context(guidance)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::run_in_tokio_runtime_with;
+    use super::{provider_error, run_in_tokio_runtime_with};
     use crate::application::{CiSummary, RepositorySession};
     use crate::cache::CiCache;
+    use crate::remote::ForgeType;
     use anyhow::{Result, anyhow};
     use std::env;
     use std::fs;
     use std::future::{Ready, ready};
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{Shutdown, TcpListener, TcpStream};
     use std::path::Path;
     use std::sync::{
         Arc, Mutex, MutexGuard,
@@ -299,6 +312,50 @@ mod tests {
         .to_string()
     }
 
+    const EMPTY_CHECK_RUNS_BODY: &str = r#"{"total_count":0,"check_runs":[]}"#;
+    const SUCCESSFUL_CHECK_RUNS_BODY: &str = r#"{"total_count":1,"check_runs":[{"id":1,"name":"tests","status":"completed","conclusion":"success"}]}"#;
+
+    /// Reads one HTTP request head, tolerating a header block that arrives split
+    /// across several TCP segments. Returns `None` for a connection that closed
+    /// without sending anything.
+    fn read_http_request(stream: &mut TcpStream) -> Option<String> {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(size) => {
+                    request.extend_from_slice(&chunk[..size]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        (!request.is_empty()).then(|| String::from_utf8_lossy(&request).into_owned())
+    }
+
+    /// Windows resets a socket that is dropped while bytes are still queued for
+    /// reading, which throws away the response the client has not consumed yet,
+    /// so half-close and drain the peer before releasing the connection.
+    fn respond_and_close(mut stream: TcpStream, body: &str) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+        let _ = stream.shutdown(Shutdown::Write);
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+        let mut drain = [0u8; 1024];
+        while matches!(stream.read(&mut drain), Ok(size) if size > 0) {}
+    }
+
     struct RecordingListener {
         endpoint: String,
         request_count: Arc<AtomicUsize>,
@@ -318,29 +375,20 @@ mod tests {
             let worker_authorization = Arc::clone(&authorization_seen);
             let (stop, stop_rx) = mpsc::channel();
             let worker = thread::spawn(move || {
-                let body = r#"{"total_count":0,"check_runs":[]}"#;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
                 loop {
                     if stop_rx.try_recv().is_ok() {
                         break;
                     }
                     match listener.accept() {
                         Ok((mut stream, _)) => {
-                            stream
-                                .set_read_timeout(Some(Duration::from_secs(2)))
-                                .unwrap();
-                            let mut request = [0u8; 8192];
-                            let size = stream.read(&mut request).unwrap_or(0);
-                            let request = String::from_utf8_lossy(&request[..size]);
+                            let Some(request) = read_http_request(&mut stream) else {
+                                continue;
+                            };
                             worker_count.fetch_add(1, Ordering::SeqCst);
                             if request.to_ascii_lowercase().contains("\nauthorization:") {
                                 worker_authorization.store(true, Ordering::SeqCst);
                             }
-                            let _ = stream.write_all(response.as_bytes());
+                            respond_and_close(stream, EMPTY_CHECK_RUNS_BODY);
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(5));
@@ -372,7 +420,7 @@ mod tests {
         endpoint: String,
         request_received: mpsc::Receiver<()>,
         release_response: Option<mpsc::Sender<()>>,
-        stop: mpsc::Sender<()>,
+        stop: Arc<AtomicBool>,
         worker: Option<thread::JoinHandle<()>>,
     }
 
@@ -383,10 +431,14 @@ mod tests {
             let endpoint = format!("http://{}", listener.local_addr().unwrap());
             let (request_received_tx, request_received) = mpsc::channel();
             let (release_response, release_response_rx) = mpsc::channel();
-            let (stop, stop_rx) = mpsc::channel();
+            let stop = Arc::new(AtomicBool::new(false));
+            let worker_stop = Arc::clone(&stop);
             let worker = thread::spawn(move || {
-                let mut served = 0;
-                while served < 2 && stop_rx.try_recv().is_err() {
+                // The gate only holds the first check-runs request: the client may
+                // reconnect for its statuses call or retry a request, and every
+                // connection after the gate opens must be answered immediately.
+                let mut gate_open = false;
+                while !worker_stop.load(Ordering::SeqCst) {
                     let (mut stream, _) = match listener.accept() {
                         Ok(connection) => connection,
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -395,39 +447,31 @@ mod tests {
                         }
                         Err(_) => break,
                     };
-                    stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .unwrap();
-                    let mut request = [0u8; 8192];
-                    let size = stream.read(&mut request).unwrap_or(0);
-                    let request = String::from_utf8_lossy(&request[..size]);
+                    let Some(request) = read_http_request(&mut stream) else {
+                        continue;
+                    };
                     let is_check_runs = request.contains("/check-runs");
 
-                    if served == 0 {
-                        request_received_tx.send(()).unwrap();
+                    if is_check_runs && !gate_open {
+                        let _ = request_received_tx.send(());
                         loop {
                             if release_response_rx
                                 .recv_timeout(Duration::from_millis(10))
                                 .is_ok()
-                                || stop_rx.try_recv().is_ok()
+                                || worker_stop.load(Ordering::SeqCst)
                             {
                                 break;
                             }
                         }
+                        gate_open = true;
                     }
 
                     let body = if is_check_runs {
-                        r#"{"total_count":1,"check_runs":[{"id":1,"name":"tests","status":"completed","conclusion":"success"}]}"#
+                        SUCCESSFUL_CHECK_RUNS_BODY
                     } else {
                         "[]"
                     };
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                        body.len(),
-                        body
-                    );
-                    let _ = stream.write_all(response.as_bytes());
-                    served += 1;
+                    respond_and_close(stream, body);
                 }
             });
 
@@ -447,7 +491,7 @@ mod tests {
         }
 
         fn release(&mut self) {
-            self.release_response.take().unwrap().send(()).unwrap();
+            let _ = self.release_response.take().unwrap().send(());
         }
     }
 
@@ -456,11 +500,55 @@ mod tests {
             if let Some(release) = self.release_response.take() {
                 let _ = release.send(());
             }
-            let _ = self.stop.send(());
+            self.stop.store(true, Ordering::SeqCst);
             if let Some(worker) = self.worker.take() {
                 worker.join().unwrap();
             }
         }
+    }
+
+    fn send_http_get(address: &str, path: &str) -> String {
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nconnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .unwrap();
+        stream.flush().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut response = String::new();
+        let _ = stream.read_to_string(&mut response);
+        response
+    }
+
+    #[test]
+    fn blocking_mock_server_gates_only_the_first_check_runs_request() {
+        let mut server = BlockingCheckRunsServer::start();
+        let address = server.endpoint.trim_start_matches("http://").to_string();
+        drop(TcpStream::connect(&address).unwrap());
+        let gated_address = address.clone();
+
+        let gated = thread::spawn(move || {
+            send_http_get(
+                &gated_address,
+                "/repos/owner/repository/commits/sha/check-runs",
+            )
+        });
+        server.wait_until_request_is_in_flight();
+        server.release();
+
+        assert!(gated.join().unwrap().contains(r#""conclusion":"success""#));
+        assert!(
+            send_http_get(&address, "/repos/owner/repository/commits/sha/check-runs")
+                .contains(r#""conclusion":"success""#),
+            "a retried check-runs request must be answered without another release"
+        );
+        assert!(
+            send_http_get(&address, "/repos/owner/repository/commits/sha/statuses").ends_with("[]")
+        );
     }
 
     fn test_session(remote_url: Option<&str>) -> (TempDir, RepositorySession, ConfigDirGuard) {
@@ -547,6 +635,99 @@ mod tests {
 
         assert_eq!(actual, expected);
         assert!(!dir.path().join(".git/stax/ci-cache.json").exists());
+    }
+
+    #[test]
+    fn provider_errors_keep_actionable_guidance_as_the_outermost_message() {
+        let error = provider_error(
+            "feature",
+            ForgeType::GitHub,
+            anyhow!("invalid type: sequence").context("Failed to fetch check runs"),
+        );
+
+        assert_eq!(
+            error.to_string(),
+            "GitHub could not load CI for branch 'feature'; \
+             verify the provider configuration and credentials"
+        );
+        assert!(format!("{error:#}").contains("invalid type: sequence"));
+    }
+
+    #[test]
+    fn provider_errors_classify_causes_hidden_behind_a_wrapping_context() {
+        let transport = provider_error(
+            "feature",
+            ForgeType::GitLab,
+            anyhow!("error sending request for url (http://127.0.0.1:1/repos)")
+                .context("Failed to fetch check runs"),
+        );
+        let credentials = provider_error(
+            "feature",
+            ForgeType::Gitea,
+            anyhow!("Bad credentials").context("Failed to fetch check runs"),
+        );
+
+        assert!(
+            transport.to_string().contains("Could not reach GitLab"),
+            "transport failure was misclassified: {transport:#}"
+        );
+        assert!(format!("{transport:#}").contains("error sending request"));
+        assert!(
+            credentials
+                .to_string()
+                .contains("Gitea authentication failed"),
+            "credential failure was misclassified: {credentials:#}"
+        );
+        assert!(format!("{credentials:#}").contains("Bad credentials"));
+    }
+
+    #[test]
+    fn unreadable_provider_response_reports_guidance_and_keeps_the_root_cause() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("not json at all"))
+                .mount(&server),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let repo = git2::Repository::init_opts(dir.path(), &options).unwrap();
+        commit_file(&repo, "initial\n");
+        repo.remote("origin", &format!("{}/owner/repo.git", server.uri()))
+            .unwrap();
+        let home = dir.path().join("home");
+        let config_dir = home.join(".config").join("stax");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                "[remote]\nname = \"origin\"\nbase_url = \"{}\"\napi_base_url = \"{}\"\nforge = \"github\"\n\
+                 [auth]\nuse_gh_cli = false\n",
+                server.uri(),
+                server.uri()
+            ),
+        )
+        .unwrap();
+        let secret = "unreadable-response-secret";
+        fs::write(config_dir.join(".credentials"), secret).unwrap();
+        let _home = HomeConfigGuard::set(&home);
+        let session = RepositorySession::open(dir.path()).unwrap();
+
+        let error = session.load_ci("main").unwrap_err();
+        let chain = format!("{error:#}");
+
+        assert!(
+            error.to_string().contains("CI for branch 'main'"),
+            "guidance is no longer the outermost message: {chain}"
+        );
+        assert!(
+            error.chain().count() > 1,
+            "the technical root cause was discarded: {chain}"
+        );
+        assert!(!chain.contains(secret));
     }
 
     #[test]
