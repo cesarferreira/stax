@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - Release
+- Release
 ## [0.104.1] - 2026-08-10
 
 ### 🚀 Features
