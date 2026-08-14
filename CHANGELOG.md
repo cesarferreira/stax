@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.104.5] - 2026-08-14
+
+### 🐛 Bug Fixes
+
+- Stop the Windows CI check-runs mock from losing responses
+## [0.104.4] - 2026-08-14
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.104.3] - 2026-08-14
 
 ### 💼 Other
