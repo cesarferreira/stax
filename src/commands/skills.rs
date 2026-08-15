@@ -227,8 +227,9 @@ fn format_harness_selection_summary(ids: &[String], origin: &SkillsUpdateOrigin)
 }
 
 /// Parse `<!-- stax-skills-version: X.Y.Z -->` or a quoted/unquoted
-/// `stax_version: X.Y.Z` YAML scalar from the
-/// first 40 lines of a skill file's content.
+/// `stax_version: X.Y.Z` YAML scalar from the first 40 lines of a skill file's
+/// content. A YAML comment after the scalar is ignored, but `#` inside a quoted
+/// scalar is preserved.
 pub fn extract_skills_version(content: &str) -> Option<String> {
     for line in content.lines().take(40) {
         let trimmed = line.trim();
@@ -240,14 +241,36 @@ pub fn extract_skills_version(content: &str) -> Option<String> {
             }
         }
 
-        if let Some(rest) = trimmed.strip_prefix("stax_version:") {
-            let v = rest.trim().trim_matches('"').trim_matches('\'').to_string();
-            if !v.is_empty() {
-                return Some(v);
-            }
+        if let Some(rest) = trimmed.strip_prefix("stax_version:")
+            && let Some(v) = extract_yaml_scalar(rest)
+        {
+            return Some(v);
         }
     }
     None
+}
+
+fn extract_yaml_scalar(value: &str) -> Option<String> {
+    let value = value.trim();
+    let (scalar, trailing) = match value.chars().next() {
+        Some(quote @ ('"' | '\'')) => {
+            let rest = &value[quote.len_utf8()..];
+            let (scalar, trailing) = rest.split_once(quote)?;
+            (scalar, trailing)
+        }
+        _ => (
+            value.split_once('#').map_or(value, |(scalar, _)| scalar),
+            "",
+        ),
+    };
+
+    let trailing = trailing.trim();
+    if !trailing.is_empty() && !trailing.starts_with('#') {
+        return None;
+    }
+
+    let scalar = scalar.trim();
+    (!scalar.is_empty()).then(|| scalar.to_string())
 }
 
 /// Build the full path for a skill location from `$HOME`.
@@ -570,6 +593,24 @@ mod tests {
     fn test_extract_yaml_single_quotes() {
         let content = "---\nstax_version: '1.0.0'\n---\n";
         assert_eq!(extract_skills_version(content), Some("1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_yaml_versions_with_comments() {
+        for (scalar, expected) in [
+            ("1.2.3 # installed by package manager", "1.2.3"),
+            ("\"1.2.3\" # installed by package manager", "1.2.3"),
+            ("'1.2.3' # installed by package manager", "1.2.3"),
+            ("\"1.2#3\" # installed by package manager", "1.2#3"),
+            ("'1.2#3' # installed by package manager", "1.2#3"),
+        ] {
+            let content = format!("---\nstax_version: {scalar}\n---\n");
+            assert_eq!(
+                extract_skills_version(&content).as_deref(),
+                Some(expected),
+                "failed to parse {scalar:?}"
+            );
+        }
     }
 
     #[test]

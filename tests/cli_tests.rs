@@ -949,11 +949,11 @@ async fn test_skills_update_rewrites_when_pkg_version_advances_past_stale_marker
     );
 }
 
-/// Regression: a single-quoted YAML `stax_version` equal to `PKG_VERSION` is
-/// current. `skills update` must skip it (independent of what the upstream
-/// marker says), and `skills list` must not report it as stale.
+/// Regression: a single-quoted YAML `stax_version` with a trailing comment and
+/// equal to `PKG_VERSION` is current. `skills update` must skip it (independent
+/// of what the upstream marker says), and `skills list` must not report it as stale.
 #[tokio::test]
-async fn test_skills_update_skips_when_already_at_pkg_version() {
+async fn test_skills_update_skips_commented_current_version() {
     ensure_crypto_provider();
     let mock_server = MockServer::start().await;
     let home = tempdir().expect("temp home");
@@ -973,7 +973,7 @@ async fn test_skills_update_skips_when_already_at_pkg_version() {
     fs::write(
         &codex_skill,
         format!(
-            "---\nname: stax\nstax_version: '{pkg_version}'\n---\n\n<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n",
+            "---\nname: stax\nstax_version: '{pkg_version}' # installed by package manager\n---\n\n<!-- stax-skills-version: 0.50.2 -->\n# Stax Skills\n",
         ),
     )
     .expect("seed up-to-date codex skill");
