@@ -138,6 +138,8 @@ mod submit_no_verify_tests;
 mod submit_plan_completions_tests;
 #[path = "submit_pr_base_tests.rs"]
 mod submit_pr_base_tests;
+#[path = "submit_temp_restack_tests.rs"]
+mod submit_temp_restack_tests;
 #[path = "sweep_tests.rs"]
 mod sweep_tests;
 #[path = "sync_confirm_tests.rs"]
