@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.104.7] - 2026-08-18
+
+### 🐛 Bug Fixes
+
+- Parse commented skill versions ([#772](https://github.com/cesarferreira/stax/issues/772))
+- Reject non-positive standup hours ([#770](https://github.com/cesarferreira/stax/issues/770))
+- Stop submit stalling silently on temporary restacks ([#775](https://github.com/cesarferreira/stax/issues/775))
 ## [0.104.6] - 2026-08-14
 
 ### 🐛 Bug Fixes
@@ -12,6 +19,10 @@ All notable changes to this project will be documented in this file.
 
 - Bump version
 - Bump version
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.104.4] - 2026-08-14
 
 ### ⚙️ Miscellaneous Tasks
