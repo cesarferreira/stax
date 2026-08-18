@@ -3035,7 +3035,7 @@ fn prepare_publish_sources_for_submit(
         );
     }
 
-    let worktrees_created = worktree.finish();
+    let (worktrees_created, replayed) = worktree.finish();
 
     // Empty branches inherit their parent's freshly-created ref. Processed in
     // stack order, so a chain of empty branches inherits transitively.
@@ -3064,9 +3064,10 @@ fn prepare_publish_sources_for_submit(
         );
         if verbose {
             println!(
-                "    {} {} rebase(s) across {} worktree(s)",
+                "    {} {} rebase(s): {} replayed in-memory, {} worktree(s) created",
                 "▸".dimmed(),
                 total,
+                replayed,
                 worktrees_created
             );
         }
@@ -3095,6 +3096,176 @@ fn truncate_branch_label(branch: &str) -> String {
     format!("{kept}…")
 }
 
+/// Replay `upstream..branch` onto `onto_ref` entirely in the object database.
+///
+/// A temporary restack only needs the resulting commit id — nobody ever looks
+/// at the files. `git merge-tree --write-tree` performs the three-way merge for
+/// each commit and writes the result straight to the object store, so this does
+/// the same work as `git rebase --onto` without materialising a working tree.
+/// On a 95k-file repository that is the difference between ~0.3s and ~45s.
+///
+/// Returns `Ok(None)` when the replay cannot be trusted and the caller should
+/// fall back to a real worktree rebase. That is deliberately conservative: it
+/// bails on anything where `git rebase` would do something more subtle than a
+/// straight three-way merge per commit.
+fn replay_rebase_in_odb(
+    workdir: &Path,
+    branch: &str,
+    onto_ref: &str,
+    upstream: &str,
+) -> Result<Option<String>> {
+    // Signing has to be done by git itself; never silently drop a signature.
+    if git_config_is_true(workdir, "commit.gpgsign") {
+        return Ok(None);
+    }
+
+    let range = format!("{upstream}..{branch}");
+
+    // `git rebase` flattens or drops merge commits; a per-commit three-way
+    // merge would quietly do something different.
+    match git_stdout(workdir, &["rev-list", "--merges", "--count", &range]) {
+        Some(count) if count.trim() != "0" => return Ok(None),
+        None => return Ok(None),
+        _ => {}
+    }
+
+    let Some(commits) = git_stdout(workdir, &["rev-list", "--reverse", &range]) else {
+        return Ok(None);
+    };
+
+    let Some(mut base) = git_stdout(workdir, &["rev-parse", &format!("{onto_ref}^{{commit}}")])
+        .map(|oid| oid.trim().to_string())
+        .filter(|oid| !oid.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    for commit in commits.split_whitespace() {
+        // The commit's own parent is the merge base for cherry-picking it.
+        // A root commit has none, so let the worktree path deal with it.
+        let Some(parent) = git_stdout(workdir, &["rev-parse", &format!("{commit}^")]) else {
+            return Ok(None);
+        };
+        let parent = parent.trim().to_string();
+
+        let merged = Command::new("git")
+            .args([
+                "merge-tree",
+                "--write-tree",
+                "--no-messages",
+                &format!("--merge-base={parent}"),
+                &base,
+                commit,
+            ])
+            .current_dir(workdir)
+            .output()
+            .context("Failed to replay commit for temporary restack")?;
+        if !merged.status.success() {
+            // Conflict: fall back so the user gets git's real conflict output.
+            return Ok(None);
+        }
+        let tree = String::from_utf8_lossy(&merged.stdout).trim().to_string();
+        if tree.is_empty() {
+            return Ok(None);
+        }
+
+        // A commit that replays to nothing is dropped, matching rebase's default.
+        let base_tree = git_stdout(workdir, &["rev-parse", &format!("{base}^{{tree}}")])
+            .map(|oid| oid.trim().to_string())
+            .unwrap_or_default();
+        if tree == base_tree {
+            continue;
+        }
+
+        // `--format=%B` appends its own newline, which `commit-tree` would store
+        // verbatim, producing a message one byte longer than the one `git
+        // rebase` keeps. `-z` terminates with NUL instead, so dropping that
+        // single byte leaves the exact original message. Kept as raw bytes so a
+        // non-UTF-8 message survives untouched.
+        let Some(mut message) =
+            git_stdout_bytes(workdir, &["log", "-1", "--format=%B", "-z", commit])
+        else {
+            return Ok(None);
+        };
+        if message.last() == Some(&0) {
+            message.pop();
+        }
+
+        // Author identity has to travel through environment variables, so it
+        // must be valid UTF-8; bail rather than mangle an unusual identity.
+        let (Some(author_name), Some(author_email), Some(author_date)) = (
+            git_stdout_utf8(workdir, &["log", "-1", "--format=%an", commit]),
+            git_stdout_utf8(workdir, &["log", "-1", "--format=%ae", commit]),
+            git_stdout_utf8(workdir, &["log", "-1", "--format=%aI", commit]),
+        ) else {
+            return Ok(None);
+        };
+
+        // Author identity is carried over and the committer becomes the current
+        // user, exactly as `git rebase` does.
+        let mut child = Command::new("git")
+            .args(["commit-tree", &tree, "-p", &base])
+            .env("GIT_AUTHOR_NAME", &author_name)
+            .env("GIT_AUTHOR_EMAIL", &author_email)
+            .env("GIT_AUTHOR_DATE", &author_date)
+            .current_dir(workdir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("Failed to write replayed commit")?;
+        {
+            use std::io::Write;
+            let stdin = child
+                .stdin
+                .as_mut()
+                .context("Failed to write replayed commit message")?;
+            stdin.write_all(&message)?;
+        }
+        let created = child
+            .wait_with_output()
+            .context("Failed to write replayed commit")?;
+        if !created.status.success() {
+            return Ok(None);
+        }
+        base = String::from_utf8_lossy(&created.stdout).trim().to_string();
+        if base.is_empty() {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(base))
+}
+
+fn git_stdout_bytes(workdir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(workdir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(output.stdout)
+}
+
+fn git_stdout(workdir: &Path, args: &[&str]) -> Option<String> {
+    git_stdout_bytes(workdir, args).map(|out| String::from_utf8_lossy(&out).to_string())
+}
+
+/// Like [`git_stdout`] but refuses to lossily convert invalid UTF-8, so callers
+/// can bail instead of silently corrupting the value.
+fn git_stdout_utf8(workdir: &Path, args: &[&str]) -> Option<String> {
+    let out = git_stdout_bytes(workdir, args)?;
+    String::from_utf8(out).ok().map(|s| s.trim().to_string())
+}
+
+fn git_config_is_true(workdir: &Path, key: &str) -> bool {
+    git_stdout(workdir, &["config", "--get", key])
+        .map(|value| matches!(value.trim(), "true" | "yes" | "on" | "1"))
+        .unwrap_or(false)
+}
+
 /// A single temporary worktree reused across every branch that needs a
 /// temporary restack.
 ///
@@ -3109,6 +3280,7 @@ struct ReusableSubmitWorktree<'a> {
     guard: Option<TemporarySubmitWorktree>,
     path: Option<PathBuf>,
     created: usize,
+    replayed: usize,
 }
 
 impl<'a> ReusableSubmitWorktree<'a> {
@@ -3119,12 +3291,31 @@ impl<'a> ReusableSubmitWorktree<'a> {
             guard: None,
             path: None,
             created: 0,
+            replayed: 0,
         }
     }
 
     /// Rebase `branch` onto `onto_ref` (dropping everything up to `upstream`)
     /// and return the resulting commit, without touching the user's checkout.
+    ///
+    /// Prefers an object-database replay, which needs no working tree at all;
+    /// falls back to a real worktree rebase when the replay cannot be trusted.
     fn rebased_head(&mut self, branch: &str, onto_ref: &str, upstream: &str) -> Result<String> {
+        if let Some(oid) = replay_rebase_in_odb(self.workdir, branch, onto_ref, upstream)? {
+            self.replayed += 1;
+            return Ok(oid);
+        }
+        self.worktree_rebased_head(branch, onto_ref, upstream)
+    }
+
+    /// The original path: check the branch out in a real worktree and run
+    /// `git rebase`. Only reached when the object-database replay bails.
+    fn worktree_rebased_head(
+        &mut self,
+        branch: &str,
+        onto_ref: &str,
+        upstream: &str,
+    ) -> Result<String> {
         let path = match &self.path {
             Some(path) => path.clone(),
             None => {
@@ -3188,11 +3379,13 @@ impl<'a> ReusableSubmitWorktree<'a> {
     }
 
     /// Tear the worktree down and report how many were created.
-    fn finish(mut self) -> usize {
+    /// Tear the worktree down and report (worktrees created, commits replayed
+    /// without one).
+    fn finish(mut self) -> (usize, usize) {
         if let Some(guard) = self.guard.as_mut() {
             let _ = guard.remove();
         }
-        self.created
+        (self.created, self.replayed)
     }
 }
 
