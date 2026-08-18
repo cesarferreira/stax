@@ -26,7 +26,7 @@ use futures_util::future::join_all;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -750,8 +750,14 @@ pub fn run(scope: SubmitScope, options: SubmitOptions) -> Result<()> {
         )?;
     }
 
-    let (publish_sources, _temporary_publish_refs) =
-        prepare_publish_sources_for_submit(&repo, &stack, &branches_to_submit, quiet)?;
+    let (publish_sources, _temporary_publish_refs) = prepare_publish_sources_for_submit(
+        &repo,
+        &stack,
+        &branches_to_submit,
+        &empty_set,
+        quiet,
+        verbose,
+    )?;
 
     // Build plan - determine which PRs need create vs update
     let planning_timer = LiveTimer::maybe_new(!quiet, "Planning PR operations...");
@@ -2894,10 +2900,12 @@ fn prepare_publish_sources_for_submit(
     repo: &GitRepo,
     stack: &Stack,
     branches_to_submit: &[String],
+    empty_set: &HashSet<&String>,
     quiet: bool,
+    verbose: bool,
 ) -> Result<(HashMap<String, PublishSource>, TemporaryPublishRefs)> {
     let workdir = repo.workdir()?;
-    let mut sources = HashMap::new();
+    let mut sources: HashMap<String, PublishSource> = HashMap::new();
     let temp_root = std::env::temp_dir().join(format!(
         "stax-submit-{}-{}",
         std::process::id(),
@@ -2905,49 +2913,114 @@ fn prepare_publish_sources_for_submit(
     ));
     let mut temporary_refs = TemporaryPublishRefs::empty(workdir);
 
-    for branch in branches_to_submit {
-        let meta = BranchMetadata::read(repo.inner(), branch)?
-            .with_context(|| format!("No metadata for branch {}", branch))?;
-        if is_imported_branch(&meta) {
-            continue;
+    // Work out up-front which branches actually need a rebase, so progress can
+    // be reported as "(i/N)" rather than leaving the user staring at nothing.
+    // (branch, upstream revision to rebase from, ref to rebase onto, temp ref)
+    let mut planned: Vec<(String, String, String, String)> = Vec::new();
+    // (empty branch, the parent whose prepared ref it inherits)
+    let mut reused_parent_sources: Vec<(String, String)> = Vec::new();
+    {
+        // Mirrors `sources` while planning, since the real refs don't exist yet.
+        let mut planned_sources: HashMap<String, PublishSource> = HashMap::new();
+        for branch in branches_to_submit {
+            let meta = BranchMetadata::read(repo.inner(), branch)?
+                .with_context(|| format!("No metadata for branch {}", branch))?;
+            if is_imported_branch(&meta) {
+                continue;
+            }
+
+            let parent_source = planned_sources.get(&meta.parent_branch_name).cloned();
+            let parent_will_publish_from_temp = parent_source.is_some();
+            let branch_needs_temp = stack
+                .branches
+                .get(branch)
+                .map(|br| br.needs_restack)
+                .unwrap_or(false)
+                || parent_will_publish_from_temp;
+
+            if !branch_needs_temp {
+                continue;
+            }
+
+            // An empty branch has, by definition, the same tip commit as its
+            // parent, so its rebased tip is exactly the parent's rebased tip.
+            // Reuse the parent's prepared ref instead of paying for a whole
+            // worktree checkout + rebase + teardown that cannot change anything.
+            if empty_set.contains(branch) {
+                if let Some(parent_source) = parent_source {
+                    planned_sources.insert(
+                        branch.clone(),
+                        PublishSource {
+                            commit_range_base: parent_source.source_ref.clone(),
+                            source_ref: parent_source.source_ref,
+                            oid: None,
+                            is_temporary: true,
+                        },
+                    );
+                    reused_parent_sources.push((branch.clone(), meta.parent_branch_name.clone()));
+                }
+                // With no parent temp ref, the branch already points at its
+                // parent's tip, so `refs/heads/<branch>` is already correct.
+                continue;
+            }
+
+            let onto_ref = parent_source
+                .map(|source| source.source_ref)
+                .unwrap_or_else(|| meta.parent_branch_name.clone());
+
+            // Placeholder: only `source_ref` is read while planning, and the
+            // real ref name is computed here so children chain onto it.
+            let temp_ref = format!(
+                "refs/stax/submit/{}/{}",
+                chrono_like_timestamp(),
+                hex_ref_component(branch)
+            );
+            planned_sources.insert(
+                branch.clone(),
+                PublishSource {
+                    source_ref: temp_ref.clone(),
+                    commit_range_base: onto_ref.clone(),
+                    oid: None,
+                    is_temporary: true,
+                },
+            );
+            planned.push((
+                branch.clone(),
+                meta.parent_branch_revision.clone(),
+                onto_ref,
+                temp_ref,
+            ));
         }
+    }
 
-        let parent_source_ref = sources
-            .get(&meta.parent_branch_name)
-            .map(|source: &PublishSource| source.source_ref.clone());
-        let parent_will_publish_from_temp = parent_source_ref.is_some();
-        let branch_needs_temp = stack
-            .branches
-            .get(branch)
-            .map(|br| br.needs_restack)
-            .unwrap_or(false)
-            || parent_will_publish_from_temp;
+    let total = planned.len();
+    let mut worktree = ReusableSubmitWorktree::new(workdir, &temp_root);
 
-        if !branch_needs_temp {
-            continue;
-        }
-
-        let onto_ref = parent_source_ref.unwrap_or_else(|| meta.parent_branch_name.clone());
-        let temp_ref = format!(
-            "refs/stax/submit/{}/{}",
-            chrono_like_timestamp(),
-            hex_ref_component(branch)
+    for (index, (branch, upstream, onto_ref, temp_ref)) in planned.into_iter().enumerate() {
+        let timer = LiveTimer::maybe_new(
+            !quiet,
+            &format!(
+                "Preparing restack {}/{}: {}...",
+                index + 1,
+                total,
+                truncate_branch_label(&branch)
+            ),
         );
-        let temp_worktree = temp_root.join(hex_ref_component(branch));
-        let oid = temporary_rebased_head(
-            workdir,
-            &temp_worktree,
-            branch,
-            &onto_ref,
-            &meta.parent_branch_revision,
-        )
-        .with_context(|| {
-            format!(
-                "Could not prepare temporary restack for submit of '{}'.\n\
-                 Run `stax restack` to resolve it locally, then retry submit.",
-                branch
-            )
-        })?;
+
+        let oid = match worktree.rebased_head(&branch, &onto_ref, &upstream) {
+            Ok(oid) => oid,
+            Err(err) => {
+                LiveTimer::maybe_finish_warn(timer, "FAILED");
+                return Err(err).with_context(|| {
+                    format!(
+                        "Could not prepare temporary restack for submit of '{}'.\n\
+                         Run `stax restack` to resolve it locally, then retry submit.",
+                        branch
+                    )
+                });
+            }
+        };
+        LiveTimer::maybe_finish_ok(timer, "done");
 
         update_ref(workdir, &temp_ref, &oid)?;
         temporary_refs.refs.push(temp_ref.clone());
@@ -2962,13 +3035,41 @@ fn prepare_publish_sources_for_submit(
         );
     }
 
-    if !sources.is_empty() && !quiet {
+    let worktrees_created = worktree.finish();
+
+    // Empty branches inherit their parent's freshly-created ref. Processed in
+    // stack order, so a chain of empty branches inherits transitively.
+    for (branch, parent) in reused_parent_sources {
+        let Some(parent_source) = sources.get(&parent).cloned() else {
+            continue;
+        };
+        sources.insert(
+            branch,
+            PublishSource {
+                commit_range_base: parent_source.source_ref.clone(),
+                source_ref: parent_source.source_ref,
+                oid: parent_source.oid,
+                is_temporary: true,
+            },
+        );
+    }
+
+    let prepared_refs = temporary_refs.refs.len();
+    if prepared_refs > 0 && !quiet {
         println!(
             "  {} Prepared {} temporary restack {} for submit",
             "▸".dimmed(),
-            sources.len().to_string().cyan(),
-            if sources.len() == 1 { "ref" } else { "refs" }
+            prepared_refs.to_string().cyan(),
+            if prepared_refs == 1 { "ref" } else { "refs" }
         );
+        if verbose {
+            println!(
+                "    {} {} rebase(s) across {} worktree(s)",
+                "▸".dimmed(),
+                total,
+                worktrees_created
+            );
+        }
     }
 
     if let Err(err) = remove_path_if_exists(&temp_root)
@@ -2985,57 +3086,114 @@ fn prepare_publish_sources_for_submit(
     Ok((sources, temporary_refs))
 }
 
-fn temporary_rebased_head(
-    workdir: &Path,
-    temp_worktree: &Path,
-    branch: &str,
-    onto_ref: &str,
-    upstream: &str,
-) -> Result<String> {
-    if let Some(parent) = temp_worktree.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!("Failed to create temporary directory {}", parent.display())
-        })?;
+fn truncate_branch_label(branch: &str) -> String {
+    const MAX: usize = 40;
+    if branch.chars().count() <= MAX {
+        return branch.to_string();
+    }
+    let kept: String = branch.chars().take(MAX - 1).collect();
+    format!("{kept}…")
+}
+
+/// A single temporary worktree reused across every branch that needs a
+/// temporary restack.
+///
+/// Creating and tearing down one worktree per branch means a full working-tree
+/// checkout plus an `rm -rf` per branch, which in a large repository is tens of
+/// seconds each and dominates submit time for anything but a trivial stack.
+/// Checking out successive branches in one worktree only touches the files that
+/// actually differ between them.
+struct ReusableSubmitWorktree<'a> {
+    workdir: &'a Path,
+    root: PathBuf,
+    guard: Option<TemporarySubmitWorktree>,
+    path: Option<PathBuf>,
+    created: usize,
+}
+
+impl<'a> ReusableSubmitWorktree<'a> {
+    fn new(workdir: &'a Path, root: &Path) -> Self {
+        Self {
+            workdir,
+            root: root.to_path_buf(),
+            guard: None,
+            path: None,
+            created: 0,
+        }
     }
 
-    let add = Command::new("git")
-        .args(["worktree", "add", "--detach"])
-        .arg(temp_worktree)
-        .arg(branch)
-        .current_dir(workdir)
-        .output()
-        .context("Failed to create temporary submit worktree")?;
-    if !add.status.success() {
-        anyhow::bail!("{}", command_output_details("git worktree add", &add));
+    /// Rebase `branch` onto `onto_ref` (dropping everything up to `upstream`)
+    /// and return the resulting commit, without touching the user's checkout.
+    fn rebased_head(&mut self, branch: &str, onto_ref: &str, upstream: &str) -> Result<String> {
+        let path = match &self.path {
+            Some(path) => path.clone(),
+            None => {
+                let path = self.root.join("worktree");
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!("Failed to create temporary directory {}", parent.display())
+                    })?;
+                }
+                let add = Command::new("git")
+                    .args(["worktree", "add", "--detach"])
+                    .arg(&path)
+                    .arg(branch)
+                    .current_dir(self.workdir)
+                    .output()
+                    .context("Failed to create temporary submit worktree")?;
+                if !add.status.success() {
+                    anyhow::bail!("{}", command_output_details("git worktree add", &add));
+                }
+                self.guard = Some(TemporarySubmitWorktree::new(self.workdir, &path));
+                self.path = Some(path.clone());
+                self.created += 1;
+                path
+            }
+        };
+
+        // The worktree is already detached at `branch` on the very first use;
+        // afterwards it is parked on the previous branch's rebase result.
+        let checkout = Command::new("git")
+            .args(["checkout", "--force", "--detach", branch])
+            .current_dir(&path)
+            .output()
+            .context("Failed to check out branch in temporary submit worktree")?;
+        if !checkout.status.success() {
+            anyhow::bail!("{}", command_output_details("git checkout", &checkout));
+        }
+
+        let rebase = Command::new("git")
+            .args(["rebase", "--onto", onto_ref, upstream])
+            .current_dir(&path)
+            .output()
+            .context("Failed to run temporary submit rebase")?;
+        if !rebase.status.success() {
+            let _ = Command::new("git")
+                .args(["rebase", "--abort"])
+                .current_dir(&path)
+                .output();
+            anyhow::bail!("{}", command_output_details("git rebase", &rebase));
+        }
+
+        let rev = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&path)
+            .output()
+            .context("Failed to read temporary submit head")?;
+        if !rev.status.success() {
+            anyhow::bail!("{}", command_output_details("git rev-parse", &rev));
+        }
+
+        Ok(String::from_utf8_lossy(&rev.stdout).trim().to_string())
     }
-    let mut temp_worktree_guard = TemporarySubmitWorktree::new(workdir, temp_worktree);
 
-    let rebase = Command::new("git")
-        .args(["rebase", "--onto", onto_ref, upstream])
-        .current_dir(temp_worktree)
-        .output()
-        .context("Failed to run temporary submit rebase")?;
-    if !rebase.status.success() {
-        let _ = Command::new("git")
-            .args(["rebase", "--abort"])
-            .current_dir(temp_worktree)
-            .output();
-        anyhow::bail!("{}", command_output_details("git rebase", &rebase));
+    /// Tear the worktree down and report how many were created.
+    fn finish(mut self) -> usize {
+        if let Some(guard) = self.guard.as_mut() {
+            let _ = guard.remove();
+        }
+        self.created
     }
-
-    let rev = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(temp_worktree)
-        .output()
-        .context("Failed to read temporary submit head")?;
-    if !rev.status.success() {
-        anyhow::bail!("{}", command_output_details("git rev-parse", &rev));
-    }
-    let oid = String::from_utf8_lossy(&rev.stdout).trim().to_string();
-
-    temp_worktree_guard.remove()?;
-
-    Ok(oid)
 }
 
 fn update_ref(workdir: &Path, refname: &str, oid: &str) -> Result<()> {
