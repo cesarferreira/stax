@@ -497,6 +497,7 @@ pub fn run_update_with(
         }
 
         let action = if file_exists { "update" } else { "install" };
+        let result = if file_exists { "updated" } else { "installed" };
         let content = build_content(&remote_body, loc);
 
         if dry_run {
@@ -518,7 +519,7 @@ pub fn run_update_with(
                 "{}  {} {}",
                 "✓".green(),
                 loc.name.cyan(),
-                format!("{action}d: {}", path.display()).dimmed(),
+                format!("{result}: {}", path.display()).dimmed(),
             );
             updated += 1;
         }
