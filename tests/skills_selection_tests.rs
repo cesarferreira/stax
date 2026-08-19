@@ -97,6 +97,11 @@ async fn setup_install_skills_flag_with_skills_list_installs_subset() {
         .expect("run setup");
 
     assert!(output.status.success(), "{:?}", output);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("installed:"),
+        "stdout was: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 
     assert!(home.path().join(".codex/skills/stax/SKILL.md").exists());
     assert!(home.path().join(".cursor/skills/stax/SKILL.md").exists());
@@ -213,6 +218,14 @@ async fn skills_update_respects_configured_harnesses() {
         "[skills]\nharnesses = [\"codex\"]\n",
     )
     .expect("write config");
+    let installed_skill = home.path().join(".codex/skills/stax/SKILL.md");
+    std::fs::create_dir_all(installed_skill.parent().expect("skill parent"))
+        .expect("create skill dir");
+    std::fs::write(
+        &installed_skill,
+        "<!-- stax-skills-version: 0.50.0 -->\n# Old Stax Skills\n",
+    )
+    .expect("write outdated skill");
 
     Mock::given(method("GET"))
         .and(path("/skills.md"))
@@ -238,6 +251,11 @@ async fn skills_update_respects_configured_harnesses() {
         .expect("skills update");
 
     assert!(output.status.success(), "{:?}", output);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("updated:"),
+        "stdout was: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     assert!(home.path().join(".codex/skills/stax/SKILL.md").exists());
     assert!(!home.path().join(".cursor/skills/stax/SKILL.md").exists());
 }
