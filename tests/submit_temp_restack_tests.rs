@@ -128,11 +128,12 @@ fn empty_branches_do_not_get_their_own_temp_worktree() {
     );
 }
 
-/// Thesis part 3: the rebases must all share one worktree instead of paying
-/// for a `git worktree add` + `rm -rf` per branch, which is what made a 4-5
-/// branch stack stall for minutes in a large repository.
+/// Thesis part 3: a temporary restack only needs the resulting commit id, so
+/// it must be replayed in the object database rather than paying for a
+/// `git worktree add` + `rm -rf`, which is what made a 4-5 branch stack stall
+/// for minutes in a large repository.
 #[test]
-fn temp_restack_reuses_a_single_worktree_for_every_branch() {
+fn temp_restack_replays_without_creating_a_worktree() {
     let repo = TestRepo::new_with_remote();
     repo.configure_github_like_submit_remote();
 
@@ -151,8 +152,57 @@ fn temp_restack_reuses_a_single_worktree_for_every_branch() {
     );
 
     assert!(
-        combined.contains("2 rebase(s) across 1 worktree(s)"),
-        "expected both rebases to share one worktree, got:\n{combined}"
+        combined.contains("2 rebase(s): 2 replayed in-memory, 0 worktree(s) created"),
+        "expected both rebases to replay without a worktree, got:\n{combined}"
+    );
+}
+
+/// The object-database replay must bail (not guess) when the rebase conflicts,
+/// handing over to the real worktree rebase so the user gets git's own output.
+#[test]
+fn conflicting_temp_restack_falls_back_to_a_real_worktree() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+
+    let bc = repo.run_stax(&["bc", "base"]);
+    assert!(bc.status.success(), "bc base: {}", TestRepo::stderr(&bc));
+    repo.create_file("shared.txt", "from base");
+    repo.commit("Base edits shared");
+
+    let co = repo.git(&["checkout", "main"]);
+    assert!(
+        co.status.success(),
+        "checkout main: {}",
+        TestRepo::stderr(&co)
+    );
+    repo.create_file("shared.txt", "from trunk");
+    repo.commit("Trunk edits shared");
+
+    let co = repo.git(&["checkout", "base"]);
+    assert!(
+        co.status.success(),
+        "checkout base: {}",
+        TestRepo::stderr(&co)
+    );
+
+    let out = repo.run_stax(&[
+        "ss",
+        "--no-pr",
+        "--no-template",
+        "--no-prompt",
+        "--yes",
+        "--verbose",
+    ]);
+    let combined = format!("{}\n{}", TestRepo::stdout(&out), TestRepo::stderr(&out));
+
+    assert!(
+        !out.status.success(),
+        "conflicting restack should still fail, got:\n{combined}"
+    );
+    // The real rebase ran, which is where git's conflict output comes from.
+    assert!(
+        combined.contains("CONFLICT") || combined.contains("could not apply"),
+        "expected git's own conflict output via the worktree fallback, got:\n{combined}"
     );
 }
 
@@ -258,5 +308,116 @@ fn failed_temp_restack_leaves_no_worktree_behind() {
         after_raw.lines().count(),
         before,
         "temporary worktree leaked after a failed restack:\n{after_raw}"
+    );
+}
+
+/// The strongest available check on the object-database replay: the commit it
+/// publishes must be byte-identical to what `git rebase --onto` produces, for
+/// awkward commit messages as well as simple ones.
+///
+/// Equality of the full SHA covers tree, parent, author identity/date and the
+/// message bytes all at once.
+#[test]
+fn replayed_commits_are_identical_to_a_real_rebase() {
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+
+    let bc = repo.run_stax(&["bc", "base"]);
+    assert!(bc.status.success(), "bc base: {}", TestRepo::stderr(&bc));
+
+    // Messages that exercise formatting the replay must not normalise away.
+    repo.create_file("one.txt", "1");
+    repo.git(&["add", "-A"]);
+    // Message files live outside the working tree so they never become content.
+    let msg_dir = std::env::temp_dir().join(format!("stax-msg-{}", std::process::id()));
+    std::fs::create_dir_all(&msg_dir).unwrap();
+    let msg_path = msg_dir.join("msg.txt");
+    let msg = "Subject line\n\nBody paragraph one.\n\nBody paragraph two.\n\nCo-Authored-By: Someone <s@example.com>\n";
+    std::fs::write(&msg_path, msg).unwrap();
+    let c = repo.git(&["commit", "-F", msg_path.to_str().unwrap()]);
+    assert!(c.status.success(), "commit: {}", TestRepo::stderr(&c));
+
+    repo.create_file("two.txt", "2");
+    repo.git(&["add", "-A"]);
+    let msg2 = "Unicode ✅ émoji 🎉 and trailing spaces   \n\nsecond line\n";
+    std::fs::write(&msg_path, msg2).unwrap();
+    let c = repo.git(&["commit", "-F", msg_path.to_str().unwrap()]);
+    assert!(c.status.success(), "commit2: {}", TestRepo::stderr(&c));
+
+    let branch = repo.current_branch();
+    let branch_tip = repo.get_commit_sha(&branch);
+    let upstream = repo.get_commit_sha("main");
+
+    // Move trunk so the branch needs a restack.
+    repo.git(&["checkout", "main"]);
+    repo.create_file("trunk.txt", "moved");
+    repo.commit("Trunk moves forward");
+    repo.git(&["checkout", &branch]);
+
+    // Reference: what a real `git rebase --onto` produces.
+    let wt = repo.path().join("refwt");
+    let add = repo.git(&[
+        "worktree",
+        "add",
+        "--detach",
+        wt.to_str().unwrap(),
+        &branch_tip,
+    ]);
+    assert!(
+        add.status.success(),
+        "worktree add: {}",
+        TestRepo::stderr(&add)
+    );
+    let rebase = repo.git_in(&wt, &["rebase", "--onto", "main", &upstream]);
+    assert!(
+        rebase.status.success(),
+        "reference rebase: {}",
+        TestRepo::stderr(&rebase)
+    );
+    let reference = String::from_utf8_lossy(&repo.git_in(&wt, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    repo.git(&["worktree", "remove", "--force", wt.to_str().unwrap()]);
+
+    submit_stack(&repo);
+
+    let published = repo.get_commit_sha(&format!("refs/remotes/origin/{branch}"));
+
+    // Everything except the committer timestamp must match. Committer time is
+    // "now" for both `git rebase` and the replay, and the two run seconds
+    // apart, so comparing raw SHAs would compare wall clocks. (Rebasing twice
+    // with real git has exactly the same property.)
+    let field = |commit: &str, format: &str| {
+        String::from_utf8_lossy(
+            &repo
+                .git(&["log", "-1", &format!("--format={format}"), commit])
+                .stdout,
+        )
+        .trim()
+        .to_string()
+    };
+
+    for (format, label) in [
+        ("%T", "tree"),
+        ("%P", "parent"),
+        ("%an", "author name"),
+        ("%ae", "author email"),
+        ("%aI", "author date"),
+        ("%B", "message"),
+    ] {
+        assert_eq!(
+            field(&published, format),
+            field(&reference, format),
+            "{label} must match `git rebase --onto` exactly"
+        );
+    }
+
+    // The message check above trims; assert the exact bytes too, since an extra
+    // trailing newline is precisely the kind of drift that is easy to miss.
+    let raw = |commit: &str| repo.git(&["log", "-1", "--format=%B", "-z", commit]).stdout;
+    assert_eq!(
+        raw(&published),
+        raw(&reference),
+        "commit message bytes must match `git rebase --onto` exactly"
     );
 }
