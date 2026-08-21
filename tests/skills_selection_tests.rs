@@ -298,6 +298,12 @@ async fn skills_update_all_overrides_configured_selection() {
 
     assert!(output.status.success(), "{:?}", output);
     assert!(home.path().join(".codex/skills/stax/SKILL.md").exists());
-    assert!(home.path().join(".cursor/skills/stax/SKILL.md").exists());
+    assert!(
+        home.path()
+            .join(".config/opencode/skills/stax/SKILL.md")
+            .exists()
+    );
     assert!(home.path().join(".claude/skills/stax/SKILL.md").exists());
+    assert!(home.path().join(".cursor/skills/stax/SKILL.md").exists());
+    assert!(home.path().join(".pi/agent/skills/stax/SKILL.md").exists());
 }
