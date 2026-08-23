@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.105.1] - 2026-08-23
+
+### 🧪 Testing
+
+- *(ci)* Make stax ci integration coverage deterministic ([#788](https://github.com/cesarferreira/stax/issues/788))
 ## [0.105.0] - 2026-08-23
 
 ### 🐛 Bug Fixes
@@ -20,6 +25,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - Move the toolchain to 1.98.0 everywhere ([#786](https://github.com/cesarferreira/stax/issues/786))
+- Release
 ## [0.104.8] - 2026-08-19
 
 ### ⚡ Performance
