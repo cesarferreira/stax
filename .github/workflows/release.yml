@@ -38,7 +38,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.96.1
+          toolchain: 1.98.0
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
@@ -94,7 +94,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.96.1
+          toolchain: 1.98.0
           targets: ${{ matrix.target }}
 
       - name: Cache cargo

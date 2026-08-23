@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 version = "0.104.8"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.98"
 license = "MIT"
 authors = ["Cesar Ferreira"]
 repository = "https://github.com/cesarferreira/stax"
