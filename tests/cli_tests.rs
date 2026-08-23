@@ -20,6 +20,29 @@ fn stax(args: &[&str]) -> std::process::Output {
         .expect("Failed to execute stax")
 }
 
+#[test]
+fn repository_commands_outside_git_show_actionable_error() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let output = Command::new(stax_bin())
+        .current_dir(dir.path())
+        .arg("status")
+        .env("STAX_CONFIG_DIR", dir.path().join("config"))
+        .env("STAX_DISABLE_UPDATE_CHECK", "1")
+        .output()
+        .expect("Failed to execute stax");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Not in a Git repository. Run this command from inside a Git repository."),
+        "expected actionable repository error, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("class=Repository"),
+        "expected libgit2 internals to stay hidden, got: {stderr}"
+    );
+}
+
 fn stax_with_home(args: &[&str], home: &std::path::Path) -> std::process::Output {
     Command::new(stax_bin())
         .args(args)

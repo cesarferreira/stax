@@ -262,7 +262,11 @@ struct BranchParentMetadata {
 impl GitRepo {
     /// Open the repository at the current directory or any parent
     pub fn open() -> Result<Self> {
-        let repo = Repository::discover(".").context("Not in a git repository")?;
+        let repo = Repository::discover(".").map_err(|_| {
+            anyhow::anyhow!(
+                "Not in a Git repository. Run this command from inside a Git repository."
+            )
+        })?;
         Ok(Self { repo })
     }
 
