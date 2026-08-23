@@ -2,11 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.105.0] - 2026-08-23
+
+### 🐛 Bug Fixes
+
+- Report installed skills correctly ([#779](https://github.com/cesarferreira/stax/issues/779))
+
+### 💼 Other
+
+- Improve error outside Git repositories ([#784](https://github.com/cesarferreira/stax/issues/784))
+- Octocrab 0.54.1, adapt to newly-required PR fields ([#785](https://github.com/cesarferreira/stax/issues/785))
+
+### 🧪 Testing
+
+- Cover every skills update --all harness ([#782](https://github.com/cesarferreira/stax/issues/782))
+
+### ⚙️ Miscellaneous Tasks
+
+- Move the toolchain to 1.98.0 everywhere ([#786](https://github.com/cesarferreira/stax/issues/786))
 ## [0.104.8] - 2026-08-19
 
 ### ⚡ Performance
 
 - Replay temporary submit restacks in the object database ([#776](https://github.com/cesarferreira/stax/issues/776))
+
+### ⚙️ Miscellaneous Tasks
+
+- Release
 ## [0.104.7] - 2026-08-18
 
 ### 🐛 Bug Fixes
