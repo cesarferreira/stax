@@ -229,9 +229,7 @@ impl HunkSplitApp {
         let prev_states = self.selected[file_idx].clone();
         let all_selected = prev_states.iter().all(|&s| s);
         let new_val = !all_selected;
-        for s in &mut self.selected[file_idx] {
-            *s = new_val;
-        }
+        self.selected[file_idx].fill(new_val);
         self.undo_stack.push(UndoAction::ToggleFile {
             file_idx,
             prev_states,
