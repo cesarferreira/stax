@@ -1,4 +1,4 @@
-FROM rust:1.96.1-trixie
+FROM rust:1.98.0-trixie
 
 ARG CARGO_NEXTEST_VERSION=0.9.114
 
