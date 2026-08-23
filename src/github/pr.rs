@@ -53,20 +53,20 @@ struct ApiIssueComment {
     created_at: DateTime<Utc>,
 }
 
-fn octocrab_pr_number(pr: &PullRequest) -> Result<u64> {
-    pr.number.context("GitHub PR response missing number")
+// As of octocrab 0.54 `number`, `head` and `base` are required fields on
+// `PullRequest`, so a response missing any of them fails to deserialize before
+// it ever reaches this code. These accessors stay as the single place that knows
+// how to read them, but no longer need to report absence.
+fn octocrab_pr_number(pr: &PullRequest) -> u64 {
+    pr.number
 }
 
-fn octocrab_pr_head(pr: &PullRequest) -> Result<&Head> {
-    pr.head
-        .as_deref()
-        .context("GitHub PR response missing head")
+fn octocrab_pr_head(pr: &PullRequest) -> &Head {
+    &pr.head
 }
 
-fn octocrab_pr_base(pr: &PullRequest) -> Result<&Base> {
-    pr.base
-        .as_deref()
-        .context("GitHub PR response missing base")
+fn octocrab_pr_base(pr: &PullRequest) -> &Base {
+    &pr.base
 }
 
 fn octocrab_pr_state(pr: &PullRequest) -> String {
@@ -78,10 +78,10 @@ fn octocrab_pr_state(pr: &PullRequest) -> String {
 
 fn octocrab_pr_info_with_state(pr: &PullRequest, state: String) -> Result<PrInfo> {
     Ok(PrInfo {
-        number: octocrab_pr_number(pr)?,
+        number: octocrab_pr_number(pr),
         state,
         is_draft: pr.draft.unwrap_or(false),
-        base: octocrab_pr_base(pr)?.ref_field.clone(),
+        base: octocrab_pr_base(pr).ref_field.clone(),
     })
 }
 
@@ -90,7 +90,7 @@ fn octocrab_pr_info(pr: &PullRequest) -> Result<PrInfo> {
 }
 
 fn octocrab_pr_info_with_head(pr: &PullRequest) -> Result<PrInfoWithHead> {
-    let head = octocrab_pr_head(pr)?;
+    let head = octocrab_pr_head(pr);
 
     Ok(PrInfoWithHead {
         head_label: head.label.clone(),
@@ -422,7 +422,7 @@ impl GitHubClient {
         };
 
         for pr in &prs.items {
-            let head = octocrab_pr_head(pr)?;
+            let head = octocrab_pr_head(pr);
             if head.ref_field != branch {
                 continue;
             }
@@ -483,7 +483,7 @@ impl GitHubClient {
             };
 
             for pr in &prs.items {
-                let head = octocrab_pr_head(pr)?.ref_field.clone();
+                let head = octocrab_pr_head(pr).ref_field.clone();
                 if prs_by_head.contains_key(&head) {
                     continue;
                 }
@@ -1110,7 +1110,7 @@ impl GitHubClient {
             .get(pr_number)
             .await
             .context("Failed to get PR")?;
-        Ok(octocrab_pr_head(&pr)?.sha.clone())
+        Ok(octocrab_pr_head(&pr).sha.clone())
     }
 
     /// List all issue comments (conversation comments) on a PR
@@ -3128,10 +3128,16 @@ mod tests {
             .await
             .expect_err("missing head should fail");
 
+        // The contract is that a malformed response surfaces an actionable
+        // error naming the absent field rather than panicking or silently
+        // returning a PR with an empty head. Which layer reports it is an
+        // implementation detail: before octocrab 0.54 `head` was optional and
+        // stax added the context itself; from 0.54 it is a required field, so
+        // serde rejects the response during deserialization.
         let msg = format!("{:#}", err);
         assert!(
-            msg.contains("GitHub PR response missing head"),
-            "expected missing head context, got: {msg}"
+            msg.contains("head"),
+            "expected an error naming the missing head field, got: {msg}"
         );
     }
 

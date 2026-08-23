@@ -175,6 +175,9 @@ async fn track_all_prs_fetches_stacked_branches_sets_upstreams_and_parents() {
     Mock::given(method("GET"))
         .and(path("/repos/test-owner/test-repo/pulls/101"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 101,
+            "url": "https://api.github.com/repos/test-owner/test-repo/pulls/101",
+            "locked": false,
             "number": 101,
             "head": { "ref": "root-pr", "sha": "1111111111111111111111111111111111111111" },
             "base": { "ref": "main", "sha": "0000000000000000000000000000000000000000" },
@@ -185,6 +188,9 @@ async fn track_all_prs_fetches_stacked_branches_sets_upstreams_and_parents() {
     Mock::given(method("GET"))
         .and(path("/repos/test-owner/test-repo/pulls/102"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 102,
+            "url": "https://api.github.com/repos/test-owner/test-repo/pulls/102",
+            "locked": false,
             "number": 102,
             "head": { "ref": "child-pr", "sha": "2222222222222222222222222222222222222222" },
             "base": { "ref": "root-pr", "sha": "1111111111111111111111111111111111111111" },

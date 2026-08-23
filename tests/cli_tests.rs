@@ -205,7 +205,13 @@ fn test_help() {
     assert!(stdout.contains("status"));
     assert!(stdout.contains("submit"));
     assert!(stdout.contains("refresh"));
-    assert!(stdout.contains("[aliases: update]"));
+    // clap renders one alias as `[alias: x]` and several as `[aliases: x, y]`.
+    // It used the plural unconditionally before 4.6.6, so accept either form:
+    // what matters is that the `update` alias is still advertised in help.
+    assert!(
+        stdout.contains("[alias: update]") || stdout.contains("[aliases: update]"),
+        "expected the `update` alias to appear in help output:\n{stdout}"
+    );
     assert!(stdout.contains("run"));
     assert!(stdout.contains("restack"));
     assert!(stdout.contains("resolve"));
