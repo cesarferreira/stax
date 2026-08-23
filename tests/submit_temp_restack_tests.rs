@@ -383,10 +383,37 @@ fn replayed_commits_are_identical_to_a_real_rebase() {
 
     let published = repo.get_commit_sha(&format!("refs/remotes/origin/{branch}"));
 
-    // Everything except the committer timestamp must match. Committer time is
-    // "now" for both `git rebase` and the replay, and the two run seconds
-    // apart, so comparing raw SHAs would compare wall clocks. (Rebasing twice
-    // with real git has exactly the same property.)
+    // Compare the two chains commit by commit rather than by tip SHA.
+    //
+    // Committer *timestamp* is "now" for both `git rebase` and the replay, and
+    // it feeds the commit id — so the tip SHA, and equally the tip's parent
+    // SHA, differ whenever the two runs straddle a second boundary. Walking the
+    // chain and comparing the fields that carry meaning is both
+    // timestamp-independent and stricter than a single tip comparison.
+    let commits = |tip: &str| -> Vec<String> {
+        String::from_utf8_lossy(
+            &repo
+                .git(&["rev-list", "--reverse", &format!("main..{tip}")])
+                .stdout,
+        )
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+    };
+
+    let published_chain = commits(&published);
+    let reference_chain = commits(&reference);
+    assert_eq!(
+        published_chain.len(),
+        reference_chain.len(),
+        "replayed chain must have the same number of commits as `git rebase --onto`"
+    );
+    assert_eq!(
+        published_chain.len(),
+        2,
+        "fixture should produce two commits above trunk"
+    );
+
     let field = |commit: &str, format: &str| {
         String::from_utf8_lossy(
             &repo
@@ -396,28 +423,32 @@ fn replayed_commits_are_identical_to_a_real_rebase() {
         .trim()
         .to_string()
     };
+    let raw_message = |commit: &str| repo.git(&["log", "-1", "--format=%B", "-z", commit]).stdout;
 
-    for (format, label) in [
-        ("%T", "tree"),
-        ("%P", "parent"),
-        ("%an", "author name"),
-        ("%ae", "author email"),
-        ("%aI", "author date"),
-        ("%B", "message"),
-    ] {
+    for (index, (got, want)) in published_chain
+        .iter()
+        .zip(reference_chain.iter())
+        .enumerate()
+    {
+        for (format, label) in [
+            ("%T", "tree"),
+            ("%an", "author name"),
+            ("%ae", "author email"),
+            ("%aI", "author date"),
+        ] {
+            assert_eq!(
+                field(got, format),
+                field(want, format),
+                "commit {index}: {label} must match `git rebase --onto` exactly"
+            );
+        }
+
+        // Exact bytes, not the trimmed form: an extra trailing newline is
+        // precisely the kind of drift that is easy to miss.
         assert_eq!(
-            field(&published, format),
-            field(&reference, format),
-            "{label} must match `git rebase --onto` exactly"
+            raw_message(got),
+            raw_message(want),
+            "commit {index}: message bytes must match `git rebase --onto` exactly"
         );
     }
-
-    // The message check above trims; assert the exact bytes too, since an extra
-    // trailing newline is precisely the kind of drift that is easy to miss.
-    let raw = |commit: &str| repo.git(&["log", "-1", "--format=%B", "-z", commit]).stdout;
-    assert_eq!(
-        raw(&published),
-        raw(&reference),
-        "commit message bytes must match `git rebase --onto` exactly"
-    );
 }
