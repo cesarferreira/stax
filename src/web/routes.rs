@@ -78,6 +78,25 @@ fn check_csrf(state: &SharedSession, csrf: &str) -> Option<Response<Body>> {
     None
 }
 
+/// Print a one-line, timestamped log for a user interaction on the running
+/// `stax web` server. Terminal-only visibility — this is not a tracing/log
+/// crate integration, matching the existing println!-based startup output
+/// in src/web/mod.rs.
+fn log_action(action: &str, detail: &str) {
+    use colored::Colorize;
+    let ts = chrono::Local::now().format("%H:%M:%S");
+    if detail.is_empty() {
+        println!("  {} {}", format!("{ts}").dimmed(), action.cyan());
+    } else {
+        println!(
+            "  {} {} {}",
+            format!("{ts}").dimmed(),
+            action.cyan(),
+            detail.dimmed()
+        );
+    }
+}
+
 fn check_local_host(headers: &HeaderMap) -> Option<Response<Body>> {
     let host = headers
         .get(header::HOST)
@@ -249,6 +268,7 @@ async fn select_branch(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("select", &form.branch);
 
     {
         let mut s = state.lock().unwrap();
@@ -432,6 +452,11 @@ async fn search_branches(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    if let Some(query) = form.query.as_deref()
+        && !query.is_empty()
+    {
+        log_action("search", query);
+    }
 
     {
         let mut s = state.lock().unwrap();
@@ -464,6 +489,7 @@ async fn toggle_panes(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("toggle pane", &form.pane);
 
     {
         let mut s = state.lock().unwrap();
@@ -506,6 +532,7 @@ async fn set_theme(
     let Some(theme) = ThemePreference::parse(&form.theme) else {
         return (StatusCode::BAD_REQUEST, Html("<h1>Invalid theme</h1>")).into_response();
     };
+    log_action("theme", &form.theme);
 
     {
         let mut s = state.lock().unwrap();
@@ -538,6 +565,7 @@ async fn refresh_handler(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("refresh", "");
     with_pane_refresh(render_stack_pane(&state, &token).await)
 }
 
@@ -564,6 +592,7 @@ async fn op_checkout(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("checkout", &form.branch);
 
     let request = OperationRequest::Checkout {
         branch: form.branch.clone(),
@@ -595,6 +624,10 @@ async fn op_create(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action(
+        "create branch",
+        &format!("{} from {}", form.name, form.parent),
+    );
 
     let request = OperationRequest::CreateBranch {
         name: form.name.clone(),
@@ -627,6 +660,7 @@ async fn op_rename(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("rename", &format!("{} -> {}", form.branch, form.new_name));
 
     let request = OperationRequest::RenameBranch {
         branch: form.branch.clone(),
@@ -659,6 +693,7 @@ async fn op_delete(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("delete", &form.branch);
 
     let request = OperationRequest::DeleteBranch {
         branch: form.branch.clone(),
@@ -691,6 +726,7 @@ async fn op_restack(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("restack", "");
 
     let current = state.lock().unwrap().selected_branch.clone();
 
@@ -728,6 +764,7 @@ async fn op_submit(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("submit stack", "");
 
     let request = OperationRequest::SubmitStack {
         new_pull_requests: PullRequestMode::Draft,
@@ -752,6 +789,7 @@ async fn op_undo(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("undo", "");
 
     let request = OperationRequest::UndoTransaction {
         operation_id: None,
@@ -777,6 +815,7 @@ async fn op_redo(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("redo", "");
 
     let request = OperationRequest::RedoTransaction {
         operation_id: None,
@@ -810,6 +849,7 @@ async fn op_move(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("move", &format!("{} -> {}", form.source, form.new_parent));
 
     let auto_stash = form.auto_stash.as_deref() == Some("true");
     let request = OperationRequest::MoveSubtree {
@@ -847,6 +887,7 @@ async fn op_reorder(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("reorder", "");
 
     let proposed_order = form
         .proposed_order
@@ -894,6 +935,7 @@ async fn switch_project(
     if let Some(r) = check_csrf(&state, &form.csrf) {
         return r;
     }
+    log_action("switch project", form.path.trim());
 
     let path = std::path::PathBuf::from(form.path.trim());
     let opened = tokio::task::spawn_blocking({
@@ -961,6 +1003,7 @@ async fn op_open_pr(
     let Some(branch_name) = branch else {
         return Html(error_fragment("No branch selected.").into_string()).into_response();
     };
+    log_action("open PR", &branch_name);
 
     let result = tokio::task::spawn_blocking(move || {
         let mut reporter = NoopOperationReporter;

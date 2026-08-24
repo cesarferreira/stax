@@ -380,7 +380,7 @@ fn topbar(
             div .topbar-sep {}
 
             // Primary actions (also updated via OOB after mutations)
-            (topbar_actions_inner(interaction, base))
+            (topbar_actions_inner(interaction, base, csrf))
 
             input #workspace-csrf type="hidden" name="csrf" value=(csrf) {}
             template #help-template {
@@ -391,7 +391,7 @@ fn topbar(
 }
 
 /// Inner content for the topbar action group, extracted so it can be OOB-updated.
-fn topbar_actions_inner(interaction: &InteractionState, base: &str) -> Markup {
+fn topbar_actions_inner(interaction: &InteractionState, base: &str, csrf: &str) -> Markup {
     html! {
         div #topbar-actions .topbar-actions {
             @if interaction.restack.enabled {
@@ -417,11 +417,11 @@ fn topbar_actions_inner(interaction: &InteractionState, base: &str) -> Markup {
             }
 
             @if interaction.submit.enabled {
-                button .btn.btn-primary.mutating-btn
-                    hx-post=(format!("{base}/op/submit"))
-                    hx-target="#stack-pane"
-                    hx-include="#workspace-csrf"
-                    hx-confirm="Submit the current stack as Draft PRs?"
+                button .btn.btn-primary
+                    onclick=(format!(
+                        "document.body.insertAdjacentHTML('beforeend', `{}`)",
+                        submit_confirm_overlay_escaped(base, csrf)
+                    ))
                     title="Submit stack (draft PRs)"
                     { "Submit stack" }
             } @else {
@@ -451,14 +451,15 @@ pub fn stack_pane_fragment(
     base: &str,
     row_meta: &StackRowMeta,
 ) -> Markup {
+    let csrf = &session.csrf_token;
     html! {
         (status_bar_oob(session, snapshot, row_meta))
-        (topbar_actions_oob(interaction, base))
+        (topbar_actions_oob(interaction, base, csrf))
         (stack_pane_inner(session, snapshot, interaction, base, row_meta))
     }
 }
 
-fn topbar_actions_oob(interaction: &InteractionState, base: &str) -> Markup {
+fn topbar_actions_oob(interaction: &InteractionState, base: &str, csrf: &str) -> Markup {
     html! {
         div #topbar-actions hx-swap-oob="true" class="topbar-actions" {
             @if interaction.restack.enabled {
@@ -484,11 +485,11 @@ fn topbar_actions_oob(interaction: &InteractionState, base: &str) -> Markup {
             }
 
             @if interaction.submit.enabled {
-                button .btn.btn-primary.mutating-btn
-                    hx-post=(format!("{base}/op/submit"))
-                    hx-target="#stack-pane"
-                    hx-include="#workspace-csrf"
-                    hx-confirm="Submit the current stack as Draft PRs?"
+                button .btn.btn-primary
+                    onclick=(format!(
+                        "document.body.insertAdjacentHTML('beforeend', `{}`)",
+                        submit_confirm_overlay_escaped(base, csrf)
+                    ))
                     title="Submit stack (draft PRs)"
                     { "Submit stack" }
             } @else {
@@ -714,11 +715,11 @@ pub fn stack_pane_inner(
                 }
 
                 @if interaction.submit.enabled {
-                    button .quick-action.qa-submit.mutating-btn
-                        hx-post=(format!("{base}/op/submit"))
-                        hx-target="#stack-pane"
-                        hx-include="#workspace-csrf"
-                        hx-confirm="Submit the current stack as Draft PRs?"
+                    button .quick-action.qa-submit
+                        onclick=(format!(
+                            "document.body.insertAdjacentHTML('beforeend', `{}`)",
+                            submit_confirm_overlay_escaped(base, csrf)
+                        ))
                         {
                         span .qa-icon { "↑" }
                         span .qa-label { "Submit stack" }
@@ -1173,11 +1174,11 @@ pub fn inspector_details(
             div .inspector-cta {
                 // Dominant: Submit stack
                 @if interaction.submit.enabled {
-                    button .btn.btn-primary.btn-full.mutating-btn
-                        hx-post=(format!("{base}/op/submit"))
-                        hx-target="#stack-pane"
-                        hx-include="#workspace-csrf"
-                        hx-confirm="Submit the current stack as Draft PRs?"
+                    button .btn.btn-primary.btn-full
+                        onclick=(format!(
+                            "document.body.insertAdjacentHTML('beforeend', `{}`)",
+                            submit_confirm_overlay_escaped(base, csrf)
+                        ))
                         title="Submit stack (draft PRs)"
                         { "Submit stack" }
                 } @else {
@@ -1241,6 +1242,20 @@ fn rename_overlay_escaped(name: &str, base: &str, csrf: &str) -> String {
         .replace('\\', "\\\\")
         .replace('`', "\\`")
         .replace("${", "\\${")
+}
+
+fn submit_confirm_overlay_escaped(base: &str, csrf: &str) -> String {
+    confirm_overlay(
+        "Submit stack",
+        "Submit the current stack as Draft PRs?",
+        &format!("{base}/op/submit"),
+        csrf,
+        &[],
+    )
+    .into_string()
+    .replace('\\', "\\\\")
+    .replace('`', "\\`")
+    .replace("${", "\\${")
 }
 
 pub fn operation_banner(message: &str, success: bool) -> Markup {
