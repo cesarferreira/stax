@@ -254,7 +254,11 @@ Use `native_stack = "link"` to always attempt registration even when the repo's 
 
 `stack_links_when_native = "keep"` preserves stax's body/comment stack links when native registration succeeds. Set it to `"off"` only if you want the GitHub native stack map without stax-managed PR body/comment links.
 
-`st doctor` reports the installed `gh-stack` version, marks versions below v0.0.8 as out of date, and can install or upgrade the extension after confirmation with `st doctor --fix`.
+`st doctor` reports the installed `gh-stack` version, marks versions below v0.1.0 as out of date, and can install or upgrade the extension after confirmation with `st doctor --fix`. `native_stack = "off"` also disables `st merge --stack`'s atomic `gh stack merge` delegation (see below), falling back to the forge-API stack merge for every run.
+
+### Atomic stack merge (`gh stack merge`)
+
+With `github/gh-stack` v0.1.0+ and a confirmed-enabled native GitHub Stack, `st merge --stack` delegates to `gh stack merge` to land the selected range atomically instead of retargeting and merging PRs individually. This has no separate config flag — it follows `native_stack` (skipped when `"off"`) and the repo's native-stack feature cache.
 
 → [Native GitHub Stacks guide](../integrations/github-native-stacks.md)
 

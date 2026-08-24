@@ -8472,6 +8472,67 @@ mod forge_mock_tests {
         }
     }
 
+    /// Like `setup_three_branch_stack_merge_fixture`, but optionally marks
+    /// the repo's native-stack feature cache as enabled
+    /// (`stax.nativeStack.enabled=true`), the same durable repo-level fact
+    /// `st submit` caches after successfully registering a native GitHub
+    /// Stack. `st merge --stack` only considers the `gh stack merge`
+    /// delegation route when this cache confirms `Enabled`.
+    async fn setup_three_branch_stack_merge_fixture_with_native_stack(
+        forge: StackMergeForge,
+        scenario: StackMergeScenario,
+        native_gh_stack: bool,
+    ) -> ThreeBranchStackMergeFixture {
+        let fixture = setup_three_branch_stack_merge_fixture(forge, scenario).await;
+        if native_gh_stack {
+            let set_native = git_with_env(
+                &fixture.repo,
+                fixture.home.path(),
+                &["config", "stax.nativeStack.enabled", "true"],
+            );
+            assert!(
+                set_native.status.success(),
+                "{}",
+                TestRepo::stderr(&set_native)
+            );
+        }
+        fixture
+    }
+
+    /// Run `st merge --stack` (or similar) against a stack-merge fixture with
+    /// a fake `gh` on `PATH`, so `gh_stack::merge_command_supported()` /
+    /// `gh_stack::merge_stack()` observe `fake_gh_script` instead of a real
+    /// `gh` binary. Reuses the `fake_gh_dir`/`path_with_fake_gh` helpers from
+    /// `gh_stack_tests` (both crates are the same `all_tests` test binary via
+    /// `tests/all_tests.rs`, so `pub(crate)` items there are visible here).
+    fn run_stax_stack_merge_with_fake_gh(
+        fixture: &ThreeBranchStackMergeFixture,
+        fake_gh_script: &str,
+        extra_env: &[(&str, &str)],
+        args: &[&str],
+    ) -> (Output, TempDir) {
+        let fake = crate::gh_stack_tests::fake_gh_dir(fake_gh_script);
+        let path = crate::gh_stack_tests::path_with_fake_gh(fake.path());
+        let gitconfig = ensure_empty_gitconfig(fixture.home.path());
+        let mut command = Command::new(stax_bin());
+        command
+            .args(args)
+            .current_dir(fixture.repo.path())
+            .env("HOME", fixture.home.path())
+            .env("GIT_CONFIG_GLOBAL", &gitconfig)
+            .env("GIT_CONFIG_SYSTEM", &gitconfig)
+            .env("STAX_GITHUB_TOKEN", "mock-token")
+            .env("PATH", path)
+            .env("STAX_DISABLE_UPDATE_CHECK", "1")
+            .env("STAX_TEST_DISABLE_HEAD_SYNC", "1")
+            .env("STAX_STACK_MERGE_INDIRECT_WAIT_SECS", "0");
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
+        let output = command.output().expect("Failed to execute stax");
+        (output, fake)
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn mount_github_three_branch_stack_merge(
         mock_server: &MockServer,
@@ -12413,6 +12474,295 @@ mod forge_mock_tests {
             );
         }
         assert!(find_request_indices(&requests, "PATCH", "/repos/test/repo/pulls/601").is_empty());
+    }
+
+    #[tokio::test]
+    async fn stack_merge_delegates_to_gh_stack_merge_for_native_stacks() {
+        let fixture = setup_three_branch_stack_merge_fixture_with_native_stack(
+            StackMergeForge::GitHub,
+            StackMergeScenario::LowerPending,
+            true,
+        )
+        .await;
+
+        let script = r#"#!/bin/sh
+case "$1 $2" in
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n  merge Merge a stack atomically\n'; exit 0 ;;
+  "stack merge")
+    printf '%s\n' "$@" > "$GH_ARGS_FILE"
+    echo "Merged stack through PR #603"
+    exit 0
+    ;;
+esac
+exit 1
+"#;
+        let args_dir = TempDir::new().expect("args dir");
+        let args_file = args_dir.path().join("gh-merge-args.txt");
+
+        let (output, _fake) = run_stax_stack_merge_with_fake_gh(
+            &fixture,
+            script,
+            &[("GH_ARGS_FILE", args_file.to_str().unwrap())],
+            &[
+                "merge",
+                "--stack",
+                "--method",
+                "squash",
+                "--yes",
+                "--no-delete",
+                "--no-sync",
+            ],
+        );
+
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        assert_eq!(
+            fs::read_to_string(&args_file).expect("gh stack merge args recorded"),
+            "stack\nmerge\n603\n--merge-method\nsquash\n--yes\n"
+        );
+
+        let requests = fixture
+            .mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        assert!(
+            find_request_indices(&requests, "PUT", "/repos/test/repo/pulls/603/merge").is_empty(),
+            "native `gh stack merge` delegation must not call the forge merge API directly"
+        );
+        assert!(
+            find_request_indices(&requests, "PATCH", "/repos/test/repo/pulls/602").is_empty(),
+            "native `gh stack merge` delegation must not retarget PR bases itself"
+        );
+        assert!(
+            find_request_indices(&requests, "PATCH", "/repos/test/repo/pulls/603").is_empty(),
+            "native `gh stack merge` delegation must not retarget the tip's base itself"
+        );
+    }
+
+    #[tokio::test]
+    async fn stack_merge_falls_back_to_forge_api_when_gh_stack_lacks_merge() {
+        let fixture = setup_three_branch_stack_merge_fixture_with_native_stack(
+            StackMergeForge::GitHub,
+            StackMergeScenario::LowerMerged,
+            true,
+        )
+        .await;
+
+        // No `merge` line in `gh stack --help`: gh-stack predates v0.1.0.
+        let script = r#"#!/bin/sh
+if [ "$1 $2" = "stack --help" ]; then
+  printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'
+  exit 0
+fi
+exit 1
+"#;
+
+        let (output, _fake) = run_stax_stack_merge_with_fake_gh(
+            &fixture,
+            script,
+            &[],
+            &["merge", "--stack", "--yes", "--no-delete", "--no-sync"],
+        );
+
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            stdout.contains("gh stack merge") && stdout.contains("gh extension upgrade stack"),
+            "expected an upgrade note pointing at `gh stack merge`, stdout was:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("merged indirectly by GitHub"),
+            "the forge-API fallback should still land the stack, stdout was:\n{stdout}"
+        );
+
+        let requests = fixture
+            .mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        assert!(
+            !find_request_indices(&requests, "PUT", "/repos/test/repo/pulls/603/merge").is_empty(),
+            "the forge-API fallback should still merge the tip through the forge"
+        );
+    }
+
+    #[tokio::test]
+    async fn stack_merge_falls_back_to_forge_api_when_gh_stack_reports_not_stacked() {
+        let fixture = setup_three_branch_stack_merge_fixture_with_native_stack(
+            StackMergeForge::GitHub,
+            StackMergeScenario::LowerMerged,
+            true,
+        )
+        .await;
+
+        let script = r#"#!/bin/sh
+case "$1 $2" in
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n  merge Merge a stack atomically\n'; exit 0 ;;
+  "stack merge") echo "PR #603 is not part of a stack" >&2; exit 1 ;;
+esac
+exit 1
+"#;
+
+        let (output, _fake) = run_stax_stack_merge_with_fake_gh(
+            &fixture,
+            script,
+            &[],
+            &["merge", "--stack", "--yes", "--no-delete", "--no-sync"],
+        );
+
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        assert!(
+            TestRepo::stdout(&output).contains("merged indirectly by GitHub"),
+            "a `NotStacked` rejection should re-apply the method guard and fall back to the forge API, stdout was:\n{}",
+            TestRepo::stdout(&output)
+        );
+
+        let requests = fixture
+            .mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        assert!(
+            !find_request_indices(&requests, "PUT", "/repos/test/repo/pulls/603/merge").is_empty(),
+            "the forge-API fallback should still merge the tip through the forge"
+        );
+    }
+
+    #[tokio::test]
+    async fn stack_merge_reports_merge_queue_routing_without_local_cleanup() {
+        let fixture = setup_three_branch_stack_merge_fixture_with_native_stack(
+            StackMergeForge::GitHub,
+            StackMergeScenario::LowerPending,
+            true,
+        )
+        .await;
+        let tip_branch = fixture.repo.current_branch();
+
+        let script = r#"#!/bin/sh
+case "$1 $2" in
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n  merge Merge a stack atomically\n'; exit 0 ;;
+  "stack merge") echo "Stack added to the merge queue for main"; exit 0 ;;
+esac
+exit 1
+"#;
+
+        // Deliberately omit `--no-delete`: a `Queued` outcome must skip local
+        // cleanup and post-merge sync entirely, regardless of flags, because
+        // it returns before either step runs.
+        let (output, _fake) = run_stax_stack_merge_with_fake_gh(
+            &fixture,
+            script,
+            &[],
+            &["merge", "--stack", "--yes", "--no-sync"],
+        );
+
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        let stdout = TestRepo::stdout(&output);
+        assert!(
+            stdout.contains("merge queue") && stdout.contains("st sync"),
+            "expected a merge-queue routing note, stdout was:\n{stdout}"
+        );
+
+        assert!(
+            fixture
+                .repo
+                .git(&["rev-parse", "--verify", &fixture.branch_a])
+                .status
+                .success(),
+            "a queued stack must not delete local branches"
+        );
+        assert!(
+            fixture
+                .repo
+                .git(&["rev-parse", "--verify", &tip_branch])
+                .status
+                .success(),
+            "a queued stack must not delete the tip branch"
+        );
+
+        let requests = fixture
+            .mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        assert!(
+            find_request_indices(&requests, "PUT", "/repos/test/repo/pulls/603/merge").is_empty(),
+            "a queued stack must not have been merged through the forge API"
+        );
+    }
+
+    #[tokio::test]
+    async fn stack_merge_ignores_native_route_when_feature_cache_is_unset() {
+        let fixture = setup_three_branch_stack_merge_fixture_with_native_stack(
+            StackMergeForge::GitHub,
+            StackMergeScenario::LowerMerged,
+            false,
+        )
+        .await;
+
+        // If native-route detection ever ignored the feature cache, this
+        // script would prove it by responding to `gh stack merge`.
+        let script = r#"#!/bin/sh
+case "$1 $2" in
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n  merge Merge a stack atomically\n'; exit 0 ;;
+  "stack merge") echo "gh stack merge should not be called" >&2; exit 1 ;;
+esac
+exit 1
+"#;
+
+        let (output, _fake) = run_stax_stack_merge_with_fake_gh(
+            &fixture,
+            script,
+            &[],
+            &["merge", "--stack", "--yes", "--no-delete", "--no-sync"],
+        );
+
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            TestRepo::stdout(&output),
+            TestRepo::stderr(&output)
+        );
+        let combined = format!("{}{}", TestRepo::stdout(&output), TestRepo::stderr(&output));
+        assert!(
+            !combined.contains("should not be called"),
+            "must never invoke `gh stack merge` when the native-stack feature cache is unset, output was:\n{combined}"
+        );
+        assert!(
+            !TestRepo::stdout(&output).contains("gh extension upgrade stack"),
+            "the upgrade note only applies when the feature cache confirms a native Stack, stdout was:\n{}",
+            TestRepo::stdout(&output)
+        );
+
+        let requests = fixture
+            .mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled");
+        assert!(
+            !find_request_indices(&requests, "PUT", "/repos/test/repo/pulls/603/merge").is_empty(),
+            "must still land through the forge API when the native route is unavailable"
+        );
     }
 
     #[tokio::test]

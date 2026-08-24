@@ -8,10 +8,11 @@ use crate::commands::merge_shared::{
     PrBaseUpdate, WaitResult, print_header, print_header_success,
     rebase_and_finalize_remaining_branch, update_pr_base_unless_current,
 };
-use crate::config::Config;
+use crate::config::{Config, NativeStackMode};
 use crate::engine::Stack;
 use crate::forge::ForgeClient;
 use crate::git::GitRepo;
+use crate::github::gh_stack::{self, FeatureState, StackMergeOutcome};
 use crate::github::pr::{CiStatus, MergeMethod, PrMergeStatus};
 use crate::progress::LiveTimer;
 use crate::remote::{ForgeType, RemoteInfo};
@@ -59,6 +60,47 @@ struct ChangedPrBase {
 enum DownstackOutcome {
     IndirectlyMerged,
     Pending,
+}
+
+/// Which mechanism `st merge --stack` uses to land the selected range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StackMergeRoute {
+    /// Delegate to gh-stack's atomic `gh stack merge` (v0.1.0+): GitHub
+    /// merges every PR up to the tip, or none of them.
+    NativeGhStack,
+    /// The existing per-PR retarget-then-merge flow through the forge API.
+    ForgeApi,
+}
+
+/// Decide whether the selected range can be landed atomically through
+/// `gh stack merge`, or must fall back to the existing forge-API flow.
+///
+/// `NativeGhStack` requires GitHub, a native-stack mode that isn't `Off`,
+/// a confirmed-enabled native Stack on this repo, and an installed gh-stack
+/// extension that actually exposes `gh stack merge`.
+fn stack_merge_route(
+    forge: ForgeType,
+    native_mode: NativeStackMode,
+    feature: FeatureState,
+    gh_stack_merge_supported: bool,
+) -> StackMergeRoute {
+    if forge == ForgeType::GitHub
+        && native_mode != NativeStackMode::Off
+        && feature == FeatureState::Enabled
+        && gh_stack_merge_supported
+    {
+        StackMergeRoute::NativeGhStack
+    } else {
+        StackMergeRoute::ForgeApi
+    }
+}
+
+/// Result of delegating a stack merge to `gh stack merge`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GhStackMergeResult {
+    Merged,
+    Queued,
+    NotStacked,
 }
 
 /// How the stack-merge confirmation should be resolved.
@@ -161,13 +203,35 @@ pub fn run(
         return Ok(());
     }
 
-    if forge == ForgeType::GitHub
-        && scope.to_merge.len() > 1
-        && !merge_method_preserves_commit_shas(method)
+    let workdir = repo.workdir()?.to_path_buf();
+    let native_mode = config.submit.native_stack;
+    let feature = if forge == ForgeType::GitHub {
+        gh_stack::feature_enabled(&workdir)
+    } else {
+        FeatureState::Unknown
+    };
+    let gh_stack_merge_supported = forge == ForgeType::GitHub
+        && native_mode != NativeStackMode::Off
+        && feature == FeatureState::Enabled
+        && gh_stack::merge_command_supported();
+    let route = stack_merge_route(forge, native_mode, feature, gh_stack_merge_supported);
+
+    if route == StackMergeRoute::ForgeApi {
+        ensure_forge_api_method_supported(forge, scope.to_merge.len(), method)?;
+    }
+
+    // Only nag when the user hasn't opted out of native stacks: with
+    // `native_stack = "off"` the forge-API route is the intended behavior.
+    if feature == FeatureState::Enabled
+        && native_mode != NativeStackMode::Off
+        && route == StackMergeRoute::ForgeApi
+        && !quiet
     {
-        anyhow::bail!(
-            "GitHub stack merge method '{}' rewrites commit SHAs, so lower PRs in a multi-PR range cannot reach genuine merged state.\n\nUse `stax merge --stack` or `stax merge --stack --method merge`.",
-            method.as_str()
+        println!(
+            "{} {}",
+            "note:".dimmed(),
+            "this repo has a native GitHub Stack but the installed `gh-stack` has no `gh stack merge`. Upgrade with `gh extension upgrade stack` (v0.1.0+) or `st doctor --fix` to let `st merge --stack` land the stack atomically."
+                .dimmed()
         );
     }
 
@@ -215,6 +279,7 @@ pub fn run(
             when_ready,
             scope.downstack_only,
             forge,
+            route,
         );
     }
 
@@ -287,36 +352,58 @@ pub fn run(
 
     verify_tip_head_matches_local(&repo, tip, &tip_status, forge)?;
     ensure_trunk_unchanged(&repo, &remote_info, &scope.trunk, &trunk_sha)?;
-    rt.block_on(async { client.preflight_stack_merge(method).await })?;
 
-    let changed_bases =
-        prepare_selected_pr_bases(&rt, &client, &resolved, &scope.trunk, quiet, forge)?;
-
-    if let Err(e) = ensure_trunk_unchanged(&repo, &remote_info, &scope.trunk, &trunk_sha) {
-        rollback_changed_pr_bases(&rt, &client, &changed_bases, quiet, forge);
-        return Err(e);
+    match route {
+        StackMergeRoute::ForgeApi => {
+            merge_stack_via_forge_api(
+                &rt,
+                &client,
+                &repo,
+                &remote_info,
+                &resolved,
+                tip,
+                &tip_status,
+                &scope.trunk,
+                &trunk_sha,
+                method,
+                quiet,
+                forge,
+            )?;
+        }
+        StackMergeRoute::NativeGhStack => {
+            match merge_stack_via_gh_stack(tip, method, quiet, forge)? {
+                GhStackMergeResult::Merged => {}
+                GhStackMergeResult::NotStacked => {
+                    ensure_forge_api_method_supported(forge, resolved.len(), method)?;
+                    merge_stack_via_forge_api(
+                        &rt,
+                        &client,
+                        &repo,
+                        &remote_info,
+                        &resolved,
+                        tip,
+                        &tip_status,
+                        &scope.trunk,
+                        &trunk_sha,
+                        method,
+                        quiet,
+                        forge,
+                    )?;
+                }
+                GhStackMergeResult::Queued => {
+                    if !quiet {
+                        println!();
+                        println!(
+                            "{}",
+                            "Stack routed onto the base branch's merge queue by `gh stack merge`; no local cleanup performed. Run `st sync` once the queue lands it."
+                                .dimmed()
+                        );
+                    }
+                    return Ok(());
+                }
+            }
+        }
     }
-
-    let merge_timer = LiveTimer::maybe_new(
-        !quiet,
-        &format!(
-            "Merging selected tip {} ({})...",
-            item_label(forge, tip.pr_number),
-            method.as_str()
-        ),
-    );
-    let merge_result = rt.block_on(async {
-        client
-            .merge_pr(tip.pr_number, method, None, Some(&tip_status.head_sha))
-            .await
-    });
-
-    if let Err(e) = merge_result {
-        LiveTimer::maybe_finish_err(merge_timer, "failed");
-        rollback_changed_pr_bases(&rt, &client, &changed_bases, quiet, forge);
-        return Err(e);
-    }
-    LiveTimer::maybe_finish_ok(merge_timer, "done");
 
     let downstack_outcomes = reconcile_downstack_prs(&rt, &client, &resolved, quiet, forge)?;
 
@@ -736,6 +823,25 @@ fn merge_method_preserves_commit_shas(method: MergeMethod) -> bool {
     matches!(method, MergeMethod::Merge)
 }
 
+/// GitHub's indirect-merge detection for lower PRs in a multi-PR range only
+/// works when the tip merge preserves commit SHAs. This guard is specific to
+/// the forge-API route — `gh stack merge` lands every selected PR atomically
+/// regardless of method, so it never applies on the native route.
+fn ensure_forge_api_method_supported(
+    forge: ForgeType,
+    selected: usize,
+    method: MergeMethod,
+) -> Result<()> {
+    if forge == ForgeType::GitHub && selected > 1 && !merge_method_preserves_commit_shas(method) {
+        anyhow::bail!(
+            "GitHub stack merge method '{}' rewrites commit SHAs, so lower PRs in a multi-PR range cannot reach genuine merged state.\n\nUse `stax merge --stack` or `stax merge --stack --method merge`.",
+            method.as_str()
+        );
+    }
+
+    Ok(())
+}
+
 fn prepare_selected_pr_bases(
     rt: &tokio::runtime::Runtime,
     client: &ForgeClient,
@@ -815,6 +921,120 @@ fn rollback_changed_pr_bases(
                     e
                 );
             }
+        }
+    }
+}
+
+/// Retarget the selected PR bases to trunk, then merge the selected tip
+/// through the forge API. On any failure after a base was retargeted, rolls
+/// back every changed base before returning the error.
+#[allow(clippy::too_many_arguments)]
+fn merge_stack_via_forge_api(
+    rt: &tokio::runtime::Runtime,
+    client: &ForgeClient,
+    repo: &GitRepo,
+    remote_info: &RemoteInfo,
+    resolved: &[ResolvedStackPr],
+    tip: &ResolvedStackPr,
+    tip_status: &PrMergeStatus,
+    trunk: &str,
+    trunk_sha: &str,
+    method: MergeMethod,
+    quiet: bool,
+    forge: ForgeType,
+) -> Result<()> {
+    rt.block_on(async { client.preflight_stack_merge(method).await })?;
+
+    let changed_bases = prepare_selected_pr_bases(rt, client, resolved, trunk, quiet, forge)?;
+
+    if let Err(e) = ensure_trunk_unchanged(repo, remote_info, trunk, trunk_sha) {
+        rollback_changed_pr_bases(rt, client, &changed_bases, quiet, forge);
+        return Err(e);
+    }
+
+    let merge_timer = LiveTimer::maybe_new(
+        !quiet,
+        &format!(
+            "Merging selected tip {} ({})...",
+            item_label(forge, tip.pr_number),
+            method.as_str()
+        ),
+    );
+    let merge_result = rt.block_on(async {
+        client
+            .merge_pr(tip.pr_number, method, None, Some(&tip_status.head_sha))
+            .await
+    });
+
+    if let Err(e) = merge_result {
+        LiveTimer::maybe_finish_err(merge_timer, "failed");
+        rollback_changed_pr_bases(rt, client, &changed_bases, quiet, forge);
+        return Err(e);
+    }
+    LiveTimer::maybe_finish_ok(merge_timer, "done");
+
+    Ok(())
+}
+
+/// Delegate the selected range to gh-stack's atomic `gh stack merge`
+/// (v0.1.0+): GitHub merges every PR up to and including the tip, or none of
+/// them. Distinct from the forge-API route, this never retargets PR bases or
+/// merges PRs individually — a single `gh stack merge` call does it all.
+fn merge_stack_via_gh_stack(
+    tip: &ResolvedStackPr,
+    method: MergeMethod,
+    quiet: bool,
+    forge: ForgeType,
+) -> Result<GhStackMergeResult> {
+    let timer = LiveTimer::maybe_new(
+        !quiet,
+        &format!(
+            "Merging native GitHub Stack through {} via `gh stack merge`...",
+            item_label(forge, tip.pr_number)
+        ),
+    );
+
+    let outcome = gh_stack::merge_stack(tip.pr_number, method.as_str());
+
+    let print_message = |message: &str| {
+        if !quiet && !message.trim().is_empty() {
+            println!("  {}", message.dimmed());
+        }
+    };
+
+    match outcome {
+        StackMergeOutcome::Merged { message } => {
+            LiveTimer::maybe_finish_ok(timer, "done");
+            print_message(&message);
+            Ok(GhStackMergeResult::Merged)
+        }
+        StackMergeOutcome::Queued { message } => {
+            LiveTimer::maybe_finish_ok(timer, "queued");
+            print_message(&message);
+            Ok(GhStackMergeResult::Queued)
+        }
+        StackMergeOutcome::NotStacked { message } => {
+            LiveTimer::maybe_finish_warn(timer, "not stacked");
+            print_message(&message);
+            Ok(GhStackMergeResult::NotStacked)
+        }
+        StackMergeOutcome::FeatureDisabled { message } => {
+            LiveTimer::maybe_finish_err(timer, "failed");
+            anyhow::bail!(
+                "`gh stack merge` reported that native GitHub Stacks are disabled for this repository: {message}\n\nRun `st doctor` for guidance, or run `st stack unlink` and retry with `st merge --stack`."
+            );
+        }
+        StackMergeOutcome::AuthTokenUnsupported { message } => {
+            LiveTimer::maybe_finish_err(timer, "failed");
+            anyhow::bail!(
+                "`gh stack merge` rejected the current GitHub authentication: {message}\n\nRun `gh auth login` to use an OAuth-authenticated account, then retry `st merge --stack`."
+            );
+        }
+        StackMergeOutcome::Failed { message } => {
+            LiveTimer::maybe_finish_err(timer, "failed");
+            anyhow::bail!(
+                "`gh stack merge` failed: {message}\n\nGitHub's native stack merge is atomic, so nothing was merged. Fix the reported problem, or run `st stack unlink` and retry with `st merge --stack`."
+            );
         }
     }
 }
@@ -1026,6 +1246,7 @@ fn run_post_merge_sync(quiet: bool) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_stack_preview(
     prs: &[ResolvedStackPr],
     remaining: &[RemainingStackBranch],
@@ -1034,13 +1255,18 @@ fn print_stack_preview(
     when_ready: bool,
     downstack_only: bool,
     forge: ForgeType,
+    route: StackMergeRoute,
 ) {
     print_header("Stack Merge");
     println!();
     let tip = prs
         .last()
         .expect("stack merge preview requires a selected tip item");
-    if merge_method_preserves_commit_shas(method) {
+    if route == StackMergeRoute::NativeGhStack {
+        println!(
+            "Will delegate to `gh stack merge` — GitHub merges every selected PR up to the tip atomically, or none of them."
+        );
+    } else if merge_method_preserves_commit_shas(method) {
         println!(
             "Will validate {} once, target every selected item to {}, then merge it:",
             item_label(forge, tip.pr_number),
@@ -1108,16 +1334,25 @@ fn print_stack_preview(
     }
 
     println!();
-    println!(
-        "Merge method: {} {}",
-        method.as_str().cyan(),
-        if merge_method_preserves_commit_shas(method) {
-            "(default for --stack; preserves commit SHAs; lower items may merge indirectly)"
+    if route == StackMergeRoute::NativeGhStack {
+        println!(
+            "Merge method: {} {}",
+            method.as_str().cyan(),
+            "(passed to `gh stack merge --merge-method`; ignored with a warning when the base branch uses a merge queue)"
                 .dimmed()
-        } else {
-            "(explicit; rewrites commit SHAs)".dimmed()
-        }
-    );
+        );
+    } else {
+        println!(
+            "Merge method: {} {}",
+            method.as_str().cyan(),
+            if merge_method_preserves_commit_shas(method) {
+                "(default for --stack; preserves commit SHAs; lower items may merge indirectly)"
+                    .dimmed()
+            } else {
+                "(explicit; rewrites commit SHAs)".dimmed()
+            }
+        );
+    }
     if when_ready {
         println!(
             "{}",
@@ -1353,6 +1588,74 @@ mod tests {
             (MergeMethod::Squash, false),
         ] {
             assert_eq!(merge_method_preserves_commit_shas(method), preserves);
+        }
+    }
+
+    #[test]
+    fn stack_merge_route_prefers_native_when_all_conditions_met() {
+        assert_eq!(
+            stack_merge_route(
+                ForgeType::GitHub,
+                NativeStackMode::Auto,
+                FeatureState::Enabled,
+                true,
+            ),
+            StackMergeRoute::NativeGhStack
+        );
+        assert_eq!(
+            stack_merge_route(
+                ForgeType::GitHub,
+                NativeStackMode::Link,
+                FeatureState::Enabled,
+                true,
+            ),
+            StackMergeRoute::NativeGhStack
+        );
+    }
+
+    #[test]
+    fn stack_merge_route_falls_back_when_gh_stack_merge_unsupported() {
+        assert_eq!(
+            stack_merge_route(
+                ForgeType::GitHub,
+                NativeStackMode::Auto,
+                FeatureState::Enabled,
+                false,
+            ),
+            StackMergeRoute::ForgeApi
+        );
+    }
+
+    #[test]
+    fn stack_merge_route_falls_back_when_native_stack_mode_is_off() {
+        assert_eq!(
+            stack_merge_route(
+                ForgeType::GitHub,
+                NativeStackMode::Off,
+                FeatureState::Enabled,
+                true,
+            ),
+            StackMergeRoute::ForgeApi
+        );
+    }
+
+    #[test]
+    fn stack_merge_route_falls_back_when_feature_is_not_confirmed_enabled() {
+        for feature in [FeatureState::Unknown, FeatureState::Disabled] {
+            assert_eq!(
+                stack_merge_route(ForgeType::GitHub, NativeStackMode::Auto, feature, true),
+                StackMergeRoute::ForgeApi
+            );
+        }
+    }
+
+    #[test]
+    fn stack_merge_route_never_uses_native_stack_off_github() {
+        for forge in [ForgeType::GitLab, ForgeType::Gitea] {
+            assert_eq!(
+                stack_merge_route(forge, NativeStackMode::Auto, FeatureState::Enabled, true),
+                StackMergeRoute::ForgeApi
+            );
         }
     }
 }

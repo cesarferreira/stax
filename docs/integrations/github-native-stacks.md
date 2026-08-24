@@ -31,7 +31,7 @@ No further setup is required — once the extension is installed, native stack r
 
 `st doctor` reports this status — including the installed version, whether it is current, when the extension is too old to expose `gh stack link`, or when it is missing entirely. `st doctor --fix` can install the extension when `gh` is available, or upgrade it when it is outdated.
 
-**Recommended: v0.0.8+.** v0.0.8 migrated to GitHub's public Stacks REST API, removing the old Personal Access Token restriction. `st doctor` marks earlier versions as out of date and `st doctor --fix` upgrades them, even though `gh stack link` itself remains available on older link-capable releases.
+**Recommended: v0.1.0+.** v0.0.8 migrated to GitHub's public Stacks REST API, removing the old Personal Access Token restriction; v0.1.0 additionally adds `gh stack merge`, which `st merge --stack` uses to land a native GitHub Stack atomically (see [Atomic stack merge](#atomic-stack-merge) below). `st doctor` marks versions below v0.1.0 as out of date and `st doctor --fix` upgrades them, even though `gh stack link` itself remains available on older link-capable releases. The legacy-OAuth warning described below only applies to versions below v0.0.8 — v0.0.8 and v0.0.9 are out of date but already use normal `gh` authentication.
 
 ## How it works
 
@@ -94,6 +94,19 @@ st stack link
 ```
 
 When gh-stack includes the Stack number in its output, stax prints that number and substitutes it into the unlink command. Automatic registration during `st submit` remains non-blocking: it prints the same recovery note, keeps the existing stax PR links, and completes the submit.
+
+<a id="atomic-stack-merge"></a>
+## Atomic stack merge
+
+With gh-stack v0.1.0+, `st merge --stack` delegates to `gh stack merge` whenever the current repo's stack is a confirmed-enabled native GitHub Stack (native `native_stack` mode not `off`, and the repo's feature cache confirms `Enabled` — the same cache `st submit` sets after a successful `gh stack link`). GitHub then merges every selected PR up to and including the tip in one atomic operation: either all of them land, or none do.
+
+This differs from the default forge-API stack merge in a few ways:
+
+- No per-PR base retargeting — `gh stack merge` handles the whole selected range itself.
+- The merge method is passed through as `--merge-method`; if the base branch uses a merge queue, GitHub may enqueue the stack instead of merging immediately, and `st merge --stack` reports that via a `note:` without performing local branch cleanup (run `st sync` once the queue lands it).
+- If `gh stack merge` reports the tip isn't registered as part of a stack, stax falls back to the normal forge-API stack merge for that run.
+
+If the repo has a native Stack registered but the installed `gh-stack` predates v0.1.0 (no `gh stack merge`), `st merge --stack` prints a `note:` recommending `gh extension upgrade stack` or `st doctor --fix`, then falls back to the forge-API stack merge as before.
 
 ## Manual commands
 

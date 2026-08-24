@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn fake_gh_dir(script: &str) -> TempDir {
+pub(crate) fn fake_gh_dir(script: &str) -> TempDir {
     let dir = TempDir::new().expect("temp fake gh dir");
     let gh = dir.path().join("gh");
     fs::write(&gh, script).expect("write fake gh");
@@ -18,7 +18,7 @@ fn fake_gh_dir(script: &str) -> TempDir {
     dir
 }
 
-fn path_with_fake_gh(fake_dir: &Path) -> String {
+pub(crate) fn path_with_fake_gh(fake_dir: &Path) -> String {
     let old_path = std::env::var("PATH").unwrap_or_default();
     format!("{}:{old_path}", fake_dir.display())
 }
@@ -209,10 +209,10 @@ case "$1 $2" in
       echo "not authenticated" >&2
       exit 4
     fi
-    echo "gh stack github/gh-stack v0.0.8"
+    echo "gh stack github/gh-stack v0.1.0"
     exit 0
     ;;
-  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n  merge Merge a stack atomically\n'; exit 0 ;;
 esac
 exit 1
 "#,
@@ -231,7 +231,7 @@ exit 1
     let stdout = TestRepo::stdout(&output);
     assert!(
         stdout.contains("gh-stack extension installed")
-            && stdout.contains("v0.0.8")
+            && stdout.contains("v0.1.0")
             && stdout.contains("up to date"),
         "doctor should report the current installed extension, stdout was:\n{stdout}"
     );
@@ -241,7 +241,60 @@ exit 1
     );
     assert!(
         !stdout.contains("no usable OAuth-authenticated `gh` account"),
-        "v0.0.8 should use the env-only authentication, stdout was:\n{stdout}"
+        "v0.1.0 should use the env-only authentication, stdout was:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_reports_v0_0_8_as_out_of_date_without_legacy_oauth_warning() {
+    // v0.0.8 already uses the public Stacks REST API and normal GitHub CLI
+    // authentication, so even though it's now `BelowRecommended` (the
+    // recommendation moved to v0.1.0 for `gh stack merge`), it must not be
+    // flagged with the legacy-OAuth warning that only applies to versions
+    // predating the public API (< v0.0.8).
+    let repo = TestRepo::new_with_remote();
+    repo.configure_github_like_submit_remote();
+    repo.run_stax(&["init", "--trunk", "main"]).assert_success();
+
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "gh version 2.96.0"; exit 0 ;;
+  "extension list") echo "gh stack github/gh-stack v0.0.8"; exit 0 ;;
+  "stack --help") printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'; exit 0 ;;
+  "auth status") echo called > "$OAUTH_PROBE_FILE"; exit 5 ;;
+esac
+exit 1
+"#,
+    );
+    let probe_file = fake.path().join("oauth-probe.txt");
+
+    let output = repo.run_stax_with_env(
+        &["doctor"],
+        &[
+            ("PATH", &path_with_fake_gh(fake.path())),
+            ("GH_TOKEN", "ghp_env_only"),
+            ("GITHUB_TOKEN", "github_env_only"),
+            ("OAUTH_PROBE_FILE", probe_file.to_str().unwrap()),
+        ],
+    );
+
+    output.assert_success();
+    let stdout = TestRepo::stdout(&output);
+    assert!(
+        stdout.contains("v0.0.8")
+            && stdout.contains("out of date")
+            && stdout.contains("gh stack merge")
+            && stdout.contains("gh extension upgrade stack"),
+        "expected a `gh stack merge` upgrade recommendation, stdout was:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("no usable OAuth-authenticated"),
+        "v0.0.8 already uses normal auth and must not trigger the legacy-OAuth warning, stdout was:\n{stdout}"
+    );
+    assert!(
+        !probe_file.exists(),
+        "v0.0.8 already uses the public Stacks API; doctor must not probe OAuth for it"
     );
 }
 
@@ -480,7 +533,33 @@ exit 1
 }
 
 #[test]
-fn version_status_accepts_recommended_or_newer_versions() {
+fn version_status_accepts_v0_1_0_as_recommended() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "extension list" ]; then
+  echo "gh-stack github/gh-stack v0.1.0"
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    let status = stax::github::gh_stack::version_status_with_path(&path_with_fake_gh(fake.path()));
+
+    assert_eq!(
+        status,
+        stax::github::gh_stack::VersionStatus::MeetsRecommended {
+            installed: "0.1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn version_status_flags_v0_0_8_as_below_recommended() {
+    // v0.0.8 uses the public Stacks REST API (normal gh auth) but predates
+    // `gh stack merge` (added in v0.1.0), so it must not be misreported as
+    // meeting the recommendation now that the recommendation tracks merge
+    // support rather than the auth boundary.
     let fake = fake_gh_dir(
         r#"#!/bin/sh
 if [ "$1 $2" = "extension list" ]; then
@@ -495,7 +574,7 @@ exit 1
 
     assert_eq!(
         status,
-        stax::github::gh_stack::VersionStatus::MeetsRecommended {
+        stax::github::gh_stack::VersionStatus::BelowRecommended {
             installed: "0.0.8".to_string()
         }
     );
@@ -706,6 +785,291 @@ exit 1
     assert_eq!(
         fs::read_to_string(env_dump_file).unwrap(),
         "GH_TOKEN=unset\nGITHUB_TOKEN=unset\n"
+    );
+}
+
+#[test]
+fn merge_command_supported_true_when_gh_stack_help_lists_merge() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack --help" ]; then
+  printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n  merge Merge a stack atomically\n'
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    assert!(stax::github::gh_stack::merge_command_supported_with_path(
+        &path_with_fake_gh(fake.path())
+    ));
+}
+
+#[test]
+fn merge_command_supported_false_when_gh_stack_lacks_merge() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack --help" ]; then
+  printf 'Remote operations:\n  link  Link PRs into a stack on GitHub\n'
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    assert!(!stax::github::gh_stack::merge_command_supported_with_path(
+        &path_with_fake_gh(fake.path())
+    ));
+}
+
+#[test]
+fn merge_stack_passes_tip_pr_number_method_and_yes_flag() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+printf '%s\n' "$@" > "$GH_ARGS_FILE"
+echo "Merged stack through PR #30"
+exit 0
+"#,
+    );
+    let args_file = fake.path().join("merge-args.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    let outcome = stax::github::gh_stack::merge_stack_with_env(
+        30,
+        "squash",
+        &[
+            ("PATH", path.as_str()),
+            ("GH_ARGS_FILE", args_file.to_str().unwrap()),
+        ],
+    );
+
+    assert_eq!(
+        outcome,
+        stax::github::gh_stack::StackMergeOutcome::Merged {
+            message: "Merged stack through PR #30".to_string()
+        }
+    );
+    let args = fs::read_to_string(args_file).expect("args written");
+    assert_eq!(args, "stack\nmerge\n30\n--merge-method\nsquash\n--yes\n");
+}
+
+#[test]
+fn merge_stack_classifies_merge_queue_routing() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack merge" ]; then
+  echo "Stack added to the merge queue for main"
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    let outcome = stax::github::gh_stack::merge_stack_with_path(
+        30,
+        "squash",
+        &path_with_fake_gh(fake.path()),
+    );
+
+    assert!(
+        matches!(
+            outcome,
+            stax::github::gh_stack::StackMergeOutcome::Queued { .. }
+        ),
+        "expected Queued, got {outcome:?}"
+    );
+}
+
+#[test]
+fn merge_stack_classifies_not_stacked_rejection() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack merge" ]; then
+  echo "PR #30 is not part of a stack" >&2
+  exit 1
+fi
+exit 1
+"#,
+    );
+
+    let outcome = stax::github::gh_stack::merge_stack_with_path(
+        30,
+        "squash",
+        &path_with_fake_gh(fake.path()),
+    );
+
+    assert!(
+        matches!(
+            outcome,
+            stax::github::gh_stack::StackMergeOutcome::NotStacked { .. }
+        ),
+        "expected NotStacked, got {outcome:?}"
+    );
+}
+
+#[test]
+fn merge_stack_classifies_feature_disabled() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack merge" ]; then
+  echo "Stacked PRs is currently in private preview and has not been enabled for this repository" >&2
+  exit 1
+fi
+exit 1
+"#,
+    );
+
+    let outcome = stax::github::gh_stack::merge_stack_with_path(
+        30,
+        "squash",
+        &path_with_fake_gh(fake.path()),
+    );
+
+    assert!(
+        matches!(
+            outcome,
+            stax::github::gh_stack::StackMergeOutcome::FeatureDisabled { .. }
+        ),
+        "expected FeatureDisabled, got {outcome:?}"
+    );
+}
+
+#[test]
+fn merge_stack_classifies_auth_token_unsupported() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack merge" ]; then
+  echo "Personal access tokens are not supported by gh stack during private preview" >&2
+  exit 1
+fi
+exit 1
+"#,
+    );
+
+    let outcome = stax::github::gh_stack::merge_stack_with_path(
+        30,
+        "squash",
+        &path_with_fake_gh(fake.path()),
+    );
+
+    assert!(
+        matches!(
+            outcome,
+            stax::github::gh_stack::StackMergeOutcome::AuthTokenUnsupported { .. }
+        ),
+        "expected AuthTokenUnsupported, got {outcome:?}"
+    );
+}
+
+#[test]
+fn merge_stack_classifies_generic_failure() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+if [ "$1 $2" = "stack merge" ]; then
+  echo "unexpected server error" >&2
+  exit 1
+fi
+exit 1
+"#,
+    );
+
+    let outcome = stax::github::gh_stack::merge_stack_with_path(
+        30,
+        "squash",
+        &path_with_fake_gh(fake.path()),
+    );
+
+    assert_eq!(
+        outcome,
+        stax::github::gh_stack::StackMergeOutcome::Failed {
+            message: "unexpected server error".to_string()
+        }
+    );
+}
+
+#[test]
+fn merge_stack_reports_gh_not_found() {
+    let empty_dir = TempDir::new().expect("empty temp dir");
+
+    let outcome = stax::github::gh_stack::merge_stack_with_path(
+        30,
+        "squash",
+        empty_dir.path().to_str().expect("utf8 path"),
+    );
+
+    assert_eq!(
+        outcome,
+        stax::github::gh_stack::StackMergeOutcome::Failed {
+            message: "`gh` executable not found".to_string()
+        }
+    );
+}
+
+#[test]
+fn merge_stack_strips_injected_token_env_vars_for_legacy_versions() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "extension list") echo "gh-stack github/gh-stack v0.0.7"; exit 0 ;;
+  "stack merge")
+    printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "${GH_TOKEN:-unset}" "${GITHUB_TOKEN:-unset}" > "$ENV_DUMP_FILE"
+    exit 0
+    ;;
+esac
+exit 1
+"#,
+    );
+    let env_dump_file = fake.path().join("merge-env.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    stax::github::gh_stack::merge_stack_with_env(
+        30,
+        "squash",
+        &[
+            ("PATH", path.as_str()),
+            ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+            ("GH_TOKEN", "ghp_should_be_stripped"),
+            ("GITHUB_TOKEN", "ghp_should_also_be_stripped"),
+        ],
+    );
+
+    assert_eq!(
+        fs::read_to_string(env_dump_file).unwrap(),
+        "GH_TOKEN=unset\nGITHUB_TOKEN=unset\n"
+    );
+}
+
+#[test]
+fn merge_stack_preserves_injected_token_env_vars_for_current_versions() {
+    let fake = fake_gh_dir(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "extension list") echo "gh-stack github/gh-stack v0.1.0"; exit 0 ;;
+  "stack merge")
+    printf 'GH_TOKEN=%s\nGITHUB_TOKEN=%s\n' "${GH_TOKEN:-unset}" "${GITHUB_TOKEN:-unset}" > "$ENV_DUMP_FILE"
+    exit 0
+    ;;
+esac
+exit 1
+"#,
+    );
+    let env_dump_file = fake.path().join("merge-current-env.txt");
+    let path = path_with_fake_gh(fake.path());
+
+    stax::github::gh_stack::merge_stack_with_env(
+        30,
+        "squash",
+        &[
+            ("PATH", path.as_str()),
+            ("ENV_DUMP_FILE", env_dump_file.to_str().unwrap()),
+            ("GH_TOKEN", "ghp_current"),
+            ("GITHUB_TOKEN", "github_current"),
+        ],
+    );
+
+    assert_eq!(
+        fs::read_to_string(env_dump_file).unwrap(),
+        "GH_TOKEN=ghp_current\nGITHUB_TOKEN=github_current\n"
     );
 }
 

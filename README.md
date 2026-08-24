@@ -206,7 +206,7 @@ st stack link            # manually re-link the current stack
 st stack unlink 7        # unstack native Stack #7 remotely
 ```
 
-Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. To turn off gh-stack registration entirely, set `native_stack = "off"` under `[submit]` in `~/.config/stax/config.toml`, or pass `st submit --no-native-stack` for a single run (see [config reference](docs/configuration/index.md#native-github-stacked-prs-gh-stack)). `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.0.8 as out of date, and can upgrade it with `st doctor --fix`. Native Stack updates are append-only; to remove or insert PRs, run `st stack unlink <stack-number>` and then link again. Argument-free `st stack unlink` retains the active locally tracked behavior.
+Repos without the feature, users without the extension, and non-GitHub remotes keep the existing stax behavior — this is purely additive and never blocks a submit. To turn off gh-stack registration entirely, set `native_stack = "off"` under `[submit]` in `~/.config/stax/config.toml`, or pass `st submit --no-native-stack` for a single run (see [config reference](docs/configuration/index.md#native-github-stacked-prs-gh-stack)). `gh-stack` v0.0.8+ uses GitHub's public Stacks REST API and supports the normal GitHub CLI authentication sources, including `GH_TOKEN`/`GITHUB_TOKEN`. For older link-capable versions, stax strips those overrides before `gh stack` operations so the extension can fall back to an OAuth-authenticated `gh` login. `st doctor` always shows the installed version, marks anything below v0.1.0 as out of date (v0.1.0 adds `gh stack merge`, see below), and can upgrade it with `st doctor --fix`. Native Stack updates are append-only; to remove or insert PRs, run `st stack unlink <stack-number>` and then link again. Argument-free `st stack unlink` retains the active locally tracked behavior.
 
 → [Native GitHub Stacks guide](docs/integrations/github-native-stacks.md)
 
@@ -223,6 +223,12 @@ st merge --stack --full   # stack-merge the full stack even from the middle
 st merge --remote         # merge remotely on GitHub while you keep working
 st merge --all            # merge the whole stack regardless of position
 ```
+
+On GitHub, if the current stack is a confirmed-enabled native GitHub Stack and
+`gh-stack` v0.1.0+ is installed, `st merge --stack` delegates to `gh stack
+merge` instead — GitHub lands every selected PR up to the tip atomically, or
+none of them. Older `gh-stack` versions fall back to the flow below with a
+`note:` pointing at `gh extension upgrade stack`.
 
 GitLab stack merge checks project merge settings first, sends `squash: false`,
 and accepts only the default preserving method; explicit stack `rebase` or
