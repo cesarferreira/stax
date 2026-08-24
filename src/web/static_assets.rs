@@ -53,7 +53,7 @@ pub const APP_CSS: &str = r#"
   --border-strong:    #2a2a40;
   --text:             #e0e0f0;
   --text-muted:       #8888a8;
-  --accent:           #7c68ff;
+  --accent:           #6f58e8;
   --accent-text:      #ffffff;
   --focus:            #9b8fff;
   --success:          #4ec97a;
@@ -89,7 +89,7 @@ pub const APP_CSS: &str = r#"
     --border-strong:    #2a2a40;
     --text:             #e0e0f0;
     --text-muted:       #8888a8;
-    --accent:           #7c68ff;
+    --accent:           #6f58e8;
     --accent-text:      #ffffff;
     --focus:            #9b8fff;
     --success:          #4ec97a;
@@ -117,6 +117,16 @@ pub const APP_CSS: &str = r#"
   [data-theme="system"] {
     color-scheme: light;
   }
+}
+
+/* ── Theme-independent layout metrics ────────────────────────────────── */
+:root {
+  --card-pad-y:    6px;
+  --card-border-w: 1px;
+  --card-margin-y: 2px;
+  --rail-bleed:     calc(var(--card-pad-y) + var(--card-border-w) + var(--card-margin-y));
+  --topo-lane-w:   20px;
+  --stack-rail-w:  240px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -227,7 +237,7 @@ html, body {
 /* ── Three-column stage ─────────────────────────────────────────────── */
 .stage {
   display: grid;
-  grid-template-columns: 240px 1fr 280px;
+  grid-template-columns: max-content 1fr 280px;
   grid-template-rows: 1fr;
   flex: 1;
   overflow: hidden;
@@ -244,7 +254,7 @@ html, body {
 }
 .pane:last-child { border-right: none; }
 
-.pane-stack  { }
+.pane-stack  { min-width: 200px; }
 .pane-changes {
   flex-direction: column;
 }
@@ -303,6 +313,7 @@ html, body {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  width: var(--stack-rail-w, 240px);
 }
 
 .stack-header {
@@ -357,12 +368,10 @@ html, body {
 .branch-card {
   display: flex;
   align-items: stretch;
-  padding: 6px 10px 6px 4px;
-  margin: 2px 8px;
+  padding: var(--card-pad-y) 10px var(--card-pad-y) 4px;
+  margin: var(--card-margin-y) 8px;
   border-radius: var(--radius-card);
-  border: 1px solid transparent;
-  cursor: pointer;
-  user-select: none;
+  border: var(--card-border-w) solid transparent;
   position: relative;
   transition: background .1s, border-color .1s;
   gap: 6px;
@@ -378,6 +387,25 @@ html, body {
 .branch-card.is-current .card-name { font-weight: 600; }
 .branch-card.is-trunk { opacity: .8; }
 
+/* Card selection surface — carries role=button so checkout is a sibling */
+.card-select {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  user-select: none;
+  background: none;
+  border: none;
+  padding: 0;
+  gap: 6px;
+}
+.card-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  border-radius: calc(var(--radius-card) - 1px);
+}
+
 /* ── Card topology connector ─────────────────────────────────────────── */
 .card-topo {
   flex-shrink: 0;
@@ -387,7 +415,7 @@ html, body {
 
 /* Multi-lane topology cells */
 .topo-cell {
-  width: 20px;
+  width: var(--topo-lane-w);
   flex-shrink: 0;
   position: relative;
   display: flex;
@@ -400,9 +428,10 @@ html, body {
   left: 50%;
   transform: translateX(-50%);
   width: 2px;
+  z-index: 2;
 }
-.tc-rail.tc-top    { top: 0; bottom: 50%; }
-.tc-rail.tc-bottom { top: 50%; bottom: 0; }
+.tc-rail.tc-top    { top: calc(-1 * var(--rail-bleed)); bottom: 50%; }
+.tc-rail.tc-bottom { top: 50%; bottom: calc(-1 * var(--rail-bleed)); }
 .tc-rail.lane-0 { background: var(--lane-0); opacity: .7; }
 .tc-rail.lane-1 { background: var(--lane-1); opacity: .7; }
 .tc-rail.lane-2 { background: var(--lane-2); opacity: .7; }
@@ -412,6 +441,7 @@ html, body {
   transform: translateY(-50%);
   height: 2px;
   background: var(--border-strong);
+  z-index: 2;
 }
 .tc-h.tc-left  { left: 0; right: 50%; }
 .tc-h.tc-right { left: 50%; right: 0; }
@@ -420,7 +450,7 @@ html, body {
   height: 10px;
   border-radius: 50%;
   position: relative;
-  z-index: 1;
+  z-index: 3;
   flex-shrink: 0;
 }
 .tc-node.lane-0 { background: var(--lane-0); }
@@ -475,6 +505,7 @@ html, body {
 .card-diverge {
   font-family: var(--mono);
   font-size: 10px;
+  color: var(--text);
 }
 
 /* ── Quick actions ───────────────────────────────────────────────────── */
@@ -552,6 +583,24 @@ html, body {
   font-size: 11px;
   color: var(--text-muted);
   flex-shrink: 0;
+}
+.review-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.review-tab {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+}
+.review-tab.active {
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface-selected);
 }
 
 /* ── Changes panel: side-by-side file nav + diff pane ───────────────── */
@@ -672,7 +721,7 @@ html, body {
   flex-shrink: 0;
   text-align: right;
   padding: 0 6px;
-  color: var(--text-muted);
+  color: var(--text);
   user-select: none;
   border-right: 1px solid var(--border);
   font-size: 10px;
@@ -858,12 +907,11 @@ html, body {
   white-space: nowrap;
   flex-shrink: 0;
 }
-.meta-chip.chip-trunk { background: var(--border); color: var(--text-muted); }
-.meta-chip.chip-head { background: var(--surface-selected); color: var(--accent); }
+.meta-chip.chip-trunk { background: var(--border); color: var(--text); }
+.meta-chip.chip-head { background: var(--surface-selected); color: var(--focus); }
 .meta-chip.chip-diverge { background: var(--surface-hover); color: var(--text-muted); }
 .meta-chip.chip-warning { background: rgba(232,180,78,.15); color: var(--warning); }
-.meta-chip.chip-pr { background: var(--surface-selected); color: var(--accent); }
-.meta-chip.chip-clean { background: rgba(78,201,122,.12); color: var(--success); }
+.meta-chip.chip-pr { background: var(--surface-selected); color: var(--focus); }
 
 /* ── Stat add / del ──────────────────────────────────────────────────── */
 .stat-add { color: var(--diff-add); }
@@ -988,6 +1036,8 @@ input[type="text"]:focus { outline: none; border-color: var(--focus); }
 
 .project-add {
   width: 120px;
+  min-width: 0;
+  flex-shrink: 1;
   padding: 4px 8px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -1006,10 +1056,30 @@ input[type="text"]:focus { outline: none; border-color: var(--focus); }
 }
 
 /* ── Responsive ──────────────────────────────────────────────────────── */
+/* Narrow topbar: actions wrap to a second full-width row so Restack / Open PR /
+   Submit remain reachable. The repository-path input compacts but stays visible. */
+@media (max-width: 900px) {
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 42px;
+    padding: 4px 10px;
+    row-gap: 4px;
+  }
+  .project-add {
+    width: 80px;
+  }
+  .topbar-actions {
+    width: 100%;
+    justify-content: flex-end;
+    padding-bottom: 4px;
+  }
+}
+
 /* Medium: inspector moves below review */
 @media (max-width: 1100px) {
   .stage {
-    grid-template-columns: 220px 1fr;
+    grid-template-columns: max-content 1fr;
     grid-template-rows: 1fr auto;
   }
   .pane-inspector {
@@ -1031,6 +1101,8 @@ input[type="text"]:focus { outline: none; border-color: var(--focus); }
   .pane-changes  { order: -1; min-height: 300px; }
   .pane-stack    { order: 0;  max-height: 280px; }
   .pane-inspector { order: 1; max-height: none; }
+  .pane-stack { min-width: 0; }
+  .stack-rail { width: 100%; }
 
   .changes-panel { flex-direction: column; }
   .file-nav {
@@ -1040,6 +1112,31 @@ input[type="text"]:focus { outline: none; border-color: var(--focus); }
     border-bottom: 1px solid var(--border);
   }
   .diff-pane { min-height: 200px; }
+}
+
+/* Very narrow (~500px): allow project/search/utility controls to wrap freely
+   so no first-row overflow occurs and all primary actions remain reachable. */
+@media (max-width: 500px) {
+  .topbar-project {
+    flex-wrap: wrap;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+  .project-select {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .project-add {
+    width: 100%;
+    min-width: 0;
+  }
+  .topbar-search {
+    min-width: 60px;
+    max-width: none;
+  }
+  .topbar-group {
+    flex-wrap: wrap;
+  }
 }
 "#;
 
@@ -1160,7 +1257,18 @@ function initFileList() {
 }
 
 document.addEventListener('htmx:beforeRequest', function(e) {
-  if (e.target.classList.contains('mutating-btn')) {
+  // Use e.detail.elt (the HTMX-triggering element) so form-backed mutations —
+  // where e.target is the form but the submit button carries .mutating-btn —
+  // are also detected and participate in global control disabling.
+  // Descendant search is limited to FORM elements so that branch-card selection
+  // (a plain div trigger) does not accidentally find the checkout .mutating-btn
+  // inside the card and disable all controls.
+  var elt = (e.detail && e.detail.elt) || e.target;
+  var isMutating = elt && (
+    elt.classList.contains('mutating-btn') ||
+    (elt.tagName === 'FORM' && typeof elt.querySelector === 'function' && elt.querySelector('.mutating-btn'))
+  );
+  if (isMutating) {
     document.querySelectorAll('.mutating-btn').forEach(function(b) { b.disabled = true; });
   }
   var swapTarget = e.detail && e.detail.target;
@@ -1204,7 +1312,7 @@ mod tests {
     fn dark_and_system_dark_token_parity() {
         // The accent colour is a reliable proxy token — it must appear in both
         // [data-theme="dark"] and the @media prefers-color-scheme:dark block.
-        let dark_accent = "--accent:           #7c68ff";
+        let dark_accent = "--accent:           #6f58e8";
         let count = APP_CSS.matches(dark_accent).count();
         assert!(
             count >= 2,
@@ -1221,6 +1329,65 @@ mod tests {
         assert!(
             APP_CSS.contains("--mono:"),
             "mono font variable missing from CSS"
+        );
+    }
+
+    #[test]
+    fn stack_column_is_sized_by_rendered_topology_width() {
+        assert!(
+            APP_CSS.contains("grid-template-columns: max-content 1fr 280px;"),
+            "desktop stack track should follow the rendered stack width"
+        );
+        assert!(
+            APP_CSS.contains("width: var(--stack-rail-w, 240px);"),
+            "stack rail should use the lane-count-driven width until the stacked breakpoint"
+        );
+        assert!(
+            !APP_CSS.contains("min(var(--stack-rail-w, 240px), 40vw)"),
+            "a viewport cap before the 800px breakpoint would squash dense stacks"
+        );
+    }
+
+    #[test]
+    fn topology_rails_bleed_across_card_chrome() {
+        assert!(
+            APP_CSS.contains(
+                "--rail-bleed:     calc(var(--card-pad-y) + var(--card-border-w) + var(--card-margin-y));"
+            ),
+            "rail bleed should equal one card's padding, border, and margin"
+        );
+        assert!(
+            APP_CSS
+                .contains(".tc-rail.tc-top    { top: calc(-1 * var(--rail-bleed)); bottom: 50%; }"),
+            "top rail should extend into the preceding card gap"
+        );
+        assert!(
+            APP_CSS
+                .contains(".tc-rail.tc-bottom { top: 50%; bottom: calc(-1 * var(--rail-bleed)); }"),
+            "bottom rail should extend into the following card gap"
+        );
+    }
+
+    #[test]
+    fn topology_connectors_paint_above_card_surfaces() {
+        let rail = APP_CSS
+            .split(".tc-rail {")
+            .nth(1)
+            .and_then(|css| css.split('}').next())
+            .expect("tc-rail rule should exist");
+        assert!(
+            rail.contains("z-index: 2;"),
+            "bleeding rails should paint above adjacent card surfaces"
+        );
+
+        let node = APP_CSS
+            .split(".tc-node {")
+            .nth(1)
+            .and_then(|css| css.split('}').next())
+            .expect("tc-node rule should exist");
+        assert!(
+            node.contains("z-index: 3;"),
+            "nodes should paint above rails"
         );
     }
 }

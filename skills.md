@@ -23,7 +23,7 @@ stax status|ls                # Stack status (tree)
 stax ll                        # Stack status with PR URLs/details
 stax log|l                     # Stack status with commits + PR info
 stax gui [path]                # Launch fresh native macOS GUI preview for one repository
-stax web [path] [--port <n>] [--no-open]  # Start localhost HTMX web workspace (127.0.0.1 only, default port 8787)
+stax web [path] [--port <n>] [--no-open]  # Start localhost workspace; busy ports fall back automatically
 
 stax submit|ss                 # Submit full stack
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
@@ -179,7 +179,7 @@ GUI operations are typed and repository-scoped. It can search branches; checkout
 
 ```bash
 stax web                          # Start on 127.0.0.1:8787 and open browser
-stax web --port 9000              # Custom port
+stax web --port 9000              # Custom port (falls back to a free OS port if busy)
 stax web --port 0                 # Ephemeral port
 stax web --no-open                # Print URL only; don't open browser
 stax web /path/to/repo            # Open a specific repository

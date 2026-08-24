@@ -40,9 +40,19 @@ fn add_gutter_numbers(lines: &[DiffLine]) -> Vec<GutteredLine<'_>> {
     let mut result = Vec::with_capacity(lines.len());
     let mut old_line: usize = 0;
     let mut new_line: usize = 0;
+    let mut file_ordinal: usize = 0;
 
     for line in lines {
-        let anchor_id = diff_git_file_id(&line.content);
+        // Collision-free ordinal anchor: assigned only to `diff --git` boundary
+        // lines. Path content is never parsed, so quoted paths, renames, and
+        // Unicode all work without collisions.
+        let anchor_id = if is_diff_git_line(&line.content) {
+            let id = file_ordinal.to_string();
+            file_ordinal += 1;
+            Some(id)
+        } else {
+            None
+        };
         let (old_num, new_num) = match line.kind {
             DiffLineKind::Hunk => {
                 if let Some((old_start, new_start)) = parse_hunk_header(&line.content) {
@@ -194,10 +204,21 @@ pub fn workspace_page(
                             }
                             #pane-changes
                             {
-                            // Review header — updated via OOB from diff responses
+                            // Review header — pre-populated on initial load, then
+                            // kept current via OOB updates from diff responses.
                             div #review-header .review-header {
                                 @if let Some(branch) = selected {
+                                    div .review-tabs {
+                                        span .review-tab.active { "Changes" }
+                                    }
                                     span .review-branch-name title=(branch) { (branch) }
+                                    @if let Some((ahead, _)) = row_meta.get(branch) {
+                                        @if *ahead > 0 {
+                                            span .review-stat {
+                                                (*ahead) " commit" @if *ahead != 1 { "s" }
+                                            }
+                                        }
+                                    }
                                 } @else {
                                     span .text-muted { "Select a branch to review" }
                                 }
@@ -296,7 +317,7 @@ fn topbar(
                 hx-post=(format!("{base}/search"))
                 hx-trigger="input changed delay:200ms"
                 hx-target="#stack-pane"
-                hx-include="[name='csrf']"
+                hx-include="#workspace-csrf"
                 {}
 
             div .spacer {}
@@ -306,7 +327,7 @@ fn topbar(
                 button .btn.btn-icon.mutating-btn
                     hx-post=(format!("{base}/refresh"))
                     hx-target="#stack-pane"
-                    hx-include="[name='csrf']"
+                    hx-include="#workspace-csrf"
                     title="Refresh repository"
                     { "↺" }
 
@@ -314,7 +335,7 @@ fn topbar(
                     button .btn.btn-icon.mutating-btn
                         hx-post=(format!("{base}/op/undo"))
                         hx-target="#stack-pane"
-                        hx-include="[name='csrf']"
+                        hx-include="#workspace-csrf"
                         title="Undo last local operation"
                         { "↶" }
                 } @else {
@@ -325,7 +346,7 @@ fn topbar(
                     button .btn.btn-icon.mutating-btn
                         hx-post=(format!("{base}/op/redo"))
                         hx-target="#stack-pane"
-                        hx-include="[name='csrf']"
+                        hx-include="#workspace-csrf"
                         title="Redo last local operation"
                         { "↷" }
                 } @else {
@@ -337,7 +358,7 @@ fn topbar(
                     title="Appearance"
                     hx-post=(format!("{base}/theme"))
                     hx-trigger="change"
-                    hx-include="[name='csrf']"
+                    hx-include="#workspace-csrf"
                     hx-swap="none"
                     onchange="document.documentElement.setAttribute('data-theme', this.value)"
                     {
@@ -357,7 +378,7 @@ fn topbar(
             // Primary actions (also updated via OOB after mutations)
             (topbar_actions_inner(interaction, base))
 
-            input type="hidden" name="csrf" value=(csrf) {}
+            input #workspace-csrf type="hidden" name="csrf" value=(csrf) {}
             template #help-template {
                 (help_fragment())
             }
@@ -373,7 +394,7 @@ fn topbar_actions_inner(interaction: &InteractionState, base: &str) -> Markup {
                 button .btn.mutating-btn
                     hx-post=(format!("{base}/op/restack"))
                     hx-target="#stack-pane"
-                    hx-include="[name='csrf']"
+                    hx-include="#workspace-csrf"
                     title="Restack current branch"
                     { "⟳ Restack" }
             } @else {
@@ -395,7 +416,7 @@ fn topbar_actions_inner(interaction: &InteractionState, base: &str) -> Markup {
                 button .btn.btn-primary.mutating-btn
                     hx-post=(format!("{base}/op/submit"))
                     hx-target="#stack-pane"
-                    hx-include="[name='csrf']"
+                    hx-include="#workspace-csrf"
                     hx-confirm="Submit the current stack as Draft PRs?"
                     title="Submit stack (draft PRs)"
                     { "Submit stack" }
@@ -407,6 +428,17 @@ fn topbar_actions_inner(interaction: &InteractionState, base: &str) -> Markup {
 }
 
 // ── Stack pane ────────────────────────────────────────────────────────────────
+
+/// Returns the pixel width for the stack pane based on how many topology lanes
+/// are rendered. 240px base, 20px per lane beyond the first, capped at 400px.
+pub(crate) fn stack_pane_width_px(lane_count: usize) -> u32 {
+    const BASE: u32 = 240;
+    const CAP: u32 = 400;
+    let extra_lanes = lane_count
+        .saturating_sub(1)
+        .min(((CAP - BASE) / 20) as usize);
+    BASE + extra_lanes as u32 * 20
+}
 
 pub fn stack_pane_fragment(
     session: &WebSession,
@@ -429,7 +461,7 @@ fn topbar_actions_oob(interaction: &InteractionState, base: &str) -> Markup {
                 button .btn.mutating-btn
                     hx-post=(format!("{base}/op/restack"))
                     hx-target="#stack-pane"
-                    hx-include="[name='csrf']"
+                    hx-include="#workspace-csrf"
                     title="Restack current branch"
                     { "⟳ Restack" }
             } @else {
@@ -451,7 +483,7 @@ fn topbar_actions_oob(interaction: &InteractionState, base: &str) -> Markup {
                 button .btn.btn-primary.mutating-btn
                     hx-post=(format!("{base}/op/submit"))
                     hx-target="#stack-pane"
-                    hx-include="[name='csrf']"
+                    hx-include="#workspace-csrf"
                     hx-confirm="Submit the current stack as Draft PRs?"
                     title="Submit stack (draft PRs)"
                     { "Submit stack" }
@@ -580,6 +612,14 @@ pub fn stack_pane_inner(
         .filter(|(b, _)| b.pr_number.is_some())
         .count();
 
+    let max_lanes = visible_rows
+        .iter()
+        .map(|(_, cells)| cells.len())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let rail_width = stack_pane_width_px(max_lanes);
+
     let csrf = &session.csrf_token;
     let create_parent = session
         .selected_branch
@@ -587,7 +627,7 @@ pub fn stack_pane_inner(
         .unwrap_or(snapshot.trunk.as_str());
 
     html! {
-        div .stack-rail {
+        div .stack-rail data-lane-count=(max_lanes) style=(format!("--stack-rail-w:{rail_width}px")) {
             // Header
             div .stack-header {
                 div .stack-header-labels {
@@ -654,7 +694,7 @@ pub fn stack_pane_inner(
                     button .quick-action.qa-restack.mutating-btn
                         hx-post=(format!("{base}/op/restack"))
                         hx-target="#stack-pane"
-                        hx-include="[name='csrf']"
+                        hx-include="#workspace-csrf"
                         title="Restack current branch onto its parent"
                         {
                         span .qa-icon { "⟳" }
@@ -673,7 +713,7 @@ pub fn stack_pane_inner(
                     button .quick-action.qa-submit.mutating-btn
                         hx-post=(format!("{base}/op/submit"))
                         hx-target="#stack-pane"
-                        hx-include="[name='csrf']"
+                        hx-include="#workspace-csrf"
                         hx-confirm="Submit the current stack as Draft PRs?"
                         {
                         span .qa-icon { "↑" }
@@ -692,7 +732,7 @@ pub fn stack_pane_inner(
                     button .quick-action.qa-undo.mutating-btn
                         hx-post=(format!("{base}/op/undo"))
                         hx-target="#stack-pane"
-                        hx-include="[name='csrf']"
+                        hx-include="#workspace-csrf"
                         {
                         span .qa-icon { "↩" }
                         span .qa-label { "Undo" }
@@ -733,75 +773,82 @@ fn branch_card(
     }
 
     html! {
-        div
-            class=(card_class)
-            hx-post=(format!("{base}/select"))
-            hx-target="#stack-pane"
-            hx-swap="innerHTML"
-            hx-vals=(format!(r#"{{"branch":"{}","csrf":"{}"}}"#, branch.name.replace('"', "\\\""), csrf))
-            hx-trigger="click"
-            hx-on--after-request="htmx.trigger('#inspector-pane','load'); htmx.trigger('#changes-pane','load');"
-            {
-            // Topology strip
-            div .card-topo {
-                (render_topo_cells(cells, branch.is_current))
-            }
-
-            // Card content
-            div .card-inner {
-                div .card-top {
-                    span .card-name title=(branch.name) { (branch.name) }
-                    div .card-chips {
-                        @if branch.is_trunk {
-                            span .meta-chip.chip-trunk { "trunk" }
-                        }
-                        @if branch.is_current && !branch.is_trunk {
-                            span .meta-chip.chip-head { "HEAD" }
-                        }
-                        @if !branch.needs_restack && !branch.is_trunk {
-                            span .meta-chip.chip-clean { "clean" }
-                        }
-                        @if branch.needs_restack {
-                            span .meta-chip.chip-warning { "restack" }
-                        }
-                        @if let Some(pr_num) = branch.pr_number {
-                            span .meta-chip.chip-pr { "#" (pr_num) }
-                        }
-                    }
+        // Outer wrapper: visual card surface only — not interactive itself.
+        // The inner .card-select div carries role=button so that the checkout
+        // button is a sibling (not a descendant) of the selection surface,
+        // avoiding the interactive-descendant-inside-role-button a11y problem.
+        div class=(card_class) {
+            // ── Selection surface ───────────────────────────────────────────
+            div
+                .card-select
+                role="button"
+                tabindex="0"
+                aria-pressed=(if selected { "true" } else { "false" })
+                hx-post=(format!("{base}/select"))
+                hx-target="#stack-pane"
+                hx-swap="innerHTML"
+                hx-vals=(format!(r#"{{"branch":"{}","csrf":"{}"}}"#, branch.name.replace('"', "\\\""), csrf))
+                hx-trigger="click"
+                onkeydown="if((event.key==='Enter'||event.key===' ')&&event.target===this){event.preventDefault();this.click();}"
+                {
+                // Topology strip
+                div .card-topo {
+                    (render_topo_cells(cells, branch.is_current))
                 }
 
-                @let has_bottom_row = branch.ci_state.is_some()
-                    || row_meta.get(&branch.name).map(|(a,b)| *a > 0 || *b > 0).unwrap_or(false);
-                @if has_bottom_row {
-                    div .card-bottom {
-                        @if let Some(ci) = &branch.ci_state {
-                            @let ci_cls = if ci.to_lowercase().contains("pass") || ci.to_lowercase().contains("success") {
-                                "card-ci ci-pass"
-                            } else if ci.to_lowercase().contains("fail") || ci.to_lowercase().contains("error") {
-                                "card-ci ci-fail"
-                            } else {
-                                "card-ci ci-pending"
-                            };
-                            span class=(ci_cls) { "● " (ci) }
+                // Card content
+                div .card-inner {
+                    div .card-top {
+                        span .card-name title=(branch.name) { (branch.name) }
+                        div .card-chips {
+                            @if branch.is_trunk {
+                                span .meta-chip.chip-trunk { "trunk" }
+                            }
+                            @if branch.is_current && !branch.is_trunk {
+                                span .meta-chip.chip-head { "HEAD" }
+                            }
+                            @if branch.needs_restack {
+                                span .meta-chip.chip-warning { "restack" }
+                            }
+                            @if let Some(pr_num) = branch.pr_number {
+                                span .meta-chip.chip-pr { "#" (pr_num) }
+                            }
                         }
-                        @if let Some((ahead, behind)) = row_meta.get(&branch.name) {
-                            @if *ahead > 0 || *behind > 0 {
-                                span .card-diverge { (ahead) "↑ " (behind) "↓" }
+                    }
+
+                    @let has_bottom_row = branch.ci_state.is_some()
+                        || row_meta.get(&branch.name).map(|(a,b)| *a > 0 || *b > 0).unwrap_or(false);
+                    @if has_bottom_row {
+                        div .card-bottom {
+                            @if let Some(ci) = &branch.ci_state {
+                                @let ci_cls = if ci.to_lowercase().contains("pass") || ci.to_lowercase().contains("success") {
+                                    "card-ci ci-pass"
+                                } else if ci.to_lowercase().contains("fail") || ci.to_lowercase().contains("error") {
+                                    "card-ci ci-fail"
+                                } else {
+                                    "card-ci ci-pending"
+                                };
+                                span class=(ci_cls) { "● " (ci) }
+                            }
+                            @if let Some((ahead, behind)) = row_meta.get(&branch.name) {
+                                @if *ahead > 0 || *behind > 0 {
+                                    span .card-diverge { (ahead) "↑ " (behind) "↓" }
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Checkout button (non-current, non-trunk branches only)
+            // ── Checkout button — sibling of the selection surface ──────────
+            // Placing it outside role=button avoids nested interactive content.
             @if !branch.is_current && !branch.is_trunk && interaction.checkout.enabled {
                 button .btn.btn-icon.btn-checkout.mutating-btn
                     hx-post=(format!("{base}/op/checkout"))
                     hx-target="#stack-pane"
                     hx-swap="innerHTML"
                     hx-vals=(format!(r#"{{"branch":"{}","csrf":"{}"}}"#, branch.name.replace('"', "\\\""), csrf))
-                    hx-trigger="click[!event.defaultPrevented]"
-                    onclick="event.stopPropagation()"
+                    hx-trigger="click"
                     title=(format!("Check out {}", branch.name))
                     { "co" }
             }
@@ -830,15 +877,25 @@ pub fn changes_pane_placeholder(selected: Option<&str>) -> Markup {
 }
 
 /// OOB review header update emitted by diff responses.
+/// Renders an active "Changes" tab and truthful commit + file stats.
 fn review_header_oob(
     branch_name: &str,
     file_count: usize,
     total_add: usize,
     total_del: usize,
+    commit_count: usize,
 ) -> Markup {
     html! {
         div #review-header hx-swap-oob="true" class="review-header" {
+            div .review-tabs {
+                span .review-tab.active { "Changes" }
+            }
             span .review-branch-name title=(branch_name) { (branch_name) }
+            @if commit_count > 0 {
+                span .review-stat {
+                    (commit_count) " commit" @if commit_count != 1 { "s" }
+                }
+            }
             @if file_count > 0 {
                 span .review-stat {
                     (file_count) " file" @if file_count != 1 { "s" }
@@ -850,14 +907,14 @@ fn review_header_oob(
     }
 }
 
-pub fn diff_view(diff: &BranchDiff, branch_name: &str) -> Markup {
+pub fn diff_view(diff: &BranchDiff, branch_name: &str, commit_count: usize) -> Markup {
     let file_count = diff.stat.len();
     let total_add: usize = diff.stat.iter().map(|s| s.additions).sum();
     let total_del: usize = diff.stat.iter().map(|s| s.deletions).sum();
 
     if diff.stat.is_empty() && diff.lines.is_empty() {
         return html! {
-            (review_header_oob(branch_name, 0, 0, 0))
+            (review_header_oob(branch_name, 0, 0, 0, commit_count))
             (diff_empty())
         };
     }
@@ -866,7 +923,7 @@ pub fn diff_view(diff: &BranchDiff, branch_name: &str) -> Markup {
 
     html! {
         // OOB update for the review header
-        (review_header_oob(branch_name, file_count, total_add, total_del))
+        (review_header_oob(branch_name, file_count, total_add, total_del, commit_count))
 
         // Side-by-side: file navigator + diff pane
         div .changes-panel {
@@ -876,10 +933,11 @@ pub fn diff_view(diff: &BranchDiff, branch_name: &str) -> Markup {
                     span { "Changed files" }
                     span .file-count { (file_count) }
                 }
-                @for stat in &diff.stat {
-                    @let fid = file_diff_id(&stat.file);
+                // Ordinal data-diff-file matches the ordinal anchor on each
+                // diff --git boundary line — works for any path format.
+                @for (i, stat) in diff.stat.iter().enumerate() {
                     button type="button" class="file-row"
-                        data-diff-file=(fid)
+                        data-diff-file=(i)
                         data-file-name=(stat.file)
                         title=(stat.file)
                         {
@@ -893,7 +951,7 @@ pub fn diff_view(diff: &BranchDiff, branch_name: &str) -> Markup {
             }
 
             // Diff pane (wide right)
-            div .diff-pane {
+            div .diff-pane role="region" tabindex="0" aria-label="Unified diff" {
                 div #diff-file-header .diff-file-header {
                     span #diff-file-path .diff-file-path { "" }
                 }
@@ -932,18 +990,10 @@ fn shorten_path(path: &str, max_chars: usize) -> String {
     format!("…{tail}")
 }
 
-fn file_diff_id(file: &str) -> String {
-    file.chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect()
-}
-
-fn diff_git_file_id(content: &str) -> Option<String> {
-    if !content.starts_with("diff --git ") {
-        return None;
-    }
-    let path = content.split_whitespace().nth(3)?;
-    Some(file_diff_id(path.trim_start_matches("b/")))
+/// Returns true when `content` is a `diff --git` boundary line.
+/// Does NOT parse the path — handles quoted paths, renames, and Unicode.
+fn is_diff_git_line(content: &str) -> bool {
+    content.starts_with("diff --git ")
 }
 
 // ── Inspector ─────────────────────────────────────────────────────────────────
@@ -981,9 +1031,6 @@ pub fn inspector_details(
                 div .inspector-badges {
                     @if branch.is_current {
                         span .meta-chip.chip-head { "HEAD" }
-                    }
-                    @if !branch.needs_restack && !branch.is_trunk {
-                        span .meta-chip.chip-clean { "clean" }
                     }
                     @if branch.needs_restack {
                         span .meta-chip.chip-warning { "needs restack" }
@@ -1036,14 +1083,6 @@ pub fn inspector_details(
                             span class=(ci_cls) { "● " (ci) }
                         }
                     }
-                    @if let Some(state) = &branch.pr_state {
-                        div .inspector-row {
-                            span .inspector-key { "Draft" }
-                            span .inspector-value {
-                                @if state.to_uppercase() == "DRAFT" { "Yes" } @else { "No" }
-                            }
-                        }
-                    }
                 }
             }
 
@@ -1085,7 +1124,7 @@ pub fn inspector_details(
                         button .btn.btn-danger.mutating-btn
                             hx-post=(format!("{base}/op/delete"))
                             hx-target="#stack-pane"
-                            hx-include="[name='csrf']"
+                            hx-include="#workspace-csrf"
                             hx-vals=(format!(r#"{{"branch":"{}"}}"#, branch.name.replace('"', "\\\"")))
                             hx-confirm=(format!("Delete branch {}?", branch.name))
                             { "Delete" }
@@ -1133,7 +1172,7 @@ pub fn inspector_details(
                     button .btn.btn-primary.btn-full.mutating-btn
                         hx-post=(format!("{base}/op/submit"))
                         hx-target="#stack-pane"
-                        hx-include="[name='csrf']"
+                        hx-include="#workspace-csrf"
                         hx-confirm="Submit the current stack as Draft PRs?"
                         title="Submit stack (draft PRs)"
                         { "Submit stack" }
@@ -1147,7 +1186,7 @@ pub fn inspector_details(
                         button .btn.mutating-btn style="flex:1"
                             hx-post=(format!("{base}/op/restack"))
                             hx-target="#stack-pane"
-                            hx-include="[name='csrf']"
+                            hx-include="#workspace-csrf"
                             { "⟳ Restack" }
                     } @else {
                         button .btn style="flex:1" disabled title=(interaction.restack.reason.as_deref().unwrap_or("")) { "⟳ Restack" }
@@ -1369,24 +1408,170 @@ mod tests {
     }
 
     #[test]
-    fn file_diff_id_sanitizes_special_characters() {
-        assert_eq!(file_diff_id("src/foo.rs"), "src-foo-rs");
-        assert_eq!(file_diff_id("path/to/file.txt"), "path-to-file-txt");
-        assert_eq!(file_diff_id("simple"), "simple");
-        assert_eq!(file_diff_id("a b"), "a-b");
+    fn diff_anchors_are_unique_ordinals() {
+        // Three diff --git boundary lines must get ordinals 0, 1, 2 regardless
+        // of path content. All other lines must have no anchor.
+        let lines = vec![
+            DiffLine {
+                kind: DiffLineKind::Header,
+                content: "diff --git a/foo.rs b/foo.rs".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                content: "index abc..def 100644".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Addition,
+                content: "+line".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                content: "diff --git a/bar.rs b/bar.rs".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                content: "diff --git a-b.rs b/a-b.rs".to_string(),
+            },
+        ];
+        let guttered = add_gutter_numbers(&lines);
+        assert_eq!(
+            guttered[0].anchor_id.as_deref(),
+            Some("0"),
+            "first diff --git should be ordinal 0"
+        );
+        assert_eq!(
+            guttered[1].anchor_id, None,
+            "non-diff header should have no anchor"
+        );
+        assert_eq!(
+            guttered[2].anchor_id, None,
+            "addition line should have no anchor"
+        );
+        assert_eq!(
+            guttered[3].anchor_id.as_deref(),
+            Some("1"),
+            "second diff --git should be ordinal 1"
+        );
+        assert_eq!(
+            guttered[4].anchor_id.as_deref(),
+            Some("2"),
+            "third diff --git should be ordinal 2"
+        );
     }
 
     #[test]
-    fn diff_git_file_id_extracts_b_path() {
-        let content = "diff --git a/src/main.rs b/src/main.rs";
-        assert_eq!(diff_git_file_id(content), Some("src-main-rs".to_string()));
+    fn diff_anchor_handles_quoted_path_with_spaces() {
+        // Quoted path: no path parsing should occur; ordinal is assigned purely
+        // from the diff --git prefix.
+        let lines = vec![DiffLine {
+            kind: DiffLineKind::Header,
+            content: r#"diff --git "a/path with spaces.rs" "b/path with spaces.rs""#.to_string(),
+        }];
+        let guttered = add_gutter_numbers(&lines);
+        assert_eq!(
+            guttered[0].anchor_id.as_deref(),
+            Some("0"),
+            "quoted-path diff --git must get ordinal 0"
+        );
     }
 
     #[test]
-    fn diff_git_file_id_ignores_non_diff_lines() {
-        assert_eq!(diff_git_file_id("+++ b/src/main.rs"), None);
-        assert_eq!(diff_git_file_id("--- a/src/main.rs"), None);
-        assert_eq!(diff_git_file_id(""), None);
+    fn diff_anchor_handles_rename() {
+        // Rename: a-path != b-path; ordinal still assigned, no path parsed.
+        let lines = vec![DiffLine {
+            kind: DiffLineKind::Header,
+            content: "diff --git a/old_name.rs b/new_name.rs".to_string(),
+        }];
+        let guttered = add_gutter_numbers(&lines);
+        assert_eq!(
+            guttered[0].anchor_id.as_deref(),
+            Some("0"),
+            "rename diff --git must get ordinal 0"
+        );
+    }
+
+    #[test]
+    fn diff_anchor_no_collision_for_slash_vs_dash_paths() {
+        // "a/b.rs" and "a-b.rs" would produce the same path-derived anchor ID
+        // under a naive path-extraction scheme (the 'a/' prefix stripped yields
+        // "b.rs" and "a-b.rs" → both contain '-').  Ordinal assignment must give
+        // them distinct IDs regardless of path content.
+        let lines = vec![
+            DiffLine {
+                kind: DiffLineKind::Header,
+                content: "diff --git a/a/b.rs b/a/b.rs".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                content: "diff --git a/a-b.rs b/a-b.rs".to_string(),
+            },
+        ];
+        let guttered = add_gutter_numbers(&lines);
+        assert_eq!(
+            guttered[0].anchor_id.as_deref(),
+            Some("0"),
+            "a/b.rs boundary should receive ordinal 0"
+        );
+        assert_eq!(
+            guttered[1].anchor_id.as_deref(),
+            Some("1"),
+            "a-b.rs boundary should receive ordinal 1 (no collision with a/b.rs)"
+        );
+    }
+
+    #[test]
+    fn diff_file_nav_anchors_align_with_diff_boundaries() {
+        // File-nav entries are indexed 0..N-1 and must align 1-to-1 with the
+        // ordinal IDs on diff --git boundary lines so that clicking a file-row
+        // scrolls to the correct diff block.
+        let lines = vec![
+            DiffLine {
+                kind: DiffLineKind::Header,
+                content: "diff --git a/foo.rs b/foo.rs".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Addition,
+                content: "+fn a() {}".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                content: "diff --git a/bar.rs b/bar.rs".to_string(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Addition,
+                content: "+fn b() {}".to_string(),
+            },
+        ];
+        let guttered = add_gutter_numbers(&lines);
+        // Boundary lines receive sequential ordinals
+        assert_eq!(
+            guttered[0].anchor_id.as_deref(),
+            Some("0"),
+            "first boundary → ordinal 0"
+        );
+        assert_eq!(
+            guttered[2].anchor_id.as_deref(),
+            Some("1"),
+            "second boundary → ordinal 1"
+        );
+        // Non-boundary lines must carry no anchor
+        assert_eq!(
+            guttered[1].anchor_id, None,
+            "addition line must have no anchor"
+        );
+        assert_eq!(
+            guttered[3].anchor_id, None,
+            "addition line must have no anchor"
+        );
+    }
+
+    #[test]
+    fn is_diff_git_line_matches_only_boundary_lines() {
+        assert!(is_diff_git_line("diff --git a/foo b/foo"));
+        assert!(!is_diff_git_line("+++ b/src/main.rs"));
+        assert!(!is_diff_git_line("--- a/src/main.rs"));
+        assert!(!is_diff_git_line("index abc..def 100644"));
+        assert!(!is_diff_git_line(""));
     }
 
     #[test]
@@ -1418,6 +1603,25 @@ mod tests {
             result.ends_with("my_file.rs"),
             "shortened path should end with the file tail: {result}"
         );
+    }
+
+    #[test]
+    fn stack_pane_width_stays_compact_for_linear_stacks() {
+        assert_eq!(stack_pane_width_px(0), 240);
+        assert_eq!(stack_pane_width_px(1), 240);
+    }
+
+    #[test]
+    fn stack_pane_width_grows_with_topology_lanes() {
+        assert_eq!(stack_pane_width_px(2), 260);
+        assert_eq!(stack_pane_width_px(3), 280);
+        assert_eq!(stack_pane_width_px(5), 320);
+    }
+
+    #[test]
+    fn stack_pane_width_is_capped_to_protect_review_space() {
+        assert_eq!(stack_pane_width_px(9), 400);
+        assert_eq!(stack_pane_width_px(usize::MAX), 400);
     }
 }
 

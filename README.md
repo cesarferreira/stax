@@ -319,7 +319,7 @@ Use `/` to search, `1`/`2`/`3` to toggle panes, and drag dividers to resize them
 `st web` starts a secure, browser-based workspace on `127.0.0.1` — the same three-pane layout as Stax.app, available everywhere (Linux, macOS, SSH sessions):
 
 ```bash
-st web            # opens http://127.0.0.1:8787/s/<token>/ in your browser
+st web            # opens port 8787, or warns and uses a free port if busy
 st web --port 0   # ephemeral port
 st web --no-open  # start without opening browser; prints URL
 ```

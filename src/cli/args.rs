@@ -51,7 +51,7 @@ pub(crate) struct GuiArgs {
 pub(crate) struct WebArgs {
     /// Repository to open; defaults to the current directory
     pub(crate) path: Option<PathBuf>,
-    /// Port to listen on (0 = ephemeral); default 8787
+    /// Port to bind (default 8787). If the requested port is busy, stax warns and uses a free OS-selected port.
     #[arg(long, default_value_t = 8787)]
     pub(crate) port: u16,
     /// Do not open the browser after starting the server

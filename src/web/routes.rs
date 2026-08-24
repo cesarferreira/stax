@@ -360,12 +360,20 @@ async fn branch_diff(
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Branch not found: {branch_name}"))?;
         let parent = branch_summary.parent.as_deref().unwrap_or(&snapshot.trunk);
-        repo_session.diff(&branch_summary.name, parent)
+        let diff = repo_session.diff(&branch_summary.name, parent)?;
+        // Use uncapped `ahead` count, not `commits.len()` which is capped by `.take(10)`.
+        let commit_count = repo_session
+            .branch_details(&branch_summary)
+            .map(|d| d.ahead)
+            .unwrap_or(0);
+        Ok::<_, anyhow::Error>((diff, commit_count))
     })
     .await;
 
     match result {
-        Ok(Ok(diff)) => Html(diff_view(&diff, &branch_display).into_string()).into_response(),
+        Ok(Ok((diff, commit_count))) => {
+            Html(diff_view(&diff, &branch_display, commit_count).into_string()).into_response()
+        }
         Ok(Err(e)) => Html(error_fragment(&e.to_string()).into_string()).into_response(),
         Err(e) => Html(error_fragment(&e.to_string()).into_string()).into_response(),
     }
@@ -964,6 +972,36 @@ async fn op_open_pr(
     }
 }
 
+// ── Cancellation-safe operation lock ─────────────────────────────────────────
+
+/// RAII guard that resets `active_operation` to `false` on drop.
+///
+/// Use `disarm()` to indicate the flag has already been cleared manually (e.g.
+/// together with receipt storage) so the guard's drop does not double-reset.
+struct ActiveOpGuard {
+    state: SharedSession,
+    disarmed: bool,
+}
+
+impl ActiveOpGuard {
+    /// Mark the guard as disarmed. The calling site must have already set
+    /// `active_operation = false` on the shared session.  The guard's `Drop`
+    /// will then be a no-op.
+    fn disarm(mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for ActiveOpGuard {
+    fn drop(&mut self) {
+        if !self.disarmed
+            && let Ok(mut s) = self.state.lock()
+        {
+            s.active_operation = false;
+        }
+    }
+}
+
 // ── Shared mutation runner ────────────────────────────────────────────────────
 
 async fn run_mutation(
@@ -971,12 +1009,26 @@ async fn run_mutation(
     token: String,
     request: OperationRequest,
 ) -> axum::response::Response<Body> {
-    let repo_root = state.lock().unwrap().repository_root.clone();
-
-    {
+    // Atomic check-and-set: reject a second in-flight operation immediately.
+    let repo_root = {
         let mut s = state.lock().unwrap();
+        if s.active_operation {
+            return Html(
+                error_fragment("Another operation is already in progress. Please wait.")
+                    .into_string(),
+            )
+            .into_response();
+        }
         s.active_operation = true;
-    }
+        s.repository_root.clone()
+    };
+
+    // Guard resets active_operation if this future is cancelled before we
+    // reach the explicit clear below (e.g. the client disconnects mid-flight).
+    let guard = ActiveOpGuard {
+        state: state.clone(),
+        disarmed: false,
+    };
 
     let result = tokio::task::spawn_blocking(move || {
         let mut reporter = NoopOperationReporter;
@@ -993,6 +1045,8 @@ async fn run_mutation(
         Err(e) => (false, format!("✗ Spawn error: {e}"), None),
     };
 
+    // Clear the flag and store the receipt atomically before rendering so that
+    // affordances in the refreshed stack response are correctly re-enabled.
     {
         let mut s = state.lock().unwrap();
         s.active_operation = false;
@@ -1000,8 +1054,58 @@ async fn run_mutation(
             s.last_receipt = Some(r);
         }
     }
+    // Disarm: flag already cleared above; guard drop should be a no-op.
+    guard.disarm();
 
     render_stack_pane_with_banner(&state, &token, &message, success).await
+}
+
+// ── Guard unit tests ──────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::web::session::{WebSession, make_shared};
+    use std::path::PathBuf;
+
+    fn test_shared_session() -> SharedSession {
+        let s = WebSession::new(PathBuf::from("/tmp"), "tok".to_string(), "csrf".to_string());
+        make_shared(s)
+    }
+
+    #[test]
+    fn active_op_guard_drop_resets_flag() {
+        let state = test_shared_session();
+        state.lock().unwrap().active_operation = true;
+
+        let guard = ActiveOpGuard {
+            state: state.clone(),
+            disarmed: false,
+        };
+        drop(guard);
+
+        assert!(
+            !state.lock().unwrap().active_operation,
+            "guard drop must reset active_operation to false"
+        );
+    }
+
+    #[test]
+    fn active_op_guard_disarm_skips_reset() {
+        let state = test_shared_session();
+        state.lock().unwrap().active_operation = true;
+
+        let guard = ActiveOpGuard {
+            state: state.clone(),
+            disarmed: false,
+        };
+        guard.disarm();
+
+        assert!(
+            state.lock().unwrap().active_operation,
+            "disarm alone must not reset active_operation (caller owns the clear)"
+        );
+    }
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────

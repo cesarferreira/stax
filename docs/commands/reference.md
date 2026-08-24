@@ -112,7 +112,7 @@ See also: [Merge and cascade](../workflows/merge-and-cascade.md)
 |---|---|
 | `st` | Launch the TUI |
 | `st gui [path]` | Launch the installed native macOS GUI for a repository |
-| `st web [path] [--port <n>] [--no-open]` | Start a localhost HTMX web workspace in the browser (127.0.0.1 only, default port 8787) |
+| `st web [path] [--port <n>] [--no-open]` | Start the localhost HTMX workspace; a busy requested port falls back to a free OS-selected port |
 | `st split` | Split branch into stacked branches (commit-based; needs 2+ commits) |
 | `st split --hunk` | Split a single commit by selecting individual diff hunks |
 | `st split --file <pathspec>` | Split by extracting matching files into a new parent branch |
@@ -435,7 +435,7 @@ The GUI can search branches; check out, create, rename, delete, move, and reorde
 
 - `st web` starts the localhost HTMX workspace for the current directory and opens it in the browser.
 - `st web <path>` opens an explicit repository path.
-- `st web --port <n>` binds on a specific port (default 8787). `--port 0` picks an ephemeral port. Fails with an error if the requested port is already in use (unless 0).
+- `st web --port <n>` binds on a specific port (default 8787). `--port 0` picks an ephemeral port. If the requested port is busy, stax warns and uses a free OS-selected port.
 - `st web --no-open` starts the server and prints the URL without opening the browser.
 - Binds **127.0.0.1 only**; no `--host` flag is available.
 - Each session URL embeds an unguessable 48-hex session token: `/s/<token>/`. Requests with a wrong or missing token return 404.

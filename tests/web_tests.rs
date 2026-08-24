@@ -1,8 +1,11 @@
 //! Integration tests for the `st web` command and web server API.
 
 use crate::common;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 fn ensure_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -267,6 +270,15 @@ fn web_server_workspace_shows_trunk_branch_after_stax_init() {
             body.contains("quick-actions"),
             "workspace should include quick actions"
         );
+        assert!(
+            body.contains(r#"data-lane-count="1""#)
+                && body.contains(r#"style="--stack-rail-w:240px""#),
+            "a linear stack should keep the reference 240px width"
+        );
+        assert!(
+            body.contains(r#"class="review-tab active""#),
+            "workspace should render Changes as the active initial tab"
+        );
 
         // Changes is the only active tab — no Commits or Stack preview tab elements
         assert!(
@@ -287,9 +299,76 @@ fn web_server_workspace_shows_trunk_branch_after_stax_init() {
             body.contains(r#"value="dark""#),
             "Dark theme option should be present"
         );
+        assert!(
+            body.contains(r#"id="workspace-csrf""#),
+            "workspace should expose one scoped CSRF input for HTMX controls"
+        );
+        assert!(
+            body.contains(r##"hx-include="#workspace-csrf""##),
+            "HTMX controls should include only the scoped workspace CSRF input"
+        );
+        assert!(
+            !body.contains(r#"hx-include="[name='csrf']""#),
+            "broad CSRF selectors submit duplicate fields and break form extraction"
+        );
 
         // Keep repo alive until assertions complete.
         drop(repo);
+    });
+}
+
+#[test]
+fn web_stack_fragment_grows_for_multiple_topology_lanes() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+        assert!(init_out.status.success());
+
+        let first = repo.run_stax(&["bc", "feat/a"]);
+        assert!(
+            first.status.success(),
+            "first branch create failed: {}",
+            common::TestRepo::stderr(&first)
+        );
+        repo.create_file("a.txt", "a\n");
+        repo.commit("add a");
+
+        let checkout = repo.git(&["checkout", "main"]);
+        assert!(
+            checkout.status.success(),
+            "main checkout failed: {}",
+            common::TestRepo::stderr(&checkout)
+        );
+
+        let second = repo.run_stax(&["bc", "feat/b"]);
+        assert!(
+            second.status.success(),
+            "second branch create failed: {}",
+            common::TestRepo::stderr(&second)
+        );
+        repo.create_file("b.txt", "b\n");
+        repo.commit("add b");
+
+        let server = stax::web::start_test_server(repo.path().to_path_buf())
+            .await
+            .expect("server should start");
+        let parts: Vec<&str> = server.base_url.split('/').collect();
+        let host = parts.get(2).copied().unwrap_or("127.0.0.1");
+        let token = parts.get(4).copied().unwrap_or("unknown");
+
+        let fragment = reqwest::Client::new()
+            .get(format!("http://{host}/s/{token}/stack"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(fragment.status().as_u16(), 200);
+        let body = fragment.text().await.unwrap();
+        assert!(
+            body.contains(r#"data-lane-count="2""#)
+                && body.contains(r#"style="--stack-rail-w:260px""#),
+            "two topology lanes should grow the HTMX stack fragment to 260px: {body}"
+        );
     });
 }
 
@@ -358,6 +437,25 @@ fn web_diff_shows_file_nav_and_gutter_for_committed_change() {
             "diff should include OOB swap for review-header: {diff_body}"
         );
 
+        // Active Changes tab must carry the exact class "review-tab active".
+        assert!(
+            diff_body.contains(r#"class="review-tab active""#),
+            "diff review-header should include class=\"review-tab active\": {diff_body}"
+        );
+
+        // Commit count must show the exact singular form "1 commit" (test made
+        // exactly one commit; plural "1 commits" must not appear).
+        assert!(
+            diff_body.contains("1 commit") && !diff_body.contains("1 commits"),
+            "diff review-header should show '1 commit' (singular): {diff_body}"
+        );
+
+        // File navigator must use ordinal anchors (integer data-diff-file).
+        assert!(
+            diff_body.contains(r#"data-diff-file="0""#),
+            "file navigator must use ordinal anchor 0: {diff_body}"
+        );
+
         drop(repo);
     });
 }
@@ -396,4 +494,142 @@ fn web_diff_empty_state_when_branch_matches_parent() {
             "empty diff should show explicit empty state: {diff_body}"
         );
     });
+}
+
+#[test]
+fn web_server_bind_falls_back_when_requested_port_is_busy() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+        assert!(init_out.status.success());
+
+        let busy_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("busy-port guard should bind");
+        let busy_port = busy_listener
+            .local_addr()
+            .expect("busy-port guard should have an address")
+            .port();
+
+        let shared = stax::web::session::make_shared(stax::web::session::WebSession::new(
+            repo.path().to_path_buf(),
+            stax::web::session::generate_token(),
+            stax::web::session::generate_token(),
+        ));
+        let bound = stax::web::server::bind(busy_port, shared)
+            .await
+            .expect("busy requested port should fall back");
+
+        assert_eq!(bound.requested_port, busy_port);
+        assert!(bound.fell_back, "busy requested port should be reported");
+        assert_ne!(bound.addr.port(), busy_port);
+        assert_ne!(bound.addr.port(), 0);
+
+        let response = reqwest::Client::new()
+            .get(&bound.url)
+            .send()
+            .await
+            .expect("fallback server should be reachable");
+        assert_eq!(response.status().as_u16(), 200);
+
+        bound.join_handle.abort();
+        drop(busy_listener);
+    });
+}
+
+#[test]
+fn web_server_bind_reports_no_fallback_for_ephemeral_port() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let shared = stax::web::session::make_shared(stax::web::session::WebSession::new(
+            repo.path().to_path_buf(),
+            stax::web::session::generate_token(),
+            stax::web::session::generate_token(),
+        ));
+
+        let bound = stax::web::server::bind(0, shared)
+            .await
+            .expect("ephemeral bind should succeed");
+
+        assert_eq!(bound.requested_port, 0);
+        assert!(!bound.fell_back);
+        assert_ne!(bound.addr.port(), 0);
+
+        bound.join_handle.abort();
+    });
+}
+
+#[test]
+fn web_command_reports_busy_port_fallback_and_startup_progress() {
+    let repo = common::TestRepo::new();
+    let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+    assert!(init_out.status.success());
+
+    let busy_listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("busy-port guard should bind");
+    let busy_port = busy_listener
+        .local_addr()
+        .expect("busy-port guard should have an address")
+        .port();
+
+    let mut child = web_command(&repo.path())
+        .args(["web", "--port", &busy_port.to_string(), "--no-open"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("st web should start");
+    let stdout = child.stdout.take().expect("stdout should be piped");
+    let (line_tx, line_rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if line_tx.send(line.unwrap_or_default()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut output = String::new();
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            panic!("timed out waiting for startup output:\n{output}");
+        };
+
+        match line_rx.recv_timeout(remaining) {
+            Ok(line) => {
+                output.push_str(&line);
+                output.push('\n');
+                if line.contains("Press Ctrl-C to stop.") {
+                    break;
+                }
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let status = child.wait().ok();
+                let _ = reader.join();
+                panic!(
+                    "startup output ended before readiness ({error}; status {status:?}):\n{output}"
+                );
+            }
+        }
+    }
+
+    child.kill().expect("web server should stop");
+    child.wait().expect("web server should be reaped");
+    reader.join().expect("stdout reader should finish");
+    drop(busy_listener);
+
+    assert!(output.contains("Opening repository..."));
+    assert!(output.contains("Port busy, using free port"));
+    assert!(output.contains(&format!(":{busy_port} → :")));
+    assert!(output.contains("Server started"));
+    assert!(output.contains("Browser"));
+    assert!(output.contains("skipped (--no-open)"));
+    assert!(output.contains("Workspace  http://127.0.0.1:"));
+    assert!(output.contains("Press Ctrl-C to stop."));
 }

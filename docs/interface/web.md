@@ -5,7 +5,7 @@
 ## Quick start
 
 ```bash
-st web            # opens http://127.0.0.1:8787/s/<token>/ in your browser
+st web            # opens port 8787, or warns and uses a free port if busy
 st web --port 0   # ephemeral port (chosen by OS)
 st web --no-open  # start without opening browser; prints URL
 st web /path/to/repo  # open a specific repository
@@ -16,7 +16,7 @@ st web /path/to/repo  # open a specific repository
 | Flag | Default | Description |
 |------|---------|-------------|
 | `[PATH]` | current directory | Repository to open |
-| `--port <N>` | `8787` | Port to bind. `0` picks an ephemeral port. Fails if already in use (unless `0`). |
+| `--port <N>` | `8787` | Port to bind. `0` picks an ephemeral port. If the port is busy, stax warns and uses a free OS-selected port. |
 | `--no-open` | false | Skip opening the browser; just print the URL. |
 
 ## Layout
