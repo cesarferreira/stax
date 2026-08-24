@@ -1,6 +1,6 @@
 # st web — Localhost Web Workspace
 
-`st web` starts a fast, secure, browser-based workspace for stax on `127.0.0.1`. It provides a three-pane layout (Stack / Changes / Inspector) matching the native Stax.app experience, powered by [HTMX](https://htmx.org/) for partial-page updates without a heavy JavaScript framework.
+`st web` starts a fast, secure, browser-based workspace for stax on `127.0.0.1`. The layout is inspired by GitKraken Desktop: a grouped toolbar, stack graph as the hero pane, a file-list + patch Changes panel, branch Details inspector, and a status bar — all powered by [HTMX](https://htmx.org/) for partial-page updates without a heavy JavaScript framework.
 
 ## Quick start
 
@@ -22,17 +22,28 @@ st web /path/to/repo  # open a specific repository
 ## Layout
 
 ```
-┌──────────────┬──────────────────────────────┬─────────────────┐
-│ Stack   [1]  │ Changes                 [2]  │ Inspector   [3] │
-│              │                              │                 │
-│  ● main      │  diff --git a/foo.rs…        │ Branch: feat/x  │
-│  ○ feat/x    │  + added line                │ Parent: main    │
-│  ○ feat/y    │  - removed line              │ Ahead:  3       │
-│              │                              │ Commits: …      │
-└──────────────┴──────────────────────────────┴─────────────────┘
+┌─ Toolbar: repo · search │ Restack Submit │ Open PR ↶ ↷ ↺ │ theme ? ─────────────┐
+├──────────────┬──────────────────────────────┬─────────────────────────────────┤
+│ Graph   [1]  │ Changes                 [2]  │ Details                     [3] │
+│ topology│branch│Δ│PR│  file list (stat)    │ Branch / divergence / actions   │
+│  ● main      │  foo.rs  +12 −3            │                                 │
+│  ○ feat/x    │  ─────────────────         │                                 │
+│              │  patch hunks below         │                                 │
+├──────────────┴──────────────────────────────┴─────────────────────────────────┤
+│ Status: HEAD main · Selected feat/x · Δ parent 3↑ 0↓ · PR #42                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Press `1`, `2`, `3` to toggle each pane.
+
+### Panes
+
+| Pane | Role |
+|------|------|
+| **Graph** | Stack topology table: lane graph, branch name, meta chips (HEAD, ahead/behind vs parent, restack, PR). Selecting a row does **not** check out — use the `co` button. |
+| **Changes** | GitKraken-style commit panel: clickable file list from diffstat on top, patch below. Empty state shows “No changes vs parent” instead of a blank pane. |
+| **Details** | Branch metadata, divergence, commits, and actions (create, rename, delete, move, reorder, restack). |
+| **Status bar** | Current HEAD, selected branch, ahead/behind vs parent, restack/PR badges. Refreshes with the stack. |
 
 ## Appearance
 
@@ -62,7 +73,7 @@ The preference is stored per repository in `.git/stax/web-state.json`.
 - **Restack** — restack the selected branch onto its parent
 - **Submit** — push the stack and create/update PRs (draft mode)
 - **Undo / Redo** — restore local transaction state
-- **Refresh** — reload the repository snapshot
+- **Refresh** — reload the repository snapshot (also rehydrates Changes + Details)
 - **Rename** — rename the current branch (overlay)
 - **Create** — create a new branch stacked on the selected one (overlay)
 - **Delete** — delete a non-current branch (overlay with confirmation)
@@ -83,12 +94,12 @@ The preference is stored per repository in `.git/stax/web-state.json`.
 |--------|------|-------------|
 | `GET` | `/assets/app.css` | Embedded CSS (light, dark, and system themes) |
 | `GET` | `/assets/htmx.min.js` | Embedded htmx 2.x |
-| `GET` | `/assets/app.js` | Inline keyboard shortcut script |
+| `GET` | `/assets/app.js` | Keyboard shortcuts, pane rehydration, file-list navigation |
 | `GET` | `/s/:token/` | Full workspace page |
-| `GET` | `/s/:token/stack?branch=` | Stack pane partial |
+| `GET` | `/s/:token/stack?branch=` | Stack pane partial (+ status bar OOB swap) |
 | `POST` | `/s/:token/select` | Update selected branch |
 | `GET` | `/s/:token/details` | Inspector hydration |
-| `GET` | `/s/:token/diff` | Diff view |
+| `GET` | `/s/:token/diff` | Diff view (file list + patch, or empty state) |
 | `GET` | `/s/:token/ci` | CI summary |
 | `POST` | `/s/:token/search` | Filter branches |
 | `POST` | `/s/:token/panes` | Toggle pane visibility |

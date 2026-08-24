@@ -186,6 +186,7 @@ stax web /path/to/repo            # Open a specific repository
 ```
 
 Key properties:
+- GitKraken-inspired layout: grouped toolbar, stack graph table (topology + ahead/behind + PR chips), file-list + patch Changes panel, Details inspector, status bar
 - Binds **127.0.0.1 only** — never reachable from the network; no `--host` flag
 - Unguessable 48-hex session token in every URL: `/s/<token>/…`
 - CSRF token required on all mutating POSTs; wrong token → 403

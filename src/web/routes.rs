@@ -3,14 +3,14 @@
 #![allow(clippy::result_large_err)]
 
 use crate::application::{
-    NoopOperationReporter, OperationOutcome, OperationRequest, PullRequestMode, RestackScope,
-    execute_repository_operation, interaction_state,
+    NoopOperationReporter, OperationOutcome, OperationRequest, PullRequestMode, RepositorySnapshot,
+    RestackScope, execute_repository_operation, interaction_state,
 };
 use crate::web::session::{SharedSession, ThemePreference};
 use crate::web::static_assets::{APP_CSS, APP_JS, HTMX_JS};
 use crate::web::templates::{
-    self, changes_pane_placeholder, diff_view, error_fragment, inspector_details,
-    inspector_placeholder, stack_pane_inner, workspace_page,
+    self, StackRowMeta, changes_pane_placeholder, diff_view, error_fragment, inspector_details,
+    inspector_placeholder, stack_pane_fragment, workspace_page,
 };
 use axum::Router;
 use axum::body::Body;
@@ -90,6 +90,32 @@ fn check_local_host(headers: &HeaderMap) -> Option<Response<Body>> {
     None
 }
 
+fn compute_stack_row_meta(
+    session: &crate::application::RepositorySession,
+    snapshot: &RepositorySnapshot,
+) -> StackRowMeta {
+    use std::collections::HashMap;
+    let mut meta = HashMap::new();
+    for branch in &snapshot.branches {
+        if branch.is_trunk {
+            continue;
+        }
+        if let Ok(details) = session.branch_details(branch) {
+            meta.insert(branch.name.clone(), (details.ahead, details.behind));
+        }
+    }
+    meta
+}
+
+fn load_snapshot_with_meta(
+    repo_root: &std::path::Path,
+) -> anyhow::Result<(RepositorySnapshot, StackRowMeta)> {
+    let repo_session = crate::application::RepositorySession::open(repo_root)?;
+    let snapshot = repo_session.snapshot()?;
+    let row_meta = compute_stack_row_meta(&repo_session, &snapshot);
+    Ok((snapshot, row_meta))
+}
+
 // ── Static assets ────────────────────────────────────────────────────────────
 
 async fn serve_css() -> impl IntoResponse {
@@ -132,21 +158,17 @@ async fn workspace_handler(
 
     let repo_root = state.lock().unwrap().repository_root.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let repo_session = crate::application::RepositorySession::open(&repo_root)?;
-        repo_session.snapshot()
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || load_snapshot_with_meta(&repo_root)).await;
 
     match result {
-        Ok(Ok(snapshot)) => {
+        Ok(Ok((snapshot, row_meta))) => {
             let session = state.lock().unwrap();
             let selected = session.selected_branch.as_deref();
             let active_op = session.active_operation;
             let last_receipt = session.last_receipt.clone();
             let interaction =
                 interaction_state(&snapshot, selected, active_op, last_receipt.as_ref());
-            let html = workspace_page(&session, &snapshot, &interaction);
+            let html = workspace_page(&session, &snapshot, &interaction, &row_meta);
             Html(html.into_string()).into_response()
         }
         Ok(Err(e)) => (
@@ -983,14 +1005,10 @@ async fn run_mutation(
 
 async fn render_stack_pane(state: &SharedSession, token: &str) -> axum::response::Response<Body> {
     let repo_root = state.lock().unwrap().repository_root.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let repo_session = crate::application::RepositorySession::open(&repo_root)?;
-        repo_session.snapshot()
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || load_snapshot_with_meta(&repo_root)).await;
 
     match result {
-        Ok(Ok(snapshot)) => {
+        Ok(Ok((snapshot, row_meta))) => {
             let session = state.lock().unwrap();
             let selected = session.selected_branch.as_deref();
             let active_op = session.active_operation;
@@ -998,8 +1016,11 @@ async fn render_stack_pane(state: &SharedSession, token: &str) -> axum::response
             let interaction =
                 interaction_state(&snapshot, selected, active_op, last_receipt.as_ref());
             let base = format!("/s/{token}");
-            Html(stack_pane_inner(&session, &snapshot, &interaction, &base).into_string())
-                .into_response()
+            Html(
+                stack_pane_fragment(&session, &snapshot, &interaction, &base, &row_meta)
+                    .into_string(),
+            )
+            .into_response()
         }
         Ok(Err(e)) => Html(error_fragment(&e.to_string()).into_string()).into_response(),
         Err(e) => Html(error_fragment(&e.to_string()).into_string()).into_response(),
@@ -1013,14 +1034,10 @@ async fn render_stack_pane_with_banner(
     success: bool,
 ) -> axum::response::Response<Body> {
     let repo_root = state.lock().unwrap().repository_root.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let repo_session = crate::application::RepositorySession::open(&repo_root)?;
-        repo_session.snapshot()
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || load_snapshot_with_meta(&repo_root)).await;
 
     match result {
-        Ok(Ok(snapshot)) => {
+        Ok(Ok((snapshot, row_meta))) => {
             let session = state.lock().unwrap();
             let selected = session.selected_branch.as_deref();
             let active_op = session.active_operation;
@@ -1035,6 +1052,7 @@ async fn render_stack_pane_with_banner(
                 &snapshot,
                 &interaction,
                 &base,
+                &row_meta,
             );
             Html(markup.into_string()).into_response()
         }

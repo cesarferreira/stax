@@ -6,6 +6,10 @@ use crate::application::{
 };
 use crate::web::session::{ThemePreference, WebSession};
 use maud::{DOCTYPE, Markup, html};
+use std::collections::HashMap;
+
+/// Ahead/behind counts keyed by branch name (non-trunk branches only).
+pub type StackRowMeta = HashMap<String, (usize, usize)>;
 
 fn csrf_input(csrf: &str) -> Markup {
     html! { input type="hidden" name="csrf" value=(csrf) {} }
@@ -15,6 +19,7 @@ pub fn workspace_page(
     session: &WebSession,
     snapshot: &RepositorySnapshot,
     interaction: &InteractionState,
+    row_meta: &StackRowMeta,
 ) -> Markup {
     let base = format!("/s/{}", session.session_token);
     let selected = session.selected_branch.as_deref();
@@ -56,9 +61,9 @@ pub fn workspace_page(
                             }
                             #pane-stack
                             {
-                            div .pane-header { "Stack" }
+                            div .pane-header { "Graph" }
                             div .pane-body #stack-pane {
-                                (stack_pane_inner(session, snapshot, interaction, &base))
+                                (stack_pane_inner(session, snapshot, interaction, &base, row_meta))
                             }
                         }
 
@@ -72,7 +77,7 @@ pub fn workspace_page(
                             {
                             div .pane-header { "Changes" }
                             div .pane-body #changes-pane
-                                style="display:flex;flex-direction:column;flex:1;"
+                                style="display:flex;flex-direction:column;flex:1;min-height:0;padding:0;"
                                 hx-get=(format!("{base}/diff"))
                                 hx-trigger="load, every 30s"
                                 {
@@ -88,7 +93,7 @@ pub fn workspace_page(
                             }
                             #pane-inspector
                             {
-                            div .pane-header { "Inspector" }
+                            div .pane-header { "Details" }
                             div .pane-body #inspector-pane
                                 hx-get=(format!("{base}/details"))
                                 hx-trigger="load"
@@ -97,6 +102,8 @@ pub fn workspace_page(
                             }
                         }
                     }
+
+                    (status_bar(session, snapshot, row_meta))
                 }
             }
         }
@@ -113,137 +120,245 @@ fn toolbar(
 
     html! {
         div .toolbar {
-            // Project switcher
-            form .project-form
-                hx-post=(format!("{base}/project"))
-                hx-target="body"
-                hx-swap="outerHTML"
-                {
-                (csrf_input(csrf))
-                select .project-select name="path"
-                    onchange="this.form.requestSubmit()"
-                    title="Switch repository"
+            div .toolbar-left {
+                // Project switcher
+                form .project-form
+                    hx-post=(format!("{base}/project"))
+                    hx-target="body"
+                    hx-swap="outerHTML"
                     {
-                    @for project in &session.recent_projects {
-                        @let name = project.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-                        @let path_str = project.display().to_string();
-                        @let is_current = *project == session.repository_root;
-                        option value=(path_str) selected[is_current] {
-                            (name)
-                            @if is_current { " (current)" }
+                    (csrf_input(csrf))
+                    select .project-select name="path"
+                        onchange="this.form.requestSubmit()"
+                        title="Switch repository"
+                        {
+                        @for project in &session.recent_projects {
+                            @let name = project.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                            @let path_str = project.display().to_string();
+                            @let is_current = *project == session.repository_root;
+                            option value=(path_str) selected[is_current] {
+                                (name)
+                                @if is_current { " (current)" }
+                            }
                         }
                     }
+                    input .project-add type="text" name="add_path" placeholder="Add path…"
+                        title="Type an absolute path and press Enter to open another repository"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault();const v=this.value.trim();if(v){this.form.path.value=v;this.form.requestSubmit();}}"
+                        {}
                 }
-                input .project-add type="text" name="add_path" placeholder="Add path…"
-                    title="Type an absolute path and press Enter to open another repository"
-                    onkeydown="if(event.key==='Enter'){event.preventDefault();const v=this.value.trim();if(v){this.form.path.value=v;this.form.requestSubmit();}}"
+
+                input #search-input .search-input
+                    type="text"
+                    placeholder="/ to search branches"
+                    name="query"
+                    value=(session.search_query)
+                    autocomplete="off"
+                    hx-post=(format!("{base}/search"))
+                    hx-trigger="input changed delay:200ms"
+                    hx-target="#stack-pane"
+                    hx-include="[name='csrf']"
                     {}
             }
 
-            // Search
-            input #search-input .search-input
-                type="text"
-                placeholder="/ to search"
-                name="query"
-                value=(session.search_query)
-                autocomplete="off"
-                hx-post=(format!("{base}/search"))
-                hx-trigger="input changed delay:200ms"
-                hx-target="#stack-pane"
-                hx-include="[name='csrf']"
-                {}
-            // Hidden CSRF for search
-            input type="hidden" name="csrf" value=(csrf) {}
+            div .toolbar-sep {}
+
+            div .toolbar-group {
+                @if interaction.restack.enabled {
+                    button .btn.mutating-btn
+                        hx-post=(format!("{base}/op/restack"))
+                        hx-target="#stack-pane"
+                        hx-include="[name='csrf']"
+                        title="Restack current branch"
+                        { "Restack" }
+                } @else {
+                    button .btn disabled title=(interaction.restack.reason.as_deref().unwrap_or("")) { "Restack" }
+                }
+
+                @if interaction.submit.enabled {
+                    button .btn.btn-primary.mutating-btn
+                        hx-post=(format!("{base}/op/submit"))
+                        hx-target="#banner"
+                        hx-include="[name='csrf']"
+                        hx-confirm="Submit the current stack as Draft PRs?"
+                        title="Submit stack (draft PRs)"
+                        { "Submit" }
+                } @else {
+                    button .btn.btn-primary disabled title=(interaction.submit.reason.as_deref().unwrap_or("")) { "Submit" }
+                }
+            }
+
+            div .toolbar-sep {}
+
+            div .toolbar-group {
+                @if interaction.open_pr.enabled {
+                    a .btn
+                        href=(format!("{base}/op/open-pr"))
+                        target="_blank"
+                        rel="noopener"
+                        title="Open PR for selected branch"
+                        { "Open PR" }
+                } @else {
+                    button .btn disabled title=(interaction.open_pr.reason.as_deref().unwrap_or("")) { "Open PR" }
+                }
+
+                @if interaction.undo.enabled {
+                    button .btn.btn-icon.mutating-btn
+                        hx-post=(format!("{base}/op/undo"))
+                        hx-target="#stack-pane"
+                        hx-include="[name='csrf']"
+                        title="Undo last local operation"
+                        { "↶" }
+                } @else {
+                    button .btn.btn-icon disabled title=(interaction.undo.reason.as_deref().unwrap_or("")) { "↶" }
+                }
+
+                @if interaction.redo.enabled {
+                    button .btn.btn-icon.mutating-btn
+                        hx-post=(format!("{base}/op/redo"))
+                        hx-target="#stack-pane"
+                        hx-include="[name='csrf']"
+                        title="Redo last local operation"
+                        { "↷" }
+                } @else {
+                    button .btn.btn-icon disabled title=(interaction.redo.reason.as_deref().unwrap_or("")) { "↷" }
+                }
+
+                button .btn.btn-icon
+                    hx-post=(format!("{base}/refresh"))
+                    hx-target="#stack-pane"
+                    hx-include="[name='csrf']"
+                    title="Refresh repository"
+                    { "↺" }
+            }
 
             div .spacer {}
 
-            // Toolbar actions
-            @if interaction.restack.enabled {
-                button .btn.mutating-btn
-                    hx-post=(format!("{base}/op/restack"))
-                    hx-target="#stack-pane"
+            div .toolbar-group {
+                select #theme-select .theme-select
+                    name="theme"
+                    title="Appearance"
+                    hx-post=(format!("{base}/theme"))
+                    hx-trigger="change"
                     hx-include="[name='csrf']"
-                    title="Restack current branch"
-                    { "Restack" }
-            } @else {
-                button .btn disabled title=(interaction.restack.reason.as_deref().unwrap_or("")) { "Restack" }
+                    hx-swap="none"
+                    onchange="document.documentElement.setAttribute('data-theme', this.value)"
+                    {
+                    option value="system" selected[session.theme == ThemePreference::System] { "System" }
+                    option value="light" selected[session.theme == ThemePreference::Light] { "Light" }
+                    option value="dark" selected[session.theme == ThemePreference::Dark] { "Dark" }
+                }
+
+                button .btn.btn-icon
+                    onclick="document.getElementById('help-overlay')?.remove();document.body.insertAdjacentHTML('beforeend', document.getElementById('help-template').innerHTML)"
+                    title="Keyboard shortcuts"
+                    { "?" }
             }
 
-            @if interaction.submit.enabled {
-                button .btn.btn-primary.mutating-btn
-                    hx-post=(format!("{base}/op/submit"))
-                    hx-target="#banner"
-                    hx-include="[name='csrf']"
-                    hx-confirm="Submit the current stack as Draft PRs?"
-                    title="Submit stack (draft PRs)"
-                    { "Submit" }
-            } @else {
-                button .btn.btn-primary disabled title=(interaction.submit.reason.as_deref().unwrap_or("")) { "Submit" }
-            }
-
-            @if interaction.open_pr.enabled {
-                a .btn
-                    href=(format!("{base}/op/open-pr"))
-                    target="_blank"
-                    rel="noopener"
-                    title="Open PR for selected branch"
-                    { "Open PR" }
-            } @else {
-                button .btn disabled title=(interaction.open_pr.reason.as_deref().unwrap_or("")) { "Open PR" }
-            }
-
-            @if interaction.undo.enabled {
-                button .btn.mutating-btn
-                    hx-post=(format!("{base}/op/undo"))
-                    hx-target="#stack-pane"
-                    hx-include="[name='csrf']"
-                    title="Undo last local operation"
-                    { "Undo" }
-            } @else {
-                button .btn disabled title=(interaction.undo.reason.as_deref().unwrap_or("")) { "Undo" }
-            }
-
-            @if interaction.redo.enabled {
-                button .btn.mutating-btn
-                    hx-post=(format!("{base}/op/redo"))
-                    hx-target="#stack-pane"
-                    hx-include="[name='csrf']"
-                    title="Redo last local operation"
-                    { "Redo" }
-            } @else {
-                button .btn disabled title=(interaction.redo.reason.as_deref().unwrap_or("")) { "Redo" }
-            }
-
-            button .btn
-                hx-post=(format!("{base}/refresh"))
-                hx-target="#stack-pane"
-                hx-include="[name='csrf']"
-                title="Refresh repository"
-                { "↺" }
-
-            select #theme-select .theme-select
-                name="theme"
-                title="Appearance"
-                hx-post=(format!("{base}/theme"))
-                hx-trigger="change"
-                hx-include="[name='csrf']"
-                hx-swap="none"
-                onchange="document.documentElement.setAttribute('data-theme', this.value)"
-                {
-                option value="system" selected[session.theme == ThemePreference::System] { "System" }
-                option value="light" selected[session.theme == ThemePreference::Light] { "Light" }
-                option value="dark" selected[session.theme == ThemePreference::Dark] { "Dark" }
-            }
-
-            button .btn
-                onclick="document.getElementById('help-overlay')?.remove();document.body.insertAdjacentHTML('beforeend', document.getElementById('help-template').innerHTML)"
-                title="Keyboard shortcuts"
-                { "?" }
-
-            // Hidden CSRF repeated for forms that don't include it from search
             input type="hidden" name="csrf" value=(csrf) {}
             template #help-template {
                 (help_fragment())
+            }
+        }
+    }
+}
+
+pub fn stack_pane_fragment(
+    session: &WebSession,
+    snapshot: &RepositorySnapshot,
+    interaction: &InteractionState,
+    base: &str,
+    row_meta: &StackRowMeta,
+) -> Markup {
+    html! {
+        (status_bar_oob(session, snapshot, row_meta))
+        (stack_pane_inner(session, snapshot, interaction, base, row_meta))
+    }
+}
+
+pub fn status_bar(
+    session: &WebSession,
+    snapshot: &RepositorySnapshot,
+    row_meta: &StackRowMeta,
+) -> Markup {
+    let selected_name = session.selected_branch.as_deref();
+    let selected_branch =
+        selected_name.and_then(|name| snapshot.branches.iter().find(|branch| branch.name == name));
+
+    html! {
+        footer #status-bar.status-bar {
+            span .status-item {
+                span .status-label { "HEAD" }
+                span .status-value { (snapshot.current_branch) }
+            }
+            @if let Some(name) = selected_name {
+                span .status-sep {}
+                span .status-item {
+                    span .status-label { "Selected" }
+                    span .status-value { (name) }
+                }
+                @if let Some((ahead, behind)) = row_meta.get(name) {
+                    span .status-sep {}
+                    span .status-item {
+                        span .status-label { "Δ parent" }
+                        span .status-value { (ahead) "↑ " (behind) "↓" }
+                    }
+                }
+                @if let Some(branch) = selected_branch {
+                    @if branch.needs_restack {
+                        span .status-chip.chip-warning { "needs restack" }
+                    }
+                    @if let Some(pr) = branch.pr_number {
+                        span .status-chip.chip-pr { "PR #" (pr) }
+                    }
+                }
+            } @else {
+                span .status-sep {}
+                span .status-item .status-muted { "No branch selected" }
+            }
+        }
+    }
+}
+
+fn status_bar_oob(
+    session: &WebSession,
+    snapshot: &RepositorySnapshot,
+    row_meta: &StackRowMeta,
+) -> Markup {
+    let selected_name = session.selected_branch.as_deref();
+    let selected_branch =
+        selected_name.and_then(|name| snapshot.branches.iter().find(|branch| branch.name == name));
+
+    html! {
+        footer #status-bar hx-swap-oob="true" class="status-bar" {
+            span .status-item {
+                span .status-label { "HEAD" }
+                span .status-value { (snapshot.current_branch) }
+            }
+            @if let Some(name) = selected_name {
+                span .status-sep {}
+                span .status-item {
+                    span .status-label { "Selected" }
+                    span .status-value { (name) }
+                }
+                @if let Some((ahead, behind)) = row_meta.get(name) {
+                    span .status-sep {}
+                    span .status-item {
+                        span .status-label { "Δ parent" }
+                        span .status-value { (ahead) "↑ " (behind) "↓" }
+                    }
+                }
+                @if let Some(branch) = selected_branch {
+                    @if branch.needs_restack {
+                        span .status-chip.chip-warning { "needs restack" }
+                    }
+                    @if let Some(pr) = branch.pr_number {
+                        span .status-chip.chip-pr { "PR #" (pr) }
+                    }
+                }
+            } @else {
+                span .status-sep {}
+                span .status-item .status-muted { "No branch selected" }
             }
         }
     }
@@ -254,25 +369,46 @@ pub fn stack_pane_inner(
     snapshot: &RepositorySnapshot,
     interaction: &InteractionState,
     base: &str,
+    row_meta: &StackRowMeta,
 ) -> Markup {
     let branches = &snapshot.branches;
     let rows = topology_layout(branches);
     let query = session.search_query.to_lowercase();
 
-    html! {
-        @for row in &rows {
-            @let branch_opt = branches.iter().find(|b| b.name == row.branch_name);
-            @if let Some(branch) = branch_opt {
-                @if query.is_empty() || branch.name.to_lowercase().contains(&query) {
-                    (branch_row(session, branch, &row.cells, interaction, base))
-                }
+    let visible_rows: Vec<(&BranchSummary, &[TopologyCell])> = rows
+        .iter()
+        .filter_map(|row| {
+            let branch = branches.iter().find(|b| b.name == row.branch_name)?;
+            if query.is_empty() || branch.name.to_lowercase().contains(&query) {
+                Some((branch, row.cells.as_slice()))
+            } else {
+                None
             }
-        }
-        @if branches.is_empty() {
-            div .text-muted style="padding:16px;font-size:12px;" {
-                "No stacked branches found. Run "
-                code { "st init" }
-                " to initialize stax."
+        })
+        .collect();
+
+    html! {
+        div .stack-table {
+            div .stack-table-header {
+                span .col-graph { "" }
+                span .col-branch { "Branch" }
+                span .col-meta { "Status" }
+            }
+            div .stack-table-body {
+                @for (branch, cells) in &visible_rows {
+                    (branch_row(session, branch, cells, interaction, base, row_meta))
+                }
+                @if visible_rows.is_empty() {
+                    div .stack-empty {
+                        @if branches.is_empty() {
+                            "No stacked branches found. Run "
+                            code { "st init" }
+                            " to initialize stax."
+                        } @else {
+                            "No branches match your search."
+                        }
+                    }
+                }
             }
         }
     }
@@ -284,11 +420,12 @@ fn branch_row(
     cells: &[TopologyCell],
     interaction: &InteractionState,
     base: &str,
+    row_meta: &StackRowMeta,
 ) -> Markup {
     let selected = session.selected_branch.as_deref() == Some(&branch.name);
     let csrf = &session.csrf_token;
 
-    let mut row_class = String::from("branch-row");
+    let mut row_class = String::from("branch-row stack-table-row");
     if selected {
         row_class.push_str(" selected");
     }
@@ -306,41 +443,49 @@ fn branch_row(
             hx-trigger="click"
             hx-on--after-request="htmx.trigger('#inspector-pane','load'); htmx.trigger('#changes-pane','load');"
             {
-            // Topology grid
-            div .topo-grid {
-                @for cell in cells {
-                    (topo_cell(cell, branch))
+            div .col-graph {
+                div .topo-grid {
+                    @for cell in cells {
+                        (topo_cell(cell, branch))
+                    }
                 }
             }
 
-            // Branch name
-            span .branch-name title=(branch.name) { (branch.name) }
-
-            // Labels
-            @if branch.is_trunk {
-                span .branch-label { "trunk" }
-            }
-            @if branch.is_current && !branch.is_trunk {
-                span .branch-label { "HEAD" }
-            }
-            @if branch.needs_restack {
-                span .branch-label.needs-restack title="Needs restack" { "⟳" }
-            }
-            @if let Some(pr_num) = branch.pr_number {
-                span .branch-label.pr-open { "#" (pr_num) }
+            div .col-branch {
+                span .branch-name title=(branch.name) { (branch.name) }
+                @if !branch.is_current && !branch.is_trunk && interaction.checkout.enabled {
+                    button .btn.btn-icon.btn-checkout.mutating-btn
+                        hx-post=(format!("{base}/op/checkout"))
+                        hx-target="#stack-pane"
+                        hx-swap="innerHTML"
+                        hx-vals=(format!(r#"{{"branch":"{}","csrf":"{}"}}"#, branch.name.replace('"', "\\\""), csrf))
+                        hx-trigger="click[!event.defaultPrevented]"
+                        onclick="event.stopPropagation()"
+                        title=(format!("Check out {}", branch.name))
+                        { "co" }
+                }
             }
 
-            // Checkout button (only for non-current, non-trunk branches)
-            @if !branch.is_current && !branch.is_trunk && interaction.checkout.enabled {
-                button .btn.btn-icon.mutating-btn style="font-size:10px;padding:2px 6px;"
-                    hx-post=(format!("{base}/op/checkout"))
-                    hx-target="#stack-pane"
-                    hx-swap="outerHTML"
-                    hx-vals=(format!(r#"{{"branch":"{}","csrf":"{}"}}"#, branch.name.replace('"', "\\\""), csrf))
-                    hx-trigger="click[!event.defaultPrevented]"
-                    onclick="event.stopPropagation()"
-                    title=(format!("Check out {}", branch.name))
-                    { "co" }
+            div .col-meta {
+                @if branch.is_trunk {
+                    span .meta-chip.chip-trunk { "trunk" }
+                }
+                @if branch.is_current && !branch.is_trunk {
+                    span .meta-chip.chip-head { "HEAD" }
+                }
+                @if let Some((ahead, behind)) = row_meta.get(&branch.name) {
+                    @if *ahead > 0 || *behind > 0 {
+                        span .meta-chip.chip-diverge title="Ahead / behind parent" {
+                            (ahead) "↑ " (behind) "↓"
+                        }
+                    }
+                }
+                @if branch.needs_restack {
+                    span .meta-chip.chip-warning title="Needs restack" { "restack" }
+                }
+                @if let Some(pr_num) = branch.pr_number {
+                    span .meta-chip.chip-pr { "#" (pr_num) }
+                }
             }
         }
     }
@@ -367,7 +512,7 @@ fn topo_cell(cell: &TopologyCell, _branch: &BranchSummary) -> Markup {
                 @let lane_class = match cell.lane % 3 {
                     1 => "lane-1",
                     2 => "lane-2",
-                    _ => "",
+                    _ => "lane-0",
                 };
                 @if is_current {
                     div class=(format!("topo-node current {lane_class}")) {}
@@ -398,29 +543,68 @@ pub fn changes_pane_placeholder(selected: Option<&str>) -> Markup {
 }
 
 pub fn diff_view(diff: &BranchDiff) -> Markup {
+    if diff.stat.is_empty() && diff.lines.is_empty() {
+        return diff_empty();
+    }
+
     html! {
-        div .diff-view {
-            @for stat in &diff.stat {
-                div .diff-line.diff-header {
-                    (stat.file)
-                    " +"
-                    (stat.additions)
-                    " -"
-                    (stat.deletions)
+        div .changes-panel {
+            div .file-list {
+                @for stat in &diff.stat {
+                    @let fid = file_diff_id(&stat.file);
+                    button type="button" class="file-row" data-diff-file=(fid) {
+                        span .file-name title=(stat.file) { (stat.file) }
+                        span .file-stats {
+                            span .stat-add { "+" (stat.additions) }
+                            span .stat-del { "−" (stat.deletions) }
+                        }
+                    }
                 }
             }
-            @for line in &diff.lines {
-                @let cls = match line.kind {
-                    DiffLineKind::Addition => "diff-line diff-add",
-                    DiffLineKind::Deletion => "diff-line diff-del",
-                    DiffLineKind::Hunk     => "diff-line diff-hunk",
-                    DiffLineKind::Header   => "diff-line diff-header",
-                    DiffLineKind::Context  => "diff-line",
-                };
-                div class=(cls) { (line.content) }
+            div .diff-patch {
+                @for line in &diff.lines {
+                    @let file_id = diff_git_file_id(&line.content);
+                    @let cls = match line.kind {
+                        DiffLineKind::Addition => "diff-line diff-add",
+                        DiffLineKind::Deletion => "diff-line diff-del",
+                        DiffLineKind::Hunk     => "diff-line diff-hunk",
+                        DiffLineKind::Header   => "diff-line diff-header",
+                        DiffLineKind::Context  => "diff-line",
+                    };
+                    @if let Some(id) = file_id {
+                        div class=(cls) id=(format!("diff-file-{id}")) { (line.content) }
+                    } @else {
+                        div class=(cls) { (line.content) }
+                    }
+                }
             }
         }
     }
+}
+
+pub fn diff_empty() -> Markup {
+    html! {
+        div .changes-empty {
+            div .changes-empty-title { "No changes vs parent" }
+            div .changes-empty-body {
+                "This branch matches its parent — there is nothing to review in the Changes panel."
+            }
+        }
+    }
+}
+
+fn file_diff_id(file: &str) -> String {
+    file.chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
+}
+
+fn diff_git_file_id(content: &str) -> Option<String> {
+    if !content.starts_with("diff --git ") {
+        return None;
+    }
+    let path = content.split_whitespace().nth(3)?;
+    Some(file_diff_id(path.trim_start_matches("b/")))
 }
 
 pub fn inspector_placeholder(selected: Option<&str>) -> Markup {
@@ -599,10 +783,11 @@ pub fn op_result_with_stack(
     snapshot: &RepositorySnapshot,
     interaction: &InteractionState,
     base: &str,
+    row_meta: &StackRowMeta,
 ) -> Markup {
     html! {
         (operation_banner(message, success))
-        (stack_pane_inner(session, snapshot, interaction, base))
+        (stack_pane_fragment(session, snapshot, interaction, base, row_meta))
     }
 }
 

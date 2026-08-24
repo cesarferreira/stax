@@ -242,7 +242,57 @@ fn web_server_workspace_shows_trunk_branch_after_stax_init() {
             "workspace HTML should reference stax"
         );
 
+        // GitKraken-inspired chrome
+        assert!(
+            body.contains("status-bar"),
+            "workspace should include status bar"
+        );
+        assert!(
+            body.contains("stack-table"),
+            "workspace should include stack graph table"
+        );
+        assert!(
+            body.contains("toolbar-group"),
+            "workspace should include grouped toolbar actions"
+        );
+
         // Keep repo alive until assertions complete.
         drop(repo);
+    });
+}
+
+#[test]
+fn web_diff_empty_state_when_branch_matches_parent() {
+    async_test!(async {
+        ensure_crypto_provider();
+        let repo = common::TestRepo::new();
+        let init_out = repo.run_stax(&["init", "--trunk", "main"]);
+        assert!(init_out.status.success());
+
+        let create_out = repo.run_stax(&["bc", "feat/a"]);
+        assert!(
+            create_out.status.success(),
+            "branch create failed: {}",
+            common::TestRepo::stderr(&create_out)
+        );
+
+        let repo_path = repo.path().to_path_buf();
+        let server = stax::web::start_test_server(repo_path)
+            .await
+            .expect("server should start");
+
+        let parts: Vec<&str> = server.base_url.split('/').collect();
+        let host = parts.get(2).copied().unwrap_or("127.0.0.1");
+        let token = parts.get(4).copied().unwrap_or("unknown");
+
+        let client = reqwest::Client::new();
+        let diff_url = format!("http://{host}/s/{token}/diff");
+        let diff_resp = client.get(&diff_url).send().await.unwrap();
+        assert_eq!(diff_resp.status().as_u16(), 200);
+        let diff_body = diff_resp.text().await.unwrap();
+        assert!(
+            diff_body.contains("No changes vs parent"),
+            "empty diff should show explicit empty state: {diff_body}"
+        );
     });
 }
