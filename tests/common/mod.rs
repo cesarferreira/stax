@@ -102,6 +102,18 @@ fn test_tempdir() -> TempDir {
     }
 }
 
+#[cfg(unix)]
+fn unavailable_gh_bin() -> TempDir {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin_dir = test_tempdir();
+    let gh_path = bin_dir.path().join("gh");
+    fs::write(&gh_path, "#!/bin/sh\nexit 127\n").expect("Failed to write unavailable gh stub");
+    fs::set_permissions(&gh_path, fs::Permissions::from_mode(0o755))
+        .expect("Failed to make unavailable gh stub executable");
+    bin_dir
+}
+
 fn sanitized_stax_command() -> Command {
     let mut cmd = Command::new(stax_bin());
     apply_sanitized_test_env(&mut cmd);
@@ -220,6 +232,9 @@ fn hermetic_git_command() -> Command {
 pub struct TestRepo {
     dir: TempDir,
     home_dir: TempDir,
+    gh_config_dir: TempDir,
+    #[cfg(unix)]
+    gh_bin_dir: TempDir,
     /// Optional bare repository acting as "origin" remote
     #[allow(dead_code)]
     remote_dir: Option<TempDir>,
@@ -235,6 +250,9 @@ impl TestRepo {
         Self {
             dir,
             home_dir: test_tempdir(),
+            gh_config_dir: test_tempdir(),
+            #[cfg(unix)]
+            gh_bin_dir: unavailable_gh_bin(),
             remote_dir: None,
         }
     }
@@ -469,7 +487,16 @@ impl TestRepo {
     }
 
     fn apply_default_stax_env(&self, cmd: &mut Command) {
-        cmd.env("HOME", self.home_dir.path());
+        cmd.env("HOME", self.home_dir.path())
+            .env("GH_CONFIG_DIR", self.gh_config_dir.path());
+        #[cfg(unix)]
+        cmd.env(
+            "PATH",
+            std::env::join_paths(std::iter::once(self.gh_bin_dir.path().to_path_buf()).chain(
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+            ))
+            .expect("Failed to construct PATH with unavailable gh stub"),
+        );
     }
 
     /// Run a stax command in this repository
