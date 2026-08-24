@@ -47,10 +47,6 @@ pub fn run() -> Result<()> {
     let _trace = crate::git::command::TraceGuard::start(cli.trace);
     update::spawn_background_check();
 
-    if let Some(Commands::Gui(args)) = &cli.command {
-        return crate::commands::gui::run(args.path.clone());
-    }
-
     if let Some(Commands::Web(args)) = &cli.command {
         return crate::commands::web::run(args.path.clone(), args.port, args.no_open);
     }
@@ -240,7 +236,6 @@ pub fn run() -> Result<()> {
 
     let result = match command {
         Commands::Completions { .. } => unreachable!("handled before repository initialization"),
-        Commands::Gui(_) => unreachable!("handled before repository initialization"),
         Commands::Web(_) => unreachable!("handled before repository initialization"),
         Commands::Status {
             json,

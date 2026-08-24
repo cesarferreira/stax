@@ -1,6 +1,6 @@
 //! stax library interface
 //!
-//! Shared functionality for the CLI, TUI, desktop application, and integration
+//! Shared functionality for the CLI, TUI, web workspace, and integration
 //! tests. The main CLI binary is in `main.rs`.
 
 // Shared and internal modules used by the stax clients

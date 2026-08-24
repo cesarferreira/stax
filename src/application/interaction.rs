@@ -1,6 +1,6 @@
 //! Presentation-neutral action availability and interaction state.
 //!
-//! Shared between the native GUI (`crates/stax-gui`) and `st web`.
+//! Shared by the `st web` workspace.
 
 use super::{OperationReceipt, RepositorySnapshot};
 
