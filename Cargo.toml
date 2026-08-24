@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/stax-gui"]
+members = ["."]
 default-members = ["."]
 resolver = "2"
 
@@ -68,7 +68,7 @@ git2 = { version = "0.21", default-features = false, features = ["https"] }
 
 # GitHub API
 octocrab = "0.54.1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # Serialization
@@ -112,6 +112,11 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 
 # TLS crypto provider (needed to install default provider for tests using octocrab)
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+
+# Local web workspace (`st web`)
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "form", "json"] }
+maud = { version = "0.27", features = ["axum"] }
+getrandom = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

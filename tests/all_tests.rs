@@ -82,8 +82,6 @@ mod github_failure_tests;
 mod github_list_tests;
 #[path = "guard_rail_tests.rs"]
 mod guard_rail_tests;
-#[path = "gui_command_tests.rs"]
-mod gui_command_tests;
 #[path = "integration_tests.rs"]
 mod integration_tests;
 #[path = "navigation_tests.rs"]
@@ -164,6 +162,8 @@ mod tui_commands_tests;
 mod upstack_onto_tests;
 #[path = "validate_tests.rs"]
 mod validate_tests;
+#[path = "web_tests.rs"]
+mod web_tests;
 #[path = "worktree_cli_tests.rs"]
 mod worktree_cli_tests;
 #[path = "worktree_pool_tests.rs"]

@@ -42,9 +42,15 @@ pub(crate) struct Cli {
 }
 
 #[derive(Args, Debug, Clone)]
-pub(crate) struct GuiArgs {
+pub(crate) struct WebArgs {
     /// Repository to open; defaults to the current directory
     pub(crate) path: Option<PathBuf>,
+    /// Port to bind (default 8787). If the requested port is busy, stax warns and uses a free OS-selected port.
+    #[arg(long, default_value_t = 8787)]
+    pub(crate) port: u16,
+    /// Do not open the browser after starting the server
+    #[arg(long)]
+    pub(crate) no_open: bool,
 }
 
 #[derive(Args, Clone)]
@@ -264,8 +270,8 @@ pub(crate) enum Commands {
     #[command(name = "__update-check", hide = true)]
     UpdateCheck,
 
-    /// Launch the native Stax macOS app
-    Gui(GuiArgs),
+    /// Start a localhost HTMX web workspace (opens in browser)
+    Web(WebArgs),
 
     /// Generate shell completions
     Completions {
@@ -1897,7 +1903,7 @@ impl Commands {
             | Commands::Doctor { .. }
             | Commands::Comments { .. }
             | Commands::Open
-            | Commands::Gui(_)
+            | Commands::Web(_)
             | Commands::W
             | Commands::Wtll { .. }
             | Commands::Wtls => CommandPolicy::RebaseSafe,
@@ -1935,14 +1941,14 @@ pub(crate) enum CommandPolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Commands, GuiArgs};
+    use super::{Cli, Commands};
     use clap::Parser;
     use std::path::Path;
 
     fn parse_cli(args: &[&str]) -> Cli {
         let args: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
         std::thread::Builder::new()
-            .name("gui-cli-parse".into())
+            .name("cli-parse".into())
             .stack_size(8 * 1024 * 1024)
             .spawn(move || Cli::try_parse_from(args))
             .expect("spawn parse thread")
@@ -1952,17 +1958,37 @@ mod tests {
     }
 
     #[test]
-    fn gui_accepts_optional_path_and_defaults_to_none() {
-        let with_path = parse_cli(&["st", "gui", "/tmp/repo"]);
-        assert!(matches!(
-            with_path.command,
-            Some(Commands::Gui(GuiArgs { path: Some(path) }))
-                if path == Path::new("/tmp/repo")
-        ));
-        let default = parse_cli(&["st", "gui"]);
+    fn web_accepts_optional_path_and_defaults_to_8787() {
+        use super::WebArgs;
+        let default = parse_cli(&["st", "web"]);
         assert!(matches!(
             default.command,
-            Some(Commands::Gui(GuiArgs { path: None }))
+            Some(Commands::Web(WebArgs {
+                path: None,
+                port: 8787,
+                no_open: false
+            }))
+        ));
+        let with_port = parse_cli(&["st", "web", "--port", "9000"]);
+        assert!(matches!(
+            with_port.command,
+            Some(Commands::Web(WebArgs { port: 9000, .. }))
+        ));
+        let no_open = parse_cli(&["st", "web", "--no-open"]);
+        assert!(matches!(
+            no_open.command,
+            Some(Commands::Web(WebArgs { no_open: true, .. }))
+        ));
+    }
+
+    #[test]
+    fn web_accepts_explicit_path() {
+        use super::WebArgs;
+        let with_path = parse_cli(&["st", "web", "/tmp/repo"]);
+        assert!(matches!(
+            with_path.command,
+            Some(Commands::Web(WebArgs { path: Some(ref p), .. }))
+                if p == Path::new("/tmp/repo")
         ));
     }
 }

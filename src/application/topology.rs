@@ -1,18 +1,30 @@
-use stax::application::BranchSummary;
+//! Shared stack topology layout used by the native GUI and `st web`.
 
+use super::BranchSummary;
+
+/// A node marker drawn in a topology lane cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TopologyNode {
+pub enum TopologyNode {
+    /// A non-current branch.
     Branch,
+    /// The currently checked-out branch.
     Current,
 }
 
+/// One cell in a topology row's lane grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TopologyCell {
+pub struct TopologyCell {
+    /// Lane index (0 = leftmost).
     pub lane: usize,
+    /// Vertical connector above the cell center.
     pub top: bool,
+    /// Vertical connector below the cell center.
     pub bottom: bool,
+    /// Horizontal connector to the left.
     pub left: bool,
+    /// Horizontal connector to the right.
     pub right: bool,
+    /// Optional branch node in this cell.
     pub node: Option<TopologyNode>,
 }
 
@@ -29,13 +41,17 @@ impl TopologyCell {
     }
 }
 
+/// One rendered row of stack topology for a branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct TopologyRow {
+pub struct TopologyRow {
+    /// Branch name associated with this row.
     pub branch_name: String,
+    /// Lane cells for this row.
     pub cells: Vec<TopologyCell>,
 }
 
-pub(super) fn layout(branches: &[BranchSummary]) -> Vec<TopologyRow> {
+/// Builds topology rows for the given ordered branch summaries.
+pub fn layout(branches: &[BranchSummary]) -> Vec<TopologyRow> {
     let Some(max_column) = branches.iter().map(|branch| branch.column).max() else {
         return Vec::new();
     };
@@ -140,7 +156,7 @@ fn cells(lane_count: usize) -> Vec<TopologyCell> {
 #[cfg(test)]
 mod tests {
     use super::{TopologyCell, TopologyNode, layout};
-    use stax::application::BranchSummary;
+    use crate::application::BranchSummary;
 
     fn branch(
         name: &str,

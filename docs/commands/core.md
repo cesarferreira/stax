@@ -7,7 +7,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 | Command | What it does |
 |---|---|
 | `st` | Launch the interactive TUI |
-| `st gui [path]` | Launch a fresh native macOS GUI window for a repository |
+| `st web [path]` | Open a localhost HTMX web workspace in the browser (127.0.0.1 only) |
 | `st ls` | Show stack with PR, rebase, and metadata-repair status |
 | `st ll` | Like `st ls` plus PR URLs and detail |
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
@@ -108,5 +108,3 @@ On GitHub repos with native Stacked PRs enabled, `st ss`/`st bs` auto-register t
 See also: [Navigation](navigation.md) · [Stack health](stack-health.md) · [Full reference](reference.md)
 
 `st ready` and `st pr list --ready` open an interactive TUI showing CI status, review approval (e.g. "1 approval", "missing review"), and recommended next action for each tracked PR. The TUI auto-refreshes every 15s and stays open after CI passes — press `q` to quit. Use `--current` or `--stack` to limit to the current stack. Use `--plain` for a single static table (safe for capture/pipes) and `--json` for the machine-readable readiness schema. Use `--interval <secs>` to change the auto-refresh interval.
-
-`st gui [path]` is macOS-only and launches the installed app with bundle id `com.cesarferreira.stax`. Run `curl -fsSL https://cesarferreira.com/stax/install-gui.sh | sh`, download `Stax-aarch64-apple-darwin.zip` or `Stax-x86_64-apple-darwin.zip` from GitHub Releases and move `Stax.app` to `/Applications`, or use `make install-gui-app` for `$HOME/Applications/Stax.app`. A pathless app launch restores the most recently opened project, and the toolbar project dropdown switches among recent repositories or adds another with the folder picker. The GUI can search and inspect stacks; check out, create, rename, delete, move, and reorder local branches; restack selected/all; submit Draft PRs; Open PR without checkout; and safely undo/redo fully local receipts. Pane visibility and widths persist per repository, while visible controls, native menus, and shortcuts use the same enabled-state rules.
