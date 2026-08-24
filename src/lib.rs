@@ -22,6 +22,7 @@ mod progress;
 mod remote;
 mod tui;
 mod update;
+pub mod web;
 
 pub mod github;
 pub use forge::ForgeClient;

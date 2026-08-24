@@ -51,6 +51,10 @@ pub fn run() -> Result<()> {
         return crate::commands::gui::run(args.path.clone());
     }
 
+    if let Some(Commands::Web(args)) = &cli.command {
+        return crate::commands::web::run(args.path.clone(), args.port, args.no_open);
+    }
+
     if let Some(Commands::Setup {
         print,
         refresh,
@@ -237,6 +241,7 @@ pub fn run() -> Result<()> {
     let result = match command {
         Commands::Completions { .. } => unreachable!("handled before repository initialization"),
         Commands::Gui(_) => unreachable!("handled before repository initialization"),
+        Commands::Web(_) => unreachable!("handled before repository initialization"),
         Commands::Status {
             json,
             stack,

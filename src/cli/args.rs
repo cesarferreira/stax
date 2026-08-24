@@ -47,6 +47,18 @@ pub(crate) struct GuiArgs {
     pub(crate) path: Option<PathBuf>,
 }
 
+#[derive(Args, Debug, Clone)]
+pub(crate) struct WebArgs {
+    /// Repository to open; defaults to the current directory
+    pub(crate) path: Option<PathBuf>,
+    /// Port to listen on (0 = ephemeral); default 8787
+    #[arg(long, default_value_t = 8787)]
+    pub(crate) port: u16,
+    /// Do not open the browser after starting the server
+    #[arg(long)]
+    pub(crate) no_open: bool,
+}
+
 #[derive(Args, Clone)]
 pub(crate) struct SubmitOptions {
     /// Show the submit plan without fetching, pushing, or changing metadata
@@ -266,6 +278,9 @@ pub(crate) enum Commands {
 
     /// Launch the native Stax macOS app
     Gui(GuiArgs),
+
+    /// Start a localhost HTMX web workspace (opens in browser)
+    Web(WebArgs),
 
     /// Generate shell completions
     Completions {
@@ -1898,6 +1913,7 @@ impl Commands {
             | Commands::Comments { .. }
             | Commands::Open
             | Commands::Gui(_)
+            | Commands::Web(_)
             | Commands::W
             | Commands::Wtll { .. }
             | Commands::Wtls => CommandPolicy::RebaseSafe,
@@ -1963,6 +1979,41 @@ mod tests {
         assert!(matches!(
             default.command,
             Some(Commands::Gui(GuiArgs { path: None }))
+        ));
+    }
+
+    #[test]
+    fn web_accepts_optional_path_and_defaults_to_8787() {
+        use super::WebArgs;
+        let default = parse_cli(&["st", "web"]);
+        assert!(matches!(
+            default.command,
+            Some(Commands::Web(WebArgs {
+                path: None,
+                port: 8787,
+                no_open: false
+            }))
+        ));
+        let with_port = parse_cli(&["st", "web", "--port", "9000"]);
+        assert!(matches!(
+            with_port.command,
+            Some(Commands::Web(WebArgs { port: 9000, .. }))
+        ));
+        let no_open = parse_cli(&["st", "web", "--no-open"]);
+        assert!(matches!(
+            no_open.command,
+            Some(Commands::Web(WebArgs { no_open: true, .. }))
+        ));
+    }
+
+    #[test]
+    fn web_accepts_explicit_path() {
+        use super::WebArgs;
+        let with_path = parse_cli(&["st", "web", "/tmp/repo"]);
+        assert!(matches!(
+            with_path.command,
+            Some(Commands::Web(WebArgs { path: Some(ref p), .. }))
+                if p == Path::new("/tmp/repo")
         ));
     }
 }

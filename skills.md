@@ -23,6 +23,7 @@ stax status|ls                # Stack status (tree)
 stax ll                        # Stack status with PR URLs/details
 stax log|l                     # Stack status with commits + PR info
 stax gui [path]                # Launch fresh native macOS GUI preview for one repository
+stax web [path] [--port <n>] [--no-open]  # Start localhost HTMX web workspace (127.0.0.1 only, default port 8787)
 
 stax submit|ss                 # Submit full stack
 stax stack link                # Register current PR stack as native GitHub Stack (GitHub + gh-stack)
@@ -171,6 +172,30 @@ Public GitHub Releases include `Stax-aarch64-apple-darwin.zip` and `Stax-x86_64-
 `stax gui [path]` is macOS-only. It canonicalizes the supplied path, defaults to the current directory, and launches exactly `open -n -b com.cesarferreira.stax --args <canonical-path>`. The `-n` fresh-instance behavior is intentional: every invocation opens a new app process/window for one repository.
 
 GUI operations are typed and repository-scoped. It can search branches; checkout, create, rename, delete, move, and reorder eligible local branches; restack selected/all; submit the current stack as Draft; Open PR without checkout; and undo/redo receipts whose transaction is fully local. Rename does not push. Delete shows descendants. Move/reorder/restack dirty-worktree recovery requires an explicit auto-stash confirmation. `/` focuses search, `1`/`2`/`3` toggle panes, draggable widths and visibility persist per canonical repository, and all enabled visible actions are keyboard-operable with visible focus and textual labels. GUI submit has no CLI prompts and does not auto-open PR pages. Keep AI naming, staging/commit creation, `--below`, `--insert`, custom prefixes, advanced submit options, and remote-effect recovery in CLI workflows.
+
+### Web Workspace (`st web`)
+
+`st web` starts a localhost HTMX workspace — platform-independent alternative to the native GUI.
+
+```bash
+stax web                          # Start on 127.0.0.1:8787 and open browser
+stax web --port 9000              # Custom port
+stax web --port 0                 # Ephemeral port
+stax web --no-open                # Print URL only; don't open browser
+stax web /path/to/repo            # Open a specific repository
+```
+
+Key properties:
+- Binds **127.0.0.1 only** — never reachable from the network; no `--host` flag
+- Unguessable 48-hex session token in every URL: `/s/<token>/…`
+- CSRF token required on all mutating POSTs; wrong token → 403
+- Non-local `Host`/`Origin` headers → 403
+- One mutation at a time; mutating controls disabled while op is in flight
+- Session state is in-memory; server restart generates a new URL
+
+Supports the same operations as the GUI: checkout, create, rename, delete, restack, submit (draft), undo/redo, move. Use `/` to search, `1`/`2`/`3` to toggle panes, `Esc` to dismiss overlays.
+
+
 
 ### Create and Edit Branches
 

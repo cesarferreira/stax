@@ -64,4 +64,5 @@ pub mod tmux;
 pub mod undo;
 pub mod upstack;
 pub mod watch;
+pub mod web;
 pub mod worktree;

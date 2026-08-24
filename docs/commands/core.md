@@ -8,6 +8,7 @@ Day-to-day commands you'll use most. For the exhaustive list of every command, s
 |---|---|
 | `st` | Launch the interactive TUI |
 | `st gui [path]` | Launch a fresh native macOS GUI window for a repository |
+| `st web [path]` | Open a localhost HTMX web workspace in the browser (127.0.0.1 only) |
 | `st ls` | Show stack with PR, rebase, and metadata-repair status |
 | `st ll` | Like `st ls` plus PR URLs and detail |
 | `st create <name>` / `st add <name>` | Create a branch stacked on current |
