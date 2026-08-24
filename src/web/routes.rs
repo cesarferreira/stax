@@ -979,6 +979,32 @@ async fn switch_project(
     }
 }
 
+/// Run `f` on a bare OS thread with no Tokio runtime context, then await its
+/// result asynchronously.
+///
+/// Some repository operations (`SubmitStack`, `ResolvePullRequestUrl`) build
+/// and `block_on` their own private Tokio runtime for GitHub API calls — the
+/// synchronous "CLI-context" pattern used elsewhere in this codebase. Tokio
+/// forbids entering a runtime from a thread that already has one active, and
+/// `tokio::task::spawn_blocking` worker threads still carry the calling
+/// runtime's context (that's what makes `Handle::current().block_on(..)`
+/// work from inside them) — so those operations reject themselves with
+/// "This blocking network operation cannot run on a Tokio runtime thread"
+/// even from a `spawn_blocking` task. A bare `std::thread::spawn` thread has
+/// no such context, so their internal `Runtime::new().block_on(..)` is safe.
+async fn spawn_off_runtime<F, T>(f: F) -> anyhow::Result<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.await
+        .map_err(|_| anyhow::anyhow!("background operation thread ended without a result"))
+}
+
 // ── Op: open PR ──────────────────────────────────────────────────────────────
 
 async fn op_open_pr(
@@ -1005,7 +1031,7 @@ async fn op_open_pr(
     };
     log_action("open PR", &branch_name);
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = spawn_off_runtime(move || {
         let mut reporter = NoopOperationReporter;
         execute_repository_operation(
             &repo_root,
@@ -1087,7 +1113,7 @@ async fn run_mutation(
         disarmed: false,
     };
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = spawn_off_runtime(move || {
         let mut reporter = NoopOperationReporter;
         execute_repository_operation(&repo_root, request, &mut reporter)
     })
